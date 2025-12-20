@@ -1,19 +1,7 @@
 use bevy::prelude::*;
+use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::application::simulation_service::SimulationService;
-use crate::SimulationParameters;
-use crate::domain::gyroscope::Gyroscope;
-
-// Component for gyroscope entities
-#[derive(Component)]
-pub struct GyroscopeComponent {
-    pub domain_gyro: crate::domain::gyroscope::Gyroscope,
-}
-
-// Component for thrust visualization (arrow entity)
-#[derive(Component)]
-pub struct ThrustArrow;
-
-
+use super::components::*;
 
 // System to update gyroscopes
 pub fn update_gyroscopes(
@@ -43,7 +31,7 @@ pub fn update_thrust(
     let total_thrust = SimulationService::calculate_thrust(&gyros, &params);
 
     for mut transform in arrow_query.iter_mut() {
-        let scale = crate::domain::physics::calculate_arrow_scale(total_thrust);
+        let scale = crate::domain::services::physics::calculate_arrow_scale(total_thrust);
         transform.scale = Vec3::new(0.1, 0.1, scale);
 
         if total_thrust.length() > 0.001 {
@@ -55,4 +43,3 @@ pub fn update_thrust(
         transform.scale *= 1.0 + 0.1 * (time.elapsed_seconds() * 5.0).sin();
     }
 }
-

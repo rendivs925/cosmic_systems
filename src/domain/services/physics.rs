@@ -1,5 +1,5 @@
 use bevy::math::Vec3;
-use super::gyroscope::Gyroscope;
+use crate::domain::entities::gyroscope::Gyroscope;
 use crate::SimulationParameters;
 
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {

@@ -1,6 +1,7 @@
 use bevy::math::Vec3;
-use crate::domain::{gyroscope::Gyroscope, physics};
-use crate::SimulationParameters;
+use crate::domain::entities::gyroscope::Gyroscope;
+use crate::domain::services::physics;
+use crate::domain::value_objects::simulation_params::SimulationParameters;
 
 pub struct SimulationService;
 
