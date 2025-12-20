@@ -38,6 +38,12 @@ See [docs/architecture.md](docs/architecture.md) for detailed documentation.
     make space-simulation
     ```
 
+3. **Interactive Controls** (Gyro Mode)
+    - **↑/↓ Arrows**: Increase/Decrease gyroscope RPM
+    - **W/S**: Increase/Decrease precession frequency
+    - **A/D**: Decrease/Increase asymmetry factor
+    - Watch the console output for parameter changes and observe the gyroscope's inertia effects in real-time
+
 ## Requirements
 - Rust 1.75 or later
 - Recommended: a GPU with Vulkan/Metal/DirectX 12 support for best performance

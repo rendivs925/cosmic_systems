@@ -43,3 +43,49 @@ pub fn update_thrust(
         transform.scale *= 1.0 + 0.1 * (time.elapsed_seconds() * 5.0).sin();
     }
 }
+
+// System to handle user input for controlling simulation parameters
+pub fn handle_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut params: ResMut<SimulationParameters>,
+    time: Res<Time>,
+) {
+    let rpm_delta = 5000.0 * time.delta_seconds(); // Adjust RPM by 5000 per second
+
+    if keyboard.pressed(KeyCode::ArrowUp) {
+        params.rpm += rpm_delta;
+        println!("RPM increased to: {:.0}", params.rpm);
+    }
+    if keyboard.pressed(KeyCode::ArrowDown) {
+        params.rpm -= rpm_delta;
+        if params.rpm < 0.0 {
+            params.rpm = 0.0;
+        }
+        println!("RPM decreased to: {:.0}", params.rpm);
+    }
+
+    // Optional: Add controls for other parameters
+    let param_delta = 10.0 * time.delta_seconds();
+    if keyboard.pressed(KeyCode::KeyW) {
+        params.precession_hz += param_delta;
+        println!("Precession Hz increased to: {:.1}", params.precession_hz);
+    }
+    if keyboard.pressed(KeyCode::KeyS) {
+        params.precession_hz -= param_delta;
+        if params.precession_hz < 0.0 {
+            params.precession_hz = 0.0;
+        }
+        println!("Precession Hz decreased to: {:.1}", params.precession_hz);
+    }
+
+    if keyboard.pressed(KeyCode::KeyA) {
+        params.asymmetry -= param_delta * 0.1;
+        params.asymmetry = params.asymmetry.max(0.0).min(1.0);
+        println!("Asymmetry decreased to: {:.2}", params.asymmetry);
+    }
+    if keyboard.pressed(KeyCode::KeyD) {
+        params.asymmetry += param_delta * 0.1;
+        params.asymmetry = params.asymmetry.max(0.0).min(1.0);
+        println!("Asymmetry increased to: {:.2}", params.asymmetry);
+    }
+}

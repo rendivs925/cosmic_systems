@@ -42,6 +42,7 @@ fn main() {
         app.add_systems(Startup, setup_gyro);
         app.add_systems(Update, update_gyroscopes);
         app.add_systems(Update, update_thrust);
+        app.add_systems(Update, handle_input);
     } else {
         app.add_systems(Startup, setup_space);
     }
