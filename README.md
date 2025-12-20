@@ -14,6 +14,17 @@
 - Quantum effects and vacuum phenomena visualization
 - High-performance real-time 3D rendering with interactive parameter controls
 
+## Architecture
+
+This project follows Domain-Driven Design (DDD) + Clean Architecture principles for maintainability and scalability. The codebase is organized into layers:
+
+- **Domain**: Pure business logic (entities, services, value objects)
+- **Application**: Use cases and orchestration
+- **Infrastructure**: External concerns (Bevy integration, persistence)
+- **Presentation**: UI and rendering
+
+See [docs/architecture.md](docs/architecture.md) for detailed documentation.
+
 ## Installation & Quick Start
 
 1. **Clone the repository**
@@ -23,9 +34,9 @@
    ```
 
 2. **Build and run**
-   ```bash
-   cargo run --release
-   ```
+    ```bash
+    make space-simulation
+    ```
 
 ## Requirements
 - Rust 1.75 or later
