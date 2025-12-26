@@ -529,7 +529,13 @@ pub fn update_camera_controller(
 
         // Handle mouse wheel for zooming (direct position change, not velocity-based) - MAXIMUM SENSITIVE
         for wheel_event in mouse_wheel.read() {
-            let zoom_distance = wheel_event.y * controller.speed * 500.0; // Maximum sensitive zoom for lightning-fast navigation across astronomical distances
+            let zoom_multiplier =
+                if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+                    2.5
+                } else {
+                    1.0
+                };
+            let zoom_distance = wheel_event.y * controller.speed * 1800.0 * zoom_multiplier;
             let forward = *transform.forward();
             transform.translation += forward * zoom_distance;
         }

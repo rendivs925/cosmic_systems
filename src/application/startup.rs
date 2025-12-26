@@ -10,6 +10,7 @@ use bevy::render::mesh::primitives::{Meshable, SphereKind};
 use bevy::render::mesh::Indices;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::PrimitiveTopology;
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::path::Path;
 
@@ -289,6 +290,8 @@ pub fn setup_space(
     // Combine planets and moons
     let all_celestial_bodies = [planets, moons].concat();
 
+    let mut entity_map: HashMap<String, Entity> = HashMap::new();
+
     // Spawn each celestial body (planets and moons)
     for planet in all_celestial_bodies {
         let visual_radius = if planet.name == "Sun" {
@@ -364,29 +367,64 @@ pub fn setup_space(
             })
             .id();
 
-        if planet.parent_entity.is_none() && planet.name != "Sun" && solar_params.show_orbits {
-            let orbit_radius = solar_params.au_to_units(planet.orbital_distance_au);
-            let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
-            let orbit_material = materials.add(StandardMaterial {
-                base_color: Color::srgba(0.35, 0.75, 1.0, 0.25),
-                emissive: Color::srgba(0.2, 0.6, 1.0, 0.4).into(),
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                double_sided: true,
-                ..default()
-            });
+        entity_map.insert(planet.name.clone(), planet_entity);
 
-            commands
-                .spawn(PbrBundle {
-                    mesh: orbit_mesh,
-                    material: orbit_material,
+        if solar_params.show_orbits {
+            if let Some(parent_name) = &planet.parent_entity {
+                if let Some(parent_entity) = entity_map.get(parent_name) {
+                    let orbit_radius =
+                        planet.orbital_distance_au * solar_params.scale_factor * 500.0;
+                    let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
+                    let orbit_material = materials.add(StandardMaterial {
+                        base_color: Color::srgba(0.4, 0.7, 1.0, 0.2),
+                        emissive: Color::srgba(0.3, 0.6, 1.0, 0.35).into(),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Blend,
+                        double_sided: true,
+                        ..default()
+                    });
+
+                    commands.entity(*parent_entity).with_children(|parent| {
+                        parent
+                            .spawn(PbrBundle {
+                                mesh: orbit_mesh,
+                                material: orbit_material,
+                                ..default()
+                            })
+                            .insert(OrbitComponent {
+                                radius: orbit_radius,
+                                planet_entity,
+                            })
+                            .insert(Name::new(format!(
+                                "Orbit {} around {}",
+                                planet.name, parent_name
+                            )));
+                    });
+                }
+            } else if planet.name != "Sun" {
+                let orbit_radius = solar_params.au_to_units(planet.orbital_distance_au);
+                let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
+                let orbit_material = materials.add(StandardMaterial {
+                    base_color: Color::srgba(0.35, 0.75, 1.0, 0.25),
+                    emissive: Color::srgba(0.2, 0.6, 1.0, 0.4).into(),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Blend,
+                    double_sided: true,
                     ..default()
-                })
-                .insert(OrbitComponent {
-                    radius: orbit_radius,
-                    planet_entity,
-                })
-                .insert(Name::new(format!("Orbit {}", planet.name)));
+                });
+
+                commands
+                    .spawn(PbrBundle {
+                        mesh: orbit_mesh,
+                        material: orbit_material,
+                        ..default()
+                    })
+                    .insert(OrbitComponent {
+                        radius: orbit_radius,
+                        planet_entity,
+                    })
+                    .insert(Name::new(format!("Orbit {}", planet.name)));
+            }
         }
 
         if let Some(atmosphere) = get_atmosphere_config(&planet.name) {
