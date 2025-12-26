@@ -9,6 +9,7 @@ pub struct Planet {
     pub orbital_distance_au: f32, // Average distance from Sun (or parent planet) in AU
     pub orbital_period_days: f32,
     pub rotation_period_hours: f32,
+    pub axial_tilt_deg: f32,
     pub parent_entity: Option<String>, // Name of parent body (None for Sun, planet name for moons)
 }
 
@@ -21,6 +22,7 @@ impl Planet {
         orbital_distance_au: f32,
         orbital_period_days: f32,
         rotation_period_hours: f32,
+        axial_tilt_deg: f32,
         parent_entity: Option<String>,
     ) -> Self {
         Self {
@@ -31,6 +33,7 @@ impl Planet {
             orbital_distance_au,
             orbital_period_days,
             rotation_period_hours,
+            axial_tilt_deg,
             parent_entity,
         }
     }
@@ -42,9 +45,10 @@ impl Planet {
             2439.7, // Accurate radius in km
             3.3011e23,
             Color::srgb(0.45, 0.45, 0.42), // Realistic gray-brown Mercury surface
-            0.387,                         // Accurate distance from Sun in AU
-            88.0,
-            1407.6,
+            0.387,  // Semi-major axis in AU
+            87.969, // Orbital period in days
+            1407.504, // 58.646 days
+            0.034,
             None, // orbits Sun
         )
     }
@@ -55,9 +59,10 @@ impl Planet {
             6051.8, // Accurate radius in km
             4.8675e24,
             Color::srgb(0.95, 0.85, 0.65), // Realistic Venus yellowish-white clouds
-            0.723,                         // Accurate distance from Sun in AU
-            224.7,
-            5832.5,
+            0.723,   // Semi-major axis in AU
+            224.701, // Orbital period in days
+            -5832.6, // Retrograde rotation (243.025 days)
+            177.36,  // Retrograde axial tilt
             None, // orbits Sun
         )
     }
@@ -66,11 +71,12 @@ impl Planet {
         Self::new(
             "Earth".to_string(),
             6371.0, // Accurate radius in km
-            5.9724e24,
+            5.97237e24,
             Color::srgb(0.25, 0.45, 0.85), // Realistic Earth: deep blue oceans with some continental green
-            1.000,                         // Accurate distance from Sun in AU (definition of AU)
-            365.25,
-            24.0,
+            1.000,   // Semi-major axis in AU
+            365.256, // Orbital period in days
+            23.934,
+            23.439,
             None, // orbits Sun
         )
     }
@@ -81,9 +87,10 @@ impl Planet {
             3389.5, // Accurate radius in km
             6.4171e23,
             Color::srgb(0.85, 0.35, 0.15), // Realistic Mars: butterscotch-orange with iron oxide dust
-            1.524,                         // Accurate distance from Sun in AU
-            687.0,
-            24.6,
+            1.524,    // Semi-major axis in AU
+            686.980,  // Orbital period in days
+            24.623,
+            25.19,
             None, // orbits Sun
         )
     }
@@ -94,9 +101,10 @@ impl Planet {
             69911.0, // Accurate radius in km
             1.8982e27,
             Color::srgb(0.85, 0.65, 0.45), // Realistic Jupiter: beige with brown/white zonal bands
-            5.204,                         // Accurate distance from Sun in AU
-            4333.0,
-            9.9,
+            5.204,    // Semi-major axis in AU
+            4332.667, // 11.862 years
+            9.925,
+            3.13,
             None, // orbits Sun
         )
     }
@@ -107,9 +115,10 @@ impl Planet {
             58232.0, // Accurate radius in km
             5.6834e26,
             Color::srgb(0.9, 0.8, 0.5), // golden rings
-            9.539,                      // Accurate distance from Sun in AU
-            10759.0,
+            9.582,    // Semi-major axis in AU
+            10759.346, // 29.457 years
             10.7,
+            26.73,
             None, // orbits Sun
         )
     }
@@ -120,9 +129,10 @@ impl Planet {
             25362.0, // Accurate radius in km
             8.6810e25,
             Color::srgb(0.6, 0.8, 0.9), // pale cyan
-            19.191,                     // Accurate distance from Sun in AU
-            30687.0,
-            17.2,
+            19.201,   // Semi-major axis in AU
+            30688.992, // 84.0205 years
+            -17.24,
+            97.77,
             None, // orbits Sun
         )
     }
@@ -133,9 +143,10 @@ impl Planet {
             24622.0, // Accurate radius in km
             1.02413e26,
             Color::srgb(0.3, 0.5, 0.9), // deep azure
-            30.061,                     // Accurate distance from Sun in AU
-            60190.0,
-            16.1,
+            30.047,   // Semi-major axis in AU
+            60194.189, // 164.8 years
+            16.11,
+            28.32,
             None, // orbits Sun
         )
     }
@@ -143,12 +154,13 @@ impl Planet {
     pub fn create_sun() -> Self {
         Self::new(
             "Sun".to_string(),
-            696342.0, // Accurate radius in km
-            1.989e30,
+            696340.0, // Mean radius in km
+            1.9885e30,
             Color::srgb(1.0, 1.0, 0.9), // bright yellowish-white
             0.0,                        // Sun doesn't orbit
             0.0,
-            609.12, // 25.38 days sidereal rotation
+            601.2, // 25.05 days sidereal rotation
+            7.25,
             None,   // central body
         )
     }
@@ -160,9 +172,10 @@ impl Planet {
             1737.4, // Earth's moon
             7.342e22,
             Color::srgb(0.75, 0.75, 0.78), // Realistic Moon: bright gray with slight blue tint from space weathering
-            0.00257,                       // Accurate: 384,400 km = 0.00257 AU from Earth
-            27.3,                          // sidereal month
-            27.3 * 24.0,                   // synchronous rotation
+            0.002569,  // 384,400 km
+            27.3217,   // sidereal month
+            27.3217 * 24.0, // synchronous rotation
+            0.0,
             Some("Earth".to_string()),
         )
     }
@@ -176,6 +189,7 @@ impl Planet {
             0.000032,                   // Accurate: ~9,400 km from Mars center
             0.32,                       // very fast orbit (7.6 hours)
             0.32 * 24.0,                // synchronous rotation
+            0.0,
             Some("Mars".to_string()),
         )
     }
@@ -189,6 +203,7 @@ impl Planet {
             0.000156,                   // Accurate: ~23,500 km from Mars center
             1.26,                       // slower orbit (30.3 hours)
             1.26 * 24.0,                // synchronous rotation
+            0.0,
             Some("Mars".to_string()),
         )
     }
@@ -202,6 +217,7 @@ impl Planet {
             0.0028,                     // Accurate: 421,700 km from Jupiter
             1.77,                       // 42.5 hours
             1.77 * 24.0,                // synchronous rotation
+            0.0,
             Some("Jupiter".to_string()),
         )
     }
@@ -215,6 +231,7 @@ impl Planet {
             0.0045,                     // Accurate: 670,900 km from Jupiter
             3.55,                       // 85.2 hours
             3.55 * 24.0,                // synchronous rotation
+            0.0,
             Some("Jupiter".to_string()),
         )
     }
@@ -228,6 +245,7 @@ impl Planet {
             0.0072,                     // Accurate: 1,070,400 km from Jupiter
             7.15,                       // 171.7 hours
             7.15 * 24.0,                // synchronous rotation
+            0.0,
             Some("Jupiter".to_string()),
         )
     }
@@ -241,6 +259,7 @@ impl Planet {
             0.0126,                     // Accurate: 1,882,700 km from Jupiter
             16.69,                      // 401.4 hours
             16.69 * 24.0,               // synchronous rotation
+            0.0,
             Some("Jupiter".to_string()),
         )
     }
@@ -254,6 +273,7 @@ impl Planet {
             0.0012,                     // Accurate: 185,539 km from Saturn
             0.94,                       // 22.6 hours
             0.94 * 24.0,                // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -267,6 +287,7 @@ impl Planet {
             0.0016,                     // Accurate: 237,948 km from Saturn
             1.37,                       // 32.9 hours
             1.37 * 24.0,                // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -280,6 +301,7 @@ impl Planet {
             0.0020,                     // Accurate: 294,672 km from Saturn
             1.89,                       // 45.3 hours
             1.89 * 24.0,                // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -293,6 +315,7 @@ impl Planet {
             0.0025,                     // Accurate: 377,415 km from Saturn
             2.74,                       // 65.7 hours
             2.74 * 24.0,                // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -306,6 +329,7 @@ impl Planet {
             0.0035,                     // Accurate: 527,108 km from Saturn
             4.52,                       // 108.4 hours
             4.52 * 24.0,                // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -319,6 +343,7 @@ impl Planet {
             0.0082,                     // Accurate: 1,221,870 km from Saturn
             15.95,                      // 383.9 hours
             15.95 * 24.0,               // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -332,6 +357,7 @@ impl Planet {
             0.0099,                     // Accurate: 1,481,009 km from Saturn
             21.28,                      // 511.0 hours
             21.28 * 24.0,               // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -345,6 +371,7 @@ impl Planet {
             0.0238,                     // Accurate: 3,561,300 km from Saturn
             79.32,                      // 1903.7 hours
             79.32 * 24.0,               // synchronous rotation
+            0.0,
             Some("Saturn".to_string()),
         )
     }
@@ -358,6 +385,7 @@ impl Planet {
             0.0008,                     // Accurate: 129,783 km from Uranus
             1.41,                       // 33.9 hours
             1.41 * 24.0,                // synchronous rotation
+            0.0,
             Some("Uranus".to_string()),
         )
     }
@@ -371,6 +399,7 @@ impl Planet {
             0.0012,                     // Accurate: 191,020 km from Uranus
             2.52,                       // 60.5 hours
             2.52 * 24.0,                // synchronous rotation
+            0.0,
             Some("Uranus".to_string()),
         )
     }
@@ -384,6 +413,7 @@ impl Planet {
             0.0018,                     // Accurate: 266,000 km from Uranus
             4.14,                       // 99.4 hours
             4.14 * 24.0,                // synchronous rotation
+            0.0,
             Some("Uranus".to_string()),
         )
     }
@@ -397,6 +427,7 @@ impl Planet {
             0.0029,                     // Accurate: 436,300 km from Uranus
             8.71,                       // 208.9 hours
             8.71 * 24.0,                // synchronous rotation
+            0.0,
             Some("Uranus".to_string()),
         )
     }
@@ -410,6 +441,7 @@ impl Planet {
             0.0039,                     // Accurate: 583,519 km from Uranus
             13.46,                      // 323.1 hours
             13.46 * 24.0,               // synchronous rotation
+            0.0,
             Some("Uranus".to_string()),
         )
     }
@@ -423,6 +455,7 @@ impl Planet {
             0.0024,                     // Accurate: 354,759 km from Neptune
             5.88,                       // 141.0 hours
             5.88 * 24.0,                // synchronous rotation
+            0.0,
             Some("Neptune".to_string()),
         )
     }
@@ -436,6 +469,7 @@ impl Planet {
             0.0008,                     // Close to Neptune
             1.12,                       // 26.9 hours
             1.12 * 24.0,                // synchronous rotation
+            0.0,
             Some("Neptune".to_string()),
         )
     }
@@ -449,6 +483,7 @@ impl Planet {
             0.0369,                     // Distant orbit: ~5.5 million km from Neptune
             360.13,                     // Very long orbital period
             360.13 * 24.0,              // synchronous rotation
+            0.0,
             Some("Neptune".to_string()),
         )
     }
@@ -462,6 +497,7 @@ impl Planet {
             0.0005,                     // Close to Neptune
             0.55,                       // 13.2 hours
             0.55 * 24.0,                // synchronous rotation
+            0.0,
             Some("Neptune".to_string()),
         )
     }
@@ -475,6 +511,7 @@ impl Planet {
             1.0,                        // simplified orbit around Pluto
             6.39,                       // 153.3 hours
             6.39 * 24.0,                // synchronous rotation
+            0.0,
             Some("Pluto".to_string()),  // Note: Pluto not in main solar system yet
         )
     }

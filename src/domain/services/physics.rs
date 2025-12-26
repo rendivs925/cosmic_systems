@@ -3,6 +3,7 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::SimulationParameters;
 use bevy::math::Vec3;
+use bevy::prelude::Quat;
 
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
@@ -50,7 +51,11 @@ pub fn calculate_planet_position(
     let relative_pos = if planet.parent_entity.is_some() {
         // Moons keep circular orbits around their parent for simplicity.
         let distance = calculate_orbit_radius_units(planet, solar_params);
-        Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
+        let mut pos = Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin());
+        if let Some(inclination_rad) = moon_orbit_inclination_rad(&planet.name) {
+            pos = Quat::from_rotation_x(inclination_rad) * pos;
+        }
+        pos
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
         let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
@@ -109,10 +114,11 @@ pub struct OrbitShape {
 
 pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) -> OrbitShape {
     if planet.parent_entity.is_some() {
+        let inclination_rad = moon_orbit_inclination_rad(&planet.name).unwrap_or(0.0);
         OrbitShape {
             semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
             eccentricity: 0.0,
-            inclination_rad: 0.0,
+            inclination_rad,
             long_asc_node_rad: 0.0,
             arg_periapsis_rad: 0.0,
         }
@@ -135,6 +141,13 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
     }
 }
 
+fn moon_orbit_inclination_rad(name: &str) -> Option<f32> {
+    match name {
+        "Moon" => Some(5.145_f32.to_radians()),
+        _ => None,
+    }
+}
+
 struct OrbitalElements {
     semi_major_axis_au: f32,
     eccentricity: f32,
@@ -149,28 +162,28 @@ fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {
     // Source: NASA planetary fact sheets (approximate).
     match name {
         "Mercury" => Some(elements_from_degrees(
-            0.38709927, 0.20563593, 7.00497902, 48.33076593, 77.45779628, 252.25032350,
+            0.387, 0.20563593, 7.005, 48.33076593, 77.45779628, 252.25032350,
         )),
         "Venus" => Some(elements_from_degrees(
-            0.72333566, 0.00677672, 3.39467605, 76.67984255, 131.60246718, 181.97909950,
+            0.723, 0.00677672, 3.394, 76.67984255, 131.60246718, 181.97909950,
         )),
         "Earth" => Some(elements_from_degrees(
-            1.00000261, 0.01671123, -0.00001531, 0.0, 102.93768193, 100.46457166,
+            1.000, 0.01671123, 0.0, 0.0, 102.93768193, 100.46457166,
         )),
         "Mars" => Some(elements_from_degrees(
-            1.52371034, 0.09339410, 1.84969142, 49.55809321, 336.04084, 355.45332,
+            1.524, 0.09339410, 1.85, 49.55809321, 336.04084, 355.45332,
         )),
         "Jupiter" => Some(elements_from_degrees(
-            5.20288700, 0.04838624, 1.30439695, 100.47390909, 14.72847983, 34.39644051,
+            5.204, 0.04838624, 1.304, 100.47390909, 14.72847983, 34.39644051,
         )),
         "Saturn" => Some(elements_from_degrees(
-            9.53667594, 0.05386179, 2.48599187, 113.66242448, 92.59887831, 49.95424423,
+            9.582, 0.05386179, 2.485, 113.66242448, 92.59887831, 49.95424423,
         )),
         "Uranus" => Some(elements_from_degrees(
-            19.18916464, 0.04725744, 0.77263783, 74.01692503, 170.95427630, 313.23810451,
+            19.201, 0.04725744, 0.773, 74.01692503, 170.95427630, 313.23810451,
         )),
         "Neptune" => Some(elements_from_degrees(
-            30.06992276, 0.00859048, 1.77004347, 131.78422574, 44.96476227, 304.87964,
+            30.047, 0.00859048, 1.77, 131.78422574, 44.96476227, 304.87964,
         )),
         _ => None,
     }
@@ -235,7 +248,7 @@ pub fn calculate_planet_rotation(planet: &Planet, time_days: f32) -> f32 {
 pub fn calculate_visual_radius(planet: &Planet, solar_params: &SolarSystemParameters) -> f32 {
     // Astronomical radii in kilometers (actual values)
     let astronomical_radii = [
-        ("Sun", 696342.0),
+        ("Sun", 696340.0),
         ("Jupiter", 69911.0),
         ("Saturn", 58232.0),
         ("Uranus", 25362.0),

@@ -111,7 +111,7 @@ pub fn setup_space(
     // Camera positioned to view the full set of orbits on load
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 150000.0, 1800000.0)
+            transform: Transform::from_xyz(0.0, 120000.0, 1500000.0)
                 .looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },

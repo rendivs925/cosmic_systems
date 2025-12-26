@@ -169,10 +169,12 @@ pub fn update_planet_rotations(
     for (mut transform, planet_comp) in query.iter_mut() {
         let rotation_angle =
             physics::calculate_planet_rotation(&planet_comp.domain_planet, time_days);
+        let tilt_rad = planet_comp.domain_planet.axial_tilt_deg.to_radians();
 
-        // Rotate around the planet's local Y axis (for simplicity)
-        // In reality, planets have different rotation axes, but this works for visualization
-        transform.rotation = Quat::from_rotation_y(rotation_angle);
+        // Apply axial tilt, then spin around the tilted local Y axis.
+        let tilt = Quat::from_rotation_z(tilt_rad);
+        let spin = Quat::from_rotation_y(rotation_angle);
+        transform.rotation = tilt * spin;
     }
 }
 
@@ -814,8 +816,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
                 "Stellar Classification",
                 "G-type main-sequence star (G2V)",
             );
-            display_info_section(ui, "Mass", "1.989 × 10³⁰ kg (333,000 Earth masses)");
-            display_info_section(ui, "Radius", "696,342 km (109 Earth radii)");
+            display_info_section(ui, "Mass", "1.9885 × 10³⁰ kg (333,000 Earth masses)");
+            display_info_section(ui, "Radius", "696,340 km (109 Earth radii)");
             display_info_section(ui, "Surface Temperature", "5,778 K (5,505°C)");
             display_info_section(ui, "Composition", "About 74% hydrogen, 24% helium (by mass)");
             display_info_section(ui, "Luminosity", "3.83 × 10²⁶ W");
@@ -827,8 +829,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "3.301 × 10²³ kg (0.055 Earth masses)");
             display_info_section(ui, "Radius", "2,439.7 km (0.383 Earth radii)");
             display_info_section(ui, "Distance from Sun", "0.387 AU (57.9 million km)");
-            display_info_section(ui, "Orbital Period", "88 Earth days");
-            display_info_section(ui, "Day Length", "176 Earth days");
+            display_info_section(ui, "Orbital Period", "87.969 Earth days");
+            display_info_section(ui, "Rotation Period", "58.646 Earth days");
             display_info_section(ui, "Surface Temperature", "-173°C to 427°C");
             display_info_section(ui, "Atmosphere", "Extremely thin exosphere (sodium, oxygen)");
             display_info_section(ui, "Moons", "0");
@@ -838,8 +840,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "4.867 × 10²⁴ kg (0.815 Earth masses)");
             display_info_section(ui, "Radius", "6,051.8 km (0.949 Earth radii)");
             display_info_section(ui, "Distance from Sun", "0.723 AU (108.2 million km)");
-            display_info_section(ui, "Orbital Period", "225 Earth days");
-            display_info_section(ui, "Day Length", "243 Earth days (retrograde)");
+            display_info_section(ui, "Orbital Period", "224.701 Earth days");
+            display_info_section(ui, "Rotation Period", "243.025 Earth days (retrograde)");
             display_info_section(ui, "Surface Temperature", "462°C (hottest planet)");
             display_info_section(ui, "Atmosphere", "96.5% CO2, sulfuric acid clouds");
         }
@@ -848,8 +850,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "5.972 × 10²⁴ kg");
             display_info_section(ui, "Radius", "6,371 km");
             display_info_section(ui, "Distance from Sun", "1.000 AU (149.6 million km)");
-            display_info_section(ui, "Orbital Period", "365.25 days");
-            display_info_section(ui, "Day Length", "24 hours");
+            display_info_section(ui, "Orbital Period", "365.256 days");
+            display_info_section(ui, "Rotation Period", "23.934 hours");
             display_info_section(ui, "Surface Temperature", "-89°C to 58°C");
             display_info_section(ui, "Moons", "1 (The Moon)");
             display_info_section(ui, "Atmosphere", "78% N2, 21% O2, trace gases");
@@ -859,8 +861,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "6.417 × 10²³ kg (0.107 Earth masses)");
             display_info_section(ui, "Radius", "3,389.5 km (0.532 Earth radii)");
             display_info_section(ui, "Distance from Sun", "1.524 AU (227.9 million km)");
-            display_info_section(ui, "Orbital Period", "687 Earth days");
-            display_info_section(ui, "Day Length", "24.6 hours");
+            display_info_section(ui, "Orbital Period", "686.980 Earth days");
+            display_info_section(ui, "Rotation Period", "24.623 hours");
             display_info_section(ui, "Surface Temperature", "-87°C to -5°C");
             display_info_section(ui, "Moons", "2 (Phobos, Deimos)");
             display_info_section(ui, "Atmosphere", "95% CO2, thin and dusty");
@@ -869,9 +871,9 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Type", "Gas giant");
             display_info_section(ui, "Mass", "1.898 × 10²⁷ kg (317.8 Earth masses)");
             display_info_section(ui, "Radius", "69,911 km (10.97 Earth radii)");
-            display_info_section(ui, "Distance from Sun", "5.204 AU (778.5 million km)");
-            display_info_section(ui, "Orbital Period", "4,333 Earth days (11.86 years)");
-            display_info_section(ui, "Day Length", "9.93 hours");
+            display_info_section(ui, "Distance from Sun", "5.204 AU (778.6 million km)");
+            display_info_section(ui, "Orbital Period", "11.862 years");
+            display_info_section(ui, "Rotation Period", "9.925 hours");
             display_info_section(
                 ui,
                 "Moons",
@@ -883,9 +885,9 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Type", "Gas giant");
             display_info_section(ui, "Mass", "5.683 × 10²⁶ kg (95.2 Earth masses)");
             display_info_section(ui, "Radius", "58,232 km (9.14 Earth radii)");
-            display_info_section(ui, "Distance from Sun", "9.539 AU (1.43 billion km)");
-            display_info_section(ui, "Orbital Period", "10,759 Earth days (29.46 years)");
-            display_info_section(ui, "Day Length", "10.7 hours");
+            display_info_section(ui, "Distance from Sun", "9.582 AU (1.433 billion km)");
+            display_info_section(ui, "Orbital Period", "29.457 years");
+            display_info_section(ui, "Rotation Period", "10.7 hours");
             display_info_section(ui, "Moons", "146+ (major: Titan, Enceladus, Mimas)");
             display_info_section(ui, "Rings", "Complex ring system of ice and rock");
             display_info_section(ui, "Atmosphere", "Hydrogen, helium, trace methane");
@@ -894,10 +896,10 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Type", "Ice giant");
             display_info_section(ui, "Mass", "8.681 × 10²⁵ kg (14.5 Earth masses)");
             display_info_section(ui, "Radius", "25,362 km (4.01 Earth radii)");
-            display_info_section(ui, "Distance from Sun", "19.191 AU (2.87 billion km)");
-            display_info_section(ui, "Orbital Period", "30,687 Earth days (84.01 years)");
-            display_info_section(ui, "Day Length", "17.2 hours");
-            display_info_section(ui, "Axial Tilt", "98° (rotates on its side)");
+            display_info_section(ui, "Distance from Sun", "19.201 AU (2.871 billion km)");
+            display_info_section(ui, "Orbital Period", "84.0205 years");
+            display_info_section(ui, "Rotation Period", "17.24 hours (retrograde)");
+            display_info_section(ui, "Axial Tilt", "97.77° (rotates on its side)");
             display_info_section(
                 ui,
                 "Moons",
@@ -909,9 +911,9 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Type", "Ice giant");
             display_info_section(ui, "Mass", "1.024 × 10²⁶ kg (17.1 Earth masses)");
             display_info_section(ui, "Radius", "24,622 km (3.88 Earth radii)");
-            display_info_section(ui, "Distance from Sun", "30.061 AU (4.5 billion km)");
-            display_info_section(ui, "Orbital Period", "60,190 Earth days (164.8 years)");
-            display_info_section(ui, "Day Length", "16.1 hours");
+            display_info_section(ui, "Distance from Sun", "30.047 AU (4.495 billion km)");
+            display_info_section(ui, "Orbital Period", "164.8 years");
+            display_info_section(ui, "Rotation Period", "16.11 hours");
             display_info_section(
                 ui,
                 "Wind Speed",
@@ -925,8 +927,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "7.342 × 10²² kg (0.0123 Earth masses)");
             display_info_section(ui, "Radius", "1,737.4 km (0.273 Earth radii)");
             display_info_section(ui, "Distance from Earth", "384,400 km (0.00257 AU)");
-            display_info_section(ui, "Orbital Period", "27.3 Earth days");
-            display_info_section(ui, "Day Length", "27.3 Earth days (tidal locking)");
+            display_info_section(ui, "Orbital Period", "27.3217 Earth days");
+            display_info_section(ui, "Rotation Period", "27.3217 Earth days (tidal locking)");
             display_info_section(ui, "Surface Gravity", "1.62 m/s² (16.6% of Earth)");
             display_info_section(ui, "Surface", "Regolith with basaltic maria");
         }
