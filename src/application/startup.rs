@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use rand;
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -284,78 +283,12 @@ pub fn setup_space(
     }
 }
 
-// Create a comprehensive starfield background covering all directions
+// Create minimal starfield for performance (disabled for optimal performance)
 fn create_starfield(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
+    _commands: &mut Commands,
+    _meshes: &mut ResMut<Assets<Mesh>>,
+    _materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
-    // Create distant stars as emissive points - optimized count for performance
-    let star_count = 1500; // Reduced for better performance
-    let star_distance = 8000.0; // Stars are very far away
-
-    for _ in 0..star_count {
-        // Generate random position on a sphere - improved distribution
-        let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI; // Full 360 degrees
-        let phi = rand::random::<f32>() * std::f32::consts::PI; // Full sphere including poles
-        let x = star_distance * phi.sin() * theta.cos();
-        let y = star_distance * phi.sin() * theta.sin();
-        let z = star_distance * phi.cos();
-
-        // Random star size (very small)
-        let star_size = rand::random::<f32>() * 0.3 + 0.05;
-
-        // Random star brightness/color - increased variety
-        let star_brightness = rand::random::<f32>() * 0.9 + 0.1;
-        let star_color = match rand::random::<f32>() {
-            x if x < 0.08 => // Blue giants
-                Color::srgb(0.6 * star_brightness, 0.7 * star_brightness, 1.0 * star_brightness),
-            x if x < 0.16 => // Red giants
-                Color::srgb(1.0 * star_brightness, 0.5 * star_brightness, 0.3 * star_brightness),
-            x if x < 0.24 => // Orange stars
-                Color::srgb(1.0 * star_brightness, 0.7 * star_brightness, 0.4 * star_brightness),
-            _ => // White/yellow stars (majority)
-                Color::srgb(0.95 * star_brightness, 0.95 * star_brightness, 0.85 * star_brightness),
-        };
-
-        commands.spawn(PbrBundle {
-            mesh: meshes.add(Mesh::from(Sphere { radius: star_size })),
-            material: materials.add(StandardMaterial {
-                base_color: star_color,
-                emissive: LinearRgba::new(star_brightness * 1.5, star_brightness * 1.5, star_brightness * 1.5, 1.0),
-                ..default()
-            }),
-            transform: Transform::from_translation(Vec3::new(x, y, z)),
-            ..default()
-        });
-    }
-
-    // Create brighter, more prominent stars for visual interest
-    for _ in 0..50 { // Reduced bright stars for performance
-        let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
-        let phi = rand::random::<f32>() * std::f32::consts::PI;
-        let x = star_distance * phi.sin() * theta.cos();
-        let y = star_distance * phi.sin() * theta.sin();
-        let z = star_distance * phi.cos();
-
-        let star_size = rand::random::<f32>() * 1.5 + 0.8;
-        let star_brightness = rand::random::<f32>() * 0.8 + 0.5;
-
-        let bright_star_color = match rand::random::<f32>() {
-            x if x < 0.3 => Color::srgb(0.8 * star_brightness, 0.9 * star_brightness, 1.0 * star_brightness), // Blue-white
-            x if x < 0.6 => Color::srgb(1.0 * star_brightness, 0.9 * star_brightness, 0.7 * star_brightness), // Yellow-white
-            _ => Color::srgb(1.0 * star_brightness, 0.8 * star_brightness, 0.6 * star_brightness), // Orange
-        };
-
-        commands.spawn(PbrBundle {
-            mesh: meshes.add(Mesh::from(Sphere { radius: star_size })),
-            material: materials.add(StandardMaterial {
-                base_color: bright_star_color,
-                emissive: LinearRgba::new(4.0 * star_brightness, 4.0 * star_brightness, 3.5 * star_brightness, 1.0),
-                ..default()
-            }),
-            transform: Transform::from_translation(Vec3::new(x, y, z)),
-            ..default()
-        });
-    }
+    // Starfield disabled for performance optimization
+    // Previously created 1500+ stars which caused performance issues
 }
