@@ -442,16 +442,20 @@ pub fn update_camera_controller(
 
         let dt = time.delta_seconds();
 
-        // Handle mouse look for rotation (only when left mouse button is held)
+        // Handle mouse look for rotation
         let mut mouse_delta = Vec2::ZERO;
         for motion in mouse_motion.read() {
             mouse_delta += motion.delta;
         }
 
-        // Apply mouse sensitivity and update rotation only when left mouse button is held
-        // This provides precise control for 3D navigation
-        if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Left) {
-            let sensitivity = controller.sensitivity;
+        // Apply mouse sensitivity and update rotation whenever the mouse moves.
+        if mouse_delta != Vec2::ZERO {
+            let sensitivity = controller.sensitivity
+                * if mouse_buttons.pressed(MouseButton::Right) {
+                    1.5
+                } else {
+                    1.0
+                };
             let yaw = -mouse_delta.x * sensitivity;
             let pitch = -mouse_delta.y * sensitivity;
 
