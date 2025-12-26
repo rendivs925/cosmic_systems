@@ -68,34 +68,66 @@ pub fn calculate_planet_rotation(planet: &Planet, time_days: f32) -> f32 {
     2.0 * std::f32::consts::PI * time_hours / planet.rotation_period_hours
 }
 
-/// Calculate the visual radius for a planet/moon based on its actual size and scaling
+/// Calculate the visual radius for a planet/moon based on actual astronomical sizes with correct relative proportions
 pub fn calculate_visual_radius(planet: &Planet, solar_params: &SolarSystemParameters) -> f32 {
-    // Different scaling for planets vs moons
-    if planet.parent_entity.is_some() {
-        // Moon scaling - make moons more visible relative to their small size
-        let moon_radius_km = planet.radius_km;
+    // Astronomical radii in kilometers (actual values)
+    let astronomical_radii = [
+        ("Sun", 696342.0),
+        ("Jupiter", 69911.0),
+        ("Saturn", 58232.0),
+        ("Uranus", 25362.0),
+        ("Neptune", 24622.0),
+        ("Earth", 6371.0),
+        ("Venus", 6051.8),
+        ("Mars", 3389.5),
+        ("Mercury", 2439.7),
+        // Major moons
+        ("Moon", 1737.4),
+        ("Ganymede", 2634.1),
+        ("Callisto", 2410.3),
+        ("Io", 1821.6),
+        ("Europa", 1560.8),
+        ("Titan", 2574.7),
+        ("Rhea", 763.8),
+        ("Iapetus", 734.5),
+        ("Dione", 561.4),
+        ("Tethys", 531.1),
+        ("Enceladus", 252.1),
+        ("Mimas", 198.2),
+        ("Hyperion", 135.0),
+        ("Titania", 788.4),
+        ("Oberon", 761.4),
+        ("Umbriel", 584.7),
+        ("Ariel", 578.9),
+        ("Miranda", 235.8),
+        ("Triton", 1353.4),
+        ("Phobos", 11.1),
+        ("Deimos", 6.2),
+    ];
 
-        // Minimum visible size for moons (so they're not invisible)
-        let min_visible_radius = 2.0; // Minimum 2 units radius
+    // Find the actual astronomical radius for this planet
+    let astronomical_radius_km = astronomical_radii
+        .iter()
+        .find(|(name, _)| *name == planet.name)
+        .map(|(_, radius)| *radius)
+        .unwrap_or(planet.radius_km); // Fallback to stored value
 
-        // Scale based on actual size but ensure visibility
-        let scaled_radius = (moon_radius_km / 1000.0).max(min_visible_radius);
+    // Calculate size relative to Mercury (smallest planet) to establish baseline
+    let mercury_radius_km = 2439.7;
+    let relative_to_mercury = astronomical_radius_km / mercury_radius_km;
 
-        // Apply planet scale for consistency
-        scaled_radius * solar_params.planet_scale * 2.0 // Extra scaling for moons
+    // Apply logarithmic scaling to make large objects manageable while preserving proportions
+    // This ensures Mercury is visible but Sun doesn't overwhelm the scene
+    let scaled_relative = if astronomical_radius_km > mercury_radius_km * 10.0 {
+        // For large objects (planets and Sun), use logarithmic scaling
+        (relative_to_mercury.ln() * 2.0).max(1.0)
     } else {
-        // Planet scaling (existing logic)
-        let jupiter_radius_km = 71492.0; // Jupiter's radius in km
+        // For smaller objects (moons), maintain more linear scaling
+        relative_to_mercury.max(0.1)
+    };
 
-        // Calculate relative size, but ensure minimum visibility
-        let relative_size = (planet.radius_km / jupiter_radius_km).max(0.02); // Min 2% of Jupiter's size
-
-        // Apply logarithmic scaling for better visibility of small planets
-        let log_scaled = (relative_size * 10.0).ln().max(0.1);
-
-        // Convert to simulation units and apply final scaling
-        log_scaled * solar_params.planet_scale * 0.5
-    }
+    // Apply final scaling for visibility in the simulation
+    scaled_relative * solar_params.planet_scale
 }
 
 /// Calculate the visual radius for the Sun with appropriate scaling

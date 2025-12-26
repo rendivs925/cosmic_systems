@@ -35,11 +35,11 @@ impl Planet {
         }
     }
 
-    // Convenience method to create planets with data
+    // Convenience method to create planets with data (using accurate astronomical radii)
     pub fn create_mercury() -> Self {
         Self::new(
             "Mercury".to_string(),
-            4879.0,
+            2439.7,  // Accurate radius in km
             3.3011e23,
             Color::srgb(0.5, 0.5, 0.5), // gray rocky
             0.387,
@@ -52,7 +52,7 @@ impl Planet {
     pub fn create_venus() -> Self {
         Self::new(
             "Venus".to_string(),
-            12104.0,
+            6051.8,  // Accurate radius in km
             4.8675e24,
             Color::srgb(0.9, 0.8, 0.6), // yellowish cloudy
             0.723,
@@ -65,7 +65,7 @@ impl Planet {
     pub fn create_earth() -> Self {
         Self::new(
             "Earth".to_string(),
-            12756.0,
+            6371.0,  // Accurate radius in km
             5.9724e24,
             Color::srgb(0.2, 0.4, 0.8), // blue with green continents
             1.0,
@@ -78,7 +78,7 @@ impl Planet {
     pub fn create_mars() -> Self {
         Self::new(
             "Mars".to_string(),
-            6792.0,
+            3389.5,  // Accurate radius in km
             6.4171e23,
             Color::srgb(0.8, 0.3, 0.1), // red/orange
             1.524,
@@ -91,7 +91,7 @@ impl Planet {
     pub fn create_jupiter() -> Self {
         Self::new(
             "Jupiter".to_string(),
-            142984.0,
+            69911.0, // Accurate radius in km
             1.8982e27,
             Color::srgb(0.8, 0.6, 0.4), // orange/brown bands
             5.204,
@@ -104,7 +104,7 @@ impl Planet {
     pub fn create_saturn() -> Self {
         Self::new(
             "Saturn".to_string(),
-            120536.0,
+            58232.0, // Accurate radius in km
             5.6834e26,
             Color::srgb(0.9, 0.8, 0.5), // golden rings
             9.539,
@@ -117,7 +117,7 @@ impl Planet {
     pub fn create_uranus() -> Self {
         Self::new(
             "Uranus".to_string(),
-            51118.0,
+            25362.0, // Accurate radius in km
             8.6810e25,
             Color::srgb(0.6, 0.8, 0.9), // pale cyan
             19.191,
@@ -130,7 +130,7 @@ impl Planet {
     pub fn create_neptune() -> Self {
         Self::new(
             "Neptune".to_string(),
-            49528.0,
+            24622.0, // Accurate radius in km
             1.02413e26,
             Color::srgb(0.3, 0.5, 0.9), // deep azure
             30.061,
@@ -143,7 +143,7 @@ impl Planet {
     pub fn create_sun() -> Self {
         Self::new(
             "Sun".to_string(),
-            1392684.0,
+            696342.0, // Accurate radius in km
             1.989e30,
             Color::srgb(1.0, 1.0, 0.9), // bright yellowish-white
             0.0, // Sun doesn't orbit
