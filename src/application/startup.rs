@@ -90,10 +90,10 @@ pub fn setup_space(
         brightness: 0.15, // Maximum ambient brightness for planet visibility
     });
 
-    // Camera positioned to view the properly scaled astronomical solar system
+    // Camera positioned to view the vastly scaled astronomical solar system
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 200.0, 800.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 500.0, 2000.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         CameraController {
@@ -107,13 +107,13 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source with massive intensity for astronomical distances
+    // Sun as the main light source with enormous intensity for vast astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 5000000.0, // Massive intensity for astronomical-scale illumination
+            intensity: 20000000.0, // Enormous intensity for vast astronomical-scale illumination
             shadows_enabled: false, // Disable shadows for better performance
             color: Color::srgb(1.0, 1.0, 0.98), // Pure sunlight
-            range: 20000.0, // Extremely extended range for all planets
+            range: 80000.0, // Extremely extended range for all planets across vast distances
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
@@ -132,40 +132,40 @@ pub fn setup_space(
         ..default()
     });
 
-    // Add powerful fill lights covering the expanded astronomical distances
+    // Add enormously powerful fill lights covering the vast astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 800000.0, // Very bright fill light for large distances
+            intensity: 5000000.0, // Enormously bright fill light for vast distances
             shadows_enabled: false,
             color: Color::srgb(0.9, 0.95, 1.0), // Bright white-blue fill light
-            range: 15000.0, // Much extended range for astronomical distances
+            range: 60000.0, // Extremely extended range for vast astronomical distances
             ..default()
         },
-        transform: Transform::from_xyz(1000.0, 500.0, 1000.0), // Offset position for side illumination
+        transform: Transform::from_xyz(2000.0, 1000.0, 2000.0), // Offset position for side illumination
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 800000.0, // Second fill light from opposite direction
+            intensity: 5000000.0, // Second fill light from opposite direction
             shadows_enabled: false,
             color: Color::srgb(1.0, 0.9, 0.95), // Warm white fill light
-            range: 15000.0,
+            range: 60000.0,
             ..default()
         },
-        transform: Transform::from_xyz(-1000.0, -500.0, -1000.0), // Opposite position
+        transform: Transform::from_xyz(-2000.0, -1000.0, -2000.0), // Opposite position
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 600000.0, // Top illumination
+            intensity: 4000000.0, // Top illumination
             shadows_enabled: false,
             color: Color::srgb(0.95, 0.95, 1.0), // Cool white
-            range: 15000.0,
+            range: 60000.0,
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 2000.0, 0.0), // Above the solar system
+        transform: Transform::from_xyz(0.0, 5000.0, 0.0), // Above the solar system
         ..default()
     });
 
@@ -212,8 +212,11 @@ pub fn setup_space(
         Planet::create_umbriel(),
         Planet::create_titania(),
         Planet::create_oberon(),
-        // Neptune's major moon
+        // Neptune's major moons
         Planet::create_triton(),
+        Planet::create_proteus(),
+        Planet::create_nereid(),
+        Planet::create_larissa(),
     ];
 
     // Combine planets and moons

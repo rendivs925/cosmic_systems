@@ -431,6 +431,45 @@ impl Planet {
         )
     }
 
+    pub fn create_proteus() -> Self {
+        Self::new(
+            "Proteus".to_string(),
+            210.0,   // Neptune's moon
+            4.4e19,
+            Color::srgb(0.5, 0.5, 0.6), // dark icy
+            0.0008,  // Close to Neptune
+            1.12,    // 26.9 hours
+            1.12 * 24.0, // synchronous rotation
+            Some("Neptune".to_string()),
+        )
+    }
+
+    pub fn create_nereid() -> Self {
+        Self::new(
+            "Nereid".to_string(),
+            170.0,   // Neptune's moon
+            3.1e19,
+            Color::srgb(0.6, 0.6, 0.7), // icy
+            0.0369,  // Distant orbit: ~5.5 million km from Neptune
+            360.13,  // Very long orbital period
+            360.13 * 24.0, // synchronous rotation
+            Some("Neptune".to_string()),
+        )
+    }
+
+    pub fn create_larissa() -> Self {
+        Self::new(
+            "Larissa".to_string(),
+            97.0,    // Neptune's moon
+            4.2e17,
+            Color::srgb(0.5, 0.5, 0.5), // gray
+            0.0005,  // Close to Neptune
+            0.55,    // 13.2 hours
+            0.55 * 24.0, // synchronous rotation
+            Some("Neptune".to_string()),
+        )
+    }
+
     pub fn create_charon() -> Self {
         Self::new(
             "Charon".to_string(),
