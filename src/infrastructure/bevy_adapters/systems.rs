@@ -300,7 +300,6 @@ pub fn handle_solar_system_input(
 pub fn update_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
     mut query: Query<(&mut CameraController, &mut Transform)>,
@@ -312,14 +311,14 @@ pub fn update_camera_controller(
 
         let dt = time.delta_seconds();
 
-        // Handle mouse look for rotation (right mouse button held)
+        // Handle mouse look for rotation (always active when mouse moves)
         let mut mouse_delta = Vec2::ZERO;
         for motion in mouse_motion.read() {
             mouse_delta += motion.delta;
         }
 
         // Apply mouse sensitivity and update rotation
-        if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Right) {
+        if mouse_delta != Vec2::ZERO {
             let sensitivity = controller.sensitivity;
             let yaw = -mouse_delta.x * sensitivity;
             let pitch = -mouse_delta.y * sensitivity;
@@ -335,19 +334,51 @@ pub fn update_camera_controller(
             transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, clamped_pitch, euler.2);
         }
 
-        // Handle keyboard movement (relative to camera orientation)
+        // Handle keyboard rotation (cursor keys for looking around)
+        let mut rotation_delta = Vec2::ZERO;
+        if keyboard.pressed(KeyCode::ArrowUp) {
+            rotation_delta.y -= 1.0;
+        }
+        if keyboard.pressed(KeyCode::ArrowDown) {
+            rotation_delta.y += 1.0;
+        }
+        if keyboard.pressed(KeyCode::ArrowLeft) {
+            rotation_delta.x -= 1.0;
+        }
+        if keyboard.pressed(KeyCode::ArrowRight) {
+            rotation_delta.x += 1.0;
+        }
+
+        // Apply keyboard-based rotation
+        if rotation_delta != Vec2::ZERO {
+            let key_sensitivity = controller.sensitivity * 50.0; // Keyboard rotation sensitivity
+            let yaw = -rotation_delta.x * key_sensitivity;
+            let pitch = -rotation_delta.y * key_sensitivity;
+
+            // Apply rotation to camera transform
+            transform.rotate_y(yaw);
+            let right = *transform.right();
+            transform.rotate_axis(bevy::math::Dir3::new(right).unwrap_or(bevy::math::Dir3::X), pitch);
+
+            // Prevent camera from flipping upside down
+            let euler = transform.rotation.to_euler(EulerRot::YXZ);
+            let clamped_pitch = euler.1.clamp(-std::f32::consts::PI / 2.1, std::f32::consts::PI / 2.1);
+            transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, clamped_pitch, euler.2);
+        }
+
+        // Handle keyboard movement (WASD for movement, not rotation)
         let mut movement = Vec3::ZERO;
 
-        if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
+        if keyboard.pressed(KeyCode::KeyW) {
             movement += *transform.forward();
         }
-        if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
+        if keyboard.pressed(KeyCode::KeyS) {
             movement -= *transform.forward();
         }
-        if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
+        if keyboard.pressed(KeyCode::KeyA) {
             movement -= *transform.right();
         }
-        if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
+        if keyboard.pressed(KeyCode::KeyD) {
             movement += *transform.right();
         }
         if keyboard.pressed(KeyCode::Space) {
@@ -357,18 +388,11 @@ pub fn update_camera_controller(
             movement -= Vec3::Y;
         }
 
-        // Handle mouse wheel for zooming
-        let mut zoom_factor = 1.0;
+        // Handle mouse wheel for zooming (direct position change, not velocity-based)
         for wheel_event in mouse_wheel.read() {
-            // Mouse wheel creates zoom based on y delta (scroll up = zoom in, scroll down = zoom out)
-            zoom_factor *= (1.0 - wheel_event.y * 0.1).clamp(0.1, 10.0);
-        }
-
-        // Apply zoom by moving camera forward/backward along its look direction
-        if zoom_factor != 1.0 {
+            let zoom_distance = wheel_event.y * controller.speed * 0.5; // Zoom speed
             let forward = *transform.forward();
-            let zoom_movement = forward * (zoom_factor - 1.0) * controller.speed * 2.0; // Zoom speed multiplier
-            movement += zoom_movement;
+            transform.translation += forward * zoom_distance;
         }
 
         // Apply speed
