@@ -507,6 +507,7 @@ pub fn setup_space(
                                 alpha_mode: AlphaMode::Blend,
                                 double_sided: true,
                                 perceptual_roughness: 0.9,
+                                unlit: true,
                                 ..default()
                             }),
                             ..default()
