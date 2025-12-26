@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
+use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::application::simulation_service::SimulationService;
+use crate::domain::services::physics;
 use super::components::*;
 
 // System to update gyroscopes
@@ -87,5 +89,73 @@ pub fn handle_input(
         params.asymmetry += param_delta * 0.1;
         params.asymmetry = params.asymmetry.max(0.0).min(1.0);
         println!("Asymmetry increased to: {:.2}", params.asymmetry);
+    }
+}
+
+// System to update planet positions in their orbits
+pub fn update_planet_positions(
+    time: Res<Time>,
+    solar_params: Res<SolarSystemParameters>,
+    mut query: Query<(&mut Transform, &PlanetComponent)>,
+) {
+    let elapsed_seconds = time.elapsed_seconds();
+    let time_days = solar_params.time_to_days(elapsed_seconds);
+
+    for (mut transform, planet_comp) in query.iter_mut() {
+        let new_position = physics::calculate_planet_position(
+            &planet_comp.domain_planet,
+            time_days,
+            &solar_params,
+        );
+        transform.translation = new_position;
+    }
+}
+
+// System to update planet rotations
+pub fn update_planet_rotations(
+    time: Res<Time>,
+    solar_params: Res<SolarSystemParameters>,
+    mut query: Query<(&mut Transform, &PlanetComponent)>,
+) {
+    let elapsed_seconds = time.elapsed_seconds();
+    let time_days = solar_params.time_to_days(elapsed_seconds);
+
+    for (mut transform, planet_comp) in query.iter_mut() {
+        let rotation_angle = physics::calculate_planet_rotation(
+            &planet_comp.domain_planet,
+            time_days,
+        );
+
+        // Rotate around the planet's local Y axis (for simplicity)
+        // In reality, planets have different rotation axes, but this works for visualization
+        transform.rotation = Quat::from_rotation_y(rotation_angle);
+    }
+}
+
+// System to handle solar system controls (time scale, etc.)
+pub fn handle_solar_system_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut solar_params: ResMut<SolarSystemParameters>,
+) {
+    // Time scale controls
+    if keyboard.pressed(KeyCode::KeyT) {
+        solar_params.time_scale *= 1.1;
+        println!("Time scale: {:.1}x", solar_params.time_scale);
+    }
+    if keyboard.pressed(KeyCode::KeyR) && solar_params.time_scale > 0.1 {
+        solar_params.time_scale /= 1.1;
+        println!("Time scale: {:.1}x", solar_params.time_scale);
+    }
+
+    // Reset time scale
+    if keyboard.pressed(KeyCode::KeyY) {
+        solar_params.time_scale = 1.0;
+        println!("Time scale reset to: {:.1}x", solar_params.time_scale);
+    }
+
+    // Toggle orbit visualization (placeholder for future feature)
+    if keyboard.just_pressed(KeyCode::KeyO) {
+        solar_params.show_orbits = !solar_params.show_orbits;
+        println!("Orbit visualization: {}", if solar_params.show_orbits { "ON" } else { "OFF" });
     }
 }
