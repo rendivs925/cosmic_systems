@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use rand;
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -82,6 +83,13 @@ pub fn setup_space(
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
 
+    // Set up dark space environment
+    commands.insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.05))); // Very dark blue-black space
+    commands.insert_resource(AmbientLight {
+        color: Color::srgb(0.1, 0.1, 0.15), // Dim ambient light for space
+        brightness: 0.01,
+    });
+
     // Camera positioned to view the solar system
     commands.spawn((
         Camera3dBundle {
@@ -102,14 +110,18 @@ pub fn setup_space(
     // Sun as the main light source
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 100000.0,
-            shadows_enabled: true,
+            intensity: 200000.0, // Increased for better visibility in dark space
+            shadows_enabled: false, // Disable shadows for better performance
             color: Color::srgb(1.0, 1.0, 0.9),
+            range: 1000.0, // Limit light range for space realism
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         ..default()
     });
+
+    // Create starfield background
+    create_starfield(&mut commands, &mut meshes, &mut materials);
 
     // Create all planets and moons
     let planets = vec![
@@ -200,5 +212,75 @@ pub fn setup_space(
                 selected: false,
             },
         ));
+    }
+}
+
+// Create a starfield background for realistic space environment
+fn create_starfield(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) {
+    // Create distant stars as emissive points
+    let star_count = 2000;
+    let star_distance = 5000.0; // Stars are very far away
+
+    for _ in 0..star_count {
+        // Generate random position on a sphere
+        let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
+        let phi = (rand::random::<f32>() - 0.5) * std::f32::consts::PI; // Avoid poles for better distribution
+        let x = star_distance * phi.sin() * theta.cos();
+        let y = star_distance * phi.sin() * theta.sin();
+        let z = star_distance * phi.cos();
+
+        // Random star size (very small)
+        let star_size = rand::random::<f32>() * 0.5 + 0.1;
+
+        // Random star brightness/color
+        let star_brightness = rand::random::<f32>() * 0.8 + 0.2;
+        let star_color = if rand::random::<f32>() < 0.1 {
+            // 10% blue giants
+            Color::srgb(0.7 * star_brightness, 0.8 * star_brightness, 1.0 * star_brightness)
+        } else if rand::random::<f32>() < 0.2 {
+            // 10% red giants
+            Color::srgb(1.0 * star_brightness, 0.6 * star_brightness, 0.4 * star_brightness)
+        } else {
+            // 80% white/yellow stars
+            Color::srgb(0.9 * star_brightness, 0.9 * star_brightness, 1.0 * star_brightness)
+        };
+
+        commands.spawn(PbrBundle {
+            mesh: meshes.add(Mesh::from(Sphere { radius: star_size })),
+            material: materials.add(StandardMaterial {
+                base_color: star_color,
+                emissive: LinearRgba::new(star_brightness * 2.0, star_brightness * 2.0, star_brightness * 2.0, 1.0), // Stars glow
+                ..default()
+            }),
+            transform: Transform::from_translation(Vec3::new(x, y, z)),
+            ..default()
+        });
+    }
+
+    // Create a few brighter, more prominent stars
+    for _ in 0..50 {
+        let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
+        let phi = (rand::random::<f32>() - 0.5) * std::f32::consts::PI;
+        let x = star_distance * phi.sin() * theta.cos();
+        let y = star_distance * phi.sin() * theta.sin();
+        let z = star_distance * phi.cos();
+
+        let star_size = rand::random::<f32>() * 1.0 + 0.5;
+        let star_brightness = rand::random::<f32>() * 0.6 + 0.4;
+
+        commands.spawn(PbrBundle {
+            mesh: meshes.add(Mesh::from(Sphere { radius: star_size })),
+            material: materials.add(StandardMaterial {
+                base_color: Color::srgb(1.0 * star_brightness, 1.0 * star_brightness, 0.9 * star_brightness),
+                emissive: LinearRgba::new(3.0 * star_brightness, 3.0 * star_brightness, 2.7 * star_brightness, 1.0),
+                ..default()
+            }),
+            transform: Transform::from_translation(Vec3::new(x, y, z)),
+            ..default()
+        });
     }
 }
