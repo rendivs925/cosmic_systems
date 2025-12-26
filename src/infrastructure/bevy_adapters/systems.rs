@@ -504,40 +504,39 @@ pub fn detect_planet_hover(
     hovered_planet.info = None;
 
     // Get camera and cursor position
-    if let Ok((camera, camera_transform)) = camera_query.get_single() {
-        if let Some(cursor_pos) = windows.single().cursor_position() {
-            // Convert screen coordinates to world coordinates (simplified raycast)
-            // This is a basic implementation - for more accuracy, you'd use proper raycasting
+    if let Ok((_camera, camera_transform)) = camera_query.get_single() {
+        // Use a simpler distance-based approach for hover detection
+        // Check if any planet is close to the camera's forward direction
 
-            let mut closest_planet: Option<(String, f32)> = None;
-            let camera_pos = camera_transform.translation();
+        let camera_pos = camera_transform.translation();
+        let camera_forward = camera_transform.forward();
 
-            for (transform, selectable) in planet_query.iter() {
-                let planet_pos = transform.translation();
-                let distance = (planet_pos - camera_pos).length();
+        let mut closest_planet: Option<(String, f32)> = None;
 
-                // Simple distance-based hover detection
-                // In a real implementation, you'd cast a ray from camera through cursor
-                let hover_distance = 100.0; // Distance threshold for hovering
+        for (transform, selectable) in planet_query.iter() {
+            let planet_pos = transform.translation();
+            let distance_to_camera = (planet_pos - camera_pos).length();
 
-                if distance < hover_distance {
-                    if let Some((_, current_dist)) = closest_planet {
-                        if distance < current_dist {
-                            closest_planet = Some((selectable.name.clone(), distance));
-                        }
-                    } else {
-                        closest_planet = Some((selectable.name.clone(), distance));
+            // Check if planet is in front of camera (dot product > 0)
+            let to_planet = (planet_pos - camera_pos).normalize();
+            let dot_product = camera_forward.dot(to_planet);
+
+            // Only consider planets in front of camera and within reasonable distance
+            if dot_product > 0.8 && distance_to_camera < 5000.0 { // Wide viewing angle, reasonable distance
+                if let Some((_, current_dist)) = closest_planet {
+                    if distance_to_camera < current_dist {
+                        closest_planet = Some((selectable.name.clone(), distance_to_camera));
                     }
+                } else {
+                    closest_planet = Some((selectable.name.clone(), distance_to_camera));
                 }
             }
+        }
 
-            // Set hover information for the closest planet
-            if let Some((planet_name, _)) = closest_planet {
-                hovered_planet.name = Some(planet_name.clone());
-
-                // Set educational information based on planet name
-                hovered_planet.info = Some(get_planet_info(&planet_name));
-            }
+        // Set hover information for the closest planet
+        if let Some((planet_name, _)) = closest_planet {
+            hovered_planet.name = Some(planet_name.clone());
+            hovered_planet.info = Some(get_planet_info(&planet_name));
         }
     }
 }

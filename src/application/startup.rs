@@ -92,7 +92,7 @@ pub fn setup_space(
     // Camera positioned to view the vastly scaled astronomical solar system
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 500.0, 2000.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 2000.0, 8000.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         CameraController {
@@ -106,13 +106,13 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source with enormous intensity for vast astronomical distances
+    // Sun as the main light source with massive intensity for vast astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 20000000.0, // Enormous intensity for vast astronomical-scale illumination
+            intensity: 100000000.0, // Massive intensity for vast astronomical-scale illumination
             shadows_enabled: false, // Disable shadows for better performance
             color: Color::srgb(1.0, 1.0, 0.98), // Pure sunlight
-            range: 80000.0, // Extremely extended range for all planets across vast distances
+            range: 300000.0, // Extremely extended range for all planets across vast distances
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
@@ -122,8 +122,8 @@ pub fn setup_space(
     // Add directional light from the Sun's direction for better front illumination
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
-            illuminance: 10000.0, // Bright directional light
-            color: Color::srgb(1.0, 1.0, 0.9), // Sunlight color
+            illuminance: 50000.0, // Very bright directional light for vast distances
+            color: Color::srgb(1.0, 1.0, 0.95), // Sunlight color
             shadows_enabled: false,
             ..default()
         },
@@ -131,40 +131,40 @@ pub fn setup_space(
         ..default()
     });
 
-    // Add enormously powerful fill lights covering the vast astronomical distances
+    // Add massively powerful fill lights covering the vast astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 5000000.0, // Enormously bright fill light for vast distances
+            intensity: 50000000.0, // Massively bright fill light for vast distances
             shadows_enabled: false,
             color: Color::srgb(0.9, 0.95, 1.0), // Bright white-blue fill light
-            range: 60000.0, // Extremely extended range for vast astronomical distances
+            range: 250000.0, // Extremely extended range for vast astronomical distances
             ..default()
         },
-        transform: Transform::from_xyz(2000.0, 1000.0, 2000.0), // Offset position for side illumination
+        transform: Transform::from_xyz(10000.0, 5000.0, 10000.0), // Offset position for side illumination
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 5000000.0, // Second fill light from opposite direction
+            intensity: 50000000.0, // Second fill light from opposite direction
             shadows_enabled: false,
             color: Color::srgb(1.0, 0.9, 0.95), // Warm white fill light
-            range: 60000.0,
+            range: 250000.0,
             ..default()
         },
-        transform: Transform::from_xyz(-2000.0, -1000.0, -2000.0), // Opposite position
+        transform: Transform::from_xyz(-10000.0, -5000.0, -10000.0), // Opposite position
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 4000000.0, // Top illumination
+            intensity: 40000000.0, // Top illumination
             shadows_enabled: false,
             color: Color::srgb(0.95, 0.95, 1.0), // Cool white
-            range: 60000.0,
+            range: 250000.0,
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 5000.0, 0.0), // Above the solar system
+        transform: Transform::from_xyz(0.0, 15000.0, 0.0), // Above the solar system
         ..default()
     });
 
