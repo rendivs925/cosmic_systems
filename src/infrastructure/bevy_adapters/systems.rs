@@ -159,3 +159,87 @@ pub fn handle_solar_system_input(
         println!("Orbit visualization: {}", if solar_params.show_orbits { "ON" } else { "OFF" });
     }
 }
+
+// System to update camera controller based on input
+pub fn update_camera_controller(
+    time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut query: Query<&mut CameraController>,
+) {
+    for mut controller in query.iter_mut() {
+        if controller.mode != CameraMode::FreeFlight {
+            continue; // Only handle input for free flight mode for now
+        }
+
+        let dt = time.delta_seconds();
+
+        // Handle keyboard movement
+        let mut movement = Vec3::ZERO;
+
+        if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
+            movement.z -= 1.0;
+        }
+        if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
+            movement.z += 1.0;
+        }
+        if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
+            movement.x -= 1.0;
+        }
+        if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
+            movement.x += 1.0;
+        }
+        if keyboard.pressed(KeyCode::Space) {
+            movement.y += 1.0;
+        }
+        if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+            movement.y -= 1.0;
+        }
+
+        // Normalize movement vector and apply speed
+        if movement != Vec3::ZERO {
+            movement = movement.normalize() * controller.speed;
+            if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+                movement *= 5.0; // Speed boost
+            }
+        }
+
+        // Apply movement to velocity with damping
+        controller.velocity += movement * dt;
+        controller.velocity *= 0.9; // Velocity damping for smooth movement
+    }
+}
+
+// System to apply camera transformations based on controller state
+pub fn apply_camera_transform(
+    time: Res<Time>,
+    mut query: Query<(&mut CameraController, &mut Transform)>,
+) {
+    for (mut controller, mut transform) in query.iter_mut() {
+        match controller.mode {
+            CameraMode::FreeFlight => {
+                // Apply velocity to position
+                let dt = time.delta_seconds();
+                transform.translation += controller.velocity * dt;
+            }
+            CameraMode::Orbit => {
+                // Orbit around the solar system center
+                controller.orbit_angle += time.delta_seconds() * 0.5;
+                let orbit_pos = Vec3::new(
+                    controller.orbit_distance * controller.orbit_angle.cos(),
+                    10.0, // Slight elevation
+                    controller.orbit_distance * controller.orbit_angle.sin(),
+                );
+                transform.translation = orbit_pos;
+                transform.look_at(Vec3::ZERO, Vec3::Y);
+            }
+            CameraMode::FollowPlanet => {
+                // Follow a specific planet (placeholder)
+                // Would need to track the target entity's position
+            }
+            CameraMode::ApproachPlanet => {
+                // Approach a planet (placeholder)
+                // Would smoothly interpolate toward target
+            }
+        }
+    }
+}

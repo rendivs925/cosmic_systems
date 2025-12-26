@@ -3,7 +3,7 @@ use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::domain::services::physics;
-use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::components::{*, CameraController, CameraMode};
 
 // Setup scene for gyro propulsion simulation
 pub fn setup_gyro(
@@ -83,10 +83,21 @@ pub fn setup_space(
     commands.insert_resource(solar_params.clone());
 
     // Camera positioned to view the solar system
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 50.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 50.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        CameraController {
+            mode: CameraMode::FreeFlight,
+            speed: 50.0,
+            sensitivity: 0.002,
+            velocity: Vec3::ZERO,
+            target_entity: None,
+            orbit_distance: 300.0,
+            orbit_angle: 0.0,
+        },
+    ));
 
     // Sun as the main light source
     commands.spawn(PointLightBundle {
