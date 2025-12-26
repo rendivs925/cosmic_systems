@@ -90,10 +90,10 @@ pub fn setup_space(
         brightness: 0.15, // Maximum ambient brightness for planet visibility
     });
 
-    // Camera positioned to view the solar system
+    // Camera positioned to view the properly scaled astronomical solar system
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 50.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 200.0, 800.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         CameraController {
@@ -107,13 +107,13 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source with maximum intensity for planet visibility
+    // Sun as the main light source with massive intensity for astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 2000000.0, // Even higher intensity for maximum illumination
+            intensity: 5000000.0, // Massive intensity for astronomical-scale illumination
             shadows_enabled: false, // Disable shadows for better performance
-            color: Color::srgb(1.0, 1.0, 0.95), // Warm sunlight
-            range: 5000.0, // Extended range to cover all distances
+            color: Color::srgb(1.0, 1.0, 0.98), // Pure sunlight
+            range: 20000.0, // Extremely extended range for all planets
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
@@ -132,40 +132,40 @@ pub fn setup_space(
         ..default()
     });
 
-    // Add maximum fill lights in all directions for comprehensive planet illumination
+    // Add powerful fill lights covering the expanded astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 200000.0, // Much brighter fill light
+            intensity: 800000.0, // Very bright fill light for large distances
             shadows_enabled: false,
             color: Color::srgb(0.9, 0.95, 1.0), // Bright white-blue fill light
-            range: 4000.0, // Extended range
+            range: 15000.0, // Much extended range for astronomical distances
             ..default()
         },
-        transform: Transform::from_xyz(500.0, 200.0, 500.0), // Offset position for side illumination
+        transform: Transform::from_xyz(1000.0, 500.0, 1000.0), // Offset position for side illumination
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 200000.0, // Second fill light from opposite direction
+            intensity: 800000.0, // Second fill light from opposite direction
             shadows_enabled: false,
             color: Color::srgb(1.0, 0.9, 0.95), // Warm white fill light
-            range: 4000.0,
+            range: 15000.0,
             ..default()
         },
-        transform: Transform::from_xyz(-500.0, -200.0, -500.0), // Opposite position
+        transform: Transform::from_xyz(-1000.0, -500.0, -1000.0), // Opposite position
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 150000.0, // Top illumination
+            intensity: 600000.0, // Top illumination
             shadows_enabled: false,
             color: Color::srgb(0.95, 0.95, 1.0), // Cool white
-            range: 4000.0,
+            range: 15000.0,
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 800.0, 0.0), // Above the solar system
+        transform: Transform::from_xyz(0.0, 2000.0, 0.0), // Above the solar system
         ..default()
     });
 
