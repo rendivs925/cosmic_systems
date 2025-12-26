@@ -72,11 +72,57 @@ pub fn setup_gyro(
     });
 }
 
+// Helper function to get texture path for a planet
+fn get_planet_texture_path(planet_name: &str) -> Option<String> {
+    match planet_name {
+        "Sun" => None, // Sun remains emissive without texture
+        "Mercury" => Some("textures/planets/mercury/albedo.png".to_string()),
+        "Venus" => Some("textures/planets/venus/albedo.png".to_string()),
+        "Earth" => Some("textures/planets/earth/albedo.png".to_string()),
+        "Mars" => Some("textures/planets/mars/albedo.png".to_string()),
+        "Jupiter" => Some("textures/planets/jupiter/albedo.png".to_string()),
+        "Saturn" => Some("textures/planets/saturn/albedo.png".to_string()),
+        "Uranus" => Some("textures/planets/uranus/albedo.png".to_string()),
+        "Neptune" => Some("textures/planets/neptune/albedo.png".to_string()),
+        "Moon" => Some("textures/planets/moon/albedo.png".to_string()),
+        // Mars moons
+        "Phobos" => Some("textures/planets/phobos/albedo.png".to_string()),
+        "Deimos" => Some("textures/planets/deimos/albedo.png".to_string()),
+        // Jupiter moons
+        "Io" => Some("textures/planets/io/albedo.png".to_string()),
+        "Europa" => Some("textures/planets/europa/albedo.png".to_string()),
+        "Ganymede" => Some("textures/planets/ganymede/albedo.png".to_string()),
+        "Callisto" => Some("textures/planets/callisto/albedo.png".to_string()),
+        // Saturn moons
+        "Mimas" => Some("textures/planets/mimas/albedo.png".to_string()),
+        "Enceladus" => Some("textures/planets/enceladus/albedo.png".to_string()),
+        "Tethys" => Some("textures/planets/tethys/albedo.png".to_string()),
+        "Dione" => Some("textures/planets/dione/albedo.png".to_string()),
+        "Rhea" => Some("textures/planets/rhea/albedo.png".to_string()),
+        "Titan" => Some("textures/planets/titan/albedo.png".to_string()),
+        "Hyperion" => Some("textures/planets/hyperion/albedo.png".to_string()),
+        "Iapetus" => Some("textures/planets/iapetus/albedo.png".to_string()),
+        // Uranus moons
+        "Miranda" => Some("textures/planets/miranda/albedo.png".to_string()),
+        "Ariel" => Some("textures/planets/ariel/albedo.png".to_string()),
+        "Umbriel" => Some("textures/planets/umbriel/albedo.png".to_string()),
+        "Titania" => Some("textures/planets/titania/albedo.png".to_string()),
+        "Oberon" => Some("textures/planets/oberon/albedo.png".to_string()),
+        // Neptune moons
+        "Triton" => Some("textures/planets/triton/albedo.png".to_string()),
+        "Proteus" => Some("textures/planets/proteus/albedo.png".to_string()),
+        "Nereid" => Some("textures/planets/nereid/albedo.png".to_string()),
+        "Larissa" => Some("textures/planets/larissa/albedo.png".to_string()),
+        _ => None, // Fallback to colored material
+    }
+}
+
 // Setup scene for solar system simulation
 pub fn setup_space(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     // Insert solar system parameters as a resource
     let solar_params = SolarSystemParameters::for_visualization();
@@ -285,10 +331,15 @@ pub fn setup_space(
             PbrBundle {
                 mesh: meshes.add(Mesh::from(Sphere { radius: visual_radius })),
                 material: materials.add(StandardMaterial {
+                    base_color_texture: get_planet_texture_path(&planet.name)
+                        .map(|path| asset_server.load(path)),
                     base_color: if planet.name == "Sun" {
                         planet.color
+                    } else if get_planet_texture_path(&planet.name).is_some() {
+                        // Use white as base when texture is present (texture will provide the color)
+                        Color::WHITE
                     } else {
-                        // Keep original planet colors - the lighting will make them visible
+                        // Keep original planet colors as fallback when no texture
                         planet.color
                     },
                     emissive: if planet.name == "Sun" {
