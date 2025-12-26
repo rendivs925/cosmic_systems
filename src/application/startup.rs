@@ -375,25 +375,36 @@ pub fn setup_space(
                     let orbit_radius =
                         planet.orbital_distance_au * solar_params.scale_factor * 500.0;
                     let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
+                    let orbit_base_color = planet.color;
                     let orbit_material = materials.add(StandardMaterial {
-                        base_color: Color::srgba(0.4, 0.7, 1.0, 0.2),
-                        emissive: Color::srgba(0.3, 0.6, 1.0, 0.35).into(),
+                        base_color: orbit_base_color.with_alpha(0.22),
+                        emissive: orbit_emissive(orbit_base_color, 0.45),
                         unlit: true,
                         alpha_mode: AlphaMode::Blend,
                         double_sided: true,
                         ..default()
                     });
+                    let orbit_material_handle = orbit_material.clone();
+                    let orbit_motion =
+                        orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
                     commands.entity(*parent_entity).with_children(|parent| {
                         parent
                             .spawn(PbrBundle {
                                 mesh: orbit_mesh,
-                                material: orbit_material,
+                                material: orbit_material_handle,
                                 ..default()
                             })
                             .insert(OrbitComponent {
                                 radius: orbit_radius,
                                 planet_entity,
+                                material: orbit_material,
+                                base_color: orbit_base_color,
+                                tilt: orbit_motion.tilt,
+                                wobble_speed: orbit_motion.wobble_speed,
+                                wobble_amount: orbit_motion.wobble_amount,
+                                spin_speed: orbit_motion.spin_speed,
+                                phase: orbit_motion.phase,
                             })
                             .insert(Name::new(format!(
                                 "Orbit {} around {}",
@@ -404,24 +415,35 @@ pub fn setup_space(
             } else if planet.name != "Sun" {
                 let orbit_radius = solar_params.au_to_units(planet.orbital_distance_au);
                 let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
+                let orbit_base_color = planet.color;
                 let orbit_material = materials.add(StandardMaterial {
-                    base_color: Color::srgba(0.35, 0.75, 1.0, 0.25),
-                    emissive: Color::srgba(0.2, 0.6, 1.0, 0.4).into(),
+                    base_color: orbit_base_color.with_alpha(0.25),
+                    emissive: orbit_emissive(orbit_base_color, 0.5),
                     unlit: true,
                     alpha_mode: AlphaMode::Blend,
                     double_sided: true,
                     ..default()
                 });
+                let orbit_material_handle = orbit_material.clone();
+                let orbit_motion =
+                    orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
                 commands
                     .spawn(PbrBundle {
                         mesh: orbit_mesh,
-                        material: orbit_material,
+                        material: orbit_material_handle,
                         ..default()
                     })
                     .insert(OrbitComponent {
                         radius: orbit_radius,
                         planet_entity,
+                        material: orbit_material,
+                        base_color: orbit_base_color,
+                        tilt: orbit_motion.tilt,
+                        wobble_speed: orbit_motion.wobble_speed,
+                        wobble_amount: orbit_motion.wobble_amount,
+                        spin_speed: orbit_motion.spin_speed,
+                        phase: orbit_motion.phase,
                     })
                     .insert(Name::new(format!("Orbit {}", planet.name)));
             }
@@ -539,6 +561,47 @@ fn create_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<M
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
     meshes.add(mesh)
+}
+
+struct OrbitMotionParams {
+    tilt: Vec2,
+    wobble_speed: f32,
+    wobble_amount: f32,
+    spin_speed: f32,
+    phase: f32,
+}
+
+fn orbit_motion_params(name: &str, orbital_distance_au: f32, is_moon: bool) -> OrbitMotionParams {
+    let base = orbit_hash(name, 1);
+    let offset = orbit_hash(name, 7);
+    let max_tilt = if is_moon { 0.28 } else { 0.16 };
+    let tilt = Vec2::new((base * 2.0 - 1.0) * max_tilt, (offset * 2.0 - 1.0) * max_tilt);
+    let wobble_amount = if is_moon { 0.06 } else { 0.035 };
+    let wobble_speed = 0.05 + base * 0.12 + orbital_distance_au * 0.002;
+    let spin_speed = 0.02 + offset * 0.05;
+    let phase = base * TAU;
+
+    OrbitMotionParams {
+        tilt,
+        wobble_speed,
+        wobble_amount,
+        spin_speed,
+        phase,
+    }
+}
+
+fn orbit_hash(name: &str, seed: u32) -> f32 {
+    let mut hash = 2166136261u32 ^ seed;
+    for byte in name.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    (hash % 10_000) as f32 / 10_000.0
+}
+
+fn orbit_emissive(color: Color, intensity: f32) -> LinearRgba {
+    let [r, g, b, _] = color.as_rgba_f32();
+    LinearRgba::new(r * intensity, g * intensity, b * intensity, 1.0)
 }
 
 // Create minimal starfield for performance (disabled for optimal performance)

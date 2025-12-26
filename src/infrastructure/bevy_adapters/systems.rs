@@ -175,6 +175,35 @@ pub fn update_planet_rotations(
     }
 }
 
+// System to animate orbit visuals for a more dynamic presentation
+pub fn update_orbit_visuals(
+    time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut query: Query<(&mut Transform, &OrbitComponent)>,
+) {
+    let elapsed = time.elapsed_seconds();
+
+    for (mut transform, orbit) in query.iter_mut() {
+        let wobble_phase = elapsed * orbit.wobble_speed + orbit.phase;
+        let pitch = orbit.tilt.x + wobble_phase.sin() * orbit.wobble_amount;
+        let roll = orbit.tilt.y + (wobble_phase * 1.3).cos() * orbit.wobble_amount;
+        let yaw = elapsed * orbit.spin_speed + orbit.phase * 0.2;
+
+        transform.rotation = Quat::from_euler(EulerRot::XYZ, pitch, yaw, roll);
+        let scale_pulse = 1.0 + (wobble_phase * 0.7).sin() * 0.008;
+        transform.scale = Vec3::splat(scale_pulse);
+
+        if let Some(material) = materials.get_mut(&orbit.material) {
+            let pulse = 0.5 + 0.5 * (wobble_phase * 0.6).sin();
+            let alpha = (0.12 + 0.18 * pulse).clamp(0.08, 0.35);
+            material.base_color = orbit.base_color.with_alpha(alpha);
+            let [r, g, b, _] = orbit.base_color.as_rgba_f32();
+            let glow = 0.35 + 0.4 * pulse;
+            material.emissive = LinearRgba::new(r * glow, g * glow, b * glow, 1.0);
+        }
+    }
+}
+
 // System to add dynamic specular reflection response for planet materials
 pub fn update_planet_reflections(
     camera_query: Query<&GlobalTransform, With<CameraController>>,

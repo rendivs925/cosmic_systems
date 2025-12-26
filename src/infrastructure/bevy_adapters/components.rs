@@ -27,6 +27,13 @@ pub struct PlanetComponent {
 pub struct OrbitComponent {
     pub radius: f32,
     pub planet_entity: Entity,
+    pub material: Handle<StandardMaterial>,
+    pub base_color: Color,
+    pub tilt: Vec2,
+    pub wobble_speed: f32,
+    pub wobble_amount: f32,
+    pub spin_speed: f32,
+    pub phase: f32,
 }
 
 // Component for cloud layers to control rotation speed
