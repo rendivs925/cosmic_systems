@@ -1,6 +1,6 @@
-pub mod entities;
-pub mod value_objects;
-pub mod services;
 pub mod aggregates;
-pub mod repositories;
+pub mod entities;
 pub mod events;
+pub mod repositories;
+pub mod services;
+pub mod value_objects;

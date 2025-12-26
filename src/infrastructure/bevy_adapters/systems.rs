@@ -1,11 +1,19 @@
-use bevy::prelude::*;
-use bevy::input::mouse::{MouseMotion, MouseWheel};
-use bevy_egui::{egui, EguiContexts};
-use crate::domain::value_objects::simulation_params::SimulationParameters;
-use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use super::components::{HoveredPlanet, *};
 use crate::application::simulation_service::SimulationService;
 use crate::domain::services::physics;
-use super::components::{*, HoveredPlanet};
+use crate::domain::value_objects::simulation_params::SimulationParameters;
+use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts};
+
+fn normalized_or_zero(vec: Vec3) -> Vec3 {
+    if vec.length_squared() > 0.0 {
+        vec.normalize()
+    } else {
+        Vec3::ZERO
+    }
+}
 
 // System to update gyroscopes
 pub fn update_gyroscopes(
@@ -16,7 +24,8 @@ pub fn update_gyroscopes(
     for (mut transform, mut gyro_comp) in query.iter_mut() {
         let spin_axis = Vec3::Y; // Assuming Y axis for spin
         SimulationService::update_gyroscope(&mut gyro_comp.domain_gyro, &params, spin_axis);
-        let precession_angle = SimulationService::get_precession_angle(&gyro_comp.domain_gyro, time.delta_seconds());
+        let precession_angle =
+            SimulationService::get_precession_angle(&gyro_comp.domain_gyro, time.delta_seconds());
         transform.rotate_y(precession_angle);
     }
 }
@@ -111,7 +120,10 @@ pub fn update_planet_positions(
     // First pass: collect parent positions
     let mut parent_positions = std::collections::HashMap::new();
     for (transform, planet_comp) in query.iter() {
-        parent_positions.insert(planet_comp.domain_planet.name.clone(), transform.translation);
+        parent_positions.insert(
+            planet_comp.domain_planet.name.clone(),
+            transform.translation,
+        );
     }
 
     // Second pass: update positions with distance-based optimization
@@ -154,14 +166,41 @@ pub fn update_planet_rotations(
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
     for (mut transform, planet_comp) in query.iter_mut() {
-        let rotation_angle = physics::calculate_planet_rotation(
-            &planet_comp.domain_planet,
-            time_days,
-        );
+        let rotation_angle =
+            physics::calculate_planet_rotation(&planet_comp.domain_planet, time_days);
 
         // Rotate around the planet's local Y axis (for simplicity)
         // In reality, planets have different rotation axes, but this works for visualization
         transform.rotation = Quat::from_rotation_y(rotation_angle);
+    }
+}
+
+// System to add dynamic specular reflection response for planet materials
+pub fn update_planet_reflections(
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<(&PlanetComponent, &GlobalTransform)>,
+) {
+    let camera_transform = match camera_query.get_single() {
+        Ok(transform) => transform,
+        Err(_) => return,
+    };
+    let camera_pos = camera_transform.translation();
+
+    for (planet_comp, global_transform) in query.iter() {
+        if planet_comp.domain_planet.name == "Sun" {
+            continue;
+        }
+        if let Some(material) = materials.get_mut(&planet_comp.material) {
+            let to_sun = normalized_or_zero(-global_transform.translation());
+            let to_camera = normalized_or_zero(camera_pos - global_transform.translation());
+            let alignment = to_sun.dot(to_camera).max(0.0);
+            let highlight = alignment.powf(3.0);
+            material.perceptual_roughness =
+                (planet_comp.base_roughness - highlight * 0.3).clamp(0.04, 1.0);
+            material.reflectance =
+                (planet_comp.base_reflectance + highlight * 0.25).clamp(0.0, 1.0);
+        }
     }
 }
 
@@ -186,7 +225,10 @@ pub fn handle_planet_selection(
 
         // Find current selection index
         let current_index = if let Some(current_entity) = selected_planet.entity {
-            all_entities.iter().position(|&entity| entity == current_entity).unwrap_or(0)
+            all_entities
+                .iter()
+                .position(|&entity| entity == current_entity)
+                .unwrap_or(0)
         } else {
             0
         };
@@ -250,7 +292,8 @@ pub fn handle_mouse_planet_selection(
         let distance = (planet_pos - camera_pos).length();
 
         // If this planet is closer and in a reasonable range, select it
-        if distance < closest_distance && distance < 1000.0 { // Max selection distance
+        if distance < closest_distance && distance < 1000.0 {
+            // Max selection distance
             closest_distance = distance;
             closest_entity = Some(entity);
         }
@@ -338,7 +381,14 @@ pub fn handle_solar_system_input(
     // Toggle orbit visualization (placeholder for future feature)
     if keyboard.just_pressed(KeyCode::KeyO) {
         solar_params.show_orbits = !solar_params.show_orbits;
-        println!("Orbit visualization: {}", if solar_params.show_orbits { "ON" } else { "OFF" });
+        println!(
+            "Orbit visualization: {}",
+            if solar_params.show_orbits {
+                "ON"
+            } else {
+                "OFF"
+            }
+        );
     }
 }
 
@@ -374,11 +424,16 @@ pub fn update_camera_controller(
             // Apply rotation to camera transform
             transform.rotate_y(yaw);
             let right = *transform.right();
-            transform.rotate_axis(bevy::math::Dir3::new(right).unwrap_or(bevy::math::Dir3::X), pitch);
+            transform.rotate_axis(
+                bevy::math::Dir3::new(right).unwrap_or(bevy::math::Dir3::X),
+                pitch,
+            );
 
             // Prevent camera from flipping upside down
             let euler = transform.rotation.to_euler(EulerRot::YXZ);
-            let clamped_pitch = euler.1.clamp(-std::f32::consts::PI / 2.1, std::f32::consts::PI / 2.1);
+            let clamped_pitch = euler
+                .1
+                .clamp(-std::f32::consts::PI / 2.1, std::f32::consts::PI / 2.1);
             transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, clamped_pitch, euler.2);
         }
 
@@ -406,11 +461,16 @@ pub fn update_camera_controller(
             // Apply rotation to camera transform
             transform.rotate_y(yaw);
             let right = *transform.right();
-            transform.rotate_axis(bevy::math::Dir3::new(right).unwrap_or(bevy::math::Dir3::X), pitch);
+            transform.rotate_axis(
+                bevy::math::Dir3::new(right).unwrap_or(bevy::math::Dir3::X),
+                pitch,
+            );
 
             // Prevent camera from flipping upside down
             let euler = transform.rotation.to_euler(EulerRot::YXZ);
-            let clamped_pitch = euler.1.clamp(-std::f32::consts::PI / 2.1, std::f32::consts::PI / 2.1);
+            let clamped_pitch = euler
+                .1
+                .clamp(-std::f32::consts::PI / 2.1, std::f32::consts::PI / 2.1);
             transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, clamped_pitch, euler.2);
         }
 
@@ -435,7 +495,10 @@ pub fn update_camera_controller(
         if keyboard.pressed(KeyCode::Space) || keyboard.pressed(KeyCode::KeyQ) {
             movement += Vec3::Y; // Up
         }
-        if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) || keyboard.pressed(KeyCode::KeyE) {
+        if keyboard.pressed(KeyCode::ControlLeft)
+            || keyboard.pressed(KeyCode::ControlRight)
+            || keyboard.pressed(KeyCode::KeyE)
+        {
             movement -= Vec3::Y; // Down
         }
 
@@ -496,7 +559,7 @@ pub fn update_camera_controller(
 pub fn detect_planet_hover(
     camera_query: Query<(&bevy::prelude::Camera, &GlobalTransform)>,
     planet_query: Query<(&GlobalTransform, &Selectable)>,
-    windows: Query<&Window>,
+    _windows: Query<&Window>,
     mut hovered_planet: ResMut<HoveredPlanet>,
 ) {
     // Reset hover state
@@ -522,7 +585,8 @@ pub fn detect_planet_hover(
             let dot_product = camera_forward.dot(to_planet);
 
             // Only consider planets in front of camera and within reasonable distance
-            if dot_product > 0.5 && distance_to_camera < 100000.0 { // Wide viewing angle, astronomical distance
+            if dot_product > 0.5 && distance_to_camera < 100000.0 {
+                // Wide viewing angle, astronomical distance
                 if let Some((_, current_dist)) = closest_planet {
                     if distance_to_camera < current_dist {
                         closest_planet = Some((selectable.name.clone(), distance_to_camera));
@@ -541,10 +605,7 @@ pub fn detect_planet_hover(
 }
 
 // System to display premium hover information cards using EGUI
-pub fn display_hover_info(
-    mut contexts: EguiContexts,
-    hovered_planet: Res<HoveredPlanet>,
-) {
+pub fn display_hover_info(mut contexts: EguiContexts, hovered_planet: Res<HoveredPlanet>) {
     if let Some(name) = &hovered_planet.name {
         let ctx = contexts.ctx_mut();
 
@@ -567,14 +628,18 @@ pub fn display_hover_info(
                     let (icon, header_color) = get_celestial_icon_and_color(name);
 
                     ui.add_space(6.0); // Compact top spacing
-                    ui.label(egui::RichText::new(icon)
-                        .size(36.0) // Appropriate size for card format
-                        .color(header_color));
+                    ui.label(
+                        egui::RichText::new(icon)
+                            .size(36.0) // Appropriate size for card format
+                            .color(header_color),
+                    );
                     ui.add_space(6.0); // Compact spacing between icon and title
-                    ui.label(egui::RichText::new(name)
-                        .size(24.0) // Card-appropriate title size
-                        .color(egui::Color32::WHITE)
-                        .strong());
+                    ui.label(
+                        egui::RichText::new(name)
+                            .size(24.0) // Card-appropriate title size
+                            .color(egui::Color32::WHITE)
+                            .strong(),
+                    );
                     ui.add_space(12.0); // Reasonable spacing before content
                 });
 
@@ -591,10 +656,12 @@ pub fn display_hover_info(
                         ui.group(|ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new("✨ Interesting Facts")
-                                    .size(14.0)
-                                    .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
-                                    .strong());
+                                ui.label(
+                                    egui::RichText::new("✨ Interesting Facts")
+                                        .size(14.0)
+                                        .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
+                                        .strong(),
+                                );
                                 ui.add_space(8.0);
                             });
 
@@ -609,10 +676,12 @@ pub fn display_hover_info(
                         ui.group(|ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new("🚀 Exploration Status")
-                                    .size(14.0)
-                                    .color(egui::Color32::from_rgb(34, 197, 94)) // Green
-                                    .strong());
+                                ui.label(
+                                    egui::RichText::new("🚀 Exploration Status")
+                                        .size(14.0)
+                                        .color(egui::Color32::from_rgb(34, 197, 94)) // Green
+                                        .strong(),
+                                );
                                 ui.add_space(8.0);
                             });
 
@@ -627,9 +696,11 @@ pub fn display_hover_info(
                 // Footer with consistent spacing and better visibility
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Click to select • Scroll to zoom • WASD to move")
-                        .size(11.0)
-                        .color(egui::Color32::from_rgba_premultiplied(148, 163, 184, 200))); // Better contrast
+                    ui.label(
+                        egui::RichText::new("Click to select • Scroll to zoom • WASD to move")
+                            .size(11.0)
+                            .color(egui::Color32::from_rgba_premultiplied(148, 163, 184, 200)),
+                    ); // Better contrast
                 });
             });
     }
@@ -647,7 +718,7 @@ fn get_celestial_icon_and_color(name: &str) -> (&'static str, egui::Color32) {
         "Saturn" => ("♄", egui::Color32::from_rgb(251, 191, 36)), // Saturn symbol
         "Uranus" => ("⛢", egui::Color32::from_rgb(34, 197, 94)), // Uranus symbol
         "Neptune" => ("♆", egui::Color32::from_rgb(59, 130, 246)), // Neptune symbol
-        _ => ("🌙", egui::Color32::from_rgb(147, 51, 234)), // Moon symbol for moons
+        _ => ("🌙", egui::Color32::from_rgb(147, 51, 234)),    // Moon symbol for moons
     }
 }
 
@@ -655,7 +726,11 @@ fn get_celestial_icon_and_color(name: &str) -> (&'static str, egui::Color32) {
 fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
     match name {
         "Sun" => {
-            display_info_section(ui, "Stellar Classification", "G-type main-sequence star (G2V)");
+            display_info_section(
+                ui,
+                "Stellar Classification",
+                "G-type main-sequence star (G2V)",
+            );
             display_info_section(ui, "Mass", "1.989 × 10³⁰ kg (333,000 Earth masses)");
             display_info_section(ui, "Radius", "696,342 km (109 Earth radii)");
             display_info_section(ui, "Surface Temperature", "5,778 K (5,505°C)");
@@ -707,7 +782,11 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Distance from Sun", "5.204 AU (778.5 million km)");
             display_info_section(ui, "Orbital Period", "4,333 Earth days (11.86 years)");
             display_info_section(ui, "Day Length", "9.93 hours");
-            display_info_section(ui, "Moons", "95+ (4 Galilean: Io, Europa, Ganymede, Callisto)");
+            display_info_section(
+                ui,
+                "Moons",
+                "95+ (4 Galilean: Io, Europa, Ganymede, Callisto)",
+            );
         }
         "Saturn" => {
             display_info_section(ui, "Type", "Gas giant");
@@ -727,7 +806,11 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Orbital Period", "30,687 Earth days (84.01 years)");
             display_info_section(ui, "Day Length", "17.2 hours");
             display_info_section(ui, "Axial Tilt", "98° (rotates on its side)");
-            display_info_section(ui, "Moons", "28 (major: Titania, Oberon, Umbriel, Ariel, Miranda)");
+            display_info_section(
+                ui,
+                "Moons",
+                "28 (major: Titania, Oberon, Umbriel, Ariel, Miranda)",
+            );
         }
         "Neptune" => {
             display_info_section(ui, "Type", "Ice giant");
@@ -736,7 +819,11 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Distance from Sun", "30.061 AU (4.5 billion km)");
             display_info_section(ui, "Orbital Period", "60,190 Earth days (164.8 years)");
             display_info_section(ui, "Day Length", "16.1 hours");
-            display_info_section(ui, "Wind Speed", "Up to 2,100 km/h (fastest in solar system)");
+            display_info_section(
+                ui,
+                "Wind Speed",
+                "Up to 2,100 km/h (fastest in solar system)",
+            );
             display_info_section(ui, "Moons", "16 (major: Triton, Proteus, Nereid)");
         }
         "Moon" => {
@@ -761,15 +848,19 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
 fn display_info_section(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         // Label with consistent styling and spacing
-        ui.label(egui::RichText::new(format!("{}:", label))
-            .size(13.0)
-            .color(egui::Color32::from_rgb(148, 163, 184))); // Light gray
+        ui.label(
+            egui::RichText::new(format!("{}:", label))
+                .size(13.0)
+                .color(egui::Color32::from_rgb(148, 163, 184)),
+        ); // Light gray
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0); // Consistent spacing between label and value
-            ui.label(egui::RichText::new(value)
-                .size(13.0)
-                .color(egui::Color32::from_rgb(226, 232, 240))); // Light blue-gray
+            ui.label(
+                egui::RichText::new(value)
+                    .size(13.0)
+                    .color(egui::Color32::from_rgb(226, 232, 240)),
+            ); // Light blue-gray
         });
     });
     ui.add_space(6.0); // Consistent spacing between sections
@@ -782,46 +873,51 @@ fn display_fun_facts(ui: &mut egui::Ui, name: &str) {
             "Contains 99.86% of the solar system's mass".to_string(),
             "Light takes 8 minutes to reach Earth".to_string(),
             "Core temperature reaches 15 million °C".to_string(),
-            "Loses 4 million tons of mass per second through fusion".to_string()
+            "Loses 4 million tons of mass per second through fusion".to_string(),
         ],
         "Earth" => vec![
             "Only known planet with life".to_string(),
             "71% of surface covered by water".to_string(),
             "Magnetic field protects from solar radiation".to_string(),
-            "Habitable for about 3.5 billion years".to_string()
+            "Habitable for about 3.5 billion years".to_string(),
         ],
         "Mars" => vec![
             "Largest volcano: Olympus Mons (3x taller than Everest)".to_string(),
             "Day length: 24 hours and 37 minutes".to_string(),
             "Seasons last twice as long as Earth's".to_string(),
-            "Atmosphere is 95% carbon dioxide".to_string()
+            "Atmosphere is 95% carbon dioxide".to_string(),
         ],
         "Jupiter" => vec![
             "Great Red Spot: storm larger than Earth".to_string(),
             "Faint ring system discovered in 1979".to_string(),
             "Acts as cosmic shield for inner planets".to_string(),
-            "Magnetic field 20,000x stronger than Earth's".to_string()
+            "Magnetic field 20,000x stronger than Earth's".to_string(),
         ],
         "Saturn" => vec![
             "Rings made of ice chunks and dust particles".to_string(),
             "Less dense than water - would float in a bathtub!".to_string(),
             "Hexagonal storm at north pole".to_string(),
-            "Moon Titan has thicker atmosphere than Earth".to_string()
+            "Moon Titan has thicker atmosphere than Earth".to_string(),
         ],
         "Moon" => vec![
             "Moving away from Earth at 3.8 cm/year".to_string(),
             "Far side photographed by Luna 3 in 1959".to_string(),
             "Moonquakes caused by Earth's gravity".to_string(),
-            "Apollo footprints will last millions of years".to_string()
+            "Apollo footprints will last millions of years".to_string(),
         ],
-        _ => vec![format!("{} has unique and fascinating characteristics", name)]
+        _ => vec![format!(
+            "{} has unique and fascinating characteristics",
+            name
+        )],
     };
 
     for fact in facts {
         ui.add_space(4.0); // Consistent spacing between facts
-        ui.label(egui::RichText::new(format!("• {}", fact))
-            .size(12.0)
-            .color(egui::Color32::from_rgb(226, 232, 240)));
+        ui.label(
+            egui::RichText::new(format!("• {}", fact))
+                .size(12.0)
+                .color(egui::Color32::from_rgb(226, 232, 240)),
+        );
     }
 }
 
@@ -833,18 +929,24 @@ fn display_exploration_status(ui: &mut egui::Ui, name: &str) {
         "Venus" => "🛰 Venera program (1960s-1980s), Magellan (1990-1994), Akatsuki (2015-present)",
         "Earth" => "🏠 Humanity's home - extensively explored and mapped",
         "Mars" => "🤖 Perseverance, Curiosity, Insight (active), Mars Sample Return (planned)",
-        "Jupiter" => "🛰 Pioneer 10 (1973), Voyager (1979), Galileo (1995-2003), Juno (2016-present)",
+        "Jupiter" => {
+            "🛰 Pioneer 10 (1973), Voyager (1979), Galileo (1995-2003), Juno (2016-present)"
+        }
         "Saturn" => "🛰 Pioneer 11 (1979), Voyager (1980-1981), Cassini-Huygens (2004-2017)",
         "Uranus" => "🛰 Voyager 2 flyby (1986) - only spacecraft to visit",
         "Neptune" => "🛰 Voyager 2 flyby (1989) - only spacecraft to visit",
-        "Moon" => "🚀 Apollo missions (1969-1972), Luna program, Chang'e missions, Artemis (planned)",
-        _ => "🔭 Observed remotely by telescopes and space probes"
+        "Moon" => {
+            "🚀 Apollo missions (1969-1972), Luna program, Chang'e missions, Artemis (planned)"
+        }
+        _ => "🔭 Observed remotely by telescopes and space probes",
     };
 
     ui.add_space(4.0); // Consistent top spacing
-    ui.label(egui::RichText::new(status)
-        .size(12.0)
-        .color(egui::Color32::from_rgb(226, 232, 240)));
+    ui.label(
+        egui::RichText::new(status)
+            .size(12.0)
+            .color(egui::Color32::from_rgb(226, 232, 240)),
+    );
 }
 
 // Helper functions for moon information
@@ -852,11 +954,13 @@ fn get_parent_body(name: &str) -> &'static str {
     match name {
         "Phobos" | "Deimos" => "Mars",
         "Io" | "Europa" | "Ganymede" | "Callisto" => "Jupiter",
-        "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Hyperion" | "Iapetus" => "Saturn",
+        "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Hyperion" | "Iapetus" => {
+            "Saturn"
+        }
         "Miranda" | "Ariel" | "Umbriel" | "Titania" | "Oberon" => "Uranus",
         "Triton" | "Proteus" | "Nereid" | "Larissa" => "Neptune",
         "Moon" => "Earth",
-        _ => "Unknown"
+        _ => "Unknown",
     }
 }
 
@@ -865,14 +969,14 @@ fn get_discovery_info(name: &str) -> &'static str {
         "Moon" => "Ancient times",
         "Phobos" | "Deimos" => "1877 (Asaph Hall)",
         "Io" | "Europa" | "Ganymede" | "Callisto" => "1610 (Galileo)",
-        "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Iapetus" => "Various 17th-19th century",
+        "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Iapetus" => {
+            "Various 17th-19th century"
+        }
         "Miranda" | "Ariel" | "Umbriel" | "Titania" | "Oberon" => "1787-1851 (William Herschel)",
         "Triton" => "1846 (William Lassell)",
-        _ => "Various space missions"
+        _ => "Various space missions",
     }
 }
-
-
 
 // System to apply camera transformations based on controller state
 pub fn apply_camera_transform(

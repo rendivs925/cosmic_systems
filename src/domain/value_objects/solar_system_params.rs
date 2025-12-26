@@ -3,10 +3,10 @@ use bevy::prelude::*;
 #[derive(Resource, Clone, Debug)]
 pub struct SolarSystemParameters {
     pub sun_radius_km: f32,
-    pub scale_factor: f32,  // For visualization (e.g., 1 AU = 100 units)
-    pub time_scale: f32,    // Simulation speed multiplier
+    pub scale_factor: f32, // For visualization (e.g., 1 AU = 100 units)
+    pub time_scale: f32,   // Simulation speed multiplier
     pub show_orbits: bool,
-    pub planet_scale: f32,  // Additional scaling for planets to make them visible
+    pub planet_scale: f32, // Additional scaling for planets to make them visible
 }
 
 impl Default for SolarSystemParameters {
@@ -19,10 +19,10 @@ impl SolarSystemParameters {
     pub fn new() -> Self {
         Self {
             sun_radius_km: 696342.0,
-            scale_factor: 100.0,  // For visualization (e.g., 1 AU = 100 units)
-            time_scale: 1.0,      // Simulation speed multiplier
+            scale_factor: 100.0, // For visualization (e.g., 1 AU = 100 units)
+            time_scale: 1.0,     // Simulation speed multiplier
             show_orbits: true,
-            planet_scale: 1.0,    // No additional scaling initially
+            planet_scale: 1.0, // No additional scaling initially
         }
     }
 
@@ -33,7 +33,7 @@ impl SolarSystemParameters {
             scale_factor: 200000.0, // Extreme spacing: 1 AU = 200000 units for maximum astronomical scale
             time_scale: 20000.0,    // Fast time for visible motion across vast distances
             show_orbits: true,
-            planet_scale: 1600.0,   // Massive planets for visibility across extreme astronomical distances
+            planet_scale: 1600.0, // Massive planets for visibility across extreme astronomical distances
         }
     }
 

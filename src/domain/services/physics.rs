@@ -1,8 +1,8 @@
-use bevy::math::Vec3;
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::SimulationParameters;
+use bevy::math::Vec3;
 
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
@@ -33,7 +33,12 @@ pub fn calculate_arrow_scale(thrust: Vec3) -> f32 {
 
 /// Calculate the position of a planet/moon in its orbit at a given time
 /// Uses simplified circular orbit approximation (Kepler's first law)
-pub fn calculate_planet_position(planet: &Planet, time_days: f32, solar_params: &SolarSystemParameters, parent_position: Vec3) -> Vec3 {
+pub fn calculate_planet_position(
+    planet: &Planet,
+    time_days: f32,
+    solar_params: &SolarSystemParameters,
+    parent_position: Vec3,
+) -> Vec3 {
     if planet.name == "Sun" {
         // Sun is at the origin
         return Vec3::ZERO;

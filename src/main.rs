@@ -2,18 +2,15 @@ use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use std::env;
 
-pub mod domain;
 pub mod application;
+pub mod domain;
 pub mod infrastructure;
 pub mod presentation;
 
 use application::startup::*;
-use infrastructure::bevy_adapters::systems::*;
-use infrastructure::bevy_adapters::components::{SelectedPlanet, HoveredPlanet};
 use domain::value_objects::simulation_params::SimulationParameters;
-
-
-
+use infrastructure::bevy_adapters::components::{HoveredPlanet, SelectedPlanet};
+use infrastructure::bevy_adapters::systems::*;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -58,6 +55,7 @@ fn main() {
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);
         app.add_systems(Update, update_planet_rotations);
+        app.add_systems(Update, update_planet_reflections);
         app.add_systems(Update, handle_solar_system_input);
         app.add_systems(Update, handle_planet_selection);
         app.add_systems(Update, handle_mouse_planet_selection);
@@ -70,7 +68,3 @@ fn main() {
 
     app.run();
 }
-
-
-
-

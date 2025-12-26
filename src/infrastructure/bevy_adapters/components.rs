@@ -1,6 +1,6 @@
-use bevy::prelude::*;
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
+use bevy::prelude::*;
 
 // Component for gyroscope entities
 #[derive(Component)]
@@ -16,6 +16,10 @@ pub struct ThrustArrow;
 #[derive(Component)]
 pub struct PlanetComponent {
     pub domain_planet: Planet,
+    pub material: Handle<StandardMaterial>,
+    pub has_texture: bool,
+    pub base_reflectance: f32,
+    pub base_roughness: f32,
 }
 
 // Component for orbital path visualization
@@ -23,6 +27,12 @@ pub struct PlanetComponent {
 pub struct OrbitComponent {
     pub radius: f32,
     pub planet_entity: Entity,
+}
+
+// Component for cloud layers to control rotation speed
+#[derive(Component)]
+pub struct CloudLayer {
+    pub rotation_period_hours: f32,
 }
 
 // Camera control modes
