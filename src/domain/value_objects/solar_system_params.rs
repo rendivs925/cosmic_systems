@@ -30,10 +30,10 @@ impl SolarSystemParameters {
     pub fn for_visualization() -> Self {
         Self {
             sun_radius_km: 696342.0,
-            scale_factor: 3000.0,  // Astronomical spacing: 1 AU = 3000 units for vast cosmic scale
-            time_scale: 20000.0,   // Much faster time for visible motion across astronomical distances
+            scale_factor: 200000.0, // Extreme spacing: 1 AU = 200000 units for maximum astronomical scale
+            time_scale: 20000.0,    // Fast time for visible motion across vast distances
             show_orbits: true,
-            planet_scale: 60.0,    // Large planets for visibility across vast astronomical distances
+            planet_scale: 1600.0,   // Massive planets for visibility across extreme astronomical distances
         }
     }
 

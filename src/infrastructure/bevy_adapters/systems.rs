@@ -117,8 +117,8 @@ pub fn update_planet_positions(
     // Second pass: update positions with distance-based optimization
     for (mut transform, planet_comp) in query.iter_mut() {
         // Distance culling: only update objects within reasonable range of camera
-        let distance_to_camera = (transform.translation - camera_pos).length();
-        let max_update_distance = 2500.0; // Only update objects within 2500 units of camera
+        let distance_to_camera = camera_pos.distance(transform.translation);
+        let max_update_distance = 2000000.0; // Update all objects within 2M units (covers entire solar system)
 
         if distance_to_camera > max_update_distance {
             // Skip updating distant objects for performance
@@ -294,7 +294,7 @@ pub fn update_planet_selection_visuals(
     for (selectable, mut transform, global_transform) in query.iter_mut() {
         // Distance culling for visual updates
         let distance_to_camera = (global_transform.translation() - camera_pos).length();
-        let max_visual_distance = 2000.0; // Only update visuals for reasonably close objects
+        let max_visual_distance = 30000.0; // Only update visuals for reasonably close objects
 
         if distance_to_camera > max_visual_distance {
             // Reset scale for distant unselected objects

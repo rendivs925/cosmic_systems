@@ -45,10 +45,10 @@ pub fn calculate_planet_position(planet: &Planet, time_days: f32, solar_params: 
     // For moons, orbital_distance_au is relative to parent, not Sun
     // For planets, it's already in AU from Sun
     let distance = if planet.parent_entity.is_some() {
-        // Moon orbiting a planet - convert relative distance to simulation units
-        // orbital_distance_au represents relative distance in "planetary radii"
-        // Scale appropriately for visibility
-        planet.orbital_distance_au * solar_params.scale_factor * 0.1
+        // Moon orbiting a planet - convert astronomical distance to simulation units
+        // orbital_distance_au represents actual AU distance from parent planet
+        // Scale massively for clear separation while maintaining relative accuracy
+        planet.orbital_distance_au * solar_params.scale_factor * 500.0
     } else {
         // Planet orbiting Sun
         solar_params.au_to_units(planet.orbital_distance_au)

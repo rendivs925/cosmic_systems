@@ -89,10 +89,10 @@ pub fn setup_space(
         brightness: 0.15, // Maximum ambient brightness for planet visibility
     });
 
-    // Camera positioned to view the vastly scaled astronomical solar system
+    // Camera positioned to view the massively scaled astronomical solar system
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 2000.0, 8000.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 5000.0, 20000.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         CameraController {
@@ -106,16 +106,65 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source with massive intensity for vast astronomical distances
+    // Sun as the main light source with enormous intensity for massive astronomical distances
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 100000000.0, // Massive intensity for vast astronomical-scale illumination
+            intensity: 500000000.0, // Enormous intensity for massive astronomical-scale illumination
             shadows_enabled: false, // Disable shadows for better performance
             color: Color::srgb(1.0, 1.0, 0.98), // Pure sunlight
-            range: 300000.0, // Extremely extended range for all planets across vast distances
+            range: 2000000.0, // Extremely extended range for all planets across massive distances
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        ..default()
+    });
+
+    // Add directional light from the Sun's direction for better front illumination
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            illuminance: 200000.0, // Extremely bright directional light for massive distances
+            color: Color::srgb(1.0, 1.0, 0.95), // Sunlight color
+            shadows_enabled: false,
+            ..default()
+        },
+        transform: Transform::from_xyz(-100000.0, 50000.0, -100000.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ..default()
+    });
+
+    // Add enormously powerful fill lights covering the massive astronomical distances
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 200000000.0, // Enormously bright fill light for massive distances
+            shadows_enabled: false,
+            color: Color::srgb(0.9, 0.95, 1.0), // Bright white-blue fill light
+            range: 1600000.0, // Extended range for massive astronomical distances
+            ..default()
+        },
+        transform: Transform::from_xyz(75000.0, 37500.0, 75000.0), // Offset position for side illumination
+        ..default()
+    });
+
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 200000000.0, // Second fill light from opposite direction
+            shadows_enabled: false,
+            color: Color::srgb(1.0, 0.9, 0.95), // Warm white fill light
+            range: 1600000.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(-75000.0, -37500.0, -75000.0), // Opposite position
+        ..default()
+    });
+
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 150000000.0, // Top illumination
+            shadows_enabled: false,
+            color: Color::srgb(0.95, 0.95, 1.0), // Cool white
+            range: 1600000.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, 100000.0, 0.0), // Above the solar system
         ..default()
     });
 
@@ -137,10 +186,10 @@ pub fn setup_space(
             intensity: 50000000.0, // Massively bright fill light for vast distances
             shadows_enabled: false,
             color: Color::srgb(0.9, 0.95, 1.0), // Bright white-blue fill light
-            range: 250000.0, // Extremely extended range for vast astronomical distances
+            range: 500000.0, // Extremely extended range for vast astronomical distances
             ..default()
         },
-        transform: Transform::from_xyz(10000.0, 5000.0, 10000.0), // Offset position for side illumination
+        transform: Transform::from_xyz(25000.0, 12500.0, 25000.0), // Offset position for side illumination
         ..default()
     });
 
@@ -149,10 +198,10 @@ pub fn setup_space(
             intensity: 50000000.0, // Second fill light from opposite direction
             shadows_enabled: false,
             color: Color::srgb(1.0, 0.9, 0.95), // Warm white fill light
-            range: 250000.0,
+            range: 500000.0,
             ..default()
         },
-        transform: Transform::from_xyz(-10000.0, -5000.0, -10000.0), // Opposite position
+        transform: Transform::from_xyz(-25000.0, -12500.0, -25000.0), // Opposite position
         ..default()
     });
 
@@ -161,10 +210,10 @@ pub fn setup_space(
             intensity: 40000000.0, // Top illumination
             shadows_enabled: false,
             color: Color::srgb(0.95, 0.95, 1.0), // Cool white
-            range: 250000.0,
+            range: 500000.0,
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 15000.0, 0.0), // Above the solar system
+        transform: Transform::from_xyz(0.0, 37500.0, 0.0), // Above the solar system
         ..default()
     });
 
@@ -229,16 +278,8 @@ pub fn setup_space(
             physics::calculate_visual_radius(&planet, &solar_params)
         };
 
-        // For initial positions, moons start at their parent planet's position
-        // The update system will handle proper orbital positioning
-        let initial_position = if planet.parent_entity.is_some() {
-            // Moon - start near parent position
-            // The physics system will update them properly
-            Vec3::ZERO
-        } else {
-            // Planet - calculate position around Sun
-            physics::calculate_planet_position(&planet, 0.0, &solar_params, Vec3::ZERO)
-        };
+        // Calculate proper initial positions
+        let initial_position = physics::calculate_planet_position(&planet, 0.0, &solar_params, Vec3::ZERO);
 
         commands.spawn((
             PbrBundle {
@@ -280,6 +321,37 @@ pub fn setup_space(
                 selected: false,
             },
         ));
+
+        // Add Saturn's rings
+        if planet.name == "Saturn" {
+            let ring_outer_radius = visual_radius * 2.5;
+            let ring_thickness = visual_radius * 0.1;
+
+            commands.spawn((
+                PbrBundle {
+                    mesh: meshes.add(Mesh::from(Cylinder {
+                        radius: ring_outer_radius,
+                        half_height: ring_thickness,
+                    })),
+                    material: materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.8, 0.7, 0.4), // Golden ring color
+                        metallic: 0.1,
+                        perceptual_roughness: 0.8,
+                        alpha_mode: AlphaMode::Blend, // Make rings semi-transparent
+                        ..default()
+                    }),
+                    transform: Transform::from_translation(initial_position),
+                    ..default()
+                },
+                PlanetComponent {
+                    domain_planet: planet.clone(),
+                },
+                Selectable {
+                    name: "Saturn Rings".to_string(),
+                    selected: false,
+                },
+            ));
+        }
     }
 }
 
