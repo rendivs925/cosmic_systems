@@ -192,6 +192,63 @@ pub fn handle_planet_selection(
     }
 }
 
+// System to handle mouse clicking for planet selection
+pub fn handle_mouse_planet_selection(
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    camera_query: Query<&GlobalTransform>,
+    mut selected_planet: ResMut<SelectedPlanet>,
+    mut selectable_query: Query<(Entity, &mut Selectable, &GlobalTransform)>,
+) {
+    // Only handle left mouse button clicks
+    if !mouse_buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    // Get camera transform
+    let camera_transform = camera_query.single();
+
+    // Simple distance-based selection: find closest planet to camera
+    let mut closest_entity: Option<Entity> = None;
+    let mut closest_distance = f32::INFINITY;
+
+    for (entity, _selectable, transform) in selectable_query.iter() {
+        let planet_pos = transform.translation();
+        let camera_pos = camera_transform.translation();
+        let distance = (planet_pos - camera_pos).length();
+
+        // If this planet is closer and in a reasonable range, select it
+        if distance < closest_distance && distance < 1000.0 { // Max selection distance
+            closest_distance = distance;
+            closest_entity = Some(entity);
+        }
+    }
+
+    // Update selection
+    if let Some(selected_entity) = closest_entity {
+        if let Ok((_, selectable, _)) = selectable_query.get(selected_entity) {
+            selected_planet.entity = Some(selected_entity);
+            selected_planet.name = Some(selectable.name.clone());
+            println!("Selected planet: {}", selectable.name);
+        }
+    } else {
+        // Clicked on empty space - deselect
+        selected_planet.entity = None;
+        selected_planet.name = None;
+        println!("Deselected planet");
+    }
+
+    // Update all selectable components
+    let target_entity = selected_planet.entity;
+    for (_, mut selectable, _) in selectable_query.iter_mut() {
+        selectable.selected = false; // Reset all first
+    }
+    if let Some(entity) = target_entity {
+        if let Ok((_, mut selectable, _)) = selectable_query.get_mut(entity) {
+            selectable.selected = true;
+        }
+    }
+}
+
 // System to update visual feedback for selected planets
 pub fn update_planet_selection_visuals(
     time: Res<Time>,
@@ -242,38 +299,63 @@ pub fn handle_solar_system_input(
 pub fn update_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut CameraController>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mut mouse_motion: EventReader<bevy::input::mouse::MouseMotion>,
+    mut query: Query<(&mut CameraController, &mut Transform)>,
 ) {
-    for mut controller in query.iter_mut() {
+    for (mut controller, mut transform) in query.iter_mut() {
         if controller.mode != CameraMode::FreeFlight {
             continue; // Only handle input for free flight mode for now
         }
 
         let dt = time.delta_seconds();
 
-        // Handle keyboard movement
+        // Handle mouse look for rotation (right mouse button held)
+        let mut mouse_delta = Vec2::ZERO;
+        for motion in mouse_motion.read() {
+            mouse_delta += motion.delta;
+        }
+
+        // Apply mouse sensitivity and update rotation
+        if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Right) {
+            let sensitivity = controller.sensitivity;
+            let yaw = -mouse_delta.x * sensitivity;
+            let pitch = -mouse_delta.y * sensitivity;
+
+            // Apply rotation to camera transform
+            transform.rotate_y(yaw);
+            let right = *transform.right();
+            transform.rotate_axis(bevy::math::Dir3::new(right).unwrap_or(bevy::math::Dir3::X), pitch);
+
+            // Prevent camera from flipping upside down
+            let euler = transform.rotation.to_euler(EulerRot::YXZ);
+            let clamped_pitch = euler.1.clamp(-std::f32::consts::PI / 2.1, std::f32::consts::PI / 2.1);
+            transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, clamped_pitch, euler.2);
+        }
+
+        // Handle keyboard movement (relative to camera orientation)
         let mut movement = Vec3::ZERO;
 
         if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
-            movement.z -= 1.0;
+            movement += *transform.forward();
         }
         if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
-            movement.z += 1.0;
+            movement -= *transform.forward();
         }
         if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
-            movement.x -= 1.0;
+            movement -= *transform.right();
         }
         if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
-            movement.x += 1.0;
+            movement += *transform.right();
         }
         if keyboard.pressed(KeyCode::Space) {
-            movement.y += 1.0;
+            movement += Vec3::Y;
         }
         if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
-            movement.y -= 1.0;
+            movement -= Vec3::Y;
         }
 
-        // Normalize movement vector and apply speed
+        // Apply speed
         if movement != Vec3::ZERO {
             movement = movement.normalize() * controller.speed;
             if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
@@ -295,7 +377,7 @@ pub fn apply_camera_transform(
     for (mut controller, mut transform) in query.iter_mut() {
         match controller.mode {
             CameraMode::FreeFlight => {
-                // Apply velocity to position
+                // Apply velocity to position (rotation is handled in input system for mouse look)
                 let dt = time.delta_seconds();
                 transform.translation += controller.velocity * dt;
             }
