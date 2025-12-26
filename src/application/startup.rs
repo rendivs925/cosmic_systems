@@ -83,11 +83,11 @@ pub fn setup_space(
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
 
-    // Set up dark space environment with enhanced ambient light for planet visibility
-    commands.insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.05))); // Very dark blue-black space
+    // Set up dark space environment with brighter ambient light for better visibility
+    commands.insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.02))); // Very dark blue-black space
     commands.insert_resource(AmbientLight {
-        color: Color::srgb(0.05, 0.05, 0.08), // Very dim blue ambient light
-        brightness: 0.02, // Slightly increased for better planet visibility
+        color: Color::srgb(0.1, 0.12, 0.15), // Brighter blue ambient light
+        brightness: 0.08, // Significantly increased for better visibility
     });
 
     // Camera positioned to view the solar system
@@ -107,29 +107,41 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source with enhanced intensity for better planet visibility
+    // Sun as the main light source with maximum intensity for planet visibility
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 500000.0, // Significantly increased for better planet illumination
+            intensity: 1000000.0, // Maximum intensity for excellent planet illumination
             shadows_enabled: false, // Disable shadows for better performance
-            color: Color::srgb(1.0, 1.0, 0.95), // Slightly warmer light
-            range: 2000.0, // Increased range to illuminate more distant planets
+            color: Color::srgb(1.0, 1.0, 0.98), // Near-white sunlight
+            range: 3000.0, // Extended range to illuminate all planets
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         ..default()
     });
 
-    // Add a subtle fill light to make planets more visible from all angles
+    // Add brighter fill lights in multiple directions for comprehensive illumination
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 20000.0, // Much dimmer fill light
+            intensity: 50000.0, // Brighter fill light
             shadows_enabled: false,
             color: Color::srgb(0.8, 0.9, 1.0), // Cool blue fill light
-            range: 1500.0,
+            range: 2000.0,
             ..default()
         },
-        transform: Transform::from_xyz(100.0, 50.0, 100.0), // Offset position for fill lighting
+        transform: Transform::from_xyz(200.0, 100.0, 200.0), // Offset position
+        ..default()
+    });
+
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 50000.0, // Second fill light from opposite direction
+            shadows_enabled: false,
+            color: Color::srgb(0.9, 0.8, 1.0), // Purple fill light
+            range: 2000.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(-200.0, -100.0, -200.0), // Opposite position
         ..default()
     });
 
@@ -232,45 +244,45 @@ pub fn setup_space(
     }
 }
 
-// Create a starfield background for realistic space environment
+// Create a comprehensive starfield background covering all directions
 fn create_starfield(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
-    // Create distant stars as emissive points
-    let star_count = 2000;
-    let star_distance = 5000.0; // Stars are very far away
+    // Create distant stars as emissive points - increased count for better coverage
+    let star_count = 5000; // More stars for comprehensive coverage
+    let star_distance = 8000.0; // Stars are very far away
 
     for _ in 0..star_count {
-        // Generate random position on a sphere
-        let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
-        let phi = (rand::random::<f32>() - 0.5) * std::f32::consts::PI; // Avoid poles for better distribution
+        // Generate random position on a sphere - improved distribution
+        let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI; // Full 360 degrees
+        let phi = rand::random::<f32>() * std::f32::consts::PI; // Full sphere including poles
         let x = star_distance * phi.sin() * theta.cos();
         let y = star_distance * phi.sin() * theta.sin();
         let z = star_distance * phi.cos();
 
         // Random star size (very small)
-        let star_size = rand::random::<f32>() * 0.5 + 0.1;
+        let star_size = rand::random::<f32>() * 0.3 + 0.05;
 
-        // Random star brightness/color
-        let star_brightness = rand::random::<f32>() * 0.8 + 0.2;
-        let star_color = if rand::random::<f32>() < 0.1 {
-            // 10% blue giants
-            Color::srgb(0.7 * star_brightness, 0.8 * star_brightness, 1.0 * star_brightness)
-        } else if rand::random::<f32>() < 0.2 {
-            // 10% red giants
-            Color::srgb(1.0 * star_brightness, 0.6 * star_brightness, 0.4 * star_brightness)
-        } else {
-            // 80% white/yellow stars
-            Color::srgb(0.9 * star_brightness, 0.9 * star_brightness, 1.0 * star_brightness)
+        // Random star brightness/color - increased variety
+        let star_brightness = rand::random::<f32>() * 0.9 + 0.1;
+        let star_color = match rand::random::<f32>() {
+            x if x < 0.08 => // Blue giants
+                Color::srgb(0.6 * star_brightness, 0.7 * star_brightness, 1.0 * star_brightness),
+            x if x < 0.16 => // Red giants
+                Color::srgb(1.0 * star_brightness, 0.5 * star_brightness, 0.3 * star_brightness),
+            x if x < 0.24 => // Orange stars
+                Color::srgb(1.0 * star_brightness, 0.7 * star_brightness, 0.4 * star_brightness),
+            _ => // White/yellow stars (majority)
+                Color::srgb(0.95 * star_brightness, 0.95 * star_brightness, 0.85 * star_brightness),
         };
 
         commands.spawn(PbrBundle {
             mesh: meshes.add(Mesh::from(Sphere { radius: star_size })),
             material: materials.add(StandardMaterial {
                 base_color: star_color,
-                emissive: LinearRgba::new(star_brightness * 2.0, star_brightness * 2.0, star_brightness * 2.0, 1.0), // Stars glow
+                emissive: LinearRgba::new(star_brightness * 1.5, star_brightness * 1.5, star_brightness * 1.5, 1.0),
                 ..default()
             }),
             transform: Transform::from_translation(Vec3::new(x, y, z)),
@@ -278,22 +290,28 @@ fn create_starfield(
         });
     }
 
-    // Create a few brighter, more prominent stars
-    for _ in 0..50 {
+    // Create brighter, more prominent stars for visual interest
+    for _ in 0..200 { // More bright stars
         let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
-        let phi = (rand::random::<f32>() - 0.5) * std::f32::consts::PI;
+        let phi = rand::random::<f32>() * std::f32::consts::PI;
         let x = star_distance * phi.sin() * theta.cos();
         let y = star_distance * phi.sin() * theta.sin();
         let z = star_distance * phi.cos();
 
-        let star_size = rand::random::<f32>() * 1.0 + 0.5;
-        let star_brightness = rand::random::<f32>() * 0.6 + 0.4;
+        let star_size = rand::random::<f32>() * 1.5 + 0.8;
+        let star_brightness = rand::random::<f32>() * 0.8 + 0.5;
+
+        let bright_star_color = match rand::random::<f32>() {
+            x if x < 0.3 => Color::srgb(0.8 * star_brightness, 0.9 * star_brightness, 1.0 * star_brightness), // Blue-white
+            x if x < 0.6 => Color::srgb(1.0 * star_brightness, 0.9 * star_brightness, 0.7 * star_brightness), // Yellow-white
+            _ => Color::srgb(1.0 * star_brightness, 0.8 * star_brightness, 0.6 * star_brightness), // Orange
+        };
 
         commands.spawn(PbrBundle {
             mesh: meshes.add(Mesh::from(Sphere { radius: star_size })),
             material: materials.add(StandardMaterial {
-                base_color: Color::srgb(1.0 * star_brightness, 1.0 * star_brightness, 0.9 * star_brightness),
-                emissive: LinearRgba::new(3.0 * star_brightness, 3.0 * star_brightness, 2.7 * star_brightness, 1.0),
+                base_color: bright_star_color,
+                emissive: LinearRgba::new(4.0 * star_brightness, 4.0 * star_brightness, 3.5 * star_brightness, 1.0),
                 ..default()
             }),
             transform: Transform::from_translation(Vec3::new(x, y, z)),
