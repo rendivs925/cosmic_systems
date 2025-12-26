@@ -52,8 +52,8 @@ pub fn calculate_planet_position(
         let distance = calculate_orbit_radius_units(planet, solar_params);
         Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
-        let mean_motion = 2.0 * std::f32::consts::PI / planet.orbital_period_days.max(1.0);
-        let mean_anomaly = elements.mean_anomaly_rad + mean_motion * time_days;
+        let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
+        let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
         let eccentric_anomaly = solve_kepler(mean_anomaly, elements.eccentricity);
         let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
         let radius_au = elements.semi_major_axis_au
@@ -96,6 +96,42 @@ pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemP
         solar_params.au_to_units(elements.semi_major_axis_au)
     } else {
         solar_params.au_to_units(planet.orbital_distance_au)
+    }
+}
+
+pub struct OrbitShape {
+    pub semi_major_axis_units: f32,
+    pub eccentricity: f32,
+    pub inclination_rad: f32,
+    pub long_asc_node_rad: f32,
+    pub arg_periapsis_rad: f32,
+}
+
+pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) -> OrbitShape {
+    if planet.parent_entity.is_some() {
+        OrbitShape {
+            semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
+            eccentricity: 0.0,
+            inclination_rad: 0.0,
+            long_asc_node_rad: 0.0,
+            arg_periapsis_rad: 0.0,
+        }
+    } else if let Some(elements) = get_orbital_elements(&planet.name) {
+        OrbitShape {
+            semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au),
+            eccentricity: elements.eccentricity,
+            inclination_rad: elements.inclination_rad,
+            long_asc_node_rad: elements.long_asc_node_rad,
+            arg_periapsis_rad: elements.arg_periapsis_rad,
+        }
+    } else {
+        OrbitShape {
+            semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
+            eccentricity: 0.0,
+            inclination_rad: 0.0,
+            long_asc_node_rad: 0.0,
+            arg_periapsis_rad: 0.0,
+        }
     }
 }
 
@@ -176,6 +212,16 @@ fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
     let cos_v = (eccentric_anomaly.cos() - eccentricity)
         / (1.0 - eccentricity * eccentric_anomaly.cos());
     sin_v.atan2(cos_v)
+}
+
+fn mean_motion_rad_per_day(semi_major_axis_au: f32) -> f32 {
+    // Gauss gravitational constant (AU^(3/2)/day)
+    const GAUSS_K: f32 = 0.01720209895;
+    GAUSS_K / semi_major_axis_au.powf(1.5)
+}
+
+fn normalize_radians(angle: f32) -> f32 {
+    angle.rem_euclid(std::f32::consts::TAU)
 }
 
 /// Calculate the rotation angle of a planet at a given time

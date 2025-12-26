@@ -372,9 +372,12 @@ pub fn setup_space(
         if solar_params.show_orbits {
             if let Some(parent_name) = &planet.parent_entity {
                 if let Some(parent_entity) = entity_map.get(parent_name) {
-                    let orbit_radius =
-                        planet.orbital_distance_au * solar_params.scale_factor * 500.0;
-                    let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
+                    let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
+                    let orbit_mesh = create_orbit_mesh_ellipse(
+                        &mut meshes,
+                        orbit_shape.semi_major_axis_units,
+                        orbit_shape.eccentricity,
+                    );
                     let orbit_base_color = planet.color;
                     let orbit_material = materials.add(StandardMaterial {
                         base_color: orbit_base_color.with_alpha(0.22),
@@ -388,15 +391,20 @@ pub fn setup_space(
                     let orbit_motion =
                         orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
+                    let orbit_rotation = Quat::from_rotation_y(orbit_shape.long_asc_node_rad)
+                        * Quat::from_rotation_x(orbit_shape.inclination_rad)
+                        * Quat::from_rotation_y(orbit_shape.arg_periapsis_rad);
+
                     commands.entity(*parent_entity).with_children(|parent| {
                         parent
                             .spawn(PbrBundle {
                                 mesh: orbit_mesh,
                                 material: orbit_material_handle,
+                                transform: Transform::from_rotation(orbit_rotation),
                                 ..default()
                             })
                             .insert(OrbitComponent {
-                                radius: orbit_radius,
+                                radius: orbit_shape.semi_major_axis_units,
                                 planet_entity,
                                 material: orbit_material,
                                 base_color: orbit_base_color,
@@ -413,8 +421,12 @@ pub fn setup_space(
                     });
                 }
             } else if planet.name != "Sun" {
-                let orbit_radius = solar_params.au_to_units(planet.orbital_distance_au);
-                let orbit_mesh = create_orbit_mesh(&mut meshes, orbit_radius);
+                let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
+                let orbit_mesh = create_orbit_mesh_ellipse(
+                    &mut meshes,
+                    orbit_shape.semi_major_axis_units,
+                    orbit_shape.eccentricity,
+                );
                 let orbit_base_color = planet.color;
                 let orbit_material = materials.add(StandardMaterial {
                     base_color: orbit_base_color.with_alpha(0.25),
@@ -428,14 +440,18 @@ pub fn setup_space(
                 let orbit_motion =
                     orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
-                commands
-                    .spawn(PbrBundle {
-                        mesh: orbit_mesh,
-                        material: orbit_material_handle,
-                        ..default()
-                    })
+                let orbit_rotation = Quat::from_rotation_y(orbit_shape.long_asc_node_rad)
+                    * Quat::from_rotation_x(orbit_shape.inclination_rad)
+                    * Quat::from_rotation_y(orbit_shape.arg_periapsis_rad);
+
+                commands.spawn(PbrBundle {
+                    mesh: orbit_mesh,
+                    material: orbit_material_handle,
+                    transform: Transform::from_rotation(orbit_rotation),
+                    ..default()
+                })
                     .insert(OrbitComponent {
-                        radius: orbit_radius,
+                        radius: orbit_shape.semi_major_axis_units,
                         planet_entity,
                         material: orbit_material,
                         base_color: orbit_base_color,
@@ -539,15 +555,23 @@ fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Hand
     meshes.add(mesh)
 }
 
-fn create_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+fn create_orbit_mesh_ellipse(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    semi_major_axis: f32,
+    eccentricity: f32,
+) -> Handle<Mesh> {
     const SEGMENTS: usize = 256;
     let mut positions = Vec::with_capacity(SEGMENTS);
     let mut normals = Vec::with_capacity(SEGMENTS);
     let mut uvs = Vec::with_capacity(SEGMENTS);
     let mut indices = Vec::with_capacity(SEGMENTS * 2);
 
+    let e = eccentricity.clamp(0.0, 0.99);
+    let semi_latus = semi_major_axis * (1.0 - e * e);
+
     for i in 0..SEGMENTS {
         let angle = (i as f32 / SEGMENTS as f32) * TAU;
+        let radius = semi_latus / (1.0 + e * angle.cos());
         positions.push([radius * angle.cos(), 0.0, radius * angle.sin()]);
         normals.push([0.0, 1.0, 0.0]);
         uvs.push([angle / TAU, 0.5]);
