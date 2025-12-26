@@ -817,6 +817,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "1.989 × 10³⁰ kg (333,000 Earth masses)");
             display_info_section(ui, "Radius", "696,342 km (109 Earth radii)");
             display_info_section(ui, "Surface Temperature", "5,778 K (5,505°C)");
+            display_info_section(ui, "Composition", "About 74% hydrogen, 24% helium (by mass)");
+            display_info_section(ui, "Luminosity", "3.83 × 10²⁶ W");
             display_info_section(ui, "Age", "4.6 billion years");
             display_info_section(ui, "Distance from Earth", "149.6 million km (1 AU)");
         }
@@ -828,6 +830,8 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Orbital Period", "88 Earth days");
             display_info_section(ui, "Day Length", "176 Earth days");
             display_info_section(ui, "Surface Temperature", "-173°C to 427°C");
+            display_info_section(ui, "Atmosphere", "Extremely thin exosphere (sodium, oxygen)");
+            display_info_section(ui, "Moons", "0");
         }
         "Venus" => {
             display_info_section(ui, "Type", "Terrestrial planet");
@@ -837,6 +841,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Orbital Period", "225 Earth days");
             display_info_section(ui, "Day Length", "243 Earth days (retrograde)");
             display_info_section(ui, "Surface Temperature", "462°C (hottest planet)");
+            display_info_section(ui, "Atmosphere", "96.5% CO2, sulfuric acid clouds");
         }
         "Earth" => {
             display_info_section(ui, "Type", "Terrestrial planet");
@@ -847,6 +852,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Day Length", "24 hours");
             display_info_section(ui, "Surface Temperature", "-89°C to 58°C");
             display_info_section(ui, "Moons", "1 (The Moon)");
+            display_info_section(ui, "Atmosphere", "78% N2, 21% O2, trace gases");
         }
         "Mars" => {
             display_info_section(ui, "Type", "Terrestrial planet");
@@ -857,6 +863,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Day Length", "24.6 hours");
             display_info_section(ui, "Surface Temperature", "-87°C to -5°C");
             display_info_section(ui, "Moons", "2 (Phobos, Deimos)");
+            display_info_section(ui, "Atmosphere", "95% CO2, thin and dusty");
         }
         "Jupiter" => {
             display_info_section(ui, "Type", "Gas giant");
@@ -870,6 +877,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
                 "Moons",
                 "95+ (4 Galilean: Io, Europa, Ganymede, Callisto)",
             );
+            display_info_section(ui, "Atmosphere", "Hydrogen, helium, ammonia clouds");
         }
         "Saturn" => {
             display_info_section(ui, "Type", "Gas giant");
@@ -880,6 +888,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Day Length", "10.7 hours");
             display_info_section(ui, "Moons", "146+ (major: Titan, Enceladus, Mimas)");
             display_info_section(ui, "Rings", "Complex ring system of ice and rock");
+            display_info_section(ui, "Atmosphere", "Hydrogen, helium, trace methane");
         }
         "Uranus" => {
             display_info_section(ui, "Type", "Ice giant");
@@ -894,6 +903,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
                 "Moons",
                 "28 (major: Titania, Oberon, Umbriel, Ariel, Miranda)",
             );
+            display_info_section(ui, "Atmosphere", "Hydrogen, helium, methane (blue color)");
         }
         "Neptune" => {
             display_info_section(ui, "Type", "Ice giant");
@@ -908,6 +918,7 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
                 "Up to 2,100 km/h (fastest in solar system)",
             );
             display_info_section(ui, "Moons", "16 (major: Triton, Proteus, Nereid)");
+            display_info_section(ui, "Atmosphere", "Hydrogen, helium, methane");
         }
         "Moon" => {
             display_info_section(ui, "Type", "Natural satellite");
@@ -917,9 +928,147 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Orbital Period", "27.3 Earth days");
             display_info_section(ui, "Day Length", "27.3 Earth days (tidal locking)");
             display_info_section(ui, "Surface Gravity", "1.62 m/s² (16.6% of Earth)");
+            display_info_section(ui, "Surface", "Regolith with basaltic maria");
+        }
+        "Phobos" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Mars");
+            display_info_section(ui, "Discovery", "1877 (Asaph Hall)");
+            display_info_section(ui, "Notable", "Fastest-orbiting moon in the solar system");
+        }
+        "Deimos" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Mars");
+            display_info_section(ui, "Discovery", "1877 (Asaph Hall)");
+            display_info_section(ui, "Notable", "Likely captured asteroid");
+        }
+        "Io" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Jupiter");
+            display_info_section(ui, "Discovery", "1610 (Galileo)");
+            display_info_section(ui, "Notable", "Most volcanically active body");
+        }
+        "Europa" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Jupiter");
+            display_info_section(ui, "Discovery", "1610 (Galileo)");
+            display_info_section(ui, "Notable", "Global subsurface ocean likely");
+        }
+        "Ganymede" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Jupiter");
+            display_info_section(ui, "Discovery", "1610 (Galileo)");
+            display_info_section(ui, "Notable", "Largest moon; has magnetic field");
+        }
+        "Callisto" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Jupiter");
+            display_info_section(ui, "Discovery", "1610 (Galileo)");
+            display_info_section(ui, "Notable", "Heavily cratered ancient surface");
+        }
+        "Mimas" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1789 (William Herschel)");
+            display_info_section(ui, "Notable", "Herschel crater dominates surface");
+        }
+        "Enceladus" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1789 (William Herschel)");
+            display_info_section(ui, "Notable", "Active geysers, subsurface ocean");
+        }
+        "Tethys" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1684 (Jean-Dominique Cassini)");
+            display_info_section(ui, "Notable", "Ithaca Chasma canyon system");
+        }
+        "Dione" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1684 (Jean-Dominique Cassini)");
+            display_info_section(ui, "Notable", "Wispy icy cliffs");
+        }
+        "Rhea" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1672 (Jean-Dominique Cassini)");
+            display_info_section(ui, "Notable", "Second-largest moon of Saturn");
+        }
+        "Titan" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1655 (Christiaan Huygens)");
+            display_info_section(ui, "Notable", "Thick atmosphere and methane lakes");
+        }
+        "Hyperion" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1848 (Bond and Lassell)");
+            display_info_section(ui, "Notable", "Chaotic rotation and porous interior");
+        }
+        "Iapetus" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Saturn");
+            display_info_section(ui, "Discovery", "1671 (Jean-Dominique Cassini)");
+            display_info_section(ui, "Notable", "Two-tone surface and equatorial ridge");
+        }
+        "Miranda" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Uranus");
+            display_info_section(ui, "Discovery", "1948 (Gerard Kuiper)");
+            display_info_section(ui, "Notable", "Patchwork terrain with giant cliffs");
+        }
+        "Ariel" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Uranus");
+            display_info_section(ui, "Discovery", "1851 (William Lassell)");
+            display_info_section(ui, "Notable", "Faulted surface and possible cryovolcanism");
+        }
+        "Umbriel" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Uranus");
+            display_info_section(ui, "Discovery", "1851 (William Lassell)");
+            display_info_section(ui, "Notable", "Darkest of Uranus's major moons");
+        }
+        "Titania" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Uranus");
+            display_info_section(ui, "Discovery", "1787 (William Herschel)");
+            display_info_section(ui, "Notable", "Largest moon of Uranus");
+        }
+        "Oberon" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Uranus");
+            display_info_section(ui, "Discovery", "1787 (William Herschel)");
+            display_info_section(ui, "Notable", "Heavily cratered icy surface");
+        }
+        "Triton" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Neptune");
+            display_info_section(ui, "Discovery", "1846 (William Lassell)");
+            display_info_section(ui, "Notable", "Retrograde orbit and geysers");
+        }
+        "Proteus" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Neptune");
+            display_info_section(ui, "Discovery", "1989 (Voyager 2)");
+            display_info_section(ui, "Notable", "Largest regular moon of Neptune");
+        }
+        "Nereid" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Neptune");
+            display_info_section(ui, "Discovery", "1949 (Gerard Kuiper)");
+            display_info_section(ui, "Notable", "Highly eccentric orbit");
+        }
+        "Larissa" => {
+            display_info_section(ui, "Type", "Natural satellite");
+            display_info_section(ui, "Parent Body", "Neptune");
+            display_info_section(ui, "Discovery", "1989 (Voyager 2)");
+            display_info_section(ui, "Notable", "Irregular moon inside ring system");
         }
         _ => {
-            // Generic information for other moons
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", get_parent_body(name));
             display_info_section(ui, "Discovery", get_discovery_info(name));
@@ -955,14 +1104,26 @@ fn display_fun_facts(ui: &mut egui::Ui, name: &str) {
         "Sun" => vec![
             "Contains 99.86% of the solar system's mass".to_string(),
             "Light takes 8 minutes to reach Earth".to_string(),
-            "Core temperature reaches 15 million °C".to_string(),
-            "Loses 4 million tons of mass per second through fusion".to_string(),
+            "Core temperature reaches about 15 million C".to_string(),
+            "Fuses about 600 million tons of hydrogen per second".to_string(),
+        ],
+        "Mercury" => vec![
+            "A year on Mercury is only 88 Earth days".to_string(),
+            "Rotates in a 3:2 spin-orbit resonance".to_string(),
+            "Has a large iron core for its size".to_string(),
+            "No true atmosphere, just a thin exosphere".to_string(),
+        ],
+        "Venus" => vec![
+            "Rotates backward compared to most planets".to_string(),
+            "Surface pressure is about 92 times Earth's".to_string(),
+            "Runaway greenhouse makes it hotter than Mercury".to_string(),
+            "Day is longer than its year".to_string(),
         ],
         "Earth" => vec![
             "Only known planet with life".to_string(),
             "71% of surface covered by water".to_string(),
             "Magnetic field protects from solar radiation".to_string(),
-            "Habitable for about 3.5 billion years".to_string(),
+            "Only planet with active plate tectonics".to_string(),
         ],
         "Mars" => vec![
             "Largest volcano: Olympus Mons (3x taller than Everest)".to_string(),
@@ -973,8 +1134,8 @@ fn display_fun_facts(ui: &mut egui::Ui, name: &str) {
         "Jupiter" => vec![
             "Great Red Spot: storm larger than Earth".to_string(),
             "Faint ring system discovered in 1979".to_string(),
-            "Acts as cosmic shield for inner planets".to_string(),
-            "Magnetic field 20,000x stronger than Earth's".to_string(),
+            "Emits more heat than it receives from the Sun".to_string(),
+            "Has the strongest planetary magnetic field".to_string(),
         ],
         "Saturn" => vec![
             "Rings made of ice chunks and dust particles".to_string(),
@@ -982,11 +1143,138 @@ fn display_fun_facts(ui: &mut egui::Ui, name: &str) {
             "Hexagonal storm at north pole".to_string(),
             "Moon Titan has thicker atmosphere than Earth".to_string(),
         ],
+        "Uranus" => vec![
+            "Axial tilt is about 98 degrees".to_string(),
+            "Coldest average temperatures of any planet".to_string(),
+            "Faint rings discovered in 1977".to_string(),
+            "Seasons last about 21 Earth years".to_string(),
+        ],
+        "Neptune" => vec![
+            "Fastest winds in the solar system".to_string(),
+            "Discovered by mathematical prediction".to_string(),
+            "Great Dark Spot observed by Voyager 2".to_string(),
+            "Triton orbits backward around Neptune".to_string(),
+        ],
         "Moon" => vec![
             "Moving away from Earth at 3.8 cm/year".to_string(),
             "Far side photographed by Luna 3 in 1959".to_string(),
-            "Moonquakes caused by Earth's gravity".to_string(),
+            "Moonquakes are real and can last minutes".to_string(),
             "Apollo footprints will last millions of years".to_string(),
+        ],
+        "Phobos" => vec![
+            "Orbit is slowly decaying toward Mars".to_string(),
+            "May break up and form a ring in the future".to_string(),
+            "Grooved surface hints at past stress fractures".to_string(),
+        ],
+        "Deimos" => vec![
+            "Likely a captured asteroid".to_string(),
+            "Very dark, carbon-rich surface".to_string(),
+            "Orbits Mars farther out than Phobos".to_string(),
+        ],
+        "Io" => vec![
+            "Most volcanically active body in the solar system".to_string(),
+            "Sulfur plumes can rise hundreds of kilometers".to_string(),
+            "Tidal heating from Jupiter powers its volcanism".to_string(),
+        ],
+        "Europa" => vec![
+            "Likely has a global ocean beneath its ice".to_string(),
+            "Surface is one of the smoothest in the solar system".to_string(),
+            "Possible water vapor plumes observed".to_string(),
+        ],
+        "Ganymede" => vec![
+            "Largest moon in the solar system".to_string(),
+            "Only moon known to have its own magnetic field".to_string(),
+            "May have a deep subsurface ocean".to_string(),
+        ],
+        "Callisto" => vec![
+            "One of the most heavily cratered moons".to_string(),
+            "Surface has changed little for billions of years".to_string(),
+            "Likely has a subsurface ocean".to_string(),
+        ],
+        "Mimas" => vec![
+            "Herschel crater makes it look like a Death Star".to_string(),
+            "Mostly water ice by composition".to_string(),
+            "Smallest of Saturn's major moons".to_string(),
+        ],
+        "Enceladus" => vec![
+            "Geysers vent water vapor from the south pole".to_string(),
+            "Evidence for a global subsurface ocean".to_string(),
+            "Supplies material to Saturn's E ring".to_string(),
+        ],
+        "Tethys" => vec![
+            "Ithaca Chasma canyon spans much of the moon".to_string(),
+            "Very low density suggests mostly ice".to_string(),
+            "Odysseus crater is nearly half its diameter".to_string(),
+        ],
+        "Dione" => vec![
+            "Bright wispy terrain are icy cliffs".to_string(),
+            "Has a tenuous oxygen exosphere".to_string(),
+            "Tidal heating may occur in its interior".to_string(),
+        ],
+        "Rhea" => vec![
+            "Second-largest moon of Saturn".to_string(),
+            "Heavily cratered icy surface".to_string(),
+            "Has a thin oxygen and CO2 exosphere".to_string(),
+        ],
+        "Titan" => vec![
+            "Thick nitrogen atmosphere with methane clouds".to_string(),
+            "Liquid methane and ethane lakes on the surface".to_string(),
+            "Methane cycle resembles Earth's water cycle".to_string(),
+        ],
+        "Hyperion" => vec![
+            "Irregular shape with chaotic rotation".to_string(),
+            "Very porous, sponge-like interior".to_string(),
+            "Surface is extremely dark and cratered".to_string(),
+        ],
+        "Iapetus" => vec![
+            "Two-tone surface: bright and dark hemispheres".to_string(),
+            "Has a massive equatorial ridge".to_string(),
+            "Dark material may be from outer moons".to_string(),
+        ],
+        "Miranda" => vec![
+            "Patchwork surface from past tectonic activity".to_string(),
+            "Giant cliffs are among the tallest in the solar system".to_string(),
+            "Distinct coronae regions reshape the surface".to_string(),
+        ],
+        "Ariel" => vec![
+            "Icy moon with long fault valleys".to_string(),
+            "Surface shows evidence of resurfacing".to_string(),
+            "Possible past cryovolcanism".to_string(),
+        ],
+        "Umbriel" => vec![
+            "Darkest of Uranus's major moons".to_string(),
+            "Wunda crater has a bright ring".to_string(),
+            "Heavily cratered, ancient surface".to_string(),
+        ],
+        "Titania" => vec![
+            "Largest moon of Uranus".to_string(),
+            "Canyons suggest crustal expansion".to_string(),
+            "May host a subsurface ocean".to_string(),
+        ],
+        "Oberon" => vec![
+            "Second-largest moon of Uranus".to_string(),
+            "Heavily cratered with some icy deposits".to_string(),
+            "Surface shows signs of past geology".to_string(),
+        ],
+        "Triton" => vec![
+            "Orbits Neptune in retrograde direction".to_string(),
+            "Nitrogen geysers observed by Voyager 2".to_string(),
+            "Likely a captured Kuiper Belt object".to_string(),
+        ],
+        "Proteus" => vec![
+            "Largest regular moon of Neptune".to_string(),
+            "Irregular shape with dark surface".to_string(),
+            "Discovered by Voyager 2 in 1989".to_string(),
+        ],
+        "Nereid" => vec![
+            "Has a highly eccentric, elongated orbit".to_string(),
+            "Likely a captured object".to_string(),
+            "One of Neptune's most distant moons".to_string(),
+        ],
+        "Larissa" => vec![
+            "Small, irregular moon close to Neptune".to_string(),
+            "Discovered by Voyager 2 in 1989".to_string(),
+            "Orbits inside Neptune's faint ring system".to_string(),
         ],
         _ => vec![format!(
             "{} has unique and fascinating characteristics",

@@ -108,10 +108,11 @@ pub fn setup_space(
         brightness: 0.15,                   // Maximum ambient brightness for planet visibility
     });
 
-    // Camera positioned to view the massively scaled astronomical solar system
+    // Camera positioned to view the full set of orbits on load
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 5000.0, 20000.0).looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0.0, 150000.0, 1800000.0)
+                .looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         CameraController {
