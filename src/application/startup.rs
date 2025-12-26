@@ -83,11 +83,11 @@ pub fn setup_space(
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
 
-    // Set up dark space environment
+    // Set up dark space environment with enhanced ambient light for planet visibility
     commands.insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.05))); // Very dark blue-black space
     commands.insert_resource(AmbientLight {
-        color: Color::srgb(0.1, 0.1, 0.15), // Dim ambient light for space
-        brightness: 0.01,
+        color: Color::srgb(0.05, 0.05, 0.08), // Very dim blue ambient light
+        brightness: 0.02, // Slightly increased for better planet visibility
     });
 
     // Camera positioned to view the solar system
@@ -107,16 +107,29 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source
+    // Sun as the main light source with enhanced intensity for better planet visibility
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 200000.0, // Increased for better visibility in dark space
+            intensity: 500000.0, // Significantly increased for better planet illumination
             shadows_enabled: false, // Disable shadows for better performance
-            color: Color::srgb(1.0, 1.0, 0.9),
-            range: 1000.0, // Limit light range for space realism
+            color: Color::srgb(1.0, 1.0, 0.95), // Slightly warmer light
+            range: 2000.0, // Increased range to illuminate more distant planets
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        ..default()
+    });
+
+    // Add a subtle fill light to make planets more visible from all angles
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 20000.0, // Much dimmer fill light
+            shadows_enabled: false,
+            color: Color::srgb(0.8, 0.9, 1.0), // Cool blue fill light
+            range: 1500.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(100.0, 50.0, 100.0), // Offset position for fill lighting
         ..default()
     });
 
@@ -199,6 +212,10 @@ pub fn setup_space(
                     } else {
                         LinearRgba::BLACK
                     },
+                    // Add reflective properties for better visibility
+                    metallic: if planet.name == "Sun" { 0.0 } else { 0.1 }, // Slight metallic for planetary surfaces
+                    reflectance: if planet.name == "Sun" { 0.0 } else { 0.3 }, // Higher reflectance for better light reflection
+                    perceptual_roughness: 0.7, // Moderate roughness for realistic surfaces
                     ..default()
                 }),
                 transform: Transform::from_translation(initial_position),
