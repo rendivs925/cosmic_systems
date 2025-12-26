@@ -325,7 +325,7 @@ pub fn setup_space(
         let emissive = if planet.name == "Sun" {
             LinearRgba::new(1.0, 1.0, 0.8, 1.0)
         } else if has_albedo {
-            LinearRgba::new(0.6, 0.6, 0.6, 1.0)
+            LinearRgba::new(0.35, 0.35, 0.35, 1.0)
         } else {
             LinearRgba::BLACK
         };
@@ -521,15 +521,12 @@ pub fn setup_space(
 
         if planet.name == "Saturn" {
             let ring_outer_radius = visual_radius * 2.5;
-            let ring_thickness = visual_radius * 0.1;
+            let ring_inner_radius = visual_radius * 1.6;
             let ring_texture = load_texture(&asset_server, get_ring_texture_path(&planet.name));
 
             commands.spawn((
                 PbrBundle {
-                    mesh: meshes.add(Mesh::from(Cylinder {
-                        radius: ring_outer_radius,
-                        half_height: ring_thickness,
-                    })),
+                    mesh: create_ring_mesh(&mut meshes, ring_inner_radius, ring_outer_radius),
                     material: materials.add(StandardMaterial {
                         base_color_texture: ring_texture,
                         base_color: Color::srgb(0.9, 0.85, 0.75),
@@ -594,6 +591,47 @@ fn create_orbit_mesh_ellipse(
     meshes.add(mesh)
 }
 
+fn create_ring_mesh(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    inner_radius: f32,
+    outer_radius: f32,
+) -> Handle<Mesh> {
+    const SEGMENTS: usize = 256;
+    let mut positions = Vec::with_capacity((SEGMENTS + 1) * 2);
+    let mut normals = Vec::with_capacity((SEGMENTS + 1) * 2);
+    let mut uvs = Vec::with_capacity((SEGMENTS + 1) * 2);
+    let mut indices = Vec::with_capacity(SEGMENTS * 6);
+
+    for i in 0..=SEGMENTS {
+        let t = i as f32 / SEGMENTS as f32;
+        let angle = t * TAU;
+        let (sin_a, cos_a) = angle.sin_cos();
+
+        positions.push([inner_radius * cos_a, 0.0, inner_radius * sin_a]);
+        positions.push([outer_radius * cos_a, 0.0, outer_radius * sin_a]);
+        normals.push([0.0, 1.0, 0.0]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([0.0, t]);
+        uvs.push([1.0, t]);
+    }
+
+    for i in 0..SEGMENTS {
+        let inner0 = (i * 2) as u32;
+        let outer0 = inner0 + 1;
+        let inner1 = inner0 + 2;
+        let outer1 = inner0 + 3;
+
+        indices.extend_from_slice(&[inner0, outer0, outer1, inner0, outer1, inner1]);
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    meshes.add(mesh)
+}
+
 struct OrbitMotionParams {
     tilt: Vec2,
     wobble_speed: f32,
@@ -649,8 +687,7 @@ fn create_starfield(
     _meshes: &mut ResMut<Assets<Mesh>>,
     _materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
-    // Starfield disabled for performance optimization
-    // Previously created 1500+ stars which caused performance issues
+    // Starfield disabled for performance and clarity.
 }
 
 struct PlanetTextureSet {
