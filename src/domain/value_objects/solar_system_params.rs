@@ -30,10 +30,10 @@ impl SolarSystemParameters {
     pub fn for_visualization() -> Self {
         Self {
             sun_radius_km: 1392684.0,
-            scale_factor: 50.0,   // Tighter view
-            time_scale: 100.0,    // Speed up time for visible motion
+            scale_factor: 30.0,   // Tighter view for solar system
+            time_scale: 500.0,    // Speed up time significantly for visible motion
             show_orbits: true,
-            planet_scale: 5.0,    // Make planets more visible
+            planet_scale: 10.0,   // Make planets much more visible
         }
     }
 
