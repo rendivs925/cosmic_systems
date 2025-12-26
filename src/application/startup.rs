@@ -307,13 +307,7 @@ pub fn setup_space(
         let emissive_handle = load_texture(&asset_server, textures.emissive);
         let has_albedo = albedo_handle.is_some();
 
-        let base_color = if planet.name == "Sun" {
-            planet.color
-        } else if has_albedo {
-            Color::WHITE
-        } else {
-            planet.color
-        };
+        let base_color = planet.color;
 
         let (metallic, reflectance, perceptual_roughness) = match planet.name.as_str() {
             "Sun" => (0.0, 0.0, 0.0),
@@ -328,16 +322,28 @@ pub fn setup_space(
             _ => (0.0, 0.5, 0.7),
         };
 
+        let emissive = if planet.name == "Sun" {
+            LinearRgba::new(1.0, 1.0, 0.8, 1.0)
+        } else if has_albedo {
+            LinearRgba::new(0.6, 0.6, 0.6, 1.0)
+        } else {
+            LinearRgba::BLACK
+        };
+
+        let emissive_texture = if planet.name == "Sun" {
+            emissive_handle.clone()
+        } else if has_albedo {
+            albedo_handle.clone()
+        } else {
+            emissive_handle.clone()
+        };
+
         let material = StandardMaterial {
             base_color_texture: albedo_handle.clone(),
             normal_map_texture: None,
-            emissive_texture: emissive_handle.clone(),
+            emissive_texture,
             base_color,
-            emissive: if planet.name == "Sun" {
-                LinearRgba::new(1.0, 1.0, 0.8, 1.0)
-            } else {
-                LinearRgba::BLACK
-            },
+            emissive,
             unlit: planet.name == "Sun",
             metallic,
             reflectance,
@@ -444,12 +450,13 @@ pub fn setup_space(
                     * Quat::from_rotation_x(orbit_shape.inclination_rad)
                     * Quat::from_rotation_y(orbit_shape.arg_periapsis_rad);
 
-                commands.spawn(PbrBundle {
-                    mesh: orbit_mesh,
-                    material: orbit_material_handle,
-                    transform: Transform::from_rotation(orbit_rotation),
-                    ..default()
-                })
+                commands
+                    .spawn(PbrBundle {
+                        mesh: orbit_mesh,
+                        material: orbit_material_handle,
+                        transform: Transform::from_rotation(orbit_rotation),
+                        ..default()
+                    })
                     .insert(OrbitComponent {
                         radius: orbit_shape.semi_major_axis_units,
                         planet_entity,
@@ -599,7 +606,10 @@ fn orbit_motion_params(name: &str, orbital_distance_au: f32, is_moon: bool) -> O
     let base = orbit_hash(name, 1);
     let offset = orbit_hash(name, 7);
     let max_tilt = if is_moon { 0.28 } else { 0.16 };
-    let tilt = Vec2::new((base * 2.0 - 1.0) * max_tilt, (offset * 2.0 - 1.0) * max_tilt);
+    let tilt = Vec2::new(
+        (base * 2.0 - 1.0) * max_tilt,
+        (offset * 2.0 - 1.0) * max_tilt,
+    );
     let wobble_amount = if is_moon { 0.06 } else { 0.035 };
     let wobble_speed = 0.05 + base * 0.12 + orbital_distance_au * 0.002;
     let spin_speed = 0.02 + offset * 0.05;
