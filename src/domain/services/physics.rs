@@ -31,9 +31,9 @@ pub fn calculate_arrow_scale(thrust: Vec3) -> f32 {
 
 // Orbital mechanics functions for solar system simulation
 
-/// Calculate the position of a planet in its orbit at a given time
+/// Calculate the position of a planet/moon in its orbit at a given time
 /// Uses simplified circular orbit approximation (Kepler's first law)
-pub fn calculate_planet_position(planet: &Planet, time_days: f32, solar_params: &SolarSystemParameters) -> Vec3 {
+pub fn calculate_planet_position(planet: &Planet, time_days: f32, solar_params: &SolarSystemParameters, parent_position: Vec3) -> Vec3 {
     if planet.name == "Sun" {
         // Sun is at the origin
         return Vec3::ZERO;
@@ -42,11 +42,22 @@ pub fn calculate_planet_position(planet: &Planet, time_days: f32, solar_params: 
     // Calculate angle based on orbital period
     let angle = 2.0 * std::f32::consts::PI * time_days / planet.orbital_period_days;
 
-    // Calculate distance in simulation units
-    let distance = solar_params.au_to_units(planet.orbital_distance_au);
+    // For moons, orbital_distance_au is relative to parent, not Sun
+    // For planets, it's already in AU from Sun
+    let distance = if planet.parent_entity.is_some() {
+        // Moon orbiting a planet - convert relative distance to simulation units
+        // Using a much smaller scale for moon orbits
+        planet.orbital_distance_au * 0.01 // Scale down moon orbits significantly
+    } else {
+        // Planet orbiting Sun
+        solar_params.au_to_units(planet.orbital_distance_au)
+    };
 
-    // Position in orbital plane (XY plane)
-    Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
+    // Position relative to parent
+    let relative_pos = Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin());
+
+    // Add parent position to get absolute position
+    parent_position + relative_pos
 }
 
 /// Calculate the rotation angle of a planet at a given time

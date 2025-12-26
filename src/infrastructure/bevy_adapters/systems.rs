@@ -93,7 +93,7 @@ pub fn handle_input(
     }
 }
 
-// System to update planet positions in their orbits
+// System to update planet/moon positions in their orbits
 pub fn update_planet_positions(
     time: Res<Time>,
     solar_params: Res<SolarSystemParameters>,
@@ -102,11 +102,28 @@ pub fn update_planet_positions(
     let elapsed_seconds = time.elapsed_seconds();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
+    // First pass: collect parent positions
+    let mut parent_positions = std::collections::HashMap::new();
+    for (transform, planet_comp) in query.iter() {
+        parent_positions.insert(planet_comp.domain_planet.name.clone(), transform.translation);
+    }
+
+    // Second pass: update positions
     for (mut transform, planet_comp) in query.iter_mut() {
+        // Find parent position
+        let parent_position = if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
+            // This is a moon - get its parent planet's position
+            *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO)
+        } else {
+            // This is a planet orbiting the Sun
+            Vec3::ZERO
+        };
+
         let new_position = physics::calculate_planet_position(
             &planet_comp.domain_planet,
             time_days,
             &solar_params,
+            parent_position,
         );
         transform.translation = new_position;
     }
@@ -300,6 +317,7 @@ pub fn handle_solar_system_input(
 pub fn update_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
     mut query: Query<(&mut CameraController, &mut Transform)>,
@@ -311,14 +329,14 @@ pub fn update_camera_controller(
 
         let dt = time.delta_seconds();
 
-        // Handle mouse look for rotation (always active when mouse moves)
+        // Handle mouse look for rotation (only when left mouse button is held)
         let mut mouse_delta = Vec2::ZERO;
         for motion in mouse_motion.read() {
             mouse_delta += motion.delta;
         }
 
-        // Apply mouse sensitivity and update rotation
-        if mouse_delta != Vec2::ZERO {
+        // Apply mouse sensitivity and update rotation only when left mouse button is held
+        if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Left) {
             let sensitivity = controller.sensitivity;
             let yaw = -mouse_delta.x * sensitivity;
             let pitch = -mouse_delta.y * sensitivity;

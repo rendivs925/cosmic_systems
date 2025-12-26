@@ -111,7 +111,7 @@ pub fn setup_space(
         ..default()
     });
 
-    // Create all planets
+    // Create all planets and moons
     let planets = vec![
         Planet::create_sun(),
         Planet::create_mercury(),
@@ -124,15 +124,58 @@ pub fn setup_space(
         Planet::create_neptune(),
     ];
 
-    // Spawn each planet
-    for planet in planets {
+    // Create all moons
+    let moons = vec![
+        // Earth's moon
+        Planet::create_moon(),
+        // Mars' moons
+        Planet::create_phobos(),
+        Planet::create_deimos(),
+        // Jupiter's major moons
+        Planet::create_io(),
+        Planet::create_europa(),
+        Planet::create_ganymede(),
+        Planet::create_callisto(),
+        // Saturn's major moons
+        Planet::create_mimas(),
+        Planet::create_enceladus(),
+        Planet::create_tethys(),
+        Planet::create_dione(),
+        Planet::create_rhea(),
+        Planet::create_titan(),
+        Planet::create_hyperion(),
+        Planet::create_iapetus(),
+        // Uranus' major moons
+        Planet::create_miranda(),
+        Planet::create_ariel(),
+        Planet::create_umbriel(),
+        Planet::create_titania(),
+        Planet::create_oberon(),
+        // Neptune's major moon
+        Planet::create_triton(),
+    ];
+
+    // Combine planets and moons
+    let all_celestial_bodies = [planets, moons].concat();
+
+    // Spawn each celestial body (planets and moons)
+    for planet in all_celestial_bodies {
         let visual_radius = if planet.name == "Sun" {
             physics::calculate_sun_visual_radius(&solar_params)
         } else {
             physics::calculate_visual_radius(&planet, &solar_params)
         };
 
-        let initial_position = physics::calculate_planet_position(&planet, 0.0, &solar_params);
+        // For initial positions, moons start at their parent planet's position
+        // The update system will handle proper orbital positioning
+        let initial_position = if planet.parent_entity.is_some() {
+            // Moon - start near parent position
+            // The physics system will update them properly
+            Vec3::ZERO
+        } else {
+            // Planet - calculate position around Sun
+            physics::calculate_planet_position(&planet, 0.0, &solar_params, Vec3::ZERO)
+        };
 
         commands.spawn((
             PbrBundle {

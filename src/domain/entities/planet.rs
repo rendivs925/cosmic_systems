@@ -6,9 +6,10 @@ pub struct Planet {
     pub radius_km: f32,
     pub mass_kg: f64,
     pub color: Color,
-    pub orbital_distance_au: f32,  // Average distance from Sun in AU
+    pub orbital_distance_au: f32,  // Average distance from Sun (or parent planet) in AU
     pub orbital_period_days: f32,
     pub rotation_period_hours: f32,
+    pub parent_entity: Option<String>, // Name of parent body (None for Sun, planet name for moons)
 }
 
 impl Planet {
@@ -20,6 +21,7 @@ impl Planet {
         orbital_distance_au: f32,
         orbital_period_days: f32,
         rotation_period_hours: f32,
+        parent_entity: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -29,6 +31,7 @@ impl Planet {
             orbital_distance_au,
             orbital_period_days,
             rotation_period_hours,
+            parent_entity,
         }
     }
 
@@ -42,6 +45,7 @@ impl Planet {
             0.387,
             88.0,
             1407.6,
+            None, // orbits Sun
         )
     }
 
@@ -54,6 +58,7 @@ impl Planet {
             0.723,
             224.7,
             5832.5,
+            None, // orbits Sun
         )
     }
 
@@ -66,6 +71,7 @@ impl Planet {
             1.0,
             365.25,
             24.0,
+            None, // orbits Sun
         )
     }
 
@@ -78,6 +84,7 @@ impl Planet {
             1.524,
             687.0,
             24.6,
+            None, // orbits Sun
         )
     }
 
@@ -90,6 +97,7 @@ impl Planet {
             5.204,
             4333.0,
             9.9,
+            None, // orbits Sun
         )
     }
 
@@ -102,6 +110,7 @@ impl Planet {
             9.539,
             10759.0,
             10.7,
+            None, // orbits Sun
         )
     }
 
@@ -114,6 +123,7 @@ impl Planet {
             19.191,
             30687.0,
             17.2,
+            None, // orbits Sun
         )
     }
 
@@ -126,6 +136,7 @@ impl Planet {
             30.061,
             60190.0,
             16.1,
+            None, // orbits Sun
         )
     }
 
@@ -138,6 +149,294 @@ impl Planet {
             0.0, // Sun doesn't orbit
             0.0,
             609.12, // 25.38 days sidereal rotation
+            None, // central body
+        )
+    }
+
+    // Moon creation methods
+    pub fn create_moon() -> Self {
+        Self::new(
+            "Moon".to_string(),
+            1737.4,  // Earth's moon
+            7.342e22,
+            Color::srgb(0.7, 0.7, 0.7), // gray rocky
+            1.0,     // orbits Earth at 1 Earth radius (simplified)
+            27.3,    // sidereal month
+            27.3 * 24.0, // synchronous rotation
+            Some("Earth".to_string()),
+        )
+    }
+
+    pub fn create_phobos() -> Self {
+        Self::new(
+            "Phobos".to_string(),
+            11.1,    // Mars' moon
+            1.06e16,
+            Color::srgb(0.4, 0.3, 0.2), // dark gray
+            1.0,     // simplified orbit around Mars
+            0.32,    // very fast orbit (7.6 hours)
+            0.32 * 24.0, // synchronous rotation
+            Some("Mars".to_string()),
+        )
+    }
+
+    pub fn create_deimos() -> Self {
+        Self::new(
+            "Deimos".to_string(),
+            6.2,     // Mars' smaller moon
+            1.48e15,
+            Color::srgb(0.5, 0.4, 0.3), // gray
+            1.0,     // simplified orbit around Mars
+            1.26,    // slower orbit (30.3 hours)
+            1.26 * 24.0, // synchronous rotation
+            Some("Mars".to_string()),
+        )
+    }
+
+    pub fn create_io() -> Self {
+        Self::new(
+            "Io".to_string(),
+            1821.6,  // Jupiter's moon
+            8.93e22,
+            Color::srgb(0.9, 0.8, 0.4), // yellowish sulfur
+            1.0,     // simplified orbit around Jupiter
+            1.77,    // 42.5 hours
+            1.77 * 24.0, // synchronous rotation
+            Some("Jupiter".to_string()),
+        )
+    }
+
+    pub fn create_europa() -> Self {
+        Self::new(
+            "Europa".to_string(),
+            1560.8,  // Jupiter's moon
+            4.8e22,
+            Color::srgb(0.8, 0.8, 0.9), // icy blue-white
+            1.0,     // simplified orbit around Jupiter
+            3.55,    // 85.2 hours
+            3.55 * 24.0, // synchronous rotation
+            Some("Jupiter".to_string()),
+        )
+    }
+
+    pub fn create_ganymede() -> Self {
+        Self::new(
+            "Ganymede".to_string(),
+            2634.1,  // Jupiter's largest moon
+            1.48e23,
+            Color::srgb(0.6, 0.6, 0.7), // gray icy
+            1.0,     // simplified orbit around Jupiter
+            7.15,    // 171.7 hours
+            7.15 * 24.0, // synchronous rotation
+            Some("Jupiter".to_string()),
+        )
+    }
+
+    pub fn create_callisto() -> Self {
+        Self::new(
+            "Callisto".to_string(),
+            2410.3,  // Jupiter's moon
+            1.08e23,
+            Color::srgb(0.5, 0.5, 0.6), // dark icy
+            1.0,     // simplified orbit around Jupiter
+            16.69,   // 401.4 hours
+            16.69 * 24.0, // synchronous rotation
+            Some("Jupiter".to_string()),
+        )
+    }
+
+    pub fn create_titan() -> Self {
+        Self::new(
+            "Titan".to_string(),
+            2574.7,  // Saturn's largest moon
+            1.35e23,
+            Color::srgb(0.7, 0.6, 0.4), // orange atmosphere
+            1.0,     // simplified orbit around Saturn
+            15.95,   // 383.9 hours
+            15.95 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_rhea() -> Self {
+        Self::new(
+            "Rhea".to_string(),
+            763.8,   // Saturn's moon
+            2.31e21,
+            Color::srgb(0.7, 0.7, 0.8), // icy
+            1.0,     // simplified orbit around Saturn
+            4.52,    // 108.4 hours
+            4.52 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_iapetus() -> Self {
+        Self::new(
+            "Iapetus".to_string(),
+            734.5,   // Saturn's moon
+            1.81e21,
+            Color::srgb(0.8, 0.8, 0.8), // icy with dark hemisphere
+            1.0,     // simplified orbit around Saturn
+            79.32,   // 1903.7 hours
+            79.32 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_mimas() -> Self {
+        Self::new(
+            "Mimas".to_string(),
+            198.2,   // Saturn's moon
+            3.75e19,
+            Color::srgb(0.8, 0.8, 0.8), // icy
+            1.0,     // simplified orbit around Saturn
+            0.94,    // 22.6 hours
+            0.94 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_enceladus() -> Self {
+        Self::new(
+            "Enceladus".to_string(),
+            252.1,   // Saturn's moon
+            1.08e20,
+            Color::srgb(0.9, 0.9, 0.9), // very bright icy
+            1.0,     // simplified orbit around Saturn
+            1.37,    // 32.9 hours
+            1.37 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_tethys() -> Self {
+        Self::new(
+            "Tethys".to_string(),
+            531.1,   // Saturn's moon
+            6.18e20,
+            Color::srgb(0.7, 0.7, 0.8), // icy
+            1.0,     // simplified orbit around Saturn
+            1.89,    // 45.3 hours
+            1.89 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_dione() -> Self {
+        Self::new(
+            "Dione".to_string(),
+            561.4,   // Saturn's moon
+            1.1e21,
+            Color::srgb(0.7, 0.7, 0.8), // icy
+            1.0,     // simplified orbit around Saturn
+            2.74,    // 65.7 hours
+            2.74 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_hyperion() -> Self {
+        Self::new(
+            "Hyperion".to_string(),
+            135.0,   // Saturn's moon
+            5.6e18,
+            Color::srgb(0.6, 0.5, 0.4), // dark porous
+            1.0,     // simplified orbit around Saturn
+            21.28,   // 511.0 hours
+            21.28 * 24.0, // synchronous rotation
+            Some("Saturn".to_string()),
+        )
+    }
+
+    pub fn create_oberon() -> Self {
+        Self::new(
+            "Oberon".to_string(),
+            761.4,   // Uranus' moon
+            3.01e21,
+            Color::srgb(0.5, 0.5, 0.6), // dark icy
+            1.0,     // simplified orbit around Uranus
+            13.46,   // 323.1 hours
+            13.46 * 24.0, // synchronous rotation
+            Some("Uranus".to_string()),
+        )
+    }
+
+    pub fn create_titania() -> Self {
+        Self::new(
+            "Titania".to_string(),
+            788.4,   // Uranus' moon
+            3.53e21,
+            Color::srgb(0.6, 0.6, 0.7), // icy
+            1.0,     // simplified orbit around Uranus
+            8.71,    // 208.9 hours
+            8.71 * 24.0, // synchronous rotation
+            Some("Uranus".to_string()),
+        )
+    }
+
+    pub fn create_umbriel() -> Self {
+        Self::new(
+            "Umbriel".to_string(),
+            584.7,   // Uranus' moon
+            1.28e21,
+            Color::srgb(0.4, 0.4, 0.5), // very dark icy
+            1.0,     // simplified orbit around Uranus
+            4.14,    // 99.4 hours
+            4.14 * 24.0, // synchronous rotation
+            Some("Uranus".to_string()),
+        )
+    }
+
+    pub fn create_ariel() -> Self {
+        Self::new(
+            "Ariel".to_string(),
+            578.9,   // Uranus' moon
+            1.25e21,
+            Color::srgb(0.7, 0.7, 0.8), // bright icy
+            1.0,     // simplified orbit around Uranus
+            2.52,    // 60.5 hours
+            2.52 * 24.0, // synchronous rotation
+            Some("Uranus".to_string()),
+        )
+    }
+
+    pub fn create_miranda() -> Self {
+        Self::new(
+            "Miranda".to_string(),
+            235.8,   // Uranus' moon
+            6.41e19,
+            Color::srgb(0.6, 0.6, 0.7), // icy
+            1.0,     // simplified orbit around Uranus
+            1.41,    // 33.9 hours
+            1.41 * 24.0, // synchronous rotation
+            Some("Uranus".to_string()),
+        )
+    }
+
+    pub fn create_triton() -> Self {
+        Self::new(
+            "Triton".to_string(),
+            1353.4,  // Neptune's moon
+            2.14e22,
+            Color::srgb(0.6, 0.7, 0.8), // icy with nitrogen
+            1.0,     // simplified orbit around Neptune
+            5.88,    // 141.0 hours
+            5.88 * 24.0, // synchronous rotation
+            Some("Neptune".to_string()),
+        )
+    }
+
+    pub fn create_charon() -> Self {
+        Self::new(
+            "Charon".to_string(),
+            603.6,   // Pluto's moon
+            1.59e21,
+            Color::srgb(0.5, 0.5, 0.5), // gray icy
+            1.0,     // simplified orbit around Pluto
+            6.39,    // 153.3 hours
+            6.39 * 24.0, // synchronous rotation
+            Some("Pluto".to_string()), // Note: Pluto not in main solar system yet
         )
     }
 }
