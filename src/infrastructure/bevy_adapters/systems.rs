@@ -336,6 +336,7 @@ pub fn update_camera_controller(
         }
 
         // Apply mouse sensitivity and update rotation only when left mouse button is held
+        // This provides precise control for 3D navigation
         if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Left) {
             let sensitivity = controller.sensitivity;
             let yaw = -mouse_delta.x * sensitivity;
@@ -384,27 +385,42 @@ pub fn update_camera_controller(
             transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, clamped_pitch, euler.2);
         }
 
-        // Handle keyboard movement (WASD for movement, not rotation)
+        // Handle keyboard movement - Full 3D spaceship-style controls
         let mut movement = Vec3::ZERO;
 
+        // Primary movement (WASD + Space/Ctrl)
         if keyboard.pressed(KeyCode::KeyW) {
-            movement += *transform.forward();
+            movement += *transform.forward(); // Forward
         }
         if keyboard.pressed(KeyCode::KeyS) {
-            movement -= *transform.forward();
+            movement -= *transform.forward(); // Backward
         }
         if keyboard.pressed(KeyCode::KeyA) {
-            movement -= *transform.right();
+            movement -= *transform.right(); // Strafe left
         }
         if keyboard.pressed(KeyCode::KeyD) {
-            movement += *transform.right();
+            movement += *transform.right(); // Strafe right
         }
-        if keyboard.pressed(KeyCode::Space) {
-            movement += Vec3::Y;
+
+        // Vertical movement (multiple options for flexibility)
+        if keyboard.pressed(KeyCode::Space) || keyboard.pressed(KeyCode::KeyQ) {
+            movement += Vec3::Y; // Up
         }
-        if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
-            movement -= Vec3::Y;
+        if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) || keyboard.pressed(KeyCode::KeyE) {
+            movement -= Vec3::Y; // Down
         }
+
+        // Alternative movement controls for enhanced 3D navigation
+        // Arrow keys provide additional movement options
+        if keyboard.pressed(KeyCode::ArrowUp) && !keyboard.pressed(KeyCode::KeyW) {
+            movement += *transform.forward() * 0.7; // Slower forward with arrows
+        }
+        if keyboard.pressed(KeyCode::ArrowDown) && !keyboard.pressed(KeyCode::KeyS) {
+            movement -= *transform.forward() * 0.7; // Slower backward with arrows
+        }
+
+        // Allow free movement in any direction by combining controls
+        // This enables full 6DOF (degrees of freedom) movement
 
         // Handle mouse wheel for zooming (direct position change, not velocity-based)
         for wheel_event in mouse_wheel.read() {
@@ -413,12 +429,19 @@ pub fn update_camera_controller(
             transform.translation += forward * zoom_distance;
         }
 
-        // Apply speed
+        // Apply speed with multiple speed options for better 3D navigation
         if movement != Vec3::ZERO {
             movement = movement.normalize() * controller.speed;
+
+            // Speed modifiers for flexible 3D movement
             if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
-                movement *= 5.0; // Speed boost
+                movement *= 5.0; // Fast mode - quick travel between planets
+            } else if keyboard.pressed(KeyCode::AltLeft) || keyboard.pressed(KeyCode::AltRight) {
+                movement *= 0.2; // Slow mode - precise positioning near objects
             }
+
+            // Allow free movement in any 3D direction without normalization constraints
+            // This enables smooth, intuitive spaceship-like movement
         }
 
         // Apply movement to velocity with damping
