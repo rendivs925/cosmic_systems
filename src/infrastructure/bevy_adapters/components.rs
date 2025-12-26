@@ -59,3 +59,10 @@ pub struct SelectedPlanet {
     pub entity: Option<Entity>,
     pub name: Option<String>,
 }
+
+// Resource to track hovered planet for information display
+#[derive(Resource)]
+pub struct HoveredPlanet {
+    pub name: Option<String>,
+    pub info: Option<String>,
+}

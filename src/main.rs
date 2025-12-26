@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_egui::EguiPlugin;
 use std::env;
 
 pub mod domain;
@@ -8,7 +9,7 @@ pub mod presentation;
 
 use application::startup::*;
 use infrastructure::bevy_adapters::systems::*;
-use infrastructure::bevy_adapters::components::SelectedPlanet;
+use infrastructure::bevy_adapters::components::{SelectedPlanet, HoveredPlanet};
 use domain::value_objects::simulation_params::SimulationParameters;
 
 
@@ -37,6 +38,7 @@ fn main() {
 
     let mut app = App::new();
     app.add_plugins(plugins);
+    app.add_plugins(EguiPlugin);
 
     if is_gyro_mode {
         app.insert_resource(SimulationParameters::new());
@@ -49,12 +51,19 @@ fn main() {
             entity: None,
             name: None,
         });
+        app.insert_resource(HoveredPlanet {
+            name: None,
+            info: None,
+        });
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);
         app.add_systems(Update, update_planet_rotations);
         app.add_systems(Update, handle_solar_system_input);
         app.add_systems(Update, handle_planet_selection);
+        app.add_systems(Update, handle_mouse_planet_selection);
         app.add_systems(Update, update_planet_selection_visuals);
+        app.add_systems(Update, detect_planet_hover);
+        app.add_systems(Update, display_hover_info);
         app.add_systems(Update, update_camera_controller);
         app.add_systems(Update, apply_camera_transform);
     }
