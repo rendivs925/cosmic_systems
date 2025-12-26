@@ -82,12 +82,12 @@ pub fn handle_input(
 
     if keyboard.pressed(KeyCode::KeyA) {
         params.asymmetry -= param_delta * 0.1;
-        params.asymmetry = params.asymmetry.max(0.0).min(1.0);
+        params.asymmetry = params.asymmetry.clamp(0.0, 1.0);
         println!("Asymmetry decreased to: {:.2}", params.asymmetry);
     }
     if keyboard.pressed(KeyCode::KeyD) {
         params.asymmetry += param_delta * 0.1;
-        params.asymmetry = params.asymmetry.max(0.0).min(1.0);
+        params.asymmetry = params.asymmetry.clamp(0.0, 1.0);
         println!("Asymmetry increased to: {:.2}", params.asymmetry);
     }
 }

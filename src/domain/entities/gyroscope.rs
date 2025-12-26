@@ -8,6 +8,12 @@ pub struct Gyroscope {
     pub angular_momentum: Vec3,
 }
 
+impl Default for Gyroscope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Gyroscope {
     pub fn new() -> Self {
         Self {

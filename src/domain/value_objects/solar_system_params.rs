@@ -9,6 +9,12 @@ pub struct SolarSystemParameters {
     pub planet_scale: f32,  // Additional scaling for planets to make them visible
 }
 
+impl Default for SolarSystemParameters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SolarSystemParameters {
     pub fn new() -> Self {
         Self {

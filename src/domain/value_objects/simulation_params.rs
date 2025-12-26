@@ -8,6 +8,12 @@ pub struct SimulationParameters {
     pub thrust_scale: f32,
 }
 
+impl Default for SimulationParameters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimulationParameters {
     pub fn new() -> Self {
         Self {
