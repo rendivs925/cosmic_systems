@@ -548,17 +548,17 @@ pub fn display_hover_info(
     if let Some(name) = &hovered_planet.name {
         let ctx = contexts.ctx_mut();
 
-        // Create a beautiful floating information card with auto-sizing
+        // Create a reasonable-sized floating information card like modern UI cards
         egui::Window::new("")
             .title_bar(false) // Remove title bar for clean design
             .resizable(false)
             .default_pos([50.0, 50.0])
-            .auto_sized() // Auto-adjust height based on content
+            .default_size([380.0, 500.0]) // Reasonable card dimensions like login/landing pages
             .frame(egui::Frame {
-                fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 245), // Dark blue-gray background with slight transparency
-                stroke: egui::Stroke::new(2.0, egui::Color32::from_rgb(59, 130, 246)), // Blue border
-                rounding: egui::Rounding::same(16.0), // More rounded corners
-                inner_margin: egui::Margin::symmetric(20.0, 16.0), // Consistent inner padding
+                fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 250), // Dark blue-gray background
+                stroke: egui::Stroke::new(1.5, egui::Color32::from_rgb(59, 130, 246)), // Subtle blue border
+                rounding: egui::Rounding::same(12.0), // Card-like rounded corners
+                inner_margin: egui::Margin::symmetric(16.0, 12.0), // Card-appropriate padding
                 ..Default::default()
             })
             .show(ctx, |ui| {
@@ -566,62 +566,62 @@ pub fn display_hover_info(
                 ui.vertical_centered(|ui| {
                     let (icon, header_color) = get_celestial_icon_and_color(name);
 
-                    ui.add_space(8.0); // Consistent top spacing
+                    ui.add_space(6.0); // Compact top spacing
                     ui.label(egui::RichText::new(icon)
-                        .size(52.0) // Slightly larger for better visibility
+                        .size(36.0) // Appropriate size for card format
                         .color(header_color));
-                    ui.add_space(8.0); // Consistent spacing between icon and title
+                    ui.add_space(6.0); // Compact spacing between icon and title
                     ui.label(egui::RichText::new(name)
-                        .size(32.0) // Larger, more prominent title
+                        .size(24.0) // Card-appropriate title size
                         .color(egui::Color32::WHITE)
                         .strong());
-                    ui.add_space(16.0); // Consistent spacing before content
+                    ui.add_space(12.0); // Reasonable spacing before content
                 });
 
                 egui::ScrollArea::vertical()
-                    .max_height(600.0) // Maximum height before scrolling
+                    .max_height(400.0) // Reasonable max height for card-like dimensions
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         // Main information sections with consistent spacing
                         display_celestial_info(ui, name);
 
-                        ui.add_space(24.0); // Consistent section spacing
+                        ui.add_space(16.0); // Card-appropriate section spacing
 
-                        // Fun facts section with consistent styling
+                        // Fun facts section with card-appropriate styling
                         ui.group(|ui| {
                             ui.vertical_centered(|ui| {
-                                ui.add_space(8.0);
+                                ui.add_space(6.0);
                                 ui.label(egui::RichText::new("✨ Interesting Facts")
-                                    .size(18.0)
+                                    .size(14.0)
                                     .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
                                     .strong());
-                                ui.add_space(12.0);
+                                ui.add_space(8.0);
                             });
 
                             display_fun_facts(ui, name);
 
-                            ui.add_space(8.0);
+                            ui.add_space(6.0);
                         });
 
-                        ui.add_space(20.0);
+                        ui.add_space(12.0);
 
-                        // Exploration status with consistent styling
+                        // Exploration status with card-appropriate styling
                         ui.group(|ui| {
                             ui.vertical_centered(|ui| {
-                                ui.add_space(8.0);
+                                ui.add_space(6.0);
                                 ui.label(egui::RichText::new("🚀 Exploration Status")
-                                    .size(16.0)
+                                    .size(14.0)
                                     .color(egui::Color32::from_rgb(34, 197, 94)) // Green
                                     .strong());
-                                ui.add_space(10.0);
+                                ui.add_space(8.0);
                             });
 
                             display_exploration_status(ui, name);
 
-                            ui.add_space(8.0);
+                            ui.add_space(6.0);
                         });
 
-                        ui.add_space(16.0);
+                        ui.add_space(8.0);
                     });
 
                 // Footer with consistent spacing and better visibility
