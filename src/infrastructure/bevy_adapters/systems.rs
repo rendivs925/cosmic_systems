@@ -93,14 +93,19 @@ pub fn handle_input(
     }
 }
 
-// System to update planet/moon positions in their orbits
+// System to update planet/moon positions in their orbits (optimized for performance)
 pub fn update_planet_positions(
     time: Res<Time>,
     solar_params: Res<SolarSystemParameters>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(&mut Transform, &PlanetComponent)>,
 ) {
     let elapsed_seconds = time.elapsed_seconds();
     let time_days = solar_params.time_to_days(elapsed_seconds);
+
+    // Get camera position for distance culling (using GlobalTransform to avoid conflicts)
+    let camera_global = camera_query.single();
+    let camera_pos = camera_global.translation();
 
     // First pass: collect parent positions
     let mut parent_positions = std::collections::HashMap::new();
@@ -108,8 +113,17 @@ pub fn update_planet_positions(
         parent_positions.insert(planet_comp.domain_planet.name.clone(), transform.translation);
     }
 
-    // Second pass: update positions
+    // Second pass: update positions with distance-based optimization
     for (mut transform, planet_comp) in query.iter_mut() {
+        // Distance culling: only update objects within reasonable range of camera
+        let distance_to_camera = (transform.translation - camera_pos).length();
+        let max_update_distance = 2500.0; // Only update objects within 2500 units of camera
+
+        if distance_to_camera > max_update_distance {
+            // Skip updating distant objects for performance
+            continue;
+        }
+
         // Find parent position
         let parent_position = if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
             // This is a moon - get its parent planet's position
@@ -267,14 +281,28 @@ pub fn handle_mouse_planet_selection(
     }
 }
 
-// System to update visual feedback for selected planets
+// System to update visual feedback for selected planets (optimized)
 pub fn update_planet_selection_visuals(
     time: Res<Time>,
-    mut query: Query<(&Selectable, &mut Transform)>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    mut query: Query<(&Selectable, &mut Transform, &GlobalTransform)>,
 ) {
     let pulse = (time.elapsed_seconds() * 3.0).sin() * 0.1 + 1.0; // Gentle pulsing effect
+    let camera_pos = camera_query.single().translation();
 
-    for (selectable, mut transform) in query.iter_mut() {
+    for (selectable, mut transform, global_transform) in query.iter_mut() {
+        // Distance culling for visual updates
+        let distance_to_camera = (global_transform.translation() - camera_pos).length();
+        let max_visual_distance = 2000.0; // Only update visuals for reasonably close objects
+
+        if distance_to_camera > max_visual_distance {
+            // Reset scale for distant unselected objects
+            if !selectable.selected {
+                transform.scale = Vec3::ONE;
+            }
+            continue;
+        }
+
         if selectable.selected {
             // Make selected planet slightly larger with pulsing effect
             transform.scale = Vec3::splat(pulse);

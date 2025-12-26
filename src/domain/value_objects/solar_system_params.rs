@@ -26,14 +26,14 @@ impl SolarSystemParameters {
         }
     }
 
-    /// Create parameters optimized for astronomical accuracy with properly spaced distances
+    /// Create parameters optimized for astronomical accuracy with truly vast distances
     pub fn for_visualization() -> Self {
         Self {
             sun_radius_km: 696342.0,
-            scale_factor: 120.0,  // Much better spacing: 1 AU = 120 units for proper astronomical scale
-            time_scale: 5000.0,   // Much faster time for visible orbital motion at large distances
+            scale_factor: 400.0,  // Vast spacing: 1 AU = 400 units for true astronomical scale
+            time_scale: 5000.0,    // Optimized time scale for performance
             show_orbits: true,
-            planet_scale: 20.0,   // Larger planets for visibility at much greater distances
+            planet_scale: 25.0,   // Optimized planet scale for performance
         }
     }
 

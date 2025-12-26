@@ -169,7 +169,7 @@ pub fn setup_space(
         ..default()
     });
 
-    // Create starfield background
+    // Create optimized starfield background (reduced density for performance)
     create_starfield(&mut commands, &mut meshes, &mut materials);
 
     // Create all planets and moons
@@ -290,8 +290,8 @@ fn create_starfield(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
-    // Create distant stars as emissive points - increased count for better coverage
-    let star_count = 5000; // More stars for comprehensive coverage
+    // Create distant stars as emissive points - optimized count for performance
+    let star_count = 1500; // Reduced for better performance
     let star_distance = 8000.0; // Stars are very far away
 
     for _ in 0..star_count {
@@ -331,7 +331,7 @@ fn create_starfield(
     }
 
     // Create brighter, more prominent stars for visual interest
-    for _ in 0..200 { // More bright stars
+    for _ in 0..50 { // Reduced bright stars for performance
         let theta = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
         let phi = rand::random::<f32>() * std::f32::consts::PI;
         let x = star_distance * phi.sin() * theta.cos();
