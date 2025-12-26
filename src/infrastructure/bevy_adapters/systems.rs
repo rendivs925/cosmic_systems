@@ -1,4 +1,4 @@
-use super::components::{HoveredPlanet, *};
+use super::components::*;
 use crate::application::simulation_service::SimulationService;
 use crate::domain::services::physics;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
@@ -211,29 +211,16 @@ pub fn update_orbit_visuals(
 
 // System to add dynamic specular reflection response for planet materials
 pub fn update_planet_reflections(
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<(&PlanetComponent, &GlobalTransform)>,
 ) {
-    let camera_transform = match camera_query.get_single() {
-        Ok(transform) => transform,
-        Err(_) => return,
-    };
-    let camera_pos = camera_transform.translation();
-
-    for (planet_comp, global_transform) in query.iter() {
+    for (planet_comp, _global_transform) in query.iter() {
         if planet_comp.domain_planet.name == "Sun" {
             continue;
         }
         if let Some(material) = materials.get_mut(&planet_comp.material) {
-            let to_sun = normalized_or_zero(-global_transform.translation());
-            let to_camera = normalized_or_zero(camera_pos - global_transform.translation());
-            let alignment = to_sun.dot(to_camera).max(0.0);
-            let highlight = alignment.powf(3.0);
-            material.perceptual_roughness =
-                (planet_comp.base_roughness - highlight * 0.3).clamp(0.04, 1.0);
-            material.reflectance =
-                (planet_comp.base_reflectance + highlight * 0.25).clamp(0.0, 1.0);
+            material.perceptual_roughness = planet_comp.base_roughness;
+            material.reflectance = planet_comp.base_reflectance;
         }
     }
 }
@@ -304,38 +291,59 @@ pub fn handle_planet_selection(
 // System to handle mouse clicking for planet selection
 pub fn handle_mouse_planet_selection(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<CameraController>>,
+    windows: Query<&Window>,
+    solar_params: Res<SolarSystemParameters>,
     mut selected_planet: ResMut<SelectedPlanet>,
-    mut selectable_query: Query<(Entity, &mut Selectable, &GlobalTransform)>,
+    mut selectable_query: Query<(Entity, &mut Selectable, &PlanetComponent, &GlobalTransform)>,
 ) {
     // Only handle left mouse button clicks
     if !mouse_buttons.just_pressed(MouseButton::Left) {
         return;
     }
 
-    // Get camera transform
-    let camera_transform = camera_query.single();
+    let (camera, camera_transform) = camera_query.single();
+    let window = match windows.get_single() {
+        Ok(window) => window,
+        Err(_) => return,
+    };
+    let cursor_pos = match window.cursor_position() {
+        Some(pos) => pos,
+        None => return,
+    };
+    let ray = match camera.viewport_to_world(camera_transform, cursor_pos) {
+        Some(ray) => ray,
+        None => return,
+    };
 
-    // Simple distance-based selection: find closest planet to camera
+    // Raycast against planet spheres to find the clicked body.
     let mut closest_entity: Option<Entity> = None;
-    let mut closest_distance = f32::INFINITY;
+    let mut closest_t = f32::INFINITY;
 
-    for (entity, _selectable, transform) in selectable_query.iter() {
-        let planet_pos = transform.translation();
-        let camera_pos = camera_transform.translation();
-        let distance = (planet_pos - camera_pos).length();
-
-        // If this planet is closer and in a reasonable range, select it
-        if distance < closest_distance && distance < 1000.0 {
-            // Max selection distance
-            closest_distance = distance;
+    for (entity, _selectable, planet_comp, transform) in selectable_query.iter() {
+        let radius = if planet_comp.domain_planet.name == "Sun" {
+            physics::calculate_sun_visual_radius(&solar_params)
+        } else {
+            physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
+        };
+        let center = transform.translation();
+        let oc = ray.origin - center;
+        let b = 2.0 * oc.dot(*ray.direction);
+        let c = oc.length_squared() - radius * radius;
+        let discriminant = b * b - 4.0 * c;
+        if discriminant < 0.0 {
+            continue;
+        }
+        let t = (-b - discriminant.sqrt()) * 0.5;
+        if t > 0.0 && t < closest_t {
+            closest_t = t;
             closest_entity = Some(entity);
         }
     }
 
     // Update selection
     if let Some(selected_entity) = closest_entity {
-        if let Ok((_, selectable, _)) = selectable_query.get(selected_entity) {
+        if let Ok((_, selectable, _, _)) = selectable_query.get(selected_entity) {
             selected_planet.entity = Some(selected_entity);
             selected_planet.name = Some(selectable.name.clone());
             println!("Selected planet: {}", selectable.name);
@@ -349,11 +357,11 @@ pub fn handle_mouse_planet_selection(
 
     // Update all selectable components
     let target_entity = selected_planet.entity;
-    for (_, mut selectable, _) in selectable_query.iter_mut() {
+    for (_, mut selectable, _, _) in selectable_query.iter_mut() {
         selectable.selected = false; // Reset all first
     }
     if let Some(entity) = target_entity {
-        if let Ok((_, mut selectable, _)) = selectable_query.get_mut(entity) {
+        if let Ok((_, mut selectable, _, _)) = selectable_query.get_mut(entity) {
             selectable.selected = true;
         }
     }
@@ -595,57 +603,9 @@ pub fn update_camera_controller(
 }
 
 // System to detect planet hovering for information display
-pub fn detect_planet_hover(
-    camera_query: Query<(&bevy::prelude::Camera, &GlobalTransform)>,
-    planet_query: Query<(&GlobalTransform, &Selectable)>,
-    _windows: Query<&Window>,
-    mut hovered_planet: ResMut<HoveredPlanet>,
-) {
-    // Reset hover state
-    hovered_planet.name = None;
-    hovered_planet.info = None;
-
-    // Get camera and cursor position
-    if let Ok((_camera, camera_transform)) = camera_query.get_single() {
-        // Use a simpler distance-based approach for hover detection
-        // Check if any planet is close to the camera's forward direction
-
-        let camera_pos = camera_transform.translation();
-        let camera_forward = camera_transform.forward();
-
-        let mut closest_planet: Option<(String, f32)> = None;
-
-        for (transform, selectable) in planet_query.iter() {
-            let planet_pos = transform.translation();
-            let distance_to_camera = (planet_pos - camera_pos).length();
-
-            // Check if planet is in front of camera (dot product > 0)
-            let to_planet = (planet_pos - camera_pos).normalize();
-            let dot_product = camera_forward.dot(to_planet);
-
-            // Only consider planets in front of camera and within reasonable distance
-            if dot_product > 0.5 && distance_to_camera < 100000.0 {
-                // Wide viewing angle, astronomical distance
-                if let Some((_, current_dist)) = closest_planet {
-                    if distance_to_camera < current_dist {
-                        closest_planet = Some((selectable.name.clone(), distance_to_camera));
-                    }
-                } else {
-                    closest_planet = Some((selectable.name.clone(), distance_to_camera));
-                }
-            }
-        }
-
-        // Set hover information for the closest planet
-        if let Some((planet_name, _)) = closest_planet {
-            hovered_planet.name = Some(planet_name);
-        }
-    }
-}
-
-// System to display premium hover information cards using EGUI
-pub fn display_hover_info(mut contexts: EguiContexts, hovered_planet: Res<HoveredPlanet>) {
-    if let Some(name) = &hovered_planet.name {
+// System to display premium info cards using EGUI (only for selected bodies)
+pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<SelectedPlanet>) {
+    if let Some(name) = &selected_planet.name {
         let ctx = contexts.ctx_mut();
 
         // Create a reasonable-sized floating information card like modern UI cards
@@ -1049,5 +1009,60 @@ pub fn apply_camera_transform(
                 // Would smoothly interpolate toward target
             }
         }
+    }
+}
+
+// System to auto-inspect a selected planet by smoothly framing it at a readable distance
+pub fn auto_inspect_selected_planet(
+    time: Res<Time>,
+    solar_params: Res<SolarSystemParameters>,
+    selected_planet: Res<SelectedPlanet>,
+    mut camera_query: Query<(&CameraController, &mut Transform)>,
+    planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
+) {
+    let selected_entity = match selected_planet.entity {
+        Some(entity) => entity,
+        None => return,
+    };
+
+    let (planet_comp, planet_transform) = match planet_query.get(selected_entity) {
+        Ok(data) => data,
+        Err(_) => return,
+    };
+
+    let (controller, mut camera_transform) = match camera_query.get_single_mut() {
+        Ok(data) => data,
+        Err(_) => return,
+    };
+
+    if controller.mode != CameraMode::FreeFlight {
+        return;
+    }
+
+    let planet_radius = if planet_comp.domain_planet.name == "Sun" {
+        physics::calculate_sun_visual_radius(&solar_params)
+    } else {
+        physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
+    };
+
+    let min_distance = (planet_radius * 3.0).max(2000.0);
+    let max_distance = (planet_radius * 8.0).max(min_distance + 500.0);
+    let target_distance = planet_radius * 5.0;
+
+    let planet_pos = planet_transform.translation();
+    let camera_pos = camera_transform.translation;
+    let to_camera = normalized_or_zero(camera_pos - planet_pos);
+    let current_distance = (camera_pos - planet_pos).length();
+
+    if current_distance < min_distance || current_distance > max_distance {
+        let desired_dir = if to_camera == Vec3::ZERO {
+            *camera_transform.forward()
+        } else {
+            to_camera
+        };
+        let target_pos = planet_pos + desired_dir * target_distance;
+        let lerp_factor = 1.0 - (-3.5 * time.delta_seconds()).exp();
+        camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
+        camera_transform.look_at(planet_pos, Vec3::Y);
     }
 }
