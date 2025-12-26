@@ -377,7 +377,7 @@ pub fn update_planet_selection_visuals(
 ) {
     let camera_pos = camera_query.single().translation();
 
-    for (selectable, mut transform, global_transform) in query.iter_mut() {
+    for (_selectable, mut transform, global_transform) in query.iter_mut() {
         // Distance culling for visual updates
         let distance_to_camera = (global_transform.translation() - camera_pos).length();
         let max_visual_distance = 30000.0; // Only update visuals for reasonably close objects
@@ -695,16 +695,27 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
         let ctx = contexts.ctx_mut();
 
         // Create a reasonable-sized floating information card like modern UI cards
+        let screen_height = ctx.screen_rect().height();
+        let screen_width = ctx.screen_rect().width();
+        let card_height = (screen_height * 0.9).clamp(520.0, 1100.0);
+        let card_width = (screen_width * 0.28).clamp(400.0, 520.0);
+
         egui::Window::new("")
             .title_bar(false) // Remove title bar for clean design
             .resizable(false)
             .default_pos([50.0, 50.0])
-            .default_size([420.0, 640.0]) // Increased dimensions for better content accommodation
+            .default_size([card_width, card_height]) // Size to fit more content without scrolling
             .frame(egui::Frame {
-                fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 250), // Dark blue-gray background
-                stroke: egui::Stroke::new(1.5, egui::Color32::from_rgb(59, 130, 246)), // Subtle blue border
-                rounding: egui::Rounding::same(12.0), // Card-like rounded corners
-                inner_margin: egui::Margin::symmetric(16.0, 12.0), // Card-appropriate padding
+                fill: egui::Color32::from_rgba_premultiplied(10, 16, 32, 245), // Deep navy background
+                stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248)), // Cool blue accent
+                rounding: egui::Rounding::same(16.0), // Softer rounded corners
+                shadow: egui::Shadow {
+                    offset: egui::vec2(0.0, 8.0),
+                    blur: 18.0,
+                    spread: 0.0,
+                    color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 140),
+                },
+                inner_margin: egui::Margin::symmetric(18.0, 14.0), // Roomier padding
                 ..Default::default()
             })
             .show(ctx, |ui| {
@@ -728,65 +739,53 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
                     ui.add_space(12.0); // Reasonable spacing before content
                 });
 
-                egui::ScrollArea::vertical()
-                    .max_height(540.0) // Increased max height for taller card dimensions
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        // Main information sections with consistent spacing
-                        display_celestial_info(ui, name);
+                // Main information sections with consistent spacing
+                display_celestial_info(ui, name);
 
-                        ui.add_space(16.0); // Card-appropriate section spacing
+                ui.add_space(16.0); // Card-appropriate section spacing
 
-                        // Fun facts section with card-appropriate styling
-                        ui.group(|ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new("✨ Interesting Facts")
-                                        .size(14.0)
-                                        .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
-                                        .strong(),
-                                );
-                                ui.add_space(8.0);
-                            });
-
-                            display_fun_facts(ui, name);
-
-                            ui.add_space(6.0);
-                        });
-
-                        ui.add_space(12.0);
-
-                        // Exploration status with card-appropriate styling
-                        ui.group(|ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new("🚀 Exploration Status")
-                                        .size(14.0)
-                                        .color(egui::Color32::from_rgb(34, 197, 94)) // Green
-                                        .strong(),
-                                );
-                                ui.add_space(8.0);
-                            });
-
-                            display_exploration_status(ui, name);
-
-                            ui.add_space(6.0);
-                        });
-
+                // Fun facts section with card-appropriate styling
+                ui.group(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("✨ Interesting Facts")
+                                .size(14.0)
+                                .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
+                                .strong(),
+                        );
                         ui.add_space(8.0);
                     });
 
-                // Footer with consistent spacing and better visibility
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new("Click to select • Scroll to zoom • WASD to move")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgba_premultiplied(148, 163, 184, 200)),
-                    ); // Better contrast
+                    display_fun_facts(ui, name);
+
+                    ui.add_space(6.0);
                 });
+
+                ui.add_space(12.0);
+
+                // Exploration status with card-appropriate styling
+                ui.group(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("🚀 Exploration Status")
+                                .size(14.0)
+                                .color(egui::Color32::from_rgb(34, 197, 94)) // Green
+                                .strong(),
+                        );
+                        ui.add_space(8.0);
+                    });
+
+                    display_exploration_status(ui, name);
+
+                    ui.add_space(6.0);
+                });
+
+                ui.add_space(8.0);
+
+                // Footer with consistent spacing and better visibility
+                ui.add_space(8.0);
             });
     }
 }
@@ -811,6 +810,13 @@ fn get_celestial_icon_and_color(name: &str) -> (&'static str, egui::Color32) {
 fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
     match name {
         "Sun" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "The solar system's central star, a hot ball of plasma powering planetary climates. Its gravity holds every planet, moon, and comet in orbit.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(
                 ui,
                 "Stellar Classification",
@@ -825,6 +831,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Distance from Earth", "149.6 million km (1 AU)");
         }
         "Mercury" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "The smallest planet, a cratered rocky world with extreme day-night temperatures. Its surface is heavily scarred by impacts and lacks a true atmosphere.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Terrestrial planet");
             display_info_section(ui, "Mass", "3.301 × 10²³ kg (0.055 Earth masses)");
             display_info_section(ui, "Radius", "2,439.7 km (0.383 Earth radii)");
@@ -836,6 +849,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Moons", "0");
         }
         "Venus" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "Earth-sized but shrouded in thick clouds and runaway greenhouse heat. Its surface pressure is crushing and the skies glow with sulfuric acid haze.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Terrestrial planet");
             display_info_section(ui, "Mass", "4.867 × 10²⁴ kg (0.815 Earth masses)");
             display_info_section(ui, "Radius", "6,051.8 km (0.949 Earth radii)");
@@ -846,6 +866,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "96.5% CO2, sulfuric acid clouds");
         }
         "Earth" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A water-rich world with life, continents, and a protective atmosphere. Active geology and plate tectonics continually reshape its surface.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Terrestrial planet");
             display_info_section(ui, "Mass", "5.972 × 10²⁴ kg");
             display_info_section(ui, "Radius", "6,371 km");
@@ -857,6 +884,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "78% N2, 21% O2, trace gases");
         }
         "Mars" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A cold desert planet with ancient rivers, volcanoes, and polar ice caps. Its thin air and dusty surface hint at a wetter past.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Terrestrial planet");
             display_info_section(ui, "Mass", "6.417 × 10²³ kg (0.107 Earth masses)");
             display_info_section(ui, "Radius", "3,389.5 km (0.532 Earth radii)");
@@ -868,6 +902,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "95% CO2, thin and dusty");
         }
         "Jupiter" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "The largest planet, a swirling gas giant with powerful storms. Its massive gravity shapes the outer solar system and shepherds many moons.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Gas giant");
             display_info_section(ui, "Mass", "1.898 × 10²⁷ kg (317.8 Earth masses)");
             display_info_section(ui, "Radius", "69,911 km (10.97 Earth radii)");
@@ -882,6 +923,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "Hydrogen, helium, ammonia clouds");
         }
         "Saturn" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A gas giant famous for its bright rings and diverse moon system. The rings are made of countless icy fragments from tiny grains to boulders.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Gas giant");
             display_info_section(ui, "Mass", "5.683 × 10²⁶ kg (95.2 Earth masses)");
             display_info_section(ui, "Radius", "58,232 km (9.14 Earth radii)");
@@ -893,6 +941,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "Hydrogen, helium, trace methane");
         }
         "Uranus" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "An ice giant tipped on its side with faint rings and icy moons. Its tilted spin creates extreme seasons lasting decades.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Ice giant");
             display_info_section(ui, "Mass", "8.681 × 10²⁵ kg (14.5 Earth masses)");
             display_info_section(ui, "Radius", "25,362 km (4.01 Earth radii)");
@@ -908,6 +963,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "Hydrogen, helium, methane (blue color)");
         }
         "Neptune" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A distant ice giant with deep blue color and supersonic winds. Its storms can rival the scale of Earth itself.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Ice giant");
             display_info_section(ui, "Mass", "1.024 × 10²⁶ kg (17.1 Earth masses)");
             display_info_section(ui, "Radius", "24,622 km (3.88 Earth radii)");
@@ -923,6 +985,13 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Atmosphere", "Hydrogen, helium, methane");
         }
         "Moon" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "Earth's tidally locked companion, shaped by ancient impacts and volcanism. Its near side has dark basaltic plains formed by ancient lava flows.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Mass", "7.342 × 10²² kg (0.0123 Earth masses)");
             display_info_section(ui, "Radius", "1,737.4 km (0.273 Earth radii)");
@@ -933,144 +1002,312 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Surface", "Regolith with basaltic maria");
         }
         "Phobos" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A small, irregular moon that orbits Mars faster than Mars spins. It is slowly spiraling inward and may one day break apart.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Mars");
             display_info_section(ui, "Discovery", "1877 (Asaph Hall)");
             display_info_section(ui, "Notable", "Fastest-orbiting moon in the solar system");
         }
         "Deimos" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A tiny, dark moon likely captured from the asteroid belt. Its surface is dusty and covered with fine regolith.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Mars");
             display_info_section(ui, "Discovery", "1877 (Asaph Hall)");
             display_info_section(ui, "Notable", "Likely captured asteroid");
         }
         "Io" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A sulfur-rich moon whose surface is constantly reshaped by volcanism. Lava flows and plumes repaint it in yellows, reds, and blacks.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Jupiter");
             display_info_section(ui, "Discovery", "1610 (Galileo)");
             display_info_section(ui, "Notable", "Most volcanically active body");
         }
         "Europa" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "An icy moon with a likely ocean beneath its fractured crust. Its surface cracks may be driven by tidal flexing from Jupiter.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Jupiter");
             display_info_section(ui, "Discovery", "1610 (Galileo)");
             display_info_section(ui, "Notable", "Global subsurface ocean likely");
         }
         "Ganymede" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "The largest moon, a layered ice-rock world with its own magnetic field. It may hide a salty ocean deep below its icy shell.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Jupiter");
             display_info_section(ui, "Discovery", "1610 (Galileo)");
             display_info_section(ui, "Notable", "Largest moon; has magnetic field");
         }
         "Callisto" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A heavily cratered moon preserving one of the oldest surfaces. Its ancient terrain records billions of years of impacts.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Jupiter");
             display_info_section(ui, "Discovery", "1610 (Galileo)");
             display_info_section(ui, "Notable", "Heavily cratered ancient surface");
         }
         "Mimas" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A small icy moon dominated by a giant impact crater. The Herschel crater gives it a distinctive appearance.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1789 (William Herschel)");
             display_info_section(ui, "Notable", "Herschel crater dominates surface");
         }
         "Enceladus" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "An icy moon venting water jets from a subsurface ocean. These plumes feed Saturn's E ring with fresh ice.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1789 (William Herschel)");
             display_info_section(ui, "Notable", "Active geysers, subsurface ocean");
         }
         "Tethys" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A bright, icy moon with a vast canyon system. Its terrain is dominated by ancient fractures and impact basins.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1684 (Jean-Dominique Cassini)");
             display_info_section(ui, "Notable", "Ithaca Chasma canyon system");
         }
         "Dione" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "An icy moon with bright fractures and ancient cratered plains. Its surface shows evidence of past internal activity.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1684 (Jean-Dominique Cassini)");
             display_info_section(ui, "Notable", "Wispy icy cliffs");
         }
         "Rhea" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "Saturn's second-largest moon, mostly water ice and rock. It has a heavily cratered surface and a thin exosphere.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1672 (Jean-Dominique Cassini)");
             display_info_section(ui, "Notable", "Second-largest moon of Saturn");
         }
         "Titan" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A hazy moon with rivers and lakes of liquid methane. Its thick atmosphere hides a complex, Earth-like weather cycle.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1655 (Christiaan Huygens)");
             display_info_section(ui, "Notable", "Thick atmosphere and methane lakes");
         }
         "Hyperion" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A sponge-like moon with an irregular shape and chaotic spin. Its low density suggests a highly porous interior.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1848 (Bond and Lassell)");
             display_info_section(ui, "Notable", "Chaotic rotation and porous interior");
         }
         "Iapetus" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A two-tone moon with a striking equatorial ridge. One hemisphere is dark and the other is bright, creating a stark contrast.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Saturn");
             display_info_section(ui, "Discovery", "1671 (Jean-Dominique Cassini)");
             display_info_section(ui, "Notable", "Two-tone surface and equatorial ridge");
         }
         "Miranda" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A small moon with dramatic cliffs and patchwork terrain. Its fractured surface hints at a complex geological past.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Uranus");
             display_info_section(ui, "Discovery", "1948 (Gerard Kuiper)");
             display_info_section(ui, "Notable", "Patchwork terrain with giant cliffs");
         }
         "Ariel" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A bright icy moon with fault valleys and resurfaced plains. Smooth areas suggest flows of icy material long ago.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Uranus");
             display_info_section(ui, "Discovery", "1851 (William Lassell)");
             display_info_section(ui, "Notable", "Faulted surface and possible cryovolcanism");
         }
         "Umbriel" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A dark, ancient moon with a subdued, heavily cratered surface. It reflects little sunlight and appears charcoal colored.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Uranus");
             display_info_section(ui, "Discovery", "1851 (William Lassell)");
             display_info_section(ui, "Notable", "Darkest of Uranus's major moons");
         }
         "Titania" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "Uranus's largest moon with canyons and evidence of past activity. Its cracks suggest the crust stretched over time.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Uranus");
             display_info_section(ui, "Discovery", "1787 (William Herschel)");
             display_info_section(ui, "Notable", "Largest moon of Uranus");
         }
         "Oberon" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A distant, cratered moon with icy ejecta deposits. Its surface preserves an ancient record of impacts.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Uranus");
             display_info_section(ui, "Discovery", "1787 (William Herschel)");
             display_info_section(ui, "Notable", "Heavily cratered icy surface");
         }
         "Triton" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A captured Kuiper Belt object with icy geysers and retrograde orbit. Its surface is coated with nitrogen and carbon dioxide frosts.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Neptune");
             display_info_section(ui, "Discovery", "1846 (William Lassell)");
             display_info_section(ui, "Notable", "Retrograde orbit and geysers");
         }
         "Proteus" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A dark, irregular moon close to Neptune with a battered surface. Large craters suggest a violent impact history.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Neptune");
             display_info_section(ui, "Discovery", "1989 (Voyager 2)");
             display_info_section(ui, "Notable", "Largest regular moon of Neptune");
         }
         "Nereid" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A small moon on an unusually elongated orbit around Neptune. Its path takes it far from the planet compared to most moons.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Neptune");
             display_info_section(ui, "Discovery", "1949 (Gerard Kuiper)");
             display_info_section(ui, "Notable", "Highly eccentric orbit");
         }
         "Larissa" => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A small inner moon orbiting within Neptune's faint ring system. It is irregularly shaped and likely heavily cratered.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", "Neptune");
             display_info_section(ui, "Discovery", "1989 (Voyager 2)");
             display_info_section(ui, "Notable", "Irregular moon inside ring system");
         }
         _ => {
+            display_section_header(ui, "Overview");
+            display_info_section(
+                ui,
+                "Description",
+                "A natural satellite in the solar system. Each moon has its own unique history of impacts and evolution.",
+            );
+            display_section_header(ui, "Key Data");
             display_info_section(ui, "Type", "Natural satellite");
             display_info_section(ui, "Parent Body", get_parent_body(name));
             display_info_section(ui, "Discovery", get_discovery_info(name));
@@ -1080,24 +1317,33 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
 
 // Helper function to display information sections with consistent spacing
 fn display_info_section(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        // Label with consistent styling and spacing
-        ui.label(
-            egui::RichText::new(format!("{}:", label))
-                .size(13.0)
-                .color(egui::Color32::from_rgb(148, 163, 184)),
-        ); // Light gray
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(8.0); // Consistent spacing between label and value
-            ui.label(
+    ui.label(
+        egui::RichText::new(format!("{}:", label))
+            .size(13.0)
+            .color(egui::Color32::from_rgb(148, 163, 184)),
+    );
+    ui.add_space(2.0);
+    ui.indent(format!("{}_value", label), |ui| {
+        ui.add(
+            egui::Label::new(
                 egui::RichText::new(value)
                     .size(13.0)
                     .color(egui::Color32::from_rgb(226, 232, 240)),
-            ); // Light blue-gray
-        });
+            )
+            .wrap(),
+        );
     });
     ui.add_space(6.0); // Consistent spacing between sections
+}
+
+fn display_section_header(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(title)
+            .size(13.0)
+            .color(egui::Color32::from_rgb(251, 191, 36)),
+    );
+    ui.add_space(4.0);
 }
 
 // Display interesting facts with consistent spacing and formatting
