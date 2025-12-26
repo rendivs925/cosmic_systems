@@ -1,156 +1,60 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Script to download REAL planetary textures from NASA sources
-# These are authentic planetary maps from NASA missions in equirectangular projection
-# Run this script from the project root directory
+# Download Solar System Scope 2k textures and convert JPGs to PNG for Bevy.
+# Run from the repository root.
 
-set -e
+set -euo pipefail
 
-echo "🌍 Downloading REAL planetary textures from NASA Scientific Visualization Studio..."
-echo "These are authentic planetary surface maps from NASA spacecraft missions"
+BASE_URL="https://www.solarsystemscope.com/textures/download"
+OUT_ROOT="assets/textures/planets"
 
-# Create assets directory if it doesn't exist
-mkdir -p assets/textures/planets
+if command -v magick >/dev/null 2>&1; then
+    CONVERT_CMD=("magick")
+elif command -v convert >/dev/null 2>&1; then
+    CONVERT_CMD=("convert")
+else
+    echo "ImageMagick (magick or convert) is required to run this script."
+    exit 1
+fi
 
-cd assets/textures/planets
+mkdir -p "$OUT_ROOT"
 
-# Function to download texture
-download_texture() {
-    local planet=$1
-    local url=$2
-
-    echo "Downloading $planet texture..."
-    if curl -L "$url" -o "$planet/albedo.tif"; then
-        echo "$planet texture downloaded successfully"
-        # Convert to PNG for Bevy compatibility
-        if command -v magick >/dev/null 2>&1; then
-            magick "$planet/albedo.tif" "$planet/albedo.png"
-            rm "$planet/albedo.tif"
-        elif command -v convert >/dev/null 2>&1; then
-            convert "$planet/albedo.tif" "$planet/albedo.png"
-            rm "$planet/albedo.tif"
-        fi
-    else
-        echo "Failed to download $planet texture"
-    fi
+download_png() {
+    local path="$1"
+    local dest="$2"
+    echo "Downloading ${path} -> ${dest}"
+    mkdir -p "$(dirname "$dest")"
+    curl -L "${BASE_URL}/${path}" -o "$dest"
 }
 
-# Real NASA textures from Scientific Visualization Studio (SVS)
+download_jpg_as_png() {
+    local path="$1"
+    local dest="$2"
+    local temp="$(mktemp)"
+    echo "Downloading ${path} -> ${dest}"
+    mkdir -p "$(dirname "$dest")"
+    curl -L "${BASE_URL}/${path}" -o "$temp"
+    "${CONVERT_CMD[@]}" "$temp" "$dest"
+    rm -f "$temp"
+}
 
-# Mercury - MESSENGER mission data
-download_texture "mercury" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Mercury_Messenger_mosaic_2013_1024x512.jpg"
+echo "🌌 Downloading Solar System Scope 2k textures..."
 
-# Venus - Magellan radar data
-download_texture "venus" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004500/a004552/venus_topography_2048x1024.jpg"
-
-# Earth - Blue Marble Next Generation
-download_texture "earth" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/BlackMarble_2016_01deg_gray_geo_2048x1024.tif"
-
-# Mars - Mars Reconnaissance Orbiter data
-download_texture "mars" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Mars_Viking_MDIM21_ClrMosaic_global_1024x512.jpg"
-
-# Jupiter - Juno and Galileo data
-download_texture "jupiter" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Jupiter_Galileo_1996_global_2048x1024.jpg"
-
-# Saturn - Cassini mission data
-download_texture "saturn" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Saturn_Cassini_global_2048x1024.jpg"
-
-# Uranus - Voyager 2 data
-download_texture "uranus" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Uranus_Voyager2_global_1024x512.jpg"
-
-# Neptune - Voyager 2 data
-download_texture "neptune" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Neptune_Voyager2_global_1024x512.jpg"
-
-# Moon - Lunar Reconnaissance Orbiter data
-download_texture "moon" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_2k.tif"
-
-# Mars moons - Mars Reconnaissance Orbiter and Viking data
-download_texture "phobos" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Phobos_MRO_global_1024x512.jpg"
-
-download_texture "deimos" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Deimos_Viking_global_512x256.jpg"
-
-# Jupiter moons - Galileo mission data
-download_texture "io" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Io_Galileo_global_1024x512.jpg"
-
-download_texture "europa" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Europa_Galileo_global_1024x512.jpg"
-
-download_texture "ganymede" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Ganymede_Galileo_global_2048x1024.jpg"
-
-download_texture "callisto" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Callisto_Galileo_global_2048x1024.jpg"
-
-# Saturn moons - Cassini mission data
-download_texture "mimas" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Mimas_Cassini_global_512x256.jpg"
-
-download_texture "enceladus" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Enceladus_Cassini_global_1024x512.jpg"
-
-download_texture "tethys" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Tethys_Cassini_global_1024x512.jpg"
-
-download_texture "dione" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Dione_Cassini_global_1024x512.jpg"
-
-download_texture "rhea" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Rhea_Cassini_global_2048x1024.jpg"
-
-download_texture "titan" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Titan_Cassini_global_2048x1024.jpg"
-
-download_texture "iapetus" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Iapetus_Cassini_global_2048x1024.jpg"
-
-# Uranus moons - Voyager 2 data
-download_texture "miranda" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Miranda_Voyager2_global_512x256.jpg"
-
-download_texture "ariel" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Ariel_Voyager2_global_1024x512.jpg"
-
-download_texture "umbriel" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Umbriel_Voyager2_global_1024x512.jpg"
-
-download_texture "titania" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Titania_Voyager2_global_1024x512.jpg"
-
-download_texture "oberon" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Oberon_Voyager2_global_1024x512.jpg"
-
-# Neptune moons - Voyager 2 data
-download_texture "triton" \
-    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004827/Triton_Voyager2_global_1024x512.jpg"
+download_jpg_as_png "2k_sun.jpg" "$OUT_ROOT/sun/albedo.png"
+download_jpg_as_png "2k_mercury.jpg" "$OUT_ROOT/mercury/albedo.png"
+download_jpg_as_png "2k_venus_surface.jpg" "$OUT_ROOT/venus/albedo.png"
+download_jpg_as_png "2k_mars.jpg" "$OUT_ROOT/mars/albedo.png"
+download_jpg_as_png "2k_jupiter.jpg" "$OUT_ROOT/jupiter/albedo.png"
+download_jpg_as_png "2k_saturn.jpg" "$OUT_ROOT/saturn/albedo.png"
+download_jpg_as_png "2k_uranus.jpg" "$OUT_ROOT/uranus/albedo.png"
+download_jpg_as_png "2k_neptune.jpg" "$OUT_ROOT/neptune/albedo.png"
+download_jpg_as_png "2k_moon.jpg" "$OUT_ROOT/moon/albedo.png"
+download_jpg_as_png "2k_earth_daymap.jpg" "$OUT_ROOT/earth/albedo.png"
+download_jpg_as_png "2k_earth_clouds.jpg" "$OUT_ROOT/earth/clouds.png"
+download_jpg_as_png "2k_earth_nightmap.jpg" "$OUT_ROOT/earth/emissive.png"
+download_jpg_as_png "2k_venus_atmosphere.jpg" "$OUT_ROOT/venus/clouds.png"
+download_png "2k_saturn_ring_alpha.png" "$OUT_ROOT/saturn/rings.png"
 
 echo ""
-echo "✅ All REAL planetary textures downloaded from NASA!"
-echo ""
-echo "These textures are authentic planetary surface maps from NASA spacecraft missions:"
-echo "🌑 Mercury: MESSENGER spacecraft (2011-2015)"
-echo "🌋 Venus: Magellan radar mapping (1990-1994)"
-echo "🌍 Earth: NASA Blue Marble satellite imagery"
-echo "🔴 Mars: Mars Reconnaissance Orbiter (2006-present)"
-echo "🪐 Jupiter: Juno and Galileo spacecraft data"
-echo "🪐 Saturn: Cassini spacecraft (2004-2017)"
-echo "🪐 Uranus: Voyager 2 flyby (1986)"
-echo "🪐 Neptune: Voyager 2 flyby (1989)"
-echo "🌙 Moon: Lunar Reconnaissance Orbiter (2009-present)"
-echo "Moons: Various NASA spacecraft observations"
-echo ""
-echo "All textures are in equirectangular projection and ready for Bevy UV spheres."
-echo "The Sun will remain emissive without texture as it represents a star."
-echo ""
-echo "🚀 Textures are now REAL NASA planetary surfaces - not placeholders!"
+echo "✅ Solar System Scope textures downloaded and converted to PNG."
+echo "Textures for planets (and Earth clouds/emissive map) are stored under ${OUT_ROOT}."
