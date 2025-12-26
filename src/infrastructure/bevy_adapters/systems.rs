@@ -1391,6 +1391,7 @@ pub fn auto_inspect_selected_planet(
     selected_planet: Res<SelectedPlanet>,
     mut camera_query: Query<(&CameraController, &mut Transform)>,
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
+    mut state: Local<AutoInspectState>,
 ) {
     let selected_entity = match selected_planet.entity {
         Some(entity) => entity,
@@ -1423,18 +1424,32 @@ pub fn auto_inspect_selected_planet(
 
     let planet_pos = planet_transform.translation();
     let camera_pos = camera_transform.translation;
-    let to_camera = normalized_or_zero(camera_pos - planet_pos);
-    let current_distance = (camera_pos - planet_pos).length();
+    let current_offset = camera_pos - planet_pos;
+    let current_distance = current_offset.length();
 
-    if current_distance < min_distance || current_distance > max_distance {
-        let desired_dir = if to_camera == Vec3::ZERO {
-            *camera_transform.forward()
+    if state.selected != Some(selected_entity) || state.offset == Vec3::ZERO {
+        state.selected = Some(selected_entity);
+        state.offset = if current_distance > 0.0 {
+            current_offset
         } else {
-            to_camera
+            *camera_transform.forward() * target_distance
         };
-        let target_pos = planet_pos + desired_dir * target_distance;
-        let lerp_factor = 1.0 - (-3.5 * time.delta_seconds()).exp();
-        camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
-        camera_transform.look_at(planet_pos, Vec3::Y);
     }
+
+    let offset_distance = state.offset.length();
+    if offset_distance < min_distance || offset_distance > max_distance {
+        let dir = normalized_or_zero(state.offset);
+        state.offset = dir * target_distance;
+    }
+
+    let target_pos = planet_pos + state.offset;
+    let lerp_factor = 1.0 - (-3.5 * time.delta_seconds()).exp();
+    camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
+    camera_transform.look_at(planet_pos, Vec3::Y);
+}
+
+#[derive(Default)]
+pub struct AutoInspectState {
+    selected: Option<Entity>,
+    offset: Vec3,
 }
