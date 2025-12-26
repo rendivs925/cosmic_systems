@@ -553,7 +553,7 @@ pub fn display_hover_info(
             .title_bar(false) // Remove title bar for clean design
             .resizable(false)
             .default_pos([50.0, 50.0])
-            .default_size([380.0, 500.0]) // Reasonable card dimensions like login/landing pages
+            .default_size([380.0, 580.0]) // Slightly taller card for better content display
             .frame(egui::Frame {
                 fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 250), // Dark blue-gray background
                 stroke: egui::Stroke::new(1.5, egui::Color32::from_rgb(59, 130, 246)), // Subtle blue border
@@ -579,7 +579,7 @@ pub fn display_hover_info(
                 });
 
                 egui::ScrollArea::vertical()
-                    .max_height(400.0) // Reasonable max height for card-like dimensions
+                    .max_height(480.0) // Increased max height for taller card
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         // Main information sections with consistent spacing
