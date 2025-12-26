@@ -117,7 +117,7 @@ pub fn setup_space(
         CameraController {
             mode: CameraMode::FreeFlight,
             speed: 50.0,
-            sensitivity: 0.003,
+            sensitivity: 0.0015,
             velocity: Vec3::ZERO,
             target_entity: None,
             orbit_distance: 300.0,

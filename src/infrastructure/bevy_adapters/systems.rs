@@ -448,14 +448,9 @@ pub fn update_camera_controller(
             mouse_delta += motion.delta;
         }
 
-        // Apply mouse sensitivity and update rotation whenever the mouse moves.
-        if mouse_delta != Vec2::ZERO {
-            let sensitivity = controller.sensitivity
-                * if mouse_buttons.pressed(MouseButton::Right) {
-                    1.5
-                } else {
-                    1.0
-                };
+        // Apply mouse sensitivity and update rotation only when left mouse is held.
+        if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Left) {
+            let sensitivity = controller.sensitivity;
             let yaw = -mouse_delta.x * sensitivity;
             let pitch = -mouse_delta.y * sensitivity;
 
