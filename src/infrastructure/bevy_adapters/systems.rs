@@ -522,7 +522,7 @@ pub fn detect_planet_hover(
             let dot_product = camera_forward.dot(to_planet);
 
             // Only consider planets in front of camera and within reasonable distance
-            if dot_product > 0.8 && distance_to_camera < 5000.0 { // Wide viewing angle, reasonable distance
+            if dot_product > 0.5 && distance_to_camera < 100000.0 { // Wide viewing angle, astronomical distance
                 if let Some((_, current_dist)) = closest_planet {
                     if distance_to_camera < current_dist {
                         closest_planet = Some((selectable.name.clone(), distance_to_camera));
@@ -535,8 +535,7 @@ pub fn detect_planet_hover(
 
         // Set hover information for the closest planet
         if let Some((planet_name, _)) = closest_planet {
-            hovered_planet.name = Some(planet_name.clone());
-            hovered_planet.info = Some(get_planet_info(&planet_name));
+            hovered_planet.name = Some(planet_name);
         }
     }
 }
@@ -546,7 +545,7 @@ pub fn display_hover_info(
     mut contexts: EguiContexts,
     hovered_planet: Res<HoveredPlanet>,
 ) {
-    if let (Some(name), Some(_info)) = (&hovered_planet.name, &hovered_planet.info) {
+    if let Some(name) = &hovered_planet.name {
         let ctx = contexts.ctx_mut();
 
         // Create a beautiful floating information card
@@ -857,174 +856,7 @@ fn get_discovery_info(name: &str) -> &'static str {
     }
 }
 
-// Function to get educational information about planets and moons
-fn get_planet_info(name: &str) -> String {
-    match name {
-        "Sun" => "🌞 The Sun: A yellow dwarf star at the center of our solar system. \
-                  Mass: 333,000 Earths. Surface temperature: 5,778°C. \
-                  Provides light and heat to all planets.".to_string(),
 
-        "Mercury" => "☿ Mercury: The smallest planet and closest to the Sun. \
-                     Extreme temperatures: 427°C (day) to -173°C (night). \
-                     No atmosphere, heavily cratered surface. \
-                     Completes orbit in just 88 Earth days.".to_string(),
-
-        "Venus" => "♀ Venus: Earth's 'sister planet' with similar size but very different conditions. \
-                   Hottest planet with surface temperature of 462°C. \
-                   Thick toxic atmosphere of CO2. Rotates backwards! \
-                   Often called Earth's twin due to size.".to_string(),
-
-        "Earth" => "🌍 Earth: Our home planet, the only known world with life. \
-                   71% surface water, protective atmosphere. \
-                   Average temperature: 15°C. One large moon. \
-                   Supports millions of species including humans.".to_string(),
-
-        "Mars" => "♂ Mars: The Red Planet, named after the Roman god of war. \
-                  Cold desert world with polar ice caps. \
-                  Two small moons: Phobos and Deimos. \
-                  Evidence of ancient water and potential past life.".to_string(),
-
-        "Jupiter" => "♃ Jupiter: Largest planet, a gas giant 2.5x more massive than all other planets combined. \
-                     Great Red Spot: A giant storm larger than Earth. \
-                     95 moons including the 4 large Galilean moons. \
-                     Strong magnetic field, faint rings.".to_string(),
-
-        "Saturn" => "♄ Saturn: Famous for its spectacular ring system made of ice and rock. \
-                    A gas giant less dense than water (would float!). \
-                    146 moons, including Titan (larger than Mercury). \
-                    Hexagonal storm at north pole.".to_string(),
-
-        "Uranus" => "⛢ Uranus: Ice giant that rotates on its side (98° axial tilt). \
-                    Coldest planetary atmosphere at -224°C. \
-                    27 moons, faint rings. Unique blue-green color from methane. \
-                    Discovered in 1781 by William Herschel.".to_string(),
-
-        "Neptune" => "♆ Neptune: Deep blue ice giant with the strongest winds in the solar system (2,100 km/h). \
-                     16 moons including Triton (retrograde orbit). \
-                     Great Dark Spot: A giant storm similar to Jupiter's. \
-                     Discovered in 1846 through mathematical predictions.".to_string(),
-
-        "Moon" => "🌕 Earth's Moon: Our natural satellite, formed 4.5 billion years ago. \
-                  Synchronous rotation (same face always visible). \
-                  Influences tides and stabilizes Earth's axial tilt. \
-                  No atmosphere, heavily cratered surface.".to_string(),
-
-        "Phobos" => "👽 Phobos: Larger of Mars' two moons. Irregular potato-shaped rock. \
-                    Orbiting closer to Mars than any other moon to its planet. \
-                    Slowly spiraling inward, will eventually crash into Mars.".to_string(),
-
-        "Deimos" => "👽 Deimos: Smaller of Mars' two moons. Very dark, carbon-rich surface. \
-                    More distant orbit than Phobos. \
-                    Both moons likely captured asteroids.".to_string(),
-
-        "Io" => "🌋 Io: Most volcanically active body in the solar system. \
-                Over 400 volcanoes, surface constantly resurfaced. \
-                Orbiting inside Jupiter's radiation belts. \
-                Discovered by Galileo in 1610.".to_string(),
-
-        "Europa" => "🧊 Europa: Ice-covered moon with subsurface ocean. \
-                    Smoothest surface in the solar system. \
-                    Possible habitable environment beneath the ice. \
-                    Shows evidence of recent geological activity.".to_string(),
-
-        "Ganymede" => "🌕 Ganymede: Largest moon in the solar system, bigger than Mercury. \
-                      Only moon with its own magnetic field. \
-                      Surface shows light and dark terrains. \
-                      Thin oxygen atmosphere.".to_string(),
-
-        "Callisto" => "🧊 Callisto: Heavily cratered ice moon. \
-                      Oldest, most cratered surface in the solar system. \
-                      Possible subsurface ocean. \
-                      Weakest magnetic field influence of the Galilean moons.".to_string(),
-
-        "Titan" => "🌌 Titan: Saturn's largest moon, bigger than Mercury. \
-                   Thick atmosphere richer than Earth's. \
-                   Lakes and rivers of liquid methane and ethane. \
-                   Only other body besides Earth with stable liquids on surface.".to_string(),
-
-        "Enceladus" => "🌊 Enceladus: Brightest object in the solar system due to fresh ice. \
-                       Water vapor geysers from south pole. \
-                       Possible subsurface ocean. \
-                       One of the most reflective bodies known.".to_string(),
-
-        "Mimas" => "👁️ Mimas: Saturn's 'Death Star' moon with giant crater. \
-                   Herschel crater is 130km wide (1/3 of moon's diameter). \
-                   Low density suggests high water ice content. \
-                   Synchronous rotation with Saturn.".to_string(),
-
-        "Tethys" => "🧊 Tethys: Saturn's icy moon with large crater. \
-                    Odysseus crater is 400km wide. \
-                    Possible evidence of cryovolcanism. \
-                    One of the larger mid-sized moons.".to_string(),
-
-        "Dione" => "🧊 Dione: Saturn's moon with bright wispy streaks. \
-                   Surface shows tectonic fractures. \
-                   Possible thin atmosphere. \
-                   Companion to Tethys in orbit.".to_string(),
-
-        "Rhea" => "🧊 Rhea: Saturn's second-largest moon. \
-                  Bright, reflective surface. \
-                  Possible faint rings or ring system. \
-                  Second-brightest moon after Enceladus.".to_string(),
-
-        "Iapetus" => "🏮 Iapetus: Saturn's 'yin-yang' moon with two-tone surface. \
-                     Leading hemisphere dark as coal, trailing bright as snow. \
-                     Extreme equatorial ridge (20km high). \
-                     One of Saturn's outermost major moons.".to_string(),
-
-        "Hyperion" => "🧽 Hyperion: Saturn's spongy, chaotic moon. \
-                      Highly porous and irregular shape. \
-                      Tumbling rotation, not tidally locked. \
-                      One of the largest irregularly shaped moons.".to_string(),
-
-        "Miranda" => "🧊 Miranda: Uranus' strange, varied moon. \
-                     Surface shows coronae, faults, and valleys. \
-                     Greatest surface variation of any moon. \
-                     Smallest of Uranus' round moons.".to_string(),
-
-        "Ariel" => "🧊 Ariel: Uranus' brightest moon. \
-                   Young surface with few craters. \
-                   Possible past cryovolcanic activity. \
-                   One of Uranus' 'classic' moons.".to_string(),
-
-        "Umbriel" => "🧊 Umbriel: Uranus' darkest moon. \
-                     Very dark, ancient surface. \
-                     Large bright crater. \
-                     Orbits between Ariel and Titania.".to_string(),
-
-        "Titania" => "🧊 Titania: Uranus' largest moon. \
-                     Heavily cratered surface. \
-                     Possible subsurface ocean. \
-                     Second-largest Uranian moon.".to_string(),
-
-        "Oberon" => "🧊 Oberon: Uranus' outermost major moon. \
-                    Large cratered surface. \
-                    Canyon system discovered. \
-                    Faintest of Uranus' five major moons.".to_string(),
-
-        "Triton" => "🧊 Triton: Neptune's largest moon, retrograde orbit. \
-                    Geysers of nitrogen gas. \
-                    Thin nitrogen atmosphere. \
-                    Possibly captured Kuiper Belt object.".to_string(),
-
-        "Proteus" => "🧊 Proteus: Neptune's second-largest moon. \
-                     Irregular, potato-shaped. \
-                     Very dark surface. \
-                     Orbits just outside Triton's orbit.".to_string(),
-
-        "Nereid" => "🧊 Nereid: Neptune's third-largest moon. \
-                    Highly eccentric orbit. \
-                    One of the most eccentric orbits in the solar system. \
-                    Possibly captured object.".to_string(),
-
-        "Larissa" => "🧊 Larissa: Neptune's inner moon. \
-                     Small, irregular shape. \
-                     Orbits within Neptune's rings. \
-                     Discovered by Voyager 2.".to_string(),
-
-        _ => format!("🌌 {}: A fascinating celestial body in our solar system.", name),
-    }
-}
 
 // System to apply camera transformations based on controller state
 pub fn apply_camera_transform(
