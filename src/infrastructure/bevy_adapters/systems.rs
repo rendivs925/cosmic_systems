@@ -548,12 +548,12 @@ pub fn display_hover_info(
     if let Some(name) = &hovered_planet.name {
         let ctx = contexts.ctx_mut();
 
-        // Create a beautiful floating information card with consistent spacing
+        // Create a beautiful floating information card with auto-sizing
         egui::Window::new("")
             .title_bar(false) // Remove title bar for clean design
             .resizable(false)
             .default_pos([50.0, 50.0])
-            .default_size([480.0, 650.0])
+            .auto_sized() // Auto-adjust height based on content
             .frame(egui::Frame {
                 fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 245), // Dark blue-gray background with slight transparency
                 stroke: egui::Stroke::new(2.0, egui::Color32::from_rgb(59, 130, 246)), // Blue border
@@ -579,6 +579,7 @@ pub fn display_hover_info(
                 });
 
                 egui::ScrollArea::vertical()
+                    .max_height(600.0) // Maximum height before scrolling
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         // Main information sections with consistent spacing
