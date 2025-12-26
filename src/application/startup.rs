@@ -331,7 +331,7 @@ pub fn setup_space(
         };
 
         let emissive_texture = if planet.name == "Sun" {
-            emissive_handle.clone()
+            albedo_handle.clone()
         } else if has_albedo {
             albedo_handle.clone()
         } else {
@@ -712,7 +712,7 @@ struct AtmosphereConfig {
 fn get_planet_textures(planet_name: &str) -> PlanetTextureSet {
     match planet_name {
         "Sun" => PlanetTextureSet {
-            albedo: None,
+            albedo: Some("textures/planets/sun/albedo.png"),
             emissive: None,
         },
         "Earth" => PlanetTextureSet {
