@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::application::simulation_service::SimulationService;
@@ -195,7 +196,7 @@ pub fn handle_planet_selection(
 // System to handle mouse clicking for planet selection
 pub fn handle_mouse_planet_selection(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    camera_query: Query<&GlobalTransform>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut selected_planet: ResMut<SelectedPlanet>,
     mut selectable_query: Query<(Entity, &mut Selectable, &GlobalTransform)>,
 ) {
@@ -300,7 +301,8 @@ pub fn update_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut mouse_motion: EventReader<bevy::input::mouse::MouseMotion>,
+    mut mouse_motion: EventReader<MouseMotion>,
+    mut mouse_wheel: EventReader<MouseWheel>,
     mut query: Query<(&mut CameraController, &mut Transform)>,
 ) {
     for (mut controller, mut transform) in query.iter_mut() {
@@ -353,6 +355,20 @@ pub fn update_camera_controller(
         }
         if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
             movement -= Vec3::Y;
+        }
+
+        // Handle mouse wheel for zooming
+        let mut zoom_factor = 1.0;
+        for wheel_event in mouse_wheel.read() {
+            // Mouse wheel creates zoom based on y delta (scroll up = zoom in, scroll down = zoom out)
+            zoom_factor *= (1.0 - wheel_event.y * 0.1).clamp(0.1, 10.0);
+        }
+
+        // Apply zoom by moving camera forward/backward along its look direction
+        if zoom_factor != 1.0 {
+            let forward = *transform.forward();
+            let zoom_movement = forward * (zoom_factor - 1.0) * controller.speed * 2.0; // Zoom speed multiplier
+            movement += zoom_movement;
         }
 
         // Apply speed
