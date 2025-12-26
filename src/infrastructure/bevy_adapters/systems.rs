@@ -548,95 +548,105 @@ pub fn display_hover_info(
     if let Some(name) = &hovered_planet.name {
         let ctx = contexts.ctx_mut();
 
-        // Create a beautiful floating information card
+        // Create a beautiful floating information card with consistent spacing
         egui::Window::new("")
             .title_bar(false) // Remove title bar for clean design
             .resizable(false)
             .default_pos([50.0, 50.0])
-            .default_size([450.0, 600.0])
+            .default_size([480.0, 650.0])
             .frame(egui::Frame {
-                fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 240), // Dark blue-gray background
+                fill: egui::Color32::from_rgba_premultiplied(15, 23, 42, 245), // Dark blue-gray background with slight transparency
                 stroke: egui::Stroke::new(2.0, egui::Color32::from_rgb(59, 130, 246)), // Blue border
-                rounding: egui::Rounding::same(12.0),
+                rounding: egui::Rounding::same(16.0), // More rounded corners
+                inner_margin: egui::Margin::symmetric(20.0, 16.0), // Consistent inner padding
                 ..Default::default()
             })
             .show(ctx, |ui| {
-                // Header with celestial body name and icon
+                // Header with celestial body name and icon - perfectly centered
                 ui.vertical_centered(|ui| {
                     let (icon, header_color) = get_celestial_icon_and_color(name);
 
-                    ui.add_space(10.0);
+                    ui.add_space(8.0); // Consistent top spacing
                     ui.label(egui::RichText::new(icon)
-                        .size(48.0)
+                        .size(52.0) // Slightly larger for better visibility
                         .color(header_color));
-                    ui.add_space(5.0);
+                    ui.add_space(8.0); // Consistent spacing between icon and title
                     ui.label(egui::RichText::new(name)
-                        .size(28.0)
+                        .size(32.0) // Larger, more prominent title
                         .color(egui::Color32::WHITE)
                         .strong());
-                    ui.add_space(15.0);
+                    ui.add_space(16.0); // Consistent spacing before content
                 });
 
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add_space(10.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        // Main information sections with consistent spacing
+                        display_celestial_info(ui, name);
 
-                    // Main information sections
-                    display_celestial_info(ui, name);
+                        ui.add_space(24.0); // Consistent section spacing
 
-                    ui.add_space(20.0);
+                        // Fun facts section with consistent styling
+                        ui.group(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("✨ Interesting Facts")
+                                    .size(18.0)
+                                    .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
+                                    .strong());
+                                ui.add_space(12.0);
+                            });
 
-                    // Fun facts section
-                    ui.group(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("✨ Interesting Facts")
-                                .size(18.0)
-                                .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
-                                .strong());
+                            display_fun_facts(ui, name);
+
+                            ui.add_space(8.0);
                         });
-                        ui.add_space(8.0);
-                        display_fun_facts(ui, name);
+
+                        ui.add_space(20.0);
+
+                        // Exploration status with consistent styling
+                        ui.group(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("🚀 Exploration Status")
+                                    .size(16.0)
+                                    .color(egui::Color32::from_rgb(34, 197, 94)) // Green
+                                    .strong());
+                                ui.add_space(10.0);
+                            });
+
+                            display_exploration_status(ui, name);
+
+                            ui.add_space(8.0);
+                        });
+
+                        ui.add_space(16.0);
                     });
 
-                    ui.add_space(15.0);
-
-                    // Exploration status
-                    ui.group(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("🚀 Exploration Status")
-                                .size(16.0)
-                                .color(egui::Color32::from_rgb(34, 197, 94)) // Green
-                                .strong());
-                        });
-                        ui.add_space(5.0);
-                        display_exploration_status(ui, name);
-                    });
-                });
-
-                // Footer hint
-                ui.add_space(10.0);
+                // Footer with consistent spacing and better visibility
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                    ui.add_space(5.0);
+                    ui.add_space(8.0);
                     ui.label(egui::RichText::new("Click to select • Scroll to zoom • WASD to move")
-                        .size(10.0)
-                        .color(egui::Color32::from_rgba_premultiplied(148, 163, 184, 180))); // Muted gray
+                        .size(11.0)
+                        .color(egui::Color32::from_rgba_premultiplied(148, 163, 184, 200))); // Better contrast
                 });
             });
     }
 }
 
-// Helper function to get celestial body icon and color
+// Helper function to get celestial body icon and color with universally supported Unicode
 fn get_celestial_icon_and_color(name: &str) -> (&'static str, egui::Color32) {
     match name {
-        "Sun" => ("☀️", egui::Color32::from_rgb(251, 191, 36)), // Bright yellow
-        "Mercury" => ("☿", egui::Color32::from_rgb(156, 163, 175)), // Gray
-        "Venus" => ("♀", egui::Color32::from_rgb(251, 146, 60)), // Orange
-        "Earth" => ("🌍", egui::Color32::from_rgb(59, 130, 246)), // Blue
-        "Mars" => ("♂", egui::Color32::from_rgb(239, 68, 68)), // Red
-        "Jupiter" => ("♃", egui::Color32::from_rgb(245, 158, 11)), // Amber
-        "Saturn" => ("♄", egui::Color32::from_rgb(251, 191, 36)), // Gold
-        "Uranus" => ("⛢", egui::Color32::from_rgb(34, 197, 94)), // Green
-        "Neptune" => ("♆", egui::Color32::from_rgb(59, 130, 246)), // Blue
-        _ => ("🌌", egui::Color32::from_rgb(147, 51, 234)), // Purple for moons
+        "Sun" => ("☀", egui::Color32::from_rgb(251, 191, 36)), // Bright yellow sun
+        "Mercury" => ("☿", egui::Color32::from_rgb(156, 163, 175)), // Mercury symbol
+        "Venus" => ("♀", egui::Color32::from_rgb(251, 146, 60)), // Venus symbol
+        "Earth" => ("🌍", egui::Color32::from_rgb(59, 130, 246)), // Earth globe
+        "Mars" => ("♂", egui::Color32::from_rgb(239, 68, 68)), // Mars symbol
+        "Jupiter" => ("♃", egui::Color32::from_rgb(245, 158, 11)), // Jupiter symbol
+        "Saturn" => ("♄", egui::Color32::from_rgb(251, 191, 36)), // Saturn symbol
+        "Uranus" => ("⛢", egui::Color32::from_rgb(34, 197, 94)), // Uranus symbol
+        "Neptune" => ("♆", egui::Color32::from_rgb(59, 130, 246)), // Neptune symbol
+        _ => ("🌙", egui::Color32::from_rgb(147, 51, 234)), // Moon symbol for moons
     }
 }
 
@@ -746,88 +756,93 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
     }
 }
 
-// Helper function to display information sections
+// Helper function to display information sections with consistent spacing
 fn display_info_section(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
+        // Label with consistent styling and spacing
         ui.label(egui::RichText::new(format!("{}:", label))
-            .size(12.0)
+            .size(13.0)
             .color(egui::Color32::from_rgb(148, 163, 184))); // Light gray
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0); // Consistent spacing between label and value
             ui.label(egui::RichText::new(value)
-                .size(12.0)
+                .size(13.0)
                 .color(egui::Color32::from_rgb(226, 232, 240))); // Light blue-gray
         });
     });
-    ui.add_space(2.0);
+    ui.add_space(6.0); // Consistent spacing between sections
 }
 
-// Display interesting facts
+// Display interesting facts with consistent spacing and formatting
 fn display_fun_facts(ui: &mut egui::Ui, name: &str) {
     let facts: Vec<String> = match name {
         "Sun" => vec![
-            "The Sun contains 99.86% of the solar system's mass".to_string(),
-            "Light takes 8 minutes to reach Earth from the Sun".to_string(),
-            "The Sun's core temperature reaches 15 million °C".to_string(),
-            "The Sun loses 4 million tons of mass per second through fusion".to_string()
+            "Contains 99.86% of the solar system's mass".to_string(),
+            "Light takes 8 minutes to reach Earth".to_string(),
+            "Core temperature reaches 15 million °C".to_string(),
+            "Loses 4 million tons of mass per second through fusion".to_string()
         ],
         "Earth" => vec![
-            "Earth is the only known planet with life".to_string(),
-            "71% of Earth's surface is covered by water".to_string(),
-            "Earth's magnetic field protects us from solar radiation".to_string(),
-            "Earth has been habitable for about 3.5 billion years".to_string()
+            "Only known planet with life".to_string(),
+            "71% of surface covered by water".to_string(),
+            "Magnetic field protects from solar radiation".to_string(),
+            "Habitable for about 3.5 billion years".to_string()
         ],
         "Mars" => vec![
-            "Mars has the largest volcano in the solar system (Olympus Mons)".to_string(),
-            "A day on Mars is 24 hours and 37 minutes".to_string(),
-            "Mars has seasons like Earth but each lasts twice as long".to_string(),
-            "Mars' atmosphere is 95% carbon dioxide".to_string()
+            "Largest volcano: Olympus Mons (3x taller than Everest)".to_string(),
+            "Day length: 24 hours and 37 minutes".to_string(),
+            "Seasons last twice as long as Earth's".to_string(),
+            "Atmosphere is 95% carbon dioxide".to_string()
         ],
         "Jupiter" => vec![
-            "Jupiter's Great Red Spot is a storm larger than Earth".to_string(),
-            "Jupiter has a faint ring system discovered in 1979".to_string(),
-            "Jupiter acts as a cosmic vacuum cleaner, protecting inner planets".to_string(),
-            "Jupiter's magnetic field is 20,000 times stronger than Earth's".to_string()
+            "Great Red Spot: storm larger than Earth".to_string(),
+            "Faint ring system discovered in 1979".to_string(),
+            "Acts as cosmic shield for inner planets".to_string(),
+            "Magnetic field 20,000x stronger than Earth's".to_string()
         ],
         "Saturn" => vec![
-            "Saturn's rings are made mostly of ice chunks and dust".to_string(),
-            "Saturn is less dense than water - it would float!".to_string(),
-            "Saturn has a hexagonal storm at its north pole".to_string(),
-            "Saturn's moon Titan has a thicker atmosphere than Earth".to_string()
+            "Rings made of ice chunks and dust particles".to_string(),
+            "Less dense than water - would float in a bathtub!".to_string(),
+            "Hexagonal storm at north pole".to_string(),
+            "Moon Titan has thicker atmosphere than Earth".to_string()
         ],
         "Moon" => vec![
-            "The Moon is slowly moving away from Earth (3.8 cm/year)".to_string(),
-            "The Moon's far side was first photographed by Luna 3 in 1959".to_string(),
-            "The Moon has quakes caused by Earth's gravitational pull".to_string(),
-            "Apollo astronauts' footprints will last millions of years".to_string()
+            "Moving away from Earth at 3.8 cm/year".to_string(),
+            "Far side photographed by Luna 3 in 1959".to_string(),
+            "Moonquakes caused by Earth's gravity".to_string(),
+            "Apollo footprints will last millions of years".to_string()
         ],
-        _ => vec![format!("{} is a fascinating celestial body with unique characteristics", name)]
+        _ => vec![format!("{} has unique and fascinating characteristics", name)]
     };
 
     for fact in facts {
+        ui.add_space(4.0); // Consistent spacing between facts
         ui.label(egui::RichText::new(format!("• {}", fact))
-            .size(11.0)
+            .size(12.0)
             .color(egui::Color32::from_rgb(226, 232, 240)));
     }
 }
 
-// Display exploration status
+// Display exploration status with consistent spacing
 fn display_exploration_status(ui: &mut egui::Ui, name: &str) {
     let status = match name {
-        "Sun" => "🛰️ Studied remotely by SOHO, SDO, and Parker Solar Probe",
-        "Mercury" => "🛰️ Mariner 10 (1974-1975), MESSENGER (2011-2015), BepiColombo (en route)",
-        "Venus" => "🛰️ Venera program (1960s-1980s), Magellan (1990-1994), Akatsuki (2015-present)",
+        "Sun" => "🛰 Studied by SOHO, SDO, and Parker Solar Probe",
+        "Mercury" => "🛰 Mariner 10 (1974-1975), MESSENGER (2011-2015), BepiColombo (en route)",
+        "Venus" => "🛰 Venera program (1960s-1980s), Magellan (1990-1994), Akatsuki (2015-present)",
         "Earth" => "🏠 Humanity's home - extensively explored and mapped",
         "Mars" => "🤖 Perseverance, Curiosity, Insight (active), Mars Sample Return (planned)",
-        "Jupiter" => "🛰️ Pioneer 10 (1973), Voyager (1979), Galileo (1995-2003), Juno (2016-present)",
-        "Saturn" => "🛰️ Pioneer 11 (1979), Voyager (1980-1981), Cassini-Huygens (2004-2017)",
-        "Uranus" => "🛰️ Voyager 2 flyby (1986) - only spacecraft to visit",
-        "Neptune" => "🛰️ Voyager 2 flyby (1989) - only spacecraft to visit",
+        "Jupiter" => "🛰 Pioneer 10 (1973), Voyager (1979), Galileo (1995-2003), Juno (2016-present)",
+        "Saturn" => "🛰 Pioneer 11 (1979), Voyager (1980-1981), Cassini-Huygens (2004-2017)",
+        "Uranus" => "🛰 Voyager 2 flyby (1986) - only spacecraft to visit",
+        "Neptune" => "🛰 Voyager 2 flyby (1989) - only spacecraft to visit",
         "Moon" => "🚀 Apollo missions (1969-1972), Luna program, Chang'e missions, Artemis (planned)",
         _ => "🔭 Observed remotely by telescopes and space probes"
     };
 
+    ui.add_space(4.0); // Consistent top spacing
     ui.label(egui::RichText::new(status)
-        .size(11.0)
+        .size(12.0)
         .color(egui::Color32::from_rgb(226, 232, 240)));
 }
 
