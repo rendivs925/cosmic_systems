@@ -600,8 +600,13 @@ fn orbit_hash(name: &str, seed: u32) -> f32 {
 }
 
 fn orbit_emissive(color: Color, intensity: f32) -> LinearRgba {
-    let [r, g, b, _] = color.as_rgba_f32();
-    LinearRgba::new(r * intensity, g * intensity, b * intensity, 1.0)
+    let linear: LinearRgba = color.into();
+    LinearRgba::new(
+        linear.red * intensity,
+        linear.green * intensity,
+        linear.blue * intensity,
+        1.0,
+    )
 }
 
 // Create minimal starfield for performance (disabled for optimal performance)

@@ -197,9 +197,14 @@ pub fn update_orbit_visuals(
             let pulse = 0.5 + 0.5 * (wobble_phase * 0.6).sin();
             let alpha = (0.12 + 0.18 * pulse).clamp(0.08, 0.35);
             material.base_color = orbit.base_color.with_alpha(alpha);
-            let [r, g, b, _] = orbit.base_color.as_rgba_f32();
+            let linear: LinearRgba = orbit.base_color.into();
             let glow = 0.35 + 0.4 * pulse;
-            material.emissive = LinearRgba::new(r * glow, g * glow, b * glow, 1.0);
+            material.emissive = LinearRgba::new(
+                linear.red * glow,
+                linear.green * glow,
+                linear.blue * glow,
+                1.0,
+            );
         }
     }
 }

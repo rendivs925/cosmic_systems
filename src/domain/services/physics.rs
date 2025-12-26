@@ -47,23 +47,135 @@ pub fn calculate_planet_position(
     // Calculate angle based on orbital period
     let angle = 2.0 * std::f32::consts::PI * time_days / planet.orbital_period_days;
 
-    // For moons, orbital_distance_au is relative to parent, not Sun
-    // For planets, it's already in AU from Sun
-    let distance = if planet.parent_entity.is_some() {
+    let relative_pos = if planet.parent_entity.is_some() {
+        // Moons keep circular orbits around their parent for simplicity.
+        let distance = calculate_orbit_radius_units(planet, solar_params);
+        Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
+    } else if let Some(elements) = get_orbital_elements(&planet.name) {
+        let mean_motion = 2.0 * std::f32::consts::PI / planet.orbital_period_days.max(1.0);
+        let mean_anomaly = elements.mean_anomaly_rad + mean_motion * time_days;
+        let eccentric_anomaly = solve_kepler(mean_anomaly, elements.eccentricity);
+        let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
+        let radius_au = elements.semi_major_axis_au
+            * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
+        let r = solar_params.au_to_units(radius_au);
+        let arg = elements.arg_periapsis_rad + true_anomaly;
+        let cos_omega = elements.long_asc_node_rad.cos();
+        let sin_omega = elements.long_asc_node_rad.sin();
+        let cos_i = elements.inclination_rad.cos();
+        let sin_i = elements.inclination_rad.sin();
+        let cos_arg = arg.cos();
+        let sin_arg = arg.sin();
+
+        Vec3::new(
+            r * (cos_omega * cos_arg - sin_omega * sin_arg * cos_i),
+            r * (sin_arg * sin_i),
+            r * (sin_omega * cos_arg + cos_omega * sin_arg * cos_i),
+        )
+    } else {
+        // Fallback to a circular orbit when no elements are defined.
+        let distance = calculate_orbit_radius_units(planet, solar_params);
+        Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
+    };
+
+    // Add parent position to get absolute position
+    parent_position + relative_pos
+}
+
+pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemParameters) -> f32 {
+    if planet.name == "Sun" {
+        return 0.0;
+    }
+
+    if planet.parent_entity.is_some() {
         // Moon orbiting a planet - convert astronomical distance to simulation units
         // orbital_distance_au represents actual AU distance from parent planet
         // Scale massively for clear separation while maintaining relative accuracy
         planet.orbital_distance_au * solar_params.scale_factor * 500.0
+    } else if let Some(elements) = get_orbital_elements(&planet.name) {
+        solar_params.au_to_units(elements.semi_major_axis_au)
     } else {
-        // Planet orbiting Sun
         solar_params.au_to_units(planet.orbital_distance_au)
-    };
+    }
+}
 
-    // Position relative to parent
-    let relative_pos = Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin());
+struct OrbitalElements {
+    semi_major_axis_au: f32,
+    eccentricity: f32,
+    inclination_rad: f32,
+    long_asc_node_rad: f32,
+    arg_periapsis_rad: f32,
+    mean_anomaly_rad: f32,
+}
 
-    // Add parent position to get absolute position
-    parent_position + relative_pos
+fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {
+    // J2000 mean orbital elements (degrees) for a Keplerian baseline.
+    // Source: NASA planetary fact sheets (approximate).
+    match name {
+        "Mercury" => Some(elements_from_degrees(
+            0.38709927, 0.20563593, 7.00497902, 48.33076593, 77.45779628, 252.25032350,
+        )),
+        "Venus" => Some(elements_from_degrees(
+            0.72333566, 0.00677672, 3.39467605, 76.67984255, 131.60246718, 181.97909950,
+        )),
+        "Earth" => Some(elements_from_degrees(
+            1.00000261, 0.01671123, -0.00001531, 0.0, 102.93768193, 100.46457166,
+        )),
+        "Mars" => Some(elements_from_degrees(
+            1.52371034, 0.09339410, 1.84969142, 49.55809321, 336.04084, 355.45332,
+        )),
+        "Jupiter" => Some(elements_from_degrees(
+            5.20288700, 0.04838624, 1.30439695, 100.47390909, 14.72847983, 34.39644051,
+        )),
+        "Saturn" => Some(elements_from_degrees(
+            9.53667594, 0.05386179, 2.48599187, 113.66242448, 92.59887831, 49.95424423,
+        )),
+        "Uranus" => Some(elements_from_degrees(
+            19.18916464, 0.04725744, 0.77263783, 74.01692503, 170.95427630, 313.23810451,
+        )),
+        "Neptune" => Some(elements_from_degrees(
+            30.06992276, 0.00859048, 1.77004347, 131.78422574, 44.96476227, 304.87964,
+        )),
+        _ => None,
+    }
+}
+
+fn elements_from_degrees(
+    a: f32,
+    e: f32,
+    i_deg: f32,
+    long_asc_node_deg: f32,
+    long_peri_deg: f32,
+    mean_longitude_deg: f32,
+) -> OrbitalElements {
+    let mean_anomaly_deg = mean_longitude_deg - long_peri_deg;
+    let arg_peri_deg = long_peri_deg - long_asc_node_deg;
+    OrbitalElements {
+        semi_major_axis_au: a,
+        eccentricity: e,
+        inclination_rad: i_deg.to_radians(),
+        long_asc_node_rad: long_asc_node_deg.to_radians(),
+        arg_periapsis_rad: arg_peri_deg.to_radians(),
+        mean_anomaly_rad: mean_anomaly_deg.to_radians(),
+    }
+}
+
+fn solve_kepler(mean_anomaly: f32, eccentricity: f32) -> f32 {
+    let mut eccentric_anomaly = mean_anomaly;
+    for _ in 0..8 {
+        let f = eccentric_anomaly - eccentricity * eccentric_anomaly.sin() - mean_anomaly;
+        let f_prime = 1.0 - eccentricity * eccentric_anomaly.cos();
+        eccentric_anomaly -= f / f_prime;
+    }
+    eccentric_anomaly
+}
+
+fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
+    let sin_v = (1.0 - eccentricity * eccentricity).sqrt() * eccentric_anomaly.sin()
+        / (1.0 - eccentricity * eccentric_anomaly.cos());
+    let cos_v = (eccentric_anomaly.cos() - eccentricity)
+        / (1.0 - eccentricity * eccentric_anomaly.cos());
+    sin_v.atan2(cos_v)
 }
 
 /// Calculate the rotation angle of a planet at a given time
