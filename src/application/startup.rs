@@ -304,10 +304,36 @@ pub fn setup_space(
                             1.0
                         )
                     },
-                    // Enhanced reflective properties for maximum visibility
-                    metallic: if planet.name == "Sun" { 0.0 } else { 0.0 }, // Reduce metallic for better color visibility
-                    reflectance: if planet.name == "Sun" { 0.0 } else { 0.6 }, // Higher reflectance for better light reflection
-                    perceptual_roughness: 0.3, // Lower roughness for more specular highlights
+                    // Realistic material properties based on planet type for dynamic light reflection
+                    metallic: match planet.name.as_str() {
+                        "Sun" => 0.0, // Not metallic
+                        "Mercury" | "Venus" => 0.1, // Slight metallic sheen from volcanic/atmospheric effects
+                        "Earth" | "Mars" => 0.05, // Earth-like reflectivity
+                        "Jupiter" | "Saturn" | "Uranus" | "Neptune" => 0.0, // Gas giants are not metallic
+                        _ => 0.0, // Moons vary by composition
+                    },
+                    reflectance: match planet.name.as_str() {
+                        "Sun" => 0.0,
+                        "Mercury" => 0.3, // Rocky surface
+                        "Venus" => 0.8, // Highly reflective clouds
+                        "Earth" => 0.4, // Ocean/atmosphere reflectivity
+                        "Mars" => 0.2, // Dusty surface
+                        "Jupiter" => 0.7, // Ammonia clouds
+                        "Saturn" => 0.6, // Similar to Jupiter
+                        "Uranus" => 0.5, // Methane atmosphere
+                        "Neptune" => 0.6, // Similar to Uranus
+                        _ => 0.8, // Most moons are icy and highly reflective
+                    },
+                    perceptual_roughness: match planet.name.as_str() {
+                        "Sun" => 0.0,
+                        "Mercury" => 0.7, // Rough, cratered surface
+                        "Venus" => 0.2, // Smooth cloud layer
+                        "Earth" => 0.4, // Mixed terrain
+                        "Mars" => 0.6, // Dusty, rough surface
+                        "Jupiter" | "Saturn" => 0.1, // Smooth gas giant atmospheres
+                        "Uranus" | "Neptune" => 0.2, // Icy atmospheres
+                        _ => 0.1, // Most moons are smooth ice
+                    },
                     ..default()
                 }),
                 transform: Transform::from_translation(initial_position),
@@ -334,10 +360,11 @@ pub fn setup_space(
                         half_height: ring_thickness,
                     })),
                     material: materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.8, 0.7, 0.4), // Golden ring color
-                        metallic: 0.1,
-                        perceptual_roughness: 0.8,
-                        alpha_mode: AlphaMode::Blend, // Make rings semi-transparent
+                        base_color: Color::srgb(0.9, 0.85, 0.75), // Realistic icy ring color (slightly bluish-white)
+                        metallic: 0.0, // Ice is not metallic
+                        reflectance: 0.9, // Highly reflective ice particles
+                        perceptual_roughness: 0.1, // Smooth ice surface
+                        alpha_mode: AlphaMode::Blend, // Semi-transparent for ring effect
                         ..default()
                     }),
                     transform: Transform::from_translation(initial_position),

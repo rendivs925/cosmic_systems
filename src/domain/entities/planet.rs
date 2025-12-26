@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+
 #[derive(Clone, Debug)]
 pub struct Planet {
     pub name: String,
@@ -41,7 +42,7 @@ impl Planet {
             "Mercury".to_string(),
             2439.7,  // Accurate radius in km
             3.3011e23,
-            Color::srgb(0.5, 0.5, 0.5), // gray rocky
+            Color::srgb(0.45, 0.45, 0.42), // Realistic gray-brown Mercury surface
             0.387,   // Accurate distance from Sun in AU
             88.0,
             1407.6,
@@ -54,7 +55,7 @@ impl Planet {
             "Venus".to_string(),
             6051.8,  // Accurate radius in km
             4.8675e24,
-            Color::srgb(0.9, 0.8, 0.6), // yellowish cloudy
+            Color::srgb(0.95, 0.85, 0.65), // Realistic Venus yellowish-white clouds
             0.723,   // Accurate distance from Sun in AU
             224.7,
             5832.5,
@@ -67,7 +68,7 @@ impl Planet {
             "Earth".to_string(),
             6371.0,  // Accurate radius in km
             5.9724e24,
-            Color::srgb(0.2, 0.4, 0.8), // blue with green continents
+            Color::srgb(0.25, 0.45, 0.85), // Realistic Earth: deep blue oceans with some continental green
             1.000,   // Accurate distance from Sun in AU (definition of AU)
             365.25,
             24.0,
@@ -80,7 +81,7 @@ impl Planet {
             "Mars".to_string(),
             3389.5,  // Accurate radius in km
             6.4171e23,
-            Color::srgb(0.8, 0.3, 0.1), // red/orange
+            Color::srgb(0.85, 0.35, 0.15), // Realistic Mars: butterscotch-orange with iron oxide dust
             1.524,   // Accurate distance from Sun in AU
             687.0,
             24.6,
@@ -93,7 +94,7 @@ impl Planet {
             "Jupiter".to_string(),
             69911.0, // Accurate radius in km
             1.8982e27,
-            Color::srgb(0.8, 0.6, 0.4), // orange/brown bands
+            Color::srgb(0.85, 0.65, 0.45), // Realistic Jupiter: beige with brown/white zonal bands
             5.204,   // Accurate distance from Sun in AU
             4333.0,
             9.9,
@@ -159,7 +160,7 @@ impl Planet {
             "Moon".to_string(),
             1737.4,  // Earth's moon
             7.342e22,
-            Color::srgb(0.7, 0.7, 0.7), // gray rocky
+            Color::srgb(0.75, 0.75, 0.78), // Realistic Moon: bright gray with slight blue tint from space weathering
             0.00257, // Accurate: 384,400 km = 0.00257 AU from Earth
             27.3,    // sidereal month
             27.3 * 24.0, // synchronous rotation
