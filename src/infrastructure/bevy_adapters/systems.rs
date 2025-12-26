@@ -370,11 +370,9 @@ pub fn handle_mouse_planet_selection(
 
 // System to update visual feedback for selected planets (optimized)
 pub fn update_planet_selection_visuals(
-    time: Res<Time>,
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(&Selectable, &mut Transform, &GlobalTransform)>,
 ) {
-    let pulse = (time.elapsed_seconds() * 3.0).sin() * 0.1 + 1.0; // Gentle pulsing effect
     let camera_pos = camera_query.single().translation();
 
     for (selectable, mut transform, global_transform) in query.iter_mut() {
@@ -384,19 +382,12 @@ pub fn update_planet_selection_visuals(
 
         if distance_to_camera > max_visual_distance {
             // Reset scale for distant unselected objects
-            if !selectable.selected {
-                transform.scale = Vec3::ONE;
-            }
+            transform.scale = Vec3::ONE;
             continue;
         }
 
-        if selectable.selected {
-            // Make selected planet slightly larger with pulsing effect
-            transform.scale = Vec3::splat(pulse);
-        } else {
-            // Reset scale for unselected planets
-            transform.scale = Vec3::ONE;
-        }
+        // Keep scale fixed regardless of selection.
+        transform.scale = Vec3::ONE;
     }
 }
 

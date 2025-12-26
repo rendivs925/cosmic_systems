@@ -31,7 +31,7 @@ impl SolarSystemParameters {
         Self {
             sun_radius_km: 696342.0,
             scale_factor: 75000.0, // Tighter spacing: 1 AU = 75k units so planets feel closer
-            time_scale: 20000.0,   // Fast time for visible motion across vast distances
+            time_scale: 3000.0,    // Slower time for calmer default motion
             show_orbits: true,
             planet_scale: 1300.0, // Still large but a little smaller
         }
