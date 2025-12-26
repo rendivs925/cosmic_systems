@@ -6,6 +6,7 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use std::collections::HashMap;
 
 fn normalized_or_zero(vec: Vec3) -> Vec3 {
     if vec.length_squared() > 0.0 {
@@ -395,6 +396,98 @@ pub fn update_planet_selection_visuals(
         } else {
             // Reset scale for unselected planets
             transform.scale = Vec3::ONE;
+        }
+    }
+}
+
+// System to show a navigation bar for quick planet selection
+pub fn display_navigation_bar(
+    mut contexts: EguiContexts,
+    mut selected_planet: ResMut<SelectedPlanet>,
+    mut selectable_query: Query<(Entity, &mut Selectable)>,
+) {
+    let mut name_to_entity = HashMap::new();
+    {
+        for (entity, selectable) in selectable_query.iter_mut() {
+            name_to_entity.insert(selectable.name.clone(), entity);
+        }
+    }
+
+    let ordered_names = [
+        "Sun",
+        "Mercury",
+        "Venus",
+        "Earth",
+        "Moon",
+        "Mars",
+        "Phobos",
+        "Deimos",
+        "Jupiter",
+        "Io",
+        "Europa",
+        "Ganymede",
+        "Callisto",
+        "Saturn",
+        "Mimas",
+        "Enceladus",
+        "Tethys",
+        "Dione",
+        "Rhea",
+        "Titan",
+        "Hyperion",
+        "Iapetus",
+        "Uranus",
+        "Miranda",
+        "Ariel",
+        "Umbriel",
+        "Titania",
+        "Oberon",
+        "Neptune",
+        "Triton",
+        "Proteus",
+        "Nereid",
+        "Larissa",
+    ];
+
+    let ctx = contexts.ctx_mut();
+    let mut selection_changed = false;
+
+    egui::TopBottomPanel::top("celestial_nav")
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Navigate:");
+                egui::ScrollArea::horizontal()
+                    .id_source("celestial_nav_scroll")
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for name in ordered_names {
+                                if !name_to_entity.contains_key(name) {
+                                    continue;
+                                }
+                                let selected = selected_planet
+                                    .name
+                                    .as_ref()
+                                    .map(|selected_name| selected_name == name)
+                                    .unwrap_or(false);
+                                let button = egui::SelectableLabel::new(selected, name);
+                                if ui.add(button).clicked() {
+                                    if let Some(entity) = name_to_entity.get(name) {
+                                        selected_planet.entity = Some(*entity);
+                                        selected_planet.name = Some(name.to_string());
+                                        selection_changed = true;
+                                    }
+                                }
+                            }
+                        });
+                    });
+            });
+        });
+
+    if selection_changed {
+        let target_entity = selected_planet.entity;
+        for (entity, mut selectable) in selectable_query.iter_mut() {
+            selectable.selected = Some(entity) == target_entity;
         }
     }
 }

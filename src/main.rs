@@ -58,6 +58,7 @@ fn main() {
         app.add_systems(Update, handle_solar_system_input);
         app.add_systems(Update, handle_planet_selection);
         app.add_systems(Update, handle_mouse_planet_selection);
+        app.add_systems(Update, display_navigation_bar);
         app.add_systems(Update, update_planet_selection_visuals);
         app.add_systems(Update, display_hover_info);
         app.add_systems(Update, update_camera_controller);
