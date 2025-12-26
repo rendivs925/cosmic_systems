@@ -373,54 +373,6 @@ pub fn setup_space(
             }
         }
 
-        if let Some(atmosphere) = get_atmosphere_config(&planet.name) {
-            commands.entity(planet_entity).with_children(|parent| {
-                let emissive_color: LinearRgba = atmosphere.color.into();
-                parent.spawn(PbrBundle {
-                    mesh: create_uv_sphere_mesh(&mut meshes, visual_radius * atmosphere.scale),
-                    material: materials.add(StandardMaterial {
-                        base_color: atmosphere.color.with_alpha(atmosphere.alpha),
-                        emissive: LinearRgba::new(
-                            emissive_color.red * atmosphere.emissive_strength,
-                            emissive_color.green * atmosphere.emissive_strength,
-                            emissive_color.blue * atmosphere.emissive_strength,
-                            1.0,
-                        ),
-                        alpha_mode: AlphaMode::Add,
-                        unlit: true,
-                        double_sided: true,
-                        ..default()
-                    }),
-                    ..default()
-                });
-            });
-        }
-
-        if let Some(clouds) = get_cloud_layer_config(&planet.name) {
-            if let Some(cloud_texture) = load_texture(&asset_server, Some(clouds.texture_path)) {
-                commands.entity(planet_entity).with_children(|parent| {
-                    parent.spawn((
-                        PbrBundle {
-                            mesh: create_uv_sphere_mesh(&mut meshes, visual_radius * clouds.scale),
-                            material: materials.add(StandardMaterial {
-                                base_color_texture: Some(cloud_texture),
-                                base_color: Color::srgba(1.0, 1.0, 1.0, clouds.alpha),
-                                alpha_mode: AlphaMode::Blend,
-                                double_sided: true,
-                                perceptual_roughness: 0.9,
-                                unlit: true,
-                                ..default()
-                            }),
-                            ..default()
-                        },
-                        CloudLayer {
-                            rotation_period_hours: clouds.rotation_period_hours,
-                        },
-                    ));
-                });
-            }
-        }
-
         if planet.name == "Saturn" {
             let ring_outer_radius = visual_radius * 2.5;
             let ring_inner_radius = visual_radius * 1.6;
@@ -447,6 +399,31 @@ pub fn setup_space(
                     selected: false,
                 },
             ));
+        }
+
+        if let Some(clouds) = get_cloud_layer_config(&planet.name) {
+            if let Some(cloud_texture) = load_texture(&asset_server, Some(clouds.texture_path)) {
+                commands.entity(planet_entity).with_children(|parent| {
+                    parent.spawn((
+                        PbrBundle {
+                            mesh: create_uv_sphere_mesh(&mut meshes, visual_radius * clouds.scale),
+                            material: materials.add(StandardMaterial {
+                                base_color_texture: Some(cloud_texture),
+                                base_color: Color::srgba(1.0, 1.0, 1.0, clouds.alpha),
+                                alpha_mode: AlphaMode::Blend,
+                                double_sided: true,
+                                perceptual_roughness: 0.9,
+                                unlit: true,
+                                ..default()
+                            }),
+                            ..default()
+                        },
+                        CloudLayer {
+                            rotation_period_hours: clouds.rotation_period_hours,
+                        },
+                    ));
+                });
+            }
         }
     }
 }
@@ -602,13 +579,6 @@ struct CloudLayerConfig {
     alpha: f32,
     rotation_period_hours: f32,
     scale: f32,
-}
-
-struct AtmosphereConfig {
-    color: Color,
-    alpha: f32,
-    scale: f32,
-    emissive_strength: f32,
 }
 
 fn get_planet_textures(planet_name: &str) -> PlanetTextureSet {
@@ -771,36 +741,6 @@ fn get_cloud_layer_config(planet_name: &str) -> Option<CloudLayerConfig> {
             alpha: 0.45,
             rotation_period_hours: 382.0,
             scale: 1.02,
-        }),
-        _ => None,
-    }
-}
-
-fn get_atmosphere_config(planet_name: &str) -> Option<AtmosphereConfig> {
-    match planet_name {
-        "Earth" => Some(AtmosphereConfig {
-            color: Color::srgb(0.25, 0.45, 0.85),
-            alpha: 0.15,
-            scale: 1.02,
-            emissive_strength: 0.02,
-        }),
-        "Venus" => Some(AtmosphereConfig {
-            color: Color::srgb(0.95, 0.85, 0.65),
-            alpha: 0.2,
-            scale: 1.03,
-            emissive_strength: 0.02,
-        }),
-        "Mars" => Some(AtmosphereConfig {
-            color: Color::srgb(0.85, 0.35, 0.15),
-            alpha: 0.08,
-            scale: 1.01,
-            emissive_strength: 0.01,
-        }),
-        "Titan" => Some(AtmosphereConfig {
-            color: Color::srgb(0.8, 0.6, 0.35),
-            alpha: 0.18,
-            scale: 1.03,
-            emissive_strength: 0.02,
         }),
         _ => None,
     }
