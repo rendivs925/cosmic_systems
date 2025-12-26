@@ -83,11 +83,11 @@ pub fn setup_space(
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
 
-    // Set up dark space environment with brighter ambient light for better visibility
-    commands.insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.02))); // Very dark blue-black space
+    // Set up dark space environment with maximum ambient light for planet visibility
+    commands.insert_resource(ClearColor(Color::srgb(0.005, 0.005, 0.01))); // Extremely dark space
     commands.insert_resource(AmbientLight {
-        color: Color::srgb(0.1, 0.12, 0.15), // Brighter blue ambient light
-        brightness: 0.08, // Significantly increased for better visibility
+        color: Color::srgb(0.2, 0.25, 0.3), // Bright ambient light with slight blue tint
+        brightness: 0.15, // Maximum ambient brightness for planet visibility
     });
 
     // Camera positioned to view the solar system
@@ -110,38 +110,62 @@ pub fn setup_space(
     // Sun as the main light source with maximum intensity for planet visibility
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 1000000.0, // Maximum intensity for excellent planet illumination
+            intensity: 2000000.0, // Even higher intensity for maximum illumination
             shadows_enabled: false, // Disable shadows for better performance
-            color: Color::srgb(1.0, 1.0, 0.98), // Near-white sunlight
-            range: 3000.0, // Extended range to illuminate all planets
+            color: Color::srgb(1.0, 1.0, 0.95), // Warm sunlight
+            range: 5000.0, // Extended range to cover all distances
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         ..default()
     });
 
-    // Add brighter fill lights in multiple directions for comprehensive illumination
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
-            intensity: 50000.0, // Brighter fill light
+    // Add directional light from the Sun's direction for better front illumination
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            illuminance: 10000.0, // Bright directional light
+            color: Color::srgb(1.0, 1.0, 0.9), // Sunlight color
             shadows_enabled: false,
-            color: Color::srgb(0.8, 0.9, 1.0), // Cool blue fill light
-            range: 2000.0,
             ..default()
         },
-        transform: Transform::from_xyz(200.0, 100.0, 200.0), // Offset position
+        transform: Transform::from_xyz(0.0, 0.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ..default()
+    });
+
+    // Add maximum fill lights in all directions for comprehensive planet illumination
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 200000.0, // Much brighter fill light
+            shadows_enabled: false,
+            color: Color::srgb(0.9, 0.95, 1.0), // Bright white-blue fill light
+            range: 4000.0, // Extended range
+            ..default()
+        },
+        transform: Transform::from_xyz(500.0, 200.0, 500.0), // Offset position for side illumination
         ..default()
     });
 
     commands.spawn(PointLightBundle {
         point_light: PointLight {
-            intensity: 50000.0, // Second fill light from opposite direction
+            intensity: 200000.0, // Second fill light from opposite direction
             shadows_enabled: false,
-            color: Color::srgb(0.9, 0.8, 1.0), // Purple fill light
-            range: 2000.0,
+            color: Color::srgb(1.0, 0.9, 0.95), // Warm white fill light
+            range: 4000.0,
             ..default()
         },
-        transform: Transform::from_xyz(-200.0, -100.0, -200.0), // Opposite position
+        transform: Transform::from_xyz(-500.0, -200.0, -500.0), // Opposite position
+        ..default()
+    });
+
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 150000.0, // Top illumination
+            shadows_enabled: false,
+            color: Color::srgb(0.95, 0.95, 1.0), // Cool white
+            range: 4000.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, 800.0, 0.0), // Above the solar system
         ..default()
     });
 
@@ -218,16 +242,29 @@ pub fn setup_space(
             PbrBundle {
                 mesh: meshes.add(Mesh::from(Sphere { radius: visual_radius })),
                 material: materials.add(StandardMaterial {
-                    base_color: planet.color,
+                    base_color: if planet.name == "Sun" {
+                        planet.color
+                    } else {
+                        // Keep original planet colors - the lighting will make them visible
+                        planet.color
+                    },
                     emissive: if planet.name == "Sun" {
                         LinearRgba::new(1.0, 1.0, 0.8, 1.0) // Make sun glow
                     } else {
-                        LinearRgba::BLACK
+                        // Add significant self-illumination to planets for maximum visibility
+                        // Convert color to LinearRgba to access components
+                        let color_rgba: LinearRgba = planet.color.into();
+                        LinearRgba::new(
+                            color_rgba.red * 0.15, // Increased from 0.05
+                            color_rgba.green * 0.15,
+                            color_rgba.blue * 0.15,
+                            1.0
+                        )
                     },
-                    // Add reflective properties for better visibility
-                    metallic: if planet.name == "Sun" { 0.0 } else { 0.1 }, // Slight metallic for planetary surfaces
-                    reflectance: if planet.name == "Sun" { 0.0 } else { 0.3 }, // Higher reflectance for better light reflection
-                    perceptual_roughness: 0.7, // Moderate roughness for realistic surfaces
+                    // Enhanced reflective properties for maximum visibility
+                    metallic: if planet.name == "Sun" { 0.0 } else { 0.0 }, // Reduce metallic for better color visibility
+                    reflectance: if planet.name == "Sun" { 0.0 } else { 0.6 }, // Higher reflectance for better light reflection
+                    perceptual_roughness: 0.3, // Lower roughness for more specular highlights
                     ..default()
                 }),
                 transform: Transform::from_translation(initial_position),
