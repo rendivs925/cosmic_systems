@@ -452,7 +452,7 @@ pub fn update_camera_controller(
         // This enables full 6DOF (degrees of freedom) movement
 
         // Additional zoom controls with keyboard for precise control
-        let zoom_speed = controller.speed * 3.0; // Fast zoom with keyboard
+        let zoom_speed = controller.speed * 8.0; // Ultra fast zoom with keyboard for astronomical navigation
         if keyboard.pressed(KeyCode::Equal) || keyboard.pressed(KeyCode::NumpadAdd) {
             // Zoom in with = or numpad +
             let forward = *transform.forward();
@@ -464,9 +464,9 @@ pub fn update_camera_controller(
             movement -= forward * zoom_speed;
         }
 
-        // Handle mouse wheel for zooming (direct position change, not velocity-based) - EXTREMELY SENSITIVE
+        // Handle mouse wheel for zooming (direct position change, not velocity-based) - ULTRA SENSITIVE
         for wheel_event in mouse_wheel.read() {
-            let zoom_distance = wheel_event.y * controller.speed * 15.0; // Extremely sensitive zoom for precise control
+            let zoom_distance = wheel_event.y * controller.speed * 50.0; // Ultra sensitive zoom for rapid navigation across astronomical distances
             let forward = *transform.forward();
             transform.translation += forward * zoom_distance;
         }
