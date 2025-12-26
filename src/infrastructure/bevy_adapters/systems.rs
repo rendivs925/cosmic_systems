@@ -132,6 +132,84 @@ pub fn update_planet_rotations(
     }
 }
 
+// System to handle planet selection
+pub fn handle_planet_selection(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut selected_planet: ResMut<SelectedPlanet>,
+    mut selectable_query: Query<(Entity, &mut Selectable)>,
+) {
+    let mut selection_changed = false;
+    let mut new_selected_entity = selected_planet.entity;
+    let mut new_selected_name = selected_planet.name.clone();
+
+    // Cycle through planets with Tab key
+    if keyboard.just_pressed(KeyCode::Tab) {
+        // Collect all selectable entities first
+        let all_entities: Vec<Entity> = selectable_query.iter().map(|(entity, _)| entity).collect();
+
+        if all_entities.is_empty() {
+            return;
+        }
+
+        // Find current selection index
+        let current_index = if let Some(current_entity) = selected_planet.entity {
+            all_entities.iter().position(|&entity| entity == current_entity).unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Move to next planet (wrap around)
+        let next_index = (current_index + 1) % all_entities.len();
+        let next_entity = all_entities[next_index];
+
+        // Get the name from the entity (we'll need to query again, but this avoids borrowing issues)
+        if let Ok((_, selectable)) = selectable_query.get(next_entity) {
+            new_selected_entity = Some(next_entity);
+            new_selected_name = Some(selectable.name.clone());
+            selection_changed = true;
+            println!("Selected planet: {}", selectable.name);
+        }
+    }
+
+    // Deselect with Escape
+    if keyboard.just_pressed(KeyCode::Escape) {
+        new_selected_entity = None;
+        new_selected_name = None;
+        selection_changed = true;
+        println!("Deselected planet");
+    }
+
+    // Update selection resource
+    if selection_changed {
+        selected_planet.entity = new_selected_entity;
+        selected_planet.name = new_selected_name;
+
+        // Update all selectable components
+        let target_entity = selected_planet.entity;
+        for (entity, mut selectable) in selectable_query.iter_mut() {
+            selectable.selected = Some(entity) == target_entity;
+        }
+    }
+}
+
+// System to update visual feedback for selected planets
+pub fn update_planet_selection_visuals(
+    time: Res<Time>,
+    mut query: Query<(&Selectable, &mut Transform)>,
+) {
+    let pulse = (time.elapsed_seconds() * 3.0).sin() * 0.1 + 1.0; // Gentle pulsing effect
+
+    for (selectable, mut transform) in query.iter_mut() {
+        if selectable.selected {
+            // Make selected planet slightly larger with pulsing effect
+            transform.scale = Vec3::splat(pulse);
+        } else {
+            // Reset scale for unselected planets
+            transform.scale = Vec3::ONE;
+        }
+    }
+}
+
 // System to handle solar system controls (time scale, etc.)
 pub fn handle_solar_system_input(
     keyboard: Res<ButtonInput<KeyCode>>,

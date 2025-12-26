@@ -45,3 +45,17 @@ pub struct CameraController {
     pub orbit_distance: f32,
     pub orbit_angle: f32,
 }
+
+// Component for selectable objects (planets, etc.)
+#[derive(Component)]
+pub struct Selectable {
+    pub name: String,
+    pub selected: bool,
+}
+
+// Resource to track currently selected planet
+#[derive(Resource)]
+pub struct SelectedPlanet {
+    pub entity: Option<Entity>,
+    pub name: Option<String>,
+}

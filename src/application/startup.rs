@@ -3,7 +3,7 @@ use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::domain::services::physics;
-use crate::infrastructure::bevy_adapters::components::{*, CameraController, CameraMode};
+use crate::infrastructure::bevy_adapters::components::{*, CameraController, CameraMode, Selectable};
 
 // Setup scene for gyro propulsion simulation
 pub fn setup_gyro(
@@ -151,6 +151,10 @@ pub fn setup_space(
             },
             PlanetComponent {
                 domain_planet: planet.clone(),
+            },
+            Selectable {
+                name: planet.name.clone(),
+                selected: false,
             },
         ));
     }

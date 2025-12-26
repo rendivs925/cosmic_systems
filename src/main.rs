@@ -8,6 +8,7 @@ pub mod presentation;
 
 use application::startup::*;
 use infrastructure::bevy_adapters::systems::*;
+use infrastructure::bevy_adapters::components::SelectedPlanet;
 use domain::value_objects::simulation_params::SimulationParameters;
 
 
@@ -44,10 +45,16 @@ fn main() {
         app.add_systems(Update, update_thrust);
         app.add_systems(Update, handle_input);
     } else {
+        app.insert_resource(SelectedPlanet {
+            entity: None,
+            name: None,
+        });
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);
         app.add_systems(Update, update_planet_rotations);
         app.add_systems(Update, handle_solar_system_input);
+        app.add_systems(Update, handle_planet_selection);
+        app.add_systems(Update, update_planet_selection_visuals);
         app.add_systems(Update, update_camera_controller);
         app.add_systems(Update, apply_camera_transform);
     }
