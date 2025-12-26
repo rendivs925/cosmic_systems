@@ -42,7 +42,7 @@ impl Planet {
             2439.7,  // Accurate radius in km
             3.3011e23,
             Color::srgb(0.5, 0.5, 0.5), // gray rocky
-            0.387,
+            0.387,   // Accurate distance from Sun in AU
             88.0,
             1407.6,
             None, // orbits Sun
@@ -55,7 +55,7 @@ impl Planet {
             6051.8,  // Accurate radius in km
             4.8675e24,
             Color::srgb(0.9, 0.8, 0.6), // yellowish cloudy
-            0.723,
+            0.723,   // Accurate distance from Sun in AU
             224.7,
             5832.5,
             None, // orbits Sun
@@ -68,7 +68,7 @@ impl Planet {
             6371.0,  // Accurate radius in km
             5.9724e24,
             Color::srgb(0.2, 0.4, 0.8), // blue with green continents
-            1.0,
+            1.000,   // Accurate distance from Sun in AU (definition of AU)
             365.25,
             24.0,
             None, // orbits Sun
@@ -81,7 +81,7 @@ impl Planet {
             3389.5,  // Accurate radius in km
             6.4171e23,
             Color::srgb(0.8, 0.3, 0.1), // red/orange
-            1.524,
+            1.524,   // Accurate distance from Sun in AU
             687.0,
             24.6,
             None, // orbits Sun
@@ -94,7 +94,7 @@ impl Planet {
             69911.0, // Accurate radius in km
             1.8982e27,
             Color::srgb(0.8, 0.6, 0.4), // orange/brown bands
-            5.204,
+            5.204,   // Accurate distance from Sun in AU
             4333.0,
             9.9,
             None, // orbits Sun
@@ -107,7 +107,7 @@ impl Planet {
             58232.0, // Accurate radius in km
             5.6834e26,
             Color::srgb(0.9, 0.8, 0.5), // golden rings
-            9.539,
+            9.539,   // Accurate distance from Sun in AU
             10759.0,
             10.7,
             None, // orbits Sun
@@ -120,7 +120,7 @@ impl Planet {
             25362.0, // Accurate radius in km
             8.6810e25,
             Color::srgb(0.6, 0.8, 0.9), // pale cyan
-            19.191,
+            19.191,  // Accurate distance from Sun in AU
             30687.0,
             17.2,
             None, // orbits Sun
@@ -133,7 +133,7 @@ impl Planet {
             24622.0, // Accurate radius in km
             1.02413e26,
             Color::srgb(0.3, 0.5, 0.9), // deep azure
-            30.061,
+            30.061,  // Accurate distance from Sun in AU
             60190.0,
             16.1,
             None, // orbits Sun
@@ -160,7 +160,7 @@ impl Planet {
             1737.4,  // Earth's moon
             7.342e22,
             Color::srgb(0.7, 0.7, 0.7), // gray rocky
-            3.0,     // Relative distance from Earth (in planetary radii units)
+            0.00257, // Accurate: 384,400 km = 0.00257 AU from Earth
             27.3,    // sidereal month
             27.3 * 24.0, // synchronous rotation
             Some("Earth".to_string()),
@@ -173,7 +173,7 @@ impl Planet {
             11.1,    // Mars' moon
             1.06e16,
             Color::srgb(0.4, 0.3, 0.2), // dark gray
-            1.5,     // Close to Mars
+            0.000032, // Accurate: ~9,400 km from Mars center
             0.32,    // very fast orbit (7.6 hours)
             0.32 * 24.0, // synchronous rotation
             Some("Mars".to_string()),
@@ -186,7 +186,7 @@ impl Planet {
             6.2,     // Mars' smaller moon
             1.48e15,
             Color::srgb(0.5, 0.4, 0.3), // gray
-            2.5,     // Further from Mars than Phobos
+            0.000156, // Accurate: ~23,500 km from Mars center
             1.26,    // slower orbit (30.3 hours)
             1.26 * 24.0, // synchronous rotation
             Some("Mars".to_string()),
@@ -199,7 +199,7 @@ impl Planet {
             1821.6,  // Jupiter's moon
             8.93e22,
             Color::srgb(0.9, 0.8, 0.4), // yellowish sulfur
-            2.0,     // Close to Jupiter
+            0.0028,  // Accurate: 421,700 km from Jupiter
             1.77,    // 42.5 hours
             1.77 * 24.0, // synchronous rotation
             Some("Jupiter".to_string()),
@@ -212,7 +212,7 @@ impl Planet {
             1560.8,  // Jupiter's moon
             4.8e22,
             Color::srgb(0.8, 0.8, 0.9), // icy blue-white
-            3.0,     // Further out
+            0.0045,  // Accurate: 670,900 km from Jupiter
             3.55,    // 85.2 hours
             3.55 * 24.0, // synchronous rotation
             Some("Jupiter".to_string()),
@@ -225,7 +225,7 @@ impl Planet {
             2634.1,  // Jupiter's largest moon
             1.48e23,
             Color::srgb(0.6, 0.6, 0.7), // gray icy
-            4.5,     // Middle distance
+            0.0072,  // Accurate: 1,070,400 km from Jupiter
             7.15,    // 171.7 hours
             7.15 * 24.0, // synchronous rotation
             Some("Jupiter".to_string()),
@@ -238,7 +238,7 @@ impl Planet {
             2410.3,  // Jupiter's moon
             1.08e23,
             Color::srgb(0.5, 0.5, 0.6), // dark icy
-            6.5,     // Furthest major moon
+            0.0126,  // Accurate: 1,882,700 km from Jupiter
             16.69,   // 401.4 hours
             16.69 * 24.0, // synchronous rotation
             Some("Jupiter".to_string()),
@@ -251,7 +251,7 @@ impl Planet {
             198.2,   // Saturn's moon
             3.75e19,
             Color::srgb(0.8, 0.8, 0.8), // icy
-            2.0,     // Close to Saturn
+            0.0012,  // Accurate: 185,539 km from Saturn
             0.94,    // 22.6 hours
             0.94 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -264,7 +264,7 @@ impl Planet {
             252.1,   // Saturn's moon
             1.08e20,
             Color::srgb(0.9, 0.9, 0.9), // very bright icy
-            2.5,     // Close to Saturn
+            0.0016,  // Accurate: 237,948 km from Saturn
             1.37,    // 32.9 hours
             1.37 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -277,7 +277,7 @@ impl Planet {
             531.1,   // Saturn's moon
             6.18e20,
             Color::srgb(0.7, 0.7, 0.8), // icy
-            3.0,     // Medium distance
+            0.0020,  // Accurate: 294,672 km from Saturn
             1.89,    // 45.3 hours
             1.89 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -290,7 +290,7 @@ impl Planet {
             561.4,   // Saturn's moon
             1.1e21,
             Color::srgb(0.7, 0.7, 0.8), // icy
-            3.5,     // Medium distance
+            0.0025,  // Accurate: 377,415 km from Saturn
             2.74,    // 65.7 hours
             2.74 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -303,7 +303,7 @@ impl Planet {
             763.8,   // Saturn's moon
             2.31e21,
             Color::srgb(0.7, 0.7, 0.8), // icy
-            4.5,     // Further out
+            0.0035,  // Accurate: 527,108 km from Saturn
             4.52,    // 108.4 hours
             4.52 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -316,7 +316,7 @@ impl Planet {
             2574.7,  // Saturn's largest moon
             1.35e23,
             Color::srgb(0.7, 0.6, 0.4), // orange atmosphere
-            6.0,     // Major moon distance
+            0.0082,  // Accurate: 1,221,870 km from Saturn
             15.95,   // 383.9 hours
             15.95 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -329,7 +329,7 @@ impl Planet {
             135.0,   // Saturn's moon
             5.6e18,
             Color::srgb(0.6, 0.5, 0.4), // dark porous
-            7.0,     // Outer moon
+            0.0099,  // Accurate: 1,481,009 km from Saturn
             21.28,   // 511.0 hours
             21.28 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -342,7 +342,7 @@ impl Planet {
             734.5,   // Saturn's moon
             1.81e21,
             Color::srgb(0.8, 0.8, 0.8), // icy with dark hemisphere
-            8.0,     // Outer moon
+            0.0238,  // Accurate: 3,561,300 km from Saturn
             79.32,   // 1903.7 hours
             79.32 * 24.0, // synchronous rotation
             Some("Saturn".to_string()),
@@ -359,7 +359,7 @@ impl Planet {
             235.8,   // Uranus' moon
             6.41e19,
             Color::srgb(0.6, 0.6, 0.7), // icy
-            2.0,     // Close to Uranus
+            0.0008,  // Accurate: 129,783 km from Uranus
             1.41,    // 33.9 hours
             1.41 * 24.0, // synchronous rotation
             Some("Uranus".to_string()),
@@ -372,7 +372,7 @@ impl Planet {
             578.9,   // Uranus' moon
             1.25e21,
             Color::srgb(0.7, 0.7, 0.8), // bright icy
-            3.0,     // Medium distance
+            0.0012,  // Accurate: 191,020 km from Uranus
             2.52,    // 60.5 hours
             2.52 * 24.0, // synchronous rotation
             Some("Uranus".to_string()),
@@ -385,7 +385,7 @@ impl Planet {
             584.7,   // Uranus' moon
             1.28e21,
             Color::srgb(0.4, 0.4, 0.5), // very dark icy
-            4.0,     // Further out
+            0.0018,  // Accurate: 266,000 km from Uranus
             4.14,    // 99.4 hours
             4.14 * 24.0, // synchronous rotation
             Some("Uranus".to_string()),
@@ -398,7 +398,7 @@ impl Planet {
             788.4,   // Uranus' moon
             3.53e21,
             Color::srgb(0.6, 0.6, 0.7), // icy
-            5.0,     // Major moon distance
+            0.0029,  // Accurate: 436,300 km from Uranus
             8.71,    // 208.9 hours
             8.71 * 24.0, // synchronous rotation
             Some("Uranus".to_string()),
@@ -411,7 +411,7 @@ impl Planet {
             761.4,   // Uranus' moon
             3.01e21,
             Color::srgb(0.5, 0.5, 0.6), // dark icy
-            6.0,     // Outer moon
+            0.0039,  // Accurate: 583,519 km from Uranus
             13.46,   // 323.1 hours
             13.46 * 24.0, // synchronous rotation
             Some("Uranus".to_string()),
@@ -424,7 +424,7 @@ impl Planet {
             1353.4,  // Neptune's moon
             2.14e22,
             Color::srgb(0.6, 0.7, 0.8), // icy with nitrogen
-            4.0,     // Major moon distance from Neptune
+            0.0024,  // Accurate: 354,759 km from Neptune
             5.88,    // 141.0 hours
             5.88 * 24.0, // synchronous rotation
             Some("Neptune".to_string()),

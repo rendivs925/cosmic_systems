@@ -18,22 +18,22 @@ impl Default for SolarSystemParameters {
 impl SolarSystemParameters {
     pub fn new() -> Self {
         Self {
-            sun_radius_km: 1392684.0,
-            scale_factor: 100.0,  // 1 AU = 100 units
-            time_scale: 1.0,      // Real-time
+            sun_radius_km: 696342.0,
+            scale_factor: 100.0,  // For visualization (e.g., 1 AU = 100 units)
+            time_scale: 1.0,      // Simulation speed multiplier
             show_orbits: true,
             planet_scale: 1.0,    // No additional scaling initially
         }
     }
 
-    /// Create parameters optimized for visualization
+    /// Create parameters optimized for astronomical accuracy with compressed distances
     pub fn for_visualization() -> Self {
         Self {
-            sun_radius_km: 1392684.0,
-            scale_factor: 30.0,   // Tighter view for solar system
-            time_scale: 500.0,    // Speed up time significantly for visible motion
+            sun_radius_km: 696342.0,
+            scale_factor: 15.0,   // Compress astronomical distances for visibility (1 AU = 15 units)
+            time_scale: 1000.0,   // Speed up time significantly for visible motion
             show_orbits: true,
-            planet_scale: 10.0,   // Make planets much more visible
+            planet_scale: 8.0,    // Scale planets appropriately for compressed space
         }
     }
 
