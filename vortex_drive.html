@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UAP: Swiss Alpine Realism (Human POV)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@200;400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #a5c9e1;
+        font-family: "Inter", sans-serif;
+        color: #111;
+      }
+      #ui {
+        position: absolute;
+        top: 30px;
+        left: 30px;
+        background: rgba(255, 255, 255, 0.4);
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        backdrop-filter: blur(15px);
+        pointer-events: none;
+        z-index: 100;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05);
+      }
+      .brand {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        color: #1a1a1a;
+        margin-bottom: 15px;
+        text-transform: uppercase;
+      }
+      .data-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 9px;
+        margin: 8px 0;
+        color: rgba(0, 0, 0, 0.6);
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+      }
+      .val {
+        color: #000;
+        font-family: monospace;
+        font-weight: bold;
+      }
+      #controls-hint {
+        position: absolute;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(255, 255, 255, 0.5);
+        padding: 8px 25px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        font-size: 9px;
+        color: rgba(0, 0, 0, 0.7);
+        text-align: center;
+        letter-spacing: 2px;
+        backdrop-filter: blur(10px);
+        z-index: 100;
+        border-radius: 4px;
+      }
+      #audio-prompt {
+        position: fixed;
+        inset: 0;
+        background: #eef2f3;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 200;
+        cursor: pointer;
+      }
+      #audio-prompt h2 {
+        color: #1a1a1a;
+        letter-spacing: 10px;
+        font-weight: 200;
+        margin-bottom: 10px;
+      }
+      #audio-prompt p {
+        font-size: 10px;
+        color: #4b7bec;
+        letter-spacing: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="audio-prompt" onclick="startEngine()">
+      <h2>SYNCHRONIZE</h2>
+      <p>ALPINE FLIGHT PROTOCOL</p>
+    </div>
+
+    <div id="ui">
+      <div class="brand">UAP <b>MODEL-S</b></div>
+      <div class="data-row">
+        <span>LOCATION:</span><span class="val">SWITZERLAND</span>
+      </div>
+      <div class="data-row">
+        <span>ALTITUDE:</span> <span class="val" id="depth">2,100 m</span>
+      </div>
+      <div class="data-row">
+        <span>VIEW MODE:</span> <span class="val" id="view-mode">FOLLOW</span>
+      </div>
+    </div>
+
+    <div id="controls-hint">
+      WASD to Move | Arrows to Rotate | [V] Toggle Human POV
+    </div>
+
+    <script>
+      let scene, camera, renderer, drone, clock;
+      let keys = {};
+      let time = 0;
+      let velocity = new THREE.Vector3();
+      let rotationY = 0;
+      let verticalVelocity = 0;
+      let isHumanView = false;
+      let humanCamPos = new THREE.Vector3(20, -298, 40); // Standard eye level on terrain
+
+      let audioCtx, mainGain, panner, engineOsc, engineGain, phaserFilter;
+
+      function startEngine() {
+        if (audioCtx) return;
+        document.getElementById("audio-prompt").style.opacity = "0";
+        setTimeout(
+          () => document.getElementById("audio-prompt").remove(),
+          1000,
+        );
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        panner = audioCtx.createStereoPanner();
+        mainGain = audioCtx.createGain();
+        mainGain.connect(audioCtx.destination);
+        panner.connect(mainGain);
+
+        // Brown noise base
+        const bufferSize = 2 * audioCtx.sampleRate;
+        const noiseBuffer = audioCtx.createBuffer(
+          1,
+          bufferSize,
+          audioCtx.sampleRate,
+        );
+        const output = noiseBuffer.getChannelData(0);
+        let lastOut = 0;
+        for (let i = 0; i < bufferSize; i++) {
+          let white = Math.random() * 2 - 1;
+          output[i] = (lastOut + 0.01 * white) / 1.01;
+          lastOut = output[i];
+          output[i] *= 4;
+        }
+        let noiseSource = audioCtx.createBufferSource();
+        noiseSource.buffer = noiseBuffer;
+        noiseSource.loop = true;
+
+        let filter = audioCtx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = 50;
+
+        phaserFilter = audioCtx.createBiquadFilter();
+        phaserFilter.type = "allpass";
+        phaserFilter.frequency.value = 500;
+
+        noiseSource.connect(filter);
+        filter.connect(phaserFilter);
+        phaserFilter.connect(panner);
+        noiseSource.start();
+
+        engineOsc = audioCtx.createOscillator();
+        engineOsc.type = "sine";
+        engineOsc.frequency.value = 38;
+        engineGain = audioCtx.createGain();
+        engineGain.gain.value = 0.08;
+        engineOsc.connect(engineGain);
+        engineGain.connect(panner);
+        engineOsc.start();
+
+        init();
+      }
+
+      function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x91b9d9);
+        scene.fog = new THREE.FogExp2(0xcfdbe5, 0.0015);
+
+        camera = new THREE.PerspectiveCamera(
+          45,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          20000,
+        );
+
+        renderer = new THREE.WebGLRenderer({
+          antialias: true,
+          logarithmicDepthBuffer: true,
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.1;
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfff5e6, 1.4);
+        sunLight.position.set(1000, 500, 1000);
+        scene.add(sunLight);
+
+        // Ground: Lush Meadow
+        const groundGeom = new THREE.PlaneGeometry(15000, 15000, 128, 128);
+        groundGeom.rotateX(-Math.PI / 2);
+
+        const pos = groundGeom.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const x = pos.getX(i);
+          const z = pos.getZ(i);
+          let h = Math.sin(x * 0.001) * 150 + Math.cos(z * 0.001) * 150;
+          h += Math.sin(x * 0.01) * 20;
+          pos.setY(i, h - 300);
+        }
+        groundGeom.computeVertexNormals();
+
+        const meadowMat = new THREE.MeshStandardMaterial({
+          color: 0x4b7b43,
+          roughness: 0.9,
+          metalness: 0.0,
+        });
+        const meadow = new THREE.Mesh(groundGeom, meadowMat);
+        scene.add(meadow);
+
+        // DISTANT MOUNTAINS
+        for (let i = 0; i < 12; i++) {
+          const mGeom = new THREE.ConeGeometry(
+            800 + Math.random() * 1000,
+            1500 + Math.random() * 1000,
+            5,
+          );
+          const mMat = new THREE.MeshStandardMaterial({
+            color: 0x718093,
+            roughness: 0.8,
+          });
+          const m = new THREE.Mesh(mGeom, mMat);
+          const dist = 4000 + Math.random() * 3000;
+          const ang = (i / 12) * Math.PI * 2;
+          m.position.set(Math.cos(ang) * dist, 200, Math.sin(ang) * dist);
+          m.rotation.y = Math.random() * Math.PI;
+          scene.add(m);
+        }
+
+        // UFO DESIGN
+        drone = new THREE.Group();
+        scene.add(drone);
+
+        const hullMat = new THREE.MeshStandardMaterial({
+          color: 0x95afc0,
+          metalness: 1.0,
+          roughness: 0.1,
+        });
+
+        const sportModel = new THREE.Group();
+        drone.add(sportModel);
+
+        const body = new THREE.Mesh(
+          new THREE.SphereGeometry(6, 64, 32),
+          hullMat,
+        );
+        body.scale.y = 0.28;
+        sportModel.add(body);
+
+        const topSlope = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.5, 3, 0.8, 64),
+          hullMat,
+        );
+        topSlope.position.y = 0.8;
+        sportModel.add(topSlope);
+
+        const emitter = new THREE.Mesh(
+          new THREE.SphereGeometry(1.2, 32, 32),
+          new THREE.MeshBasicMaterial({
+            color: 0xc7ecee,
+            transparent: true,
+            opacity: 0.6,
+          }),
+        );
+        emitter.position.y = -1.1;
+        emitter.scale.y = 0.3;
+        sportModel.add(emitter);
+
+        window.addEventListener("keydown", (e) => {
+          keys[e.code] = true;
+          if (e.code === "KeyV") {
+            isHumanView = !isHumanView;
+            document.getElementById("view-mode").innerText = isHumanView
+              ? "HUMAN POV"
+              : "FOLLOW";
+          }
+        });
+        window.addEventListener("keyup", (e) => (keys[e.code] = false));
+
+        clock = new THREE.Clock();
+        animate();
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const delta = clock.getDelta();
+        time += delta;
+
+        // PHYSICS
+        const accel = 0.04;
+        const friction = 0.985;
+        const rotSpeed = 0.02;
+
+        if (keys["ArrowLeft"]) rotationY += rotSpeed;
+        if (keys["ArrowRight"]) rotationY -= rotSpeed;
+
+        const dir = new THREE.Vector3(0, 0, -1).applyAxisAngle(
+          new THREE.Vector3(0, 1, 0),
+          rotationY,
+        );
+        if (keys["KeyW"]) velocity.add(dir.clone().multiplyScalar(accel));
+        if (keys["KeyS"]) velocity.sub(dir.clone().multiplyScalar(accel));
+
+        const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(
+          new THREE.Vector3(0, 1, 0),
+          rotationY,
+        );
+        if (keys["KeyA"]) velocity.sub(side.clone().multiplyScalar(accel));
+        if (keys["KeyD"]) velocity.add(side.clone().multiplyScalar(accel));
+
+        if (keys["ArrowUp"]) verticalVelocity += accel;
+        if (keys["ArrowDown"]) verticalVelocity -= accel;
+
+        velocity.multiplyScalar(friction);
+        verticalVelocity *= friction;
+
+        if (drone) {
+          drone.position.add(velocity);
+          drone.position.y += verticalVelocity;
+          drone.rotation.y = rotationY;
+
+          // UAP tilt
+          const localVel = velocity
+            .clone()
+            .applyAxisAngle(new THREE.Vector3(0, 1, 0), -rotationY);
+          drone.rotation.z = THREE.MathUtils.lerp(
+            drone.rotation.z,
+            -localVel.x * 0.8,
+            0.08,
+          );
+          drone.rotation.x = THREE.MathUtils.lerp(
+            drone.rotation.x,
+            localVel.z * 0.8,
+            0.08,
+          );
+
+          // CAMERA MODES
+          if (!isHumanView) {
+            // Drone Follow (Third Person)
+            const camTarget = new THREE.Vector3(0, 3, 22).applyAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              rotationY,
+            );
+            camera.position.lerp(drone.position.clone().add(camTarget), 0.04);
+            camera.lookAt(
+              drone.position.clone().add(new THREE.Vector3(0, -0.5, 0)),
+            );
+          } else {
+            // Human POV (Fixed on ground, eye level)
+            // Add slight handheld shake
+            const shakeX = Math.sin(time * 2.5) * 0.1;
+            const shakeY = Math.cos(time * 2.1) * 0.1;
+
+            camera.position.set(humanCamPos.x, humanCamPos.y, humanCamPos.z);
+            camera.position.y += shakeY;
+            camera.position.x += shakeX;
+
+            camera.lookAt(drone.position);
+          }
+
+          // UI updates
+          document.getElementById("depth").innerText =
+            (drone.position.y + 2100).toFixed(0) + " m";
+        }
+
+        // AUDIO Processing
+        if (audioCtx && phaserFilter) {
+          const speed = velocity.length();
+          phaserFilter.frequency.setTargetAtTime(
+            400 + Math.sin(time) * 100 + speed * 1000,
+            audioCtx.currentTime,
+            0.1,
+          );
+          engineOsc.frequency.setTargetAtTime(
+            38 + speed * 80,
+            audioCtx.currentTime,
+            0.1,
+          );
+          engineGain.gain.setTargetAtTime(
+            0.08 + speed * 0.2,
+            audioCtx.currentTime,
+            0.1,
+          );
+
+          // Pan based on craft position relative to viewer in Human POV
+          if (isHumanView) {
+            const relativeX = drone.position.x - humanCamPos.x;
+            const panVal = Math.max(-1, Math.min(1, relativeX / 100));
+            panner.pan.setTargetAtTime(panVal, audioCtx.currentTime, 0.1);
+          } else {
+            panner.pan.setTargetAtTime(
+              Math.sin(rotationY) * 0.4,
+              audioCtx.currentTime,
+              0.1,
+            );
+          }
+        }
+
+        if (renderer && scene && camera) {
+          renderer.render(scene, camera);
+        }
+      }
+
+      window.addEventListener("resize", () => {
+        if (camera && renderer) {
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+      });
+    </script>
+  </body>
+</html>
