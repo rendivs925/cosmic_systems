@@ -413,6 +413,7 @@ pub fn display_navigation_bar(
     mut contexts: EguiContexts,
     mut selected_planet: ResMut<SelectedPlanet>,
     mut selectable_query: Query<(Entity, &mut Selectable)>,
+    mut solar_params: ResMut<SolarSystemParameters>,
 ) {
     let mut name_to_entity = HashMap::new();
     {
@@ -476,6 +477,29 @@ pub fn display_navigation_bar(
                         .size(14.0)
                         .color(egui::Color32::from_rgb(120, 140, 180))
                 );
+
+                ui.separator();
+
+                // Orbit visibility toggle button
+                let orbit_icon = if solar_params.show_orbits { "👁" } else { "👁‍🗨" };
+                let orbit_text = if solar_params.show_orbits { "Hide Orbits" } else { "Show Orbits" };
+                let button = egui::Button::new(
+                    egui::RichText::new(format!("{} {}", orbit_icon, orbit_text)).size(11.0)
+                )
+                .fill(if solar_params.show_orbits {
+                    egui::Color32::from_rgb(40, 60, 100)
+                } else {
+                    egui::Color32::from_rgba_premultiplied(20, 25, 35, 150)
+                })
+                .stroke(if solar_params.show_orbits {
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 120, 200))
+                } else {
+                    egui::Stroke::NONE
+                });
+
+                if ui.add(button).clicked() {
+                    solar_params.show_orbits = !solar_params.show_orbits;
+                }
 
                 ui.separator();
 
@@ -544,9 +568,11 @@ pub fn handle_solar_system_input(
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
         let window_entity = main_window.single();
 
-        // Create screenshots directory if it doesn't exist
-        let screenshots_dir = "screenshots";
-        if let Err(e) = std::fs::create_dir_all(screenshots_dir) {
+        // Create screenshots directory in home folder
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let screenshots_dir = format!("{}/cosmic_systems_images", home_dir);
+
+        if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
             println!("❌ Failed to create screenshots directory: {}", e);
             return;
         }
