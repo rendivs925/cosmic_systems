@@ -303,30 +303,31 @@ pub fn setup_space(
                         * Quat::from_rotation_x(orbit_shape.inclination_rad)
                         * Quat::from_rotation_y(orbit_shape.arg_periapsis_rad);
 
-                    commands.entity(*parent_entity).with_children(|parent| {
-                        parent
-                            .spawn(PbrBundle {
-                                mesh: orbit_mesh,
-                                material: orbit_material_handle,
-                                transform: Transform::from_rotation(orbit_rotation),
-                                ..default()
-                            })
-                            .insert(OrbitComponent {
-                                radius: orbit_shape.semi_major_axis_units,
-                                planet_entity,
-                                material: orbit_material,
-                                base_color: orbit_base_color,
-                                tilt: orbit_motion.tilt,
-                                wobble_speed: orbit_motion.wobble_speed,
-                                wobble_amount: orbit_motion.wobble_amount,
-                                spin_speed: orbit_motion.spin_speed,
-                                phase: orbit_motion.phase,
-                            })
-                            .insert(Name::new(format!(
-                                "Orbit {} around {}",
-                                planet.name, parent_name
-                            )));
-                    });
+                    // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent rotation
+                    // This ensures moons follow their orbits with perfect precision
+                    commands
+                        .spawn(PbrBundle {
+                            mesh: orbit_mesh,
+                            material: orbit_material_handle,
+                            transform: Transform::from_rotation(orbit_rotation),
+                            ..default()
+                        })
+                        .insert(OrbitComponent {
+                            radius: orbit_shape.semi_major_axis_units,
+                            planet_entity: *parent_entity,
+                            material: orbit_material,
+                            base_color: orbit_base_color,
+                            tilt: orbit_motion.tilt,
+                            wobble_speed: orbit_motion.wobble_speed,
+                            wobble_amount: orbit_motion.wobble_amount,
+                            spin_speed: orbit_motion.spin_speed,
+                            phase: orbit_motion.phase,
+                        })
+                        .insert(MoonOrbit)
+                        .insert(Name::new(format!(
+                            "Orbit {} around {}",
+                            planet.name, parent_name
+                        )));
                 }
             } else if planet.name != "Sun" {
                 let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);

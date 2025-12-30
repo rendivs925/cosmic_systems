@@ -36,6 +36,10 @@ pub struct OrbitComponent {
     pub phase: f32,
 }
 
+// Marker component for moon orbits (orbits that need to follow their parent planet)
+#[derive(Component)]
+pub struct MoonOrbit;
+
 // Component for cloud layers to control rotation speed
 #[derive(Component)]
 pub struct CloudLayer {

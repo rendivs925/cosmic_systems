@@ -182,19 +182,15 @@ pub fn update_planet_rotations(
 pub fn update_orbit_visuals(
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut query: Query<(&mut Transform, &OrbitComponent)>,
+    query: Query<&OrbitComponent>,
 ) {
     let elapsed = time.elapsed_seconds();
 
-    for (mut transform, orbit) in query.iter_mut() {
+    for orbit in query.iter() {
         let wobble_phase = elapsed * orbit.wobble_speed + orbit.phase;
-        let pitch = orbit.tilt.x + wobble_phase.sin() * orbit.wobble_amount;
-        let roll = orbit.tilt.y + (wobble_phase * 1.3).cos() * orbit.wobble_amount;
-        let yaw = elapsed * orbit.spin_speed + orbit.phase * 0.2;
 
-        transform.rotation = Quat::from_euler(EulerRot::XYZ, pitch, yaw, roll);
-        let scale_pulse = 1.0 + (wobble_phase * 0.7).sin() * 0.008;
-        transform.scale = Vec3::splat(scale_pulse);
+        // Don't modify transform - keep the rotation set at spawn time for precision
+        // This ensures moons follow their orbital paths exactly
 
         if let Some(material) = materials.get_mut(&orbit.material) {
             let pulse = 0.5 + 0.5 * (wobble_phase * 0.6).sin();
@@ -208,6 +204,21 @@ pub fn update_orbit_visuals(
                 linear.blue * glow,
                 1.0,
             );
+        }
+    }
+}
+
+// System to update moon orbit positions to follow their parent planets
+pub fn update_moon_orbit_positions(
+    mut moon_orbit_query: Query<(&mut Transform, &OrbitComponent), With<MoonOrbit>>,
+    planet_query: Query<&Transform, (With<PlanetComponent>, Without<MoonOrbit>)>,
+) {
+    for (mut orbit_transform, orbit_comp) in moon_orbit_query.iter_mut() {
+        // Get the parent planet's position
+        if let Ok(parent_transform) = planet_query.get(orbit_comp.planet_entity) {
+            // Update orbit position to match parent planet position
+            // Keep the rotation unchanged (it was set correctly at spawn time)
+            orbit_transform.translation = parent_transform.translation;
         }
     }
 }

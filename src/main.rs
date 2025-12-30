@@ -55,6 +55,9 @@ fn main() {
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);
         app.add_systems(Update, update_planet_rotations);
+        app.add_systems(Update, update_moon_orbit_positions);
+        app.add_systems(Update, update_orbit_visuals);
+        app.add_systems(Update, update_planet_reflections);
         app.add_systems(Update, handle_solar_system_input);
         app.add_systems(Update, handle_planet_selection);
         app.add_systems(Update, handle_mouse_planet_selection);
