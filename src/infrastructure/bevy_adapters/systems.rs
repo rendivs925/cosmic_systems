@@ -537,7 +537,33 @@ pub fn handle_solar_system_input(
     mut camera_query: Query<(&mut CameraController, &mut Transform)>,
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
+    mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
+    main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
 ) {
+    // Screenshot feature - F12 or P key
+    if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
+        let window_entity = main_window.single();
+
+        // Create screenshots directory if it doesn't exist
+        let screenshots_dir = "screenshots";
+        if let Err(e) = std::fs::create_dir_all(screenshots_dir) {
+            println!("❌ Failed to create screenshots directory: {}", e);
+            return;
+        }
+
+        // Generate filename with timestamp
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let filename = format!("{}/cosmic_systems_{}.png", screenshots_dir, timestamp);
+
+        // Take screenshot using Bevy's screenshot API
+        match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
+            Ok(_) => println!("📸 Screenshot saved to: {}", filename),
+            Err(e) => println!("❌ Failed to save screenshot: {}", e),
+        }
+    }
     // Time scale controls
     if keyboard.pressed(KeyCode::KeyT) {
         solar_params.time_scale *= 1.1;
@@ -822,8 +848,6 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
         let card_width = 320.0;
         let card_height = (screen_rect.height() * 0.75).min(650.0);
         let margin = 20.0; // Margin from edges
-        let card_x = screen_rect.width() - card_width - margin;
-        let card_y = margin;
 
         egui::Window::new("info_card")
             .title_bar(false)
