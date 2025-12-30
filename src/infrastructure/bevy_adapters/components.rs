@@ -70,6 +70,7 @@ pub struct CameraController {
     pub adaptive_speed_enabled: bool, // Auto-adjust speed based on distance
     pub min_speed: f32,              // Minimum movement speed
     pub max_speed: f32,              // Maximum movement speed
+    pub zoom_sensitivity: f32,       // Mouse wheel zoom sensitivity
 }
 
 // Component for selectable objects (planets, etc.)

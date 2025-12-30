@@ -848,16 +848,14 @@ pub fn update_camera_controller(
                     let speed_change = wheel_event.y * controller.speed * 0.15;
                     controller.speed = (controller.speed + speed_change).clamp(controller.min_speed, controller.max_speed);
                     println!("Camera speed: {:.0} units/s", controller.speed);
+                } else if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+                    // Shift+Wheel: Adjust zoom sensitivity
+                    let sensitivity_change = wheel_event.y * 5.0;
+                    controller.zoom_sensitivity = (controller.zoom_sensitivity + sensitivity_change).clamp(1.0, 500.0);
+                    println!("Zoom sensitivity: {:.1}", controller.zoom_sensitivity);
                 } else {
                     // Normal wheel: Zoom in/out
-                    let zoom_multiplier =
-                        if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
-                            2.0 // Faster zoom with shift
-                        } else {
-                            1.0
-                        };
-                    // Reduced from 220.0 to 50.0 for smoother, more controllable zoom
-                    let zoom_distance = wheel_event.y * controller.speed * 50.0 * zoom_multiplier;
+                    let zoom_distance = wheel_event.y * controller.speed * controller.zoom_sensitivity;
                     let forward = *transform.forward();
                     transform.translation += forward * zoom_distance;
                 }
@@ -1972,19 +1970,10 @@ pub fn display_notifications(
         };
 
         // Choose colors based on notification type
-        let (bg_color, icon) = match notification.notification_type {
-            NotificationType::Success => (
-                egui::Color32::from_rgba_premultiplied(16, 64, 16, alpha.min(220)),
-                "✓"
-            ),
-            NotificationType::Error => (
-                egui::Color32::from_rgba_premultiplied(64, 16, 16, alpha.min(220)),
-                "✗"
-            ),
-            NotificationType::Info => (
-                egui::Color32::from_rgba_premultiplied(16, 32, 64, alpha.min(220)),
-                "ℹ"
-            ),
+        let bg_color = match notification.notification_type {
+            NotificationType::Success => egui::Color32::from_rgba_premultiplied(16, 64, 16, alpha.min(220)),
+            NotificationType::Error => egui::Color32::from_rgba_premultiplied(64, 16, 16, alpha.min(220)),
+            NotificationType::Info => egui::Color32::from_rgba_premultiplied(16, 32, 64, alpha.min(220)),
         };
 
         egui::Window::new(format!("notification_{}", idx))
@@ -2005,18 +1994,11 @@ pub fn display_notifications(
                 },
             })
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(icon)
-                            .size(18.0)
-                            .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha))
-                    );
-                    ui.label(
-                        egui::RichText::new(&notification.message)
-                            .size(14.0)
-                            .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha))
-                    );
-                });
+                ui.label(
+                    egui::RichText::new(&notification.message)
+                        .size(14.0)
+                        .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha))
+                );
             });
 
         y_offset += 60.0; // Stack notifications vertically

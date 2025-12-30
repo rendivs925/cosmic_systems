@@ -128,6 +128,7 @@ pub fn setup_space(
             adaptive_speed_enabled: true, // Auto-adjust speed based on distance
             min_speed: 50.0,            // Minimum speed for close-up viewing
             max_speed: 50000.0,         // Maximum speed for far travel
+            zoom_sensitivity: 50.0,     // Mouse wheel zoom multiplier
         },
     ));
 
