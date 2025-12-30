@@ -57,23 +57,26 @@ pub fn calculate_planet_position(
             let radius_au = elements.semi_major_axis_au
                 * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
             let r = solar_params.au_to_units(radius_au) * 500.0; // Moon scale factor
-            let arg = elements.arg_periapsis_rad + true_anomaly;
-            let cos_omega = elements.long_asc_node_rad.cos();
-            let sin_omega = elements.long_asc_node_rad.sin();
-            let cos_i = elements.inclination_rad.cos();
-            let sin_i = elements.inclination_rad.sin();
-            let cos_arg = arg.cos();
-            let sin_arg = arg.sin();
 
-            Vec3::new(
-                r * (cos_omega * cos_arg - sin_omega * sin_arg * cos_i),
-                r * (sin_arg * sin_i),
-                r * (sin_omega * cos_arg + cos_omega * sin_arg * cos_i),
+            // Position in orbital plane (periapsis at +X)
+            let x_orbital = r * true_anomaly.cos();
+            let z_orbital = r * true_anomaly.sin();
+
+            // Transform to 3D space using same method as orbit mesh
+            transform_orbital_point(
+                x_orbital,
+                z_orbital,
+                elements.inclination_rad,
+                elements.long_asc_node_rad,
+                elements.arg_periapsis_rad,
             )
         } else {
             // Fallback to simple circular orbit for moons without defined elements
+            // Use 3D transformation for consistency (no inclination/nodes for fallback)
             let distance = calculate_orbit_radius_units(planet, solar_params);
-            Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
+            let x_orbital = distance * angle.cos();
+            let z_orbital = distance * angle.sin();
+            transform_orbital_point(x_orbital, z_orbital, 0.0, 0.0, 0.0)
         }
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
@@ -83,23 +86,26 @@ pub fn calculate_planet_position(
         let radius_au = elements.semi_major_axis_au
             * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
         let r = solar_params.au_to_units(radius_au);
-        let arg = elements.arg_periapsis_rad + true_anomaly;
-        let cos_omega = elements.long_asc_node_rad.cos();
-        let sin_omega = elements.long_asc_node_rad.sin();
-        let cos_i = elements.inclination_rad.cos();
-        let sin_i = elements.inclination_rad.sin();
-        let cos_arg = arg.cos();
-        let sin_arg = arg.sin();
 
-        Vec3::new(
-            r * (cos_omega * cos_arg - sin_omega * sin_arg * cos_i),
-            r * (sin_arg * sin_i),
-            r * (sin_omega * cos_arg + cos_omega * sin_arg * cos_i),
+        // Position in orbital plane (periapsis at +X)
+        let x_orbital = r * true_anomaly.cos();
+        let z_orbital = r * true_anomaly.sin();
+
+        // Transform to 3D space using same method as orbit mesh
+        transform_orbital_point(
+            x_orbital,
+            z_orbital,
+            elements.inclination_rad,
+            elements.long_asc_node_rad,
+            elements.arg_periapsis_rad,
         )
     } else {
-        // Fallback to a circular orbit when no elements are defined.
+        // Fallback to a circular orbit when no elements are defined
+        // Use 3D transformation for consistency (no inclination/nodes for fallback)
         let distance = calculate_orbit_radius_units(planet, solar_params);
-        Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
+        let x_orbital = distance * angle.cos();
+        let z_orbital = distance * angle.sin();
+        transform_orbital_point(x_orbital, z_orbital, 0.0, 0.0, 0.0)
     };
 
     // Add parent position to get absolute position
@@ -171,6 +177,37 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
             arg_periapsis_rad: 0.0,
         }
     }
+}
+
+// Helper function to transform a point from orbital plane to 3D space
+// This ensures orbit mesh and position calculation use identical transformation
+pub fn transform_orbital_point(
+    x_orbital: f32,
+    z_orbital: f32,
+    inclination: f32,
+    long_asc_node: f32,
+    arg_periapsis: f32,
+) -> Vec3 {
+    // Apply argument of periapsis rotation (in orbital plane)
+    let cos_w = arg_periapsis.cos();
+    let sin_w = arg_periapsis.sin();
+    let x1 = x_orbital * cos_w - z_orbital * sin_w;
+    let z1 = x_orbital * sin_w + z_orbital * cos_w;
+
+    // Apply inclination (tilt the plane)
+    let cos_i = inclination.cos();
+    let sin_i = inclination.sin();
+    let y2 = z1 * sin_i;
+    let z2 = z1 * cos_i;
+    let x2 = x1;
+
+    // Apply longitude of ascending node (rotate around Y axis)
+    let cos_omega = long_asc_node.cos();
+    let sin_omega = long_asc_node.sin();
+    let x3 = x2 * cos_omega - z2 * sin_omega;
+    let z3 = x2 * sin_omega + z2 * cos_omega;
+
+    Vec3::new(x3, y2, z3)
 }
 
 // Real-world orbital elements for major moons

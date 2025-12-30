@@ -283,8 +283,7 @@ pub fn setup_space(
                     let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
                     let orbit_mesh = create_orbit_mesh_ellipse(
                         &mut meshes,
-                        orbit_shape.semi_major_axis_units,
-                        orbit_shape.eccentricity,
+                        &orbit_shape,
                     );
                     let orbit_base_color = planet.color;
                     let orbit_material = materials.add(StandardMaterial {
@@ -299,17 +298,14 @@ pub fn setup_space(
                     let orbit_motion =
                         orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
-                    let orbit_rotation = Quat::from_rotation_y(orbit_shape.long_asc_node_rad)
-                        * Quat::from_rotation_x(orbit_shape.inclination_rad)
-                        * Quat::from_rotation_y(orbit_shape.arg_periapsis_rad);
-
                     // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent rotation
                     // This ensures moons follow their orbits with perfect precision
+                    // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
                     commands
                         .spawn(PbrBundle {
                             mesh: orbit_mesh,
                             material: orbit_material_handle,
-                            transform: Transform::from_rotation(orbit_rotation),
+                            transform: Transform::default(),
                             ..default()
                         })
                         .insert(OrbitComponent {
@@ -333,8 +329,7 @@ pub fn setup_space(
                 let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
                 let orbit_mesh = create_orbit_mesh_ellipse(
                     &mut meshes,
-                    orbit_shape.semi_major_axis_units,
-                    orbit_shape.eccentricity,
+                    &orbit_shape,
                 );
                 let orbit_base_color = planet.color;
                 let orbit_material = materials.add(StandardMaterial {
@@ -349,15 +344,12 @@ pub fn setup_space(
                 let orbit_motion =
                     orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
-                let orbit_rotation = Quat::from_rotation_y(orbit_shape.long_asc_node_rad)
-                    * Quat::from_rotation_x(orbit_shape.inclination_rad)
-                    * Quat::from_rotation_y(orbit_shape.arg_periapsis_rad);
-
+                // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
                 commands
                     .spawn(PbrBundle {
                         mesh: orbit_mesh,
                         material: orbit_material_handle,
-                        transform: Transform::from_rotation(orbit_rotation),
+                        transform: Transform::default(),
                         ..default()
                     })
                     .insert(OrbitComponent {
@@ -442,8 +434,7 @@ fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Hand
 
 fn create_orbit_mesh_ellipse(
     meshes: &mut ResMut<Assets<Mesh>>,
-    semi_major_axis: f32,
-    eccentricity: f32,
+    orbit_shape: &physics::OrbitShape,
 ) -> Handle<Mesh> {
     const SEGMENTS: usize = 256;
     let mut positions = Vec::with_capacity(SEGMENTS);
@@ -451,15 +442,29 @@ fn create_orbit_mesh_ellipse(
     let mut uvs = Vec::with_capacity(SEGMENTS);
     let mut indices = Vec::with_capacity(SEGMENTS * 2);
 
-    let e = eccentricity.clamp(0.0, 0.99);
-    let semi_latus = semi_major_axis * (1.0 - e * e);
+    let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
+    let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
 
     for i in 0..SEGMENTS {
-        let angle = (i as f32 / SEGMENTS as f32) * TAU;
-        let radius = semi_latus / (1.0 + e * angle.cos());
-        positions.push([radius * angle.cos(), 0.0, radius * angle.sin()]);
+        let true_anomaly = (i as f32 / SEGMENTS as f32) * TAU;
+        let radius = semi_latus / (1.0 + e * true_anomaly.cos());
+
+        // Position in orbital plane (periapsis at +X)
+        let x_orbital = radius * true_anomaly.cos();
+        let z_orbital = radius * true_anomaly.sin();
+
+        // Transform to 3D space using same method as planet position calculation
+        let pos_3d = physics::transform_orbital_point(
+            x_orbital,
+            z_orbital,
+            orbit_shape.inclination_rad,
+            orbit_shape.long_asc_node_rad,
+            orbit_shape.arg_periapsis_rad,
+        );
+
+        positions.push([pos_3d.x, pos_3d.y, pos_3d.z]);
         normals.push([0.0, 1.0, 0.0]);
-        uvs.push([angle / TAU, 0.5]);
+        uvs.push([true_anomaly / TAU, 0.5]);
         indices.push(i as u32);
         indices.push(((i + 1) % SEGMENTS) as u32);
     }
