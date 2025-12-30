@@ -576,6 +576,8 @@ pub fn handle_solar_system_input(
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
     main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut notifications: ResMut<NotificationQueue>,
+    time: Res<Time>,
 ) {
     // Screenshot feature - F12 or P key
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
@@ -586,7 +588,12 @@ pub fn handle_solar_system_input(
         let screenshots_dir = format!("{}/cosmic_systems_images", home_dir);
 
         if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
-            println!("❌ Failed to create screenshots directory: {}", e);
+            notifications.notifications.push(Notification {
+                message: format!("Failed to create screenshots directory: {}", e),
+                notification_type: NotificationType::Error,
+                created_at: time.elapsed_seconds(),
+                duration: 5.0,
+            });
             return;
         }
 
@@ -599,8 +606,22 @@ pub fn handle_solar_system_input(
 
         // Take screenshot using Bevy's screenshot API
         match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
-            Ok(_) => println!("📸 Screenshot saved to: {}", filename),
-            Err(e) => println!("❌ Failed to save screenshot: {}", e),
+            Ok(_) => {
+                notifications.notifications.push(Notification {
+                    message: format!("Screenshot saved to: {}", filename),
+                    notification_type: NotificationType::Success,
+                    created_at: time.elapsed_seconds(),
+                    duration: 4.0,
+                });
+            }
+            Err(e) => {
+                notifications.notifications.push(Notification {
+                    message: format!("Failed to save screenshot: {}", e),
+                    notification_type: NotificationType::Error,
+                    created_at: time.elapsed_seconds(),
+                    duration: 5.0,
+                });
+            }
         }
     }
     // Time scale controls
@@ -835,7 +856,8 @@ pub fn update_camera_controller(
                         } else {
                             1.0
                         };
-                    let zoom_distance = wheel_event.y * controller.speed * 220.0 * zoom_multiplier;
+                    // Reduced from 220.0 to 50.0 for smoother, more controllable zoom
+                    let zoom_distance = wheel_event.y * controller.speed * 50.0 * zoom_multiplier;
                     let forward = *transform.forward();
                     transform.translation += forward * zoom_distance;
                 }
@@ -1920,4 +1942,83 @@ pub struct AutoInspectState {
     offset: Vec3,
     orbit_angle: f32,     // Cinematic orbit angle
     orbit_elevation: f32, // Vertical orbit component
+}
+
+// System to display notifications as toast-style messages
+pub fn display_notifications(
+    mut contexts: EguiContexts,
+    mut notifications: ResMut<NotificationQueue>,
+    time: Res<Time>,
+) {
+    use bevy_egui::egui;
+
+    let current_time = time.elapsed_seconds();
+    let ctx = contexts.ctx_mut();
+
+    // Remove expired notifications
+    notifications.notifications.retain(|n| {
+        current_time - n.created_at < n.duration
+    });
+
+    // Display each notification
+    let mut y_offset = 80.0; // Start from bottom with some padding
+    for (idx, notification) in notifications.notifications.iter().enumerate() {
+        let remaining_time = notification.duration - (current_time - notification.created_at);
+        let alpha = if remaining_time < 0.5 {
+            // Fade out in the last 0.5 seconds
+            (remaining_time / 0.5 * 255.0) as u8
+        } else {
+            255
+        };
+
+        // Choose colors based on notification type
+        let (bg_color, icon) = match notification.notification_type {
+            NotificationType::Success => (
+                egui::Color32::from_rgba_premultiplied(16, 64, 16, alpha.min(220)),
+                "✓"
+            ),
+            NotificationType::Error => (
+                egui::Color32::from_rgba_premultiplied(64, 16, 16, alpha.min(220)),
+                "✗"
+            ),
+            NotificationType::Info => (
+                egui::Color32::from_rgba_premultiplied(16, 32, 64, alpha.min(220)),
+                "ℹ"
+            ),
+        };
+
+        egui::Window::new(format!("notification_{}", idx))
+            .title_bar(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -y_offset))
+            .frame(egui::Frame {
+                fill: bg_color,
+                rounding: egui::Rounding::same(8.0),
+                stroke: egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha / 3)),
+                inner_margin: egui::Margin::symmetric(16.0, 12.0),
+                outer_margin: egui::Margin::ZERO,
+                shadow: egui::epaint::Shadow {
+                    offset: egui::vec2(0.0, 4.0),
+                    blur: 12.0,
+                    spread: 0.0,
+                    color: egui::Color32::from_rgba_premultiplied(0, 0, 0, (alpha / 2).min(100)),
+                },
+            })
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(icon)
+                            .size(18.0)
+                            .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha))
+                    );
+                    ui.label(
+                        egui::RichText::new(&notification.message)
+                            .size(14.0)
+                            .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha))
+                    );
+                });
+            });
+
+        y_offset += 60.0; // Stack notifications vertically
+    }
 }

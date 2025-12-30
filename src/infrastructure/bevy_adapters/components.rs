@@ -92,3 +92,26 @@ pub struct HoveredPlanet {
     pub name: Option<String>,
     pub info: Option<String>,
 }
+
+// Notification types for user feedback
+#[derive(Clone, Debug)]
+pub enum NotificationType {
+    Success,
+    Error,
+    Info,
+}
+
+// Individual notification message
+#[derive(Clone, Debug)]
+pub struct Notification {
+    pub message: String,
+    pub notification_type: NotificationType,
+    pub created_at: f32, // Time in seconds
+    pub duration: f32,   // How long to display (seconds)
+}
+
+// Resource to manage notification queue
+#[derive(Resource)]
+pub struct NotificationQueue {
+    pub notifications: Vec<Notification>,
+}

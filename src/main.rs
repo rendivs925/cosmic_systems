@@ -9,7 +9,7 @@ pub mod presentation;
 
 use application::startup::*;
 use domain::value_objects::simulation_params::SimulationParameters;
-use infrastructure::bevy_adapters::components::{HoveredPlanet, SelectedPlanet};
+use infrastructure::bevy_adapters::components::{HoveredPlanet, NotificationQueue, SelectedPlanet};
 use infrastructure::bevy_adapters::systems::*;
 
 fn main() {
@@ -52,6 +52,9 @@ fn main() {
             name: None,
             info: None,
         });
+        app.insert_resource(NotificationQueue {
+            notifications: Vec::new(),
+        });
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);
         app.add_systems(Update, update_planet_rotations);
@@ -65,6 +68,7 @@ fn main() {
         app.add_systems(Update, display_navigation_bar);
         app.add_systems(Update, update_planet_selection_visuals);
         app.add_systems(Update, display_hover_info);
+        app.add_systems(Update, display_notifications);
         app.add_systems(Update, update_camera_controller);
         app.add_systems(Update, apply_camera_transform);
         app.add_systems(Update, auto_inspect_selected_planet);
