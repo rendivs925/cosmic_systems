@@ -117,12 +117,17 @@ pub fn setup_space(
         },
         CameraController {
             mode: CameraMode::FreeFlight,
-            speed: 50.0,
+            speed: 5000.0,              // Increased base speed for easier navigation
             sensitivity: 0.0015,
             velocity: Vec3::ZERO,
             target_entity: None,
             orbit_distance: 300.0,
             orbit_angle: 0.0,
+            acceleration: 10.0,         // Smooth acceleration
+            deceleration: 8.0,          // Smooth deceleration
+            adaptive_speed_enabled: true, // Auto-adjust speed based on distance
+            min_speed: 50.0,            // Minimum speed for close-up viewing
+            max_speed: 50000.0,         // Maximum speed for far travel
         },
     ));
 

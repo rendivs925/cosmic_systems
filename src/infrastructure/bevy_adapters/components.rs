@@ -65,6 +65,11 @@ pub struct CameraController {
     pub target_entity: Option<Entity>,
     pub orbit_distance: f32,
     pub orbit_angle: f32,
+    pub acceleration: f32,           // Smooth acceleration
+    pub deceleration: f32,           // Smooth deceleration
+    pub adaptive_speed_enabled: bool, // Auto-adjust speed based on distance
+    pub min_speed: f32,              // Minimum movement speed
+    pub max_speed: f32,              // Maximum movement speed
 }
 
 // Component for selectable objects (planets, etc.)

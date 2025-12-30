@@ -131,7 +131,10 @@ pub fn update_planet_positions(
     for (mut transform, planet_comp) in query.iter_mut() {
         // Distance culling: only update objects within reasonable range of camera
         let distance_to_camera = camera_pos.distance(transform.translation);
-        let max_update_distance = 5000000.0; // Update all objects within 5M units (covers entire solar system including Neptune)
+        // Neptune at ~30 AU * 75000 scale = 2.25M units from Sun
+        // Camera can view from up to 10M+ units away to see entire system
+        // Set to 15M to ensure all objects update even at farthest zoom
+        let max_update_distance = 15000000.0;
 
         if distance_to_camera > max_update_distance {
             // Skip updating distant objects for performance
@@ -500,34 +503,86 @@ pub fn display_navigation_bar(
 pub fn handle_solar_system_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut solar_params: ResMut<SolarSystemParameters>,
+    mut camera_query: Query<(&mut CameraController, &mut Transform)>,
+    selected_planet: Res<SelectedPlanet>,
+    planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
 ) {
     // Time scale controls
     if keyboard.pressed(KeyCode::KeyT) {
         solar_params.time_scale *= 1.1;
-        println!("Time scale: {:.1}x", solar_params.time_scale);
+        println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
     }
     if keyboard.pressed(KeyCode::KeyR) && solar_params.time_scale > 0.1 {
         solar_params.time_scale /= 1.1;
-        println!("Time scale: {:.1}x", solar_params.time_scale);
+        println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
     }
 
     // Reset time scale
     if keyboard.pressed(KeyCode::KeyY) {
         solar_params.time_scale = 1.0;
-        println!("Time scale reset to: {:.1}x", solar_params.time_scale);
+        println!("⏸️  Time scale reset to: {:.1}x", solar_params.time_scale);
     }
 
-    // Toggle orbit visualization (placeholder for future feature)
+    // Toggle orbit visualization
     if keyboard.just_pressed(KeyCode::KeyO) {
         solar_params.show_orbits = !solar_params.show_orbits;
         println!(
-            "Orbit visualization: {}",
+            "🛸 Orbit visualization: {}",
             if solar_params.show_orbits {
                 "ON"
             } else {
                 "OFF"
             }
         );
+    }
+
+    // Quick navigation shortcuts
+    if let Ok((mut controller, mut transform)) = camera_query.get_single_mut() {
+        // GG (press G twice): Return to overview of entire solar system
+        static mut LAST_G_PRESS: Option<std::time::Instant> = None;
+        if keyboard.just_pressed(KeyCode::KeyG) {
+            unsafe {
+                if let Some(last_press) = LAST_G_PRESS {
+                    // If pressed within 0.5 seconds, trigger action
+                    if last_press.elapsed().as_secs_f32() < 0.5 {
+                        transform.translation = Vec3::new(0.0, 120000.0, 1500000.0);
+                        transform.look_at(Vec3::ZERO, Vec3::Y);
+                        controller.velocity = Vec3::ZERO;
+                        controller.speed = 5000.0;
+                        println!("🏠 Returned to solar system overview (gg)");
+                        LAST_G_PRESS = None;
+                    } else {
+                        LAST_G_PRESS = Some(std::time::Instant::now());
+                    }
+                } else {
+                    LAST_G_PRESS = Some(std::time::Instant::now());
+                }
+            }
+        }
+
+        // F key: Focus on selected planet
+        if keyboard.just_pressed(KeyCode::KeyF) {
+            if let Some(entity) = selected_planet.entity {
+                if let Ok((planet_comp, planet_transform)) = planet_query.get(entity) {
+                    let planet_pos = planet_transform.translation();
+                    let radius = physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
+
+                    // Position camera to frame the planet nicely
+                    let distance = (radius * 10.0).max(5000.0).min(500000.0);
+                    let offset = Vec3::new(distance * 0.7, distance * 0.5, distance * 0.7);
+                    transform.translation = planet_pos + offset;
+                    transform.look_at(planet_pos, Vec3::Y);
+                    controller.velocity = Vec3::ZERO;
+
+                    // Adjust speed based on planet size
+                    controller.speed = (radius * 2.0).max(50.0).min(50000.0);
+
+                    println!("🎯 Focused on {}", planet_comp.domain_planet.name);
+                }
+            } else {
+                println!("❌ No planet selected. Click on a planet first!");
+            }
+        }
     }
 }
 
@@ -665,17 +720,25 @@ pub fn update_camera_controller(
             movement -= forward * zoom_speed;
         }
 
-        // Handle mouse wheel for zooming (direct position change, not velocity-based)
+        // Handle mouse wheel for zooming and speed adjustment
         for wheel_event in mouse_wheel.read() {
-            let zoom_multiplier =
-                if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
-                    1.5
-                } else {
-                    1.0
-                };
-            let zoom_distance = wheel_event.y * controller.speed * 220.0 * zoom_multiplier;
-            let forward = *transform.forward();
-            transform.translation += forward * zoom_distance;
+            if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+                // Ctrl+Wheel: Adjust base movement speed
+                let speed_change = wheel_event.y * controller.speed * 0.15;
+                controller.speed = (controller.speed + speed_change).clamp(controller.min_speed, controller.max_speed);
+                println!("Camera speed: {:.0} units/s", controller.speed);
+            } else {
+                // Normal wheel: Zoom in/out
+                let zoom_multiplier =
+                    if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+                        2.0 // Faster zoom with shift
+                    } else {
+                        1.0
+                    };
+                let zoom_distance = wheel_event.y * controller.speed * 220.0 * zoom_multiplier;
+                let forward = *transform.forward();
+                transform.translation += forward * zoom_distance;
+            }
         }
 
         // Apply speed with multiple speed options for better 3D navigation
@@ -693,9 +756,20 @@ pub fn update_camera_controller(
             // This enables smooth, intuitive spaceship-like movement
         }
 
-        // Apply movement to velocity with damping
-        controller.velocity += movement * dt;
-        controller.velocity *= 0.9; // Velocity damping for smooth movement
+        // Smooth acceleration/deceleration for better control
+        let target_velocity = movement;
+        let accel_rate = if target_velocity.length() > controller.velocity.length() {
+            controller.acceleration
+        } else {
+            controller.deceleration
+        };
+
+        controller.velocity = controller.velocity.lerp(target_velocity, dt * accel_rate);
+
+        // Apply damping to stop completely when no input
+        if movement == Vec3::ZERO && controller.velocity.length() < 1.0 {
+            controller.velocity = Vec3::ZERO;
+        }
     }
 }
 
