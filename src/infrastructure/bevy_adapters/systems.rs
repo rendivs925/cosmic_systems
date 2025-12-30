@@ -821,8 +821,9 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
         // Elegant card in right side with comprehensive educational info
         let card_width = 320.0;
         let card_height = (screen_rect.height() * 0.75).min(650.0);
-        let card_x = screen_rect.width() - card_width - 24.0; // More margin from edge
-        let card_y = 16.0;
+        let margin = 32.0; // Comfortable margin from edges
+        let card_x = screen_rect.width() - card_width - margin;
+        let card_y = margin;
 
         egui::Window::new("info_card")
             .title_bar(false)
