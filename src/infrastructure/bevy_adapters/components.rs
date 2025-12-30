@@ -117,3 +117,9 @@ pub struct NotificationQueue {
     pub notifications: Vec<Notification>,
     pub hide_for_screenshot: bool, // Temporarily hide notifications during screenshot
 }
+
+// Resource to track pending screenshot capture
+#[derive(Resource)]
+pub struct ScreenshotState {
+    pub pending: bool, // Screenshot requested, will capture next frame
+}

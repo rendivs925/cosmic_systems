@@ -574,58 +574,14 @@ pub fn handle_solar_system_input(
     mut camera_query: Query<(&mut CameraController, &mut Transform)>,
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
-    mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
-    main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut screenshot_state: ResMut<ScreenshotState>,
     mut notifications: ResMut<NotificationQueue>,
-    time: Res<Time>,
 ) {
     // Screenshot feature - F12 or P key
+    // Request screenshot, will be captured next frame after notifications hide
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
-        // Hide notifications for clean screenshot
         notifications.hide_for_screenshot = true;
-
-        let window_entity = main_window.single();
-
-        // Create screenshots directory in home folder
-        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let screenshots_dir = format!("{}/cosmic_systems_images", home_dir);
-
-        if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
-            notifications.notifications.push(Notification {
-                message: format!("Failed to create screenshots directory: {}", e),
-                notification_type: NotificationType::Error,
-                created_at: time.elapsed_seconds(),
-                duration: 5.0,
-            });
-            return;
-        }
-
-        // Generate filename with timestamp
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let filename = format!("{}/cosmic_systems_{}.png", screenshots_dir, timestamp);
-
-        // Take screenshot using Bevy's screenshot API
-        match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
-            Ok(_) => {
-                notifications.notifications.push(Notification {
-                    message: format!("Screenshot saved to: {}", filename),
-                    notification_type: NotificationType::Success,
-                    created_at: time.elapsed_seconds(),
-                    duration: 4.0,
-                });
-            }
-            Err(e) => {
-                notifications.notifications.push(Notification {
-                    message: format!("Failed to save screenshot: {}", e),
-                    notification_type: NotificationType::Error,
-                    created_at: time.elapsed_seconds(),
-                    duration: 5.0,
-                });
-            }
-        }
+        screenshot_state.pending = true;
     }
     // Time scale controls
     if keyboard.pressed(KeyCode::KeyT) {
@@ -2020,5 +1976,63 @@ pub fn display_notifications(
             });
 
         y_offset += 60.0; // Stack notifications vertically
+    }
+}
+
+// System to capture screenshot on next frame after notifications are hidden
+pub fn take_pending_screenshot(
+    mut screenshot_state: ResMut<ScreenshotState>,
+    mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
+    main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut notifications: ResMut<NotificationQueue>,
+    time: Res<Time>,
+) {
+    if !screenshot_state.pending {
+        return;
+    }
+
+    screenshot_state.pending = false;
+
+    let window_entity = main_window.single();
+
+    // Create screenshots directory in home folder
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let screenshots_dir = format!("{}/cosmic_systems_images", home_dir);
+
+    if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
+        notifications.notifications.push(Notification {
+            message: format!("Failed to create screenshots directory: {}", e),
+            notification_type: NotificationType::Error,
+            created_at: time.elapsed_seconds(),
+            duration: 5.0,
+        });
+        return;
+    }
+
+    // Generate filename with timestamp
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let filename = format!("{}/cosmic_systems_{}.png", screenshots_dir, timestamp);
+
+    // Take screenshot using Bevy's screenshot API
+    match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
+        Ok(_) => {
+            notifications.notifications.push(Notification {
+                message: format!("Screenshot saved to: {}", filename),
+                notification_type: NotificationType::Success,
+                created_at: time.elapsed_seconds(),
+                duration: 4.0,
+            });
+        }
+        Err(e) => {
+            notifications.notifications.push(Notification {
+                message: format!("Failed to save screenshot: {}", e),
+                notification_type: NotificationType::Error,
+                created_at: time.elapsed_seconds(),
+                duration: 5.0,
+            });
+        }
     }
 }
