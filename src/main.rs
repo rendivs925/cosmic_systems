@@ -54,6 +54,7 @@ fn main() {
         });
         app.insert_resource(NotificationQueue {
             notifications: Vec::new(),
+            hide_for_screenshot: false,
         });
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);

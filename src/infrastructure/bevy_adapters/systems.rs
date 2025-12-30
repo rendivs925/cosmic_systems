@@ -581,6 +581,9 @@ pub fn handle_solar_system_input(
 ) {
     // Screenshot feature - F12 or P key
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
+        // Hide notifications for clean screenshot
+        notifications.hide_for_screenshot = true;
+
         let window_entity = main_window.single();
 
         // Create screenshots directory in home folder
@@ -1958,6 +1961,12 @@ pub fn display_notifications(
     time: Res<Time>,
 ) {
     use bevy_egui::egui;
+
+    // Don't display notifications during screenshot capture
+    if notifications.hide_for_screenshot {
+        notifications.hide_for_screenshot = false; // Reset flag after one frame
+        return;
+    }
 
     let current_time = time.elapsed_seconds();
     let ctx = contexts.ctx_mut();

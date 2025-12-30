@@ -115,4 +115,5 @@ pub struct Notification {
 #[derive(Resource)]
 pub struct NotificationQueue {
     pub notifications: Vec<Notification>,
+    pub hide_for_screenshot: bool, // Temporarily hide notifications during screenshot
 }
