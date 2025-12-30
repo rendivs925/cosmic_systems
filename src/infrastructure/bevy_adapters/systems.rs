@@ -131,7 +131,7 @@ pub fn update_planet_positions(
     for (mut transform, planet_comp) in query.iter_mut() {
         // Distance culling: only update objects within reasonable range of camera
         let distance_to_camera = camera_pos.distance(transform.translation);
-        let max_update_distance = 2000000.0; // Update all objects within 2M units (covers entire solar system)
+        let max_update_distance = 5000000.0; // Update all objects within 5M units (covers entire solar system including Neptune)
 
         if distance_to_camera > max_update_distance {
             // Skip updating distant objects for performance
