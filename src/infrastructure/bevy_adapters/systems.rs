@@ -804,105 +804,179 @@ pub fn update_camera_controller(
     }
 }
 
-// System to detect planet hovering for information display
-// System to display premium info cards using EGUI (only for selected bodies)
+// Minimal, aesthetic info card for selected celestial bodies
 pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<SelectedPlanet>) {
     if let Some(name) = &selected_planet.name {
         let ctx = contexts.ctx_mut();
+        let screen_rect = ctx.screen_rect();
 
-        // Create a reasonable-sized floating information card like modern UI cards
-        let screen_height = ctx.screen_rect().height();
-        let screen_width = ctx.screen_rect().width();
-        let card_height = (screen_height * 0.9).clamp(520.0, 1100.0);
-        let card_width = (screen_width * 0.28).clamp(400.0, 520.0);
+        // Compact, elegant card in bottom-right corner
+        let card_width = 280.0;
+        let card_x = screen_rect.width() - card_width - 20.0;
+        let card_y = screen_rect.height() - 180.0; // Above bottom nav bar
 
-        egui::Window::new("")
-            .title_bar(false) // Remove title bar for clean design
+        egui::Window::new("info_card")
+            .title_bar(false)
             .resizable(false)
-            .default_pos([50.0, 50.0])
-            .default_size([card_width, card_height]) // Size to fit more content without scrolling
+            .fixed_pos([card_x, card_y])
+            .fixed_size([card_width, 140.0])
             .frame(egui::Frame {
-                fill: egui::Color32::from_rgba_premultiplied(10, 16, 32, 245), // Deep navy background
-                stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248)), // Cool blue accent
-                rounding: egui::Rounding::same(16.0), // Softer rounded corners
+                fill: egui::Color32::from_rgba_premultiplied(10, 12, 18, 200), // Semi-transparent
+                stroke: egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(60, 80, 120, 100)),
+                rounding: egui::Rounding::same(12.0),
                 shadow: egui::Shadow {
-                    offset: egui::vec2(0.0, 8.0),
-                    blur: 18.0,
+                    offset: egui::vec2(0.0, 4.0),
+                    blur: 12.0,
                     spread: 0.0,
-                    color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 140),
+                    color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 100),
                 },
-                inner_margin: egui::Margin::symmetric(18.0, 14.0), // Roomier padding
+                inner_margin: egui::Margin::symmetric(16.0, 12.0),
                 ..Default::default()
             })
             .show(ctx, |ui| {
-                // Header with celestial body name and icon - perfectly centered
-                ui.vertical_centered(|ui| {
-                    let (icon, header_color) = get_celestial_icon_and_color(name);
-
-                    ui.add_space(6.0); // Compact top spacing
+                // Minimal header with icon and name
+                ui.horizontal(|ui| {
+                    let (icon, color) = get_celestial_icon_and_color(name);
                     ui.label(
                         egui::RichText::new(icon)
-                            .size(36.0) // Appropriate size for card format
-                            .color(header_color),
+                            .size(28.0)
+                            .color(color),
                     );
-                    ui.add_space(6.0); // Compact spacing between icon and title
-                    ui.label(
-                        egui::RichText::new(name)
-                            .size(24.0) // Card-appropriate title size
-                            .color(egui::Color32::WHITE)
-                            .strong(),
-                    );
-                    ui.add_space(12.0); // Reasonable spacing before content
-                });
-
-                // Main information sections with consistent spacing
-                display_celestial_info(ui, name);
-
-                ui.add_space(16.0); // Card-appropriate section spacing
-
-                // Fun facts section with card-appropriate styling
-                ui.group(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(6.0);
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("✨ Interesting Facts")
-                                .size(14.0)
-                                .color(egui::Color32::from_rgb(251, 191, 36)) // Amber
+                            egui::RichText::new(name)
+                                .size(18.0)
+                                .color(egui::Color32::from_rgb(220, 230, 245))
                                 .strong(),
                         );
-                        ui.add_space(8.0);
-                    });
-
-                    display_fun_facts(ui, name);
-
-                    ui.add_space(6.0);
-                });
-
-                ui.add_space(12.0);
-
-                // Exploration status with card-appropriate styling
-                ui.group(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(6.0);
+                        // Subtle subtitle
+                        let subtitle = get_celestial_type(name);
                         ui.label(
-                            egui::RichText::new("🚀 Exploration Status")
-                                .size(14.0)
-                                .color(egui::Color32::from_rgb(34, 197, 94)) // Green
-                                .strong(),
+                            egui::RichText::new(subtitle)
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(120, 140, 170)),
                         );
-                        ui.add_space(8.0);
                     });
-
-                    display_exploration_status(ui, name);
-
-                    ui.add_space(6.0);
                 });
 
+                ui.add_space(10.0);
+                ui.separator();
                 ui.add_space(8.0);
 
-                // Footer with consistent spacing and better visibility
-                ui.add_space(8.0);
+                // Essential info only - compact two-column layout
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        display_compact_info(ui, name, true);
+                    });
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        display_compact_info(ui, name, false);
+                    });
+                });
             });
+    }
+}
+
+// Get celestial body type subtitle
+fn get_celestial_type(name: &str) -> &'static str {
+    match name {
+        "Sun" => "G-type Main Sequence Star",
+        "Mercury" | "Venus" | "Earth" | "Mars" => "Terrestrial Planet",
+        "Jupiter" | "Saturn" => "Gas Giant",
+        "Uranus" | "Neptune" => "Ice Giant",
+        "Moon" | "Phobos" | "Deimos" | "Io" | "Europa" | "Ganymede" | "Callisto" |
+        "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Hyperion" |
+        "Iapetus" | "Miranda" | "Ariel" | "Umbriel" | "Titania" | "Oberon" |
+        "Triton" | "Proteus" | "Nereid" | "Larissa" => "Natural Satellite",
+        _ => "Celestial Body"
+    }
+}
+
+// Display compact info in two columns
+fn display_compact_info(ui: &mut egui::Ui, name: &str, is_left_column: bool) {
+    let label_color = egui::Color32::from_rgb(140, 160, 190);
+    let value_color = egui::Color32::from_rgb(200, 215, 235);
+
+    if is_left_column {
+        // Left column - Type and Distance
+        info_row(ui, "Type", get_body_type_short(name), label_color, value_color);
+        info_row(ui, "Distance", get_distance_from_sun(name), label_color, value_color);
+    } else {
+        // Right column - Moons and Day length
+        if is_planet(name) {
+            info_row(ui, "Moons", &get_moon_count(name).to_string(), label_color, value_color);
+        }
+        info_row(ui, "Day", get_day_length(name), label_color, value_color);
+    }
+}
+
+// Compact info row
+fn info_row(ui: &mut egui::Ui, label: &str, value: &str, label_color: egui::Color32, value_color: egui::Color32) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).size(10.0).color(label_color));
+        ui.label(egui::RichText::new(value).size(11.0).color(value_color));
+    });
+}
+
+fn get_body_type_short(name: &str) -> &'static str {
+    match name {
+        "Sun" => "⭐ Star",
+        "Mercury" | "Venus" | "Earth" | "Mars" => "🪨 Rocky",
+        "Jupiter" | "Saturn" => "💨 Gas",
+        "Uranus" | "Neptune" => "❄️ Ice",
+        _ => "🌙 Moon"
+    }
+}
+
+fn get_distance_from_sun(name: &str) -> &'static str {
+    match name {
+        "Sun" => "0 AU",
+        "Mercury" => "0.39 AU",
+        "Venus" => "0.72 AU",
+        "Earth" | "Moon" => "1.00 AU",
+        "Mars" | "Phobos" | "Deimos" => "1.52 AU",
+        "Jupiter" | "Io" | "Europa" | "Ganymede" | "Callisto" => "5.20 AU",
+        "Saturn" | "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Hyperion" | "Iapetus" => "9.54 AU",
+        "Uranus" | "Miranda" | "Ariel" | "Umbriel" | "Titania" | "Oberon" => "19.2 AU",
+        "Neptune" | "Triton" | "Proteus" | "Nereid" | "Larissa" => "30.1 AU",
+        _ => "Unknown"
+    }
+}
+
+fn is_planet(name: &str) -> bool {
+    matches!(name, "Mercury" | "Venus" | "Earth" | "Mars" | "Jupiter" | "Saturn" | "Uranus" | "Neptune")
+}
+
+fn get_moon_count(name: &str) -> u32 {
+    match name {
+        "Mercury" | "Venus" => 0,
+        "Earth" => 1,
+        "Mars" => 2,
+        "Jupiter" => 95,
+        "Saturn" => 146,
+        "Uranus" => 28,
+        "Neptune" => 16,
+        _ => 0
+    }
+}
+
+fn get_day_length(name: &str) -> &'static str {
+    match name {
+        "Sun" => "~25d",
+        "Mercury" => "59d",
+        "Venus" => "243d",
+        "Earth" | "Moon" => "24h",
+        "Mars" => "24.6h",
+        "Jupiter" => "10h",
+        "Saturn" => "10.7h",
+        "Uranus" => "17.2h",
+        "Neptune" => "16h",
+        "Io" => "42h",
+        "Europa" => "85h",
+        "Titan" => "382h",
+        "Triton" => "141h",
+        _ => "Varies"
     }
 }
 
