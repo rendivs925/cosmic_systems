@@ -30,10 +30,15 @@ impl SolarSystemParameters {
     pub fn for_visualization() -> Self {
         Self {
             sun_radius_km: 696342.0,
-            scale_factor: 75000.0, // Tighter spacing: 1 AU = 75k units so planets feel closer
+            scale_factor: 75000.0, // 1 AU = 75,000 simulation units
             time_scale: 3000.0,    // Slower time for calmer default motion
             show_orbits: true,
-            planet_scale: 1300.0, // Still large but a little smaller
+            // TRUE SIZE RELATIONSHIPS between planets are preserved:
+            // - Sun is 109x larger than Earth
+            // - Jupiter is 28.6x larger than Earth
+            // But we scale ALL planets up together for visibility against orbits
+            // (In reality, planets would be invisible dots at true orbital scale)
+            planet_scale: 80.0, // Makes planets visible while keeping size ratios accurate
         }
     }
 

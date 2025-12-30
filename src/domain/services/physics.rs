@@ -458,27 +458,24 @@ pub fn calculate_visual_radius(planet: &Planet, solar_params: &SolarSystemParame
     let mercury_radius_km = 2439.7;
     let relative_to_mercury = astronomical_radius_km / mercury_radius_km;
 
-    // Apply logarithmic scaling to make large objects manageable while preserving proportions
-    // This ensures Mercury is visible but Sun doesn't overwhelm the scene
-    let scaled_relative = if astronomical_radius_km > mercury_radius_km * 10.0 {
-        // For large objects (planets and Sun), use logarithmic scaling
-        (relative_to_mercury.ln() * 2.0).max(1.0)
-    } else {
-        // For smaller objects (moons), maintain more linear scaling
-        relative_to_mercury.max(0.1)
-    };
+    // Use TRUE mathematical proportions - no logarithmic scaling
+    // This preserves real-world size relationships:
+    // - Jupiter will be ~28.6x larger than Earth
+    // - Sun will be ~109x larger than Earth
+    // - All sizes are mathematically accurate to real-world data
 
     // Apply final scaling for visibility in the simulation
-    scaled_relative * solar_params.planet_scale
+    relative_to_mercury * solar_params.planet_scale
 }
 
 /// Calculate the visual radius for the Sun with appropriate scaling
 pub fn calculate_sun_visual_radius(solar_params: &SolarSystemParameters) -> f32 {
-    // Sun radius is ~696,000 km, Jupiter is ~71,000 km
-    // Sun is about 9.7 times larger than Jupiter
-    // For visualization, make it reasonably larger than Jupiter but not overwhelming
-    let jupiter_visual_radius = calculate_visual_radius(&Planet::create_jupiter(), solar_params);
-    jupiter_visual_radius * 2.5 // Sun appears 2.5x larger than Jupiter visually
+    // Sun radius is ~696,340 km
+    // Use the same TRUE mathematical proportions as planets
+    // Sun will be ~285x larger than Mercury, ~109x larger than Earth
+    // This preserves the real-world dominance of the Sun in the solar system
+    let sun = Planet::create_sun();
+    calculate_visual_radius(&sun, solar_params)
 }
 
 /// Get the astronomical unit in simulation units
