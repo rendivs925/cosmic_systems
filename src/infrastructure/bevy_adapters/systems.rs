@@ -624,8 +624,11 @@ pub fn update_camera_controller(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
+    mut contexts: EguiContexts,
     mut query: Query<(&mut CameraController, &mut Transform)>,
 ) {
+    // Check if egui is using the mouse (hovering over UI)
+    let ui_has_pointer = contexts.ctx_mut().is_pointer_over_area();
     for (mut controller, mut transform) in query.iter_mut() {
         if controller.mode != CameraMode::FreeFlight {
             continue; // Only handle input for free flight mode for now
@@ -751,25 +754,30 @@ pub fn update_camera_controller(
             movement -= forward * zoom_speed;
         }
 
-        // Handle mouse wheel for zooming and speed adjustment
-        for wheel_event in mouse_wheel.read() {
-            if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
-                // Ctrl+Wheel: Adjust base movement speed
-                let speed_change = wheel_event.y * controller.speed * 0.15;
-                controller.speed = (controller.speed + speed_change).clamp(controller.min_speed, controller.max_speed);
-                println!("Camera speed: {:.0} units/s", controller.speed);
-            } else {
-                // Normal wheel: Zoom in/out
-                let zoom_multiplier =
-                    if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
-                        2.0 // Faster zoom with shift
-                    } else {
-                        1.0
-                    };
-                let zoom_distance = wheel_event.y * controller.speed * 220.0 * zoom_multiplier;
-                let forward = *transform.forward();
-                transform.translation += forward * zoom_distance;
+        // Handle mouse wheel for zooming and speed adjustment (only if not over UI)
+        if !ui_has_pointer {
+            for wheel_event in mouse_wheel.read() {
+                if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+                    // Ctrl+Wheel: Adjust base movement speed
+                    let speed_change = wheel_event.y * controller.speed * 0.15;
+                    controller.speed = (controller.speed + speed_change).clamp(controller.min_speed, controller.max_speed);
+                    println!("Camera speed: {:.0} units/s", controller.speed);
+                } else {
+                    // Normal wheel: Zoom in/out
+                    let zoom_multiplier =
+                        if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+                            2.0 // Faster zoom with shift
+                        } else {
+                            1.0
+                        };
+                    let zoom_distance = wheel_event.y * controller.speed * 220.0 * zoom_multiplier;
+                    let forward = *transform.forward();
+                    transform.translation += forward * zoom_distance;
+                }
             }
+        } else {
+            // Clear wheel events when over UI to prevent them from being processed
+            mouse_wheel.clear();
         }
 
         // Apply speed with multiple speed options for better 3D navigation
@@ -813,7 +821,7 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
         // Elegant card in right side with comprehensive educational info
         let card_width = 320.0;
         let card_height = (screen_rect.height() * 0.75).min(650.0);
-        let card_x = screen_rect.width() - card_width - 16.0;
+        let card_x = screen_rect.width() - card_width - 24.0; // More margin from edge
         let card_y = 16.0;
 
         egui::Window::new("info_card")
