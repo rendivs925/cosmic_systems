@@ -292,8 +292,8 @@ pub fn setup_space(
                     );
                     let orbit_base_color = planet.color;
                     let orbit_material = materials.add(StandardMaterial {
-                        base_color: orbit_base_color.with_alpha(0.22),
-                        emissive: orbit_emissive(orbit_base_color, 0.45),
+                        base_color: orbit_base_color.with_alpha(0.35), // More visible
+                        emissive: orbit_emissive(orbit_base_color, 0.8), // Stronger glow
                         unlit: true,
                         alpha_mode: AlphaMode::Blend,
                         double_sided: true,
@@ -338,8 +338,8 @@ pub fn setup_space(
                 );
                 let orbit_base_color = planet.color;
                 let orbit_material = materials.add(StandardMaterial {
-                    base_color: orbit_base_color.with_alpha(0.25),
-                    emissive: orbit_emissive(orbit_base_color, 0.5),
+                    base_color: orbit_base_color.with_alpha(0.30), // More visible
+                    emissive: orbit_emissive(orbit_base_color, 0.7), // Stronger glow
                     unlit: true,
                     alpha_mode: AlphaMode::Blend,
                     double_sided: true,

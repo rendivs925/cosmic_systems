@@ -196,11 +196,12 @@ pub fn update_orbit_visuals(
         // This ensures moons follow their orbital paths exactly
 
         if let Some(material) = materials.get_mut(&orbit.material) {
-            let pulse = 0.5 + 0.5 * (wobble_phase * 0.6).sin();
-            let alpha = (0.12 + 0.18 * pulse).clamp(0.08, 0.35);
+            // Smooth, slow pulsing for aesthetic effect
+            let pulse = 0.5 + 0.5 * (wobble_phase * 0.4).sin();
+            let alpha = (0.25 + 0.15 * pulse).clamp(0.20, 0.45); // More visible, smoother pulse
             material.base_color = orbit.base_color.with_alpha(alpha);
             let linear: LinearRgba = orbit.base_color.into();
-            let glow = 0.35 + 0.4 * pulse;
+            let glow = 0.6 + 0.35 * pulse; // Stronger base glow with subtle pulse
             material.emissive = LinearRgba::new(
                 linear.red * glow,
                 linear.green * glow,
@@ -459,15 +460,33 @@ pub fn display_navigation_bar(
     let ctx = contexts.ctx_mut();
     let mut selection_changed = false;
 
-    egui::TopBottomPanel::top("celestial_nav")
+    // Minimal, aesthetic bottom panel with transparency
+    egui::TopBottomPanel::bottom("celestial_nav")
         .resizable(false)
+        .frame(egui::Frame {
+            fill: egui::Color32::from_rgba_premultiplied(10, 10, 15, 180), // Dark, semi-transparent
+            inner_margin: egui::Margin::symmetric(12.0, 8.0),
+            ..Default::default()
+        })
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Navigate:");
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // Minimal label with subtle styling
+                ui.label(
+                    egui::RichText::new("🌌")
+                        .size(14.0)
+                        .color(egui::Color32::from_rgb(120, 140, 180))
+                );
+
+                ui.separator();
+
+                // Compact horizontal scroll for planet selection
                 egui::ScrollArea::horizontal()
                     .id_source("celestial_nav_scroll")
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0; // Tighter spacing
+
                             for name in ordered_names {
                                 if !name_to_entity.contains_key(name) {
                                     continue;
@@ -477,7 +496,19 @@ pub fn display_navigation_bar(
                                     .as_ref()
                                     .map(|selected_name| selected_name == name)
                                     .unwrap_or(false);
-                                let button = egui::SelectableLabel::new(selected, name);
+
+                                // Aesthetic button styling
+                                let button_text = egui::RichText::new(name).size(11.0);
+                                let button = if selected {
+                                    egui::Button::new(button_text)
+                                        .fill(egui::Color32::from_rgb(40, 60, 100))
+                                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 120, 200)))
+                                } else {
+                                    egui::Button::new(button_text)
+                                        .fill(egui::Color32::from_rgba_premultiplied(20, 25, 35, 150))
+                                        .stroke(egui::Stroke::NONE)
+                                };
+
                                 if ui.add(button).clicked() {
                                     if let Some(entity) = name_to_entity.get(name) {
                                         selected_planet.entity = Some(*entity);
@@ -1751,38 +1782,60 @@ pub fn auto_inspect_selected_planet(
         physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
     };
 
-    let min_distance = (planet_radius * 3.0).max(2000.0);
-    let max_distance = (planet_radius * 8.0).max(min_distance + 500.0);
     let target_distance = planet_radius * 5.0;
-
     let planet_pos = planet_transform.translation();
-    let camera_pos = camera_transform.translation;
-    let current_offset = camera_pos - planet_pos;
-    let current_distance = current_offset.length();
 
-    if state.selected != Some(selected_entity) || state.offset == Vec3::ZERO {
+    // Initialize or reset state when selection changes
+    if state.selected != Some(selected_entity) {
         state.selected = Some(selected_entity);
-        state.offset = if current_distance > 0.0 {
-            current_offset
-        } else {
-            *camera_transform.forward() * target_distance
-        };
+        state.orbit_angle = 0.0;
+        // Start with a nice 3/4 view angle
+        state.orbit_elevation = 0.3; // 30 degrees up
     }
 
-    let offset_distance = state.offset.length();
-    if offset_distance < min_distance || offset_distance > max_distance {
-        let dir = normalized_or_zero(state.offset);
-        state.offset = dir * target_distance;
-    }
+    // Cinematic slow orbit around the planet for aesthetic viewing
+    state.orbit_angle += time.delta_seconds() * 0.15; // Slow orbit
+
+    // Get aesthetic viewing angle based on planet type
+    let (orbit_distance, elevation_offset) = get_aesthetic_view_params(&planet_comp.domain_planet.name);
+    let actual_distance = target_distance * orbit_distance;
+    let elevation = state.orbit_elevation + elevation_offset;
+
+    // Calculate cinematic orbit position (3/4 view with elevation)
+    let horizontal = Vec3::new(
+        state.orbit_angle.cos() * actual_distance,
+        0.0,
+        state.orbit_angle.sin() * actual_distance,
+    );
+    let elevated = horizontal + Vec3::Y * (actual_distance * elevation);
+    state.offset = elevated;
 
     let target_pos = planet_pos + state.offset;
-    let lerp_factor = 1.0 - (-3.5 * time.delta_seconds()).exp();
+    let lerp_factor = 1.0 - (-2.5 * time.delta_seconds()).exp(); // Smoother transitions
     camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
+
+    // Look at planet center for perfect framing
     camera_transform.look_at(planet_pos, Vec3::Y);
+}
+
+// Get aesthetic viewing parameters for different celestial bodies
+fn get_aesthetic_view_params(name: &str) -> (f32, f32) {
+    // Returns (distance_multiplier, elevation_offset)
+    match name {
+        "Sun" => (1.2, 0.2),          // Further back, slightly elevated for the massive sun
+        "Saturn" => (1.15, 0.3),      // Extra elevation to showcase rings
+        "Jupiter" => (1.1, 0.25),     // Show off the gas giant with nice elevation
+        "Earth" | "Mars" => (0.95, 0.35), // Closer, higher angle for detail
+        "Moon" | "Io" | "Europa" | "Titan" | "Triton" => (0.9, 0.4), // Intimate moon views
+        "Neptune" | "Uranus" => (1.0, 0.3), // Ice giants with good elevation
+        _ => (1.0, 0.3), // Default: standard distance, nice 3/4 view
+    }
 }
 
 #[derive(Default)]
 pub struct AutoInspectState {
     selected: Option<Entity>,
     offset: Vec3,
+    orbit_angle: f32,     // Cinematic orbit angle
+    orbit_elevation: f32, // Vertical orbit component
 }
