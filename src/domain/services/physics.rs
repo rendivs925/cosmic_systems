@@ -3,7 +3,6 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::SimulationParameters;
 use bevy::math::Vec3;
-use bevy::prelude::Quat;
 
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
@@ -49,13 +48,33 @@ pub fn calculate_planet_position(
     let angle = 2.0 * std::f32::consts::PI * time_days / planet.orbital_period_days;
 
     let relative_pos = if planet.parent_entity.is_some() {
-        // Moons keep circular orbits around their parent for simplicity.
-        let distance = calculate_orbit_radius_units(planet, solar_params);
-        let mut pos = Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin());
-        if let Some(inclination_rad) = moon_orbit_inclination_rad(&planet.name) {
-            pos = Quat::from_rotation_x(inclination_rad) * pos;
+        // Moons - use real orbital elements for accurate position calculation
+        if let Some(elements) = get_moon_orbital_elements(&planet.name) {
+            let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
+            let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
+            let eccentric_anomaly = solve_kepler(mean_anomaly, elements.eccentricity);
+            let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
+            let radius_au = elements.semi_major_axis_au
+                * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
+            let r = solar_params.au_to_units(radius_au) * 500.0; // Moon scale factor
+            let arg = elements.arg_periapsis_rad + true_anomaly;
+            let cos_omega = elements.long_asc_node_rad.cos();
+            let sin_omega = elements.long_asc_node_rad.sin();
+            let cos_i = elements.inclination_rad.cos();
+            let sin_i = elements.inclination_rad.sin();
+            let cos_arg = arg.cos();
+            let sin_arg = arg.sin();
+
+            Vec3::new(
+                r * (cos_omega * cos_arg - sin_omega * sin_arg * cos_i),
+                r * (sin_arg * sin_i),
+                r * (sin_omega * cos_arg + cos_omega * sin_arg * cos_i),
+            )
+        } else {
+            // Fallback to simple circular orbit for moons without defined elements
+            let distance = calculate_orbit_radius_units(planet, solar_params);
+            Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
         }
-        pos
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
         let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
@@ -114,15 +133,27 @@ pub struct OrbitShape {
 
 pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) -> OrbitShape {
     if planet.parent_entity.is_some() {
-        let inclination_rad = moon_orbit_inclination_rad(&planet.name).unwrap_or(0.0);
-        OrbitShape {
-            semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
-            eccentricity: 0.0,
-            inclination_rad,
-            long_asc_node_rad: 0.0,
-            arg_periapsis_rad: 0.0,
+        // Moon - use real orbital elements if available
+        if let Some(elements) = get_moon_orbital_elements(&planet.name) {
+            OrbitShape {
+                semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au) * 500.0,
+                eccentricity: elements.eccentricity,
+                inclination_rad: elements.inclination_rad,
+                long_asc_node_rad: elements.long_asc_node_rad,
+                arg_periapsis_rad: elements.arg_periapsis_rad,
+            }
+        } else {
+            // Fallback for moons without defined elements
+            OrbitShape {
+                semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
+                eccentricity: 0.0,
+                inclination_rad: 0.0,
+                long_asc_node_rad: 0.0,
+                arg_periapsis_rad: 0.0,
+            }
         }
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
+        // Planet - use real orbital elements
         OrbitShape {
             semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au),
             eccentricity: elements.eccentricity,
@@ -131,6 +162,7 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
             arg_periapsis_rad: elements.arg_periapsis_rad,
         }
     } else {
+        // Fallback for bodies without defined elements
         OrbitShape {
             semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
             eccentricity: 0.0,
@@ -141,11 +173,108 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
     }
 }
 
-fn moon_orbit_inclination_rad(name: &str) -> Option<f32> {
+// Real-world orbital elements for major moons
+fn get_moon_orbital_elements(name: &str) -> Option<OrbitalElements> {
+    // Orbital elements relative to planet's equator (degrees)
+    // Sources: NASA planetary fact sheets, JPL horizons
     match name {
-        "Moon" => Some(5.145_f32.to_radians()),
+        // Earth
+        "Moon" => Some(moon_elements_from_degrees(
+            0.002569, 0.0549, 5.145, 0.0, 318.15, 135.27,
+        )),
+
+        // Mars
+        "Phobos" => Some(moon_elements_from_degrees(
+            0.000063, 0.0151, 1.08, 0.0, 0.0, 0.0,
+        )),
+        "Deimos" => Some(moon_elements_from_degrees(
+            0.000157, 0.0002, 1.79, 0.0, 0.0, 0.0,
+        )),
+
+        // Jupiter (Galilean moons)
+        "Io" => Some(moon_elements_from_degrees(
+            0.002819, 0.0041, 0.05, 0.0, 0.0, 0.0,
+        )),
+        "Europa" => Some(moon_elements_from_degrees(
+            0.004485, 0.0094, 0.47, 0.0, 0.0, 0.0,
+        )),
+        "Ganymede" => Some(moon_elements_from_degrees(
+            0.007155, 0.0013, 0.20, 0.0, 0.0, 0.0,
+        )),
+        "Callisto" => Some(moon_elements_from_degrees(
+            0.012585, 0.0074, 0.51, 0.0, 0.0, 0.0,
+        )),
+
+        // Saturn
+        "Mimas" => Some(moon_elements_from_degrees(
+            0.001239, 0.0196, 1.53, 0.0, 0.0, 0.0,
+        )),
+        "Enceladus" => Some(moon_elements_from_degrees(
+            0.001590, 0.0047, 0.00, 0.0, 0.0, 0.0,
+        )),
+        "Tethys" => Some(moon_elements_from_degrees(
+            0.001969, 0.0001, 1.12, 0.0, 0.0, 0.0,
+        )),
+        "Dione" => Some(moon_elements_from_degrees(
+            0.002522, 0.0022, 0.02, 0.0, 0.0, 0.0,
+        )),
+        "Rhea" => Some(moon_elements_from_degrees(
+            0.003521, 0.0010, 0.35, 0.0, 0.0, 0.0,
+        )),
+        "Titan" => Some(moon_elements_from_degrees(
+            0.008168, 0.0288, 0.33, 0.0, 0.0, 0.0,
+        )),
+        "Hyperion" => Some(moon_elements_from_degrees(
+            0.009893, 0.0274, 0.43, 0.0, 0.0, 0.0,
+        )),
+        "Iapetus" => Some(moon_elements_from_degrees(
+            0.023781, 0.0286, 15.47, 0.0, 0.0, 0.0,
+        )),
+
+        // Uranus
+        "Miranda" => Some(moon_elements_from_degrees(
+            0.000867, 0.0013, 4.34, 0.0, 0.0, 0.0,
+        )),
+        "Ariel" => Some(moon_elements_from_degrees(
+            0.001276, 0.0012, 0.26, 0.0, 0.0, 0.0,
+        )),
+        "Umbriel" => Some(moon_elements_from_degrees(
+            0.001778, 0.0039, 0.13, 0.0, 0.0, 0.0,
+        )),
+        "Titania" => Some(moon_elements_from_degrees(
+            0.002914, 0.0011, 0.34, 0.0, 0.0, 0.0,
+        )),
+        "Oberon" => Some(moon_elements_from_degrees(
+            0.003898, 0.0014, 0.07, 0.0, 0.0, 0.0,
+        )),
+
+        // Neptune
+        "Triton" => Some(moon_elements_from_degrees(
+            0.002371, 0.0000, 156.87, 0.0, 0.0, 0.0, // Retrograde orbit!
+        )),
+        "Proteus" => Some(moon_elements_from_degrees(
+            0.000787, 0.0005, 0.55, 0.0, 0.0, 0.0,
+        )),
+        "Nereid" => Some(moon_elements_from_degrees(
+            0.036915, 0.7512, 7.23, 0.0, 0.0, 0.0, // Highly eccentric!
+        )),
+        "Larissa" => Some(moon_elements_from_degrees(
+            0.000489, 0.0014, 0.20, 0.0, 0.0, 0.0,
+        )),
+
         _ => None,
     }
+}
+
+fn moon_elements_from_degrees(
+    a_au: f32,
+    e: f32,
+    i_deg: f32,
+    long_asc_node_deg: f32,
+    long_peri_deg: f32,
+    mean_longitude_deg: f32,
+) -> OrbitalElements {
+    elements_from_degrees(a_au, e, i_deg, long_asc_node_deg, long_peri_deg, mean_longitude_deg)
 }
 
 struct OrbitalElements {
