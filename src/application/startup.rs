@@ -378,31 +378,33 @@ pub fn setup_space(
             let ring_inner_radius = visual_radius * 1.6;
             let ring_texture = load_texture(&asset_server, get_ring_texture_path(&planet.name));
 
-            // Realistic ring material - bright and visible with texture details
-            commands.spawn((
-                PbrBundle {
-                    mesh: create_ring_mesh(&mut meshes, ring_inner_radius, ring_outer_radius),
-                    material: materials.add(StandardMaterial {
-                        base_color_texture: ring_texture,
-                        base_color: Color::srgba(1.5, 1.4, 1.2, 1.0), // Brightened to show texture clearly
-                        metallic: 0.0,                    // Non-metallic (ice particles)
-                        reflectance: 0.8,                 // High reflectance for icy look
-                        perceptual_roughness: 0.2,        // Smooth ice surface
-                        emissive: Color::srgb(0.3, 0.25, 0.18).into(), // Add glow to make visible
-                        alpha_mode: AlphaMode::Blend,     // Alpha blending for transparent gaps
-                        double_sided: true,
-                        cull_mode: None,                  // Render both sides
-                        unlit: false,                     // Use lighting for depth
+            // Spawn rings as child of Saturn so they follow the planet
+            commands.entity(planet_entity).with_children(|parent| {
+                parent.spawn((
+                    PbrBundle {
+                        mesh: create_ring_mesh(&mut meshes, ring_inner_radius, ring_outer_radius),
+                        material: materials.add(StandardMaterial {
+                            base_color_texture: ring_texture,
+                            base_color: Color::srgba(1.5, 1.4, 1.2, 1.0), // Brightened to show texture clearly
+                            metallic: 0.0,                    // Non-metallic (ice particles)
+                            reflectance: 0.8,                 // High reflectance for icy look
+                            perceptual_roughness: 0.2,        // Smooth ice surface
+                            emissive: Color::srgb(0.3, 0.25, 0.18).into(), // Add glow to make visible
+                            alpha_mode: AlphaMode::Blend,     // Alpha blending for transparent gaps
+                            double_sided: true,
+                            cull_mode: None,                  // Render both sides
+                            unlit: false,                     // Use lighting for depth
+                            ..default()
+                        }),
+                        transform: Transform::default(),  // Relative to parent (Saturn)
                         ..default()
-                    }),
-                    transform: Transform::from_translation(initial_position),
-                    ..default()
-                },
-                Selectable {
-                    name: "Saturn Rings".to_string(),
-                    selected: false,
-                },
-            ));
+                    },
+                    Selectable {
+                        name: "Saturn Rings".to_string(),
+                        selected: false,
+                    },
+                ));
+            });
         }
 
         if let Some(clouds) = get_cloud_layer_config(&planet.name) {
