@@ -712,6 +712,7 @@ pub fn update_camera_controller(
     mut mouse_wheel: EventReader<MouseWheel>,
     mut contexts: EguiContexts,
     mut query: Query<(&mut CameraController, &mut Transform)>,
+    mut notifications: ResMut<NotificationQueue>,
 ) {
     // Check if egui is using the mouse (hovering over UI)
     let ui_has_pointer = contexts.ctx_mut().is_pointer_over_area();
@@ -852,7 +853,14 @@ pub fn update_camera_controller(
                     // Shift+Wheel: Adjust zoom sensitivity
                     let sensitivity_change = wheel_event.y * 5.0;
                     controller.zoom_sensitivity = (controller.zoom_sensitivity + sensitivity_change).clamp(1.0, 500.0);
-                    println!("Zoom sensitivity: {:.1}", controller.zoom_sensitivity);
+
+                    // Show notification with current zoom sensitivity
+                    notifications.notifications.push(Notification {
+                        message: format!("Zoom Sensitivity: {:.1}", controller.zoom_sensitivity),
+                        notification_type: NotificationType::Info,
+                        created_at: time.elapsed_seconds(),
+                        duration: 2.0,
+                    });
                 } else {
                     // Normal wheel: Zoom in/out
                     let zoom_distance = wheel_event.y * controller.speed * controller.zoom_sensitivity;
@@ -904,16 +912,16 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
         let screen_rect = ctx.screen_rect();
 
         // Elegant card in right side with comprehensive educational info
-        let card_width = 320.0;
-        let card_height = (screen_rect.height() * 0.75).min(650.0);
-        let margin = 20.0; // Margin from edges
+        let card_width = 380.0; // Fixed width for consistent layout
+        let margin = 20.0; // Margin from edges (same for all sides)
+        let max_height = screen_rect.height() - (margin * 2.0); // Leave space for top and bottom margins
 
         egui::Window::new("info_card")
             .title_bar(false)
             .resizable(false)
-            .anchor(egui::Align2::RIGHT_TOP, [-margin, margin]) // Use anchor instead
-            .default_width(card_width)
-            .default_height(card_height)
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-margin, margin)) // Right margin and top margin
+            .fixed_size(egui::vec2(card_width, max_height)) // Fixed width, max height
+            .vscroll(false) // Disable window-level vertical scroll
             .frame(egui::Frame {
                 fill: egui::Color32::from_rgba_premultiplied(8, 10, 16, 220), // Semi-transparent dark
                 stroke: egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(50, 70, 110, 120)),
@@ -957,9 +965,10 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
                 ui.separator();
                 ui.add_space(10.0);
 
-                // Scrollable content area for educational information
+                // Scrollable content area - auto-sizes to content, scrolls only when needed
                 egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
+                    .auto_shrink([false, true]) // Shrink vertically to content
+                    .max_height(max_height - 100.0) // Reserve space for header
                     .show(ui, |ui| {
                         // Physical characteristics section
                         section_header(ui, "📊 Physical Characteristics");
