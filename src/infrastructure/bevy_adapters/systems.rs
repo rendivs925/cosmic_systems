@@ -852,7 +852,7 @@ pub fn update_camera_controller(
                 } else if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
                     // Shift+Wheel: Adjust zoom sensitivity
                     let sensitivity_change = wheel_event.y * 5.0;
-                    controller.zoom_sensitivity = (controller.zoom_sensitivity + sensitivity_change).clamp(1.0, 500.0);
+                    controller.zoom_sensitivity = (controller.zoom_sensitivity + sensitivity_change).clamp(0.1, 500.0);
 
                     // Show notification with current zoom sensitivity
                     notifications.notifications.push(Notification {
