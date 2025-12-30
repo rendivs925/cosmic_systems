@@ -1,8 +1,8 @@
-# Cosmic Frontier Simulator - Architecture Documentation
+# Cosmic System - Architecture Documentation
 
 ## Overview
 
-The Cosmic Frontier Simulator (CFSim) is built using Domain-Driven Design (DDD) combined with Clean Architecture principles. This ensures a scalable, maintainable, and testable codebase that can evolve with the project's ambitious goals of simulating speculative physics and advanced space operations.
+The Cosmic System is built using Domain-Driven Design (DDD) combined with Clean Architecture principles. This ensures a scalable, maintainable, and testable codebase that can evolve with the project's ambitious goals of simulating speculative physics and advanced space operations.
 
 ## Architectural Principles
 
@@ -19,7 +19,7 @@ The Cosmic Frontier Simulator (CFSim) is built using Domain-Driven Design (DDD) 
 ## Layer Structure
 
 ```
-cosmic_frontier_simulator/
+cosmic_systems/
 ├── src/
 │   ├── domain/           # Business Logic Layer
 │   ├── application/      # Use Cases Layer

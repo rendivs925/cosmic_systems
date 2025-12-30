@@ -1,10 +1,10 @@
-# cosmic_frontier_simulator
+# cosmic_systems
 
 [![Rust](https://img.shields.io/badge/Rust-1.75+-orange?logo=rust)](https://www.rust-lang.org/)
 [![Bevy](https://img.shields.io/badge/Bevy-0.14-blue?logo=bevy)](https://bevyengine.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Cosmic Frontier Simulator (CFSim)** – Rust + Bevy simulation platform for speculative physics and advanced space operations. Build autonomous spacecraft for satellite rendezvous and tethering, explore anti-gravity propulsion, zero-point energy, Casimir effects, and AI-driven debris removal. Simulate warp drives and quantum phenomena in immersive 3D.
+**Cosmic System** – Rust + Bevy simulation platform for speculative physics and advanced space operations. Build autonomous spacecraft for satellite rendezvous and tethering, explore anti-gravity propulsion, zero-point energy, Casimir effects, and AI-driven debris removal. Simulate warp drives and quantum phenomena in immersive 3D.
 
 ## Features
 - Autonomous spacecraft fleets with AI-driven rendezvous, tethering, and servicing of satellites
@@ -29,8 +29,8 @@ See [docs/architecture.md](docs/architecture.md) for detailed documentation.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/rendivs925/cosmic_frontier_simulator.git
-   cd cosmic_frontier_simulator
+    git clone https://github.com/rendivs925/cosmic_systems.git
+    cd cosmic_systems
    ```
 
 2. **Build and run**
