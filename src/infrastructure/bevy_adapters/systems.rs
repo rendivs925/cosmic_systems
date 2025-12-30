@@ -227,6 +227,20 @@ pub fn update_moon_orbit_positions(
     }
 }
 
+// System to toggle orbit visibility based on show_orbits parameter
+pub fn update_orbit_visibility(
+    solar_params: Res<SolarSystemParameters>,
+    mut orbit_query: Query<&mut Visibility, With<OrbitComponent>>,
+) {
+    for mut visibility in orbit_query.iter_mut() {
+        *visibility = if solar_params.show_orbits {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
 // System to add dynamic specular reflection response for planet materials
 pub fn update_planet_reflections(
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -481,10 +495,9 @@ pub fn display_navigation_bar(
                 ui.separator();
 
                 // Orbit visibility toggle button
-                let orbit_icon = if solar_params.show_orbits { "👁" } else { "👁‍🗨" };
                 let orbit_text = if solar_params.show_orbits { "Hide Orbits" } else { "Show Orbits" };
                 let button = egui::Button::new(
-                    egui::RichText::new(format!("{} {}", orbit_icon, orbit_text)).size(11.0)
+                    egui::RichText::new(orbit_text).size(11.0)
                 )
                 .fill(if solar_params.show_orbits {
                     egui::Color32::from_rgb(40, 60, 100)
