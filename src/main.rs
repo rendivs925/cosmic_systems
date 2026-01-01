@@ -9,7 +9,9 @@ pub mod presentation;
 
 use application::startup::*;
 use domain::value_objects::simulation_params::SimulationParameters;
-use infrastructure::bevy_adapters::components::{HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet};
+use infrastructure::bevy_adapters::components::{
+    HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
+};
 use infrastructure::bevy_adapters::systems::*;
 
 fn main() {
@@ -17,9 +19,9 @@ fn main() {
     let is_gyro_mode = args.contains(&"gyro".to_string());
 
     let title = if is_gyro_mode {
-        "Cosmic Frontier Simulator - Gyro Propulsion"
+        "Cosmic Systems - Gyro Propulsion"
     } else {
-        "Cosmic Frontier Simulator"
+        "Cosmic Systems Simulator"
     };
 
     let window_plugin = WindowPlugin {
@@ -56,9 +58,7 @@ fn main() {
             notifications: Vec::new(),
             hide_for_screenshot: false,
         });
-        app.insert_resource(ScreenshotState {
-            pending: false,
-        });
+        app.insert_resource(ScreenshotState { pending: false });
         app.add_systems(Startup, setup_space);
         app.add_systems(Update, update_planet_positions);
         app.add_systems(Update, update_planet_rotations);
