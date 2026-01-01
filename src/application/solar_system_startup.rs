@@ -118,6 +118,11 @@ pub fn setup_space(
     let all_celestial_bodies = [planets, moons].concat();
 
     let mut entity_map: HashMap<String, Entity> = HashMap::new();
+    let mut position_map: HashMap<String, Vec3> = HashMap::new();
+    let mut axial_tilts: HashMap<String, f32> = HashMap::new();
+    for planet in &all_celestial_bodies {
+        axial_tilts.insert(planet.name.clone(), planet.axial_tilt_deg);
+    }
 
     // Spawn each celestial body (planets and moons)
     for planet in all_celestial_bodies {
@@ -127,8 +132,22 @@ pub fn setup_space(
             physics::calculate_visual_radius(&planet, &solar_params)
         };
 
-        let initial_position =
-            physics::calculate_planet_position(&planet, 0.0, &solar_params, Vec3::ZERO);
+        let parent_position = planet
+            .parent_entity
+            .as_ref()
+            .and_then(|parent_name| position_map.get(parent_name).copied())
+            .unwrap_or(Vec3::ZERO);
+        let parent_tilt = planet
+            .parent_entity
+            .as_ref()
+            .and_then(|parent_name| axial_tilts.get(parent_name).copied());
+        let initial_position = physics::calculate_planet_position(
+            &planet,
+            0.0,
+            &solar_params,
+            parent_position,
+            parent_tilt,
+        );
         let textures = get_planet_textures(&planet.name);
         let albedo_handle = load_texture(&asset_server, textures.albedo);
         let emissive_handle = load_texture(&asset_server, textures.emissive);
@@ -200,6 +219,7 @@ pub fn setup_space(
             .id();
 
         entity_map.insert(planet.name.clone(), planet_entity);
+        position_map.insert(planet.name.clone(), initial_position);
 
         if solar_params.show_orbits {
             if let Some(parent_name) = &planet.parent_entity {
@@ -215,9 +235,8 @@ pub fn setup_space(
                     let orbit_motion =
                         orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
-                    // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent rotation
-                    // This ensures moons follow their orbits with perfect precision
-                    // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
+                    // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
+                    // The orbit plane is set from elements and aligned to the parent axial tilt at runtime.
                     commands
                         .spawn(PbrBundle {
                             mesh: orbit_mesh,

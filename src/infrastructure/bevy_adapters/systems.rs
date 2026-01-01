@@ -118,12 +118,17 @@ pub fn update_planet_positions(
     let camera_global = camera_query.single();
     let camera_pos = camera_global.translation();
 
-    // First pass: collect parent positions
-    let mut parent_positions = std::collections::HashMap::new();
+    // First pass: collect parent positions and axial tilts
+    let mut parent_positions = HashMap::new();
+    let mut parent_tilts = HashMap::new();
     for (transform, planet_comp) in query.iter() {
         parent_positions.insert(
             planet_comp.domain_planet.name.clone(),
             transform.translation,
+        );
+        parent_tilts.insert(
+            planet_comp.domain_planet.name.clone(),
+            planet_comp.domain_planet.axial_tilt_deg,
         );
     }
 
@@ -142,12 +147,17 @@ pub fn update_planet_positions(
         }
 
         // Find parent position
-        let parent_position = if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
+        let (parent_position, parent_tilt) = if let Some(parent_name) =
+            &planet_comp.domain_planet.parent_entity
+        {
             // This is a moon - get its parent planet's position
-            *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO)
+            (
+                *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
+                parent_tilts.get(parent_name).copied(),
+            )
         } else {
             // This is a planet orbiting the Sun
-            Vec3::ZERO
+            (Vec3::ZERO, None)
         };
 
         let new_position = physics::calculate_planet_position(
@@ -155,6 +165,7 @@ pub fn update_planet_positions(
             time_days,
             &solar_params,
             parent_position,
+            parent_tilt,
         );
         transform.translation = new_position;
     }
@@ -215,14 +226,15 @@ pub fn update_orbit_visuals(
 // System to update moon orbit positions to follow their parent planets
 pub fn update_moon_orbit_positions(
     mut moon_orbit_query: Query<(&mut Transform, &OrbitComponent), With<MoonOrbit>>,
-    planet_query: Query<&Transform, (With<PlanetComponent>, Without<MoonOrbit>)>,
+    planet_query: Query<(&Transform, &PlanetComponent), Without<MoonOrbit>>,
 ) {
     for (mut orbit_transform, orbit_comp) in moon_orbit_query.iter_mut() {
         // Get the parent planet's position
-        if let Ok(parent_transform) = planet_query.get(orbit_comp.planet_entity) {
-            // Update orbit position to match parent planet position
-            // Keep the rotation unchanged (it was set correctly at spawn time)
+        if let Ok((parent_transform, parent_comp)) = planet_query.get(orbit_comp.planet_entity) {
+            // Update orbit position and align the orbit plane with the parent axial tilt
             orbit_transform.translation = parent_transform.translation;
+            orbit_transform.rotation =
+                Quat::from_rotation_z(parent_comp.domain_planet.axial_tilt_deg.to_radians());
         }
     }
 }

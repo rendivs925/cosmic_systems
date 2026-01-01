@@ -2,7 +2,7 @@ use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::SimulationParameters;
-use bevy::math::Vec3;
+use bevy::math::{Quat, Vec3};
 
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
@@ -40,6 +40,7 @@ pub fn calculate_planet_position(
     time_days: f32,
     solar_params: &SolarSystemParameters,
     parent_position: Vec3,
+    parent_axial_tilt_deg: Option<f32>,
 ) -> Vec3 {
     if planet.name == "Sun" {
         // Sun is at the origin
@@ -49,10 +50,10 @@ pub fn calculate_planet_position(
     // Calculate angle based on orbital period
     let angle = 2.0 * std::f32::consts::PI * time_days / planet.orbital_period_days;
 
-    let relative_pos = if planet.parent_entity.is_some() {
+    let mut relative_pos = if planet.parent_entity.is_some() {
         // Moons - use real orbital elements for accurate position calculation
         if let Some(elements) = get_moon_orbital_elements(&planet.name) {
-            let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
+            let mean_motion = mean_motion_from_period_days(planet.orbital_period_days);
             let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
             let eccentric_anomaly = solve_kepler(mean_anomaly, elements.eccentricity);
             let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
@@ -109,6 +110,13 @@ pub fn calculate_planet_position(
         let z_orbital = distance * angle.sin();
         transform_orbital_point(x_orbital, z_orbital, 0.0, 0.0, 0.0)
     };
+
+    if planet.parent_entity.is_some() {
+        if let Some(tilt_deg) = parent_axial_tilt_deg {
+            let tilt = Quat::from_rotation_z(tilt_deg.to_radians());
+            relative_pos = tilt * relative_pos;
+        }
+    }
 
     // Add parent position to get absolute position
     parent_position + relative_pos
@@ -400,6 +408,10 @@ fn mean_motion_rad_per_day(semi_major_axis_au: f32) -> f32 {
     // Gauss gravitational constant (AU^(3/2)/day)
     const GAUSS_K: f32 = 0.01720209895;
     GAUSS_K / semi_major_axis_au.powf(1.5)
+}
+
+fn mean_motion_from_period_days(period_days: f32) -> f32 {
+    std::f32::consts::TAU / period_days
 }
 
 fn normalize_radians(angle: f32) -> f32 {
