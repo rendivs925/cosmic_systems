@@ -1871,8 +1871,6 @@ pub fn auto_inspect_selected_planet(
     let mut moon_side: Option<Vec3> = None;
     let mut moon_up: Option<Vec3> = None;
     let mut moon_distance: Option<f32> = None;
-    let mut moon_separation: Option<f32> = None;
-    let mut moon_parent_radius: Option<f32> = None;
 
     let fov_y = match projection {
         Projection::Perspective(perspective) => perspective.fov,
@@ -1909,15 +1907,12 @@ pub fn auto_inspect_selected_planet(
                 } else {
                     physics::calculate_visual_radius(&other_comp.domain_planet, &solar_params)
                 };
-                let separation = parent_pos.distance(planet_pos);
                 let size_ratio = (parent_radius / planet_radius).clamp(1.2, 50.0);
-                let fill = (0.82 - size_ratio.log10() * 0.05).clamp(0.66, 0.82);
+                let fill = (0.78 - size_ratio.log10() * 0.04).clamp(0.62, 0.78);
                 let desired_distance = fit_radius(planet_radius, fill);
-                let min_distance = (planet_radius * 3.4).max(120.0);
+                let min_distance = (planet_radius * 3.2).max(120.0);
                 target_distance = desired_distance.max(min_distance);
                 moon_distance = Some(target_distance);
-                moon_separation = Some(separation);
-                moon_parent_radius = Some(parent_radius);
                 break;
             }
         }
@@ -1935,21 +1930,13 @@ pub fn auto_inspect_selected_planet(
     state.orbit_angle += time.delta_seconds() * 0.15; // Slow orbit
 
     if let (Some(axis_dir), Some(lateral), Some(up)) = (moon_axis, moon_side, moon_up) {
-        // Frame the moon large in the foreground with the parent as background.
+        // Frame the moon large in the foreground with the parent in the background.
         let distance = moon_distance.unwrap_or(target_distance);
-        let separation = moon_separation.unwrap_or(distance * 0.6);
-        let parent_radius = moon_parent_radius.unwrap_or(planet_radius * 4.0);
-        let size_ratio = (parent_radius / planet_radius).clamp(1.0, 80.0);
-        let focus_ratio = (0.28 + (separation / (separation + parent_radius * 4.0)) * 0.32)
-            .clamp(0.28, 0.6);
-        let up_ratio = (0.22 + size_ratio.log10() * 0.04).clamp(0.22, 0.38);
-        let side_ratio = 0.08;
-
-        let rotation = Quat::from_axis_angle(axis_dir, state.orbit_angle * 0.08);
+        let rotation = Quat::from_axis_angle(axis_dir, state.orbit_angle * 0.06);
         let side_offset =
-            rotation * (up * (distance * up_ratio) + lateral * (distance * side_ratio));
+            rotation * (up * (distance * 0.35) + lateral * (distance * 0.12));
         state.offset = (-axis_dir * distance) + side_offset;
-        focus_point = planet_pos + axis_dir * (separation * focus_ratio);
+        focus_point = planet_pos;
     } else {
         // Get aesthetic viewing angle based on planet type
         let (orbit_distance, elevation_offset) =
