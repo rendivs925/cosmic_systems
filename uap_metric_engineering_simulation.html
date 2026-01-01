@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UAP Metric Engineering Simulation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background-color: #000205;
+        font-family: "JetBrains Mono", "Courier New", monospace;
+        color: white;
+      }
+      #ui-layer {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      .hud-text {
+        font-size: 0.7rem;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: rgba(0, 242, 255, 0.7);
+      }
+      .hud-value {
+        font-size: 1.2rem;
+        color: #fff;
+        text-shadow: 0 0 10px rgba(0, 242, 255, 0.5);
+      }
+      .hud-border {
+        border-left: 2px solid rgba(0, 242, 255, 0.5);
+        padding-left: 10px;
+      }
+      .corner-bracket {
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border: 1px solid rgba(0, 242, 255, 0.3);
+      }
+      #audio-notice {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 5, 10, 0.98);
+        padding: 40px;
+        border: 2px solid rgba(0, 242, 255, 0.6);
+        text-align: center;
+        pointer-events: all;
+        z-index: 100;
+        box-shadow: 0 0 60px rgba(0, 242, 255, 0.2);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="audio-notice">
+      <p class="mb-1 text-cyan-400 font-bold tracking-[0.2em]">
+        METRIC DRIVE CORE
+      </p>
+      <p class="mb-6 text-[0.6rem] text-cyan-700 uppercase tracking-widest">
+        Aetheric Resonance Field
+      </p>
+      <button
+        id="btn-init"
+        class="px-10 py-4 border-2 border-cyan-400 text-cyan-400 hover:bg-cyan-400 hover:text-black transition-all font-bold tracking-widest text-sm uppercase"
+      >
+        Initialize Drive
+      </button>
+    </div>
+
+    <div id="ui-layer">
+      <div class="corner-bracket top-10 left-10 border-r-0 border-b-0"></div>
+      <div class="corner-bracket top-10 right-10 border-l-0 border-b-0"></div>
+      <div class="corner-bracket bottom-10 left-10 border-r-0 border-t-0"></div>
+      <div
+        class="corner-bracket bottom-10 right-10 border-l-0 border-t-0"
+      ></div>
+
+      <div class="absolute top-12 left-12 hud-border">
+        <div class="hud-text">Metric Distortion</div>
+        <div id="g-value" class="hud-value">1.000 G</div>
+        <div class="w-32 h-[2px] bg-cyan-900 mt-1">
+          <div
+            id="g-bar"
+            class="h-full bg-cyan-400 transition-all duration-300"
+            style="width: 10%"
+          ></div>
+        </div>
+      </div>
+
+      <div class="absolute bottom-12 left-12">
+        <div class="hud-text">Core Status</div>
+        <div class="flex items-center gap-2">
+          <div
+            id="status-light"
+            class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]"
+          ></div>
+          <div class="text-xs" id="status-text">HARMONIC LOCK</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      /** * CONSTANTS & CONFIG
+       */
+      const CONFIG = {
+        SPEED_IDLE: 0.8,
+        SPEED_WARP: 15.0,
+        HARMONICS: [
+          { freq: 174, vol: 0.3 },
+          { freq: 285, vol: 0.2 },
+          { freq: 528, vol: 0.15 },
+        ],
+        COLORS: {
+          UAP_ACCENT: 0x00f2ff,
+          UAP_HULL: 0x000000,
+          STATUS_OK: "#22c55e",
+          STATUS_WARP: "#00f2ff",
+        },
+      };
+
+      /**
+       * INPUT MANAGER
+       */
+      const Input = {
+        keys: {},
+        init() {
+          window.addEventListener("keydown", (e) => (this.keys[e.code] = true));
+          window.addEventListener("keyup", (e) => (this.keys[e.code] = false));
+        },
+        isMoving() {
+          return (
+            this.keys["KeyW"] ||
+            this.keys["KeyS"] ||
+            this.keys["KeyA"] ||
+            this.keys["KeyD"] ||
+            this.keys["KeyQ"] ||
+            this.keys["KeyE"]
+          );
+        },
+        isWarp() {
+          return !!(this.keys["ShiftLeft"] || this.keys["Space"]);
+        },
+      };
+
+      /**
+       * AUDIO ENGINE (SOLID: Single Responsibility)
+       */
+      const AudioEngine = {
+        ctx: null,
+        oscs: [],
+        filter: null,
+        lfo: null,
+        initialized: false,
+
+        async init() {
+          if (this.initialized) return;
+
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+          if (this.ctx.state === "suspended") await this.ctx.resume();
+
+          const masterGain = this.ctx.createGain();
+          masterGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
+          masterGain.connect(this.ctx.destination);
+
+          this.filter = this.ctx.createBiquadFilter();
+          this.filter.type = "bandpass";
+          this.filter.frequency.value = 440;
+          this.filter.Q.value = 2.0;
+          this.filter.connect(masterGain);
+
+          this._setupLFO();
+          this._setupHarmonics();
+
+          this.initialized = true;
+          document.getElementById("audio-notice").style.display = "none";
+        },
+
+        _setupLFO() {
+          this.lfo = this.ctx.createOscillator();
+          this.lfo.type = "sine";
+          this.lfo.frequency.value = 0.5;
+          const lfoGain = this.ctx.createGain();
+          lfoGain.gain.value = 100;
+          this.lfo.connect(lfoGain);
+          lfoGain.connect(this.filter.frequency);
+          this.lfo.start();
+        },
+
+        _setupHarmonics() {
+          CONFIG.HARMONICS.forEach((cfg) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(cfg.freq, this.ctx.currentTime);
+            g.gain.setValueAtTime(cfg.vol, this.ctx.currentTime);
+            osc.connect(g);
+            g.connect(this.filter);
+            osc.start();
+            this.oscs.push({ osc, g, base: cfg.freq, idleVol: cfg.vol });
+          });
+        },
+
+        update(isWarp, isMoving) {
+          if (!this.initialized) return;
+
+          const now = this.ctx.currentTime;
+          const targetFreq = isWarp ? 1200 : isMoving ? 600 : 440;
+          const targetQ = isWarp ? 10.0 : 2.0;
+
+          this.filter.frequency.setTargetAtTime(targetFreq, now, 2.0);
+          this.filter.Q.setTargetAtTime(targetQ, now, 2.0);
+          this.lfo.frequency.setTargetAtTime(isWarp ? 4.0 : 0.5, now, 1.5);
+
+          this.oscs.forEach((obj, i) => {
+            const drift = isWarp ? 1 + i * 0.1 : isMoving ? 1.05 : 1.0;
+            obj.osc.frequency.setTargetAtTime(obj.base * drift, now, 2.5);
+            obj.g.gain.setTargetAtTime(
+              obj.idleVol + (isWarp && i > 0 ? 0.2 : 0),
+              now,
+              1.5,
+            );
+          });
+        },
+      };
+
+      /**
+       * WORLD & SCENE MANAGER
+       */
+      let scene, camera, renderer, uap, core, warpBubble, stars;
+      const clock = new THREE.Clock();
+
+      function initScene() {
+        scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000510, 0.0006);
+
+        camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          5000,
+        );
+        camera.position.set(0, 5, 20);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const light = new THREE.PointLight(CONFIG.COLORS.UAP_ACCENT, 1.5, 200);
+        light.position.set(0, 20, 20);
+        scene.add(light, new THREE.AmbientLight(0x050510));
+
+        _createEnvironment();
+        _createUAP();
+
+        window.addEventListener("resize", onWindowResize);
+      }
+
+      function _createEnvironment() {
+        const starGeo = new THREE.BufferGeometry();
+        const starPos = [];
+        for (let i = 0; i < 20000; i++)
+          starPos.push(
+            (Math.random() - 0.5) * 4000,
+            (Math.random() - 0.5) * 4000,
+            (Math.random() - 0.5) * 4000,
+          );
+        starGeo.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(starPos, 3),
+        );
+        stars = new THREE.Points(
+          starGeo,
+          new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.8,
+            transparent: true,
+            opacity: 0.8,
+          }),
+        );
+        scene.add(stars);
+      }
+
+      function _createUAP() {
+        uap = new THREE.Group();
+        const hullGeo = new THREE.SphereGeometry(6, 64, 16);
+        hullGeo.scale(1, 0.15, 1);
+        const hull = new THREE.Mesh(
+          hullGeo,
+          new THREE.MeshStandardMaterial({
+            color: CONFIG.COLORS.UAP_HULL,
+            metalness: 1,
+            roughness: 0,
+            emissive: 0x000a15,
+          }),
+        );
+
+        core = new THREE.Mesh(
+          new THREE.SphereGeometry(0.25, 32, 32),
+          new THREE.MeshBasicMaterial({ color: CONFIG.COLORS.UAP_ACCENT }),
+        );
+        warpBubble = new THREE.Mesh(
+          new THREE.SphereGeometry(10, 64, 32),
+          new THREE.MeshBasicMaterial({
+            color: CONFIG.COLORS.UAP_ACCENT,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.02,
+          }),
+        );
+
+        uap.add(hull, core, warpBubble);
+        scene.add(uap);
+      }
+
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      /**
+       * CORE LOOP
+       */
+      function updatePhysics() {
+        const isWarp = Input.isWarp();
+        const speed = isWarp ? CONFIG.SPEED_WARP : CONFIG.SPEED_IDLE;
+
+        // Movement handling
+        if (Input.keys["KeyW"]) uap.translateZ(-speed);
+        if (Input.keys["KeyS"]) uap.translateZ(speed);
+        if (Input.keys["KeyA"]) uap.rotation.y += 0.02;
+        if (Input.keys["KeyD"]) uap.rotation.y -= 0.02;
+        if (Input.keys["KeyQ"]) uap.position.y += speed * 0.5;
+        if (Input.keys["KeyE"]) uap.position.y -= speed * 0.5;
+      }
+
+      function updateVisuals(isWarp, t) {
+        const targetOpacity = isWarp ? 0.3 : 0.02;
+        const targetFov = isWarp ? 110 : 75;
+        const starScale = isWarp ? 30 : 1;
+
+        warpBubble.material.opacity = THREE.MathUtils.lerp(
+          warpBubble.material.opacity,
+          targetOpacity,
+          0.1,
+        );
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 0.03);
+        stars.scale.z = THREE.MathUtils.lerp(stars.scale.z, starScale, 0.05);
+        camera.updateProjectionMatrix();
+
+        core.scale.setScalar(
+          1 + Math.sin(t * (isWarp ? 15 : 4)) * (isWarp ? 0.3 : 0.1),
+        );
+
+        const cameraTarget = new THREE.Vector3(0, 3, 22).applyMatrix4(
+          uap.matrixWorld,
+        );
+        camera.position.lerp(cameraTarget, 0.05);
+        camera.lookAt(uap.position);
+      }
+
+      function updateHUD(isWarp) {
+        const gValue = isWarp ? 999.9 : 1.0;
+        document.getElementById("g-value").innerText = gValue.toFixed(3) + " G";
+        document.getElementById("g-bar").style.width =
+          Math.min(gValue / 10, 100) + "%";
+        document.getElementById("status-light").style.backgroundColor = isWarp
+          ? CONFIG.COLORS.STATUS_WARP
+          : CONFIG.COLORS.STATUS_OK;
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const t = clock.getElapsedTime();
+        const isWarp = Input.isWarp();
+        const isMoving = Input.isMoving();
+
+        updatePhysics();
+        updateVisuals(isWarp, t);
+        updateHUD(isWarp);
+        AudioEngine.update(isWarp, isMoving);
+
+        renderer.render(scene, camera);
+      }
+
+      // Startup
+      document.getElementById("btn-init").onclick = () => AudioEngine.init();
+      Input.init();
+      initScene();
+      animate();
+    </script>
+  </body>
+</html>
