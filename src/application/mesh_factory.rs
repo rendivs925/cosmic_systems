@@ -1,0 +1,105 @@
+use bevy::prelude::*;
+use bevy::render::mesh::primitives::{Meshable, SphereKind};
+use bevy::render::mesh::Indices;
+use bevy::render::render_asset::RenderAssetUsages;
+use bevy::render::render_resource::PrimitiveTopology;
+use std::f32::consts::TAU;
+
+use crate::domain::services::physics;
+
+pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+    let mesh = Sphere { radius }
+        .mesh()
+        .kind(SphereKind::Uv {
+            sectors: 64,
+            stacks: 32,
+        })
+        .build();
+    meshes.add(mesh)
+}
+
+pub fn create_orbit_mesh_ellipse(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    orbit_shape: &physics::OrbitShape,
+) -> Handle<Mesh> {
+    const SEGMENTS: usize = 256;
+    let mut positions = Vec::with_capacity(SEGMENTS);
+    let mut normals = Vec::with_capacity(SEGMENTS);
+    let mut uvs = Vec::with_capacity(SEGMENTS);
+    let mut indices = Vec::with_capacity(SEGMENTS * 2);
+
+    let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
+    let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
+
+    for i in 0..SEGMENTS {
+        let true_anomaly = (i as f32 / SEGMENTS as f32) * TAU;
+        let radius = semi_latus / (1.0 + e * true_anomaly.cos());
+
+        // Position in orbital plane (periapsis at +X)
+        let x_orbital = radius * true_anomaly.cos();
+        let z_orbital = radius * true_anomaly.sin();
+
+        // Transform to 3D space using same method as planet position calculation
+        let pos_3d = physics::transform_orbital_point(
+            x_orbital,
+            z_orbital,
+            orbit_shape.inclination_rad,
+            orbit_shape.long_asc_node_rad,
+            orbit_shape.arg_periapsis_rad,
+        );
+
+        positions.push([pos_3d.x, pos_3d.y, pos_3d.z]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([true_anomaly / TAU, 0.5]);
+        indices.push(i as u32);
+        indices.push(((i + 1) % SEGMENTS) as u32);
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    meshes.add(mesh)
+}
+
+pub fn create_ring_mesh(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    inner_radius: f32,
+    outer_radius: f32,
+) -> Handle<Mesh> {
+    const SEGMENTS: usize = 256;
+    let mut positions = Vec::with_capacity((SEGMENTS + 1) * 2);
+    let mut normals = Vec::with_capacity((SEGMENTS + 1) * 2);
+    let mut uvs = Vec::with_capacity((SEGMENTS + 1) * 2);
+    let mut indices = Vec::with_capacity(SEGMENTS * 6);
+
+    for i in 0..=SEGMENTS {
+        let t = i as f32 / SEGMENTS as f32;
+        let angle = t * TAU;
+        let (sin_a, cos_a) = angle.sin_cos();
+
+        positions.push([inner_radius * cos_a, 0.0, inner_radius * sin_a]);
+        positions.push([outer_radius * cos_a, 0.0, outer_radius * sin_a]);
+        normals.push([0.0, 1.0, 0.0]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([0.0, t]);
+        uvs.push([1.0, t]);
+    }
+
+    for i in 0..SEGMENTS {
+        let inner0 = (i * 2) as u32;
+        let outer0 = inner0 + 1;
+        let inner1 = inner0 + 2;
+        let outer1 = inner0 + 3;
+
+        indices.extend_from_slice(&[inner0, outer0, outer1, inner0, outer1, inner1]);
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    meshes.add(mesh)
+}
