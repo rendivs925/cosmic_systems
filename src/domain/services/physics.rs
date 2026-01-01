@@ -29,6 +29,8 @@ pub fn calculate_arrow_scale(thrust: Vec3) -> f32 {
     thrust.length().clamp(0.1, 10.0)
 }
 
+const MOON_ORBIT_SCALE: f32 = 60.0;
+
 // Orbital mechanics functions for solar system simulation
 
 /// Calculate the position of a planet/moon in its orbit at a given time
@@ -56,7 +58,7 @@ pub fn calculate_planet_position(
             let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
             let radius_au = elements.semi_major_axis_au
                 * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
-            let r = solar_params.au_to_units(radius_au) * 500.0; // Moon scale factor
+            let r = solar_params.au_to_units(radius_au) * MOON_ORBIT_SCALE;
 
             // Position in orbital plane (periapsis at +X)
             let x_orbital = r * true_anomaly.cos();
@@ -121,7 +123,7 @@ pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemP
         // Moon orbiting a planet - convert astronomical distance to simulation units
         // orbital_distance_au represents actual AU distance from parent planet
         // Scale massively for clear separation while maintaining relative accuracy
-        planet.orbital_distance_au * solar_params.scale_factor * 500.0
+        planet.orbital_distance_au * solar_params.scale_factor * MOON_ORBIT_SCALE
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         solar_params.au_to_units(elements.semi_major_axis_au)
     } else {
@@ -142,7 +144,8 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
         // Moon - use real orbital elements if available
         if let Some(elements) = get_moon_orbital_elements(&planet.name) {
             OrbitShape {
-                semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au) * 500.0,
+                semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au)
+                    * MOON_ORBIT_SCALE,
                 eccentricity: elements.eccentricity,
                 inclination_rad: elements.inclination_rad,
                 long_asc_node_rad: elements.long_asc_node_rad,
