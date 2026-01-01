@@ -1868,9 +1868,9 @@ pub fn auto_inspect_selected_planet(
     let mut focus_point = planet_pos;
     let mut target_distance = planet_radius * 5.0;
     let mut moon_axis: Option<Vec3> = None;
-    let mut moon_side: Option<Vec3> = None;
     let mut moon_up: Option<Vec3> = None;
     let mut moon_distance: Option<f32> = None;
+    let is_moon = planet_comp.domain_planet.parent_entity.is_some();
 
     let fov_y = match projection {
         Projection::Perspective(perspective) => perspective.fov,
@@ -1899,7 +1899,6 @@ pub fn auto_inspect_selected_planet(
                 let up = lateral.cross(axis_dir).normalize();
 
                 moon_axis = Some(axis_dir);
-                moon_side = Some(lateral);
                 moon_up = Some(up);
 
                 let parent_radius = if other_comp.domain_planet.name == "Sun" {
@@ -1924,18 +1923,44 @@ pub fn auto_inspect_selected_planet(
         state.orbit_angle = 0.0;
         // Start with a nice 3/4 view angle
         state.orbit_elevation = 0.3; // 30 degrees up
+        state.smooth_axis = Vec3::ZERO;
+        state.smooth_up = Vec3::ZERO;
+        state.smooth_focus = Vec3::ZERO;
+        state.smooth_offset = Vec3::ZERO;
     }
 
     // Cinematic slow orbit around the planet for aesthetic viewing
-    state.orbit_angle += time.delta_seconds() * 0.15; // Slow orbit
+    if !is_moon {
+        state.orbit_angle += time.delta_seconds() * 0.15; // Slow orbit
+    }
 
-    if let (Some(axis_dir), Some(lateral), Some(up)) = (moon_axis, moon_side, moon_up) {
+    if let (Some(axis_dir), Some(up)) = (moon_axis, moon_up) {
         // Frame the moon large in the foreground with the parent in the background.
         let distance = moon_distance.unwrap_or(target_distance);
-        let rotation = Quat::from_axis_angle(axis_dir, state.orbit_angle * 0.06);
+        let smooth_lerp = 1.0 - (-3.0 * time.delta_seconds()).exp();
+        state.smooth_axis = if state.smooth_axis.length_squared() > 0.0 {
+            state.smooth_axis.lerp(axis_dir, smooth_lerp).normalize_or_zero()
+        } else {
+            axis_dir
+        };
+        state.smooth_up = if state.smooth_up.length_squared() > 0.0 {
+            state.smooth_up.lerp(up, smooth_lerp).normalize_or_zero()
+        } else {
+            up
+        };
+
+        let smooth_axis = state.smooth_axis;
+        let smooth_up = state.smooth_up;
+        let mut smooth_lateral = smooth_axis.cross(Vec3::Y);
+        if smooth_lateral.length_squared() < 1e-4 {
+            smooth_lateral = smooth_axis.cross(Vec3::X);
+        }
+        let smooth_lateral = smooth_lateral.normalize();
+
+        let rotation = Quat::from_axis_angle(smooth_axis, state.orbit_angle * 0.06);
         let side_offset =
-            rotation * (up * (distance * 0.35) + lateral * (distance * 0.12));
-        state.offset = (-axis_dir * distance) + side_offset;
+            rotation * (smooth_up * (distance * 0.35) + smooth_lateral * (distance * 0.12));
+        state.offset = (-smooth_axis * distance) + side_offset;
         focus_point = planet_pos;
     } else {
         // Get aesthetic viewing angle based on planet type
@@ -1954,12 +1979,28 @@ pub fn auto_inspect_selected_planet(
         state.offset = elevated;
     }
 
-    let target_pos = focus_point + state.offset;
+    let smooth_factor = if is_moon {
+        1.0 - (-2.5 * time.delta_seconds()).exp()
+    } else {
+        1.0 - (-4.0 * time.delta_seconds()).exp()
+    };
+    if state.smooth_focus.length_squared() > 0.0 {
+        state.smooth_focus = state.smooth_focus.lerp(focus_point, smooth_factor);
+    } else {
+        state.smooth_focus = focus_point;
+    }
+    if state.smooth_offset.length_squared() > 0.0 {
+        state.smooth_offset = state.smooth_offset.lerp(state.offset, smooth_factor);
+    } else {
+        state.smooth_offset = state.offset;
+    }
+
+    let target_pos = state.smooth_focus + state.smooth_offset;
     let lerp_factor = 1.0 - (-2.5 * time.delta_seconds()).exp(); // Smoother transitions
     camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
 
     // Look at the focus point to frame moon + parent when applicable
-    camera_transform.look_at(focus_point, Vec3::Y);
+    camera_transform.look_at(state.smooth_focus, Vec3::Y);
 }
 
 // Get aesthetic viewing parameters for different celestial bodies
@@ -1982,6 +2023,10 @@ pub struct AutoInspectState {
     offset: Vec3,
     orbit_angle: f32,     // Cinematic orbit angle
     orbit_elevation: f32, // Vertical orbit component
+    smooth_axis: Vec3,
+    smooth_up: Vec3,
+    smooth_focus: Vec3,
+    smooth_offset: Vec3,
 }
 
 // System to display notifications as toast-style messages
