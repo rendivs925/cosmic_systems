@@ -1864,8 +1864,38 @@ pub fn auto_inspect_selected_planet(
         physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
     };
 
-    let target_distance = planet_radius * 5.0;
     let planet_pos = planet_transform.translation();
+    let mut focus_point = planet_pos;
+    let mut target_distance = planet_radius * 5.0;
+    let mut moon_axis: Option<Vec3> = None;
+    let mut moon_side: Option<Vec3> = None;
+    let mut moon_up: Option<Vec3> = None;
+
+    if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
+        for (other_comp, other_transform) in planet_query.iter() {
+            if other_comp.domain_planet.name == *parent_name {
+                let parent_pos = other_transform.translation();
+                let axis = planet_pos - parent_pos;
+                let axis_dir = if axis.length_squared() > 0.0 {
+                    axis.normalize()
+                } else {
+                    Vec3::Z
+                };
+                let mut lateral = axis_dir.cross(Vec3::Y);
+                if lateral.length_squared() < 1e-4 {
+                    lateral = axis_dir.cross(Vec3::X);
+                }
+                let lateral = lateral.normalize();
+                let up = lateral.cross(axis_dir).normalize();
+
+                moon_axis = Some(axis_dir);
+                moon_side = Some(lateral);
+                moon_up = Some(up);
+                target_distance = (planet_radius * 5.0).max(80.0);
+                break;
+            }
+        }
+    }
 
     // Initialize or reset state when selection changes
     if state.selected != Some(selected_entity) {
@@ -1878,26 +1908,35 @@ pub fn auto_inspect_selected_planet(
     // Cinematic slow orbit around the planet for aesthetic viewing
     state.orbit_angle += time.delta_seconds() * 0.15; // Slow orbit
 
-    // Get aesthetic viewing angle based on planet type
-    let (orbit_distance, elevation_offset) = get_aesthetic_view_params(&planet_comp.domain_planet.name);
-    let actual_distance = target_distance * orbit_distance;
-    let elevation = state.orbit_elevation + elevation_offset;
+    if let (Some(axis_dir), Some(lateral), Some(up)) = (moon_axis, moon_side, moon_up) {
+        // Keep the camera on the far side of the moon so the parent sits in the background.
+        let rotation = Quat::from_axis_angle(axis_dir, state.orbit_angle * 0.25);
+        let side_offset = rotation * (up * (target_distance * 0.35) + lateral * (target_distance * 0.15));
+        state.offset = axis_dir * target_distance + side_offset;
+        focus_point = planet_pos;
+    } else {
+        // Get aesthetic viewing angle based on planet type
+        let (orbit_distance, elevation_offset) =
+            get_aesthetic_view_params(&planet_comp.domain_planet.name);
+        let actual_distance = target_distance * orbit_distance;
+        let elevation = state.orbit_elevation + elevation_offset;
 
-    // Calculate cinematic orbit position (3/4 view with elevation)
-    let horizontal = Vec3::new(
-        state.orbit_angle.cos() * actual_distance,
-        0.0,
-        state.orbit_angle.sin() * actual_distance,
-    );
-    let elevated = horizontal + Vec3::Y * (actual_distance * elevation);
-    state.offset = elevated;
+        // Calculate cinematic orbit position (3/4 view with elevation)
+        let horizontal = Vec3::new(
+            state.orbit_angle.cos() * actual_distance,
+            0.0,
+            state.orbit_angle.sin() * actual_distance,
+        );
+        let elevated = horizontal + Vec3::Y * (actual_distance * elevation);
+        state.offset = elevated;
+    }
 
-    let target_pos = planet_pos + state.offset;
+    let target_pos = focus_point + state.offset;
     let lerp_factor = 1.0 - (-2.5 * time.delta_seconds()).exp(); // Smoother transitions
     camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
 
-    // Look at planet center for perfect framing
-    camera_transform.look_at(planet_pos, Vec3::Y);
+    // Look at the focus point to frame moon + parent when applicable
+    camera_transform.look_at(focus_point, Vec3::Y);
 }
 
 // Get aesthetic viewing parameters for different celestial bodies
@@ -1908,7 +1947,7 @@ fn get_aesthetic_view_params(name: &str) -> (f32, f32) {
         "Saturn" => (1.15, 0.3),      // Extra elevation to showcase rings
         "Jupiter" => (1.1, 0.25),     // Show off the gas giant with nice elevation
         "Earth" | "Mars" => (0.95, 0.35), // Closer, higher angle for detail
-        "Moon" | "Io" | "Europa" | "Titan" | "Triton" => (0.9, 0.4), // Intimate moon views
+        "Moon" | "Io" | "Europa" | "Titan" | "Triton" => (0.95, 0.35), // Keep close while showing parent
         "Neptune" | "Uranus" => (1.0, 0.3), // Ice giants with good elevation
         _ => (1.0, 0.3), // Default: standard distance, nice 3/4 view
     }
