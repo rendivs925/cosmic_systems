@@ -2,7 +2,9 @@ use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
 use bevy::render::view::Msaa;
 use bevy::time::Fixed;
-use crate::infrastructure::bevy_adapters::components::PerformanceStats;
+use crate::infrastructure::bevy_adapters::components::{ChromeOptimizations, PerformanceStats};
+use crate::infrastructure::web_workers::physics_worker::{adapt_worker_pool, PhysicsWorkerPool};
+use js_sys::Reflect;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys;
@@ -75,9 +77,19 @@ pub fn main() {
         hide_for_screenshot: false,
     });
     app.insert_resource(ScreenshotState { pending: false });
+    let (is_chrome, webgpu_supported) = detect_chrome_and_webgpu();
     let mut perf_stats = PerformanceStats::default();
-    perf_stats.target_fps = 45.0;
+    perf_stats.target_fps = if is_chrome { 60.0 } else { 45.0 };
     app.insert_resource(perf_stats);
+    let worker_pool = PhysicsWorkerPool::new_dynamic();
+    let worker_target = worker_pool.worker_count();
+    app.insert_resource(ChromeOptimizations {
+        is_chrome,
+        webgpu_supported,
+        webgpu_enabled: is_chrome && webgpu_supported,
+        worker_target,
+    });
+    app.insert_non_send_resource(worker_pool);
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     app.insert_resource(Time::<Fixed>::from_hz(30.0));
@@ -103,6 +115,7 @@ pub fn main() {
         update_planet_selection_visuals.run_if(every_n_frames(4)),
     );
     app.add_systems(Update, update_performance_stats);
+    app.add_systems(Update, adapt_worker_pool);
     app.add_systems(Update, cap_fixed_overstep);
     app.add_systems(Update, update_info_card);
     app.add_systems(Update, update_notifications_ui);
@@ -114,6 +127,14 @@ pub fn main() {
 
     prepare_dom_for_wasm();
 
+    log_webgpu_status(is_chrome, webgpu_supported);
+    if worker_target == 0 {
+        web_sys::console::log_1(&"Worker pool unavailable; running on main thread".into());
+    } else {
+        web_sys::console::log_1(
+            &format!("Worker pool initialized with {worker_target} workers").into(),
+        );
+    }
     web_sys::console::log_1(&"✅ Cosmic Systems Simulator initialized successfully".into());
     app.run();
 }
@@ -151,5 +172,31 @@ fn prepare_dom_for_wasm() {
                 loading.remove();
             }
         }
+    }
+}
+
+fn detect_chrome_and_webgpu() -> (bool, bool) {
+    let user_agent = web_sys::window()
+        .and_then(|window| window.navigator().user_agent().ok())
+        .unwrap_or_default();
+    let is_chrome = user_agent.contains("Chrome") && !user_agent.contains("Edg");
+
+    let webgpu_supported = web_sys::window()
+        .map(|window| JsValue::from(window.navigator()))
+        .and_then(|navigator| Reflect::has(&navigator, &JsValue::from_str("gpu")).ok())
+        .unwrap_or(false);
+
+    (is_chrome, webgpu_supported)
+}
+
+fn log_webgpu_status(is_chrome: bool, webgpu_supported: bool) {
+    if is_chrome && webgpu_supported {
+        web_sys::console::log_1(
+            &"WebGPU enabled by default for Chrome (high-performance backend preferred)".into(),
+        );
+    } else if webgpu_supported {
+        web_sys::console::log_1(&"WebGPU supported, using CPU fallback until enabled".into());
+    } else {
+        web_sys::console::log_1(&"WebGPU unavailable, using SIMD + workers fallback".into());
     }
 }

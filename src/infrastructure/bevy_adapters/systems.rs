@@ -6,6 +6,8 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::time::Fixed;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -147,6 +149,107 @@ pub fn handle_input(
 }
 
 // System to update planet/moon positions in their orbits (optimized for performance with parallel processing)
+#[cfg(target_arch = "wasm32")]
+pub fn update_planet_positions(
+    time: Res<Time<Fixed>>,
+    solar_params: Res<SolarSystemParameters>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
+    mut worker_pool: NonSendMut<PhysicsWorkerPool>,
+) {
+    let elapsed_seconds = time.elapsed_seconds();
+    let time_days = solar_params.time_to_days(elapsed_seconds);
+
+    let camera_pos = camera_query.single().translation();
+
+    let mut parent_positions = std::collections::HashMap::new();
+    let mut parent_tilts = std::collections::HashMap::new();
+
+    for (_, transform, planet_comp) in query.iter() {
+        if planet_comp.domain_planet.parent_entity.is_none() {
+            parent_positions.insert(
+                planet_comp.domain_planet.name.clone(),
+                transform.translation,
+            );
+            parent_tilts.insert(
+                planet_comp.domain_planet.name.clone(),
+                Some(planet_comp.domain_planet.axial_tilt_deg),
+            );
+        }
+    }
+
+    let mut worker_tasks: Vec<(f32, PhysicsTask)> = Vec::new();
+    let worker_distance_threshold = 500_000.0;
+    let max_distance = 15_000_000.0;
+
+    for (entity, mut transform, planet_comp) in query.iter_mut() {
+        let distance_to_camera = camera_pos.distance(transform.translation);
+        if distance_to_camera > max_distance {
+            continue;
+        }
+
+        let (parent_position, parent_tilt) =
+            if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
+                (
+                    *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
+                    parent_tilts.get(parent_name).copied().flatten(),
+                )
+            } else {
+                (Vec3::ZERO, None)
+            };
+
+        let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
+        let should_use_worker = worker_pool.worker_count() > 0
+            && planet_comp.domain_planet.parent_entity.is_none()
+            && planet_comp.domain_planet.orbital_period_days > 0.0
+            && distance_to_camera >= worker_distance_threshold;
+
+        if should_use_worker {
+            let mean_anomaly = (time_days / planet_comp.domain_planet.orbital_period_days)
+                * std::f32::consts::TAU;
+            worker_tasks.push((
+                distance_to_camera,
+                PhysicsTask {
+                    worker_id: 0,
+                    entity_bits: entity.to_bits(),
+                    orbital_elements: crate::infrastructure::web_workers::physics_worker::OrbitalElements {
+                        semi_major_axis_au: planet_comp.domain_planet.orbital_distance_au,
+                        eccentricity: 0.0167,
+                        mean_anomaly,
+                    },
+                    scale_factor: solar_params.scale_factor,
+                },
+            ));
+            continue;
+        }
+
+        let new_position = physics::calculate_planet_position_with_quality(
+            &planet_comp.domain_planet,
+            time_days,
+            &solar_params,
+            parent_position,
+            parent_tilt,
+            kepler_iterations,
+        );
+        transform.translation = new_position;
+    }
+
+    if worker_pool.worker_count() > 0 && !worker_tasks.is_empty() {
+        worker_tasks.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let tasks = worker_tasks.into_iter().map(|(_, task)| task).collect();
+        worker_pool.queue_tasks(tasks);
+    }
+
+    for result in worker_pool.collect_results() {
+        if let Ok((_, mut transform, _)) = query.get_mut(result.entity) {
+            transform.translation = result.position;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn update_planet_positions(
     time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,

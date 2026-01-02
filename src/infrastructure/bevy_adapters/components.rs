@@ -196,6 +196,25 @@ pub struct PerformanceStats {
     pub adaptive_enabled: bool,      // Whether automatic quality adjustment is enabled
 }
 
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct ChromeOptimizations {
+    pub is_chrome: bool,
+    pub webgpu_supported: bool,
+    pub webgpu_enabled: bool,
+    pub worker_target: usize,
+}
+
+impl Default for ChromeOptimizations {
+    fn default() -> Self {
+        Self {
+            is_chrome: false,
+            webgpu_supported: false,
+            webgpu_enabled: false,
+            worker_target: 2,
+        }
+    }
+}
+
 // Quality levels for automatic adjustment
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QualityLevel {
