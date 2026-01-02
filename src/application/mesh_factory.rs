@@ -8,11 +8,16 @@ use std::f32::consts::TAU;
 use crate::domain::services::physics;
 
 pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+    #[cfg(target_arch = "wasm32")]
+    let (sectors, stacks) = (32, 16);
+    #[cfg(not(target_arch = "wasm32"))]
+    let (sectors, stacks) = (64, 32);
+
     let mesh = Sphere { radius }
         .mesh()
         .kind(SphereKind::Uv {
-            sectors: 64,
-            stacks: 32,
+            sectors,
+            stacks,
         })
         .build();
     meshes.add(mesh)
@@ -21,12 +26,19 @@ pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> 
 pub fn create_orbit_mesh_ellipse(
     meshes: &mut ResMut<Assets<Mesh>>,
     orbit_shape: &physics::OrbitShape,
+    color: Color,
 ) -> Handle<Mesh> {
+    #[cfg(target_arch = "wasm32")]
+    const SEGMENTS: usize = 128;
+    #[cfg(not(target_arch = "wasm32"))]
     const SEGMENTS: usize = 256;
     let mut positions = Vec::with_capacity(SEGMENTS);
     let mut normals = Vec::with_capacity(SEGMENTS);
     let mut uvs = Vec::with_capacity(SEGMENTS);
+    let mut colors = Vec::with_capacity(SEGMENTS);
     let mut indices = Vec::with_capacity(SEGMENTS * 2);
+    let color: LinearRgba = color.into();
+    let color = [color.red, color.green, color.blue, color.alpha];
 
     let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
     let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
@@ -51,6 +63,7 @@ pub fn create_orbit_mesh_ellipse(
         positions.push([pos_3d.x, pos_3d.y, pos_3d.z]);
         normals.push([0.0, 1.0, 0.0]);
         uvs.push([true_anomaly / TAU, 0.5]);
+        colors.push(color);
         indices.push(i as u32);
         indices.push(((i + 1) % SEGMENTS) as u32);
     }
@@ -59,6 +72,7 @@ pub fn create_orbit_mesh_ellipse(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     meshes.add(mesh)
 }
@@ -68,6 +82,9 @@ pub fn create_ring_mesh(
     inner_radius: f32,
     outer_radius: f32,
 ) -> Handle<Mesh> {
+    #[cfg(target_arch = "wasm32")]
+    const SEGMENTS: usize = 128;
+    #[cfg(not(target_arch = "wasm32"))]
     const SEGMENTS: usize = 256;
     let mut positions = Vec::with_capacity((SEGMENTS + 1) * 2);
     let mut normals = Vec::with_capacity((SEGMENTS + 1) * 2);

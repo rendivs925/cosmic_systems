@@ -67,6 +67,15 @@ pub fn setup_space(
     // Create optimized starfield background (reduced density for performance)
     create_starfield(&mut commands, &mut meshes, &mut materials);
 
+    let shared_orbit_material = materials.add(create_orbit_material(
+        Color::srgb(1.0, 1.0, 1.0),
+        orbit_emissive(Color::srgb(1.0, 1.0, 1.0), 0.7),
+        0.32,
+    ));
+    commands.insert_resource(SharedOrbitMaterial {
+        handle: shared_orbit_material.clone(),
+    });
+
     // Create all planets and moons
     let planets = vec![
         Planet::create_sun(),
@@ -184,10 +193,23 @@ pub fn setup_space(
             emissive_handle.clone()
         };
 
+        #[cfg(target_arch = "wasm32")]
+        let material = create_planet_material(
+            None,
+            None,
+            None,
+            base_color,
+            emissive,
+            planet.name == "Sun",
+            metallic,
+            reflectance,
+            perceptual_roughness,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
         let material = create_planet_material(
             albedo_handle.clone(),
             None,
-            emissive_texture,
+            emissive_texture.clone(),
             base_color,
             emissive,
             planet.name == "Sun",
@@ -218,19 +240,26 @@ pub fn setup_space(
             })
             .id();
 
+        #[cfg(target_arch = "wasm32")]
+        {
+            commands.entity(planet_entity).insert(PendingMaterialTextures {
+                material: material_handle.clone(),
+                base_color_texture: albedo_handle.clone(),
+                normal_map_texture: None,
+                emissive_texture,
+            });
+        }
+
         entity_map.insert(planet.name.clone(), planet_entity);
         position_map.insert(planet.name.clone(), initial_position);
 
         if let Some(parent_name) = &planet.parent_entity {
             if let Some(parent_ent) = entity_map.get(parent_name).copied() {
                 let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
-                let orbit_mesh = create_orbit_mesh_ellipse(&mut meshes, &orbit_shape);
                 let orbit_base_color = planet.color;
-                let orbit_material_handle = materials.add(create_orbit_material(
-                    orbit_base_color,
-                    orbit_emissive(orbit_base_color, 0.8),
-                    0.35,
-                ));
+                let orbit_mesh =
+                    create_orbit_mesh_ellipse(&mut meshes, &orbit_shape, orbit_base_color);
+                let orbit_material_handle = shared_orbit_material.clone();
                 let orbit_motion =
                     orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
@@ -262,13 +291,10 @@ pub fn setup_space(
             }
         } else if planet.name != "Sun" {
             let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
-            let orbit_mesh = create_orbit_mesh_ellipse(&mut meshes, &orbit_shape);
             let orbit_base_color = planet.color;
-            let orbit_material_handle = materials.add(create_orbit_material(
-                orbit_base_color,
-                orbit_emissive(orbit_base_color, 0.7),
-                0.30,
-            ));
+            let orbit_mesh =
+                create_orbit_mesh_ellipse(&mut meshes, &orbit_shape, orbit_base_color);
+            let orbit_material_handle = shared_orbit_material.clone();
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
             // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
@@ -298,16 +324,26 @@ pub fn setup_space(
             let ring_inner_radius = visual_radius * 1.6;
             let ring_texture = load_texture(&asset_server, get_ring_texture_path(&planet.name));
 
+            #[cfg(target_arch = "wasm32")]
+            let ring_material = create_ring_material(
+                None,
+                Color::srgba(1.5, 1.4, 1.2, 1.0),
+                Color::srgb(0.3, 0.25, 0.18).into(),
+            );
+            #[cfg(not(target_arch = "wasm32"))]
+            let ring_material = create_ring_material(
+                ring_texture.clone(),
+                Color::srgba(1.5, 1.4, 1.2, 1.0),
+                Color::srgb(0.3, 0.25, 0.18).into(),
+            );
+            let ring_material_handle = materials.add(ring_material);
+
             // Spawn rings as child of Saturn so they follow the planet
             commands.entity(planet_entity).with_children(|parent| {
-                parent.spawn((
+                let mut ring_entity = parent.spawn((
                     PbrBundle {
                         mesh: create_ring_mesh(&mut meshes, ring_inner_radius, ring_outer_radius),
-                        material: materials.add(create_ring_material(
-                            ring_texture,
-                            Color::srgba(1.5, 1.4, 1.2, 1.0),
-                            Color::srgb(0.3, 0.25, 0.18).into(),
-                        )),
+                        material: ring_material_handle.clone(),
                         transform: Transform::default(), // Relative to parent (Saturn)
                         ..default()
                     },
@@ -316,23 +352,48 @@ pub fn setup_space(
                         selected: false,
                     },
                 ));
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    ring_entity.insert(PendingMaterialTextures {
+                        material: ring_material_handle.clone(),
+                        base_color_texture: ring_texture,
+                        normal_map_texture: None,
+                        emissive_texture: None,
+                    });
+                }
             });
         }
 
         if let Some(clouds) = get_cloud_layer_config(&planet.name) {
             if let Some(cloud_texture) = load_texture(&asset_server, Some(clouds.texture_path)) {
                 commands.entity(planet_entity).with_children(|parent| {
-                    parent.spawn((
+                    #[cfg(target_arch = "wasm32")]
+                    let cloud_material = create_cloud_material(None, clouds.alpha);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let cloud_material = create_cloud_material(Some(cloud_texture.clone()), clouds.alpha);
+                    let cloud_material_handle = materials.add(cloud_material);
+
+                    let mut cloud_entity = parent.spawn((
                         PbrBundle {
                             mesh: create_uv_sphere_mesh(&mut meshes, visual_radius * clouds.scale),
-                            material: materials
-                                .add(create_cloud_material(Some(cloud_texture), clouds.alpha)),
+                            material: cloud_material_handle.clone(),
                             ..default()
                         },
                         CloudLayer {
                             rotation_period_hours: clouds.rotation_period_hours,
                         },
                     ));
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        cloud_entity.insert(PendingMaterialTextures {
+                            material: cloud_material_handle.clone(),
+                            base_color_texture: Some(cloud_texture),
+                            normal_map_texture: None,
+                            emissive_texture: None,
+                        });
+                    }
                 });
             }
         }
@@ -397,6 +458,11 @@ struct CloudLayerConfig {
     alpha: f32,
     rotation_period_hours: f32,
     scale: f32,
+}
+
+#[derive(Resource)]
+pub(crate) struct SharedOrbitMaterial {
+    pub(crate) handle: Handle<StandardMaterial>,
 }
 
 fn get_planet_textures(planet_name: &str) -> PlanetTextureSet {

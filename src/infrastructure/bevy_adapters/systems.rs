@@ -293,36 +293,36 @@ pub fn update_orbit_visuals(
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<&OrbitComponent>,
+    shared: Option<Res<crate::application::solar_system_startup::SharedOrbitMaterial>>,
 ) {
     // Performance optimization: update orbit visuals only every 3 frames
     // Visual pulsing is slow enough that this is imperceptible
     let frame_number = (time.elapsed_seconds() * 60.0) as u32; // Assume 60 FPS
-    if frame_number % 3 != 0 {
+    #[cfg(target_arch = "wasm32")]
+    let update_stride = 6;
+    #[cfg(not(target_arch = "wasm32"))]
+    let update_stride = 3;
+
+    if frame_number % update_stride != 0 {
         return;
     }
 
     let elapsed = time.elapsed_seconds();
 
-    for orbit in query.iter() {
-        let wobble_phase = elapsed * orbit.wobble_speed + orbit.phase;
+    if query.is_empty() {
+        return;
+    }
 
-        // Don't modify transform - keep the rotation set at spawn time for precision
-        // This ensures moons follow their orbital paths exactly
+    let Some(shared) = shared else {
+        return;
+    };
 
-        if let Some(material) = materials.get_mut(&orbit.material) {
-            // Smooth, slow pulsing for aesthetic effect
-            let pulse = 0.5 + 0.5 * (wobble_phase * 0.4).sin();
-            let alpha = (0.25 + 0.15 * pulse).clamp(0.20, 0.45); // More visible, smoother pulse
-            material.base_color = orbit.base_color.with_alpha(alpha);
-            let linear: LinearRgba = orbit.base_color.into();
-            let glow = 0.6 + 0.35 * pulse; // Stronger base glow with subtle pulse
-            material.emissive = LinearRgba::new(
-                linear.red * glow,
-                linear.green * glow,
-                linear.blue * glow,
-                1.0,
-            );
-        }
+    if let Some(material) = materials.get_mut(&shared.handle) {
+        let pulse = 0.5 + 0.5 * (elapsed * 0.18).sin();
+        let alpha = (0.25 + 0.15 * pulse).clamp(0.2, 0.45);
+        material.base_color = Color::srgb(1.0, 1.0, 1.0).with_alpha(alpha);
+        let glow = 0.6 + 0.35 * pulse;
+        material.emissive = LinearRgba::new(glow, glow, glow, 1.0);
     }
 }
 
@@ -365,7 +365,12 @@ pub fn update_planet_reflections(
 ) {
     // Performance optimization: skip most updates since values don't change
     let frame_number = (time.elapsed_seconds() * 60.0) as u32;
-    if frame_number % 5 != 0 {
+    #[cfg(target_arch = "wasm32")]
+    let update_stride = 10;
+    #[cfg(not(target_arch = "wasm32"))]
+    let update_stride = 5;
+
+    if frame_number % update_stride != 0 {
         return;
     }
 
@@ -377,6 +382,58 @@ pub fn update_planet_reflections(
             material.perceptual_roughness = planet_comp.base_roughness;
             material.reflectance = planet_comp.base_reflectance;
         }
+    }
+}
+
+pub fn apply_pending_material_textures(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    images: Res<Assets<Image>>,
+    query: Query<(Entity, &PendingMaterialTextures)>,
+    mut throttle: Local<f32>,
+) {
+    #[cfg(target_arch = "wasm32")]
+    let cooldown = 0.5;
+    #[cfg(not(target_arch = "wasm32"))]
+    let cooldown = 0.0;
+
+    *throttle -= time.delta_seconds();
+    if *throttle > 0.0 {
+        return;
+    }
+
+    for (entity, pending) in query.iter() {
+
+        let base_ready = pending
+            .base_color_texture
+            .as_ref()
+            .map(|handle| images.get(handle).is_some())
+            .unwrap_or(true);
+        let emissive_ready = pending
+            .emissive_texture
+            .as_ref()
+            .map(|handle| images.get(handle).is_some())
+            .unwrap_or(true);
+        let normal_ready = pending
+            .normal_map_texture
+            .as_ref()
+            .map(|handle| images.get(handle).is_some())
+            .unwrap_or(true);
+
+        if !base_ready || !emissive_ready || !normal_ready {
+            continue;
+        }
+
+        if let Some(material) = materials.get_mut(&pending.material) {
+            material.base_color_texture = pending.base_color_texture.clone();
+            material.emissive_texture = pending.emissive_texture.clone();
+            material.normal_map_texture = pending.normal_map_texture.clone();
+        }
+
+        commands.entity(entity).remove::<PendingMaterialTextures>();
+        *throttle = cooldown;
+        break;
     }
 }
 
@@ -1129,6 +1186,68 @@ pub fn update_performance_stats(
     // Automatic quality adjustment based on frame time
     if performance_stats.adaptive_enabled {
         adjust_quality_based_on_performance(&mut performance_stats, &mut solar_params);
+    }
+}
+
+pub fn update_dynamic_resolution(
+    time: Res<Time>,
+    performance_stats: Res<PerformanceStats>,
+    mut state: ResMut<DynamicResolutionState>,
+    mut windows: Query<&mut Window>,
+) {
+    if state.cooldown > 0.0 {
+        state.cooldown -= time.delta_seconds();
+        return;
+    }
+
+    let avg_fps = if performance_stats.average_frame_time > 0.0 {
+        1000.0 / performance_stats.average_frame_time
+    } else {
+        performance_stats.fps
+    };
+    let target = performance_stats.target_fps;
+    let mut new_scale = state.scale;
+
+    if avg_fps < target - 5.0 {
+        new_scale = (state.scale - 0.05).max(state.min_scale);
+    } else if avg_fps > target + 8.0 {
+        new_scale = (state.scale + 0.05).min(state.max_scale);
+    }
+
+    if (new_scale - state.scale).abs() < f32::EPSILON {
+        return;
+    }
+
+    if let Ok(mut window) = windows.get_single_mut() {
+        let base_scale = window.resolution.base_scale_factor();
+        window
+            .resolution
+            .set_scale_factor_override(Some(base_scale * new_scale));
+    }
+
+    state.scale = new_scale;
+    state.cooldown = 0.5;
+}
+
+pub fn apply_initial_dynamic_resolution(
+    state: Res<DynamicResolutionState>,
+    mut windows: Query<&mut Window>,
+) {
+    if let Ok(mut window) = windows.get_single_mut() {
+        let base_scale = window.resolution.base_scale_factor();
+        window
+            .resolution
+            .set_scale_factor_override(Some(base_scale * state.scale));
+    }
+}
+
+pub fn cap_fixed_overstep(mut fixed_time: ResMut<Time<Fixed>>) {
+    let max_overstep = std::time::Duration::from_secs_f32(
+        fixed_time.timestep().as_secs_f32() * 2.0,
+    );
+    let overstep = fixed_time.overstep();
+    if overstep > max_overstep {
+        fixed_time.discard_overstep(overstep - max_overstep);
     }
 }
 

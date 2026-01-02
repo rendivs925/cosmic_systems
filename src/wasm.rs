@@ -1,5 +1,7 @@
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
+use bevy::render::view::Msaa;
+use bevy::time::Fixed;
 use crate::infrastructure::bevy_adapters::components::PerformanceStats;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -20,8 +22,8 @@ fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
 
 use crate::application::startup::*;
 use crate::infrastructure::bevy_adapters::components::{
-    CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
-    UiPointerState,
+    CameraInputState, DynamicResolutionState, HoveredPlanet, NotificationQueue, ScreenshotState,
+    SelectedPlanet, UiPointerState,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::presentation::ui::*;
@@ -55,6 +57,7 @@ pub fn main() {
 
     let mut app = App::new();
     app.add_plugins(plugins);
+    app.insert_resource(Msaa::Off);
 
     // Solar system mode (no gyro mode for web)
     app.insert_resource(SelectedPlanet {
@@ -70,11 +73,18 @@ pub fn main() {
         hide_for_screenshot: false,
     });
     app.insert_resource(ScreenshotState { pending: false });
-    app.insert_resource(PerformanceStats::default());
+    let mut perf_stats = PerformanceStats::default();
+    perf_stats.target_fps = 45.0;
+    app.insert_resource(perf_stats);
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
+    let mut dynamic_resolution = DynamicResolutionState::default();
+    dynamic_resolution.scale = 0.8;
+    app.insert_resource(dynamic_resolution);
+    app.insert_resource(Time::<Fixed>::from_hz(30.0));
     app.add_systems(Startup, setup_space);
     app.add_systems(Startup, setup_ui);
+    app.add_systems(Startup, apply_initial_dynamic_resolution);
 
     // Physics systems run on FixedUpdate for consistent simulation
     app.add_systems(FixedUpdate, update_planet_positions);
@@ -83,6 +93,7 @@ pub fn main() {
     app.add_systems(Update, update_orbit_visuals);
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(Update, update_planet_reflections);
+    app.add_systems(Update, apply_pending_material_textures);
     app.add_systems(Update, handle_solar_system_input);
     app.add_systems(Update, handle_planet_selection);
     app.add_systems(Update, handle_mouse_planet_selection);
@@ -90,9 +101,11 @@ pub fn main() {
     app.add_systems(Update, update_navbar);
     app.add_systems(
         Update,
-        update_planet_selection_visuals.run_if(every_n_frames(2)),
+        update_planet_selection_visuals.run_if(every_n_frames(4)),
     );
     app.add_systems(Update, update_performance_stats);
+    app.add_systems(Update, update_dynamic_resolution);
+    app.add_systems(Update, cap_fixed_overstep);
     app.add_systems(Update, update_info_card);
     app.add_systems(Update, update_notifications_ui);
     app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));

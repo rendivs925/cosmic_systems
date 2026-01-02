@@ -22,6 +22,14 @@ pub struct PlanetComponent {
     pub base_roughness: f32,
 }
 
+#[derive(Component)]
+pub struct PendingMaterialTextures {
+    pub material: Handle<StandardMaterial>,
+    pub base_color_texture: Option<Handle<Image>>,
+    pub normal_map_texture: Option<Handle<Image>>,
+    pub emissive_texture: Option<Handle<Image>>,
+}
+
 // Component for orbital path visualization
 #[derive(Component)]
 pub struct OrbitComponent {
@@ -143,6 +151,25 @@ impl Default for CameraInputState {
             last_input_time: -1000.0,
             suppress_auto_inspect_for: None,
             last_selected_entity: None,
+        }
+    }
+}
+
+#[derive(Resource)]
+pub struct DynamicResolutionState {
+    pub scale: f32,
+    pub min_scale: f32,
+    pub max_scale: f32,
+    pub cooldown: f32,
+}
+
+impl Default for DynamicResolutionState {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            min_scale: 0.6,
+            max_scale: 1.0,
+            cooldown: 0.0,
         }
     }
 }
