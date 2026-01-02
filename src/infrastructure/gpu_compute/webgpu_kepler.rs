@@ -3,6 +3,7 @@ use crate::infrastructure::bevy_adapters::components::QualityLevel;
 use bevy::math::Vec3;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 
 /// Most Advanced Kepler Solver with Ultimate CPU Optimizations
@@ -123,6 +124,7 @@ impl WebGpuKeplerSolver {
         }).collect()
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub async fn solve_positions(
         &self,
         inputs: &[PlanetGpuInput],
