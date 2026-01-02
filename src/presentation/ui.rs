@@ -53,9 +53,19 @@ pub(crate) struct SelectorPanelRoot;
 #[derive(Component)]
 pub(crate) struct SelectorMoonsSection;
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub(crate) struct UiMenuState {
     selector_open: bool,
+    info_card_open: bool,
+}
+
+impl Default for UiMenuState {
+    fn default() -> Self {
+        Self {
+            selector_open: false,
+            info_card_open: true,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -69,6 +79,12 @@ pub(crate) struct InfoCardSubtitle;
 
 #[derive(Component)]
 pub(crate) struct InfoCardBody;
+
+#[derive(Component)]
+pub(crate) struct InfoCardToggleButton;
+
+#[derive(Component)]
+pub(crate) struct InfoCardExternalToggle;
 
 #[derive(Component)]
 pub(crate) struct NotificationLayer;
@@ -291,10 +307,52 @@ pub(crate) fn setup_ui(mut commands: Commands) {
         .id();
 
     commands.entity(info_card).with_children(|parent| {
-        parent.spawn((
-            TextBundle::from_section("", text_style(18.0, Color::srgb(0.9, 0.94, 1.0))),
-            InfoCardTitle,
-        ));
+        parent
+            .spawn(NodeBundle {
+                style: Style {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceBetween,
+                    ..default()
+                },
+                ..default()
+            })
+            .with_children(|header| {
+                header.spawn((
+                    TextBundle::from_section(
+                        "",
+                        text_style(18.0, Color::srgb(0.9, 0.94, 1.0)),
+                    ),
+                    InfoCardTitle,
+                ));
+                header
+                    .spawn((
+                        ButtonBundle {
+                            style: Style {
+                                padding: UiRect::new(
+                                    Val::Px(10.0),
+                                    Val::Px(10.0),
+                                    Val::Px(4.0),
+                                    Val::Px(4.0),
+                                ),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
+                            border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.28)),
+                            border_radius: BorderRadius::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                        InfoCardToggleButton,
+                        UiCapture,
+                    ))
+                    .with_children(|button| {
+                        button.spawn(TextBundle::from_section(
+                            "Hide",
+                            text_style(10.0, Color::srgb(0.74, 0.8, 0.9)),
+                        ));
+                    });
+            });
         parent.spawn((
             TextBundle::from_section("", text_style(11.0, Color::srgb(0.51, 0.59, 0.71))),
             InfoCardSubtitle,
@@ -309,6 +367,33 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 ..default()
             },
             InfoCardBody,
+        ));
+    });
+
+    commands.spawn((
+        ButtonBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                right: Val::Px(20.0),
+                top: Val::Px(20.0),
+                padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(6.0), Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                display: Display::None,
+                ..default()
+            },
+            background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+            border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+            border_radius: BorderRadius::all(Val::Px(12.0)),
+            ..default()
+        },
+        InfoCardToggleButton,
+        InfoCardExternalToggle,
+        UiCapture,
+    ))
+    .with_children(|button| {
+        button.spawn(TextBundle::from_section(
+            "Info",
+            text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
         ));
     });
 
@@ -341,6 +426,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
 pub(crate) fn handle_nav_interactions(
     interactions: Query<(&Interaction, &NavButton), Changed<Interaction>>,
     menu_interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
+    info_card_interactions: Query<&Interaction, (Changed<Interaction>, With<InfoCardToggleButton>)>,
     mut selected_planet: ResMut<SelectedPlanet>,
     mut selectable_query: Query<(Entity, &mut Selectable)>,
     mut solar_params: ResMut<SolarSystemParameters>,
@@ -367,6 +453,12 @@ pub(crate) fn handle_nav_interactions(
         }
     }
 
+    for interaction in info_card_interactions.iter() {
+        if *interaction == Interaction::Pressed {
+            menu_state.info_card_open = !menu_state.info_card_open;
+        }
+    }
+
     for (interaction, button) in interactions.iter() {
         if *interaction != Interaction::Pressed {
             continue;
@@ -383,6 +475,9 @@ pub(crate) fn handle_nav_interactions(
         selected_planet.entity = target_entity;
         selected_planet.name = target_entity.map(|_| button.name.clone());
         menu_state.selector_open = false;
+        if target_entity.is_some() {
+            menu_state.info_card_open = true;
+        }
 
         for (entity, mut selectable) in selectable_query.iter_mut() {
             selectable.selected = Some(entity) == target_entity;
@@ -402,6 +497,7 @@ pub(crate) fn update_navbar(
         Query<&mut Text, With<FpsText>>,
         Query<&mut Style, With<SelectorPanelRoot>>,
         Query<&mut Style, With<SelectorMoonsSection>>,
+        Query<&mut Style, With<InfoCardExternalToggle>>,
     )>,
 ) {
     let selected_name = selected_planet.name.as_deref();
@@ -424,6 +520,14 @@ pub(crate) fn update_navbar(
             Display::Flex
         } else {
             Display::None
+        };
+    }
+
+    for mut style in queries.p5().iter_mut() {
+        style.display = if menu_state.info_card_open {
+            Display::None
+        } else {
+            Display::Flex
         };
     }
 
@@ -479,6 +583,7 @@ pub(crate) fn update_navbar(
 pub(crate) fn update_info_card(
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<&PlanetComponent>,
+    menu_state: Res<UiMenuState>,
     mut root_query: Query<&mut Style, With<InfoCardRoot>>,
     mut text_queries: ParamSet<(
         Query<&mut Text, With<InfoCardTitle>>,
@@ -487,6 +592,11 @@ pub(crate) fn update_info_card(
     )>,
 ) {
     let Ok(mut root_style) = root_query.get_single_mut() else {
+        return;
+    };
+
+    if !menu_state.info_card_open {
+        root_style.display = Display::None;
         return;
     };
 
