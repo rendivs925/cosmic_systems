@@ -105,44 +105,41 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 NodeBundle {
                     style: Style {
                         width: Val::Percent(100.0),
-                        height: Val::Px(64.0),
+                        height: Val::Px(44.0),
                         padding: UiRect::new(
-                            Val::Px(20.0),
-                            Val::Px(20.0),
-                            Val::Px(8.0),
-                            Val::Px(8.0),
+                            Val::Px(12.0),
+                            Val::Px(12.0),
+                            Val::Px(4.0),
+                            Val::Px(4.0),
                         ),
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-                    border_color: BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
-                    border_radius: BorderRadius::all(Val::Px(18.0)),
                     ..default()
                 },
                 UiCapture,
             ))
             .with_children(|bar| {
-                bar.spawn((
-                    TextBundle {
-                        text: Text::from_section(
+                bar.spawn(NodeBundle {
+                    style: Style {
+                        width: Val::Px(48.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    ..default()
+                })
+                .with_children(|left| {
+                    left.spawn((
+                        TextBundle::from_section(
                             "fps 0",
                             text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
                         ),
-                        style: Style {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(20.0),
-                            top: Val::Px(0.0),
-                            bottom: Val::Px(0.0),
-                            align_self: AlignSelf::Center,
-                            ..default()
-                        },
-                        ..default()
-                    },
-                    FpsText,
-                ));
+                        FpsText,
+                    ));
+                });
 
                 bar.spawn(NodeBundle {
                     style: Style {
@@ -156,6 +153,14 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 .with_children(|menu| {
                     spawn_menu_button(menu, "Explore", MenuAction::Explore, true);
                     spawn_menu_button(menu, "Orbits", MenuAction::Orbits, false);
+                });
+
+                bar.spawn(NodeBundle {
+                    style: Style {
+                        width: Val::Px(48.0),
+                        ..default()
+                    },
+                    ..default()
                 });
             });
 
