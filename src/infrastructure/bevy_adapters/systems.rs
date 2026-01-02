@@ -614,7 +614,8 @@ pub fn queue_pending_material_textures(
     mut texture_worker: NonSendMut<TextureDecodeWorker>,
 ) {
     let camera_pos = camera_query.single().translation();
-    let mut load_budget = 1usize;
+    let worker_count = texture_worker.worker_count();
+    let mut load_budget = if worker_count == 0 { 1 } else { worker_count.min(4) };
 
     for (entity, mut pending) in pending_query.iter_mut() {
         if load_budget == 0 {

@@ -14,14 +14,15 @@ use web_sys::{
 
 pub struct TextureDecodeWorker {
     enabled: bool,
-    worker: Option<Worker>,
-    callback: Option<Closure<dyn FnMut(MessageEvent)>>,
+    workers: Vec<Worker>,
+    callbacks: Vec<Closure<dyn FnMut(MessageEvent)>>,
     results: Rc<RefCell<VecDeque<TextureWorkerResult>>>,
     inflight: HashSet<String>,
     cache: HashMap<String, Handle<Image>>,
     canvas: Option<HtmlCanvasElement>,
     context: Option<CanvasRenderingContext2d>,
     base_url: Option<String>,
+    next_worker: usize,
 }
 
 pub struct TextureWorkerResult {
@@ -35,8 +36,8 @@ impl TextureDecodeWorker {
         let results = Rc::new(RefCell::new(VecDeque::new()));
         let mut worker = TextureDecodeWorker {
             enabled: false,
-            worker: None,
-            callback: None,
+            workers: Vec::new(),
+            callbacks: Vec::new(),
             results,
             inflight: HashSet::new(),
             cache: HashMap::new(),
@@ -44,6 +45,7 @@ impl TextureDecodeWorker {
             context: None,
             base_url: web_sys::window()
                 .and_then(|window| window.location().href().ok()),
+            next_worker: 0,
         };
 
         let canvas = match create_canvas() {
@@ -60,39 +62,46 @@ impl TextureDecodeWorker {
             None => return worker,
         };
 
-        let worker_handle = match create_worker() {
-            Ok(worker) => worker,
-            Err(err) => {
-                web_sys::console::error_1(&err);
-                return worker;
-            }
-        };
-
-        let results = Rc::clone(&worker.results);
-        let callback = Closure::<dyn FnMut(MessageEvent)>::wrap(Box::new(move |event| {
-            let data = event.data();
-            let path = Reflect::get(&data, &JsValue::from_str("path"))
-                .ok()
-                .and_then(|value| value.as_string());
-            let bitmap_value = Reflect::get(&data, &JsValue::from_str("bitmap")).ok();
-            let bitmap = bitmap_value
-                .and_then(|value| value.dyn_into::<ImageBitmap>().ok());
-            let error = Reflect::get(&data, &JsValue::from_str("error"))
-                .ok()
-                .and_then(|value| value.as_string());
-
-            let Some(path) = path else {
-                return;
+        let worker_count = TextureDecodeWorker::optimal_worker_count();
+        for _ in 0..worker_count {
+            let worker_handle = match create_worker() {
+                Ok(worker) => worker,
+                Err(err) => {
+                    web_sys::console::error_1(&err);
+                    continue;
+                }
             };
 
-            results.borrow_mut().push_back(TextureWorkerResult { path, bitmap, error });
-        }));
+            let results = Rc::clone(&worker.results);
+            let callback = Closure::<dyn FnMut(MessageEvent)>::wrap(Box::new(move |event| {
+                let data = event.data();
+                let path = Reflect::get(&data, &JsValue::from_str("path"))
+                    .ok()
+                    .and_then(|value| value.as_string());
+                let bitmap_value = Reflect::get(&data, &JsValue::from_str("bitmap")).ok();
+                let bitmap = bitmap_value
+                    .and_then(|value| value.dyn_into::<ImageBitmap>().ok());
+                let error = Reflect::get(&data, &JsValue::from_str("error"))
+                    .ok()
+                    .and_then(|value| value.as_string());
 
-        worker_handle.set_onmessage(Some(callback.as_ref().unchecked_ref()));
+                let Some(path) = path else {
+                    return;
+                };
+
+                results.borrow_mut().push_back(TextureWorkerResult { path, bitmap, error });
+            }));
+
+            worker_handle.set_onmessage(Some(callback.as_ref().unchecked_ref()));
+            worker.workers.push(worker_handle);
+            worker.callbacks.push(callback);
+        }
+
+        if worker.workers.is_empty() {
+            return worker;
+        }
 
         worker.enabled = true;
-        worker.worker = Some(worker_handle);
-        worker.callback = Some(callback);
         worker.canvas = Some(canvas);
         worker.context = Some(context);
         worker
@@ -100,6 +109,10 @@ impl TextureDecodeWorker {
 
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn worker_count(&self) -> usize {
+        self.workers.len()
     }
 
     pub fn cached_handle(&self, path: &str) -> Option<Handle<Image>> {
@@ -118,7 +131,11 @@ impl TextureDecodeWorker {
         if self.inflight.contains(&resolved_path) || self.cache.contains_key(&resolved_path) {
             return;
         }
-        let Some(worker) = self.worker.as_ref() else {
+        if self.workers.is_empty() {
+            return;
+        }
+        let worker_index = self.next_worker % self.workers.len();
+        let Some(worker) = self.workers.get(worker_index) else {
             return;
         };
         let message = js_sys::Object::new();
@@ -136,6 +153,7 @@ impl TextureDecodeWorker {
         }
         if worker.post_message(&message).is_ok() {
             self.inflight.insert(resolved_path);
+            self.next_worker = self.next_worker.wrapping_add(1);
         }
     }
 
@@ -244,4 +262,13 @@ fn normalize_asset_path(path: &str) -> String {
         return path.to_string();
     }
     format!("assets/{}", path)
+}
+
+impl TextureDecodeWorker {
+    fn optimal_worker_count() -> usize {
+        let cores = web_sys::window()
+            .map(|window| window.navigator().hardware_concurrency() as usize)
+            .unwrap_or(4);
+        (cores.saturating_mul(2)).min(8).max(2)
+    }
 }
