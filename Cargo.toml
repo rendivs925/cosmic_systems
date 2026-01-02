@@ -15,6 +15,7 @@ required-features = ["native"]
 [dependencies]
 bevy = { version = "0.14.0" }
 rand = "0.8.5"
+bumpalo = "3.14"        # Arena-based memory allocation
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"
@@ -25,6 +26,7 @@ log = "0.4"
 uuid = { version = "1.19", features = ["js"] }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["console", "Document", "Element", "Window"] }
+serde-wasm-bindgen = "0.6"  # Web Worker communication
 
 [dependencies.rayon]
 version = "1.8"

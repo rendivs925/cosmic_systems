@@ -20,16 +20,57 @@ fn normalized_or_zero(vec: Vec3) -> Vec3 {
 // System to update gyroscopes
 pub fn update_gyroscopes(
     time: Res<Time>,
-    params: Res<SimulationParameters>,
-    mut query: Query<(&mut Transform, &mut GyroscopeComponent)>,
+    mut query: Query<(&mut GyroscopeComponent, &mut Transform)>,
 ) {
-    for (mut transform, mut gyro_comp) in query.iter_mut() {
-        let spin_axis = Vec3::Y; // Assuming Y axis for spin
-        SimulationService::update_gyroscope(&mut gyro_comp.domain_gyro, &params, spin_axis);
-        let precession_angle =
-            SimulationService::get_precession_angle(&gyro_comp.domain_gyro, time.delta_seconds());
-        transform.rotate_y(precession_angle);
+    for (mut gyro, mut transform) in query.iter_mut() {
+        // Update gyroscope rotation based on time
+        let spin_rate = gyro.domain_gyro.spin_rate;
+        let precession_rate = gyro.domain_gyro.precession_rate;
+        let delta_time = time.delta_seconds();
+
+        // Apply spin rotation around the angular momentum axis
+        let spin_rotation = Quat::from_axis_angle(
+            gyro.domain_gyro.angular_momentum.normalize(),
+            spin_rate * delta_time
+        );
+        transform.rotate(spin_rotation);
+
+        // Apply precession (wobble) if precession rate > 0
+        if precession_rate > 0.0 {
+            let precession_axis = Vec3::Y; // Precession around Y axis
+            let precession_rotation = Quat::from_axis_angle(
+                precession_axis,
+                precession_rate * delta_time
+            );
+            transform.rotate(precession_rotation);
+        }
     }
+}
+
+// Performance monitoring and quality adaptation system
+pub fn update_performance_monitor(
+    mut perf_stats: ResMut<PerformanceStats>,
+    mut quality_controller: ResMut<QualityController>,
+    time: Res<Time>,
+) {
+    // Update frame time history
+    perf_stats.frame_time = time.delta_seconds();
+    quality_controller.frame_times.push_back(perf_stats.frame_time);
+
+    if quality_controller.frame_times.len() > 60 {
+        quality_controller.frame_times.pop_front();
+    }
+
+    // Calculate average FPS
+    let avg_frame_time = quality_controller.frame_times.iter().sum::<f32>()
+                       / quality_controller.frame_times.len() as f32;
+    perf_stats.fps = 1.0 / avg_frame_time;
+
+    // Update quality level in PerformanceStats to match QualityController
+    perf_stats.quality_level = quality_controller.current_level;
+
+    // Gradual quality adaptation
+    quality_controller.adapt_quality(perf_stats.fps);
 }
 
 // System to update thrust visualization

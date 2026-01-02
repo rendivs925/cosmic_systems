@@ -1,6 +1,7 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use bevy::prelude::*;
+use std::collections::VecDeque;
 
 // Component for gyroscope entities
 #[derive(Component)]
@@ -206,6 +207,58 @@ impl Default for PerformanceStats {
             quality_level: QualityLevel::High,
             target_fps: 60.0,
             adaptive_enabled: true,
+        }
+    }
+}
+
+// Quality controller for gradual performance adaptation
+#[derive(Resource)]
+pub struct QualityController {
+    pub current_level: QualityLevel,
+    pub min_fps: f32,
+    pub frame_times: VecDeque<f32>,
+    pub adaptation_rate: f32, // Gradual 10% changes
+}
+
+impl Default for QualityController {
+    fn default() -> Self {
+        Self {
+            current_level: QualityLevel::High,
+            min_fps: 60.0,
+            frame_times: VecDeque::with_capacity(60), // 1 second at 60 FPS
+            adaptation_rate: 0.1,
+        }
+    }
+}
+
+impl QualityController {
+    pub fn adapt_quality(&mut self, current_fps: f32) {
+        if current_fps < self.min_fps {
+            self.decrease_quality();
+        } else if current_fps > self.min_fps * 1.2 {
+            self.increase_quality();
+        }
+    }
+
+    fn decrease_quality(&mut self) {
+        // Gradual parameter reduction
+        match self.current_level {
+            QualityLevel::Ultra => self.current_level = QualityLevel::High,
+            QualityLevel::High => self.current_level = QualityLevel::Medium,
+            QualityLevel::Medium => self.current_level = QualityLevel::Low,
+            QualityLevel::Low => self.current_level = QualityLevel::Minimal,
+            QualityLevel::Minimal => {} // Can't go lower
+        }
+    }
+
+    fn increase_quality(&mut self) {
+        // Gradual parameter increase
+        match self.current_level {
+            QualityLevel::Ultra => {} // Already at maximum
+            QualityLevel::High => self.current_level = QualityLevel::Ultra,
+            QualityLevel::Medium => self.current_level = QualityLevel::High,
+            QualityLevel::Low => self.current_level = QualityLevel::Medium,
+            QualityLevel::Minimal => self.current_level = QualityLevel::Low,
         }
     }
 }
