@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use crate::infrastructure::bevy_adapters::components::PerformanceStats;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use web_sys;
 
 // Run condition for visual updates (every 3 frames)
@@ -34,6 +35,7 @@ pub fn main() {
         primary_window: Some(Window {
             title: "Cosmic Systems Simulator".to_string(),
             canvas: Some("#bevy".to_owned()),
+            fit_canvas_to_parent: true,
             resolution: (1280.0, 720.0).into(),
             ..default()
         }),
@@ -89,9 +91,35 @@ pub fn main() {
     app.add_systems(Update, apply_camera_transform);
     app.add_systems(Update, auto_inspect_selected_planet);
 
-    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
-        if let Ok(Some(loading)) = document.query_selector(".loading") {
-            loading.remove();
+    if let Some(window) = web_sys::window() {
+        if let Some(document) = window.document() {
+            if let Some(root) = document.document_element() {
+                let _ = root.style().set_property("width", "100%");
+                let _ = root.style().set_property("height", "100%");
+                let _ = root.style().set_property("margin", "0");
+                let _ = root.style().set_property("padding", "0");
+                let _ = root.style().set_property("overflow", "hidden");
+            }
+
+            if let Some(body) = document.body() {
+                let _ = body.style().set_property("width", "100%");
+                let _ = body.style().set_property("height", "100%");
+                let _ = body.style().set_property("margin", "0");
+                let _ = body.style().set_property("padding", "0");
+                let _ = body.style().set_property("overflow", "hidden");
+            }
+
+            if let Ok(Some(canvas)) = document.query_selector("#bevy") {
+                if let Ok(canvas) = canvas.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = canvas.style().set_property("width", "100%");
+                    let _ = canvas.style().set_property("height", "100%");
+                    let _ = canvas.style().set_property("display", "block");
+                }
+            }
+
+            if let Ok(Some(loading)) = document.query_selector(".loading") {
+                loading.remove();
+            }
         }
     }
 
