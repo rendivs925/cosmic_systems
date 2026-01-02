@@ -550,21 +550,39 @@ pub fn apply_pending_material_textures(
 
     for (entity, pending) in query.iter() {
 
-        let base_ready = pending
-            .base_color_texture
-            .as_ref()
-            .map(|handle| images.get(handle).is_some())
-            .unwrap_or(true);
-        let emissive_ready = pending
-            .emissive_texture
-            .as_ref()
-            .map(|handle| images.get(handle).is_some())
-            .unwrap_or(true);
-        let normal_ready = pending
-            .normal_map_texture
-            .as_ref()
-            .map(|handle| images.get(handle).is_some())
-            .unwrap_or(true);
+        let wants_base = pending.base_color_texture.is_some() || pending.base_color_path.is_some();
+        let wants_emissive =
+            pending.emissive_texture.is_some() || pending.emissive_path.is_some();
+        let wants_normal =
+            pending.normal_map_texture.is_some() || pending.normal_map_path.is_some();
+
+        let base_ready = if wants_base {
+            pending
+                .base_color_texture
+                .as_ref()
+                .and_then(|handle| images.get(handle))
+                .is_some()
+        } else {
+            true
+        };
+        let emissive_ready = if wants_emissive {
+            pending
+                .emissive_texture
+                .as_ref()
+                .and_then(|handle| images.get(handle))
+                .is_some()
+        } else {
+            true
+        };
+        let normal_ready = if wants_normal {
+            pending
+                .normal_map_texture
+                .as_ref()
+                .and_then(|handle| images.get(handle))
+                .is_some()
+        } else {
+            true
+        };
 
         if !base_ready || !emissive_ready || !normal_ready {
             continue;
@@ -579,6 +597,72 @@ pub fn apply_pending_material_textures(
         commands.entity(entity).remove::<PendingMaterialTextures>();
         *throttle = cooldown;
         break;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn queue_pending_material_textures(
+    asset_server: Res<AssetServer>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    selected_planet: Res<SelectedPlanet>,
+    planet_query: Query<&PlanetComponent>,
+    transforms: Query<&GlobalTransform>,
+    parents: Query<&Parent>,
+    mut pending_query: Query<(Entity, &mut PendingMaterialTextures)>,
+) {
+    let camera_pos = camera_query.single().translation();
+    let mut load_budget = 1usize;
+
+    for (entity, mut pending) in pending_query.iter_mut() {
+        if load_budget == 0 {
+            break;
+        }
+
+        let target_entity = if planet_query.get(entity).is_ok() {
+            entity
+        } else if let Ok(parent) = parents.get(entity) {
+            parent.get()
+        } else {
+            entity
+        };
+
+        let mut should_load = pending.eager;
+        if let Some(selected) = selected_planet.entity {
+            if selected == target_entity {
+                should_load = true;
+            }
+        }
+
+        if !should_load {
+            if let Ok(transform) = transforms.get(target_entity) {
+                let distance = camera_pos.distance(transform.translation());
+                if distance < 200_000.0 {
+                    should_load = true;
+                }
+            }
+        }
+
+        if !should_load {
+            continue;
+        }
+
+        if pending.base_color_texture.is_none() {
+            if let Some(path) = pending.base_color_path {
+                pending.base_color_texture = Some(asset_server.load(path));
+                load_budget = load_budget.saturating_sub(1);
+            }
+        }
+
+        if load_budget == 0 {
+            break;
+        }
+
+        if pending.emissive_texture.is_none() {
+            if let Some(path) = pending.emissive_path {
+                pending.emissive_texture = Some(asset_server.load(path));
+                load_budget = load_budget.saturating_sub(1);
+            }
+        }
     }
 }
 

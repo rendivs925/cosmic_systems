@@ -104,6 +104,10 @@ pub fn main() {
     app.add_systems(Update, update_orbit_visuals);
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(Update, update_planet_reflections);
+    app.add_systems(
+        Update,
+        queue_pending_material_textures.before(apply_pending_material_textures),
+    );
     app.add_systems(Update, apply_pending_material_textures);
     app.add_systems(Update, handle_solar_system_input);
     app.add_systems(Update, handle_planet_selection);

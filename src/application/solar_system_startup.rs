@@ -250,9 +250,12 @@ fn spawn_celestial_body(
         parent_tilt,
     );
     let textures = get_planet_textures(&planet.name);
+    let has_albedo = textures.albedo.is_some();
+
+    #[cfg(not(target_arch = "wasm32"))]
     let albedo_handle = load_texture(asset_server, textures.albedo);
+    #[cfg(not(target_arch = "wasm32"))]
     let emissive_handle = load_texture(asset_server, textures.emissive);
-    let has_albedo = albedo_handle.is_some();
 
     let base_color = planet.color;
 
@@ -277,12 +280,22 @@ fn spawn_celestial_body(
         LinearRgba::BLACK
     };
 
+    #[cfg(not(target_arch = "wasm32"))]
     let emissive_texture = if planet.name == "Sun" {
         albedo_handle.clone()
     } else if has_albedo {
         albedo_handle.clone()
     } else {
         emissive_handle.clone()
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let emissive_path = if planet.name == "Sun" {
+        textures.albedo
+    } else if has_albedo {
+        textures.albedo
+    } else {
+        textures.emissive
     };
 
     #[cfg(target_arch = "wasm32")]
@@ -334,11 +347,16 @@ fn spawn_celestial_body(
 
     #[cfg(target_arch = "wasm32")]
     {
+        let eager = matches!(planet.name.as_str(), "Sun" | "Earth");
         commands.entity(planet_entity).insert(PendingMaterialTextures {
             material: material_handle.clone(),
-            base_color_texture: albedo_handle.clone(),
+            base_color_texture: None,
             normal_map_texture: None,
-            emissive_texture,
+            emissive_texture: None,
+            base_color_path: textures.albedo,
+            normal_map_path: None,
+            emissive_path,
+            eager,
         });
     }
 
@@ -409,7 +427,9 @@ fn spawn_celestial_body(
     if planet.name == "Saturn" {
         let ring_outer_radius = visual_radius * 2.5;
         let ring_inner_radius = visual_radius * 1.6;
-        let ring_texture = load_texture(asset_server, get_ring_texture_path(&planet.name));
+        let ring_texture_path = get_ring_texture_path(&planet.name);
+        #[cfg(not(target_arch = "wasm32"))]
+        let ring_texture = load_texture(asset_server, ring_texture_path);
 
         #[cfg(target_arch = "wasm32")]
         let ring_material = create_ring_material(
@@ -443,46 +463,59 @@ fn spawn_celestial_body(
             {
                 ring_entity.insert(PendingMaterialTextures {
                     material: ring_material_handle.clone(),
-                    base_color_texture: ring_texture,
+                    base_color_texture: None,
                     normal_map_texture: None,
                     emissive_texture: None,
+                    base_color_path: ring_texture_path,
+                    normal_map_path: None,
+                    emissive_path: None,
+                    eager: false,
                 });
             }
         });
     }
 
     if let Some(clouds) = get_cloud_layer_config(&planet.name) {
-        if let Some(cloud_texture) = load_texture(asset_server, Some(clouds.texture_path)) {
-            commands.entity(planet_entity).with_children(|parent| {
-                #[cfg(target_arch = "wasm32")]
-                let cloud_material = create_cloud_material(None, clouds.alpha);
-                #[cfg(not(target_arch = "wasm32"))]
-                let cloud_material =
-                    create_cloud_material(Some(cloud_texture.clone()), clouds.alpha);
-                let cloud_material_handle = materials.add(cloud_material);
-
-                let mut cloud_entity = parent.spawn((
-                    PbrBundle {
-                        mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
-                        material: cloud_material_handle.clone(),
-                        ..default()
-                    },
-                    CloudLayer {
-                        rotation_period_hours: clouds.rotation_period_hours,
-                    },
-                ));
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    cloud_entity.insert(PendingMaterialTextures {
-                        material: cloud_material_handle.clone(),
-                        base_color_texture: Some(cloud_texture),
-                        normal_map_texture: None,
-                        emissive_texture: None,
-                    });
-                }
-            });
+        #[cfg(not(target_arch = "wasm32"))]
+        let cloud_texture = load_texture(asset_server, Some(clouds.texture_path));
+        #[cfg(not(target_arch = "wasm32"))]
+        let cloud_material =
+            create_cloud_material(cloud_texture.clone(), clouds.alpha);
+        #[cfg(target_arch = "wasm32")]
+        let cloud_material = create_cloud_material(None, clouds.alpha);
+        #[cfg(not(target_arch = "wasm32"))]
+        if cloud_texture.is_none() {
+            return;
         }
+
+        commands.entity(planet_entity).with_children(|parent| {
+            let cloud_material_handle = materials.add(cloud_material);
+
+            let mut cloud_entity = parent.spawn((
+                PbrBundle {
+                    mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
+                    material: cloud_material_handle.clone(),
+                    ..default()
+                },
+                CloudLayer {
+                    rotation_period_hours: clouds.rotation_period_hours,
+                },
+            ));
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                cloud_entity.insert(PendingMaterialTextures {
+                    material: cloud_material_handle.clone(),
+                    base_color_texture: None,
+                    normal_map_texture: None,
+                    emissive_texture: None,
+                    base_color_path: Some(clouds.texture_path),
+                    normal_map_path: None,
+                    emissive_path: None,
+                    eager: false,
+                });
+            }
+        });
     }
 }
 
