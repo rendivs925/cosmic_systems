@@ -28,7 +28,7 @@ BINARY_NAME := cosmic_systems
 # ============================================================================
 
 help:
-	@echo "🚀 Cosmic Systems Simulation - Performance Optimized Makefile"
+	@echo "Cosmic Systems Simulation - Performance Optimized Makefile"
 	@echo ""
 	@echo "BUILD TARGETS:"
 	@echo "  build           - Build with default features (debug)"
@@ -162,7 +162,7 @@ cpu-profile:
 
 performance-test:
 	@echo "Running performance tests..."
-	@echo "Sequential build:"
+	@echo "Sequential (no features):"
 	time make build-release > /dev/null
 	@echo "Parallel build:"
 	time make build-parallel > /dev/null
@@ -170,6 +170,56 @@ performance-test:
 	time make build-simd > /dev/null
 	@echo "Optimized build:"
 	time make build-optimized > /dev/null
+
+perf-extended: perf-warmup perf-sustained perf-memory perf-comparison
+
+perf-warmup:
+	@echo "Warming up system..."
+	@echo "Running 30-second warmup for each configuration..."
+	@echo "Sequential warmup:"
+	timeout 30s make run-release > /dev/null 2>&1 || true
+	@echo "Parallel warmup:"
+	timeout 30s make run-parallel > /dev/null 2>&1 || true
+	@echo "SIMD warmup:"
+	timeout 30s make run-simd > /dev/null 2>&1 || true
+	@echo "Optimized warmup:"
+	timeout 30s make run-optimized > /dev/null 2>&1 || true
+
+perf-sustained:
+	@echo "Running sustained performance tests (60 seconds each)..."
+	@echo ""
+	@echo "Sequential (no features):"
+	@echo "   Real time:"
+	@timeout 60s time -p make run-release 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@echo ""
+	@echo "Parallel processing:"
+	@echo "   Real time:"
+	@timeout 60s time -p make run-parallel 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@echo ""
+	@echo "SIMD + Parallel:"
+	@echo "   Real time:"
+	@timeout 60s time -p make run-simd 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@echo ""
+	@echo "Maximum optimization:"
+	@echo "   Real time:"
+	@timeout 60s time -p make run-optimized 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+
+perf-memory:
+	@echo "Memory usage analysis..."
+	@echo "Sequential memory usage:"
+	timeout 30s make run-release > /dev/null 2>&1 &
+	sleep 5 && ps aux --no-headers -o pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -5
+	killall cosmic_systems 2>/dev/null || true
+	@echo ""
+	@echo "Parallel memory usage:"
+	timeout 30s make run-parallel > /dev/null 2>&1 &
+	sleep 5 && ps aux --no-headers -o pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -5
+	killall cosmic_systems 2>/dev/null || true
+	@echo ""
+	@echo "SIMD memory usage:"
+	timeout 30s make run-simd > /dev/null 2>&1 &
+	sleep 5 && ps aux --no-headers -o pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -5
+	killall cosmic_systems 2>/dev/null || true
 
 # ============================================================================
 # QUALITY ASSURANCE
@@ -192,7 +242,7 @@ doc:
 	cargo doc --open $(FEATURES_SIMD)
 
 ci-checks: check clippy fmt test
-	@echo "✅ All CI checks passed!"
+	@echo "All CI checks passed!"
 
 # ============================================================================
 # MAINTENANCE
@@ -266,20 +316,44 @@ dev: clean clippy fmt
 
 # Production build with all optimizations
 release-build: clean ci-checks build-optimized
-	@echo "🎯 Release build complete with maximum optimizations!"
+	@echo "Release build complete with maximum optimizations!"
 
-# Performance comparison
+# Performance comparison with extended durations
 perf-compare:
-	@echo "Performance Comparison:"
-	@echo "======================"
+	@echo "Performance Comparison (30-second sustained tests)"
+	@echo "=================================================="
+	@echo ""
 	@echo "Sequential (no features):"
-	time timeout 10s cargo run > /dev/null 2>&1 || true
+	@echo "   Building..."
+	@make build-release > /dev/null 2>&1
+	@echo "   Running..."
+	@timeout 30s time -p cargo run --release > /dev/null 2>&1 || true
+	@echo ""
 	@echo "Parallel processing:"
-	time timeout 10s make run-parallel > /dev/null 2>&1 || true
+	@echo "   Building..."
+	@make build-parallel > /dev/null 2>&1
+	@echo "   Running..."
+	@timeout 30s time -p make run-parallel > /dev/null 2>&1 || true
+	@echo ""
 	@echo "SIMD + Parallel:"
-	time timeout 10s make run-simd > /dev/null 2>&1 || true
+	@echo "   Building..."
+	@make build-simd > /dev/null 2>&1
+	@echo "   Running..."
+	@timeout 30s time -p make run-simd > /dev/null 2>&1 || true
+	@echo ""
 	@echo "Maximum optimization:"
-	time timeout 10s make run-optimized > /dev/null 2>&1 || true
+	@echo "   Building..."
+	@make build-optimized > /dev/null 2>&1
+	@echo "   Running..."
+	@timeout 30s time -p make run-optimized > /dev/null 2>&1 || true
+	@echo ""
+	@echo "Performance Summary:"
+	@echo "   - Sequential: Baseline performance"
+	@echo "   - Parallel: Multi-core Kepler equation processing"
+	@echo "   - SIMD: Vectorized mathematical operations"
+	@echo "   - Optimized: Maximum compiler optimizations"
+	@echo ""
+	@echo "For even better results, run: make perf-extended"
 
 # Memory usage check
 memory-check:
