@@ -3,8 +3,8 @@ use bevy::text::BreakLineOn;
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
-    NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, Selectable,
-    SelectedPlanet, UiPointerState,
+    CameraController, NotificationQueue, NotificationType, PerformanceStats, PlanetComponent,
+    Selectable, SelectedPlanet, UiPointerState,
 };
 
 #[derive(Component)]
@@ -18,14 +18,15 @@ pub(crate) struct UiRoots {
 }
 
 #[derive(Component)]
-pub(crate) struct OrbitToggleButton;
-
-#[derive(Component)]
-pub(crate) struct OrbitToggleLabel;
-
-#[derive(Component)]
 pub(crate) struct NavButton {
     name: String,
+    group: NavGroup,
+}
+
+#[derive(Clone, Copy)]
+enum NavGroup {
+    Planet,
+    Moon(&'static str),
 }
 
 #[derive(Component)]
@@ -33,6 +34,29 @@ pub(crate) struct NavButtonLabel;
 
 #[derive(Component)]
 pub(crate) struct FpsText;
+
+#[derive(Component)]
+pub(crate) struct MenuButton {
+    action: MenuAction,
+    primary: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuAction {
+    Explore,
+    Orbits,
+}
+
+#[derive(Component)]
+pub(crate) struct SelectorPanelRoot;
+
+#[derive(Component)]
+pub(crate) struct SelectorMoonsSection;
+
+#[derive(Resource, Default)]
+pub(crate) struct UiMenuState {
+    selector_open: bool,
+}
 
 #[derive(Component)]
 pub(crate) struct InfoCardRoot;
@@ -59,143 +83,169 @@ pub(crate) fn setup_ui(mut commands: Commands) {
         ..default()
     });
 
+    commands.insert_resource(UiMenuState::default());
+
     let navbar = commands
         .spawn(NodeBundle {
             style: Style {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
-                bottom: Val::Px(0.0),
+                bottom: Val::Px(10.0),
                 width: Val::Percent(100.0),
-                height: Val::Px(56.0),
-                padding: UiRect::new(
-                    Val::Px(12.0),
-                    Val::Px(12.0),
-                    Val::Px(8.0),
-                    Val::Px(8.0),
-                ),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
+                height: Val::Auto,
                 ..default()
             },
-            background_color: BackgroundColor(Color::srgba(0.04, 0.04, 0.06, 0.71)),
             ..default()
         })
         .id();
 
     commands.entity(navbar).with_children(|parent| {
         parent
-            .spawn(NodeBundle {
-                style: Style {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(10.0),
-                    ..default()
-                },
-                ..default()
-            })
-            .with_children(|left| {
-                left.spawn(TextBundle::from_section(
-                    "COSMIC",
-                    text_style(12.0, Color::srgb(0.47, 0.55, 0.71)),
-                ));
-
-                left.spawn((
-                    ButtonBundle {
-                        style: Style {
-                            border: UiRect::all(Val::Px(1.0)),
-                            padding: UiRect::new(
-                                Val::Px(10.0),
-                                Val::Px(10.0),
-                                Val::Px(4.0),
-                                Val::Px(4.0),
-                            ),
-                            ..default()
-                        },
-                        background_color: BackgroundColor(Color::srgb(0.16, 0.24, 0.39)),
-                        border_color: BorderColor(Color::srgb(0.31, 0.47, 0.78)),
-                        border_radius: BorderRadius::all(Val::Px(6.0)),
-                        ..default()
-                    },
-                    OrbitToggleButton,
-                    UiCapture,
-                ))
-                .with_children(|button| {
-                    button.spawn((
-                        TextBundle::from_section(
-                            "Hide Orbits",
-                            text_style(11.0, Color::srgb(0.85, 0.9, 1.0)),
+            .spawn((
+                NodeBundle {
+                    style: Style {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(64.0),
+                        padding: UiRect::new(
+                            Val::Px(20.0),
+                            Val::Px(20.0),
+                            Val::Px(8.0),
+                            Val::Px(8.0),
                         ),
-                        OrbitToggleLabel,
-                    ));
-                });
-            });
-
-        parent
-            .spawn(NodeBundle {
-                style: Style {
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(6.0),
-                    row_gap: Val::Px(4.0),
-                    ..default()
-                },
-                ..default()
-            })
-            .with_children(|center| {
-                for name in ordered_names() {
-                    center
-                        .spawn((
-                    ButtonBundle {
-                        style: Style {
-                            border: UiRect::all(Val::Px(1.0)),
-                            padding: UiRect::new(
-                                Val::Px(8.0),
-                                Val::Px(8.0),
-                                Val::Px(3.0),
-                                Val::Px(3.0),
-                            ),
-                            ..default()
-                        },
-                        background_color: BackgroundColor(Color::srgba(0.08, 0.1, 0.14, 0.59)),
-                        border_color: BorderColor(Color::NONE),
-                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::SpaceBetween,
                         ..default()
                     },
-                    NavButton {
-                        name: name.to_string(),
-                    },
-                    UiCapture,
-                        ))
-                        .with_children(|button| {
-                            button.spawn((
-                                TextBundle::from_section(
-                                    name,
-                                    text_style(10.5, Color::srgb(0.85, 0.9, 1.0)),
-                                ),
-                                NavButtonLabel,
-                            ));
-                        });
-                }
-            });
-
-        parent
-            .spawn(NodeBundle {
-                style: Style {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
+                    background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+                    border_color: BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                    border_radius: BorderRadius::all(Val::Px(18.0)),
                     ..default()
                 },
-                ..default()
-            })
-            .with_children(|right| {
-                right.spawn((
-                    TextBundle::from_section("fps 0", text_style(11.0, Color::srgb(0.75, 0.8, 0.9))),
+                UiCapture,
+            ))
+            .with_children(|bar| {
+                bar.spawn(NodeBundle {
+                    style: Style {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(10.0),
+                        ..default()
+                    },
+                    ..default()
+                })
+                .with_children(|left| {
+                    spawn_menu_button(left, "Explore", MenuAction::Explore, true);
+                    spawn_menu_button(left, "Orbits", MenuAction::Orbits, false);
+                });
+
+                bar.spawn((
+                    TextBundle::from_section(
+                        "fps 0",
+                        text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
+                    ),
                     FpsText,
                 ));
+            });
+
+        parent
+            .spawn((
+                NodeBundle {
+                    style: Style {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        right: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        bottom: Val::Px(0.0),
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        display: Display::None,
+                        ..default()
+                    },
+                    background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+                    ..default()
+                },
+                SelectorPanelRoot,
+                UiCapture,
+            ))
+            .with_children(|container| {
+                container
+                    .spawn(NodeBundle {
+                        style: Style {
+                            width: Val::Px(600.0),
+                            padding: UiRect::new(
+                                Val::Px(16.0),
+                                Val::Px(16.0),
+                                Val::Px(14.0),
+                                Val::Px(14.0),
+                            ),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(10.0),
+                            ..default()
+                        },
+                        background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+                        border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+                        border_radius: BorderRadius::all(Val::Px(14.0)),
+                        ..default()
+                    })
+                    .with_children(|panel| {
+                        panel.spawn(TextBundle::from_section(
+                            "Select Body",
+                            text_style(12.0, Color::srgb(0.9, 0.94, 1.0)),
+                        ));
+
+                        panel.spawn(TextBundle::from_section(
+                            "Planets",
+                            text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
+                        ));
+
+                        panel
+                            .spawn(NodeBundle {
+                                style: Style {
+                                    flex_direction: FlexDirection::Row,
+                                    flex_wrap: FlexWrap::Wrap,
+                                    column_gap: Val::Px(8.0),
+                                    row_gap: Val::Px(6.0),
+                                    ..default()
+                                },
+                                ..default()
+                            })
+                            .with_children(|planets| {
+                                for name in planet_names() {
+                                    spawn_nav_button(planets, name, NavGroup::Planet);
+                                }
+                            });
+
+                        panel.spawn((
+                            TextBundle::from_section(
+                                "Moons",
+                                text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
+                            ),
+                            SelectorMoonsSection,
+                        ));
+
+                        panel
+                            .spawn((
+                                NodeBundle {
+                                    style: Style {
+                                        flex_direction: FlexDirection::Row,
+                                        flex_wrap: FlexWrap::Wrap,
+                                        column_gap: Val::Px(8.0),
+                                        row_gap: Val::Px(6.0),
+                                        ..default()
+                                    },
+                                    ..default()
+                                },
+                                SelectorMoonsSection,
+                            ))
+                            .with_children(|moons| {
+                                for (parent_name, moon_name) in moon_pairs() {
+                                    spawn_nav_button(moons, moon_name, NavGroup::Moon(parent_name));
+                                }
+                            });
+                    });
             });
     });
 
@@ -280,14 +330,30 @@ pub(crate) fn setup_ui(mut commands: Commands) {
 
 pub(crate) fn handle_nav_interactions(
     interactions: Query<(&Interaction, &NavButton), Changed<Interaction>>,
-    orbit_interactions: Query<&Interaction, (Changed<Interaction>, With<OrbitToggleButton>)>,
+    menu_interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
     mut selected_planet: ResMut<SelectedPlanet>,
     mut selectable_query: Query<(Entity, &mut Selectable)>,
     mut solar_params: ResMut<SolarSystemParameters>,
+    mut menu_state: ResMut<UiMenuState>,
+    mut camera_query: Query<(&mut CameraController, &mut Transform)>,
 ) {
-    for interaction in orbit_interactions.iter() {
-        if *interaction == Interaction::Pressed {
-            solar_params.show_orbits = !solar_params.show_orbits;
+    for (interaction, button) in menu_interactions.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match button.action {
+            MenuAction::Explore => {
+                if let Ok((mut controller, mut transform)) = camera_query.get_single_mut() {
+                    transform.translation = Vec3::new(0.0, 120000.0, 1500000.0);
+                    transform.look_at(Vec3::ZERO, Vec3::Y);
+                    controller.velocity = Vec3::ZERO;
+                    controller.speed = 5000.0;
+                }
+                menu_state.selector_open = !menu_state.selector_open;
+            }
+            MenuAction::Orbits => {
+                solar_params.show_orbits = !solar_params.show_orbits;
+            }
         }
     }
 
@@ -306,6 +372,7 @@ pub(crate) fn handle_nav_interactions(
 
         selected_planet.entity = target_entity;
         selected_planet.name = target_entity.map(|_| button.name.clone());
+        menu_state.selector_open = false;
 
         for (entity, mut selectable) in selectable_query.iter_mut() {
             selectable.selected = Some(entity) == target_entity;
@@ -313,41 +380,91 @@ pub(crate) fn handle_nav_interactions(
     }
 }
 
+
 pub(crate) fn update_navbar(
     selected_planet: Res<SelectedPlanet>,
     solar_params: Res<SolarSystemParameters>,
     performance_stats: Res<PerformanceStats>,
+    menu_state: Res<UiMenuState>,
     mut queries: ParamSet<(
-        Query<(&NavButton, &mut BackgroundColor, &mut BorderColor)>,
-        Query<(&mut BackgroundColor, &mut BorderColor), With<OrbitToggleButton>>,
-        Query<&mut Text, With<OrbitToggleLabel>>,
+        Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
+        Query<(&MenuButton, &mut BackgroundColor, &mut BorderColor)>,
         Query<&mut Text, With<FpsText>>,
+        Query<&mut Style, With<SelectorPanelRoot>>,
+        Query<&mut Style, With<SelectorMoonsSection>>,
     )>,
 ) {
     let selected_name = selected_planet.name.as_deref();
-    for (button, mut background, mut border) in queries.p0().iter_mut() {
+    let active_parent = selected_name.map(|name| {
+        if is_primary_body(name) {
+            name
+        } else {
+            get_parent_body(name)
+        }
+    });
+
+    let show_selector = menu_state.selector_open;
+    let show_moons = show_selector
+        && active_parent
+            .map(|parent| !moon_names_for_parent(parent).is_empty())
+            .unwrap_or(false);
+
+    if let Ok(mut style) = queries.p3().get_single_mut() {
+        style.display = if show_selector {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+
+    for (button, mut style, mut background, mut border) in queries.p0().iter_mut() {
         let is_selected = selected_name == Some(button.name.as_str());
+        match button.group {
+            NavGroup::Planet => {
+                style.display = if show_selector {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+            NavGroup::Moon(parent) => {
+                let visible = active_parent == Some(parent);
+                style.display = if show_moons && visible {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+        }
         *background = BackgroundColor(nav_button_color(is_selected));
         border.0 = nav_button_border_color(is_selected);
     }
 
-    if let Ok((mut background, mut border)) = queries.p1().get_single_mut() {
-        *background = BackgroundColor(orbit_button_color(solar_params.show_orbits));
-        border.0 = orbit_button_border_color(solar_params.show_orbits);
+    for (button, mut background, mut border) in queries.p1().iter_mut() {
+        let active = match button.action {
+            MenuAction::Orbits => solar_params.show_orbits,
+            MenuAction::Explore => menu_state.selector_open,
+            _ => false,
+        };
+        let (bg, stroke) = menu_button_colors(button.primary, active);
+        *background = BackgroundColor(bg);
+        border.0 = stroke;
     }
-    if let Ok(mut text) = queries.p2().get_single_mut() {
-        text.sections[0].value = if solar_params.show_orbits {
-            "Hide Orbits".to_string()
+
+    for mut style in queries.p4().iter_mut() {
+        style.display = if show_moons {
+            Display::Flex
         } else {
-            "Show Orbits".to_string()
+            Display::None
         };
     }
 
-    if let Ok(mut text) = queries.p3().get_single_mut() {
+    if let Ok(mut text) = queries.p2().get_single_mut() {
         text.sections[0].value = format!("fps {:.0}", performance_stats.fps);
         text.sections[0].style.color = fps_color(performance_stats.fps);
     }
 }
+
 
 pub(crate) fn update_info_card(
     selected_planet: Res<SelectedPlanet>,
@@ -454,6 +571,76 @@ fn text_style(font_size: f32, color: Color) -> TextStyle {
     }
 }
 
+fn spawn_menu_button(
+    parent: &mut ChildBuilder,
+    label: &str,
+    action: MenuAction,
+    primary: bool,
+) {
+    let padding = if primary {
+        UiRect::new(Val::Px(14.0), Val::Px(14.0), Val::Px(8.0), Val::Px(8.0))
+    } else {
+        UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(6.0), Val::Px(6.0))
+    };
+    let radius = if primary { 22.0 } else { 18.0 };
+
+    parent
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    border: UiRect::all(Val::Px(1.0)),
+                    padding,
+                    ..default()
+                },
+                background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
+                border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.28)),
+                border_radius: BorderRadius::all(Val::Px(radius)),
+                ..default()
+            },
+            MenuButton { action, primary },
+            UiCapture,
+        ))
+        .with_children(|button| {
+            button.spawn(TextBundle::from_section(
+                label,
+                text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
+            ));
+        });
+}
+
+fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
+    parent
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    border: UiRect::all(Val::Px(1.0)),
+                    padding: UiRect::new(
+                        Val::Px(10.0),
+                        Val::Px(10.0),
+                        Val::Px(4.0),
+                        Val::Px(4.0),
+                    ),
+                    ..default()
+                },
+                background_color: BackgroundColor(nav_button_color(false)),
+                border_color: BorderColor(nav_button_border_color(false)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            NavButton {
+                name: name.to_string(),
+                group,
+            },
+            UiCapture,
+        ))
+        .with_children(|button| {
+            button.spawn((TextBundle::from_section(
+                name,
+                text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
+            ), NavButtonLabel));
+        });
+}
+
 fn info_body_text(text: &str) -> Text {
     let mut body = Text::from_section(text, text_style(11.0, Color::srgb(0.89, 0.91, 0.94)));
     body.linebreak_behavior = BreakLineOn::WordBoundary;
@@ -464,7 +651,7 @@ fn nav_button_color(selected: bool) -> Color {
     if selected {
         Color::srgb(0.16, 0.24, 0.39)
     } else {
-        Color::srgba(0.08, 0.1, 0.14, 0.59)
+        Color::srgba(0.031, 0.039, 0.063, 0.78)
     }
 }
 
@@ -472,23 +659,26 @@ fn nav_button_border_color(selected: bool) -> Color {
     if selected {
         Color::srgb(0.31, 0.47, 0.78)
     } else {
-        Color::NONE
+        Color::srgba(0.196, 0.275, 0.431, 0.28)
     }
 }
 
-fn orbit_button_color(enabled: bool) -> Color {
-    if enabled {
-        Color::srgb(0.16, 0.24, 0.39)
+fn menu_button_colors(primary: bool, active: bool) -> (Color, Color) {
+    if active {
+        (
+            Color::srgb(0.16, 0.24, 0.39),
+            Color::srgb(0.31, 0.47, 0.78),
+        )
+    } else if primary {
+        (
+            Color::srgba(0.031, 0.039, 0.063, 0.86),
+            Color::srgba(1.0, 1.0, 1.0, 0.12),
+        )
     } else {
-        Color::srgba(0.08, 0.1, 0.14, 0.59)
-    }
-}
-
-fn orbit_button_border_color(enabled: bool) -> Color {
-    if enabled {
-        Color::srgb(0.31, 0.47, 0.78)
-    } else {
-        Color::NONE
+        (
+            Color::srgba(0.031, 0.039, 0.063, 0.78),
+            Color::srgba(0.196, 0.275, 0.431, 0.28),
+        )
     }
 }
 
@@ -904,22 +1094,29 @@ fn get_discovery_info(name: &str) -> &'static str {
     }
 }
 
-fn ordered_names() -> [&'static str; 33] {
+fn planet_names() -> [&'static str; 9] {
     [
         "Sun",
         "Mercury",
         "Venus",
         "Earth",
-        "Moon",
         "Mars",
+        "Jupiter",
+        "Saturn",
+        "Uranus",
+        "Neptune",
+    ]
+}
+
+fn moon_list() -> [&'static str; 24] {
+    [
+        "Moon",
         "Phobos",
         "Deimos",
-        "Jupiter",
         "Io",
         "Europa",
         "Ganymede",
         "Callisto",
-        "Saturn",
         "Mimas",
         "Enceladus",
         "Tethys",
@@ -928,16 +1125,36 @@ fn ordered_names() -> [&'static str; 33] {
         "Titan",
         "Hyperion",
         "Iapetus",
-        "Uranus",
         "Miranda",
         "Ariel",
         "Umbriel",
         "Titania",
         "Oberon",
-        "Neptune",
         "Triton",
         "Proteus",
         "Nereid",
         "Larissa",
     ]
+}
+
+fn moon_names_for_parent(parent: &str) -> &'static [&'static str] {
+    match parent {
+        "Earth" => &["Moon"],
+        "Mars" => &["Phobos", "Deimos"],
+        "Jupiter" => &["Io", "Europa", "Ganymede", "Callisto"],
+        "Saturn" => &["Mimas", "Enceladus", "Tethys", "Dione", "Rhea", "Titan", "Hyperion", "Iapetus"],
+        "Uranus" => &["Miranda", "Ariel", "Umbriel", "Titania", "Oberon"],
+        "Neptune" => &["Triton", "Proteus", "Nereid", "Larissa"],
+        _ => &[],
+    }
+}
+
+fn moon_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
+    moon_list()
+        .into_iter()
+        .map(|name| (get_parent_body(name), name))
+}
+
+fn is_primary_body(name: &str) -> bool {
+    planet_names().contains(&name)
 }
