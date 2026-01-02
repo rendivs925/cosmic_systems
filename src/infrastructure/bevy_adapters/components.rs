@@ -1,6 +1,10 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use bevy::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 use std::collections::VecDeque;
 
 
@@ -9,6 +13,8 @@ use std::collections::VecDeque;
 use crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver;
 
 use crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 
 // Component for gyroscope entities
 #[derive(Component)]
@@ -202,10 +208,14 @@ pub struct PerformanceStats {
     pub frame_time: f32,             // Current frame time in milliseconds
     pub fps: f32,                    // Current FPS
     pub average_frame_time: f32,     // Rolling average frame time
+    pub average_fps: f32,            // Rolling average FPS
     pub frame_count: u64,            // Total frames rendered
     pub quality_level: QualityLevel, // Current quality setting
     pub target_fps: f32,             // Target FPS for quality adjustment
     pub adaptive_enabled: bool,      // Whether automatic quality adjustment is enabled
+    pub frame_history: VecDeque<f32>,
+    pub history_len: usize,
+    pub adaptation_rate: f32,
 }
 
 #[derive(Resource, Clone, Copy, Debug)]
@@ -243,12 +253,33 @@ impl Default for PerformanceStats {
             frame_time: 16.67, // Assume 60 FPS initially
             fps: 60.0,
             average_frame_time: 16.67,
+            average_fps: 60.0,
             frame_count: 0,
             quality_level: QualityLevel::High,
             target_fps: 60.0,
             adaptive_enabled: true,
+            frame_history: VecDeque::with_capacity(60),
+            history_len: 60,
+            adaptation_rate: 0.1,
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+pub struct WasmMemoryStats {
+    pub used_heap_bytes: u64,
+    pub heap_limit_bytes: u64,
+    pub utilization: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+pub struct WebGpuKeplerState {
+    pub solver: Rc<RefCell<Option<WebGpuKeplerSolver>>>,
+    pub initializing: Rc<RefCell<bool>>,
+    pub in_flight: Rc<RefCell<bool>>,
+    pub results: Rc<RefCell<Vec<(Entity, Vec3)>>>,
 }
 
 // Quality controller for gradual performance adaptation

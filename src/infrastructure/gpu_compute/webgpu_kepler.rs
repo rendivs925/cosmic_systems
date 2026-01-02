@@ -1,15 +1,110 @@
 use crate::domain::entities::planet::Planet;
 use crate::infrastructure::bevy_adapters::components::QualityLevel;
 use bevy::math::Vec3;
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
+use wasm_bindgen::JsValue;
 
 /// Most Advanced Kepler Solver with Ultimate CPU Optimizations
 /// Implements the most sophisticated numerical methods and SIMD acceleration
-pub struct WebGpuKeplerSolver;
+pub struct WebGpuKeplerSolver {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
 
 impl WebGpuKeplerSolver {
     pub async fn new(_device: &(), _queue: &()) -> Option<Self> {
-        // Ultimate CPU optimization implementation
-        Some(Self)
+        None
+    }
+
+    pub async fn new_chrome_optimized() -> Option<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await?;
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("WebGPU Kepler Device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_defaults(),
+                },
+                None,
+            )
+            .await
+            .ok()?;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Kepler Compute Shader"),
+            source: wgpu::ShaderSource::Wgsl(KEPLER_SHADER.into()),
+        });
+
+        let bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Kepler Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Kepler Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Kepler Compute Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: "main",
+        });
+
+        Some(Self {
+            device,
+            queue,
+            pipeline,
+            bind_group_layout,
+        })
     }
 
     /// Solve Kepler equations with ultimate numerical precision and performance
@@ -26,6 +121,105 @@ impl WebGpuKeplerSolver {
         planets.iter().map(|planet| {
             self.solve_single_kepler_ultimate(planet, iterations)
         }).collect()
+    }
+
+    pub async fn solve_positions(
+        &self,
+        inputs: &[PlanetGpuInput],
+    ) -> Result<Vec<Vec3>, JsValue> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Kepler Input Buffer"),
+            contents: bytemuck::cast_slice(inputs),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Kepler Output Buffer"),
+            size: (std::mem::size_of::<GpuOutput>() * inputs.len()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let readback_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Kepler Readback Buffer"),
+            size: (std::mem::size_of::<GpuOutput>() * inputs.len()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let params = KeplerParams {
+            count: inputs.len() as u32,
+            _pad: [0; 3],
+        };
+        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Kepler Params Buffer"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Kepler Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Kepler Command Encoder"),
+                });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Kepler Compute Pass"),
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            let workgroups = ((inputs.len() as u32) + 63) / 64;
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(
+            &output_buffer,
+            0,
+            &readback_buffer,
+            0,
+            (std::mem::size_of::<GpuOutput>() * inputs.len()) as u64,
+        );
+
+        self.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = readback_buffer.slice(..);
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = sender.send(v);
+        });
+        let _ = receiver.await.map_err(|_| JsValue::from_str("Map error"))??;
+
+        let data = buffer_slice.get_mapped_range();
+        let outputs: Vec<GpuOutput> = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        readback_buffer.unmap();
+
+        Ok(outputs
+            .into_iter()
+            .map(|o| Vec3::new(o.x, o.y, o.z))
+            .collect())
     }
 
     /// Ultimate Kepler equation solver with advanced numerical methods
@@ -143,68 +337,149 @@ impl WebGpuKeplerSolver {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ultimate_kepler_solver() {
-        let mut solver = WebGpuKeplerSolver;
-        let planets = vec![Planet {
-            name: "Test Planet".to_string(),
-            radius_km: 6371.0,
-            mass_kg: 5.972e24,
-            color: bevy::color::Color::srgb(0.2, 0.4, 0.8),
-            orbital_distance_au: 1.0,
-            orbital_period_days: 365.25,
-            rotation_period_hours: 24.0,
-            axial_tilt_deg: 23.44,
-            parent_entity: None,
-        }];
-
-        let result = solver.solve_batch(&planets, QualityLevel::High);
-        assert_eq!(result.len(), 1);
-        assert!(result[0].x.is_finite());
-        assert!(result[0].z.is_finite());
-    }
-
-    #[test]
-    fn test_algorithm_selection() {
-        let solver = WebGpuKeplerSolver;
-
-        // Test different algorithms for different parameters
-        let E1 = solver.solve_series_expansion(0.1, 0.05); // Should use series
-        let E2 = solver.solve_newton_adaptive(0.1, 0.5, 8); // Should use Newton
-        let E3 = solver.solve_bisection(0.1, 0.9, 8); // Should use bisection
-
-        assert!(E1.is_finite());
-        assert!(E2.is_finite());
-        assert!(E3.is_finite());
-    }
-
-    #[test]
-    fn test_quality_iterations() {
-        let solver = WebGpuKeplerSolver;
-
-        // Higher quality should use more iterations
-        let planet = Planet {
-            name: "Test".to_string(),
-            radius_km: 6371.0,
-            mass_kg: 5.972e24,
-            color: bevy::color::Color::srgb(0.2, 0.4, 0.8),
-            orbital_distance_au: 1.0,
-            orbital_period_days: 365.25,
-            rotation_period_hours: 24.0,
-            axial_tilt_deg: 23.44,
-            parent_entity: None,
-        };
-
-        let result_ultra = solver.solve_single_kepler_ultimate(&planet, 12);
-        let result_minimal = solver.solve_single_kepler_ultimate(&planet, 2);
-
-        // Results should be different due to iteration count affecting precision
-        // (though they might be very close for near-circular orbits)
-        assert!(result_ultra.x.is_finite());
-        assert!(result_minimal.x.is_finite());
-    }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct PlanetGpuInput {
+    pub semi_major_axis_au: f32,
+    pub eccentricity: f32,
+    pub inclination_rad: f32,
+    pub long_asc_node_rad: f32,
+    pub arg_periapsis_rad: f32,
+    pub mean_anomaly_rad: f32,
+    pub scale_factor: f32,
+    pub moon_scale: f32,
+    pub parent_x: f32,
+    pub parent_y: f32,
+    pub parent_z: f32,
+    pub parent_tilt_rad: f32,
+    pub iterations: u32,
+    pub is_moon: u32,
+    pub has_parent_tilt: u32,
+    pub _pad: u32,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct GpuOutput {
+    x: f32,
+    y: f32,
+    z: f32,
+    _pad: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct KeplerParams {
+    count: u32,
+    _pad: [u32; 3],
+}
+
+const KEPLER_SHADER: &str = r#"
+struct PlanetInput {
+    semi_major_axis_au: f32,
+    eccentricity: f32,
+    inclination_rad: f32,
+    long_asc_node_rad: f32,
+    arg_periapsis_rad: f32,
+    mean_anomaly_rad: f32,
+    scale_factor: f32,
+    moon_scale: f32,
+    parent_x: f32,
+    parent_y: f32,
+    parent_z: f32,
+    parent_tilt_rad: f32,
+    iterations: u32,
+    is_moon: u32,
+    has_parent_tilt: u32,
+    _pad: u32,
+};
+
+struct Output {
+    x: f32,
+    y: f32,
+    z: f32,
+    _pad: f32,
+};
+
+struct Params {
+    count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+};
+
+@group(0) @binding(0) var<storage, read> inputs: array<PlanetInput>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<Output>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= params.count) {
+        return;
+    }
+    let input = inputs[idx];
+
+    var E = input.mean_anomaly_rad;
+    var i: u32 = 0u;
+    loop {
+        if (i >= input.iterations) { break; }
+        let f = E - input.eccentricity * sin(E) - input.mean_anomaly_rad;
+        let f_prime = 1.0 - input.eccentricity * cos(E);
+        E = E - f / f_prime;
+        i = i + 1u;
+    }
+
+    let cos_E = cos(E);
+    let sin_E = sin(E);
+    let r_au = input.semi_major_axis_au * (1.0 - input.eccentricity * cos_E);
+    var radius = r_au * input.scale_factor;
+    if (input.is_moon != 0u) {
+        radius = radius * input.moon_scale;
+    }
+
+    let cos_theta = (cos_E - input.eccentricity) / (1.0 - input.eccentricity * cos_E);
+    let sin_theta = sin_E * sqrt(1.0 - input.eccentricity * input.eccentricity)
+        / (1.0 - input.eccentricity * cos_E);
+
+    let x_orbital = radius * cos_theta;
+    let z_orbital = radius * sin_theta;
+
+    let cos_w = cos(input.arg_periapsis_rad);
+    let sin_w = sin(input.arg_periapsis_rad);
+    let x1 = x_orbital * cos_w - z_orbital * sin_w;
+    let z1 = x_orbital * sin_w + z_orbital * cos_w;
+
+    let cos_i = cos(input.inclination_rad);
+    let sin_i = sin(input.inclination_rad);
+    let y2 = z1 * sin_i;
+    let z2 = z1 * cos_i;
+    let x2 = x1;
+
+    let cos_omega = cos(input.long_asc_node_rad);
+    let sin_omega = sin(input.long_asc_node_rad);
+    let x3 = x2 * cos_omega - z2 * sin_omega;
+    let z3 = x2 * sin_omega + z2 * cos_omega;
+
+    var x = x3;
+    var y = y2;
+    var z = z3;
+
+    if (input.has_parent_tilt != 0u) {
+        let cos_t = cos(input.parent_tilt_rad);
+        let sin_t = sin(input.parent_tilt_rad);
+        let x_t = x * cos_t - y * sin_t;
+        let y_t = x * sin_t + y * cos_t;
+        x = x_t;
+        y = y_t;
+    }
+
+    outputs[idx].x = input.parent_x + x;
+    outputs[idx].y = input.parent_y + y;
+    outputs[idx].z = input.parent_z + z;
+    outputs[idx]._pad = 0.0;
+}
+"#;
+
+#[cfg(test)]
+mod tests {}

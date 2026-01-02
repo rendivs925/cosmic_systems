@@ -8,6 +8,8 @@ use bevy::prelude::*;
 use bevy::render::mesh::Indices;
 use bevy::time::Fixed;
 #[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
+#[cfg(target_arch = "wasm32")]
 use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
@@ -15,6 +17,12 @@ use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use crate::infrastructure::web_workers::orbit_mesh_worker::{
     entity_from_task_id, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData, task_id_from_entity,
 };
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::PlanetGpuInput;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -163,11 +171,34 @@ pub fn update_planet_positions(
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
     mut worker_pool: NonSendMut<PhysicsWorkerPool>,
+    chrome: Option<Res<ChromeOptimizations>>,
+    mut webgpu_state: Option<NonSendMut<WebGpuKeplerState>>,
 ) {
     let elapsed_seconds = time.elapsed_seconds();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
     let camera_pos = camera_query.single().translation();
+
+    let webgpu_enabled = chrome
+        .as_ref()
+        .is_some_and(|chrome| chrome.webgpu_enabled);
+    let solver_ready = webgpu_state
+        .as_ref()
+        .is_some_and(|state| state.solver.borrow().is_some());
+    let webgpu_active = webgpu_enabled && solver_ready;
+
+    if webgpu_active {
+        if let Some(state) = webgpu_state.as_mut() {
+            let mut results = state.results.borrow_mut();
+            if !results.is_empty() {
+                for (entity, position) in results.drain(..) {
+                    if let Ok((_, mut transform, _)) = query.get_mut(entity) {
+                        transform.translation = position;
+                    }
+                }
+            }
+        }
+    }
 
     let mut parent_positions = std::collections::HashMap::new();
     let mut parent_tilts = std::collections::HashMap::new();
@@ -186,6 +217,8 @@ pub fn update_planet_positions(
     }
 
     let mut worker_tasks: Vec<(f32, PhysicsTask)> = Vec::new();
+    let mut gpu_inputs: Vec<PlanetGpuInput> = Vec::new();
+    let mut gpu_entities: Vec<Entity> = Vec::new();
     let max_distance = 15_000_000.0;
 
     for (entity, mut transform, planet_comp) in query.iter_mut() {
@@ -205,6 +238,49 @@ pub fn update_planet_positions(
             };
 
         let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
+        let is_moon = planet_comp.domain_planet.parent_entity.is_some();
+        if webgpu_active && !is_moon && planet_comp.domain_planet.name != "Sun" {
+            let elements = physics::orbital_elements_for(&planet_comp.domain_planet);
+            let mean_anomaly_rad = if let Some(elements) = elements {
+                let mean_motion = 0.01720209895 / elements.semi_major_axis_au.powf(1.5);
+                elements.mean_anomaly_rad + mean_motion * time_days
+            } else if planet_comp.domain_planet.orbital_period_days > 0.0 {
+                std::f32::consts::TAU * (time_days / planet_comp.domain_planet.orbital_period_days)
+            } else {
+                0.0
+            };
+
+            let elements = elements.unwrap_or(crate::domain::services::physics::OrbitalElements {
+                semi_major_axis_au: planet_comp.domain_planet.orbital_distance_au,
+                eccentricity: 0.0,
+                inclination_rad: 0.0,
+                long_asc_node_rad: 0.0,
+                arg_periapsis_rad: 0.0,
+                mean_anomaly_rad: 0.0,
+            });
+
+            gpu_inputs.push(PlanetGpuInput {
+                semi_major_axis_au: elements.semi_major_axis_au,
+                eccentricity: elements.eccentricity,
+                inclination_rad: elements.inclination_rad,
+                long_asc_node_rad: elements.long_asc_node_rad,
+                arg_periapsis_rad: elements.arg_periapsis_rad,
+                mean_anomaly_rad,
+                scale_factor: solar_params.scale_factor,
+                moon_scale: physics::MOON_ORBIT_SCALE,
+                parent_x: parent_position.x,
+                parent_y: parent_position.y,
+                parent_z: parent_position.z,
+                parent_tilt_rad: parent_tilt.map(|deg| deg.to_radians()).unwrap_or(0.0),
+                iterations: kepler_iterations,
+                is_moon: 0,
+                has_parent_tilt: 0,
+                _pad: 0,
+            });
+            gpu_entities.push(entity);
+            continue;
+        }
+
         let should_use_worker = worker_pool.worker_count() > 0
             && planet_comp.domain_planet.name != "Sun"
             && worker_pool.can_accept_tasks();
@@ -284,6 +360,31 @@ pub fn update_planet_positions(
     for result in worker_pool.collect_results() {
         if let Ok((_, mut transform, _)) = query.get_mut(result.entity) {
             transform.translation = result.position;
+        }
+    }
+
+    if webgpu_active && !gpu_inputs.is_empty() {
+        if let Some(state) = webgpu_state.as_mut() {
+            if !*state.in_flight.borrow() {
+                let solver_ref = state.solver.clone();
+                let results_ref = state.results.clone();
+                let in_flight = state.in_flight.clone();
+                *in_flight.borrow_mut() = true;
+                let entities = gpu_entities.clone();
+                spawn_local(async move {
+                    let solver_opt = solver_ref.borrow_mut().take();
+                    if let Some(mut solver) = solver_opt {
+                        let result = solver.solve_positions(&gpu_inputs).await;
+                        *solver_ref.borrow_mut() = Some(solver);
+                        if let Ok(positions) = result {
+                            let mut results = results_ref.borrow_mut();
+                            results.clear();
+                            results.extend(entities.into_iter().zip(positions));
+                        }
+                    }
+                    *in_flight.borrow_mut() = false;
+                });
+            }
         }
     }
 }
@@ -648,10 +749,18 @@ pub fn queue_pending_material_textures(
     parents: Query<&Parent>,
     mut pending_query: Query<(Entity, &mut PendingMaterialTextures)>,
     mut texture_worker: NonSendMut<TextureDecodeWorker>,
+    memory_stats: Option<Res<WasmMemoryStats>>,
 ) {
     let camera_pos = camera_query.single().translation();
     let worker_count = texture_worker.worker_count();
     let mut load_budget = if worker_count == 0 { 1 } else { worker_count.min(4) };
+
+    if memory_stats
+        .as_ref()
+        .is_some_and(|stats| stats.utilization > 0.8)
+    {
+        return;
+    }
 
     for (entity, mut pending) in pending_query.iter_mut() {
         if load_budget == 0 {
@@ -788,6 +897,77 @@ fn matches_asset_path(original: &str, resolved: &str) -> bool {
     }
     let prefixed = format!("assets/{}", original);
     prefixed == resolved
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn init_webgpu_solver(
+    chrome: Option<Res<ChromeOptimizations>>,
+    mut state: NonSendMut<WebGpuKeplerState>,
+) {
+    if !chrome
+        .as_ref()
+        .is_some_and(|chrome| chrome.webgpu_enabled)
+    {
+        return;
+    }
+
+    if state.solver.borrow().is_some() || *state.initializing.borrow() {
+        return;
+    }
+
+    *state.initializing.borrow_mut() = true;
+    let solver_ref = state.solver.clone();
+    let init_flag = state.initializing.clone();
+    spawn_local(async move {
+        if let Some(solver) = WebGpuKeplerSolver::new_chrome_optimized().await {
+            *solver_ref.borrow_mut() = Some(solver);
+        }
+        *init_flag.borrow_mut() = false;
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn update_wasm_memory_stats(
+    mut memory_stats: ResMut<WasmMemoryStats>,
+    mut performance_stats: ResMut<PerformanceStats>,
+    mut solar_params: ResMut<SolarSystemParameters>,
+) {
+    let performance = web_sys::window()
+        .and_then(|window| window.performance())
+        .and_then(|perf| js_sys::Reflect::get(&perf, &JsValue::from_str("memory")).ok())
+        .unwrap_or(JsValue::UNDEFINED);
+
+    let used = js_sys::Reflect::get(&performance, &JsValue::from_str("usedJSHeapSize"))
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or(0.0) as u64;
+    let limit = js_sys::Reflect::get(&performance, &JsValue::from_str("jsHeapSizeLimit"))
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or(0.0) as u64;
+
+    if used == 0 || limit == 0 {
+        return;
+    }
+
+    memory_stats.used_heap_bytes = used;
+    memory_stats.heap_limit_bytes = limit;
+    memory_stats.utilization = used as f32 / limit as f32;
+
+    if memory_stats.utilization > 0.8 {
+        let new_quality = match performance_stats.quality_level {
+            QualityLevel::Ultra => QualityLevel::High,
+            QualityLevel::High => QualityLevel::Medium,
+            QualityLevel::Medium => QualityLevel::Low,
+            QualityLevel::Low => QualityLevel::Minimal,
+            QualityLevel::Minimal => QualityLevel::Minimal,
+        };
+        if new_quality != performance_stats.quality_level {
+            performance_stats.quality_level = new_quality;
+            apply_quality_settings(new_quality, &mut solar_params);
+            web_sys::console::log_1(&"Memory pressure: reducing quality".into());
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1600,6 +1780,7 @@ pub fn update_performance_stats(
     time: Res<Time>,
     mut performance_stats: ResMut<PerformanceStats>,
     mut solar_params: ResMut<SolarSystemParameters>,
+    chrome: Option<Res<ChromeOptimizations>>,
 ) {
     // Update frame time and FPS
     let frame_time_ms = time.delta_seconds() * 1000.0;
@@ -1611,10 +1792,23 @@ pub fn update_performance_stats(
     };
     performance_stats.frame_count += 1;
 
-    // Update rolling average frame time (exponential moving average)
-    const ALPHA: f32 = 0.1; // Smoothing factor
-    performance_stats.average_frame_time =
-        performance_stats.average_frame_time * (1.0 - ALPHA) + frame_time_ms * ALPHA;
+    if let Some(chrome) = chrome {
+        performance_stats.adaptation_rate = if chrome.is_chrome { 0.05 } else { 0.1 };
+    }
+
+    // Update rolling average FPS with a 60-frame window
+    performance_stats.frame_history.push_back(performance_stats.fps);
+    if performance_stats.frame_history.len() > performance_stats.history_len {
+        performance_stats.frame_history.pop_front();
+    }
+    let avg_fps = performance_stats.frame_history.iter().sum::<f32>()
+        / performance_stats.frame_history.len().max(1) as f32;
+    performance_stats.average_fps = avg_fps;
+    performance_stats.average_frame_time = if avg_fps > 0.0 {
+        1000.0 / avg_fps
+    } else {
+        performance_stats.frame_time
+    };
 
     // Automatic quality adjustment based on frame time
     if performance_stats.adaptive_enabled {
@@ -1689,28 +1883,29 @@ fn adjust_quality_based_on_performance(
     performance_stats: &mut PerformanceStats,
     solar_params: &mut SolarSystemParameters,
 ) {
-    let target_frame_time = 1000.0 / performance_stats.target_fps;
-    let current_avg_time = performance_stats.average_frame_time;
+    let target_fps = performance_stats.target_fps.max(1.0);
+    let avg_fps = performance_stats.average_fps;
+    let rate = performance_stats.adaptation_rate;
 
-    // Quality adjustment thresholds
-    let ultra_threshold = target_frame_time * 0.8; // 80% of target = excellent performance
-    let high_threshold = target_frame_time * 1.0; // At target = good performance
-    let medium_threshold = target_frame_time * 1.3; // 30% over target = acceptable
-    let low_threshold = target_frame_time * 1.6; // 60% over target = poor performance
+    let mut new_quality_level = performance_stats.quality_level;
+    if avg_fps < target_fps * (1.0 - rate) {
+        new_quality_level = match performance_stats.quality_level {
+            QualityLevel::Ultra => QualityLevel::High,
+            QualityLevel::High => QualityLevel::Medium,
+            QualityLevel::Medium => QualityLevel::Low,
+            QualityLevel::Low => QualityLevel::Minimal,
+            QualityLevel::Minimal => QualityLevel::Minimal,
+        };
+    } else if avg_fps > target_fps * (1.0 + rate) {
+        new_quality_level = match performance_stats.quality_level {
+            QualityLevel::Ultra => QualityLevel::Ultra,
+            QualityLevel::High => QualityLevel::Ultra,
+            QualityLevel::Medium => QualityLevel::High,
+            QualityLevel::Low => QualityLevel::Medium,
+            QualityLevel::Minimal => QualityLevel::Low,
+        };
+    }
 
-    let new_quality_level = if current_avg_time < ultra_threshold {
-        QualityLevel::Ultra
-    } else if current_avg_time < high_threshold {
-        QualityLevel::High
-    } else if current_avg_time < medium_threshold {
-        QualityLevel::Medium
-    } else if current_avg_time < low_threshold {
-        QualityLevel::Low
-    } else {
-        QualityLevel::Minimal
-    };
-
-    // Only change quality if we've moved significantly
     if new_quality_level != performance_stats.quality_level {
         performance_stats.quality_level = new_quality_level;
         apply_quality_settings(new_quality_level, solar_params);
