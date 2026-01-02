@@ -4,6 +4,7 @@ use bevy::render::view::Msaa;
 use bevy::time::Fixed;
 use crate::infrastructure::bevy_adapters::components::{ChromeOptimizations, PerformanceStats};
 use crate::infrastructure::web_workers::physics_worker::{adapt_worker_pool, PhysicsWorkerPool};
+use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use js_sys::Reflect;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -90,6 +91,7 @@ pub fn main() {
         worker_target,
     });
     app.insert_non_send_resource(worker_pool);
+    app.insert_non_send_resource(TextureDecodeWorker::new());
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     app.insert_resource(Time::<Fixed>::from_hz(30.0));
@@ -107,6 +109,10 @@ pub fn main() {
     app.add_systems(
         Update,
         queue_pending_material_textures.before(apply_pending_material_textures),
+    );
+    app.add_systems(
+        Update,
+        apply_texture_worker_results.before(apply_pending_material_textures),
     );
     app.add_systems(Update, apply_pending_material_textures);
     app.add_systems(Update, handle_solar_system_input);

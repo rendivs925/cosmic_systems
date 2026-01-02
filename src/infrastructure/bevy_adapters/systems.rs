@@ -8,6 +8,8 @@ use bevy::prelude::*;
 use bevy::time::Fixed;
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -609,6 +611,7 @@ pub fn queue_pending_material_textures(
     transforms: Query<&GlobalTransform>,
     parents: Query<&Parent>,
     mut pending_query: Query<(Entity, &mut PendingMaterialTextures)>,
+    mut texture_worker: NonSendMut<TextureDecodeWorker>,
 ) {
     let camera_pos = camera_query.single().translation();
     let mut load_budget = 1usize;
@@ -648,8 +651,17 @@ pub fn queue_pending_material_textures(
 
         if pending.base_color_texture.is_none() {
             if let Some(path) = pending.base_color_path {
-                pending.base_color_texture = Some(asset_server.load(path));
-                load_budget = load_budget.saturating_sub(1);
+                if let Some(handle) = texture_worker.cached_handle(path) {
+                    pending.base_color_texture = Some(handle);
+                } else if texture_worker.enabled() {
+                    if load_budget > 0 {
+                        texture_worker.request(path);
+                        load_budget = load_budget.saturating_sub(1);
+                    }
+                } else {
+                    pending.base_color_texture = Some(asset_server.load(path));
+                    load_budget = load_budget.saturating_sub(1);
+                }
             }
         }
 
@@ -659,8 +671,65 @@ pub fn queue_pending_material_textures(
 
         if pending.emissive_texture.is_none() {
             if let Some(path) = pending.emissive_path {
-                pending.emissive_texture = Some(asset_server.load(path));
-                load_budget = load_budget.saturating_sub(1);
+                if let Some(handle) = texture_worker.cached_handle(path) {
+                    pending.emissive_texture = Some(handle);
+                } else if texture_worker.enabled() {
+                    if load_budget > 0 {
+                        texture_worker.request(path);
+                        load_budget = load_budget.saturating_sub(1);
+                    }
+                } else {
+                    pending.emissive_texture = Some(asset_server.load(path));
+                    load_budget = load_budget.saturating_sub(1);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn apply_texture_worker_results(
+    mut texture_worker: NonSendMut<TextureDecodeWorker>,
+    mut images: ResMut<Assets<Image>>,
+    mut pending_query: Query<&mut PendingMaterialTextures>,
+) {
+    if !texture_worker.enabled() {
+        return;
+    }
+
+    for result in texture_worker.take_results() {
+        if let Some(error) = result.error {
+            web_sys::console::log_1(&format!("Texture worker error for {}: {}", result.path, error).into());
+            texture_worker.mark_failed(&result.path);
+            continue;
+        }
+
+        let Some(bitmap) = result.bitmap else {
+            texture_worker.mark_failed(&result.path);
+            continue;
+        };
+
+        if texture_worker.cached_handle(&result.path).is_some() {
+            texture_worker.mark_failed(&result.path);
+            continue;
+        }
+
+        let image = match texture_worker.decode_bitmap(&bitmap) {
+            Ok(image) => image,
+            Err(err) => {
+                web_sys::console::error_1(&err);
+                texture_worker.mark_failed(&result.path);
+                continue;
+            }
+        };
+
+        let handle = texture_worker.cache_image(result.path.clone(), image, &mut images);
+        for mut pending in pending_query.iter_mut() {
+            if pending.base_color_path == Some(result.path.as_str()) {
+                pending.base_color_texture = Some(handle.clone());
+            }
+            if pending.emissive_path == Some(result.path.as_str()) {
+                pending.emissive_texture = Some(handle.clone());
             }
         }
     }
