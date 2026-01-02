@@ -19,6 +19,17 @@ bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types
 ash = "0.37"            # Vulkan bindings for native compute
 wgpu = "0.19"           # WebGPU for WASM compute
+num_cpus = "1.16"       # CPU core detection
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"            # System calls for CPU affinity
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.25"          # macOS system frameworks
+objc = "0.2.7"          # Objective-C runtime bindings
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["processthreadsapi"] }  # Windows thread affinity
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"
