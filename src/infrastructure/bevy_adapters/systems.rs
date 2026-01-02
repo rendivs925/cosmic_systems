@@ -5,6 +5,7 @@ use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use bevy_egui::{egui, EguiContexts};
 use std::collections::HashMap;
 
@@ -106,7 +107,7 @@ pub fn handle_input(
 
 // System to update planet/moon positions in their orbits (optimized for performance)
 pub fn update_planet_positions(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(&mut Transform, &PlanetComponent)>,
@@ -177,7 +178,7 @@ pub fn update_planet_positions(
 
 // System to update planet rotations
 pub fn update_planet_rotations(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut Transform, &PlanetComponent)>,
 ) {

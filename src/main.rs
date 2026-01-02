@@ -1,5 +1,18 @@
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
+
+// Run condition for visual updates (every 3 frames)
+fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
+    move |mut frame_count: Local<usize>| {
+        *frame_count += 1;
+        if *frame_count >= n {
+            *frame_count = 0;
+            true
+        } else {
+            false
+        }
+    }
+}
 use std::env;
 
 pub mod application;
@@ -59,18 +72,20 @@ fn main() {
             hide_for_screenshot: false,
         });
         app.insert_resource(ScreenshotState { pending: false });
-        app.add_systems(Startup, setup_space);
-        app.add_systems(Update, update_planet_positions);
-        app.add_systems(Update, update_planet_rotations);
-        app.add_systems(Update, update_moon_orbit_positions);
-        app.add_systems(Update, update_orbit_visuals);
-        app.add_systems(Update, update_orbit_visibility);
-        app.add_systems(Update, update_planet_reflections);
-        app.add_systems(Update, handle_solar_system_input);
-        app.add_systems(Update, handle_planet_selection);
-        app.add_systems(Update, handle_mouse_planet_selection);
-        app.add_systems(Update, display_navigation_bar);
-        app.add_systems(Update, update_planet_selection_visuals);
+    app.add_systems(Startup, setup_space);
+
+    // Physics systems run on FixedUpdate for consistent simulation
+    app.add_systems(FixedUpdate, update_planet_positions);
+    app.add_systems(FixedUpdate, update_planet_rotations);
+    app.add_systems(FixedUpdate, update_moon_orbit_positions);
+    app.add_systems(Update, update_orbit_visuals);
+    app.add_systems(Update, update_orbit_visibility);
+    app.add_systems(Update, update_planet_reflections);
+    app.add_systems(Update, handle_solar_system_input);
+    app.add_systems(Update, handle_planet_selection);
+    app.add_systems(Update, handle_mouse_planet_selection);
+    app.add_systems(Update, display_navigation_bar);
+    app.add_systems(Update, update_planet_selection_visuals.run_if(every_n_frames(2)));
         app.add_systems(Update, display_hover_info);
         app.add_systems(Update, display_notifications);
         app.add_systems(Update, take_pending_screenshot);
