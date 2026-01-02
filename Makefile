@@ -99,8 +99,8 @@ build-simd:
 	cargo build $(FEATURES_SIMD)
 
 build-optimized:
-	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort -C lto=fat" \
-	cargo build --release $(FEATURES_SIMD) $(PROFILE_OPTIMIZED)
+	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
+	cargo build --release $(FEATURES_SIMD)
 
 # ============================================================================
 # RUNNING
@@ -122,8 +122,8 @@ run-simd:
 	cargo run $(FEATURES_SIMD)
 
 run-optimized:
-	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort -C lto=fat" \
-	cargo run --release $(FEATURES_SIMD) $(PROFILE_OPTIMIZED)
+	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
+	cargo run --release $(FEATURES_SIMD)
 
 # ============================================================================
 # TESTING & ANALYSIS
