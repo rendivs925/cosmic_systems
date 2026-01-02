@@ -1,5 +1,5 @@
-use crate::application::mesh_factory::*;
 use crate::application::material_factory::*;
+use crate::application::mesh_factory::*;
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -36,18 +36,18 @@ pub fn setup_space(
         },
         CameraController {
             mode: CameraMode::FreeFlight,
-            speed: 5000.0,              // Increased base speed for easier navigation
+            speed: 5000.0, // Increased base speed for easier navigation
             sensitivity: 0.0015,
             velocity: Vec3::ZERO,
             target_entity: None,
             orbit_distance: 300.0,
             orbit_angle: 0.0,
-            acceleration: 10.0,         // Smooth acceleration
-            deceleration: 8.0,          // Smooth deceleration
+            acceleration: 10.0,           // Smooth acceleration
+            deceleration: 8.0,            // Smooth deceleration
             adaptive_speed_enabled: true, // Auto-adjust speed based on distance
-            min_speed: 50.0,            // Minimum speed for close-up viewing
-            max_speed: 50000.0,         // Maximum speed for far travel
-            zoom_sensitivity: 50.0,     // Mouse wheel zoom multiplier
+            min_speed: 50.0,              // Minimum speed for close-up viewing
+            max_speed: 50000.0,           // Maximum speed for far travel
+            zoom_sensitivity: 50.0,       // Mouse wheel zoom multiplier
         },
     ));
 
@@ -292,17 +292,6 @@ pub fn setup_space(
                         spin_speed: orbit_motion.spin_speed,
                         phase: orbit_motion.phase,
                     })
-                        .insert(OrbitComponent {
-                            radius: orbit_shape.semi_major_axis_units,
-                            planet_entity,
-                            material: orbit_material_handle.clone(),
-                            base_color: orbit_base_color,
-                            tilt: orbit_motion.tilt,
-                            wobble_speed: orbit_motion.wobble_speed,
-                            wobble_amount: orbit_motion.wobble_amount,
-                            spin_speed: orbit_motion.spin_speed,
-                            phase: orbit_motion.phase,
-                        })
                     .insert(OrbitComponent {
                         radius: orbit_shape.semi_major_axis_units,
                         planet_entity,
@@ -314,17 +303,28 @@ pub fn setup_space(
                         spin_speed: orbit_motion.spin_speed,
                         phase: orbit_motion.phase,
                     })
-                        .insert(OrbitComponent {
-                            radius: orbit_shape.semi_major_axis_units,
-                            planet_entity,
-                            material: orbit_material_handle.clone(),
-                            base_color: orbit_base_color,
-                            tilt: orbit_motion.tilt,
-                            wobble_speed: orbit_motion.wobble_speed,
-                            wobble_amount: orbit_motion.wobble_amount,
-                            spin_speed: orbit_motion.spin_speed,
-                            phase: orbit_motion.phase,
-                        })
+                    .insert(OrbitComponent {
+                        radius: orbit_shape.semi_major_axis_units,
+                        planet_entity,
+                        material: orbit_material_handle.clone(),
+                        base_color: orbit_base_color,
+                        tilt: orbit_motion.tilt,
+                        wobble_speed: orbit_motion.wobble_speed,
+                        wobble_amount: orbit_motion.wobble_amount,
+                        spin_speed: orbit_motion.spin_speed,
+                        phase: orbit_motion.phase,
+                    })
+                    .insert(OrbitComponent {
+                        radius: orbit_shape.semi_major_axis_units,
+                        planet_entity,
+                        material: orbit_material_handle.clone(),
+                        base_color: orbit_base_color,
+                        tilt: orbit_motion.tilt,
+                        wobble_speed: orbit_motion.wobble_speed,
+                        wobble_amount: orbit_motion.wobble_amount,
+                        spin_speed: orbit_motion.spin_speed,
+                        phase: orbit_motion.phase,
+                    })
                     .insert(Name::new(format!("Orbit {}", planet.name)));
             }
         }
@@ -344,7 +344,7 @@ pub fn setup_space(
                             Color::srgba(1.5, 1.4, 1.2, 1.0),
                             Color::srgb(0.3, 0.25, 0.18).into(),
                         )),
-                        transform: Transform::default(),  // Relative to parent (Saturn)
+                        transform: Transform::default(), // Relative to parent (Saturn)
                         ..default()
                     },
                     Selectable {
@@ -361,7 +361,8 @@ pub fn setup_space(
                     parent.spawn((
                         PbrBundle {
                             mesh: create_uv_sphere_mesh(&mut meshes, visual_radius * clouds.scale),
-                            material: materials.add(create_cloud_material(Some(cloud_texture), clouds.alpha)),
+                            material: materials
+                                .add(create_cloud_material(Some(cloud_texture), clouds.alpha)),
                             ..default()
                         },
                         CloudLayer {

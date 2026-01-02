@@ -1,6 +1,6 @@
-use bevy::prelude::*;
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::infrastructure::bevy_adapters::components::*;
+use bevy::prelude::*;
 
 // Setup scene for gyro propulsion simulation
 pub fn setup_gyro(

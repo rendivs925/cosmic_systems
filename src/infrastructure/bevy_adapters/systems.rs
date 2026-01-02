@@ -3,12 +3,12 @@ use crate::application::simulation_service::SimulationService;
 use crate::domain::services::physics;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use bevy_egui::{egui, EguiContexts};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 fn normalized_or_zero(vec: Vec3) -> Vec3 {
     if vec.length_squared() > 0.0 {
@@ -126,8 +126,14 @@ pub fn update_planet_positions(
     for (entity, transform, planet_comp) in query.iter() {
         if planet_comp.domain_planet.parent_entity.is_none() {
             // This is a planet orbiting the Sun
-            parent_positions.insert(planet_comp.domain_planet.name.clone(), transform.translation);
-            parent_tilts.insert(planet_comp.domain_planet.name.clone(), Some(planet_comp.domain_planet.axial_tilt_deg));
+            parent_positions.insert(
+                planet_comp.domain_planet.name.clone(),
+                transform.translation,
+            );
+            parent_tilts.insert(
+                planet_comp.domain_planet.name.clone(),
+                Some(planet_comp.domain_planet.axial_tilt_deg),
+            );
         }
     }
 
@@ -135,8 +141,12 @@ pub fn update_planet_positions(
     {
         // Parallel implementation
         update_planet_positions_parallel(
-            time_days, solar_params, camera_pos, &parent_positions, &parent_tilts,
-            &mut query
+            time_days,
+            solar_params,
+            camera_pos,
+            &parent_positions,
+            &parent_tilts,
+            &mut query,
         );
     }
 
@@ -144,8 +154,12 @@ pub fn update_planet_positions(
     {
         // Fallback sequential implementation
         update_planet_positions_sequential(
-            time_days, solar_params, camera_pos, &parent_positions, &parent_tilts,
-            &mut query
+            time_days,
+            solar_params,
+            camera_pos,
+            &parent_positions,
+            &parent_tilts,
+            &mut query,
         );
     }
 }
@@ -161,34 +175,50 @@ fn update_planet_positions_parallel(
     query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
     // Collect planet data for batch processing
-    let planet_data: Vec<_> = query.iter_mut()
-        .filter(|(_, transform, _)| {
-            camera_pos.distance(transform.translation) <= 15_000_000.0
-        })
+    let planet_data: Vec<_> = query
+        .iter_mut()
+        .filter(|(_, transform, _)| camera_pos.distance(transform.translation) <= 15_000_000.0)
         .map(|(entity, mut transform, planet_comp)| {
             let distance_to_camera = camera_pos.distance(transform.translation);
             let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
 
-            let (parent_position, parent_tilt) = if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
-                (*parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
-                 parent_tilts.get(parent_name).copied().flatten())
-            } else {
-                (Vec3::ZERO, None)
-            };
+            let (parent_position, parent_tilt) =
+                if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
+                    (
+                        *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
+                        parent_tilts.get(parent_name).copied().flatten(),
+                    )
+                } else {
+                    (Vec3::ZERO, None)
+                };
 
-            (entity, planet_comp.domain_planet.clone(), parent_position, parent_tilt, kepler_iterations, transform)
+            (
+                entity,
+                planet_comp.domain_planet.clone(),
+                parent_position,
+                parent_tilt,
+                kepler_iterations,
+                transform,
+            )
         })
         .collect();
 
     // Parallel batch processing
     let position_updates: Vec<(Entity, Vec3)> = planet_data
         .into_par_iter()
-        .map(|(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
-            let position = physics::calculate_planet_position_with_quality(
-                &planet, time_days, &solar_params, parent_pos, parent_tilt, kepler_iterations
-            );
-            (entity, position)
-        })
+        .map(
+            |(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
+                let position = physics::calculate_planet_position_with_quality(
+                    &planet,
+                    time_days,
+                    &solar_params,
+                    parent_pos,
+                    parent_tilt,
+                    kepler_iterations,
+                );
+                (entity, position)
+            },
+        )
         .collect();
 
     // Apply position updates
@@ -214,17 +244,24 @@ fn update_planet_positions_sequential(
             continue;
         }
 
-        let (parent_position, parent_tilt) = if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
-            (*parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
-             parent_tilts.get(parent_name).copied().flatten())
-        } else {
-            (Vec3::ZERO, None)
-        };
+        let (parent_position, parent_tilt) =
+            if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
+                (
+                    *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
+                    parent_tilts.get(parent_name).copied().flatten(),
+                )
+            } else {
+                (Vec3::ZERO, None)
+            };
 
         let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
         let new_position = physics::calculate_planet_position_with_quality(
-            &planet_comp.domain_planet, time_days, &solar_params,
-            parent_position, parent_tilt, kepler_iterations
+            &planet_comp.domain_planet,
+            time_days,
+            &solar_params,
+            parent_position,
+            parent_tilt,
+            kepler_iterations,
         );
         transform.translation = new_position;
     }
@@ -577,26 +614,28 @@ pub fn display_navigation_bar(
                 ui.label(
                     egui::RichText::new("🌌")
                         .size(14.0)
-                        .color(egui::Color32::from_rgb(120, 140, 180))
+                        .color(egui::Color32::from_rgb(120, 140, 180)),
                 );
 
                 ui.separator();
 
                 // Orbit visibility toggle button
-                let orbit_text = if solar_params.show_orbits { "Hide Orbits" } else { "Show Orbits" };
-                let button = egui::Button::new(
-                    egui::RichText::new(orbit_text).size(11.0)
-                )
-                .fill(if solar_params.show_orbits {
-                    egui::Color32::from_rgb(40, 60, 100)
+                let orbit_text = if solar_params.show_orbits {
+                    "Hide Orbits"
                 } else {
-                    egui::Color32::from_rgba_premultiplied(20, 25, 35, 150)
-                })
-                .stroke(if solar_params.show_orbits {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 120, 200))
-                } else {
-                    egui::Stroke::NONE
-                });
+                    "Show Orbits"
+                };
+                let button = egui::Button::new(egui::RichText::new(orbit_text).size(11.0))
+                    .fill(if solar_params.show_orbits {
+                        egui::Color32::from_rgb(40, 60, 100)
+                    } else {
+                        egui::Color32::from_rgba_premultiplied(20, 25, 35, 150)
+                    })
+                    .stroke(if solar_params.show_orbits {
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 120, 200))
+                    } else {
+                        egui::Stroke::NONE
+                    });
 
                 if ui.add(button).clicked() {
                     solar_params.show_orbits = !solar_params.show_orbits;
@@ -627,10 +666,15 @@ pub fn display_navigation_bar(
                                 let button = if selected {
                                     egui::Button::new(button_text)
                                         .fill(egui::Color32::from_rgb(40, 60, 100))
-                                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 120, 200)))
+                                        .stroke(egui::Stroke::new(
+                                            1.0,
+                                            egui::Color32::from_rgb(80, 120, 200),
+                                        ))
                                 } else {
                                     egui::Button::new(button_text)
-                                        .fill(egui::Color32::from_rgba_premultiplied(20, 25, 35, 150))
+                                        .fill(egui::Color32::from_rgba_premultiplied(
+                                            20, 25, 35, 150,
+                                        ))
                                         .stroke(egui::Stroke::NONE)
                                 };
 
@@ -645,32 +689,32 @@ pub fn display_navigation_bar(
                         });
                     });
 
-                    // FPS indicator on the right side
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
+                // FPS indicator on the right side
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
 
-                        // Determine color based on FPS with subtle colors
-                        let fps_color = if performance_stats.fps >= 55.0 {
-                            egui::Color32::from_rgb(180, 220, 180) // Subtle green
-                        } else if performance_stats.fps >= 45.0 {
-                            egui::Color32::from_rgb(220, 220, 180) // Subtle yellow
-                        } else if performance_stats.fps >= 30.0 {
-                            egui::Color32::from_rgb(220, 200, 180) // Subtle orange
-                        } else {
-                            egui::Color32::from_rgb(220, 180, 180) // Subtle red
-                        };
+                    // Determine color based on FPS with subtle colors
+                    let fps_color = if performance_stats.fps >= 55.0 {
+                        egui::Color32::from_rgb(180, 220, 180) // Subtle green
+                    } else if performance_stats.fps >= 45.0 {
+                        egui::Color32::from_rgb(220, 220, 180) // Subtle yellow
+                    } else if performance_stats.fps >= 30.0 {
+                        egui::Color32::from_rgb(220, 200, 180) // Subtle orange
+                    } else {
+                        egui::Color32::from_rgb(220, 180, 180) // Subtle red
+                    };
 
-                        ui.label(
-                            egui::RichText::new("fps")
-                                .size(9.0)
-                                .color(egui::Color32::from_rgb(150, 150, 170)),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!("{:.0}", performance_stats.fps))
-                                .size(11.0)
-                                .color(fps_color),
-                        );
-                    });
+                    ui.label(
+                        egui::RichText::new("fps")
+                            .size(9.0)
+                            .color(egui::Color32::from_rgb(150, 150, 170)),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("{:.0}", performance_stats.fps))
+                            .size(11.0)
+                            .color(fps_color),
+                    );
+                });
             });
         });
 
@@ -756,7 +800,8 @@ pub fn handle_solar_system_input(
             if let Some(entity) = selected_planet.entity {
                 if let Ok((planet_comp, planet_transform)) = planet_query.get(entity) {
                     let planet_pos = planet_transform.translation();
-                    let radius = physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
+                    let radius =
+                        physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
 
                     // Position camera to frame the planet nicely
                     let distance = (radius * 10.0).max(5000.0).min(500000.0);
@@ -918,15 +963,20 @@ pub fn update_camera_controller(
         // Handle mouse wheel for zooming and speed adjustment (only if not over UI)
         if !ui_has_pointer {
             for wheel_event in mouse_wheel.read() {
-                if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+                if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight)
+                {
                     // Ctrl+Wheel: Adjust base movement speed
                     let speed_change = wheel_event.y * controller.speed * 0.15;
-                    controller.speed = (controller.speed + speed_change).clamp(controller.min_speed, controller.max_speed);
+                    controller.speed = (controller.speed + speed_change)
+                        .clamp(controller.min_speed, controller.max_speed);
                     println!("Camera speed: {:.0} units/s", controller.speed);
-                } else if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+                } else if keyboard.pressed(KeyCode::ShiftLeft)
+                    || keyboard.pressed(KeyCode::ShiftRight)
+                {
                     // Shift+Wheel: Adjust zoom sensitivity
                     let sensitivity_change = wheel_event.y * 5.0;
-                    controller.zoom_sensitivity = (controller.zoom_sensitivity + sensitivity_change).clamp(0.1, 500.0);
+                    controller.zoom_sensitivity =
+                        (controller.zoom_sensitivity + sensitivity_change).clamp(0.1, 500.0);
 
                     // Show notification with current zoom sensitivity
                     notifications.notifications.push(Notification {
@@ -937,7 +987,8 @@ pub fn update_camera_controller(
                     });
                 } else {
                     // Normal wheel: Zoom in/out
-                    let zoom_distance = wheel_event.y * controller.speed * controller.zoom_sensitivity;
+                    let zoom_distance =
+                        wheel_event.y * controller.speed * controller.zoom_sensitivity;
                     let forward = *transform.forward();
                     transform.translation += forward * zoom_distance;
                 }
@@ -998,7 +1049,10 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
             .vscroll(false) // Disable window-level vertical scroll
             .frame(egui::Frame {
                 fill: egui::Color32::from_rgba_premultiplied(8, 10, 16, 220), // Semi-transparent dark
-                stroke: egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(50, 70, 110, 120)),
+                stroke: egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_premultiplied(50, 70, 110, 120),
+                ),
                 rounding: egui::Rounding::same(12.0),
                 shadow: egui::Shadow {
                     offset: egui::vec2(0.0, 4.0),
@@ -1013,11 +1067,7 @@ pub fn display_hover_info(mut contexts: EguiContexts, selected_planet: Res<Selec
                 // Elegant header with icon and name
                 ui.horizontal(|ui| {
                     let (icon, color) = get_celestial_icon_and_color(name);
-                    ui.label(
-                        egui::RichText::new(icon)
-                            .size(32.0)
-                            .color(color),
-                    );
+                    ui.label(egui::RichText::new(icon).size(32.0).color(color));
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.label(
@@ -1082,14 +1132,13 @@ fn get_celestial_type(name: &str) -> &'static str {
         "Mercury" | "Venus" | "Earth" | "Mars" => "Terrestrial Planet",
         "Jupiter" | "Saturn" => "Gas Giant",
         "Uranus" | "Neptune" => "Ice Giant",
-        "Moon" | "Phobos" | "Deimos" | "Io" | "Europa" | "Ganymede" | "Callisto" |
-        "Mimas" | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Hyperion" |
-        "Iapetus" | "Miranda" | "Ariel" | "Umbriel" | "Titania" | "Oberon" |
-        "Triton" | "Proteus" | "Nereid" | "Larissa" => "Natural Satellite",
-        _ => "Celestial Body"
+        "Moon" | "Phobos" | "Deimos" | "Io" | "Europa" | "Ganymede" | "Callisto" | "Mimas"
+        | "Enceladus" | "Tethys" | "Dione" | "Rhea" | "Titan" | "Hyperion" | "Iapetus"
+        | "Miranda" | "Ariel" | "Umbriel" | "Titania" | "Oberon" | "Triton" | "Proteus"
+        | "Nereid" | "Larissa" => "Natural Satellite",
+        _ => "Celestial Body",
     }
 }
-
 
 // Helper function to get celestial body icon and color with universally supported Unicode
 fn get_celestial_icon_and_color(name: &str) -> (&'static str, egui::Color32) {
@@ -1126,7 +1175,11 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Mass", "1.9885 × 10³⁰ kg (333,000 Earth masses)");
             display_info_section(ui, "Radius", "696,340 km (109 Earth radii)");
             display_info_section(ui, "Surface Temperature", "5,778 K (5,505°C)");
-            display_info_section(ui, "Composition", "About 74% hydrogen, 24% helium (by mass)");
+            display_info_section(
+                ui,
+                "Composition",
+                "About 74% hydrogen, 24% helium (by mass)",
+            );
             display_info_section(ui, "Luminosity", "3.83 × 10²⁶ W");
             display_info_section(ui, "Age", "4.6 billion years");
             display_info_section(ui, "Distance from Earth", "149.6 million km (1 AU)");
@@ -1146,7 +1199,11 @@ fn display_celestial_info(ui: &mut egui::Ui, name: &str) {
             display_info_section(ui, "Orbital Period", "87.969 Earth days");
             display_info_section(ui, "Rotation Period", "58.646 Earth days");
             display_info_section(ui, "Surface Temperature", "-173°C to 427°C");
-            display_info_section(ui, "Atmosphere", "Extremely thin exosphere (sodium, oxygen)");
+            display_info_section(
+                ui,
+                "Atmosphere",
+                "Extremely thin exosphere (sodium, oxygen)",
+            );
             display_info_section(ui, "Moons", "0");
         }
         "Venus" => {
@@ -2042,7 +2099,10 @@ pub fn auto_inspect_selected_planet(
         let distance = moon_distance.unwrap_or(target_distance);
         let smooth_lerp = 1.0 - (-3.0 * time.delta_seconds()).exp();
         state.smooth_axis = if state.smooth_axis.length_squared() > 0.0 {
-            state.smooth_axis.lerp(axis_dir, smooth_lerp).normalize_or_zero()
+            state
+                .smooth_axis
+                .lerp(axis_dir, smooth_lerp)
+                .normalize_or_zero()
         } else {
             axis_dir
         };
@@ -2110,13 +2170,13 @@ pub fn auto_inspect_selected_planet(
 fn get_aesthetic_view_params(name: &str) -> (f32, f32) {
     // Returns (distance_multiplier, elevation_offset)
     match name {
-        "Sun" => (1.2, 0.2),          // Further back, slightly elevated for the massive sun
-        "Saturn" => (1.15, 0.3),      // Extra elevation to showcase rings
-        "Jupiter" => (1.1, 0.25),     // Show off the gas giant with nice elevation
+        "Sun" => (1.2, 0.2),      // Further back, slightly elevated for the massive sun
+        "Saturn" => (1.15, 0.3),  // Extra elevation to showcase rings
+        "Jupiter" => (1.1, 0.25), // Show off the gas giant with nice elevation
         "Earth" | "Mars" => (0.95, 0.35), // Closer, higher angle for detail
         "Moon" | "Io" | "Europa" | "Titan" | "Triton" => (0.95, 0.35), // Keep close while showing parent
         "Neptune" | "Uranus" => (1.0, 0.3), // Ice giants with good elevation
-        _ => (1.0, 0.3), // Default: standard distance, nice 3/4 view
+        _ => (1.0, 0.3),                    // Default: standard distance, nice 3/4 view
     }
 }
 
@@ -2129,12 +2189,17 @@ pub fn update_performance_stats(
     // Update frame time and FPS
     let frame_time_ms = time.delta_seconds() * 1000.0;
     performance_stats.frame_time = frame_time_ms;
-    performance_stats.fps = if frame_time_ms > 0.0 { 1000.0 / frame_time_ms } else { 0.0 };
+    performance_stats.fps = if frame_time_ms > 0.0 {
+        1000.0 / frame_time_ms
+    } else {
+        0.0
+    };
     performance_stats.frame_count += 1;
 
     // Update rolling average frame time (exponential moving average)
     const ALPHA: f32 = 0.1; // Smoothing factor
-    performance_stats.average_frame_time = performance_stats.average_frame_time * (1.0 - ALPHA) + frame_time_ms * ALPHA;
+    performance_stats.average_frame_time =
+        performance_stats.average_frame_time * (1.0 - ALPHA) + frame_time_ms * ALPHA;
 
     // Automatic quality adjustment based on frame time
     if performance_stats.adaptive_enabled {
@@ -2151,10 +2216,10 @@ fn adjust_quality_based_on_performance(
     let current_avg_time = performance_stats.average_frame_time;
 
     // Quality adjustment thresholds
-    let ultra_threshold = target_frame_time * 0.8;    // 80% of target = excellent performance
-    let high_threshold = target_frame_time * 1.0;     // At target = good performance
-    let medium_threshold = target_frame_time * 1.3;   // 30% over target = acceptable
-    let low_threshold = target_frame_time * 1.6;      // 60% over target = poor performance
+    let ultra_threshold = target_frame_time * 0.8; // 80% of target = excellent performance
+    let high_threshold = target_frame_time * 1.0; // At target = good performance
+    let medium_threshold = target_frame_time * 1.3; // 30% over target = acceptable
+    let low_threshold = target_frame_time * 1.6; // 60% over target = poor performance
 
     let new_quality_level = if current_avg_time < ultra_threshold {
         QualityLevel::Ultra
@@ -2211,8 +2276,6 @@ fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarS
     }
 }
 
-
-
 #[derive(Default)]
 pub struct AutoInspectState {
     selected: Option<Entity>,
@@ -2243,9 +2306,9 @@ pub fn display_notifications(
     let ctx = contexts.ctx_mut();
 
     // Remove expired notifications
-    notifications.notifications.retain(|n| {
-        current_time - n.created_at < n.duration
-    });
+    notifications
+        .notifications
+        .retain(|n| current_time - n.created_at < n.duration);
 
     // Display each notification
     let mut y_offset = 80.0; // Start from bottom with some padding
@@ -2260,9 +2323,15 @@ pub fn display_notifications(
 
         // Choose colors based on notification type
         let bg_color = match notification.notification_type {
-            NotificationType::Success => egui::Color32::from_rgba_premultiplied(16, 64, 16, alpha.min(220)),
-            NotificationType::Error => egui::Color32::from_rgba_premultiplied(64, 16, 16, alpha.min(220)),
-            NotificationType::Info => egui::Color32::from_rgba_premultiplied(16, 32, 64, alpha.min(220)),
+            NotificationType::Success => {
+                egui::Color32::from_rgba_premultiplied(16, 64, 16, alpha.min(220))
+            }
+            NotificationType::Error => {
+                egui::Color32::from_rgba_premultiplied(64, 16, 16, alpha.min(220))
+            }
+            NotificationType::Info => {
+                egui::Color32::from_rgba_premultiplied(16, 32, 64, alpha.min(220))
+            }
         };
 
         egui::Window::new(format!("notification_{}", idx))
@@ -2272,7 +2341,10 @@ pub fn display_notifications(
             .frame(egui::Frame {
                 fill: bg_color,
                 rounding: egui::Rounding::same(8.0),
-                stroke: egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha / 3)),
+                stroke: egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha / 3),
+                ),
                 inner_margin: egui::Margin::symmetric(16.0, 12.0),
                 outer_margin: egui::Margin::ZERO,
                 shadow: egui::epaint::Shadow {
@@ -2286,7 +2358,7 @@ pub fn display_notifications(
                 ui.label(
                     egui::RichText::new(&notification.message)
                         .size(14.0)
-                        .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha))
+                        .color(egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha)),
                 );
             });
 

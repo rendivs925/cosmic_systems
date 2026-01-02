@@ -74,22 +74,25 @@ fn main() {
         });
         app.insert_resource(ScreenshotState { pending: false });
         app.insert_resource(PerformanceStats::default());
-    app.add_systems(Startup, setup_space);
+        app.add_systems(Startup, setup_space);
 
-    // Physics systems run on FixedUpdate for consistent simulation
-    app.add_systems(FixedUpdate, update_planet_positions);
-    app.add_systems(FixedUpdate, update_planet_rotations);
-    app.add_systems(FixedUpdate, update_moon_orbit_positions);
-    app.add_systems(Update, update_orbit_visuals);
-    app.add_systems(Update, update_orbit_visibility);
-    app.add_systems(Update, update_planet_reflections);
-    app.add_systems(Update, handle_solar_system_input);
-    app.add_systems(Update, handle_planet_selection);
-    app.add_systems(Update, handle_mouse_planet_selection);
-    app.add_systems(Update, display_navigation_bar);
-    app.add_systems(Update, update_planet_selection_visuals.run_if(every_n_frames(2)));
-    app.add_systems(Update, update_performance_stats);
-    app.add_systems(Update, display_hover_info);
+        // Physics systems run on FixedUpdate for consistent simulation
+        app.add_systems(FixedUpdate, update_planet_positions);
+        app.add_systems(FixedUpdate, update_planet_rotations);
+        app.add_systems(FixedUpdate, update_moon_orbit_positions);
+        app.add_systems(Update, update_orbit_visuals);
+        app.add_systems(Update, update_orbit_visibility);
+        app.add_systems(Update, update_planet_reflections);
+        app.add_systems(Update, handle_solar_system_input);
+        app.add_systems(Update, handle_planet_selection);
+        app.add_systems(Update, handle_mouse_planet_selection);
+        app.add_systems(Update, display_navigation_bar);
+        app.add_systems(
+            Update,
+            update_planet_selection_visuals.run_if(every_n_frames(2)),
+        );
+        app.add_systems(Update, update_performance_stats);
+        app.add_systems(Update, display_hover_info);
         app.add_systems(Update, display_notifications);
         app.add_systems(Update, take_pending_screenshot);
         app.add_systems(Update, update_camera_controller);

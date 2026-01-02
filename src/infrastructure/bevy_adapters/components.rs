@@ -65,12 +65,12 @@ pub struct CameraController {
     pub target_entity: Option<Entity>,
     pub orbit_distance: f32,
     pub orbit_angle: f32,
-    pub acceleration: f32,           // Smooth acceleration
-    pub deceleration: f32,           // Smooth deceleration
+    pub acceleration: f32,            // Smooth acceleration
+    pub deceleration: f32,            // Smooth deceleration
     pub adaptive_speed_enabled: bool, // Auto-adjust speed based on distance
-    pub min_speed: f32,              // Minimum movement speed
-    pub max_speed: f32,              // Maximum movement speed
-    pub zoom_sensitivity: f32,       // Mouse wheel zoom sensitivity
+    pub min_speed: f32,               // Minimum movement speed
+    pub max_speed: f32,               // Maximum movement speed
+    pub zoom_sensitivity: f32,        // Mouse wheel zoom sensitivity
 }
 
 // Component for selectable objects (planets, etc.)
@@ -127,23 +127,23 @@ pub struct ScreenshotState {
 // Performance monitoring and quality adjustment
 #[derive(Resource)]
 pub struct PerformanceStats {
-    pub frame_time: f32,           // Current frame time in milliseconds
-    pub fps: f32,                  // Current FPS
-    pub average_frame_time: f32,   // Rolling average frame time
-    pub frame_count: u64,          // Total frames rendered
+    pub frame_time: f32,             // Current frame time in milliseconds
+    pub fps: f32,                    // Current FPS
+    pub average_frame_time: f32,     // Rolling average frame time
+    pub frame_count: u64,            // Total frames rendered
     pub quality_level: QualityLevel, // Current quality setting
-    pub target_fps: f32,           // Target FPS for quality adjustment
-    pub adaptive_enabled: bool,    // Whether automatic quality adjustment is enabled
+    pub target_fps: f32,             // Target FPS for quality adjustment
+    pub adaptive_enabled: bool,      // Whether automatic quality adjustment is enabled
 }
 
 // Quality levels for automatic adjustment
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QualityLevel {
-    Ultra,      // Highest quality, no performance optimizations
-    High,       // High quality with minimal optimizations
-    Medium,     // Balanced quality and performance
-    Low,        // Lower quality for better performance
-    Minimal,    // Minimum quality for maximum performance
+    Ultra,   // Highest quality, no performance optimizations
+    High,    // High quality with minimal optimizations
+    Medium,  // Balanced quality and performance
+    Low,     // Lower quality for better performance
+    Minimal, // Minimum quality for maximum performance
 }
 
 impl Default for PerformanceStats {

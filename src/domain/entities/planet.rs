@@ -45,9 +45,9 @@ impl Planet {
             2439.7, // Accurate radius in km
             3.3011e23,
             Color::srgb(0.45, 0.45, 0.42), // Realistic gray-brown Mercury surface
-            0.387,  // Semi-major axis in AU
-            87.969, // Orbital period in days
-            1407.504, // 58.646 days
+            0.387,                         // Semi-major axis in AU
+            87.969,                        // Orbital period in days
+            1407.504,                      // 58.646 days
             0.034,
             None, // orbits Sun
         )
@@ -59,11 +59,11 @@ impl Planet {
             6051.8, // Accurate radius in km
             4.8675e24,
             Color::srgb(0.95, 0.85, 0.65), // Realistic Venus yellowish-white clouds
-            0.723,   // Semi-major axis in AU
-            224.701, // Orbital period in days
-            -5832.6, // Retrograde rotation (243.025 days)
-            177.36,  // Retrograde axial tilt
-            None, // orbits Sun
+            0.723,                         // Semi-major axis in AU
+            224.701,                       // Orbital period in days
+            -5832.6,                       // Retrograde rotation (243.025 days)
+            177.36,                        // Retrograde axial tilt
+            None,                          // orbits Sun
         )
     }
 
@@ -73,8 +73,8 @@ impl Planet {
             6371.0, // Accurate radius in km
             5.97237e24,
             Color::srgb(0.25, 0.45, 0.85), // Realistic Earth: deep blue oceans with some continental green
-            1.000,   // Semi-major axis in AU
-            365.256, // Orbital period in days
+            1.000,                         // Semi-major axis in AU
+            365.256,                       // Orbital period in days
             23.934,
             23.439,
             None, // orbits Sun
@@ -87,8 +87,8 @@ impl Planet {
             3389.5, // Accurate radius in km
             6.4171e23,
             Color::srgb(0.85, 0.35, 0.15), // Realistic Mars: butterscotch-orange with iron oxide dust
-            1.524,    // Semi-major axis in AU
-            686.980,  // Orbital period in days
+            1.524,                         // Semi-major axis in AU
+            686.980,                       // Orbital period in days
             24.623,
             25.19,
             None, // orbits Sun
@@ -101,8 +101,8 @@ impl Planet {
             69911.0, // Accurate radius in km
             1.8982e27,
             Color::srgb(0.85, 0.65, 0.45), // Realistic Jupiter: beige with brown/white zonal bands
-            5.204,    // Semi-major axis in AU
-            4332.667, // 11.862 years
+            5.204,                         // Semi-major axis in AU
+            4332.667,                      // 11.862 years
             9.925,
             3.13,
             None, // orbits Sun
@@ -115,8 +115,8 @@ impl Planet {
             58232.0, // Accurate radius in km
             5.6834e26,
             Color::srgb(0.9, 0.8, 0.5), // golden rings
-            9.582,    // Semi-major axis in AU
-            10759.346, // 29.457 years
+            9.582,                      // Semi-major axis in AU
+            10759.346,                  // 29.457 years
             10.7,
             26.73,
             None, // orbits Sun
@@ -129,8 +129,8 @@ impl Planet {
             25362.0, // Accurate radius in km
             8.6810e25,
             Color::srgb(0.6, 0.8, 0.9), // pale cyan
-            19.201,   // Semi-major axis in AU
-            30688.992, // 84.0205 years
+            19.201,                     // Semi-major axis in AU
+            30688.992,                  // 84.0205 years
             -17.24,
             97.77,
             None, // orbits Sun
@@ -143,8 +143,8 @@ impl Planet {
             24622.0, // Accurate radius in km
             1.02413e26,
             Color::srgb(0.3, 0.5, 0.9), // deep azure
-            30.047,   // Semi-major axis in AU
-            60194.189, // 164.8 years
+            30.047,                     // Semi-major axis in AU
+            60194.189,                  // 164.8 years
             16.11,
             28.32,
             None, // orbits Sun
@@ -161,7 +161,7 @@ impl Planet {
             0.0,
             601.2, // 25.05 days sidereal rotation
             7.25,
-            None,   // central body
+            None, // central body
         )
     }
 
@@ -172,9 +172,9 @@ impl Planet {
             1737.4, // Earth's moon
             7.342e22,
             Color::srgb(0.75, 0.75, 0.78), // Realistic Moon: bright gray with slight blue tint from space weathering
-            0.002569,  // 384,400 km
-            27.3217,   // sidereal month
-            27.3217 * 24.0, // synchronous rotation
+            0.002569,                      // 384,400 km
+            27.3217,                       // sidereal month
+            27.3217 * 24.0,                // synchronous rotation
             0.0,
             Some("Earth".to_string()),
         )
@@ -512,7 +512,7 @@ impl Planet {
             6.39,                       // 153.3 hours
             6.39 * 24.0,                // synchronous rotation
             0.0,
-            Some("Pluto".to_string()),  // Note: Pluto not in main solar system yet
+            Some("Pluto".to_string()), // Note: Pluto not in main solar system yet
         )
     }
 }
