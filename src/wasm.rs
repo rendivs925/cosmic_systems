@@ -20,6 +20,7 @@ fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
     }
 }
 
+use crate::application::solar_system_startup::spawn_bodies_progressively;
 use crate::application::startup::*;
 use crate::infrastructure::bevy_adapters::components::{
     CameraInputState, DynamicResolutionState, HoveredPlanet, NotificationQueue, ScreenshotState,

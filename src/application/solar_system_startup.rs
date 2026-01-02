@@ -150,6 +150,7 @@ pub fn setup_space(
     }
 
     // Spawn each celestial body (planets and moons)
+    #[cfg(not(target_arch = "wasm32"))]
     for planet in all_celestial_bodies {
         spawn_celestial_body(
             planet,
@@ -186,8 +187,17 @@ pub fn spawn_bodies_progressively(
     solar_params: Res<SolarSystemParameters>,
     mut queue: ResMut<SpawnQueue>,
 ) {
-    for _ in 0..queue.spawn_per_frame {
-        let Some(planet) = queue.pending.pop_front() else {
+    let SpawnQueue {
+        pending,
+        entity_map,
+        position_map,
+        axial_tilts,
+        shared_orbit_material,
+        spawn_per_frame,
+    } = &mut *queue;
+
+    for _ in 0..*spawn_per_frame {
+        let Some(planet) = pending.pop_front() else {
             return;
         };
         spawn_celestial_body(
@@ -197,10 +207,10 @@ pub fn spawn_bodies_progressively(
             &mut materials,
             &asset_server,
             &solar_params,
-            &mut queue.entity_map,
-            &mut queue.position_map,
-            &queue.axial_tilts,
-            &queue.shared_orbit_material,
+            entity_map,
+            position_map,
+            axial_tilts,
+            shared_orbit_material,
         );
     }
 }
