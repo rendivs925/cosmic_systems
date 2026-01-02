@@ -3,6 +3,12 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::SimulationParameters;
 use bevy::math::{Quat, Vec3};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
+// SIMD feature detection
+#[cfg(target_arch = "x86_64")]
+use std::is_x86_feature_detected;
 
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
@@ -535,4 +541,49 @@ pub const AU_IN_KM: f32 = 149597870.7; // 1 AU in kilometers
 /// Convert astronomical units to simulation distance units
 pub fn au_to_simulation_units(au: f32, solar_params: &SolarSystemParameters) -> f32 {
     au * solar_params.scale_factor
+}
+
+// Parallel Optimizations for Phase 6
+
+/// Parallel orbital position calculation using Rayon
+#[cfg(feature = "parallel")]
+pub fn calculate_planet_positions_parallel(
+    planets: &[(Planet, Vec3, Option<f32>, u32)], // (planet, parent_pos, parent_tilt, kepler_iterations)
+    time_days: f32,
+    solar_params: &SolarSystemParameters
+) -> Vec<Vec3> {
+    planets.par_iter()
+        .map(|(planet, parent_pos, parent_tilt, kepler_iterations)| {
+            calculate_planet_position_with_quality(
+                planet, time_days, solar_params, *parent_pos, *parent_tilt, *kepler_iterations
+            )
+        })
+        .collect()
+}
+
+/// CPU feature level detection for future SIMD dispatch
+#[derive(Debug, Clone, Copy)]
+pub enum CpuFeatureLevel {
+    Scalar,
+    SSE4,
+    AVX2,
+    AVX512,
+}
+pub fn detect_cpu_features() -> CpuFeatureLevel {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") {
+            CpuFeatureLevel::AVX512
+        } else if is_x86_feature_detected!("avx2") {
+            CpuFeatureLevel::AVX2
+        } else if is_x86_feature_detected!("sse4.1") {
+            CpuFeatureLevel::SSE4
+        } else {
+            CpuFeatureLevel::Scalar
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        CpuFeatureLevel::Scalar
+    }
 }
