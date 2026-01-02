@@ -299,7 +299,7 @@ pub fn update_orbit_visuals(
     // Visual pulsing is slow enough that this is imperceptible
     let frame_number = (time.elapsed_seconds() * 60.0) as u32; // Assume 60 FPS
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 6;
+    let update_stride = 12;
     #[cfg(not(target_arch = "wasm32"))]
     let update_stride = 3;
 
@@ -366,7 +366,7 @@ pub fn update_planet_reflections(
     // Performance optimization: skip most updates since values don't change
     let frame_number = (time.elapsed_seconds() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 10;
+    let update_stride = 20;
     #[cfg(not(target_arch = "wasm32"))]
     let update_stride = 5;
 

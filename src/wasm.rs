@@ -79,7 +79,9 @@ pub fn main() {
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     let mut dynamic_resolution = DynamicResolutionState::default();
-    dynamic_resolution.scale = 0.8;
+    dynamic_resolution.scale = 0.7;
+    dynamic_resolution.min_scale = 0.5;
+    dynamic_resolution.max_scale = 0.9;
     app.insert_resource(dynamic_resolution);
     app.insert_resource(Time::<Fixed>::from_hz(30.0));
     app.add_systems(Startup, setup_space);
@@ -90,6 +92,7 @@ pub fn main() {
     app.add_systems(FixedUpdate, update_planet_positions);
     app.add_systems(FixedUpdate, update_planet_rotations);
     app.add_systems(FixedUpdate, update_moon_orbit_positions);
+    app.add_systems(Update, spawn_bodies_progressively);
     app.add_systems(Update, update_orbit_visuals);
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(Update, update_planet_reflections);

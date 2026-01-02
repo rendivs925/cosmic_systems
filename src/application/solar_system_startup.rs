@@ -6,7 +6,10 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use bevy::prelude::*;
 use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
+use std::collections::VecDeque;
 use std::f32::consts::TAU;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 // Setup scene for solar system simulation
@@ -133,171 +136,214 @@ pub fn setup_space(
         axial_tilts.insert(planet.name.clone(), planet.axial_tilt_deg);
     }
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        commands.insert_resource(SpawnQueue {
+            pending: all_celestial_bodies.into(),
+            entity_map,
+            position_map,
+            axial_tilts,
+            shared_orbit_material,
+            spawn_per_frame: 1,
+        });
+        return;
+    }
+
     // Spawn each celestial body (planets and moons)
     for planet in all_celestial_bodies {
-        let visual_radius = if planet.name == "Sun" {
-            physics::calculate_sun_visual_radius(&solar_params)
-        } else {
-            physics::calculate_visual_radius(&planet, &solar_params)
-        };
-
-        let parent_position = planet
-            .parent_entity
-            .as_ref()
-            .and_then(|parent_name| position_map.get(parent_name).copied())
-            .unwrap_or(Vec3::ZERO);
-        let parent_tilt = planet
-            .parent_entity
-            .as_ref()
-            .and_then(|parent_name| axial_tilts.get(parent_name).copied());
-        let initial_position = physics::calculate_planet_position(
-            &planet,
-            0.0,
+        spawn_celestial_body(
+            planet,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &asset_server,
             &solar_params,
-            parent_position,
-            parent_tilt,
+            &mut entity_map,
+            &mut position_map,
+            &axial_tilts,
+            &shared_orbit_material,
         );
-        let textures = get_planet_textures(&planet.name);
-        let albedo_handle = load_texture(&asset_server, textures.albedo);
-        let emissive_handle = load_texture(&asset_server, textures.emissive);
-        let has_albedo = albedo_handle.is_some();
+    }
+}
 
-        let base_color = planet.color;
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource)]
+pub(crate) struct SpawnQueue {
+    pending: VecDeque<Planet>,
+    entity_map: HashMap<String, Entity>,
+    position_map: HashMap<String, Vec3>,
+    axial_tilts: HashMap<String, f32>,
+    shared_orbit_material: Handle<StandardMaterial>,
+    spawn_per_frame: usize,
+}
 
-        let (metallic, reflectance, perceptual_roughness) = match planet.name.as_str() {
-            "Sun" => (0.0, 0.0, 0.0),
-            "Mercury" => (0.1, 0.3, 0.8),
-            "Venus" => (0.1, 0.75, 0.25),
-            "Earth" => (0.05, 0.4, 0.45),
-            "Mars" => (0.05, 0.25, 0.6),
-            "Jupiter" => (0.0, 0.7, 0.15),
-            "Saturn" => (0.0, 0.65, 0.15),
-            "Uranus" => (0.0, 0.5, 0.25),
-            "Neptune" => (0.0, 0.6, 0.25),
-            _ => (0.0, 0.5, 0.7),
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_bodies_progressively(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+    solar_params: Res<SolarSystemParameters>,
+    mut queue: ResMut<SpawnQueue>,
+) {
+    for _ in 0..queue.spawn_per_frame {
+        let Some(planet) = queue.pending.pop_front() else {
+            return;
         };
-
-        let emissive = if planet.name == "Sun" {
-            LinearRgba::new(1.0, 1.0, 0.8, 1.0)
-        } else if has_albedo {
-            LinearRgba::new(0.35, 0.35, 0.35, 1.0)
-        } else {
-            LinearRgba::BLACK
-        };
-
-        let emissive_texture = if planet.name == "Sun" {
-            albedo_handle.clone()
-        } else if has_albedo {
-            albedo_handle.clone()
-        } else {
-            emissive_handle.clone()
-        };
-
-        #[cfg(target_arch = "wasm32")]
-        let material = create_planet_material(
-            None,
-            None,
-            None,
-            base_color,
-            emissive,
-            planet.name == "Sun",
-            metallic,
-            reflectance,
-            perceptual_roughness,
+        spawn_celestial_body(
+            planet,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &asset_server,
+            &solar_params,
+            &mut queue.entity_map,
+            &mut queue.position_map,
+            &queue.axial_tilts,
+            &queue.shared_orbit_material,
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        let material = create_planet_material(
-            albedo_handle.clone(),
-            None,
-            emissive_texture.clone(),
-            base_color,
-            emissive,
-            planet.name == "Sun",
-            metallic,
-            reflectance,
-            perceptual_roughness,
-        );
+    }
+}
 
-        let material_handle = materials.add(material);
+fn spawn_celestial_body(
+    planet: Planet,
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    asset_server: &AssetServer,
+    solar_params: &SolarSystemParameters,
+    entity_map: &mut HashMap<String, Entity>,
+    position_map: &mut HashMap<String, Vec3>,
+    axial_tilts: &HashMap<String, f32>,
+    shared_orbit_material: &Handle<StandardMaterial>,
+) {
+    let visual_radius = if planet.name == "Sun" {
+        physics::calculate_sun_visual_radius(solar_params)
+    } else {
+        physics::calculate_visual_radius(&planet, solar_params)
+    };
 
-        let planet_entity = commands
-            .spawn(PbrBundle {
-                mesh: create_uv_sphere_mesh(&mut meshes, visual_radius),
-                material: material_handle.clone(),
-                transform: Transform::from_translation(initial_position),
-                ..default()
-            })
-            .insert(PlanetComponent {
-                domain_planet: planet.clone(),
-                material: material_handle.clone(),
-                has_texture: has_albedo,
-                base_reflectance: reflectance,
-                base_roughness: perceptual_roughness,
-            })
-            .insert(Selectable {
-                name: planet.name.clone(),
-                selected: false,
-            })
-            .id();
+    let parent_position = planet
+        .parent_entity
+        .as_ref()
+        .and_then(|parent_name| position_map.get(parent_name).copied())
+        .unwrap_or(Vec3::ZERO);
+    let parent_tilt = planet
+        .parent_entity
+        .as_ref()
+        .and_then(|parent_name| axial_tilts.get(parent_name).copied());
+    let initial_position = physics::calculate_planet_position(
+        &planet,
+        0.0,
+        solar_params,
+        parent_position,
+        parent_tilt,
+    );
+    let textures = get_planet_textures(&planet.name);
+    let albedo_handle = load_texture(asset_server, textures.albedo);
+    let emissive_handle = load_texture(asset_server, textures.emissive);
+    let has_albedo = albedo_handle.is_some();
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            commands.entity(planet_entity).insert(PendingMaterialTextures {
-                material: material_handle.clone(),
-                base_color_texture: albedo_handle.clone(),
-                normal_map_texture: None,
-                emissive_texture,
-            });
-        }
+    let base_color = planet.color;
 
-        entity_map.insert(planet.name.clone(), planet_entity);
-        position_map.insert(planet.name.clone(), initial_position);
+    let (metallic, reflectance, perceptual_roughness) = match planet.name.as_str() {
+        "Sun" => (0.0, 0.0, 0.0),
+        "Mercury" => (0.1, 0.3, 0.8),
+        "Venus" => (0.1, 0.75, 0.25),
+        "Earth" => (0.05, 0.4, 0.45),
+        "Mars" => (0.05, 0.25, 0.6),
+        "Jupiter" => (0.0, 0.7, 0.15),
+        "Saturn" => (0.0, 0.65, 0.15),
+        "Uranus" => (0.0, 0.5, 0.25),
+        "Neptune" => (0.0, 0.6, 0.25),
+        _ => (0.0, 0.5, 0.7),
+    };
 
-        if let Some(parent_name) = &planet.parent_entity {
-            if let Some(parent_ent) = entity_map.get(parent_name).copied() {
-                let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
-                let orbit_base_color = planet.color;
-                let orbit_mesh =
-                    create_orbit_mesh_ellipse(&mut meshes, &orbit_shape, orbit_base_color);
-                let orbit_material_handle = shared_orbit_material.clone();
-                let orbit_motion =
-                    orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
+    let emissive = if planet.name == "Sun" {
+        LinearRgba::new(1.0, 1.0, 0.8, 1.0)
+    } else if has_albedo {
+        LinearRgba::new(0.35, 0.35, 0.35, 1.0)
+    } else {
+        LinearRgba::BLACK
+    };
 
-                // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
-                // The orbit plane is set from elements and aligned to the parent axial tilt at runtime.
-                commands
-                    .spawn(PbrBundle {
-                        mesh: orbit_mesh,
-                        material: orbit_material_handle.clone(),
-                        transform: Transform::default(),
-                        ..default()
-                    })
-                    .insert(OrbitComponent {
-                        radius: orbit_shape.semi_major_axis_units,
-                        planet_entity: parent_ent,
-                        material: orbit_material_handle.clone(),
-                        base_color: orbit_base_color,
-                        tilt: orbit_motion.tilt,
-                        wobble_speed: orbit_motion.wobble_speed,
-                        wobble_amount: orbit_motion.wobble_amount,
-                        spin_speed: orbit_motion.spin_speed,
-                        phase: orbit_motion.phase,
-                    })
-                    .insert(MoonOrbit)
-                    .insert(Name::new(format!(
-                        "Orbit {} around {}",
-                        planet.name, parent_name
-                    )));
-            }
-        } else if planet.name != "Sun" {
-            let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
+    let emissive_texture = if planet.name == "Sun" {
+        albedo_handle.clone()
+    } else if has_albedo {
+        albedo_handle.clone()
+    } else {
+        emissive_handle.clone()
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let material = create_planet_material(
+        None,
+        None,
+        None,
+        base_color,
+        emissive,
+        planet.name == "Sun",
+        metallic,
+        reflectance,
+        perceptual_roughness,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let material = create_planet_material(
+        albedo_handle.clone(),
+        None,
+        emissive_texture.clone(),
+        base_color,
+        emissive,
+        planet.name == "Sun",
+        metallic,
+        reflectance,
+        perceptual_roughness,
+    );
+
+    let material_handle = materials.add(material);
+
+    let planet_entity = commands
+        .spawn(PbrBundle {
+            mesh: create_uv_sphere_mesh(meshes, visual_radius),
+            material: material_handle.clone(),
+            transform: Transform::from_translation(initial_position),
+            ..default()
+        })
+        .insert(PlanetComponent {
+            domain_planet: planet.clone(),
+            material: material_handle.clone(),
+            has_texture: has_albedo,
+            base_reflectance: reflectance,
+            base_roughness: perceptual_roughness,
+        })
+        .insert(Selectable {
+            name: planet.name.clone(),
+            selected: false,
+        })
+        .id();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        commands.entity(planet_entity).insert(PendingMaterialTextures {
+            material: material_handle.clone(),
+            base_color_texture: albedo_handle.clone(),
+            normal_map_texture: None,
+            emissive_texture,
+        });
+    }
+
+    entity_map.insert(planet.name.clone(), planet_entity);
+    position_map.insert(planet.name.clone(), initial_position);
+
+    if let Some(parent_name) = &planet.parent_entity {
+        if let Some(parent_ent) = entity_map.get(parent_name).copied() {
+            let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
             let orbit_base_color = planet.color;
-            let orbit_mesh =
-                create_orbit_mesh_ellipse(&mut meshes, &orbit_shape, orbit_base_color);
+            let orbit_mesh = create_orbit_mesh_ellipse(meshes, &orbit_shape, orbit_base_color);
             let orbit_material_handle = shared_orbit_material.clone();
-            let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
+            let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
-            // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
+            // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
             commands
                 .spawn(PbrBundle {
                     mesh: orbit_mesh,
@@ -307,7 +353,7 @@ pub fn setup_space(
                 })
                 .insert(OrbitComponent {
                     radius: orbit_shape.semi_major_axis_units,
-                    planet_entity,
+                    planet_entity: parent_ent,
                     material: orbit_material_handle.clone(),
                     base_color: orbit_base_color,
                     tilt: orbit_motion.tilt,
@@ -316,86 +362,116 @@ pub fn setup_space(
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
                 })
-                .insert(Name::new(format!("Orbit {}", planet.name)));
+                .insert(MoonOrbit)
+                .insert(Name::new(format!(
+                    "Orbit {} around {}",
+                    planet.name, parent_name
+                )));
         }
+    } else if planet.name != "Sun" {
+        let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
+        let orbit_base_color = planet.color;
+        let orbit_mesh = create_orbit_mesh_ellipse(meshes, &orbit_shape, orbit_base_color);
+        let orbit_material_handle = shared_orbit_material.clone();
+        let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
-        if planet.name == "Saturn" {
-            let ring_outer_radius = visual_radius * 2.5;
-            let ring_inner_radius = visual_radius * 1.6;
-            let ring_texture = load_texture(&asset_server, get_ring_texture_path(&planet.name));
+        commands
+            .spawn(PbrBundle {
+                mesh: orbit_mesh,
+                material: orbit_material_handle.clone(),
+                transform: Transform::default(),
+                ..default()
+            })
+            .insert(OrbitComponent {
+                radius: orbit_shape.semi_major_axis_units,
+                planet_entity,
+                material: orbit_material_handle.clone(),
+                base_color: orbit_base_color,
+                tilt: orbit_motion.tilt,
+                wobble_speed: orbit_motion.wobble_speed,
+                wobble_amount: orbit_motion.wobble_amount,
+                spin_speed: orbit_motion.spin_speed,
+                phase: orbit_motion.phase,
+            })
+            .insert(Name::new(format!("Orbit {}", planet.name)));
+    }
+
+    if planet.name == "Saturn" {
+        let ring_outer_radius = visual_radius * 2.5;
+        let ring_inner_radius = visual_radius * 1.6;
+        let ring_texture = load_texture(asset_server, get_ring_texture_path(&planet.name));
+
+        #[cfg(target_arch = "wasm32")]
+        let ring_material = create_ring_material(
+            None,
+            Color::srgba(1.5, 1.4, 1.2, 1.0),
+            Color::srgb(0.3, 0.25, 0.18).into(),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let ring_material = create_ring_material(
+            ring_texture.clone(),
+            Color::srgba(1.5, 1.4, 1.2, 1.0),
+            Color::srgb(0.3, 0.25, 0.18).into(),
+        );
+        let ring_material_handle = materials.add(ring_material);
+
+        commands.entity(planet_entity).with_children(|parent| {
+            let mut ring_entity = parent.spawn((
+                PbrBundle {
+                    mesh: create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius),
+                    material: ring_material_handle.clone(),
+                    transform: Transform::default(),
+                    ..default()
+                },
+                Selectable {
+                    name: "Saturn Rings".to_string(),
+                    selected: false,
+                },
+            ));
 
             #[cfg(target_arch = "wasm32")]
-            let ring_material = create_ring_material(
-                None,
-                Color::srgba(1.5, 1.4, 1.2, 1.0),
-                Color::srgb(0.3, 0.25, 0.18).into(),
-            );
-            #[cfg(not(target_arch = "wasm32"))]
-            let ring_material = create_ring_material(
-                ring_texture.clone(),
-                Color::srgba(1.5, 1.4, 1.2, 1.0),
-                Color::srgb(0.3, 0.25, 0.18).into(),
-            );
-            let ring_material_handle = materials.add(ring_material);
+            {
+                ring_entity.insert(PendingMaterialTextures {
+                    material: ring_material_handle.clone(),
+                    base_color_texture: ring_texture,
+                    normal_map_texture: None,
+                    emissive_texture: None,
+                });
+            }
+        });
+    }
 
-            // Spawn rings as child of Saturn so they follow the planet
+    if let Some(clouds) = get_cloud_layer_config(&planet.name) {
+        if let Some(cloud_texture) = load_texture(asset_server, Some(clouds.texture_path)) {
             commands.entity(planet_entity).with_children(|parent| {
-                let mut ring_entity = parent.spawn((
+                #[cfg(target_arch = "wasm32")]
+                let cloud_material = create_cloud_material(None, clouds.alpha);
+                #[cfg(not(target_arch = "wasm32"))]
+                let cloud_material =
+                    create_cloud_material(Some(cloud_texture.clone()), clouds.alpha);
+                let cloud_material_handle = materials.add(cloud_material);
+
+                let mut cloud_entity = parent.spawn((
                     PbrBundle {
-                        mesh: create_ring_mesh(&mut meshes, ring_inner_radius, ring_outer_radius),
-                        material: ring_material_handle.clone(),
-                        transform: Transform::default(), // Relative to parent (Saturn)
+                        mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
+                        material: cloud_material_handle.clone(),
                         ..default()
                     },
-                    Selectable {
-                        name: "Saturn Rings".to_string(),
-                        selected: false,
+                    CloudLayer {
+                        rotation_period_hours: clouds.rotation_period_hours,
                     },
                 ));
 
                 #[cfg(target_arch = "wasm32")]
                 {
-                    ring_entity.insert(PendingMaterialTextures {
-                        material: ring_material_handle.clone(),
-                        base_color_texture: ring_texture,
+                    cloud_entity.insert(PendingMaterialTextures {
+                        material: cloud_material_handle.clone(),
+                        base_color_texture: Some(cloud_texture),
                         normal_map_texture: None,
                         emissive_texture: None,
                     });
                 }
             });
-        }
-
-        if let Some(clouds) = get_cloud_layer_config(&planet.name) {
-            if let Some(cloud_texture) = load_texture(&asset_server, Some(clouds.texture_path)) {
-                commands.entity(planet_entity).with_children(|parent| {
-                    #[cfg(target_arch = "wasm32")]
-                    let cloud_material = create_cloud_material(None, clouds.alpha);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let cloud_material = create_cloud_material(Some(cloud_texture.clone()), clouds.alpha);
-                    let cloud_material_handle = materials.add(cloud_material);
-
-                    let mut cloud_entity = parent.spawn((
-                        PbrBundle {
-                            mesh: create_uv_sphere_mesh(&mut meshes, visual_radius * clouds.scale),
-                            material: cloud_material_handle.clone(),
-                            ..default()
-                        },
-                        CloudLayer {
-                            rotation_period_hours: clouds.rotation_period_hours,
-                        },
-                    ));
-
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        cloud_entity.insert(PendingMaterialTextures {
-                            material: cloud_material_handle.clone(),
-                            base_color_texture: Some(cloud_texture),
-                            normal_map_texture: None,
-                            emissive_texture: None,
-                        });
-                    }
-                });
-            }
         }
     }
 }
