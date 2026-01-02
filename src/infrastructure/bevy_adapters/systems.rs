@@ -461,6 +461,7 @@ pub fn display_navigation_bar(
     mut selected_planet: ResMut<SelectedPlanet>,
     mut selectable_query: Query<(Entity, &mut Selectable)>,
     mut solar_params: ResMut<SolarSystemParameters>,
+    performance_stats: Res<PerformanceStats>,
 ) {
     let mut name_to_entity = HashMap::new();
     {
@@ -588,6 +589,33 @@ pub fn display_navigation_bar(
                                 }
                             }
                         });
+                    });
+
+                    // FPS indicator on the right side
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+
+                        // Determine color based on FPS with subtle colors
+                        let fps_color = if performance_stats.fps >= 55.0 {
+                            egui::Color32::from_rgb(180, 220, 180) // Subtle green
+                        } else if performance_stats.fps >= 45.0 {
+                            egui::Color32::from_rgb(220, 220, 180) // Subtle yellow
+                        } else if performance_stats.fps >= 30.0 {
+                            egui::Color32::from_rgb(220, 200, 180) // Subtle orange
+                        } else {
+                            egui::Color32::from_rgb(220, 180, 180) // Subtle red
+                        };
+
+                        ui.label(
+                            egui::RichText::new("fps")
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(150, 150, 170)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.0}", performance_stats.fps))
+                                .size(11.0)
+                                .color(fps_color),
+                        );
                     });
             });
         });
@@ -2129,51 +2157,7 @@ fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarS
     }
 }
 
-// System to display a subtle FPS indicator in the top left corner
-pub fn display_fps_indicator(mut contexts: EguiContexts, performance_stats: Res<PerformanceStats>) {
-    let ctx = contexts.ctx_mut();
 
-    // Create a small, subtle window in the top left
-    egui::Window::new("fps_indicator")
-        .title_bar(false)
-        .resizable(false)
-        .movable(false)
-        .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 10.0)) // 10px margin from top-left
-        .fixed_size(egui::vec2(60.0, 25.0)) // Small fixed size
-        .frame(egui::Frame {
-            fill: egui::Color32::from_rgba_premultiplied(20, 20, 30, 180), // Semi-transparent dark background
-            stroke: egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(60, 60, 80, 120)),
-            rounding: egui::Rounding::same(4.0),
-            inner_margin: egui::Margin::symmetric(6.0, 4.0),
-            ..Default::default()
-        })
-        .show(ctx, |ui| {
-            // Determine color based on FPS with more subtle colors
-            let fps_color = if performance_stats.fps >= 55.0 {
-                egui::Color32::from_rgb(180, 220, 180) // Subtle green
-            } else if performance_stats.fps >= 45.0 {
-                egui::Color32::from_rgb(220, 220, 180) // Subtle yellow
-            } else if performance_stats.fps >= 30.0 {
-                egui::Color32::from_rgb(220, 200, 180) // Subtle orange
-            } else {
-                egui::Color32::from_rgb(220, 180, 180) // Subtle red
-            };
-
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{:.0}", performance_stats.fps))
-                        .size(12.0)
-                        .color(fps_color)
-                        .strong(),
-                );
-                ui.label(
-                    egui::RichText::new("fps")
-                        .size(9.0)
-                        .color(egui::Color32::from_rgb(150, 150, 170)),
-                );
-            });
-        });
-}
 
 #[derive(Default)]
 pub struct AutoInspectState {
