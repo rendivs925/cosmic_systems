@@ -682,7 +682,7 @@ fn menu_button_colors(primary: bool, active: bool) -> (Color, Color) {
     } else if primary {
         (
             Color::srgba(0.031, 0.039, 0.063, 0.86),
-            Color::srgba(1.0, 1.0, 1.0, 0.12),
+            Color::srgba(0.196, 0.275, 0.431, 0.28),
         )
     } else {
         (
