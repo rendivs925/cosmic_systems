@@ -137,91 +137,109 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 });
             });
 
-        parent
-            .spawn(NodeBundle {
+        parent.spawn((
+            TextBundle {
+                text: Text::from_section(
+                    "fps 0",
+                    text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
+                ),
                 style: Style {
                     position_type: PositionType::Absolute,
                     left: Val::Px(20.0),
                     bottom: Val::Px(12.0),
-                    padding: UiRect::new(
-                        Val::Px(12.0),
-                        Val::Px(12.0),
-                        Val::Px(6.0),
-                        Val::Px(6.0),
-                    ),
                     ..default()
                 },
-                background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-                border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-                border_radius: BorderRadius::all(Val::Px(10.0)),
                 ..default()
-            })
-            .with_children(|left| {
-                left.spawn((
-                    TextBundle::from_section(
-                        "fps 0",
-                        text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
-                    ),
-                    FpsText,
-                ));
-            });
+            },
+            FpsText,
+        ));
 
-        parent
-            .spawn((
-                NodeBundle {
+    });
+
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    min_height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    display: Display::None,
+                    ..default()
+                },
+                background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+                z_index: ZIndex::Global(10),
+                ..default()
+            },
+            SelectorPanelRoot,
+            UiCapture,
+        ))
+        .with_children(|container| {
+            container
+                .spawn(NodeBundle {
                     style: Style {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(0.0),
-                        right: Val::Px(0.0),
-                        top: Val::Px(0.0),
-                        bottom: Val::Px(0.0),
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        display: Display::None,
+                        width: Val::Px(600.0),
+                        padding: UiRect::new(
+                            Val::Px(16.0),
+                            Val::Px(16.0),
+                            Val::Px(14.0),
+                            Val::Px(14.0),
+                        ),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
                         ..default()
                     },
-                    background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
-                    z_index: ZIndex::Global(10),
+                    background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+                    border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+                    border_radius: BorderRadius::all(Val::Px(14.0)),
                     ..default()
-                },
-                SelectorPanelRoot,
-                UiCapture,
-            ))
-            .with_children(|container| {
-                container
-                    .spawn(NodeBundle {
-                        style: Style {
-                            width: Val::Px(600.0),
-                            padding: UiRect::new(
-                                Val::Px(16.0),
-                                Val::Px(16.0),
-                                Val::Px(14.0),
-                                Val::Px(14.0),
-                            ),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(10.0),
+                })
+                .with_children(|panel| {
+                    panel.spawn(TextBundle::from_section(
+                        "Select Body",
+                        text_style(12.0, Color::srgb(0.9, 0.94, 1.0)),
+                    ));
+
+                    panel.spawn(TextBundle::from_section(
+                        "Planets",
+                        text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
+                    ));
+
+                    panel
+                        .spawn(NodeBundle {
+                            style: Style {
+                                flex_direction: FlexDirection::Row,
+                                flex_wrap: FlexWrap::Wrap,
+                                column_gap: Val::Px(8.0),
+                                row_gap: Val::Px(6.0),
+                                ..default()
+                            },
                             ..default()
-                        },
-                        background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-                        border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-                        border_radius: BorderRadius::all(Val::Px(14.0)),
-                        ..default()
-                    })
-                    .with_children(|panel| {
-                        panel.spawn(TextBundle::from_section(
-                            "Select Body",
-                            text_style(12.0, Color::srgb(0.9, 0.94, 1.0)),
-                        ));
+                        })
+                        .with_children(|planets| {
+                            for name in planet_names() {
+                                spawn_nav_button(planets, name, NavGroup::Planet);
+                            }
+                        });
 
-                        panel.spawn(TextBundle::from_section(
-                            "Planets",
+                    panel.spawn((
+                        TextBundle::from_section(
+                            "Moons",
                             text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
-                        ));
+                        ),
+                        SelectorMoonsSection,
+                    ));
 
-                        panel
-                            .spawn(NodeBundle {
+                    panel
+                        .spawn((
+                            NodeBundle {
                                 style: Style {
                                     flex_direction: FlexDirection::Row,
                                     flex_wrap: FlexWrap::Wrap,
@@ -230,43 +248,16 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                                     ..default()
                                 },
                                 ..default()
-                            })
-                            .with_children(|planets| {
-                                for name in planet_names() {
-                                    spawn_nav_button(planets, name, NavGroup::Planet);
-                                }
-                            });
-
-                        panel.spawn((
-                            TextBundle::from_section(
-                                "Moons",
-                                text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
-                            ),
+                            },
                             SelectorMoonsSection,
-                        ));
-
-                        panel
-                            .spawn((
-                                NodeBundle {
-                                    style: Style {
-                                        flex_direction: FlexDirection::Row,
-                                        flex_wrap: FlexWrap::Wrap,
-                                        column_gap: Val::Px(8.0),
-                                        row_gap: Val::Px(6.0),
-                                        ..default()
-                                    },
-                                    ..default()
-                                },
-                                SelectorMoonsSection,
-                            ))
-                            .with_children(|moons| {
-                                for (parent_name, moon_name) in moon_pairs() {
-                                    spawn_nav_button(moons, moon_name, NavGroup::Moon(parent_name));
-                                }
-                            });
-                    });
-            });
-    });
+                        ))
+                        .with_children(|moons| {
+                            for (parent_name, moon_name) in moon_pairs() {
+                                spawn_nav_button(moons, moon_name, NavGroup::Moon(parent_name));
+                            }
+                        });
+                });
+        });
 
     let info_card = commands
         .spawn((
