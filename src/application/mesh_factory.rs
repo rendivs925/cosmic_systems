@@ -77,6 +77,22 @@ pub fn create_orbit_mesh_ellipse(
     meshes.add(mesh)
 }
 
+pub fn create_placeholder_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
+    let positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+    let normals = vec![[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+    let uvs = vec![[0.0, 0.0], [1.0, 0.0]];
+    let colors = vec![[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+    let indices = vec![0u32, 1u32];
+
+    let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    meshes.add(mesh)
+}
+
 pub fn create_ring_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     inner_radius: f32,

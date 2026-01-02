@@ -42,6 +42,14 @@ pub struct PendingMaterialTextures {
     pub eager: bool,
 }
 
+#[derive(Component)]
+pub struct PendingOrbitMesh {
+    pub mesh: Handle<Mesh>,
+    pub orbit_shape: crate::domain::services::physics::OrbitShape,
+    pub color: Color,
+    pub segments: usize,
+}
+
 // Component for orbital path visualization
 #[derive(Component)]
 pub struct OrbitComponent {

@@ -13,7 +13,16 @@ pub struct PhysicsTask {
     pub worker_id: usize,
     pub entity_bits: u64,
     pub orbital_elements: OrbitalElements,
+    pub has_elements: bool,
+    pub is_moon: bool,
+    pub parent_position: WorkerVec3,
+    pub parent_tilt_deg: Option<f32>,
+    pub orbital_distance_au: f32,
+    pub orbital_period_days: f32,
+    pub time_days: f32,
+    pub kepler_iterations: u32,
     pub scale_factor: f32,
+    pub moon_orbit_scale: f32,
 }
 
 /// Simplified orbital elements for worker communication
@@ -21,13 +30,16 @@ pub struct PhysicsTask {
 pub struct OrbitalElements {
     pub semi_major_axis_au: f32,
     pub eccentricity: f32,
-    pub mean_anomaly: f32,
+    pub inclination_rad: f32,
+    pub long_asc_node_rad: f32,
+    pub arg_periapsis_rad: f32,
+    pub mean_anomaly_rad: f32,
 }
 
 /// Physics worker pool for background processing
 pub struct PhysicsWorkerPool {
     workers: Vec<Worker>,
-    available_workers: Vec<usize>,
+    available_workers: VecDeque<usize>,
     task_queue: VecDeque<PhysicsTask>,
     results: Rc<RefCell<VecDeque<WorkerResult>>>,
     callbacks: Vec<Closure<dyn FnMut(MessageEvent)>>,
@@ -50,8 +62,8 @@ struct WorkerResultMessage {
     position: WorkerVec3,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
-struct WorkerVec3 {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WorkerVec3 {
     x: f32,
     y: f32,
     z: f32,
@@ -79,7 +91,7 @@ impl PhysicsWorkerPool {
         let max_queue_len = initial_workers.saturating_mul(4).max(8);
         let mut pool = Self {
             workers: Vec::new(),
-            available_workers: Vec::new(),
+            available_workers: VecDeque::new(),
             task_queue: VecDeque::new(),
             results,
             callbacks: Vec::new(),
@@ -104,9 +116,12 @@ impl PhysicsWorkerPool {
     fn create_worker() -> Result<Worker, JsValue> {
         // Create a web worker from inline script
         let script = r#"
+            const TAU = Math.PI * 2.0;
+            const GAUSS_K = 0.01720209895;
+
             self.onmessage = function(e) {
                 const task = e.data;
-                const position = calculate_kepler_position(task.orbital_elements, task.scale_factor);
+                const position = calculate_orbit_position(task);
                 self.postMessage({
                     worker_id: task.worker_id,
                     entity_bits: task.entity_bits,
@@ -114,25 +129,107 @@ impl PhysicsWorkerPool {
                 });
             };
 
-            function calculate_kepler_position(elements, scaleFactor) {
-                // Simplified Kepler calculation for worker
-                const a = elements.semi_major_axis_au * scaleFactor;
-                const e = elements.eccentricity;
-                const M = elements.mean_anomaly;
+            function calculate_orbit_position(task) {
+                let relative = { x: 0, y: 0, z: 0 };
 
-                // Solve Kepler's equation (simplified)
-                let E = M;
-                for (let i = 0; i < 5; i++) {
-                    E = M + e * Math.sin(E);
+                if (task.has_elements) {
+                    const elements = task.orbital_elements;
+                    const meanMotion = task.is_moon
+                        ? TAU / task.orbital_period_days
+                        : GAUSS_K / Math.pow(elements.semi_major_axis_au, 1.5);
+                    const meanAnomaly = normalize_radians(
+                        elements.mean_anomaly_rad + meanMotion * task.time_days
+                    );
+                    const eccentricAnomaly = solve_kepler_adaptive(
+                        meanAnomaly,
+                        elements.eccentricity,
+                        task.kepler_iterations
+                    );
+                    const trueAnomaly = true_anomaly(eccentricAnomaly, elements.eccentricity);
+                    const radius_au =
+                        elements.semi_major_axis_au *
+                        (1.0 - elements.eccentricity * Math.cos(eccentricAnomaly));
+                    let radius = radius_au * task.scale_factor;
+                    if (task.is_moon) {
+                        radius *= task.moon_orbit_scale;
+                    }
+                    const xOrb = radius * Math.cos(trueAnomaly);
+                    const zOrb = radius * Math.sin(trueAnomaly);
+                    relative = transform_orbital_point(
+                        xOrb,
+                        zOrb,
+                        elements.inclination_rad,
+                        elements.long_asc_node_rad,
+                        elements.arg_periapsis_rad
+                    );
+                } else if (task.orbital_period_days > 0.0) {
+                    let radius = task.orbital_distance_au * task.scale_factor;
+                    if (task.is_moon) {
+                        radius *= task.moon_orbit_scale;
+                    }
+                    const angle = TAU * (task.time_days / task.orbital_period_days);
+                    const xOrb = radius * Math.cos(angle);
+                    const zOrb = radius * Math.sin(angle);
+                    relative = transform_orbital_point(xOrb, zOrb, 0.0, 0.0, 0.0);
                 }
 
-                // Calculate position
-                const cosE = Math.cos(E);
-                const r = a * (1 - e * cosE);
-                const x = r * cosE;
-                const z = r * Math.sin(E);
+                if (task.is_moon && task.parent_tilt_deg !== null) {
+                    const tilt = task.parent_tilt_deg * Math.PI / 180.0;
+                    const cosT = Math.cos(tilt);
+                    const sinT = Math.sin(tilt);
+                    const x = relative.x * cosT - relative.y * sinT;
+                    const y = relative.x * sinT + relative.y * cosT;
+                    relative.x = x;
+                    relative.y = y;
+                }
 
-                return { x: x, y: 0, z: z };
+                return {
+                    x: task.parent_position.x + relative.x,
+                    y: task.parent_position.y + relative.y,
+                    z: task.parent_position.z + relative.z
+                };
+            }
+
+            function solve_kepler_adaptive(meanAnomaly, eccentricity, maxIterations) {
+                let eccentricAnomaly = meanAnomaly;
+                for (let i = 0; i < maxIterations; i++) {
+                    const f = eccentricAnomaly - eccentricity * Math.sin(eccentricAnomaly) - meanAnomaly;
+                    const fPrime = 1.0 - eccentricity * Math.cos(eccentricAnomaly);
+                    eccentricAnomaly -= f / fPrime;
+                }
+                return eccentricAnomaly;
+            }
+
+            function true_anomaly(eccentricAnomaly, eccentricity) {
+                const sinV = Math.sqrt(1.0 - eccentricity * eccentricity) * Math.sin(eccentricAnomaly)
+                    / (1.0 - eccentricity * Math.cos(eccentricAnomaly));
+                const cosV = (Math.cos(eccentricAnomaly) - eccentricity)
+                    / (1.0 - eccentricity * Math.cos(eccentricAnomaly));
+                return Math.atan2(sinV, cosV);
+            }
+
+            function normalize_radians(angle) {
+                return ((angle % TAU) + TAU) % TAU;
+            }
+
+            function transform_orbital_point(xOrbital, zOrbital, inclination, longAscNode, argPeriapsis) {
+                const cosW = Math.cos(argPeriapsis);
+                const sinW = Math.sin(argPeriapsis);
+                const x1 = xOrbital * cosW - zOrbital * sinW;
+                const z1 = xOrbital * sinW + zOrbital * cosW;
+
+                const cosI = Math.cos(inclination);
+                const sinI = Math.sin(inclination);
+                const y2 = z1 * sinI;
+                const z2 = z1 * cosI;
+                const x2 = x1;
+
+                const cosOmega = Math.cos(longAscNode);
+                const sinOmega = Math.sin(longAscNode);
+                const x3 = x2 * cosOmega - z2 * sinOmega;
+                const z3 = x2 * sinOmega + z2 * cosOmega;
+
+                return { x: x3, y: y2, z: z3 };
             }
         "#;
 
@@ -180,7 +277,7 @@ impl PhysicsWorkerPool {
 
         worker.set_onmessage(Some(callback.as_ref().unchecked_ref()));
         self.workers.push(worker);
-        self.available_workers.push(worker_id);
+        self.available_workers.push_back(worker_id);
         self.callbacks.push(callback);
         self.max_queue_len = self.workers.len().saturating_mul(4).max(8);
     }
@@ -197,7 +294,7 @@ impl PhysicsWorkerPool {
 
     pub fn dispatch_tasks(&mut self) {
         while let (Some(worker_idx), Some(task)) = (
-            self.available_workers.pop(),
+            self.available_workers.pop_front(),
             self.task_queue.pop_front(),
         ) {
             if let Some(worker) = self.workers.get(worker_idx) {
@@ -205,10 +302,10 @@ impl PhysicsWorkerPool {
                 task.worker_id = worker_idx;
                 if let Ok(message) = serde_wasm_bindgen::to_value(&task) {
                     if worker.post_message(&message).is_err() {
-                        self.available_workers.push(worker_idx);
+                        self.available_workers.push_back(worker_idx);
                     }
                 } else {
-                    self.available_workers.push(worker_idx);
+                    self.available_workers.push_back(worker_idx);
                 }
             }
         }
@@ -220,7 +317,7 @@ impl PhysicsWorkerPool {
         let mut results = Vec::new();
         while let Some(result) = self.results.borrow_mut().pop_front() {
             if !self.available_workers.contains(&result.worker_id) {
-                self.available_workers.push(result.worker_id);
+                self.available_workers.push_back(result.worker_id);
             }
             results.push(result);
         }

@@ -5,11 +5,16 @@ use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
+use bevy::render::mesh::Indices;
 use bevy::time::Fixed;
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::orbit_mesh_worker::{
+    entity_from_task_id, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData, task_id_from_entity,
+};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -181,7 +186,6 @@ pub fn update_planet_positions(
     }
 
     let mut worker_tasks: Vec<(f32, PhysicsTask)> = Vec::new();
-    let worker_distance_threshold = 500_000.0;
     let max_distance = 15_000_000.0;
 
     for (entity, mut transform, planet_comp) in query.iter_mut() {
@@ -202,25 +206,57 @@ pub fn update_planet_positions(
 
         let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
         let should_use_worker = worker_pool.worker_count() > 0
-            && planet_comp.domain_planet.parent_entity.is_none()
-            && planet_comp.domain_planet.orbital_period_days > 0.0
-            && distance_to_camera >= worker_distance_threshold
+            && planet_comp.domain_planet.name != "Sun"
             && worker_pool.can_accept_tasks();
 
         if should_use_worker {
-            let mean_anomaly = (time_days / planet_comp.domain_planet.orbital_period_days)
-                * std::f32::consts::TAU;
+            let elements = physics::orbital_elements_for(&planet_comp.domain_planet);
+            let (has_elements, orbital_elements) = if let Some(elements) = elements {
+                (
+                    true,
+                    crate::infrastructure::web_workers::physics_worker::OrbitalElements {
+                        semi_major_axis_au: elements.semi_major_axis_au,
+                        eccentricity: elements.eccentricity,
+                        inclination_rad: elements.inclination_rad,
+                        long_asc_node_rad: elements.long_asc_node_rad,
+                        arg_periapsis_rad: elements.arg_periapsis_rad,
+                        mean_anomaly_rad: elements.mean_anomaly_rad,
+                    },
+                )
+            } else {
+                (
+                    false,
+                    crate::infrastructure::web_workers::physics_worker::OrbitalElements {
+                        semi_major_axis_au: 0.0,
+                        eccentricity: 0.0,
+                        inclination_rad: 0.0,
+                        long_asc_node_rad: 0.0,
+                        arg_periapsis_rad: 0.0,
+                        mean_anomaly_rad: 0.0,
+                    },
+                )
+            };
+
             worker_tasks.push((
                 distance_to_camera,
                 PhysicsTask {
                     worker_id: 0,
                     entity_bits: entity.to_bits(),
-                    orbital_elements: crate::infrastructure::web_workers::physics_worker::OrbitalElements {
-                        semi_major_axis_au: planet_comp.domain_planet.orbital_distance_au,
-                        eccentricity: 0.0167,
-                        mean_anomaly,
+                    orbital_elements,
+                    has_elements,
+                    is_moon: planet_comp.domain_planet.parent_entity.is_some(),
+                    parent_position: crate::infrastructure::web_workers::physics_worker::WorkerVec3 {
+                        x: parent_position.x,
+                        y: parent_position.y,
+                        z: parent_position.z,
                     },
+                    parent_tilt_deg: parent_tilt,
+                    orbital_distance_au: planet_comp.domain_planet.orbital_distance_au,
+                    orbital_period_days: planet_comp.domain_planet.orbital_period_days,
+                    time_days,
+                    kepler_iterations,
                     scale_factor: solar_params.scale_factor,
+                    moon_orbit_scale: physics::MOON_ORBIT_SCALE,
                 },
             ));
             continue;
@@ -752,6 +788,86 @@ fn matches_asset_path(original: &str, resolved: &str) -> bool {
     }
     let prefixed = format!("assets/{}", original);
     prefixed == resolved
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn queue_orbit_mesh_tasks(
+    mut worker_pool: NonSendMut<OrbitMeshWorkerPool>,
+    pending_query: Query<(Entity, &PendingOrbitMesh)>,
+) {
+    if worker_pool.worker_count() == 0 {
+        return;
+    }
+
+    for (entity, pending) in pending_query.iter() {
+        let task = OrbitMeshTask {
+            task_id: task_id_from_entity(entity),
+            segments: pending.segments as u32,
+            orbit_shape: OrbitShapeData {
+                semi_major_axis_units: pending.orbit_shape.semi_major_axis_units,
+                eccentricity: pending.orbit_shape.eccentricity,
+                inclination_rad: pending.orbit_shape.inclination_rad,
+                long_asc_node_rad: pending.orbit_shape.long_asc_node_rad,
+                arg_periapsis_rad: pending.orbit_shape.arg_periapsis_rad,
+            },
+        };
+        worker_pool.request(task);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn apply_orbit_mesh_results(
+    mut commands: Commands,
+    mut worker_pool: NonSendMut<OrbitMeshWorkerPool>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut pending_query: Query<&mut PendingOrbitMesh>,
+) {
+    for result in worker_pool.take_results() {
+        let entity = entity_from_task_id(result.task_id);
+        let Ok(mut pending) = pending_query.get_mut(entity) else {
+            worker_pool.mark_complete(result.task_id);
+            continue;
+        };
+
+        let segments = pending.segments;
+        if segments == 0 {
+            worker_pool.mark_complete(result.task_id);
+            commands.entity(entity).remove::<PendingOrbitMesh>();
+            continue;
+        }
+
+        let mut positions = Vec::with_capacity(segments);
+        let mut normals = Vec::with_capacity(segments);
+        let mut uvs = Vec::with_capacity(segments);
+        let mut colors = Vec::with_capacity(segments);
+        let mut indices = Vec::with_capacity(segments * 2);
+        let color: LinearRgba = pending.color.into();
+        let color = [color.red, color.green, color.blue, color.alpha];
+
+        let coords = result.positions;
+        let coord_count = coords.len() / 3;
+        let usable = coord_count.min(segments);
+        for i in 0..usable {
+            let idx = i * 3;
+            positions.push([coords[idx], coords[idx + 1], coords[idx + 2]]);
+            normals.push([0.0, 1.0, 0.0]);
+            uvs.push([i as f32 / segments as f32, 0.5]);
+            colors.push(color);
+            indices.push(i as u32);
+            indices.push(((i + 1) % segments) as u32);
+        }
+
+        if let Some(mesh) = meshes.get_mut(&pending.mesh) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+            mesh.insert_indices(Indices::U32(indices));
+        }
+
+        worker_pool.mark_complete(result.task_id);
+        commands.entity(entity).remove::<PendingOrbitMesh>();
+    }
 }
 
 // System to handle planet selection

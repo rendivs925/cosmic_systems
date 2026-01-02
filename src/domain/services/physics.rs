@@ -41,7 +41,7 @@ pub fn calculate_arrow_scale(thrust: Vec3) -> f32 {
     thrust.length().clamp(0.1, 10.0)
 }
 
-const MOON_ORBIT_SCALE: f32 = 60.0;
+pub const MOON_ORBIT_SCALE: f32 = 60.0;
 
 // Orbital mechanics functions for solar system simulation
 
@@ -367,13 +367,22 @@ fn moon_elements_from_degrees(
     )
 }
 
-struct OrbitalElements {
-    semi_major_axis_au: f32,
-    eccentricity: f32,
-    inclination_rad: f32,
-    long_asc_node_rad: f32,
-    arg_periapsis_rad: f32,
-    mean_anomaly_rad: f32,
+#[derive(Clone, Copy, Debug)]
+pub struct OrbitalElements {
+    pub semi_major_axis_au: f32,
+    pub eccentricity: f32,
+    pub inclination_rad: f32,
+    pub long_asc_node_rad: f32,
+    pub arg_periapsis_rad: f32,
+    pub mean_anomaly_rad: f32,
+}
+
+pub fn orbital_elements_for(planet: &Planet) -> Option<OrbitalElements> {
+    if planet.parent_entity.is_some() {
+        get_moon_orbital_elements(&planet.name)
+    } else {
+        get_orbital_elements(&planet.name)
+    }
 }
 
 fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {

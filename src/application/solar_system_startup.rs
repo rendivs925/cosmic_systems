@@ -367,14 +367,17 @@ fn spawn_celestial_body(
         if let Some(parent_ent) = entity_map.get(parent_name).copied() {
             let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
             let orbit_base_color = planet.color;
+            #[cfg(not(target_arch = "wasm32"))]
             let orbit_mesh = create_orbit_mesh_ellipse(meshes, &orbit_shape, orbit_base_color);
+            #[cfg(target_arch = "wasm32")]
+            let orbit_mesh = create_placeholder_orbit_mesh(meshes);
             let orbit_material_handle = shared_orbit_material.clone();
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
             // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
-            commands
+            let orbit_entity = commands
                 .spawn(PbrBundle {
-                    mesh: orbit_mesh,
+                    mesh: orbit_mesh.clone(),
                     material: orbit_material_handle.clone(),
                     transform: Transform::default(),
                     ..default()
@@ -394,18 +397,32 @@ fn spawn_celestial_body(
                 .insert(Name::new(format!(
                     "Orbit {} around {}",
                     planet.name, parent_name
-                )));
+                )))
+                .id();
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                commands.entity(orbit_entity).insert(PendingOrbitMesh {
+                    mesh: orbit_mesh,
+                    orbit_shape,
+                    color: orbit_base_color,
+                    segments: 128,
+                });
+            }
         }
     } else if planet.name != "Sun" {
         let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
         let orbit_base_color = planet.color;
+        #[cfg(not(target_arch = "wasm32"))]
         let orbit_mesh = create_orbit_mesh_ellipse(meshes, &orbit_shape, orbit_base_color);
+        #[cfg(target_arch = "wasm32")]
+        let orbit_mesh = create_placeholder_orbit_mesh(meshes);
         let orbit_material_handle = shared_orbit_material.clone();
         let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
-        commands
+        let orbit_entity = commands
             .spawn(PbrBundle {
-                mesh: orbit_mesh,
+                mesh: orbit_mesh.clone(),
                 material: orbit_material_handle.clone(),
                 transform: Transform::default(),
                 ..default()
@@ -422,6 +439,16 @@ fn spawn_celestial_body(
                 phase: orbit_motion.phase,
             })
             .insert(Name::new(format!("Orbit {}", planet.name)));
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            commands.entity(orbit_entity.id()).insert(PendingOrbitMesh {
+                mesh: orbit_mesh,
+                orbit_shape,
+                color: orbit_base_color,
+                segments: 128,
+            });
+        }
     }
 
     if planet.name == "Saturn" {
