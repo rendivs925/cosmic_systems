@@ -114,7 +114,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         ),
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        justify_content: JustifyContent::SpaceBetween,
+                        justify_content: JustifyContent::Center,
                         ..default()
                     },
                     background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
@@ -125,27 +125,38 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 UiCapture,
             ))
             .with_children(|bar| {
+                bar.spawn((
+                    TextBundle {
+                        text: Text::from_section(
+                            "fps 0",
+                            text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
+                        ),
+                        style: Style {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(20.0),
+                            top: Val::Px(0.0),
+                            bottom: Val::Px(0.0),
+                            align_self: AlignSelf::Center,
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    FpsText,
+                ));
+
                 bar.spawn(NodeBundle {
                     style: Style {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(10.0),
+                        column_gap: Val::Px(12.0),
                         ..default()
                     },
                     ..default()
                 })
-                .with_children(|left| {
-                    spawn_menu_button(left, "Explore", MenuAction::Explore, true);
-                    spawn_menu_button(left, "Orbits", MenuAction::Orbits, false);
+                .with_children(|menu| {
+                    spawn_menu_button(menu, "Explore", MenuAction::Explore, true);
+                    spawn_menu_button(menu, "Orbits", MenuAction::Orbits, false);
                 });
-
-                bar.spawn((
-                    TextBundle::from_section(
-                        "fps 0",
-                        text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
-                    ),
-                    FpsText,
-                ));
             });
 
         parent
