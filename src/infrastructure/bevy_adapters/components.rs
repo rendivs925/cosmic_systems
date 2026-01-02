@@ -123,3 +123,39 @@ pub struct NotificationQueue {
 pub struct ScreenshotState {
     pub pending: bool, // Screenshot requested, will capture next frame
 }
+
+// Performance monitoring and quality adjustment
+#[derive(Resource)]
+pub struct PerformanceStats {
+    pub frame_time: f32,           // Current frame time in milliseconds
+    pub fps: f32,                  // Current FPS
+    pub average_frame_time: f32,   // Rolling average frame time
+    pub frame_count: u64,          // Total frames rendered
+    pub quality_level: QualityLevel, // Current quality setting
+    pub target_fps: f32,           // Target FPS for quality adjustment
+    pub adaptive_enabled: bool,    // Whether automatic quality adjustment is enabled
+}
+
+// Quality levels for automatic adjustment
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum QualityLevel {
+    Ultra,      // Highest quality, no performance optimizations
+    High,       // High quality with minimal optimizations
+    Medium,     // Balanced quality and performance
+    Low,        // Lower quality for better performance
+    Minimal,    // Minimum quality for maximum performance
+}
+
+impl Default for PerformanceStats {
+    fn default() -> Self {
+        Self {
+            frame_time: 16.67, // Assume 60 FPS initially
+            fps: 60.0,
+            average_frame_time: 16.67,
+            frame_count: 0,
+            quality_level: QualityLevel::High,
+            target_fps: 60.0,
+            adaptive_enabled: true,
+        }
+    }
+}

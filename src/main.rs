@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
+use infrastructure::bevy_adapters::components::PerformanceStats;
 
 // Run condition for visual updates (every 3 frames)
 fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
@@ -72,6 +73,7 @@ fn main() {
             hide_for_screenshot: false,
         });
         app.insert_resource(ScreenshotState { pending: false });
+        app.insert_resource(PerformanceStats::default());
     app.add_systems(Startup, setup_space);
 
     // Physics systems run on FixedUpdate for consistent simulation
@@ -86,7 +88,8 @@ fn main() {
     app.add_systems(Update, handle_mouse_planet_selection);
     app.add_systems(Update, display_navigation_bar);
     app.add_systems(Update, update_planet_selection_visuals.run_if(every_n_frames(2)));
-        app.add_systems(Update, display_hover_info);
+    app.add_systems(Update, update_performance_stats);
+    app.add_systems(Update, display_hover_info);
         app.add_systems(Update, display_notifications);
         app.add_systems(Update, take_pending_screenshot);
         app.add_systems(Update, update_camera_controller);

@@ -461,6 +461,7 @@ pub fn display_navigation_bar(
     mut selected_planet: ResMut<SelectedPlanet>,
     mut selectable_query: Query<(Entity, &mut Selectable)>,
     mut solar_params: ResMut<SolarSystemParameters>,
+    performance_stats: Res<PerformanceStats>,
 ) {
     let mut name_to_entity = HashMap::new();
     {
@@ -546,6 +547,23 @@ pub fn display_navigation_bar(
                 if ui.add(button).clicked() {
                     solar_params.show_orbits = !solar_params.show_orbits;
                 }
+
+                ui.separator();
+
+                // Performance display
+                let fps_color = if performance_stats.fps >= 50.0 {
+                    egui::Color32::from_rgb(100, 200, 100) // Green for good performance
+                } else if performance_stats.fps >= 30.0 {
+                    egui::Color32::from_rgb(200, 200, 100) // Yellow for acceptable
+                } else {
+                    egui::Color32::from_rgb(200, 100, 100) // Red for poor performance
+                };
+
+                ui.label(
+                    egui::RichText::new(format!("FPS: {:.0}", performance_stats.fps))
+                        .size(11.0)
+                        .color(fps_color)
+                );
 
                 ui.separator();
 
@@ -2035,6 +2053,97 @@ fn get_aesthetic_view_params(name: &str) -> (f32, f32) {
         "Moon" | "Io" | "Europa" | "Titan" | "Triton" => (0.95, 0.35), // Keep close while showing parent
         "Neptune" | "Uranus" => (1.0, 0.3), // Ice giants with good elevation
         _ => (1.0, 0.3), // Default: standard distance, nice 3/4 view
+    }
+}
+
+// Performance monitoring and automatic quality adjustment system
+pub fn update_performance_stats(
+    time: Res<Time>,
+    mut performance_stats: ResMut<PerformanceStats>,
+    mut solar_params: ResMut<SolarSystemParameters>,
+) {
+    // Update frame time and FPS
+    let frame_time_ms = time.delta_seconds() * 1000.0;
+    performance_stats.frame_time = frame_time_ms;
+    performance_stats.fps = if frame_time_ms > 0.0 { 1000.0 / frame_time_ms } else { 0.0 };
+    performance_stats.frame_count += 1;
+
+    // Update rolling average frame time (exponential moving average)
+    const ALPHA: f32 = 0.1; // Smoothing factor
+    performance_stats.average_frame_time = performance_stats.average_frame_time * (1.0 - ALPHA) + frame_time_ms * ALPHA;
+
+    // Automatic quality adjustment based on frame time
+    if performance_stats.adaptive_enabled {
+        adjust_quality_based_on_performance(&mut performance_stats, &mut solar_params);
+    }
+}
+
+// Automatic quality adjustment based on performance metrics
+fn adjust_quality_based_on_performance(
+    performance_stats: &mut PerformanceStats,
+    solar_params: &mut SolarSystemParameters,
+) {
+    let target_frame_time = 1000.0 / performance_stats.target_fps;
+    let current_avg_time = performance_stats.average_frame_time;
+
+    // Quality adjustment thresholds
+    let ultra_threshold = target_frame_time * 0.8;    // 80% of target = excellent performance
+    let high_threshold = target_frame_time * 1.0;     // At target = good performance
+    let medium_threshold = target_frame_time * 1.3;   // 30% over target = acceptable
+    let low_threshold = target_frame_time * 1.6;      // 60% over target = poor performance
+
+    let new_quality_level = if current_avg_time < ultra_threshold {
+        QualityLevel::Ultra
+    } else if current_avg_time < high_threshold {
+        QualityLevel::High
+    } else if current_avg_time < medium_threshold {
+        QualityLevel::Medium
+    } else if current_avg_time < low_threshold {
+        QualityLevel::Low
+    } else {
+        QualityLevel::Minimal
+    };
+
+    // Only change quality if we've moved significantly
+    if new_quality_level != performance_stats.quality_level {
+        performance_stats.quality_level = new_quality_level;
+        apply_quality_settings(new_quality_level, solar_params);
+    }
+}
+
+// Apply quality settings based on the quality level
+fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarSystemParameters) {
+    match quality_level {
+        QualityLevel::Ultra => {
+            // Maximum quality - no performance optimizations
+            solar_params.time_scale = 1.0;
+            solar_params.show_orbits = true;
+            println!("🎯 Performance excellent - Quality set to Ultra");
+        }
+        QualityLevel::High => {
+            // High quality with minimal optimizations
+            solar_params.time_scale = 1.0;
+            solar_params.show_orbits = true;
+            println!("✅ Performance good - Quality set to High");
+        }
+        QualityLevel::Medium => {
+            // Balanced quality and performance
+            solar_params.time_scale = 0.8;
+            solar_params.show_orbits = true;
+            println!("⚖️ Performance moderate - Quality set to Medium");
+        }
+        QualityLevel::Low => {
+            // Lower quality for better performance
+            solar_params.time_scale = 0.5;
+            solar_params.show_orbits = false;
+            println!("⚡ Performance low - Quality set to Low (reduced orbits, slower time)");
+        }
+        QualityLevel::Minimal => {
+            // Minimum quality for maximum performance
+            solar_params.time_scale = 0.2;
+            solar_params.show_orbits = false;
+            println!("🚀 Performance critical - Quality set to Minimal (maximum optimizations)");
+        }
     }
 }
 
