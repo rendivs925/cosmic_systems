@@ -202,7 +202,8 @@ pub fn update_planet_positions(
         let should_use_worker = worker_pool.worker_count() > 0
             && planet_comp.domain_planet.parent_entity.is_none()
             && planet_comp.domain_planet.orbital_period_days > 0.0
-            && distance_to_camera >= worker_distance_threshold;
+            && distance_to_camera >= worker_distance_threshold
+            && worker_pool.can_accept_tasks();
 
         if should_use_worker {
             let mean_anomaly = (time_days / planet_comp.domain_planet.orbital_period_days)

@@ -33,6 +33,7 @@ pub struct PhysicsWorkerPool {
     callbacks: Vec<Closure<dyn FnMut(MessageEvent)>>,
     min_workers: usize,
     max_workers: usize,
+    max_queue_len: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +76,7 @@ impl PhysicsWorkerPool {
     fn with_bounds(initial_workers: usize, min_workers: usize, max_workers: usize) -> Self {
         let initial_workers = initial_workers.min(max_workers).max(min_workers);
         let results = Rc::new(RefCell::new(VecDeque::new()));
+        let max_queue_len = initial_workers.saturating_mul(4).max(8);
         let mut pool = Self {
             workers: Vec::new(),
             available_workers: Vec::new(),
@@ -83,6 +85,7 @@ impl PhysicsWorkerPool {
             callbacks: Vec::new(),
             min_workers,
             max_workers,
+            max_queue_len,
         };
 
         for _ in 0..initial_workers {
@@ -179,10 +182,14 @@ impl PhysicsWorkerPool {
         self.workers.push(worker);
         self.available_workers.push(worker_id);
         self.callbacks.push(callback);
+        self.max_queue_len = self.workers.len().saturating_mul(4).max(8);
     }
 
     pub fn queue_tasks(&mut self, tasks: Vec<PhysicsTask>) {
         for task in tasks {
+            if self.task_queue.len() >= self.max_queue_len {
+                break;
+            }
             self.task_queue.push_back(task);
         }
         self.dispatch_tasks();
@@ -228,6 +235,10 @@ impl PhysicsWorkerPool {
         !self.available_workers.is_empty()
     }
 
+    pub fn can_accept_tasks(&self) -> bool {
+        self.task_queue.len() < self.max_queue_len
+    }
+
     pub fn adapt_worker_count(&mut self, current_fps: f32, target_fps: f32) {
         if current_fps < target_fps * 0.8 && self.workers.len() > self.min_workers {
             let last_id = self.workers.len().saturating_sub(1);
@@ -237,6 +248,7 @@ impl PhysicsWorkerPool {
                 }
                 self.available_workers.retain(|&id| id != last_id);
                 self.callbacks.pop();
+                self.max_queue_len = self.workers.len().saturating_mul(4).max(8);
                 web_sys::console::log_1(&"Reduced worker count for performance".into());
             }
         } else if current_fps > target_fps * 1.2 && self.workers.len() < self.max_workers {
