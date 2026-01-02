@@ -1,4 +1,5 @@
 use bevy::prelude::{Assets, Handle};
+use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::texture::Image;
 use js_sys::Reflect;
@@ -153,9 +154,7 @@ impl TextureDecodeWorker {
         canvas.set_height(height);
         context.draw_image_with_image_bitmap(bitmap, 0.0, 0.0)?;
         let image_data = context.get_image_data(0.0, 0.0, width as f64, height as f64)?;
-        let data = image_data.data();
-        let mut pixels = vec![0u8; data.length() as usize];
-        data.copy_to(&mut pixels);
+        let pixels = image_data.data().0;
         bitmap.close();
 
         let size = Extent3d {
@@ -168,6 +167,7 @@ impl TextureDecodeWorker {
             TextureDimension::D2,
             &pixels,
             TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
         ))
     }
 }
@@ -177,7 +177,7 @@ fn create_canvas() -> Result<HtmlCanvasElement, JsValue> {
         .and_then(|window| window.document())
         .ok_or_else(|| JsValue::from_str("Missing document"))?;
     let element = document.create_element("canvas")?;
-    element.dyn_into::<HtmlCanvasElement>()
+    Ok(element.dyn_into::<HtmlCanvasElement>()?)
 }
 
 fn create_worker() -> Result<Worker, JsValue> {
@@ -185,7 +185,8 @@ fn create_worker() -> Result<Worker, JsValue> {
         self.onmessage = async function(e) {
             const path = e.data.path;
             try {
-                const response = await fetch(path);
+                const url = new URL(path, self.location.href);
+                const response = await fetch(url);
                 const blob = await response.blob();
                 const bitmap = await createImageBitmap(blob);
                 self.postMessage({ path, bitmap }, [bitmap]);
