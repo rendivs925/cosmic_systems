@@ -19,9 +19,14 @@ bevy_egui = { version = "0.28.0", default-features = false }
 rand = "0.8.5"
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+console_error_panic_hook = "0.1"
+console_log = "1.0"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom_02 = { version = "0.2", features = ["js"], package = "getrandom" }
+log = "0.4"
 uuid = { version = "1.19", features = ["js"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["console", "Document", "Element", "Window"] }
 
 [dependencies.rayon]
 version = "1.8"

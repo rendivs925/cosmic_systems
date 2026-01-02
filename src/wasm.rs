@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
-use infrastructure::bevy_adapters::components::PerformanceStats;
+use crate::infrastructure::bevy_adapters::components::PerformanceStats;
 use wasm_bindgen::prelude::*;
+use web_sys;
 
 // Run condition for visual updates (every 3 frames)
 fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
@@ -16,16 +17,18 @@ fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
     }
 }
 
-use application::startup::*;
-use infrastructure::bevy_adapters::components::{
+use crate::application::startup::*;
+use crate::infrastructure::bevy_adapters::components::{
     HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
 };
-use infrastructure::bevy_adapters::systems::*;
+use crate::infrastructure::bevy_adapters::systems::*;
 
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Info).unwrap();
+
+    web_sys::console::log_1(&"🚀 Starting Cosmic Systems Simulator (WASM)".into());
 
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
@@ -83,5 +86,12 @@ pub fn main() {
     app.add_systems(Update, apply_camera_transform);
     app.add_systems(Update, auto_inspect_selected_planet);
 
+    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        if let Ok(Some(loading)) = document.query_selector(".loading") {
+            loading.remove();
+        }
+    }
+
+    web_sys::console::log_1(&"✅ Cosmic Systems Simulator initialized successfully".into());
     app.run();
 }

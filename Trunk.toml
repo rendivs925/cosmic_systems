@@ -2,10 +2,9 @@
 target = "index.html"
 dist = "dist"
 
-[[hooks]]
-stage = "pre_build"
-command = "bash"
-command_arguments = ["-c", "mkdir -p dist"]
+[[copy]]
+source = "assets"
+dest = "assets"
 
 [serve]
 port = 8080

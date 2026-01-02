@@ -139,10 +139,10 @@ run-built-optimized:
 # ============================================================================
 
 build-wasm:
-	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk build --release
+	NO_COLOR=true TRUNK_BUILD_MINIFY=false TRUNK_BUILD_RELEASE=false RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk build
 
 serve-wasm:
-	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk serve
+	NO_COLOR=true RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk serve
 
 # ============================================================================
 # TESTING & ANALYSIS
