@@ -44,3 +44,4 @@ assets/large_files/
 
 # Trunk output
 dist/
+.cargo
