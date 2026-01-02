@@ -21,13 +21,28 @@ pub fn detect_cpu_features() -> CpuFeature {
     }
 }
 
+/// SIMD Kepler solver struct
+pub struct SimdKeplerSolver;
+
+impl SimdKeplerSolver {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Main dispatch function for Kepler solving
+    pub fn solve_batch(&self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
+        match detect_cpu_features() {
+            CpuFeature::AVX2 => unsafe { solve_kepler_avx2(planets, quality) },
+            CpuFeature::SSE4 => unsafe { solve_kepler_sse4(planets, quality) },
+            CpuFeature::Scalar => solve_kepler_scalar_parallel(planets, quality),
+        }
+    }
+}
+
 /// Main dispatch function for Kepler solving
 pub fn solve_kepler_batch(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
-    match detect_cpu_features() {
-        CpuFeature::AVX2 => unsafe { solve_kepler_avx2(planets, quality) },
-        CpuFeature::SSE4 => unsafe { solve_kepler_sse4(planets, quality) },
-        CpuFeature::Scalar => solve_kepler_scalar_parallel(planets, quality),
-    }
+    let solver = SimdKeplerSolver::new();
+    solver.solve_batch(planets, quality)
 }
 
 #[target_feature(enable = "avx2")]

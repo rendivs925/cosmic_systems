@@ -3,6 +3,14 @@ use crate::domain::entities::planet::Planet;
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver;
+
+use crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver;
+
 // Component for gyroscope entities
 #[derive(Component)]
 pub struct GyroscopeComponent {
@@ -101,6 +109,28 @@ pub struct SelectedPlanet {
 pub struct HoveredPlanet {
     pub name: Option<String>,
     pub info: Option<String>,
+}
+
+// Resource to track hovered planet for information display
+#[derive(Resource)]
+pub struct ComputeBackend {
+    pub fallback_solver: SimdKeplerSolver,
+}
+
+impl Default for ComputeBackend {
+    fn default() -> Self {
+        Self {
+            fallback_solver: SimdKeplerSolver::new(),
+        }
+    }
+}
+
+impl ComputeBackend {
+    pub fn solve_kepler(&mut self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
+        // Currently using SIMD CPU solver
+        // TODO: Add WebGPU and Vulkan solvers when implemented
+        self.fallback_solver.solve_batch(planets, quality)
+    }
 }
 
 // Notification types for user feedback

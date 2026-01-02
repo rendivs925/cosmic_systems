@@ -16,6 +16,9 @@ required-features = ["native"]
 bevy = { version = "0.14.0" }
 rand = "0.8.5"
 bumpalo = "3.14"        # Arena-based memory allocation
+bytemuck = "1.14"       # Safe casting between byte slices and types
+ash = "0.37"            # Vulkan bindings for native compute
+wgpu = "0.19"           # WebGPU for WASM compute
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"

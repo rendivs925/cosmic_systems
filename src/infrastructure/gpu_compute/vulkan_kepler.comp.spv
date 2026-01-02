@@ -1,0 +1,20 @@
+// Placeholder SPIR-V file for Vulkan Kepler compute shader
+// In practice, this would be compiled from GLSL using glslangValidator
+//
+// GLSL source would be:
+// #version 450
+// layout(local_size_x = 64) in;
+// layout(binding = 0) buffer OrbitalData { vec4 orbital_elements[]; };
+// layout(binding = 1) buffer ResultData { vec4 results[]; };
+// void main() { /* Kepler equation solving */ }
+
+// This is a placeholder - actual SPIR-V binary would be generated from GLSL
+static SPIRV_PLACEHOLDER: &[u8] = &[
+    // Minimal SPIR-V header (this is not a valid SPIR-V file)
+    0x03, 0x02, 0x23, 0x07, // Magic number
+    0x00, 0x00, 0x01, 0x00, // Version
+    0x00, 0x00, 0x00, 0x00, // Generator
+    0x0E, 0x00, 0x00, 0x00, // Bound
+    0x00, 0x00, 0x00, 0x00, // Schema
+    // ... actual SPIR-V bytecode would go here
+];
