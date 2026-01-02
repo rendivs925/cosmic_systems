@@ -19,7 +19,8 @@ fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
 
 use crate::application::startup::*;
 use crate::infrastructure::bevy_adapters::components::{
-    HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet, UiPointerState,
+    CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
+    UiPointerState,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::presentation::ui::*;
@@ -63,6 +64,7 @@ pub fn main() {
     app.insert_resource(ScreenshotState { pending: false });
     app.insert_resource(PerformanceStats::default());
     app.insert_resource(UiPointerState::default());
+    app.insert_resource(CameraInputState::default());
     app.add_systems(Startup, setup_space);
     app.add_systems(Startup, setup_ui);
 
@@ -94,11 +96,13 @@ pub fn main() {
     if let Some(window) = web_sys::window() {
         if let Some(document) = window.document() {
             if let Some(root) = document.document_element() {
-                let _ = root.style().set_property("width", "100%");
-                let _ = root.style().set_property("height", "100%");
-                let _ = root.style().set_property("margin", "0");
-                let _ = root.style().set_property("padding", "0");
-                let _ = root.style().set_property("overflow", "hidden");
+                if let Ok(root) = root.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = root.style().set_property("width", "100%");
+                    let _ = root.style().set_property("height", "100%");
+                    let _ = root.style().set_property("margin", "0");
+                    let _ = root.style().set_property("padding", "0");
+                    let _ = root.style().set_property("overflow", "hidden");
+                }
             }
 
             if let Some(body) = document.body() {

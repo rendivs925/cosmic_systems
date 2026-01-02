@@ -3,8 +3,8 @@ use bevy::text::BreakLineOn;
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
-    CameraController, NotificationQueue, NotificationType, PerformanceStats, PlanetComponent,
-    Selectable, SelectedPlanet, UiPointerState,
+    NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, Selectable,
+    SelectedPlanet, UiPointerState,
 };
 
 #[derive(Component)]
@@ -431,7 +431,6 @@ pub(crate) fn handle_nav_interactions(
     mut selectable_query: Query<(Entity, &mut Selectable)>,
     mut solar_params: ResMut<SolarSystemParameters>,
     mut menu_state: ResMut<UiMenuState>,
-    mut camera_query: Query<(&mut CameraController, &mut Transform)>,
 ) {
     for (interaction, button) in menu_interactions.iter() {
         if *interaction != Interaction::Pressed {
@@ -439,12 +438,6 @@ pub(crate) fn handle_nav_interactions(
         }
         match button.action {
             MenuAction::Explore => {
-                if let Ok((mut controller, mut transform)) = camera_query.get_single_mut() {
-                    transform.translation = Vec3::new(0.0, 120000.0, 1500000.0);
-                    transform.look_at(Vec3::ZERO, Vec3::Y);
-                    controller.velocity = Vec3::ZERO;
-                    controller.speed = 5000.0;
-                }
                 menu_state.selector_open = !menu_state.selector_open;
             }
             MenuAction::Orbits => {

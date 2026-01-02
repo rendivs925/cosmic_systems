@@ -23,7 +23,8 @@ pub mod presentation;
 use application::startup::*;
 use domain::value_objects::simulation_params::SimulationParameters;
 use infrastructure::bevy_adapters::components::{
-    HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet, UiPointerState,
+    CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
+    UiPointerState,
 };
 use infrastructure::bevy_adapters::systems::*;
 use presentation::ui::*;
@@ -73,6 +74,7 @@ fn main() {
         app.insert_resource(ScreenshotState { pending: false });
         app.insert_resource(PerformanceStats::default());
         app.insert_resource(UiPointerState::default());
+        app.insert_resource(CameraInputState::default());
         app.add_systems(Startup, setup_space);
         app.add_systems(Startup, setup_ui);
 

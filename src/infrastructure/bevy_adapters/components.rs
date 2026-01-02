@@ -130,6 +130,23 @@ pub struct UiPointerState {
     pub is_over_ui: bool,
 }
 
+#[derive(Resource)]
+pub struct CameraInputState {
+    pub last_input_time: f32,
+    pub suppress_auto_inspect_for: Option<Entity>,
+    pub last_selected_entity: Option<Entity>,
+}
+
+impl Default for CameraInputState {
+    fn default() -> Self {
+        Self {
+            last_input_time: -1000.0,
+            suppress_auto_inspect_for: None,
+            last_selected_entity: None,
+        }
+    }
+}
+
 // Performance monitoring and quality adjustment
 #[derive(Resource)]
 pub struct PerformanceStats {

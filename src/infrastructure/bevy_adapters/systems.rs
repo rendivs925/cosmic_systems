@@ -653,7 +653,9 @@ pub fn update_camera_controller(
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
     ui_state: Res<UiPointerState>,
+    selected_planet: Res<SelectedPlanet>,
     mut query: Query<(&mut CameraController, &mut Transform)>,
+    mut input_state: ResMut<CameraInputState>,
     mut notifications: ResMut<NotificationQueue>,
 ) {
     // Check if UI is using the mouse (hovering over UI)
@@ -664,6 +666,7 @@ pub fn update_camera_controller(
         }
 
         let dt = time.delta_seconds();
+        let mut user_input = false;
 
         // Handle mouse look for rotation
         let mut mouse_delta = Vec2::ZERO;
@@ -673,6 +676,7 @@ pub fn update_camera_controller(
 
         // Apply mouse sensitivity and update rotation only when left mouse is held.
         if mouse_delta != Vec2::ZERO && mouse_buttons.pressed(MouseButton::Left) {
+            user_input = true;
             let sensitivity = controller.sensitivity;
             let yaw = -mouse_delta.x * sensitivity;
             let pitch = -mouse_delta.y * sensitivity;
@@ -710,6 +714,7 @@ pub fn update_camera_controller(
 
         // Apply keyboard-based rotation
         if rotation_delta != Vec2::ZERO {
+            user_input = true;
             let key_sensitivity = controller.sensitivity * 50.0; // Keyboard rotation sensitivity
             let yaw = -rotation_delta.x * key_sensitivity;
             let pitch = -rotation_delta.y * key_sensitivity;
@@ -786,6 +791,7 @@ pub fn update_camera_controller(
         // Handle mouse wheel for zooming and speed adjustment (only if not over UI)
         if !ui_has_pointer {
             for wheel_event in mouse_wheel.read() {
+                user_input = true;
                 if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight)
                 {
                     // Ctrl+Wheel: Adjust base movement speed
@@ -850,6 +856,17 @@ pub fn update_camera_controller(
         if movement == Vec3::ZERO && controller.velocity.length() < 1.0 {
             controller.velocity = Vec3::ZERO;
         }
+
+        if movement != Vec3::ZERO {
+            user_input = true;
+        }
+
+        if user_input {
+            input_state.last_input_time = time.elapsed_seconds();
+            if let Some(entity) = selected_planet.entity {
+                input_state.suppress_auto_inspect_for = Some(entity);
+            }
+        }
     }
 }
 
@@ -893,6 +910,7 @@ pub fn auto_inspect_selected_planet(
     time: Res<Time>,
     solar_params: Res<SolarSystemParameters>,
     selected_planet: Res<SelectedPlanet>,
+    mut input_state: ResMut<CameraInputState>,
     mut camera_query: Query<(&CameraController, &mut Transform, &Projection)>,
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut state: Local<AutoInspectState>,
@@ -913,6 +931,15 @@ pub fn auto_inspect_selected_planet(
     };
 
     if controller.mode != CameraMode::FreeFlight {
+        return;
+    }
+
+    if input_state.last_selected_entity != Some(selected_entity) {
+        input_state.last_selected_entity = Some(selected_entity);
+        input_state.suppress_auto_inspect_for = None;
+    }
+
+    if input_state.suppress_auto_inspect_for == Some(selected_entity) {
         return;
     }
 
