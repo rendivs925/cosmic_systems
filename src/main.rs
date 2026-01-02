@@ -89,6 +89,7 @@ fn main() {
     app.add_systems(Update, display_navigation_bar);
     app.add_systems(Update, update_planet_selection_visuals.run_if(every_n_frames(2)));
     app.add_systems(Update, update_performance_stats);
+    app.add_systems(Update, display_fps_indicator);
     app.add_systems(Update, display_hover_info);
         app.add_systems(Update, display_notifications);
         app.add_systems(Update, take_pending_screenshot);
