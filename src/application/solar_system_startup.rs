@@ -438,11 +438,12 @@ fn spawn_celestial_body(
                 spin_speed: orbit_motion.spin_speed,
                 phase: orbit_motion.phase,
             })
-            .insert(Name::new(format!("Orbit {}", planet.name)));
+            .insert(Name::new(format!("Orbit {}", planet.name)))
+            .id();
 
         #[cfg(target_arch = "wasm32")]
         {
-            commands.entity(orbit_entity.id()).insert(PendingOrbitMesh {
+            commands.entity(orbit_entity).insert(PendingOrbitMesh {
                 mesh: orbit_mesh,
                 orbit_shape,
                 color: orbit_base_color,
