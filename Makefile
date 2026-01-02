@@ -139,7 +139,7 @@ run-built-optimized:
 # ============================================================================
 
 build-wasm:
-	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk build --release --lib cosmic_systems
+	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk build --release
 
 serve-wasm:
 	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk serve

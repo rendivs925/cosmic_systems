@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "cosmic_systems"
+name = "cosmic_systems_wasm"
 crate-type = ["cdylib"]
 
 [[bin]]
