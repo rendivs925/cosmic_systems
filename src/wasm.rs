@@ -32,8 +32,9 @@ use crate::presentation::ui::*;
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
-    console_log::init_with_level(log::Level::Info).unwrap();
+    let _ = console_log::init_with_level(log::Level::Info);
 
+    prepare_dom_for_wasm();
     web_sys::console::log_1(&"🚀 Starting Cosmic Systems Simulator (WASM)".into());
 
     let window_plugin = WindowPlugin {
@@ -118,6 +119,13 @@ pub fn main() {
     app.add_systems(Update, apply_camera_transform);
     app.add_systems(Update, auto_inspect_selected_planet);
 
+    prepare_dom_for_wasm();
+
+    web_sys::console::log_1(&"✅ Cosmic Systems Simulator initialized successfully".into());
+    app.run();
+}
+
+fn prepare_dom_for_wasm() {
     if let Some(window) = web_sys::window() {
         if let Some(document) = window.document() {
             if let Some(root) = document.document_element() {
@@ -151,7 +159,4 @@ pub fn main() {
             }
         }
     }
-
-    web_sys::console::log_1(&"✅ Cosmic Systems Simulator initialized successfully".into());
-    app.run();
 }
