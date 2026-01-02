@@ -1,3 +1,4 @@
+use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
 use crate::infrastructure::bevy_adapters::components::PerformanceStats;
 use wasm_bindgen::prelude::*;
@@ -43,7 +44,14 @@ pub fn main() {
         ..default()
     };
 
-    let plugins = DefaultPlugins.set(window_plugin);
+    let plugins = DefaultPlugins
+        .set(window_plugin)
+        .set(AssetPlugin {
+            file_path: "assets".to_string(),
+            watch_for_changes_override: Some(false),
+            meta_check: AssetMetaCheck::Never,
+            ..default()
+        });
 
     let mut app = App::new();
     app.add_plugins(plugins);
