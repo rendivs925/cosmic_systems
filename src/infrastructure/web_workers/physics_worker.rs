@@ -3,14 +3,14 @@ use web_sys::{Worker, MessageEvent, DedicatedWorkerGlobalScope};
 use std::collections::VecDeque;
 
 /// Task for background physics processing
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PhysicsTask {
     pub planet_id: u32,
     pub orbital_elements: OrbitalElements,
 }
 
 /// Simplified orbital elements for worker communication
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OrbitalElements {
     pub semi_major_axis: f32,
     pub eccentricity: f32,

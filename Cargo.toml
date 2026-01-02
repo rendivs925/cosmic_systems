@@ -18,6 +18,7 @@ rand = "0.8.5"
 bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types
 num_cpus = "1.16"       # CPU core detection
+serde = { version = "1.0", features = ["derive"] }  # Serialization for Web Workers
 wgpu = "0.19"           # WebGPU for WASM compute
 
 [target.'cfg(target_os = "linux")'.dependencies]
