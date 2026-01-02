@@ -10,6 +10,12 @@ use rayon::prelude::*;
 #[cfg(target_arch = "x86_64")]
 use std::is_x86_feature_detected;
 
+// SIMD intrinsics
+#[cfg(all(feature = "simd", target_feature = "avx2"))]
+use std::arch::x86_64::*;
+#[cfg(all(feature = "simd", target_feature = "avx512f"))]
+use std::arch::x86_64::*;
+
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
 }
@@ -541,6 +547,67 @@ pub const AU_IN_KM: f32 = 149597870.7; // 1 AU in kilometers
 /// Convert astronomical units to simulation distance units
 pub fn au_to_simulation_units(au: f32, solar_params: &SolarSystemParameters) -> f32 {
     au * solar_params.scale_factor
+}
+
+// SIMD Optimizations for Phase 6
+
+/// SIMD-accelerated Kepler equation solver for batches
+/// Currently uses parallel scalar processing - full SIMD intrinsics to be implemented
+#[cfg(feature = "simd")]
+pub fn solve_kepler_simd_batch(
+    mean_anomalies: &[f32],
+    eccentricities: &[f32],
+    max_iterations: u32,
+    _cpu_features: CpuFeatureLevel
+) -> Vec<f32> {
+    // TODO: Implement AVX-512 and AVX2 intrinsic versions
+    // For now, use parallel scalar processing as foundation
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        mean_anomalies.par_iter()
+            .zip(eccentricities.par_iter())
+            .map(|(&ma, &e)| solve_kepler_adaptive(ma, e, max_iterations))
+            .collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        mean_anomalies.iter()
+            .zip(eccentricities.iter())
+            .map(|(&ma, &e)| solve_kepler_adaptive(ma, e, max_iterations))
+            .collect()
+    }
+}
+
+/// SIMD-accelerated orbital transformation matrix operations
+/// Vectorized 3D transformations for orbital point calculations
+#[cfg(feature = "simd")]
+pub fn transform_orbital_points_simd(
+    points: &[(f32, f32)], // (x_orbital, z_orbital) pairs
+    orbital_elements: &[(f32, f32, f32)] // (inclination, long_asc_node, arg_periapsis)
+) -> Vec<Vec3> {
+    // TODO: Implement full SIMD matrix operations using AVX2/AVX-512
+    // For now, use parallel scalar processing
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        points.par_iter()
+            .zip(orbital_elements.par_iter())
+            .map(|(&(x_orb, z_orb), &(inc, lan, ap))| {
+                transform_orbital_point(x_orb, z_orb, inc, lan, ap)
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        points.iter()
+            .zip(orbital_elements.iter())
+            .map(|(&(x_orb, z_orb), &(inc, lan, ap))| {
+                transform_orbital_point(x_orb, z_orb, inc, lan, ap)
+            })
+            .collect()
+    }
 }
 
 // Parallel Optimizations for Phase 6
