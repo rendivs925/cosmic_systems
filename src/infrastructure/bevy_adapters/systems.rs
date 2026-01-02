@@ -160,12 +160,16 @@ pub fn update_planet_positions(
             (Vec3::ZERO, None)
         };
 
-        let new_position = physics::calculate_planet_position(
+        // Adaptive quality: reduce Kepler iterations for distant objects
+        let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
+
+        let new_position = physics::calculate_planet_position_with_quality(
             &planet_comp.domain_planet,
             time_days,
             &solar_params,
             parent_position,
             parent_tilt,
+            kepler_iterations,
         );
         transform.translation = new_position;
     }
@@ -193,11 +197,19 @@ pub fn update_planet_rotations(
 }
 
 // System to animate orbit visuals for a more dynamic presentation
+// Optimized to update every 3 frames instead of every frame
 pub fn update_orbit_visuals(
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<&OrbitComponent>,
 ) {
+    // Performance optimization: update orbit visuals only every 3 frames
+    // Visual pulsing is slow enough that this is imperceptible
+    let frame_number = (time.elapsed_seconds() * 60.0) as u32; // Assume 60 FPS
+    if frame_number % 3 != 0 {
+        return;
+    }
+
     let elapsed = time.elapsed_seconds();
 
     for orbit in query.iter() {
@@ -254,10 +266,18 @@ pub fn update_orbit_visibility(
 }
 
 // System to add dynamic specular reflection response for planet materials
+// Optimized to update every 5 frames (material properties don't change dynamically)
 pub fn update_planet_reflections(
+    time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<(&PlanetComponent, &GlobalTransform)>,
 ) {
+    // Performance optimization: skip most updates since values don't change
+    let frame_number = (time.elapsed_seconds() * 60.0) as u32;
+    if frame_number % 5 != 0 {
+        return;
+    }
+
     for (planet_comp, _global_transform) in query.iter() {
         if planet_comp.domain_planet.name == "Sun" {
             continue;

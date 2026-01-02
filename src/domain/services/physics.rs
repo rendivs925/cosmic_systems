@@ -35,12 +35,25 @@ const MOON_ORBIT_SCALE: f32 = 60.0;
 
 /// Calculate the position of a planet/moon in its orbit at a given time
 /// Uses simplified circular orbit approximation (Kepler's first law)
+/// iterations parameter controls Kepler solver accuracy (default: 8)
 pub fn calculate_planet_position(
     planet: &Planet,
     time_days: f32,
     solar_params: &SolarSystemParameters,
     parent_position: Vec3,
     parent_axial_tilt_deg: Option<f32>,
+) -> Vec3 {
+    calculate_planet_position_with_quality(planet, time_days, solar_params, parent_position, parent_axial_tilt_deg, 8)
+}
+
+/// Calculate the position of a planet/moon with configurable quality/performance
+pub fn calculate_planet_position_with_quality(
+    planet: &Planet,
+    time_days: f32,
+    solar_params: &SolarSystemParameters,
+    parent_position: Vec3,
+    parent_axial_tilt_deg: Option<f32>,
+    kepler_iterations: u32,
 ) -> Vec3 {
     if planet.name == "Sun" {
         // Sun is at the origin
@@ -55,7 +68,7 @@ pub fn calculate_planet_position(
         if let Some(elements) = get_moon_orbital_elements(&planet.name) {
             let mean_motion = mean_motion_from_period_days(planet.orbital_period_days);
             let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-            let eccentric_anomaly = solve_kepler(mean_anomaly, elements.eccentricity);
+            let eccentric_anomaly = solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
             let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
             let radius_au = elements.semi_major_axis_au
                 * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
@@ -84,7 +97,7 @@ pub fn calculate_planet_position(
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
         let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-        let eccentric_anomaly = solve_kepler(mean_anomaly, elements.eccentricity);
+        let eccentric_anomaly = solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
         let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
         let radius_au = elements.semi_major_axis_au
             * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
@@ -387,13 +400,36 @@ fn elements_from_degrees(
 }
 
 fn solve_kepler(mean_anomaly: f32, eccentricity: f32) -> f32 {
+    solve_kepler_adaptive(mean_anomaly, eccentricity, 8)
+}
+
+/// Adaptive Kepler equation solver with configurable iteration count
+/// Higher iterations = more accuracy, lower iterations = better performance
+pub fn solve_kepler_adaptive(mean_anomaly: f32, eccentricity: f32, max_iterations: u32) -> f32 {
     let mut eccentric_anomaly = mean_anomaly;
-    for _ in 0..8 {
+    for _ in 0..max_iterations {
         let f = eccentric_anomaly - eccentricity * eccentric_anomaly.sin() - mean_anomaly;
         let f_prime = 1.0 - eccentricity * eccentric_anomaly.cos();
         eccentric_anomaly -= f / f_prime;
     }
     eccentric_anomaly
+}
+
+/// Calculate optimal Kepler solver iteration count based on distance from camera
+/// Near objects: 8 iterations (full accuracy)
+/// Medium distance: 4 iterations
+/// Far distance: 2 iterations
+/// Very far: 1 iteration (minimal calculation)
+pub fn get_kepler_iterations_for_distance(distance_to_camera: f32) -> u32 {
+    if distance_to_camera < 100000.0 {
+        8 // Near: full accuracy
+    } else if distance_to_camera < 500000.0 {
+        4 // Medium: half accuracy
+    } else if distance_to_camera < 2000000.0 {
+        2 // Far: quarter accuracy
+    } else {
+        1 // Very far: minimal calculation
+    }
 }
 
 fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
