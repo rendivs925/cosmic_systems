@@ -44,7 +44,8 @@ help:
 	@echo "  run-debug       - Run with debug symbols"
 	@echo "  run-parallel    - Run with parallel processing"
 	@echo "  run-simd        - Run with SIMD optimizations"
-	@echo "  run-optimized   - Run with maximum optimizations"
+	@echo "  run-optimized      - Run with maximum optimizations"
+	@echo "  run-built-optimized - Run pre-built optimized binary"
 	@echo ""
 	@echo "TESTING & ANALYSIS:"
 	@echo "  test            - Run unit tests"
@@ -124,6 +125,9 @@ run-simd:
 run-optimized:
 	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
 	cargo run --release $(FEATURES_SIMD)
+
+run-built-optimized:
+	./target/release/$(BINARY_NAME)
 
 # ============================================================================
 # TESTING & ANALYSIS
