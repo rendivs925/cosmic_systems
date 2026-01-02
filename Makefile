@@ -1,20 +1,334 @@
-# Makefile for Cosmic Frontier Simulator
+# Makefile for Cosmic Systems Simulation
+# Advanced performance optimization with SIMD, parallel processing, and profiling
 
 .DEFAULT_GOAL := help
 
-.PHONY: help space-simulation gyro-propulsion clean
+# Feature flags for different optimization levels
+FEATURES_BASE :=
+FEATURES_PARALLEL := --features parallel
+FEATURES_SIMD := --features parallel,simd
+
+# Build profiles
+PROFILE_DEBUG := dev
+PROFILE_RELEASE := release
+PROFILE_OPTIMIZED := --profile optimized
+
+# Binary names
+BINARY_NAME := cosmic_systems
+
+.PHONY: help build build-release build-debug build-parallel build-simd build-optimized
+.PHONY: run run-release run-debug run-parallel run-simd run-optimized
+.PHONY: test test-release test-parallel test-simd benchmark profile
+.PHONY: check clippy fmt doc clean clean-all install-deps update-deps
+.PHONY: performance-test memory-profile cpu-profile flamegraph
+.PHONY: docker-build docker-run ci-checks release-build
+
+# ============================================================================
+# HELP & INFO
+# ============================================================================
 
 help:
-	@echo "Available targets:"
-	@echo "  space-simulation Run the main space simulation"
-	@echo "  gyro-propulsion  Run the gyroscopic propulsion simulation"
-	@echo "  clean            Clean build artifacts"
+	@echo "🚀 Cosmic Systems Simulation - Performance Optimized Makefile"
+	@echo ""
+	@echo "BUILD TARGETS:"
+	@echo "  build           - Build with default features (debug)"
+	@echo "  build-release   - Build optimized release binary"
+	@echo "  build-debug     - Build with debug symbols"
+	@echo "  build-parallel  - Build with parallel processing"
+	@echo "  build-simd      - Build with SIMD optimizations"
+	@echo "  build-optimized - Build with maximum optimizations"
+	@echo ""
+	@echo "RUN TARGETS:"
+	@echo "  run             - Run with default features"
+	@echo "  run-release     - Run optimized release binary"
+	@echo "  run-debug       - Run with debug symbols"
+	@echo "  run-parallel    - Run with parallel processing"
+	@echo "  run-simd        - Run with SIMD optimizations"
+	@echo "  run-optimized   - Run with maximum optimizations"
+	@echo ""
+	@echo "TESTING & ANALYSIS:"
+	@echo "  test            - Run unit tests"
+	@echo "  test-release    - Run tests in release mode"
+	@echo "  test-parallel   - Run tests with parallel features"
+	@echo "  benchmark       - Run performance benchmarks"
+	@echo "  profile         - Run with profiling enabled"
+	@echo "  flamegraph      - Generate flame graph"
+	@echo "  memory-profile  - Memory usage profiling"
+	@echo "  cpu-profile     - CPU usage profiling"
+	@echo ""
+	@echo "QUALITY ASSURANCE:"
+	@echo "  check           - Run cargo check"
+	@echo "  clippy          - Run clippy linter"
+	@echo "  fmt             - Format code"
+	@echo "  doc             - Generate documentation"
+	@echo "  ci-checks       - Run all CI checks"
+	@echo ""
+	@echo "MAINTENANCE:"
+	@echo "  clean           - Clean build artifacts"
+	@echo "  clean-all       - Clean everything including caches"
+	@echo "  install-deps    - Install system dependencies"
+	@echo "  update-deps     - Update Rust dependencies"
+	@echo ""
+	@echo "DOCKER:"
+	@echo "  docker-build    - Build Docker image"
+	@echo "  docker-run      - Run in Docker container"
+	@echo ""
+	@echo "PERFORMANCE FEATURES:"
+	@echo "  SIMD            - AVX-512/AVX2 vectorized Kepler solvers"
+	@echo "  Parallel        - Rayon-based multi-core processing"
+	@echo "  Optimized       - Maximum compiler optimizations"
+	@echo ""
 
-space-simulation:
+# ============================================================================
+# BUILDING
+# ============================================================================
+
+build:
+	cargo build
+
+build-release:
+	cargo build --release
+
+build-debug:
+	cargo build --profile $(PROFILE_DEBUG)
+
+build-parallel:
+	cargo build $(FEATURES_PARALLEL)
+
+build-simd:
+	cargo build $(FEATURES_SIMD)
+
+build-optimized:
+	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort -C lto=fat" \
+	cargo build --release $(FEATURES_SIMD) $(PROFILE_OPTIMIZED)
+
+# ============================================================================
+# RUNNING
+# ============================================================================
+
+run:
+	cargo run
+
+run-release:
 	cargo run --release
 
-gyro-propulsion:
-	cargo run --release gyro
+run-debug:
+	cargo run --profile $(PROFILE_DEBUG)
+
+run-parallel:
+	cargo run $(FEATURES_PARALLEL)
+
+run-simd:
+	cargo run $(FEATURES_SIMD)
+
+run-optimized:
+	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort -C lto=fat" \
+	cargo run --release $(FEATURES_SIMD) $(PROFILE_OPTIMIZED)
+
+# ============================================================================
+# TESTING & ANALYSIS
+# ============================================================================
+
+test:
+	cargo test
+
+test-release:
+	cargo test --release
+
+test-parallel:
+	cargo test $(FEATURES_PARALLEL)
+
+test-simd:
+	cargo test $(FEATURES_SIMD)
+
+benchmark:
+	cargo bench
+
+profile:
+	RUSTFLAGS="-g" cargo build --release $(FEATURES_SIMD)
+	perf record -F 1000 -g --call-graph dwarf target/release/$(BINARY_NAME)
+	perf report
+
+flamegraph:
+	cargo flamegraph --release $(FEATURES_SIMD) -- --duration 10
+
+memory-profile:
+	valgrind --tool=massif --massif-out-file=massif.out target/release/$(BINARY_NAME)
+	ms_print massif.out
+
+cpu-profile:
+	valgrind --tool=callgrind --callgrind-out-file=callgrind.out target/release/$(BINARY_NAME)
+	callgrind_annotate callgrind.out
+
+performance-test:
+	@echo "Running performance tests..."
+	@echo "Sequential build:"
+	time make build-release > /dev/null
+	@echo "Parallel build:"
+	time make build-parallel > /dev/null
+	@echo "SIMD build:"
+	time make build-simd > /dev/null
+	@echo "Optimized build:"
+	time make build-optimized > /dev/null
+
+# ============================================================================
+# QUALITY ASSURANCE
+# ============================================================================
+
+check:
+	cargo check
+	cargo check $(FEATURES_PARALLEL)
+	cargo check $(FEATURES_SIMD)
+
+clippy:
+	cargo clippy
+	cargo clippy $(FEATURES_PARALLEL)
+	cargo clippy $(FEATURES_SIMD)
+
+fmt:
+	cargo fmt
+
+doc:
+	cargo doc --open $(FEATURES_SIMD)
+
+ci-checks: check clippy fmt test
+	@echo "✅ All CI checks passed!"
+
+# ============================================================================
+# MAINTENANCE
+# ============================================================================
 
 clean:
 	cargo clean
+
+clean-all: clean
+	rm -rf target/
+	rm -f *.profraw *.profdata
+	rm -f flamegraph.svg callgrind.out massif.out
+	rm -f perf.data*
+
+install-deps:
+	@echo "Installing system dependencies..."
+	# Linux dependencies
+	@if command -v apt-get >/dev/null 2>&1; then \
+		sudo apt-get update && sudo apt-get install -y \
+			build-essential \
+			pkg-config \
+			libx11-dev \
+			libxrandr-dev \
+			libxi-dev \
+			libgl1-mesa-dev \
+			libasound2-dev \
+			valgrind \
+			linux-tools-common \
+			linux-tools-generic; \
+	elif command -v pacman >/dev/null 2>&1; then \
+		sudo pacman -Syu --needed \
+			base-devel \
+			pkgconf \
+			libx11 \
+			libxrandr \
+			libxi \
+			mesa \
+			alsa-lib \
+			valgrind \
+			perf; \
+	else \
+		echo "Please install system dependencies manually."; \
+	fi
+	@echo "Installing Rust tools..."
+	cargo install flamegraph cargo-benchcmp cargo-outdated
+
+update-deps:
+	cargo update
+
+# ============================================================================
+# DOCKER
+# ============================================================================
+
+docker-build:
+	docker build -t cosmic-systems .
+
+docker-run:
+	docker run --rm -it \
+		-e DISPLAY=$(DISPLAY) \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		--device /dev/dri \
+		cosmic-systems
+
+# ============================================================================
+# SPECIALIZED TARGETS
+# ============================================================================
+
+# Development workflow
+dev: clean clippy fmt
+	cargo build
+
+# Production build with all optimizations
+release-build: clean ci-checks build-optimized
+	@echo "🎯 Release build complete with maximum optimizations!"
+
+# Performance comparison
+perf-compare:
+	@echo "Performance Comparison:"
+	@echo "======================"
+	@echo "Sequential (no features):"
+	time timeout 10s cargo run > /dev/null 2>&1 || true
+	@echo "Parallel processing:"
+	time timeout 10s make run-parallel > /dev/null 2>&1 || true
+	@echo "SIMD + Parallel:"
+	time timeout 10s make run-simd > /dev/null 2>&1 || true
+	@echo "Maximum optimization:"
+	time timeout 10s make run-optimized > /dev/null 2>&1 || true
+
+# Memory usage check
+memory-check:
+	cargo build --release $(FEATURES_SIMD)
+	size target/release/$(BINARY_NAME)
+
+# Dependency analysis
+deps-tree:
+	cargo tree
+	cargo tree --features parallel
+	cargo tree --features parallel,simd
+
+# ============================================================================
+# UTILITY TARGETS
+# ============================================================================
+
+# Show system information
+system-info:
+	@echo "System Information:"
+	@echo "==================="
+	@echo "CPU: $$(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+	@echo "Cores: $$(nproc)"
+	@echo "Memory: $$(free -h | grep '^Mem:' | awk '{print $$2}')"
+	@echo "Rust: $$(rustc --version)"
+	@echo "Cargo: $$(cargo --version)"
+	@echo "SIMD Support:"
+	@if command -v lscpu >/dev/null 2>&1; then \
+		lscpu | grep -E "(avx512|avx2|sse4)" || echo "No SIMD detected"; \
+	else \
+		echo "Unable to detect SIMD support"; \
+	fi
+
+# Show available features
+features:
+	@echo "Available Cargo Features:"
+	@echo "========================"
+	@echo "parallel  - Enable Rayon parallel processing"
+	@echo "simd      - Enable SIMD optimizations (AVX-512/AVX2)"
+	@echo ""
+	@echo "Usage examples:"
+	@echo "  make run-parallel"
+	@echo "  make run-simd"
+	@echo "  cargo build --features parallel,simd"
+
+# Create distribution package
+dist: clean release-build
+	mkdir -p dist/
+	cp target/release/$(BINARY_NAME) dist/
+	cp README.md dist/
+	cp LICENSE dist/
+	tar -czf cosmic-systems-v$$(cargo pkgid | cut -d# -f2 | cut -d: -f2).tar.gz dist/
+	rm -rf dist/
