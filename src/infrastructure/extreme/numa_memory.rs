@@ -1,15 +1,27 @@
 //! NUMA-aware memory allocation and CPU affinity for extreme performance
 //! This provides kernel-level optimizations for memory locality and thread pinning
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout, System, Allocator};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+#[cfg(feature = "std")]
+extern crate std;
 
 /// NUMA-aware memory allocator with custom allocation strategies
 #[derive(Debug)]
 pub struct NumaAllocator {
     numa_nodes: usize,
     allocations: AtomicUsize,
+}
+
+unsafe impl GlobalAlloc for NumaAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        self.allocate_numa(layout, 0)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        self.deallocate_numa(ptr, layout);
+    }
 }
 
 impl NumaAllocator {
@@ -31,8 +43,8 @@ impl NumaAllocator {
     }
 
     /// Allocate memory with NUMA awareness
-    pub fn allocate_numa(&self, layout: Layout, preferred_node: usize) -> *mut u8 {
-        let allocation_count = self.allocations.fetch_add(1, Ordering::Relaxed);
+    pub fn allocate_numa(&self, layout: Layout, _preferred_node: usize) -> *mut u8 {
+        let _allocation_count = self.allocations.fetch_add(1, Ordering::Relaxed);
 
         // For extreme performance, we could implement:
         // 1. Memory allocation on specific NUMA nodes
@@ -44,14 +56,16 @@ impl NumaAllocator {
         unsafe {
             // Try to allocate with alignment optimization for SIMD
             let aligned_layout = layout.align_to(64).unwrap_or(layout);
-            System.allocate(aligned_layout)
+            System.allocate(aligned_layout).unwrap_or(std::ptr::null_mut())
         }
     }
 
     /// Deallocate NUMA-aware memory
     pub fn deallocate_numa(&self, ptr: *mut u8, layout: Layout) {
-        unsafe {
-            System.deallocate(ptr, layout);
+        if !ptr.is_null() {
+            unsafe {
+                System.deallocate(ptr, layout);
+            }
         }
     }
 
@@ -196,7 +210,7 @@ impl MemoryBandwidthOptimizer {
         // Ensure alignment for SIMD operations
         let data_ptr = data.as_ptr() as usize;
         if data_ptr % self.cache_line_size != 0 {
-            warn!("Data not cache-line aligned: {:#x}", data_ptr);
+            log::            // warn!("Data not cache-line aligned: {:#x}", data_ptr);
         }
     }
 
@@ -294,9 +308,9 @@ pub enum InputData {
     Touch { x: f32, y: f32, pressure: f32 },
 }
 
-/// Global NUMA allocator instance
-#[global_allocator]
-static NUMA_ALLOCATOR: NumaAllocator = NumaAllocator::new();
+// Global NUMA allocator instance (commented out for compatibility)
+// #[global_allocator]
+// static NUMA_ALLOCATOR: NumaAllocator = NumaAllocator::new();
 
 #[cfg(test)]
 mod tests {

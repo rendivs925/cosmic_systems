@@ -3,7 +3,8 @@ use crate::domain::entities::planet::Planet;
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver;
@@ -110,7 +111,27 @@ pub struct HoveredPlanet {
     pub info: Option<String>,
 }
 
+// Resource to track hovered planet for information display
+#[derive(Resource)]
+pub struct ComputeBackend {
+    pub fallback_solver: SimdKeplerSolver,
+}
 
+impl Default for ComputeBackend {
+    fn default() -> Self {
+        Self {
+            fallback_solver: SimdKeplerSolver::new(),
+        }
+    }
+}
+
+impl ComputeBackend {
+    pub fn solve_kepler(&mut self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
+        // Currently using SIMD CPU solver
+        // TODO: Add WebGPU and Vulkan solvers when implemented
+        self.fallback_solver.solve_batch(planets, quality)
+    }
+}
 
 // Notification types for user feedback
 #[derive(Clone, Debug)]
@@ -269,53 +290,5 @@ impl QualityController {
             QualityLevel::Low => self.current_level = QualityLevel::Medium,
             QualityLevel::Minimal => self.current_level = QualityLevel::Low,
         }
-    }
-}
-
-// Unified compute backend for Kepler equation solving
-#[derive(Resource)]
-pub struct ComputeBackend {
-    pub vulkan_solver: Option<VulkanKeplerSolver>,
-    pub fallback_solver: SimdKeplerSolver,
-    pub vulkan_available: bool,
-}
-
-impl Default for ComputeBackend {
-    fn default() -> Self {
-        Self {
-            vulkan_solver: None,
-            fallback_solver: SimdKeplerSolver::new(),
-            vulkan_available: false,
-        }
-    }
-}
-
-impl ComputeBackend {
-    /// Initialize compute backends with hardware detection
-    pub fn new() -> Self {
-        let mut backend = Self::default();
-        // Vulkan initialization would go here - for now not available
-        backend.vulkan_available = false;
-        backend
-    }
-
-    pub fn solve_kepler(&mut self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
-        // For now, only SIMD CPU solver is available
-        // Vulkan and WebGPU solvers would be added here when implemented
-        self.fallback_solver.solve_batch(planets, quality)
-    }
-
-    /// Get information about available compute backends
-    pub fn get_backend_info(&self) -> String {
-        let mut info = String::new();
-
-        if self.vulkan_available {
-            info.push_str("Vulkan: Available\n");
-        } else {
-            info.push_str("Vulkan: Not Available\n");
-        }
-
-        info.push_str("SIMD CPU: Always Available\n");
-        info
     }
 }
