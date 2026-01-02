@@ -55,7 +55,14 @@ pub fn calculate_planet_position(
     parent_position: Vec3,
     parent_axial_tilt_deg: Option<f32>,
 ) -> Vec3 {
-    calculate_planet_position_with_quality(planet, time_days, solar_params, parent_position, parent_axial_tilt_deg, 8)
+    calculate_planet_position_with_quality(
+        planet,
+        time_days,
+        solar_params,
+        parent_position,
+        parent_axial_tilt_deg,
+        8,
+    )
 }
 
 /// Calculate the position of a planet/moon with configurable quality/performance
@@ -79,8 +86,10 @@ pub fn calculate_planet_position_with_quality(
         // Moons - use real orbital elements for accurate position calculation
         if let Some(elements) = get_moon_orbital_elements(&planet.name) {
             let mean_motion = mean_motion_from_period_days(planet.orbital_period_days);
-            let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-            let eccentric_anomaly = solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
+            let mean_anomaly =
+                normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
+            let eccentric_anomaly =
+                solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
             let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
             let radius_au = elements.semi_major_axis_au
                 * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
@@ -109,10 +118,11 @@ pub fn calculate_planet_position_with_quality(
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
         let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-        let eccentric_anomaly = solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
+        let eccentric_anomaly =
+            solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
         let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
-        let radius_au = elements.semi_major_axis_au
-            * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
+        let radius_au =
+            elements.semi_major_axis_au * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
         let r = solar_params.au_to_units(radius_au);
 
         // Position in orbital plane (periapsis at +X)
@@ -156,11 +166,11 @@ pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemP
         // Moon orbiting a planet - convert astronomical distance to simulation units
         // orbital_distance_au represents actual AU distance from parent planet
         // Scale massively for clear separation while maintaining relative accuracy
-        planet.orbital_distance_au * solar_params.scale_factor * MOON_ORBIT_SCALE
+        return planet.orbital_distance_au * solar_params.scale_factor * MOON_ORBIT_SCALE;
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
-        solar_params.au_to_units(elements.semi_major_axis_au)
+        return solar_params.au_to_units(elements.semi_major_axis_au);
     } else {
-        solar_params.au_to_units(planet.orbital_distance_au)
+        return solar_params.au_to_units(planet.orbital_distance_au);
     }
 }
 
@@ -176,42 +186,42 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
     if planet.parent_entity.is_some() {
         // Moon - use real orbital elements if available
         if let Some(elements) = get_moon_orbital_elements(&planet.name) {
-            OrbitShape {
+            return OrbitShape {
                 semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au)
                     * MOON_ORBIT_SCALE,
                 eccentricity: elements.eccentricity,
                 inclination_rad: elements.inclination_rad,
                 long_asc_node_rad: elements.long_asc_node_rad,
                 arg_periapsis_rad: elements.arg_periapsis_rad,
-            }
+            };
         } else {
             // Fallback for moons without defined elements
-            OrbitShape {
+            return OrbitShape {
                 semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
                 eccentricity: 0.0,
                 inclination_rad: 0.0,
                 long_asc_node_rad: 0.0,
                 arg_periapsis_rad: 0.0,
-            }
+            };
         }
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         // Planet - use real orbital elements
-        OrbitShape {
+        return OrbitShape {
             semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au),
             eccentricity: elements.eccentricity,
             inclination_rad: elements.inclination_rad,
             long_asc_node_rad: elements.long_asc_node_rad,
             arg_periapsis_rad: elements.arg_periapsis_rad,
-        }
+        };
     } else {
         // Fallback for bodies without defined elements
-        OrbitShape {
+        return OrbitShape {
             semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
             eccentricity: 0.0,
             inclination_rad: 0.0,
             long_asc_node_rad: 0.0,
             arg_periapsis_rad: 0.0,
-        }
+        };
     }
 }
 
@@ -347,7 +357,14 @@ fn moon_elements_from_degrees(
     long_peri_deg: f32,
     mean_longitude_deg: f32,
 ) -> OrbitalElements {
-    elements_from_degrees(a_au, e, i_deg, long_asc_node_deg, long_peri_deg, mean_longitude_deg)
+    elements_from_degrees(
+        a_au,
+        e,
+        i_deg,
+        long_asc_node_deg,
+        long_peri_deg,
+        mean_longitude_deg,
+    )
 }
 
 struct OrbitalElements {
@@ -364,28 +381,68 @@ fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {
     // Source: NASA planetary fact sheets (approximate).
     match name {
         "Mercury" => Some(elements_from_degrees(
-            0.387, 0.20563593, 7.005, 48.33076593, 77.45779628, 252.25032350,
+            0.387,
+            0.20563593,
+            7.005,
+            48.33076593,
+            77.45779628,
+            252.25032350,
         )),
         "Venus" => Some(elements_from_degrees(
-            0.723, 0.00677672, 3.394, 76.67984255, 131.60246718, 181.97909950,
+            0.723,
+            0.00677672,
+            3.394,
+            76.67984255,
+            131.60246718,
+            181.97909950,
         )),
         "Earth" => Some(elements_from_degrees(
-            1.000, 0.01671123, 0.0, 0.0, 102.93768193, 100.46457166,
+            1.000,
+            0.01671123,
+            0.0,
+            0.0,
+            102.93768193,
+            100.46457166,
         )),
         "Mars" => Some(elements_from_degrees(
-            1.524, 0.09339410, 1.85, 49.55809321, 336.04084, 355.45332,
+            1.524,
+            0.09339410,
+            1.85,
+            49.55809321,
+            336.04084,
+            355.45332,
         )),
         "Jupiter" => Some(elements_from_degrees(
-            5.204, 0.04838624, 1.304, 100.47390909, 14.72847983, 34.39644051,
+            5.204,
+            0.04838624,
+            1.304,
+            100.47390909,
+            14.72847983,
+            34.39644051,
         )),
         "Saturn" => Some(elements_from_degrees(
-            9.582, 0.05386179, 2.485, 113.66242448, 92.59887831, 49.95424423,
+            9.582,
+            0.05386179,
+            2.485,
+            113.66242448,
+            92.59887831,
+            49.95424423,
         )),
         "Uranus" => Some(elements_from_degrees(
-            19.201, 0.04725744, 0.773, 74.01692503, 170.95427630, 313.23810451,
+            19.201,
+            0.04725744,
+            0.773,
+            74.01692503,
+            170.95427630,
+            313.23810451,
         )),
         "Neptune" => Some(elements_from_degrees(
-            30.047, 0.00859048, 1.77, 131.78422574, 44.96476227, 304.87964,
+            30.047,
+            0.00859048,
+            1.77,
+            131.78422574,
+            44.96476227,
+            304.87964,
         )),
         _ => None,
     }
@@ -447,8 +504,8 @@ pub fn get_kepler_iterations_for_distance(distance_to_camera: f32) -> u32 {
 fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
     let sin_v = (1.0 - eccentricity * eccentricity).sqrt() * eccentric_anomaly.sin()
         / (1.0 - eccentricity * eccentric_anomaly.cos());
-    let cos_v = (eccentric_anomaly.cos() - eccentricity)
-        / (1.0 - eccentricity * eccentric_anomaly.cos());
+    let cos_v =
+        (eccentric_anomaly.cos() - eccentricity) / (1.0 - eccentricity * eccentric_anomaly.cos());
     sin_v.atan2(cos_v)
 }
 
@@ -558,21 +615,23 @@ pub fn solve_kepler_simd_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],
     max_iterations: u32,
-    _cpu_features: CpuFeatureLevel
+    _cpu_features: CpuFeatureLevel,
 ) -> Vec<f32> {
     // TODO: Implement AVX-512 and AVX2 intrinsic versions
     // For now, use parallel scalar processing as foundation
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        mean_anomalies.par_iter()
+        mean_anomalies
+            .par_iter()
             .zip(eccentricities.par_iter())
             .map(|(&ma, &e)| solve_kepler_adaptive(ma, e, max_iterations))
             .collect()
     }
     #[cfg(not(feature = "parallel"))]
     {
-        mean_anomalies.iter()
+        mean_anomalies
+            .iter()
             .zip(eccentricities.iter())
             .map(|(&ma, &e)| solve_kepler_adaptive(ma, e, max_iterations))
             .collect()
@@ -583,8 +642,8 @@ pub fn solve_kepler_simd_batch(
 /// Vectorized 3D transformations for orbital point calculations
 #[cfg(feature = "simd")]
 pub fn transform_orbital_points_simd(
-    points: &[(f32, f32)], // (x_orbital, z_orbital) pairs
-    orbital_elements: &[(f32, f32, f32)] // (inclination, long_asc_node, arg_periapsis)
+    points: &[(f32, f32)],                // (x_orbital, z_orbital) pairs
+    orbital_elements: &[(f32, f32, f32)], // (inclination, long_asc_node, arg_periapsis)
 ) -> Vec<Vec3> {
     // TODO: Implement full SIMD matrix operations using AVX2/AVX-512
     // For now, use parallel scalar processing
@@ -592,7 +651,8 @@ pub fn transform_orbital_points_simd(
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        points.par_iter()
+        points
+            .par_iter()
             .zip(orbital_elements.par_iter())
             .map(|(&(x_orb, z_orb), &(inc, lan, ap))| {
                 transform_orbital_point(x_orb, z_orb, inc, lan, ap)
@@ -601,7 +661,8 @@ pub fn transform_orbital_points_simd(
     }
     #[cfg(not(feature = "parallel"))]
     {
-        points.iter()
+        points
+            .iter()
             .zip(orbital_elements.iter())
             .map(|(&(x_orb, z_orb), &(inc, lan, ap))| {
                 transform_orbital_point(x_orb, z_orb, inc, lan, ap)
@@ -617,12 +678,18 @@ pub fn transform_orbital_points_simd(
 pub fn calculate_planet_positions_parallel(
     planets: &[(Planet, Vec3, Option<f32>, u32)], // (planet, parent_pos, parent_tilt, kepler_iterations)
     time_days: f32,
-    solar_params: &SolarSystemParameters
+    solar_params: &SolarSystemParameters,
 ) -> Vec<Vec3> {
-    planets.par_iter()
+    planets
+        .par_iter()
         .map(|(planet, parent_pos, parent_tilt, kepler_iterations)| {
             calculate_planet_position_with_quality(
-                planet, time_days, solar_params, *parent_pos, *parent_tilt, *kepler_iterations
+                planet,
+                time_days,
+                solar_params,
+                *parent_pos,
+                *parent_tilt,
+                *kepler_iterations,
             )
         })
         .collect()
