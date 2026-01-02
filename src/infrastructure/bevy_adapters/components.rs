@@ -124,6 +124,12 @@ pub struct ScreenshotState {
     pub pending: bool, // Screenshot requested, will capture next frame
 }
 
+// Resource to track if UI is currently under the cursor
+#[derive(Resource, Default)]
+pub struct UiPointerState {
+    pub is_over_ui: bool,
+}
+
 // Performance monitoring and quality adjustment
 #[derive(Resource)]
 pub struct PerformanceStats {

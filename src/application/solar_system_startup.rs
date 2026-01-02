@@ -221,59 +221,21 @@ pub fn setup_space(
         entity_map.insert(planet.name.clone(), planet_entity);
         position_map.insert(planet.name.clone(), initial_position);
 
-        if solar_params.show_orbits {
-            if let Some(parent_name) = &planet.parent_entity {
-                if let Some(parent_ent) = entity_map.get(parent_name).copied() {
-                    let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
-                    let orbit_mesh = create_orbit_mesh_ellipse(&mut meshes, &orbit_shape);
-                    let orbit_base_color = planet.color;
-                    let orbit_material_handle = materials.add(create_orbit_material(
-                        orbit_base_color,
-                        orbit_emissive(orbit_base_color, 0.8),
-                        0.35,
-                    ));
-                    let orbit_motion =
-                        orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
-
-                    // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
-                    // The orbit plane is set from elements and aligned to the parent axial tilt at runtime.
-                    commands
-                        .spawn(PbrBundle {
-                            mesh: orbit_mesh,
-                            material: orbit_material_handle.clone(),
-                            transform: Transform::default(),
-                            ..default()
-                        })
-                        .insert(OrbitComponent {
-                            radius: orbit_shape.semi_major_axis_units,
-                            planet_entity: parent_ent,
-                            material: orbit_material_handle.clone(),
-                            base_color: orbit_base_color,
-                            tilt: orbit_motion.tilt,
-                            wobble_speed: orbit_motion.wobble_speed,
-                            wobble_amount: orbit_motion.wobble_amount,
-                            spin_speed: orbit_motion.spin_speed,
-                            phase: orbit_motion.phase,
-                        })
-                        .insert(MoonOrbit)
-                        .insert(Name::new(format!(
-                            "Orbit {} around {}",
-                            planet.name, parent_name
-                        )));
-                }
-            } else if planet.name != "Sun" {
+        if let Some(parent_name) = &planet.parent_entity {
+            if let Some(parent_ent) = entity_map.get(parent_name).copied() {
                 let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
                 let orbit_mesh = create_orbit_mesh_ellipse(&mut meshes, &orbit_shape);
                 let orbit_base_color = planet.color;
                 let orbit_material_handle = materials.add(create_orbit_material(
                     orbit_base_color,
-                    orbit_emissive(orbit_base_color, 0.7),
-                    0.30,
+                    orbit_emissive(orbit_base_color, 0.8),
+                    0.35,
                 ));
                 let orbit_motion =
-                    orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
+                    orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
-                // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
+                // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
+                // The orbit plane is set from elements and aligned to the parent axial tilt at runtime.
                 commands
                     .spawn(PbrBundle {
                         mesh: orbit_mesh,
@@ -283,7 +245,7 @@ pub fn setup_space(
                     })
                     .insert(OrbitComponent {
                         radius: orbit_shape.semi_major_axis_units,
-                        planet_entity,
+                        planet_entity: parent_ent,
                         material: orbit_material_handle.clone(),
                         base_color: orbit_base_color,
                         tilt: orbit_motion.tilt,
@@ -292,41 +254,43 @@ pub fn setup_space(
                         spin_speed: orbit_motion.spin_speed,
                         phase: orbit_motion.phase,
                     })
-                    .insert(OrbitComponent {
-                        radius: orbit_shape.semi_major_axis_units,
-                        planet_entity,
-                        material: orbit_material_handle.clone(),
-                        base_color: orbit_base_color,
-                        tilt: orbit_motion.tilt,
-                        wobble_speed: orbit_motion.wobble_speed,
-                        wobble_amount: orbit_motion.wobble_amount,
-                        spin_speed: orbit_motion.spin_speed,
-                        phase: orbit_motion.phase,
-                    })
-                    .insert(OrbitComponent {
-                        radius: orbit_shape.semi_major_axis_units,
-                        planet_entity,
-                        material: orbit_material_handle.clone(),
-                        base_color: orbit_base_color,
-                        tilt: orbit_motion.tilt,
-                        wobble_speed: orbit_motion.wobble_speed,
-                        wobble_amount: orbit_motion.wobble_amount,
-                        spin_speed: orbit_motion.spin_speed,
-                        phase: orbit_motion.phase,
-                    })
-                    .insert(OrbitComponent {
-                        radius: orbit_shape.semi_major_axis_units,
-                        planet_entity,
-                        material: orbit_material_handle.clone(),
-                        base_color: orbit_base_color,
-                        tilt: orbit_motion.tilt,
-                        wobble_speed: orbit_motion.wobble_speed,
-                        wobble_amount: orbit_motion.wobble_amount,
-                        spin_speed: orbit_motion.spin_speed,
-                        phase: orbit_motion.phase,
-                    })
-                    .insert(Name::new(format!("Orbit {}", planet.name)));
+                    .insert(MoonOrbit)
+                    .insert(Name::new(format!(
+                        "Orbit {} around {}",
+                        planet.name, parent_name
+                    )));
             }
+        } else if planet.name != "Sun" {
+            let orbit_shape = physics::orbit_shape_for(&planet, &solar_params);
+            let orbit_mesh = create_orbit_mesh_ellipse(&mut meshes, &orbit_shape);
+            let orbit_base_color = planet.color;
+            let orbit_material_handle = materials.add(create_orbit_material(
+                orbit_base_color,
+                orbit_emissive(orbit_base_color, 0.7),
+                0.30,
+            ));
+            let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
+
+            // Note: orbit mesh vertices are already transformed to 3D space, no rotation needed
+            commands
+                .spawn(PbrBundle {
+                    mesh: orbit_mesh,
+                    material: orbit_material_handle.clone(),
+                    transform: Transform::default(),
+                    ..default()
+                })
+                .insert(OrbitComponent {
+                    radius: orbit_shape.semi_major_axis_units,
+                    planet_entity,
+                    material: orbit_material_handle.clone(),
+                    base_color: orbit_base_color,
+                    tilt: orbit_motion.tilt,
+                    wobble_speed: orbit_motion.wobble_speed,
+                    wobble_amount: orbit_motion.wobble_amount,
+                    spin_speed: orbit_motion.spin_speed,
+                    phase: orbit_motion.phase,
+                })
+                .insert(Name::new(format!("Orbit {}", planet.name)));
         }
 
         if planet.name == "Saturn" {
@@ -608,10 +572,19 @@ fn get_ring_texture_path(planet_name: &str) -> Option<&'static str> {
 }
 
 fn asset_exists(path: &str) -> bool {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("assets")
-        .join(path)
-        .exists()
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(path)
+            .exists()
+    }
 }
 
 fn load_texture(asset_server: &AssetServer, path: Option<&'static str>) -> Option<Handle<Image>> {

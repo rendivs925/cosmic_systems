@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy_egui::EguiPlugin;
 use infrastructure::bevy_adapters::components::PerformanceStats;
 
 // Run condition for visual updates (every 3 frames)
@@ -24,9 +23,10 @@ pub mod presentation;
 use application::startup::*;
 use domain::value_objects::simulation_params::SimulationParameters;
 use infrastructure::bevy_adapters::components::{
-    HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
+    HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet, UiPointerState,
 };
 use infrastructure::bevy_adapters::systems::*;
+use presentation::ui::*;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -51,8 +51,6 @@ fn main() {
 
     let mut app = App::new();
     app.add_plugins(plugins);
-    app.add_plugins(EguiPlugin);
-
     if is_gyro_mode {
         app.insert_resource(SimulationParameters::new());
         app.add_systems(Startup, setup_gyro);
@@ -74,7 +72,9 @@ fn main() {
         });
         app.insert_resource(ScreenshotState { pending: false });
         app.insert_resource(PerformanceStats::default());
+        app.insert_resource(UiPointerState::default());
         app.add_systems(Startup, setup_space);
+        app.add_systems(Startup, setup_ui);
 
         // Physics systems run on FixedUpdate for consistent simulation
         app.add_systems(FixedUpdate, update_planet_positions);
@@ -86,14 +86,16 @@ fn main() {
         app.add_systems(Update, handle_solar_system_input);
         app.add_systems(Update, handle_planet_selection);
         app.add_systems(Update, handle_mouse_planet_selection);
-        app.add_systems(Update, display_navigation_bar);
+        app.add_systems(Update, handle_nav_interactions);
+        app.add_systems(Update, update_navbar);
         app.add_systems(
             Update,
             update_planet_selection_visuals.run_if(every_n_frames(2)),
         );
         app.add_systems(Update, update_performance_stats);
-        app.add_systems(Update, display_hover_info);
-        app.add_systems(Update, display_notifications);
+        app.add_systems(Update, update_info_card);
+        app.add_systems(Update, update_notifications_ui);
+        app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));
         app.add_systems(Update, take_pending_screenshot);
         app.add_systems(Update, update_camera_controller);
         app.add_systems(Update, apply_camera_transform);
