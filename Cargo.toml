@@ -3,16 +3,35 @@ name = "cosmic_systems"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "cosmic_systems"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "cosmic_systems"
+path = "src/main.rs"
+required-features = ["native"]
+
 [dependencies]
 bevy = { version = "0.14.0" }
-bevy_egui = "0.28.0"
+bevy_egui = { version = "0.28.0", default-features = false }
 
 rand = "0.8.5"
+
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { version = "0.2", features = ["js"], package = "getrandom" }
+uuid = { version = "1.19", features = ["js"] }
 
 [dependencies.rayon]
 version = "1.8"
 optional = true             # Optional for parallel processing
 
 [features]
+default = ["native"]
+native = []                 # Enable native binary build
 simd = []                   # Enable SIMD optimizations
 parallel = ["rayon"]        # Enable parallel processing
+
+[dev-dependencies]
+trunk = "0.18"

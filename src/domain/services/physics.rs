@@ -1,7 +1,7 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::SimulationParameters;
+use crate::domain::value_objects::simulation_params::SimulationParameters;
 use bevy::math::{Quat, Vec3};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;

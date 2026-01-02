@@ -17,7 +17,8 @@ PROFILE_OPTIMIZED := --profile optimized
 BINARY_NAME := cosmic_systems
 
 .PHONY: help build build-release build-debug build-parallel build-simd build-optimized
-.PHONY: run run-release run-debug run-parallel run-simd run-optimized
+.PHONY: run run-release run-debug run-parallel run-simd run-optimized run-built-optimized
+.PHONY: build-wasm serve-wasm
 .PHONY: test test-release test-parallel test-simd benchmark profile
 .PHONY: check clippy fmt doc clean clean-all install-deps update-deps
 .PHONY: performance-test memory-profile cpu-profile flamegraph
@@ -46,6 +47,10 @@ help:
 	@echo "  run-simd        - Run with SIMD optimizations"
 	@echo "  run-optimized      - Run with maximum optimizations"
 	@echo "  run-built-optimized - Run pre-built optimized binary"
+	@echo ""
+	@echo "WASM TARGETS:"
+	@echo "  build-wasm         - Build for WebAssembly (release)"
+	@echo "  serve-wasm         - Build and serve WebAssembly locally"
 	@echo ""
 	@echo "TESTING & ANALYSIS:"
 	@echo "  test            - Run unit tests"
@@ -128,6 +133,16 @@ run-optimized:
 
 run-built-optimized:
 	./target/release/$(BINARY_NAME)
+
+# ============================================================================
+# WASM/WEBASSEMBLY
+# ============================================================================
+
+build-wasm:
+	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk build --release --lib cosmic_systems
+
+serve-wasm:
+	RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --cfg=web_sys_unstable_apis" trunk serve
 
 # ============================================================================
 # TESTING & ANALYSIS

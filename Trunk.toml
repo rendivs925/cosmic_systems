@@ -1,0 +1,12 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[[hooks]]
+stage = "pre_build"
+command = "bash"
+command_arguments = ["-c", "mkdir -p dist"]
+
+[serve]
+port = 8080
+open = true
