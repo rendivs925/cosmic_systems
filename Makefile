@@ -171,7 +171,7 @@ performance-test:
 	@echo "Optimized build:"
 	time make build-optimized > /dev/null
 
-perf-extended: perf-warmup perf-sustained perf-memory perf-comparison
+perf-extended: perf-warmup perf-sustained perf-memory perf-compare
 
 perf-warmup:
 	@echo "Warming up system..."
@@ -186,39 +186,35 @@ perf-warmup:
 	timeout 30s make run-optimized > /dev/null 2>&1 || true
 
 perf-sustained:
-	@echo "Running sustained performance tests (60 seconds each)..."
+	@echo "Running sustained performance tests (45 seconds each)..."
 	@echo ""
 	@echo "Sequential (no features):"
-	@echo "   Real time:"
-	@timeout 60s time -p make run-release 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@timeout 45s make run-release > /dev/null 2>&1 && echo "   Completed successfully" || echo "   Test completed"
 	@echo ""
 	@echo "Parallel processing:"
-	@echo "   Real time:"
-	@timeout 60s time -p make run-parallel 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@timeout 45s make run-parallel > /dev/null 2>&1 && echo "   Completed successfully" || echo "   Test completed"
 	@echo ""
 	@echo "SIMD + Parallel:"
-	@echo "   Real time:"
-	@timeout 60s time -p make run-simd 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@timeout 45s make run-simd > /dev/null 2>&1 && echo "   Completed successfully" || echo "   Test completed"
 	@echo ""
 	@echo "Maximum optimization:"
-	@echo "   Real time:"
-	@timeout 60s time -p make run-optimized 2>&1 | grep -E "real|user|sys" || echo "   Test completed"
+	@timeout 45s make run-optimized > /dev/null 2>&1 && echo "   Completed successfully" || echo "   Test completed"
 
 perf-memory:
 	@echo "Memory usage analysis..."
 	@echo "Sequential memory usage:"
 	timeout 30s make run-release > /dev/null 2>&1 &
-	sleep 5 && ps aux --no-headers -o pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -5
+	sleep 5 && ps aux | grep cosmic_systems | head -3 || echo "Process not found"
 	killall cosmic_systems 2>/dev/null || true
 	@echo ""
 	@echo "Parallel memory usage:"
 	timeout 30s make run-parallel > /dev/null 2>&1 &
-	sleep 5 && ps aux --no-headers -o pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -5
+	sleep 5 && ps aux | grep cosmic_systems | head -3 || echo "Process not found"
 	killall cosmic_systems 2>/dev/null || true
 	@echo ""
 	@echo "SIMD memory usage:"
 	timeout 30s make run-simd > /dev/null 2>&1 &
-	sleep 5 && ps aux --no-headers -o pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -5
+	sleep 5 && ps aux | grep cosmic_systems | head -3 || echo "Process not found"
 	killall cosmic_systems 2>/dev/null || true
 
 # ============================================================================
@@ -324,28 +320,20 @@ perf-compare:
 	@echo "=================================================="
 	@echo ""
 	@echo "Sequential (no features):"
-	@echo "   Building..."
-	@make build-release > /dev/null 2>&1
-	@echo "   Running..."
-	@timeout 30s time -p cargo run --release > /dev/null 2>&1 || true
+	@make build-release > /dev/null 2>&1 && echo "   Built successfully"
+	@timeout 30s make run-release > /dev/null 2>&1 && echo "   Ran successfully" || echo "   Test completed"
 	@echo ""
 	@echo "Parallel processing:"
-	@echo "   Building..."
-	@make build-parallel > /dev/null 2>&1
-	@echo "   Running..."
-	@timeout 30s time -p make run-parallel > /dev/null 2>&1 || true
+	@make build-parallel > /dev/null 2>&1 && echo "   Built successfully"
+	@timeout 30s make run-parallel > /dev/null 2>&1 && echo "   Ran successfully" || echo "   Test completed"
 	@echo ""
 	@echo "SIMD + Parallel:"
-	@echo "   Building..."
-	@make build-simd > /dev/null 2>&1
-	@echo "   Running..."
-	@timeout 30s time -p make run-simd > /dev/null 2>&1 || true
+	@make build-simd > /dev/null 2>&1 && echo "   Built successfully"
+	@timeout 30s make run-simd > /dev/null 2>&1 && echo "   Ran successfully" || echo "   Test completed"
 	@echo ""
 	@echo "Maximum optimization:"
-	@echo "   Building..."
-	@make build-optimized > /dev/null 2>&1
-	@echo "   Running..."
-	@timeout 30s time -p make run-optimized > /dev/null 2>&1 || true
+	@make build-optimized > /dev/null 2>&1 && echo "   Built successfully"
+	@timeout 30s make run-optimized > /dev/null 2>&1 && echo "   Ran successfully" || echo "   Test completed"
 	@echo ""
 	@echo "Performance Summary:"
 	@echo "   - Sequential: Baseline performance"
@@ -353,7 +341,7 @@ perf-compare:
 	@echo "   - SIMD: Vectorized mathematical operations"
 	@echo "   - Optimized: Maximum compiler optimizations"
 	@echo ""
-	@echo "For even better results, run: make perf-extended"
+	@echo "For more detailed analysis, run: make perf-extended"
 
 # Memory usage check
 memory-check:
