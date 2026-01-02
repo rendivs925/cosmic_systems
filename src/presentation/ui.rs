@@ -124,25 +124,6 @@ pub(crate) fn setup_ui(mut commands: Commands) {
             .with_children(|bar| {
                 bar.spawn(NodeBundle {
                     style: Style {
-                        width: Val::Px(48.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    },
-                    ..default()
-                })
-                .with_children(|left| {
-                    left.spawn((
-                        TextBundle::from_section(
-                            "fps 0",
-                            text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
-                        ),
-                        FpsText,
-                    ));
-                });
-
-                bar.spawn(NodeBundle {
-                    style: Style {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
                         column_gap: Val::Px(12.0),
@@ -154,14 +135,35 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     spawn_menu_button(menu, "Explore", MenuAction::Explore, true);
                     spawn_menu_button(menu, "Orbits", MenuAction::Orbits, false);
                 });
+            });
 
-                bar.spawn(NodeBundle {
-                    style: Style {
-                        width: Val::Px(48.0),
-                        ..default()
-                    },
+        parent
+            .spawn(NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(20.0),
+                    bottom: Val::Px(12.0),
+                    padding: UiRect::new(
+                        Val::Px(12.0),
+                        Val::Px(12.0),
+                        Val::Px(6.0),
+                        Val::Px(6.0),
+                    ),
                     ..default()
-                });
+                },
+                background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+                border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+                border_radius: BorderRadius::all(Val::Px(10.0)),
+                ..default()
+            })
+            .with_children(|left| {
+                left.spawn((
+                    TextBundle::from_section(
+                        "fps 0",
+                        text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
+                    ),
+                    FpsText,
+                ));
             });
 
         parent
@@ -181,6 +183,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         ..default()
                     },
                     background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+                    z_index: ZIndex::Global(10),
                     ..default()
                 },
                 SelectorPanelRoot,
