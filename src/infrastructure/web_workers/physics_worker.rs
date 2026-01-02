@@ -1,5 +1,7 @@
+use crate::domain::entities::planet::Planet;
+use bevy::prelude::Vec3;
 use wasm_bindgen::prelude::*;
-use web_sys::{Worker, MessageEvent, DedicatedWorkerGlobalScope};
+use web_sys::Worker;
 use std::collections::VecDeque;
 
 /// Task for background physics processing
@@ -86,10 +88,14 @@ impl PhysicsWorkerPool {
             }
         "#;
 
-        let blob = web_sys::Blob::new_with_str_sequence(
-            &js_sys::Array::of1(&JsValue::from_str(script)),
-            web_sys::BlobPropertyBag::new().type_("application/javascript")
-        )?;
+        let blob_parts = js_sys::Array::of1(&JsValue::from_str(script));
+        let options = {
+            let options = web_sys::BlobPropertyBag::new();
+            options.set_type("application/javascript");
+            options
+        };
+
+        let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts.into(), &options)?;
 
         let url = web_sys::Url::create_object_url_with_blob(&blob)?;
         Worker::new(&url)

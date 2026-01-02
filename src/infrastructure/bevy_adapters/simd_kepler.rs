@@ -1,6 +1,7 @@
 use crate::domain::entities::planet::Planet;
 use crate::infrastructure::bevy_adapters::components::QualityLevel;
 use bevy::math::Vec3;
+#[cfg(target_arch = "x86_64")]
 use std::is_x86_feature_detected;
 
 /// CPU feature detection for SIMD dispatch
@@ -12,6 +13,7 @@ pub enum CpuFeature {
     Scalar,
 }
 
+#[cfg(target_arch = "x86_64")]
 pub fn detect_cpu_features() -> CpuFeature {
     if is_x86_feature_detected!("avx512f") {
         CpuFeature::AVX512
@@ -24,6 +26,11 @@ pub fn detect_cpu_features() -> CpuFeature {
     }
 }
 
+#[cfg(not(target_arch = "x86_64"))]
+pub fn detect_cpu_features() -> CpuFeature {
+    CpuFeature::Scalar
+}
+
 /// SIMD Kepler solver struct
 pub struct SimdKeplerSolver;
 
@@ -33,11 +40,19 @@ impl SimdKeplerSolver {
     }
 
     pub fn solve_batch(&self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
-        match detect_cpu_features() {
-            CpuFeature::AVX512 => unsafe { solve_kepler_avx512(planets, quality) },
-            CpuFeature::AVX2 => unsafe { solve_kepler_avx2(planets, quality) },
-            CpuFeature::SSE4 => unsafe { solve_kepler_sse4(planets, quality) },
-            CpuFeature::Scalar => solve_kepler_scalar_parallel(planets, quality),
+        #[cfg(target_arch = "x86_64")]
+        {
+            match detect_cpu_features() {
+                CpuFeature::AVX512 => unsafe { solve_kepler_avx512(planets, quality) },
+                CpuFeature::AVX2 => unsafe { solve_kepler_avx2(planets, quality) },
+                CpuFeature::SSE4 => unsafe { solve_kepler_sse4(planets, quality) },
+                CpuFeature::Scalar => solve_kepler_scalar_parallel(planets, quality),
+            }
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            solve_kepler_scalar_parallel(planets, quality)
         }
     }
 }
@@ -54,6 +69,7 @@ pub fn solve_kepler_batch(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3
     solver.solve_batch(planets, quality)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn solve_kepler_avx512(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
     // Ultimate AVX-512 implementation processing 16 Kepler equations simultaneously
@@ -123,6 +139,7 @@ unsafe fn solve_kepler_avx512(planets: &[Planet], quality: QualityLevel) -> Vec<
     results
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn solve_kepler_avx2(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
     // Ultimate AVX2 implementation with advanced SIMD optimizations
@@ -186,6 +203,7 @@ unsafe fn solve_kepler_avx2(planets: &[Planet], quality: QualityLevel) -> Vec<Ve
     results
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn simd_sin_approx_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_64::__m512 {
     use std::arch::x86_64::*;
@@ -203,6 +221,7 @@ unsafe fn simd_sin_approx_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86
 
 /// Polynomial approximation of sin(x) for AVX-256
 /// Accurate for x in [-π, π], uses Taylor series: sin(x) ≈ x - x^3/6 + x^5/120
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn simd_sin_approx_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
     use std::arch::x86_64::*;
@@ -220,6 +239,7 @@ unsafe fn simd_sin_approx_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_6
 
 /// Polynomial approximation of cos(x) for AVX-256
 /// Accurate for x in [-π, π], uses Taylor series: cos(x) ≈ 1 - x^2/2 + x^4/24
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn simd_cos_approx_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
     use std::arch::x86_64::*;
@@ -234,6 +254,7 @@ unsafe fn simd_cos_approx_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_6
     _mm256_add_ps(_mm256_sub_ps(term1, term2), term3)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 unsafe fn solve_kepler_sse4(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
     // SSE4 implementation processing 4 equations simultaneously
@@ -257,6 +278,7 @@ fn solve_kepler_scalar_parallel(planets: &[Planet], quality: QualityLevel) -> Ve
 
 /// Polynomial approximation of cos(x) for AVX-512
 /// Accurate for x in [-π, π], uses Taylor series: cos(x) ≈ 1 - x^2/2 + x^4/24
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn simd_cos_approx_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_64::__m512 {
     use std::arch::x86_64::*;

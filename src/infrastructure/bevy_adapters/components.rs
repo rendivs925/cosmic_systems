@@ -275,17 +275,32 @@ impl QualityController {
 // Unified compute backend for Kepler equation solving
 #[derive(Resource)]
 pub struct ComputeBackend {
+    #[cfg(not(target_arch = "wasm32"))]
     pub vulkan_solver: Option<VulkanKeplerSolver>,
+    #[cfg(target_arch = "wasm32")]
+    pub vulkan_solver: Option<()>,
     pub fallback_solver: SimdKeplerSolver,
     pub vulkan_available: bool,
 }
 
 impl Default for ComputeBackend {
     fn default() -> Self {
-        Self {
-            vulkan_solver: None,
-            fallback_solver: SimdKeplerSolver::new(),
-            vulkan_available: false,
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self {
+                vulkan_solver: None,
+                fallback_solver: SimdKeplerSolver::new(),
+                vulkan_available: false,
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self {
+                vulkan_solver: None,
+                fallback_solver: SimdKeplerSolver::new(),
+                vulkan_available: false,
+            }
         }
     }
 }
