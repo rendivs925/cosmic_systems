@@ -114,22 +114,82 @@ pub struct HoveredPlanet {
 // Resource to track hovered planet for information display
 #[derive(Resource)]
 pub struct ComputeBackend {
+    pub webgpu_solver: Option<WebGpuKeplerSolver>,
+    pub vulkan_solver: Option<VulkanKeplerSolver>,
     pub fallback_solver: SimdKeplerSolver,
+    pub webgpu_available: bool,
+    pub vulkan_available: bool,
 }
 
 impl Default for ComputeBackend {
     fn default() -> Self {
         Self {
+            webgpu_solver: None,
+            vulkan_solver: None,
             fallback_solver: SimdKeplerSolver::new(),
+            webgpu_available: false,
+            vulkan_available: false,
         }
     }
 }
 
 impl ComputeBackend {
+    /// Initialize compute backends with hardware detection
+    pub async fn initialize() -> Self {
+        let mut backend = Self::default();
+
+        // Try to initialize WebGPU (WebAssembly)
+        #[cfg(target_arch = "wasm32")]
+        {
+            backend.webgpu_solver = WebGpuKeplerSolver::new(&()).await;
+            backend.webgpu_available = backend.webgpu_solver.is_some();
+        }
+
+        // Try to initialize Vulkan (native)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // For now, Vulkan initialization is placeholder
+            // In practice, this would initialize Vulkan device and pipeline
+            backend.vulkan_available = false;
+        }
+
+        backend
+    }
+
     pub fn solve_kepler(&mut self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
-        // Currently using SIMD CPU solver
-        // TODO: Add WebGPU and Vulkan solvers when implemented
+        // Priority order: WebGPU > Vulkan > SIMD CPU > Scalar CPU
+
+        // Try WebGPU first (highest performance on Web)
+        if let Some(solver) = &mut self.webgpu_solver {
+            return solver.solve_batch(planets, quality);
+        }
+
+        // Try Vulkan second (highest performance on native)
+        // Vulkan solver has different interface - placeholder for now
+        // TODO: Implement proper Vulkan workload creation and result handling
+
+        // Fallback to SIMD CPU solver
         self.fallback_solver.solve_batch(planets, quality)
+    }
+
+    /// Get information about available compute backends
+    pub fn get_backend_info(&self) -> String {
+        let mut info = String::new();
+
+        if self.webgpu_available {
+            info.push_str("WebGPU: Available\n");
+        } else {
+            info.push_str("WebGPU: Not Available\n");
+        }
+
+        if self.vulkan_available {
+            info.push_str("Vulkan: Available\n");
+        } else {
+            info.push_str("Vulkan: Not Available\n");
+        }
+
+        info.push_str("SIMD CPU: Always Available\n");
+        info
     }
 }
 

@@ -18,6 +18,7 @@ rand = "0.8.5"
 bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types
 ash = "0.37"            # Vulkan bindings for native compute
+gpu-allocator = "0.25"  # Vulkan memory allocator
 wgpu = "0.19"           # WebGPU for WASM compute
 num_cpus = "1.16"       # CPU core detection
 
