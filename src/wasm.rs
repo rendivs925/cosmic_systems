@@ -23,8 +23,8 @@ fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
 use crate::application::solar_system_startup::spawn_bodies_progressively;
 use crate::application::startup::*;
 use crate::infrastructure::bevy_adapters::components::{
-    CameraInputState, DynamicResolutionState, HoveredPlanet, NotificationQueue, ScreenshotState,
-    SelectedPlanet, UiPointerState,
+    CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
+    UiPointerState,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::presentation::ui::*;
@@ -80,15 +80,9 @@ pub fn main() {
     app.insert_resource(perf_stats);
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
-    let mut dynamic_resolution = DynamicResolutionState::default();
-    dynamic_resolution.scale = 0.7;
-    dynamic_resolution.min_scale = 0.5;
-    dynamic_resolution.max_scale = 0.9;
-    app.insert_resource(dynamic_resolution);
     app.insert_resource(Time::<Fixed>::from_hz(30.0));
     app.add_systems(Startup, setup_space);
     app.add_systems(Startup, setup_ui);
-    app.add_systems(Startup, apply_initial_dynamic_resolution);
 
     // Physics systems run on FixedUpdate for consistent simulation
     app.add_systems(FixedUpdate, update_planet_positions);
@@ -109,7 +103,6 @@ pub fn main() {
         update_planet_selection_visuals.run_if(every_n_frames(4)),
     );
     app.add_systems(Update, update_performance_stats);
-    app.add_systems(Update, update_dynamic_resolution);
     app.add_systems(Update, cap_fixed_overstep);
     app.add_systems(Update, update_info_card);
     app.add_systems(Update, update_notifications_ui);
