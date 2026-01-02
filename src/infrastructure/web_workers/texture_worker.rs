@@ -21,6 +21,7 @@ pub struct TextureDecodeWorker {
     cache: HashMap<String, Handle<Image>>,
     canvas: Option<HtmlCanvasElement>,
     context: Option<CanvasRenderingContext2d>,
+    base_url: Option<String>,
 }
 
 pub struct TextureWorkerResult {
@@ -41,6 +42,8 @@ impl TextureDecodeWorker {
             cache: HashMap::new(),
             canvas: None,
             context: None,
+            base_url: web_sys::window()
+                .and_then(|window| window.location().href().ok()),
         };
 
         let canvas = match create_canvas() {
@@ -100,23 +103,39 @@ impl TextureDecodeWorker {
     }
 
     pub fn cached_handle(&self, path: &str) -> Option<Handle<Image>> {
-        self.cache.get(path).cloned()
+        if let Some(handle) = self.cache.get(path) {
+            return Some(handle.clone());
+        }
+        let normalized = normalize_asset_path(path);
+        self.cache.get(&normalized).cloned()
     }
 
     pub fn request(&mut self, path: &str) {
         if !self.enabled {
             return;
         }
-        if self.inflight.contains(path) || self.cache.contains_key(path) {
+        let resolved_path = normalize_asset_path(path);
+        if self.inflight.contains(&resolved_path) || self.cache.contains_key(&resolved_path) {
             return;
         }
         let Some(worker) = self.worker.as_ref() else {
             return;
         };
         let message = js_sys::Object::new();
-        let _ = Reflect::set(&message, &JsValue::from_str("path"), &JsValue::from_str(path));
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("path"),
+            &JsValue::from_str(&resolved_path),
+        );
+        if let Some(base_url) = &self.base_url {
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("base_url"),
+                &JsValue::from_str(base_url),
+            );
+        }
         if worker.post_message(&message).is_ok() {
-            self.inflight.insert(path.to_string());
+            self.inflight.insert(resolved_path);
         }
     }
 
@@ -184,9 +203,18 @@ fn create_worker() -> Result<Worker, JsValue> {
     let script = r#"
         self.onmessage = async function(e) {
             const path = e.data.path;
+            const baseUrl = e.data.base_url || "";
             try {
-                const url = new URL(path, self.location.href);
+                const url = new URL(path, baseUrl || self.location.href);
                 const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+                }
+                const contentType = response.headers.get("content-type") || "";
+                if (!contentType.startsWith("image/")) {
+                    const body = await response.text();
+                    throw new Error(`Non-image response (${contentType}): ${body.slice(0, 120)}`);
+                }
                 const blob = await response.blob();
                 const bitmap = await createImageBitmap(blob);
                 self.postMessage({ path, bitmap }, [bitmap]);
@@ -205,4 +233,15 @@ fn create_worker() -> Result<Worker, JsValue> {
     let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts.into(), &options)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob)?;
     Worker::new(&url)
+}
+
+fn normalize_asset_path(path: &str) -> String {
+    if path.starts_with("assets/")
+        || path.starts_with('/')
+        || path.starts_with("http://")
+        || path.starts_with("https://")
+    {
+        return path.to_string();
+    }
+    format!("assets/{}", path)
 }

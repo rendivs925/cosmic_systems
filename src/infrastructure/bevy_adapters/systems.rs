@@ -725,14 +725,32 @@ pub fn apply_texture_worker_results(
 
         let handle = texture_worker.cache_image(result.path.clone(), image, &mut images);
         for mut pending in pending_query.iter_mut() {
-            if pending.base_color_path == Some(result.path.as_str()) {
+            if pending
+                .base_color_path
+                .is_some_and(|path| matches_asset_path(path, &result.path))
+            {
                 pending.base_color_texture = Some(handle.clone());
             }
-            if pending.emissive_path == Some(result.path.as_str()) {
+            if pending
+                .emissive_path
+                .is_some_and(|path| matches_asset_path(path, &result.path))
+            {
                 pending.emissive_texture = Some(handle.clone());
             }
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn matches_asset_path(original: &str, resolved: &str) -> bool {
+    if original == resolved {
+        return true;
+    }
+    if original.starts_with("assets/") {
+        return false;
+    }
+    let prefixed = format!("assets/{}", original);
+    prefixed == resolved
 }
 
 // System to handle planet selection
