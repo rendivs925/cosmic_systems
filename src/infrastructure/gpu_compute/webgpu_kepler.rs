@@ -188,6 +188,7 @@ impl WebGpuKeplerSolver {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Kepler Compute Pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -209,7 +210,8 @@ impl WebGpuKeplerSolver {
         buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
             let _ = sender.send(v);
         });
-        let _ = receiver.await.map_err(|_| JsValue::from_str("Map error"))??;
+        let map_result = receiver.await.map_err(|_| JsValue::from_str("Map error"))?;
+        map_result.map_err(|err| JsValue::from_str(&format!("Map error: {err}")))?;
 
         let data = buffer_slice.get_mapped_range();
         let outputs: Vec<GpuOutput> = bytemuck::cast_slice(&data).to_vec();

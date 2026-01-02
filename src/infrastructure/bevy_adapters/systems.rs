@@ -1797,7 +1797,8 @@ pub fn update_performance_stats(
     }
 
     // Update rolling average FPS with a 60-frame window
-    performance_stats.frame_history.push_back(performance_stats.fps);
+    let current_fps = performance_stats.fps;
+    performance_stats.frame_history.push_back(current_fps);
     if performance_stats.frame_history.len() > performance_stats.history_len {
         performance_stats.frame_history.pop_front();
     }
