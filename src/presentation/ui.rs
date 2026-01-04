@@ -349,10 +349,10 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         UiCapture,
                     ))
                     .with_children(|button| {
-                        button.spawn(TextBundle::from_section(
-                            "Hide",
-                            text_style(10.0, Color::srgb(0.74, 0.8, 0.9)),
-                        ));
+        button.spawn(TextBundle::from_section(
+            "X",
+            text_style(12.0, Color::srgb(0.74, 0.8, 0.9)),
+        ));
                     });
             });
         parent.spawn((
@@ -394,8 +394,8 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     ))
     .with_children(|button| {
         button.spawn(TextBundle::from_section(
-            "X",
-            text_style(12.0, Color::srgb(0.82, 0.88, 0.98)),
+            "Info",
+            text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
         ));
     });
 
@@ -492,7 +492,7 @@ pub(crate) fn update_navbar(
     menu_state: Res<UiMenuState>,
     mut queries: ParamSet<(
         Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
-        Query<(&MenuButton, &mut BackgroundColor, &mut BorderColor)>,
+        Query<(&MenuButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
         Query<&mut Text, With<FpsText>>,
         Query<&mut Style, With<SelectorPanelRoot>>,
         Query<&mut Style, With<SelectorMoonsSection>>,
@@ -559,16 +559,18 @@ pub(crate) fn update_navbar(
         border.0 = nav_button_border_color(is_selected);
     }
 
-    for (button, mut background, mut border) in queries.p1().iter_mut() {
+    for (button, mut style, mut background, mut border) in queries.p1().iter_mut() {
         let active = match button.action {
             MenuAction::Orbits => solar_params.show_orbits,
             MenuAction::Explore => menu_state.selector_open,
         };
         if hide_ui {
+            style.display = Display::None;
             *background = BackgroundColor(Color::NONE);
             border.0 = Color::NONE;
             continue;
         }
+        style.display = Display::Flex;
         let (bg, stroke) = menu_button_colors(button.primary, active);
         *background = BackgroundColor(bg);
         border.0 = stroke;
