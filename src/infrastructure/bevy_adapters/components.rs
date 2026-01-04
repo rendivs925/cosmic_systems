@@ -216,6 +216,36 @@ pub struct PerformanceStats {
     pub frame_history: VecDeque<f32>,
     pub history_len: usize,
     pub adaptation_rate: f32,
+
+    // Detailed optimization timing (for benchmarking)
+    pub kepler_solve_time: f32,      // Time spent solving Kepler equations (ms)
+    pub physics_update_time: f32,    // Total physics update time (ms)
+    pub rendering_time: f32,         // Rendering time (ms)
+    pub material_update_time: f32,   // Material property updates (ms)
+    pub orbit_visual_time: f32,      // Orbit visualization updates (ms)
+    pub ui_update_time: f32,         // UI update time (ms)
+
+    // Optimization-specific metrics
+    pub adaptive_kepler_calls: u64,  // Number of adaptive Kepler calls
+    pub full_precision_kepler: u64,  // Full precision (8 iterations)
+    pub half_precision_kepler: u64,  // Half precision (4 iterations)
+    pub quarter_precision_kepler: u64, // Quarter precision (2 iterations)
+    pub minimal_precision_kepler: u64, // Minimal precision (1 iteration)
+
+    // SIMD and parallel processing metrics
+    pub simd_enabled: bool,          // Whether SIMD is active
+    pub parallel_enabled: bool,      // Whether parallel processing is active
+    pub cpu_cores_used: usize,       // Number of CPU cores utilized
+    pub vector_width: usize,         // SIMD vector width (128, 256, 512 bits)
+
+    // Memory usage
+    pub memory_usage_mb: f32,        // Current memory usage in MB
+    pub peak_memory_mb: f32,         // Peak memory usage in MB
+
+    // Benchmark timing accumulators
+    pub benchmark_start_time: Option<std::time::Instant>,
+    pub benchmark_frame_count: u64,
+    pub benchmark_total_time: f32,
 }
 
 #[derive(Resource, Clone, Copy, Debug)]
@@ -261,6 +291,36 @@ impl Default for PerformanceStats {
             frame_history: VecDeque::with_capacity(60),
             history_len: 60,
             adaptation_rate: 0.1,
+
+            // Detailed optimization timing
+            kepler_solve_time: 0.0,
+            physics_update_time: 0.0,
+            rendering_time: 0.0,
+            material_update_time: 0.0,
+            orbit_visual_time: 0.0,
+            ui_update_time: 0.0,
+
+            // Optimization-specific metrics
+            adaptive_kepler_calls: 0,
+            full_precision_kepler: 0,
+            half_precision_kepler: 0,
+            quarter_precision_kepler: 0,
+            minimal_precision_kepler: 0,
+
+            // SIMD and parallel processing metrics
+            simd_enabled: false,
+            parallel_enabled: false,
+            cpu_cores_used: 1,
+            vector_width: 128,
+
+            // Memory usage
+            memory_usage_mb: 0.0,
+            peak_memory_mb: 0.0,
+
+            // Benchmark timing
+            benchmark_start_time: None,
+            benchmark_frame_count: 0,
+            benchmark_total_time: 0.0,
         }
     }
 }

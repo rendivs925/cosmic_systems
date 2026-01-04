@@ -1,0 +1,18 @@
+{
+    "configuration": "rendering_throttling",
+    "timestamp": "20260104_140000",
+    "hardware": {
+        "cpu_model": "AMD Ryzen 9 8940HX with Radeon Graphics",
+        "cpu_cores": 32,
+        "memory_gb": 30,
+        "avx512_support": true,
+        "avx2_support": true
+    },
+    "performance": {
+        "avg_fps": 67.8,
+        "min_fps": 64.3,
+        "max_fps": 71.9,
+        "avg_frame_time_ms": 14.7
+    },
+    "test_duration_seconds": 30
+}

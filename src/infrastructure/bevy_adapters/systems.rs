@@ -173,7 +173,11 @@ pub fn update_planet_positions(
     mut worker_pool: NonSendMut<PhysicsWorkerPool>,
     chrome: Option<Res<ChromeOptimizations>>,
     mut webgpu_state: Option<NonSendMut<WebGpuKeplerState>>,
+    mut perf_stats: ResMut<PerformanceStats>,
 ) {
+    // Start timing for physics update
+    let physics_start = std::time::Instant::now();
+
     let elapsed_seconds = time.elapsed_seconds();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
@@ -395,7 +399,11 @@ pub fn update_planet_positions(
     solar_params: Res<SolarSystemParameters>,
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
+    mut perf_stats: ResMut<PerformanceStats>,
 ) {
+    // Start timing for physics update
+    let physics_start = std::time::Instant::now();
+
     let elapsed_seconds = time.elapsed_seconds();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
@@ -445,6 +453,15 @@ pub fn update_planet_positions(
             &mut query,
         );
     }
+
+    // Record physics timing
+    let physics_duration = physics_start.elapsed();
+    perf_stats.physics_update_time = physics_duration.as_secs_f32() * 1000.0;
+
+    // Update SIMD/parallel flags based on build configuration
+    perf_stats.simd_enabled = cfg!(feature = "simd");
+    perf_stats.parallel_enabled = cfg!(feature = "parallel");
+    perf_stats.cpu_cores_used = num_cpus::get();
 }
 
 /// Parallel optimized position updates
@@ -2011,5 +2028,40 @@ pub fn take_pending_screenshot(
                 duration: 5.0,
             });
         }
+    }
+}
+
+// System to log detailed performance statistics for benchmarking
+pub fn log_performance_stats(
+    perf_stats: Res<PerformanceStats>,
+    time: Res<Time>,
+) {
+    // Log performance stats every 60 frames for benchmarking
+    if perf_stats.frame_count % 60 == 0 {
+        println!("PERF_STATS: frame_time={:.2}ms fps={:.1} physics_time={:.3}ms kepler_time={:.3}ms rendering_time={:.3}ms",
+            perf_stats.frame_time,
+            perf_stats.fps,
+            perf_stats.physics_update_time,
+            perf_stats.kepler_solve_time,
+            perf_stats.rendering_time
+        );
+
+        // Log optimization metrics
+        println!("OPTIMIZATION_METRICS: adaptive_calls={} full_prec={} half_prec={} quarter_prec={} minimal_prec={} simd={} parallel={} cores={}",
+            perf_stats.adaptive_kepler_calls,
+            perf_stats.full_precision_kepler,
+            perf_stats.half_precision_kepler,
+            perf_stats.quarter_precision_kepler,
+            perf_stats.minimal_precision_kepler,
+            perf_stats.simd_enabled,
+            perf_stats.parallel_enabled,
+            perf_stats.cpu_cores_used
+        );
+
+        // Log memory usage if available
+        println!("MEMORY_STATS: current_mb={:.1} peak_mb={:.1}",
+            perf_stats.memory_usage_mb,
+            perf_stats.peak_memory_mb
+        );
     }
 }
