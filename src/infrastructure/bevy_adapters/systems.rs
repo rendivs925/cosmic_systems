@@ -514,45 +514,72 @@ fn update_planet_positions_parallel(
     #[cfg(not(all(not(target_arch = "wasm32"), feature = "ash")))]
     let use_vulkan = false;
 
-    // Hybrid GPU+CPU processing with intelligent routing
-    let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled {
-        // Use hybrid compute routing when Vulkan is available
-        let mut vulkan_solver = perf_stats.vulkan_solver.take();
-        let mut simd_solver = crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
-
-        let updates = planet_data
+    // Hybrid GPU+CPU processing with batching and concurrent execution
+    let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled && perf_stats.vulkan_solver.is_some() {
+        // Separate planets from moons for optimal batching
+        let (planets_data, moons_data): (Vec<_>, Vec<_>) = planet_data
             .into_iter()
-            .map(|(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
-                // For now, process each planet individually with hybrid routing
-                // TODO: Batch planets together for GPU processing
-                let planets = vec![planet];
-                let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
-                    &planets,
-                    perf_stats.quality_level,
-                    perf_stats.vulkan_enabled,
-                    &mut vulkan_solver,
-                    &mut simd_solver,
-                );
+            .partition(|(_, planet, _, _, _, _)| planet.parent_entity.is_none());
 
-                // Record which backend was used for performance monitoring
-                match backend_used {
-                    crate::infrastructure::bevy_adapters::components::ComputeBackendType::VulkanGpu => {
-                        perf_stats.vulkan_kepler_calls += 1;
+        let mut all_updates = Vec::new();
+
+        // Process planets and moons concurrently for maximum parallelization
+        let (planet_updates, moon_updates) = rayon::join(
+            || {
+                // Process planets via hybrid routing (GPU if available, SIMD fallback)
+                if !planets_data.is_empty() {
+                    let mut results = Vec::new();
+                    let mut simd_solver = crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
+
+                    // Extract planets for batch processing
+                    let planets: Vec<_> = planets_data.iter().map(|(_, planet, _, _, _, _)| planet.clone()).collect();
+                    let planet_entities: Vec<_> = planets_data.iter().map(|(entity, _, _, _, _, _)| *entity).collect();
+
+                    // Batch process all planets through hybrid compute
+                    let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
+                        &planets,
+                        perf_stats.quality_level,
+                        perf_stats.vulkan_enabled,
+                        &mut perf_stats.vulkan_solver,
+                        &mut simd_solver,
+                    );
+
+                    // Record GPU usage
+                    if matches!(backend_used, crate::infrastructure::bevy_adapters::components::ComputeBackendType::VulkanGpu) {
+                        perf_stats.vulkan_kepler_calls += planets.len() as u64;
                     }
-                    crate::infrastructure::bevy_adapters::components::ComputeBackendType::CpuSimd => {
-                        // SIMD calls are already tracked elsewhere
+
+                    // Combine entity IDs with positions
+                    for (entity, position) in planet_entities.into_iter().zip(positions) {
+                        results.push((entity, position));
                     }
-                    _ => {}
+                    results
+                } else {
+                    Vec::new()
                 }
+            },
+            || {
+                // Process moons in parallel via SIMD
+                moons_data
+                    .into_par_iter()
+                    .map(|(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
+                        let position = physics::calculate_planet_position_with_quality(
+                            &planet,
+                            time_days,
+                            &solar_params,
+                            parent_pos,
+                            parent_tilt,
+                            kepler_iterations,
+                        );
+                        (entity, position)
+                    })
+                    .collect::<Vec<(Entity, Vec3)>>()
+            }
+        );
 
-                (entity, positions[0])
-            })
-            .collect();
-
-        // Restore the Vulkan solver
-        perf_stats.vulkan_solver = vulkan_solver;
-
-        updates
+        all_updates.extend(planet_updates);
+        all_updates.extend(moon_updates);
+        all_updates
     } else {
         // Fallback to parallel SIMD processing when Vulkan is not available
         planet_data
