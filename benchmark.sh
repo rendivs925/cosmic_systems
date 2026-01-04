@@ -475,7 +475,7 @@ run_quick_benchmark() {
 
     # Run quick test
     log_info "Running performance test (20 seconds)..."
-    timeout 20s ./target/release/cosmic_systems > "$RESULTS_DIR/quick_benchmark.log" 2>&1 &
+    timeout 20s xvfb-run -a ./target/release/cosmic_systems > "$RESULTS_DIR/quick_benchmark.log" 2>&1 &
     local pid=$!
     sleep 2  # Let it stabilize
     wait $pid 2>/dev/null || true

@@ -6,7 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 BENCHMARK_DIR="$SCRIPT_DIR/benchmark"
 
 # Colors
@@ -46,17 +46,22 @@ for func_test in "${functions[@]}"; do
 
     echo -e "${GREEN}Testing: $func_desc${NC}"
 
-    # Build first, then run to avoid mixing compilation output with app output
-    echo "Building application..."
-    cargo build --release --features parallel,simd > /dev/null 2>&1
-
     # Run the built application with performance logging
     echo "Running benchmark..."
-    timeout 45s ./target/release/cosmic_systems > "$RESULTS_DIR/${func_name}.log" 2>&1 &
-    pid=$!
-    # Wait a bit for the application to start and stabilize
-    sleep 3
-    wait $pid 2>/dev/null || true
+    if [ ! -f "./target/release/cosmic_systems" ]; then
+        echo "Error: Binary not found"
+        exit 1
+    fi
+
+    # Run in background with timeout protection
+    timeout 15s xvfb-run -a ./target/release/cosmic_systems > "$RESULTS_DIR/${func_name}.log" 2>&1 &
+    APP_PID=$!
+    sleep 10  # Reduced sleep time for faster benchmarks
+    # Kill the entire process group to ensure cleanup
+    kill -TERM -$APP_PID 2>/dev/null || kill -9 $APP_PID 2>/dev/null || true
+    wait $APP_PID 2>/dev/null || true
+    # Additional cleanup for any remaining xvfb processes
+    pkill -f "xvfb-run.*cosmic_systems" 2>/dev/null || true
 
     # Extract function-specific metrics from PERF_STATS
     fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${func_name}.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
