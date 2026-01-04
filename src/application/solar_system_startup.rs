@@ -679,7 +679,7 @@ fn create_starfield(
 ) {
     // Single GPU draw: build a mesh of tiny quads with per-star color/size
     let mut rng = StdRng::seed_from_u64(1337);
-    let star_count = 18000;
+    let star_count = 40000;
     let radius = solar_params.au_to_units(400.0); // push far beyond planetary orbits
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
@@ -710,20 +710,29 @@ fn create_starfield(
         let dir = Vec3::new(r * theta.cos(), z, r * theta.sin());
         let center = dir * radius;
 
-        let size = rng.gen_range(500.0..2400.0);
-        let color_tint = rng.gen_range(0.7..1.15);
+        let size = rng.gen_range(900.0..2600.0);
+        let color_tint = rng.gen_range(0.7..1.2);
         let color = [
-            1.0 * color_tint,
-            0.92 * color_tint,
-            0.85 * color_tint,
+            1.2 * color_tint,
+            1.05 * color_tint,
+            0.95 * color_tint,
             1.0,
         ];
 
+        // Build a camera-independent quad facing outward along dir
+        let up_hint = if dir.dot(Vec3::Y).abs() > 0.9 {
+            Vec3::X
+        } else {
+            Vec3::Y
+        };
+        let right = dir.cross(up_hint).normalize_or_zero();
+        let up_vec = right.cross(dir).normalize_or_zero();
+
         let base_index = (i * 4) as u32;
         for (offset, uv) in quad {
-            let world_pos = center + Vec3::new(offset.x * size, offset.y * size, 0.0);
+            let world_pos = center + right * offset.x * size + up_vec * offset.y * size;
             positions.push(world_pos.into());
-            normals.push([0.0, 0.0, 1.0]);
+            normals.push(dir.into());
             uvs.push(uv.into());
             colors.push(color);
         }
