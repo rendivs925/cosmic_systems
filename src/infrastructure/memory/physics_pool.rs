@@ -1,4 +1,5 @@
 use crate::infrastructure::bevy_adapters::components::QualityLevel;
+use bevy::math::Vec3;
 use bumpalo::Bump;
 
 /// Physics memory pool for zero-allocation physics updates
