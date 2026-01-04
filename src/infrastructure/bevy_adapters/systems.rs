@@ -2179,6 +2179,8 @@ pub fn take_pending_screenshot(
 pub fn init_vulkan_solver(
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
+    println!("🎯 init_vulkan_solver: System called!");
+    crate::infrastructure::gpu_compute::vulkan_kepler::test_vulkan_compilation();
     // Only initialize once
     if perf_stats.vulkan_solver.is_some() || perf_stats.vulkan_initialized {
         return;
@@ -2205,75 +2207,8 @@ pub fn init_vulkan_solver(
 /// Initialize Vulkan compute pipeline
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 fn init_vulkan_compute() -> Result<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver, Box<dyn std::error::Error>> {
-    use ash::vk;
-
-    // Create Vulkan instance
-    let entry = ash::Entry::linked();
-    let app_info = vk::ApplicationInfo::builder()
-        .application_name(c"Cosmic Systems")
-        .application_version(vk::make_api_version(0, 1, 0, 0))
-        .engine_name(c"Cosmic Engine")
-        .engine_version(vk::make_api_version(0, 1, 0, 0))
-        .api_version(vk::API_VERSION_1_3);
-
-    let create_info = vk::InstanceCreateInfo::builder()
-        .application_info(&app_info);
-
-    let instance = unsafe { entry.create_instance(&create_info, None)? };
-
-    // Select physical device (prefer discrete GPU)
-    let physical_devices = unsafe { instance.enumerate_physical_devices()? };
-    let mut selected_device = None;
-    let mut selected_queue_family = None;
-
-    for physical_device in physical_devices {
-        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
-        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-
-        // Find compute queue family
-        for (i, queue_family) in queue_families.iter().enumerate() {
-            if queue_family.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                // Prefer discrete GPU, then integrated
-                let is_discrete = properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
-                let should_select = selected_device.is_none() ||
-                    (properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU && !is_discrete);
-
-                if should_select {
-                    selected_device = Some(physical_device);
-                    selected_queue_family = Some(i as u32);
-                }
-            }
-        }
-    }
-
-    let physical_device = selected_device.ok_or("No suitable Vulkan device found")?;
-    let queue_family_index = selected_queue_family.ok_or("No compute queue family found")?;
-
-    // Create device
-    let queue_priorities = [1.0f32];
-    let queue_create_info = vk::DeviceQueueCreateInfo::builder()
-        .queue_family_index(queue_family_index)
-        .queue_priorities(&queue_priorities);
-
-    let device_create_info = vk::DeviceCreateInfo::builder()
-        .queue_create_infos(&[queue_create_info])
-        .enabled_extension_names(&[]); // No extensions needed for basic compute
-
-    let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
-    let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
-
-    // Get memory properties for buffer creation
-    let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
-
-    // Create Vulkan solver
-    crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver::new(
-        &instance,
-        physical_device,
-        &device,
-        queue_family_index,
-        queue,
-        &memory_properties,
-    )
+    // Create Vulkan solver with internal initialization
+    crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver::new()
 }
 
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)

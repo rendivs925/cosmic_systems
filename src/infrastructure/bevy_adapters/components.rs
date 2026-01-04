@@ -352,8 +352,12 @@ pub fn process_hybrid_compute(
     if vulkan_available && !planets.is_empty() {
         // Try Vulkan first
         if let Some(vulkan) = vulkan_solver {
-            let positions = vulkan.solve_batch(planets, quality);
-            return (positions, ComputeBackendType::VulkanGpu);
+            match vulkan.solve_batch(planets, quality) {
+                Ok(positions) => return (positions, ComputeBackendType::VulkanGpu),
+                Err(_) => {
+                    // Vulkan failed, fall back to SIMD
+                }
+            }
         }
     }
 
