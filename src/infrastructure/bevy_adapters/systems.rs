@@ -3,37 +3,34 @@ use crate::application::simulation_service::SimulationService;
 use crate::domain::services::physics;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::PlanetGpuInput;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::orbit_mesh_worker::{
+    entity_from_task_id, task_id_from_entity, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData,
+};
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use bevy::render::mesh::Indices;
 use bevy::time::Fixed;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::web_workers::orbit_mesh_worker::{
-    entity_from_task_id, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData, task_id_from_entity,
-};
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::gpu_compute::webgpu_kepler::PlanetGpuInput;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::spawn_local;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 // Vulkan import removed - implementation simplified
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 
 // System to update gyroscopes
-pub fn update_gyroscopes(
-    time: Res<Time>,
-    mut query: Query<(&GyroscopeComponent, &mut Transform)>,
-) {
+pub fn update_gyroscopes(time: Res<Time>, mut query: Query<(&GyroscopeComponent, &mut Transform)>) {
     for (gyro, mut transform) in query.iter_mut() {
         // Update gyroscope rotation based on time
         let spin_rate = gyro.domain_gyro.spin_rate;
@@ -43,17 +40,15 @@ pub fn update_gyroscopes(
         // Apply spin rotation around the angular momentum axis
         let spin_rotation = Quat::from_axis_angle(
             gyro.domain_gyro.angular_momentum.normalize(),
-            spin_rate * delta_time
+            spin_rate * delta_time,
         );
         transform.rotate(spin_rotation);
 
         // Apply precession (wobble) if precession rate > 0
         if precession_rate > 0.0 {
             let precession_axis = Vec3::Y; // Precession around Y axis
-            let precession_rotation = Quat::from_axis_angle(
-                precession_axis,
-                precession_rate * delta_time
-            );
+            let precession_rotation =
+                Quat::from_axis_angle(precession_axis, precession_rate * delta_time);
             transform.rotate(precession_rotation);
         }
     }
@@ -67,7 +62,9 @@ pub fn update_performance_monitor(
 ) {
     // Update frame time history
     perf_stats.frame_time = time.delta_seconds();
-    quality_controller.frame_times.push_back(perf_stats.frame_time);
+    quality_controller
+        .frame_times
+        .push_back(perf_stats.frame_time);
 
     if quality_controller.frame_times.len() > 60 {
         quality_controller.frame_times.pop_front();
@@ -75,7 +72,7 @@ pub fn update_performance_monitor(
 
     // Calculate average FPS
     let avg_frame_time = quality_controller.frame_times.iter().sum::<f32>()
-                       / quality_controller.frame_times.len() as f32;
+        / quality_controller.frame_times.len() as f32;
     perf_stats.fps = 1.0 / avg_frame_time;
 
     // Update quality level in PerformanceStats to match QualityController
@@ -178,9 +175,7 @@ pub fn update_planet_positions(
 
     let camera_pos = camera_query.single().translation();
 
-    let webgpu_enabled = chrome
-        .as_ref()
-        .is_some_and(|chrome| chrome.webgpu_enabled);
+    let webgpu_enabled = chrome.as_ref().is_some_and(|chrome| chrome.webgpu_enabled);
     let solver_ready = webgpu_state
         .as_ref()
         .is_some_and(|state| state.solver.borrow().is_some());
@@ -320,11 +315,12 @@ pub fn update_planet_positions(
                     orbital_elements,
                     has_elements,
                     is_moon: planet_comp.domain_planet.parent_entity.is_some(),
-                    parent_position: crate::infrastructure::web_workers::physics_worker::WorkerVec3 {
-                        x: parent_position.x,
-                        y: parent_position.y,
-                        z: parent_position.z,
-                    },
+                    parent_position:
+                        crate::infrastructure::web_workers::physics_worker::WorkerVec3 {
+                            x: parent_position.x,
+                            y: parent_position.y,
+                            z: parent_position.z,
+                        },
                     parent_tilt_deg: parent_tilt,
                     orbital_distance_au: planet_comp.domain_planet.orbital_distance_au,
                     orbital_period_days: planet_comp.domain_planet.orbital_period_days,
@@ -349,9 +345,7 @@ pub fn update_planet_positions(
     }
 
     if worker_pool.worker_count() > 0 && !worker_tasks.is_empty() {
-        worker_tasks.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        worker_tasks.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         let tasks = worker_tasks.into_iter().map(|(_, task)| task).collect();
         worker_pool.queue_tasks(tasks);
     }
@@ -501,7 +495,9 @@ fn update_planet_positions_parallel(
         .collect();
 
     // Hybrid GPU+CPU processing with batching and concurrent execution
-    let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled && perf_stats.vulkan_solver.is_some() {
+    let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled
+        && perf_stats.vulkan_solver.is_some()
+    {
         // Separate planets from moons for optimal batching
         let (planets_data, moons_data): (Vec<_>, Vec<_>) = planet_data
             .into_iter()
@@ -515,11 +511,18 @@ fn update_planet_positions_parallel(
                 // Process planets via hybrid routing (GPU if available, SIMD fallback)
                 if !planets_data.is_empty() {
                     let mut results = Vec::new();
-                    let mut simd_solver = crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
+                    let mut simd_solver =
+                        crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
 
                     // Extract planets for batch processing - group into larger batches for GPU efficiency
-                    let planets: Vec<_> = planets_data.iter().map(|(_, planet, _, _, _, _)| planet.clone()).collect();
-                    let planet_entities: Vec<_> = planets_data.iter().map(|(entity, _, _, _, _, _)| *entity).collect();
+                    let planets: Vec<_> = planets_data
+                        .iter()
+                        .map(|(_, planet, _, _, _, _)| planet.clone())
+                        .collect();
+                    let planet_entities: Vec<_> = planets_data
+                        .iter()
+                        .map(|(entity, _, _, _, _, _)| *entity)
+                        .collect();
 
                     // Process in batches of up to 100 planets for optimal GPU utilization
                     for chunk in planets.chunks(100).zip(planet_entities.chunks(100)) {
@@ -553,19 +556,21 @@ fn update_planet_positions_parallel(
                 // Process moons in parallel via SIMD
                 moons_data
                     .into_par_iter()
-                    .map(|(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
-                        let position = physics::calculate_planet_position_with_quality(
-                            &planet,
-                            time_days,
-                            &solar_params,
-                            parent_pos,
-                            parent_tilt,
-                            kepler_iterations,
-                        );
-                        (entity, position)
-                    })
+                    .map(
+                        |(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
+                            let position = physics::calculate_planet_position_with_quality(
+                                &planet,
+                                time_days,
+                                &solar_params,
+                                parent_pos,
+                                parent_tilt,
+                                kepler_iterations,
+                            );
+                            (entity, position)
+                        },
+                    )
                     .collect::<Vec<(Entity, Vec3)>>()
-            }
+            },
         );
 
         all_updates.extend(planet_updates);
@@ -777,10 +782,8 @@ pub fn apply_pending_material_textures(
     }
 
     for (entity, pending) in query.iter() {
-
         let wants_base = pending.base_color_texture.is_some() || pending.base_color_path.is_some();
-        let wants_emissive =
-            pending.emissive_texture.is_some() || pending.emissive_path.is_some();
+        let wants_emissive = pending.emissive_texture.is_some() || pending.emissive_path.is_some();
         let wants_normal =
             pending.normal_map_texture.is_some() || pending.normal_map_path.is_some();
 
@@ -842,7 +845,11 @@ pub fn queue_pending_material_textures(
 ) {
     let camera_pos = camera_query.single().translation();
     let worker_count = texture_worker.worker_count();
-    let mut load_budget = if worker_count == 0 { 1 } else { worker_count.min(4) };
+    let mut load_budget = if worker_count == 0 {
+        1
+    } else {
+        worker_count.min(4)
+    };
 
     if memory_stats
         .as_ref()
@@ -934,7 +941,9 @@ pub fn apply_texture_worker_results(
 
     for result in texture_worker.take_results() {
         if let Some(error) = result.error {
-            web_sys::console::log_1(&format!("Texture worker error for {}: {}", result.path, error).into());
+            web_sys::console::log_1(
+                &format!("Texture worker error for {}: {}", result.path, error).into(),
+            );
             texture_worker.mark_failed(&result.path);
             continue;
         }
@@ -993,10 +1002,7 @@ pub fn init_webgpu_solver(
     chrome: Option<Res<ChromeOptimizations>>,
     mut state: NonSendMut<WebGpuKeplerState>,
 ) {
-    if !chrome
-        .as_ref()
-        .is_some_and(|chrome| chrome.webgpu_enabled)
-    {
+    if !chrome.as_ref().is_some_and(|chrome| chrome.webgpu_enabled) {
         return;
     }
 
@@ -1689,9 +1695,9 @@ pub fn auto_inspect_selected_planet(
         Err(_) => return,
     };
 
-    if controller.mode != CameraMode::FreeFlight {
-        return;
-    }
+    // if controller.mode != CameraMode::FreeFlight {
+    //     return;
+    // }
 
     if input_state.last_selected_entity != Some(selected_entity) {
         input_state.last_selected_entity = Some(selected_entity);
@@ -1880,7 +1886,8 @@ pub fn update_performance_stats(
 
     // Calculate frame time as difference from last frame
     let frame_time_seconds = if performance_stats.frame_count > 0 {
-        now.duration_since(performance_stats.last_frame_time).as_secs_f64()
+        now.duration_since(performance_stats.last_frame_time)
+            .as_secs_f64()
     } else {
         // First frame - use target frame time as estimate
         1.0 / performance_stats.target_fps as f64
@@ -1907,12 +1914,13 @@ pub fn update_performance_stats(
     // - Responsive: Reacts to changes quickly
     // - Cheap: Single multiplication per frame
     const SMOOTHING_FACTOR: f32 = 0.1; // 0.1 = 10% new data, 90% history
-    performance_stats.fps_smoothed = performance_stats.fps_smoothed * (1.0 - SMOOTHING_FACTOR) +
-                                     performance_stats.fps_raw * SMOOTHING_FACTOR;
+    performance_stats.fps_smoothed = performance_stats.fps_smoothed * (1.0 - SMOOTHING_FACTOR)
+        + performance_stats.fps_raw * SMOOTHING_FACTOR;
 
     // Frame time EMA (more stable than FPS for performance analysis)
-    performance_stats.frame_time_smoothed = performance_stats.frame_time_smoothed * (1.0 - SMOOTHING_FACTOR) +
-                                           performance_stats.frame_time_ms * SMOOTHING_FACTOR;
+    performance_stats.frame_time_smoothed = performance_stats.frame_time_smoothed
+        * (1.0 - SMOOTHING_FACTOR)
+        + performance_stats.frame_time_ms * SMOOTHING_FACTOR;
 
     // DISPLAY FPS (what users see - smoothed for human consumption)
     performance_stats.fps_display = performance_stats.fps_smoothed;
@@ -1934,7 +1942,8 @@ pub fn update_performance_stats(
         sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         let percentile_index = ((sorted_times.len() - 1) as f32 * 0.99) as usize;
-        performance_stats.frame_time_99th = sorted_times[percentile_index.min(sorted_times.len() - 1)];
+        performance_stats.frame_time_99th =
+            sorted_times[percentile_index.min(sorted_times.len() - 1)];
     }
 
     // GPU TIMING (when available - Vulkan/WebGPU)
@@ -2023,9 +2032,8 @@ pub fn apply_initial_dynamic_resolution(
 }
 
 pub fn cap_fixed_overstep(mut fixed_time: ResMut<Time<Fixed>>) {
-    let max_overstep = std::time::Duration::from_secs_f32(
-        fixed_time.timestep().as_secs_f32() * 2.0,
-    );
+    let max_overstep =
+        std::time::Duration::from_secs_f32(fixed_time.timestep().as_secs_f32() * 2.0);
     let overstep = fixed_time.overstep();
     if overstep > max_overstep {
         fixed_time.discard_overstep(overstep - max_overstep);
@@ -2169,9 +2177,7 @@ pub fn take_pending_screenshot(
 
 /// Initialize Vulkan compute solver for native builds
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-pub fn init_vulkan_solver(
-    mut perf_stats: ResMut<PerformanceStats>,
-) {
+pub fn init_vulkan_solver(mut perf_stats: ResMut<PerformanceStats>) {
     println!("🎯 init_vulkan_solver: System called!");
     // Vulkan compilation test removed
     // Only initialize once
@@ -2199,7 +2205,10 @@ pub fn init_vulkan_solver(
 
 /// Initialize Vulkan compute pipeline
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-fn init_vulkan_compute() -> Result<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver, Box<dyn std::error::Error>> {
+fn init_vulkan_compute() -> Result<
+    crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver,
+    Box<dyn std::error::Error>,
+> {
     // Vulkan temporarily disabled due to syntax issues
     Err("Vulkan GPU acceleration temporarily disabled".into())
 }
@@ -2214,7 +2223,9 @@ pub struct QualityAdaptationResource {
 impl Default for QualityAdaptationResource {
     fn default() -> Self {
         Self {
-            system: crate::infrastructure::bevy_adapters::components::QualityAdaptationSystem::new(60.0),
+            system: crate::infrastructure::bevy_adapters::components::QualityAdaptationSystem::new(
+                60.0,
+            ),
             enabled: true,
         }
     }
@@ -2249,13 +2260,17 @@ pub fn adaptive_quality_system(
         let should_log = LAST_LOG
             .map(|last| now.duration_since(last).as_millis() > 5000)
             .unwrap_or(true);
-        if should_log { // Log every 5 seconds
+        if should_log {
+            // Log every 5 seconds
             println!("🎯 Quality Adaptation Status:");
             println!("   Current Quality: {:?}", perf_stats.quality_level);
             println!("   FPS: {:.1}", perf_stats.fps_display);
             println!("   GPU Util: {:.1}%", perf_stats.gpu_utilization * 100.0);
             println!("   CPU Util: {:.1}%", perf_stats.cpu_utilization * 100.0);
-            println!("   Mem Pressure: {:.1}%", perf_stats.memory_pressure * 100.0);
+            println!(
+                "   Mem Pressure: {:.1}%",
+                perf_stats.memory_pressure * 100.0
+            );
             println!("   Trend: {:?}", perf_stats.quality_trend);
             println!("   Confidence: {:.2}", perf_stats.adaptive_confidence);
             LAST_LOG = Some(now);
@@ -2265,10 +2280,7 @@ pub fn adaptive_quality_system(
 
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
 /// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
-pub fn log_performance_stats(
-    perf_stats: Res<PerformanceStats>,
-    _time: Res<Time>,
-) {
+pub fn log_performance_stats(perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
     // Log performance stats every 60 frames for benchmarking
     if perf_stats.frame_count % 60 == 0 {
         // PRIMARY DISPLAY: Frame time and FPS (industry standard format)
@@ -2283,7 +2295,8 @@ pub fn log_performance_stats(
 
         // GPU TIMING (when available)
         if perf_stats.gpu_frame_time_ms > 0.0 {
-            println!("🎮 GPU_TIMING: CPU: {:.1}ms | GPU: {:.1}ms | Combined: {:.1}ms",
+            println!(
+                "🎮 GPU_TIMING: CPU: {:.1}ms | GPU: {:.1}ms | Combined: {:.1}ms",
                 perf_stats.frame_time_ms,
                 perf_stats.gpu_frame_time_ms,
                 perf_stats.cpu_gpu_frame_time
@@ -2291,7 +2304,8 @@ pub fn log_performance_stats(
         }
 
         // PHYSICS PERFORMANCE BREAKDOWN
-        println!("⚛️  PHYSICS: update={:.2}ms kepler={:.2}ms vulkan_calls={} adaptive_calls={}",
+        println!(
+            "⚛️  PHYSICS: update={:.2}ms kepler={:.2}ms vulkan_calls={} adaptive_calls={}",
             perf_stats.physics_update_time,
             perf_stats.kepler_solve_time,
             perf_stats.vulkan_kepler_calls,
@@ -2304,7 +2318,8 @@ pub fn log_performance_stats(
         } else {
             "SIMD CPU Only"
         };
-        println!("🖥️  COMPUTE: {} | SIMD: {} | Parallel: {} | Cores: {}",
+        println!(
+            "🖥️  COMPUTE: {} | SIMD: {} | Parallel: {} | Cores: {}",
             backend_status,
             perf_stats.simd_enabled,
             perf_stats.parallel_enabled,
@@ -2312,24 +2327,23 @@ pub fn log_performance_stats(
         );
 
         // QUALITY AND ADAPTATION
-        println!("🎚️  QUALITY: {:?} | Adaptive: {} | Target: {:.0} FPS",
-            perf_stats.quality_level,
-            perf_stats.adaptive_enabled,
-            perf_stats.target_fps
+        println!(
+            "🎚️  QUALITY: {:?} | Adaptive: {} | Target: {:.0} FPS",
+            perf_stats.quality_level, perf_stats.adaptive_enabled, perf_stats.target_fps
         );
 
         // MEMORY USAGE
-        println!("💾 MEMORY: {:.1}MB current | {:.1}MB peak",
-            perf_stats.memory_usage_mb,
-            perf_stats.peak_memory_mb
+        println!(
+            "💾 MEMORY: {:.1}MB current | {:.1}MB peak",
+            perf_stats.memory_usage_mb, perf_stats.peak_memory_mb
         );
 
         // RAW METRICS (for debugging - not for end users)
-        if perf_stats.frame_count % 300 == 0 { // Every 5 seconds
-            println!("🔍 RAW_METRICS: fps_raw={:.1} fps_smoothed={:.1} frame_time_smoothed={:.1}ms",
-                perf_stats.fps_raw,
-                perf_stats.fps_smoothed,
-                perf_stats.frame_time_smoothed
+        if perf_stats.frame_count % 300 == 0 {
+            // Every 5 seconds
+            println!(
+                "🔍 RAW_METRICS: fps_raw={:.1} fps_smoothed={:.1} frame_time_smoothed={:.1}ms",
+                perf_stats.fps_raw, perf_stats.fps_smoothed, perf_stats.frame_time_smoothed
             );
         }
     }
