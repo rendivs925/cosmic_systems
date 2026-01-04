@@ -240,14 +240,14 @@ pub fn transform_orbital_point(
     let x1 = x_orbital * cos_w - z_orbital * sin_w;
     let z1 = x_orbital * sin_w + z_orbital * cos_w;
 
-    // Apply inclination (tilt the plane)
+    // Apply inclination (tilt the orbital plane)
     let cos_i = inclination.cos();
     let sin_i = inclination.sin();
     let y2 = z1 * sin_i;
     let z2 = z1 * cos_i;
     let x2 = x1;
 
-    // Apply longitude of ascending node (rotate around Y axis)
+    // Apply longitude of ascending node (rotate around Z-axis)
     let cos_omega = long_asc_node.cos();
     let sin_omega = long_asc_node.sin();
     let x3 = x2 * cos_omega - z2 * sin_omega;
