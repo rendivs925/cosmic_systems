@@ -5,6 +5,10 @@ use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use bevy::prelude::*;
+use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
+use bevy::render::render_asset::RenderAssetUsages;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
 #[cfg(target_arch = "wasm32")]
 use std::collections::VecDeque;
@@ -68,7 +72,7 @@ pub fn setup_space(
     });
 
     // Create optimized starfield background (reduced density for performance)
-    create_starfield(&mut commands, &mut meshes, &mut materials);
+    create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
 
     let shared_orbit_material = materials.add(create_orbit_material(
         Color::srgb(1.0, 1.0, 1.0),
@@ -668,11 +672,93 @@ fn orbit_hash(name: &str, seed: u32) -> f32 {
 
 // Create minimal starfield for performance (disabled for optimal performance)
 fn create_starfield(
-    _commands: &mut Commands,
-    _meshes: &mut ResMut<Assets<Mesh>>,
-    _materials: &mut ResMut<Assets<StandardMaterial>>,
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    solar_params: &SolarSystemParameters,
 ) {
-    // Starfield disabled for performance and clarity.
+    // Single GPU draw: build a mesh of tiny quads with per-star color/size
+    let mut rng = StdRng::seed_from_u64(1337);
+    let star_count = 3000;
+    let radius = solar_params.au_to_units(20.0); // big sphere around the system
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(star_count * 4);
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(star_count * 4);
+    let mut indices: Vec<u32> = Vec::with_capacity(star_count * 6);
+
+    let quad = [
+        (Vec2::new(-1.0, -1.0), Vec2::new(0.0, 0.0)),
+        (Vec2::new(1.0, -1.0), Vec2::new(1.0, 0.0)),
+        (Vec2::new(1.0, 1.0), Vec2::new(1.0, 1.0)),
+        (Vec2::new(-1.0, 1.0), Vec2::new(0.0, 1.0)),
+    ];
+
+    for i in 0..star_count {
+        // Uniform point on sphere
+        let z: f32 = rng.gen_range(-1.0..1.0);
+        let theta = rng.gen_range(0.0..std::f32::consts::TAU);
+        let r = (1.0_f32 - z * z).sqrt();
+        let dir = Vec3::new(r * theta.cos(), z, r * theta.sin());
+        let center = dir * radius;
+
+        let size = rng.gen_range(400.0..1800.0);
+        let color_tint = rng.gen_range(0.8..1.1);
+        let color = [
+            1.0 * color_tint,
+            0.92 * color_tint,
+            0.85 * color_tint,
+            1.0,
+        ];
+
+        let base_index = (i * 4) as u32;
+        for (offset, uv) in quad {
+            let world_pos = center + Vec3::new(offset.x * size, offset.y * size, 0.0);
+            positions.push(world_pos.into());
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push(uv.into());
+            colors.push(color);
+        }
+
+        indices.extend_from_slice(&[
+            base_index,
+            base_index + 1,
+            base_index + 2,
+            base_index,
+            base_index + 2,
+            base_index + 3,
+        ]);
+    }
+
+    let mut mesh = Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+
+    let material = materials.add(StandardMaterial {
+        base_color: Color::srgba(1.0, 1.0, 1.0, 1.0),
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        emissive: LinearRgba::new(1.0, 0.98, 0.9, 1.0),
+        ..default()
+    });
+
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(mesh),
+            material,
+            transform: Transform::IDENTITY,
+            ..default()
+        },
+        NotShadowCaster,
+        NotShadowReceiver,
+    ));
 }
 
 struct PlanetTextureSet {
