@@ -229,7 +229,8 @@ impl VulkanKeplerSolver {
             .build();
         unsafe {
             self.device.queue_submit(self.queue, &[submit_info], ash::vk::Fence::null())?;
-            self.device.wait_for_fences(&[self.cmd_pool.fence], true, u64::MAX)?;
+            // For now, just wait for queue idle since we don't have a fence pool
+            self.device.queue_wait_idle(self.queue)?;
         }
 
         // Cleanup
