@@ -2179,7 +2179,6 @@ pub fn take_pending_screenshot(
 /// Initialize Vulkan compute solver for native builds
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 pub fn init_vulkan_solver(mut perf_stats: ResMut<PerformanceStats>) {
-    println!("🎯 init_vulkan_solver: System called!");
     // Vulkan compilation test removed
     // Only initialize once
     if perf_stats.vulkan_solver.is_some() || perf_stats.vulkan_initialized {
