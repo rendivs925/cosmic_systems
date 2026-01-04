@@ -219,9 +219,9 @@ pub struct VulkanKeplerSolver {
 
 #[cfg(feature = "ash")]
 impl VulkanKeplerSolver {
-    /// Create a new Vulkan Kepler solver with GPU acceleration
+    /// Create a new Vulkan Kepler solver with GPU acceleration (single GPU)
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        println!("🚀 Initializing Vulkan Kepler solver...");
+        println!("🚀 Initializing Vulkan Kepler solver (single GPU)...");
 
         // Create Vulkan instance
         let entry = unsafe { ash::Entry::load()? };
@@ -247,42 +247,10 @@ impl VulkanKeplerSolver {
         }
 
         let physical_device = physical_devices[0]; // Use first device
-        let device_properties = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name = unsafe { std::ffi::CStr::from_ptr(device_properties.device_name.as_ptr()) };
-        println!("🎮 Using GPU: {:?}", device_name);
+        Self::new_with_device(&instance, physical_device)
+    }
 
-        // Find compute queue family
-        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-        let queue_family_index = queue_families
-            .iter()
-            .enumerate()
-            .find(|(_, family)| family.queue_flags.contains(ash::vk::QueueFlags::COMPUTE))
-            .map(|(index, _)| index as u32)
-            .ok_or("No compute queue family found")?;
 
-        // Create logical device
-        let queue_priorities = [1.0];
-        let queue_create_info = ash::vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_index)
-            .queue_priorities(&queue_priorities)
-            .build();
-
-        let device_create_info = ash::vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&[queue_create_info])
-            .build();
-
-        let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
-        let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
-
-        let context = VulkanContext {
-            instance,
-            physical_device,
-            device,
-            queue_family_index,
-            queue,
-        };
-
-        println!("✅ Vulkan device and queue created");
 
         // Load SPIR-V shader
         let shader_code = include_bytes!("vulkan_kepler.comp.spv");
@@ -848,6 +816,145 @@ impl VulkanKeplerSolver {
             self.context.device.free_memory(moon_params_buffer.memory, None);
             self.context.device.free_memory(input_buffer.memory, None);
         }
+    }
+
+    /// Create Vulkan solver with specific physical device (for multi-GPU support)
+    fn new_with_device(instance: &ash::Instance, physical_device: ash::vk::PhysicalDevice) -> Result<Self, Box<dyn std::error::Error>> {
+        // Get device properties for logging
+        let device_properties = unsafe { instance.get_physical_device_properties(physical_device) };
+        let device_name = unsafe { std::ffi::CStr::from_ptr(device_properties.device_name.as_ptr()) };
+
+        // Find compute queue family
+        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+        let queue_family_index = queue_families
+            .iter()
+            .enumerate()
+            .find(|(_, family)| family.queue_flags.contains(ash::vk::QueueFlags::COMPUTE))
+            .map(|(index, _)| index as u32)
+            .ok_or("No compute queue family found")?;
+
+        // Create logical device
+        let queue_priorities = [1.0];
+        let queue_create_info = ash::vk::DeviceQueueCreateInfo::builder()
+            .queue_family_index(queue_family_index)
+            .queue_priorities(&queue_priorities)
+            .build();
+
+        let device_create_info = ash::vk::DeviceCreateInfo::builder()
+            .queue_create_infos(&[queue_create_info])
+            .build();
+
+        let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
+        let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
+
+        let context = VulkanContext {
+            instance: instance.clone(),
+            physical_device,
+            device,
+            queue_family_index,
+            queue,
+        };
+
+        // Create memory pool
+        let memory_pool = VulkanMemoryPool::new(&context)?;
+
+        // Load SPIR-V shader
+        let shader_code = include_bytes!("vulkan_kepler.comp.spv");
+        let shader_code_u32: Vec<u32> = shader_code
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+
+        let shader_module_create_info = ash::vk::ShaderModuleCreateInfo::builder()
+            .code(&shader_code_u32);
+
+        let shader_module = unsafe { context.device.create_shader_module(&shader_module_create_info, None)? };
+
+        // Create descriptor set layout
+        let descriptor_set_layout_bindings = [
+            ash::vk::DescriptorSetLayoutBinding::builder()
+                .binding(0)
+                .descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(ash::vk::ShaderStageFlags::COMPUTE)
+                .build(),
+            ash::vk::DescriptorSetLayoutBinding::builder()
+                .binding(1)
+                .descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(ash::vk::ShaderStageFlags::COMPUTE)
+                .build(),
+            ash::vk::DescriptorSetLayoutBinding::builder()
+                .binding(3)
+                .descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(ash::vk::ShaderStageFlags::COMPUTE)
+                .build(),
+        ];
+
+        let descriptor_set_layout_create_info = ash::vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&descriptor_set_layout_bindings);
+
+        let descriptor_set_layout = unsafe { context.device.create_descriptor_set_layout(&descriptor_set_layout_create_info, None)? };
+
+        // Create pipeline layout
+        let pipeline_layout_create_info = ash::vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&[descriptor_set_layout])
+            .build();
+
+        let pipeline_layout = unsafe { context.device.create_pipeline_layout(&pipeline_layout_create_info, None)? };
+
+        // Create compute pipeline
+        let main_name = std::ffi::CString::new("main").unwrap();
+        let shader_stage = ash::vk::PipelineShaderStageCreateInfo::builder()
+            .stage(ash::vk::ShaderStageFlags::COMPUTE)
+            .module(shader_module)
+            .name(&main_name)
+            .build();
+
+        let compute_pipeline_create_info = ash::vk::ComputePipelineCreateInfo::builder()
+            .stage(shader_stage)
+            .layout(pipeline_layout)
+            .build();
+
+        let compute_pipelines = unsafe {
+            context.device.create_compute_pipelines(
+                ash::vk::PipelineCache::null(),
+                &[compute_pipeline_create_info],
+                None
+            )
+        };
+
+        let compute_pipeline = match compute_pipelines {
+            Ok(pipelines) => pipelines.into_iter().next().unwrap(),
+            Err((_, err)) => return Err(Box::new(err)),
+        };
+
+        // Create command pool
+        let command_pool_create_info = ash::vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(queue_family_index);
+
+        let command_pool = unsafe { context.device.create_command_pool(&command_pool_create_info, None)? };
+
+        // Create timestamp query pool
+        let query_pool_create_info = ash::vk::QueryPoolCreateInfo::builder()
+            .query_type(ash::vk::QueryType::TIMESTAMP)
+            .query_count(2);
+
+        let query_pool = unsafe { context.device.create_query_pool(&query_pool_create_info, None)? };
+
+        // Cleanup shader module
+        unsafe { context.device.destroy_shader_module(shader_module, None) };
+
+        Ok(Self {
+            context,
+            memory_pool,
+            compute_pipeline,
+            pipeline_layout,
+            descriptor_set_layout,
+            command_pool,
+            query_pool,
+        })
     }
 }
 
