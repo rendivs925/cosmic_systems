@@ -10,6 +10,62 @@ pub struct AsmKeplerSolver;
 
 /// High-performance trigonometric approximations
 pub mod approximations {
+    /// Extreme-performance sine approximation using Chebyshev polynomials
+    pub fn sin_approx_extreme(x: f64) -> f64 {
+        // Range reduction to [-π/2, π/2] for maximum accuracy
+        let x_abs = x.abs();
+        let x_norm = x_abs % (2.0 * std::f64::consts::PI);
+
+        // Determine quadrant and reduce to [-π/2, π/2]
+        let (quadrant, x_reduced) = if x_norm <= std::f64::consts::FRAC_PI_2 {
+            (0, x_norm)
+        } else if x_norm <= std::f64::consts::PI {
+            (1, std::f64::consts::PI - x_norm)
+        } else if x_norm <= 3.0 * std::f64::consts::FRAC_PI_2 {
+            (2, x_norm - std::f64::consts::PI)
+        } else {
+            (3, 2.0 * std::f64::consts::PI - x_norm)
+        };
+
+        // Chebyshev polynomial approximation for sin(x) on [-π/2, π/2]
+        // sin(x) ≈ x * P(x²) where P is an even polynomial
+        // P(t) = 1 - t/6 + t²/120 - t³/5040 + t⁴/362880 - t⁵/39916800
+        let t = x_reduced * x_reduced;  // x²
+        let t2 = t * t;                  // x⁴
+        let t3 = t2 * t;                 // x⁶
+        let t4 = t3 * t;                 // x⁸
+        let t5 = t4 * t;                 // x¹⁰
+
+        // Horner's method for polynomial evaluation (most efficient)
+        let p = 1.0 - t * (1.0/6.0 - t * (1.0/120.0 - t * (1.0/5040.0 - t * (1.0/362880.0 - t * (1.0/39916800.0)))));
+
+        let mut result = x_reduced * p;
+
+        // Apply quadrant correction
+        result = match quadrant {
+            0 => result,
+            1 => result,
+            2 => -result,
+            3 => -result,
+            _ => unreachable!(),
+        };
+
+        // Apply sign correction
+        if x < 0.0 { -result } else { result }
+    }
+
+    /// Extreme-performance cosine approximation using Chebyshev polynomials
+    pub fn cos_approx_extreme(x: f64) -> f64 {
+        // cos(x) = sin(x + π/2), so we can reuse the sine approximation
+        approximations::sin_approx_extreme(x + std::f64::consts::FRAC_PI_2)
+    }
+
+    /// Fallback sine approximation using polynomial series
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn sin_approx_avx512(x: f64) -> f64 {
+        sin_approx(x)
+    }
+
     /// Optimized sine approximation using polynomial series
     pub fn sin_approx(x: f64) -> f64 {
         // Normalize to [-π, π] for better accuracy
@@ -22,13 +78,13 @@ pub mod approximations {
             x_norm
         };
 
-        // Taylor series: sin(x) ≈ x - x³/6 + x⁵/120 - x⁷/5040
+        // Use Taylor series approximation: sin(x) ≈ x - x³/6 + x⁵/120 - x⁷/5040
         let x2 = x_norm * x_norm;
         let x3 = x2 * x_norm;
         let x5 = x3 * x2;
         let x7 = x5 * x2;
 
-        x_norm - x3 / 6.0 + x5 / 120.0 - x7 / 5040.0
+        x_norm - x3/6.0 + x5/120.0 - x7/5040.0
     }
 
     /// Optimized cosine approximation using polynomial series
@@ -76,10 +132,58 @@ pub mod approximations {
 }
 
 impl AsmKeplerSolver {
-    /// High-performance Kepler equation solver using optimized algorithms
-    pub fn solve_kepler_optimized(eccentricity: f64, mean_anomaly: f64, tolerance: f64) -> f64 {
-        // Use optimized Newton-Raphson solver for extreme performance
-        Self::solve_kepler_newton_optimized(eccentricity, mean_anomaly, tolerance)
+    /// Extreme-performance Kepler equation solver using Newton's method with optimized approximations
+    pub fn solve_kepler_extreme(&self, mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
+        // Use extreme trigonometric approximations for maximum performance
+        self.solve_kepler_extreme_impl(mean_anomaly, eccentricity, tolerance)
+    }
+
+    /// High-performance Kepler equation solver using Newton's method with optimized approximations
+    pub fn solve_kepler_optimized(&self, mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
+        // Use optimized trigonometric functions
+        self.solve_kepler_optimized_impl(mean_anomaly, eccentricity, tolerance)
+    }
+
+    /// Extreme performance implementation using algorithmic optimizations
+    fn solve_kepler_extreme_impl(&self, mut mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
+        // Range reduction for mean anomaly to improve convergence
+        mean_anomaly = mean_anomaly % (2.0 * std::f64::consts::PI);
+        if mean_anomaly < 0.0 {
+            mean_anomaly += 2.0 * std::f64::consts::PI;
+        }
+
+        // Initial guess using improved approximation for near-circular orbits
+        let mut eccentric_anomaly = if eccentricity < 0.3 {
+            // For low eccentricity, use Soderblom approximation: E ≈ M + e*sin(M)
+            mean_anomaly + eccentricity * approximations::sin_approx_extreme(mean_anomaly)
+        } else {
+            // For higher eccentricity, use Danby approximation
+            let beta = eccentricity / (8.0 + 7.0 * eccentricity);
+            mean_anomaly + beta * approximations::sin_approx_extreme(2.0 * mean_anomaly)
+        };
+
+        // Newton's method with optimized trigonometric functions
+        for _ in 0..20 {  // Limit iterations for performance
+            let sin_e = approximations::sin_approx_extreme(eccentric_anomaly);
+            let cos_e = approximations::cos_approx_extreme(eccentric_anomaly);
+
+            // Kepler equation: M = E - e*sin(E)
+            let f = eccentric_anomaly - eccentricity * sin_e - mean_anomaly;
+
+            // Derivative: f' = 1 - e*cos(E)
+            let f_prime = 1.0 - eccentricity * cos_e;
+
+            // Newton step: E_new = E - f/f'
+            let delta = f / f_prime;
+            eccentric_anomaly -= delta;
+
+            // Check convergence
+            if delta.abs() < tolerance {
+                break;
+            }
+        }
+
+        eccentric_anomaly
     }
 
     /// Optimized Newton-Raphson Kepler equation solver
@@ -276,10 +380,11 @@ impl AsmKeplerSolver {
     /// This is where the real performance gains come from - vectorizing across multiple equations
     pub fn solve_batch_optimized(eccentricities: &[f64], mean_anomalies: &[f64]) -> Vec<f64> {
         // For now, use scalar processing - SIMD batch implementation pending
+        let solver = AsmKeplerSolver;
         eccentricities
             .iter()
             .zip(mean_anomalies.iter())
-            .map(|(&e, &m)| Self::solve_kepler_optimized(e, m, 1e-12))
+            .map(|(&e, &m)| solver.solve_kepler_optimized(m, e, 1e-12))
             .collect()
     }
 
@@ -294,7 +399,8 @@ mod tests {
         let e = 0.0167; // Earth's eccentricity
         let m = 0.1;    // Mean anomaly
 
-        let result = AsmKeplerSolver::solve_kepler_optimized(e, m, 1e-12);
+        let solver = AsmKeplerSolver;
+        let result = solver.solve_kepler_optimized(m, e, 1e-12);
 
         // Should be close to mean anomaly for near-circular orbits
         assert!((result - m).abs() < 0.01);
