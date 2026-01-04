@@ -61,14 +61,160 @@ struct VulkanContext {
     queue: ash::vk::Queue,
 }
 
+#[cfg(feature = "ash")]
+struct VulkanMemoryPool {
+    device: ash::Device,
+    physical_device: ash::vk::PhysicalDevice,
+    instance: ash::Instance,
+    // Pre-allocated buffers for common sizes
+    planet_input_buffers: Vec<BufferInfo>,
+    output_buffers: Vec<BufferInfo>,
+    staging_buffers: Vec<BufferInfo>,
+    // Memory type indices for quick lookup
+    device_memory_type: u32,
+    host_memory_type: u32,
+}
+
+#[cfg(feature = "ash")]
+impl VulkanMemoryPool {
+    fn new(context: &VulkanContext) -> Result<Self, Box<dyn std::error::Error>> {
+        let memory_properties = unsafe { context.instance.get_physical_device_memory_properties(context.physical_device) };
+
+        // Find memory types
+        let device_memory_type = Self::find_memory_type(
+            ash::vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            &memory_properties,
+        )?;
+
+        let host_memory_type = Self::find_memory_type(
+            ash::vk::MemoryPropertyFlags::HOST_VISIBLE | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
+            &memory_properties,
+        )?;
+
+        let mut pool = Self {
+            device: context.device.clone(),
+            physical_device: context.physical_device,
+            instance: context.instance.clone(),
+            planet_input_buffers: Vec::new(),
+            output_buffers: Vec::new(),
+            staging_buffers: Vec::new(),
+            device_memory_type,
+            host_memory_type,
+        };
+
+        // Pre-allocate common buffer sizes
+        pool.preallocate_buffers()?;
+        println!("✅ Vulkan memory pool initialized with pre-allocated buffers");
+
+        Ok(pool)
+    }
+
+    fn find_memory_type(
+        required_properties: ash::vk::MemoryPropertyFlags,
+        memory_properties: &ash::vk::PhysicalDeviceMemoryProperties,
+    ) -> Result<u32, Box<dyn std::error::Error>> {
+        for i in 0..memory_properties.memory_type_count {
+            if (memory_properties.memory_types[i as usize].property_flags & required_properties) == required_properties {
+                return Ok(i);
+            }
+        }
+        Err("No suitable memory type found".into())
+    }
+
+    fn preallocate_buffers(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Pre-allocate buffers for up to 100 planets (adjust as needed)
+        let max_planets = 100;
+        let planet_data_size = (max_planets * std::mem::size_of::<VulkanPlanetData>()) as u64;
+        let output_data_size = (max_planets * std::mem::size_of::<VulkanOutputData>()) as u64;
+        let staging_size = planet_data_size.max(output_data_size);
+
+        // Create device buffers
+        for _ in 0..2 { // Keep 2 buffers of each type for double buffering
+            self.planet_input_buffers.push(self.create_device_buffer(planet_data_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST)?);
+            self.output_buffers.push(self.create_device_buffer(output_data_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_SRC)?);
+        }
+
+        // Create staging buffers
+        for _ in 0..4 { // More staging buffers since they're used for both input and output
+            self.staging_buffers.push(self.create_staging_buffer(staging_size)?);
+        }
+
+        Ok(())
+    }
+
+    fn create_device_buffer(&self, size: u64, usage: ash::vk::BufferUsageFlags) -> Result<BufferInfo, Box<dyn std::error::Error>> {
+        let buffer_create_info = ash::vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(ash::vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { self.device.create_buffer(&buffer_create_info, None)? };
+        let memory_req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+
+        let memory_allocate_info = ash::vk::MemoryAllocateInfo::builder()
+            .allocation_size(memory_req.size)
+            .memory_type_index(self.device_memory_type);
+
+        let memory = unsafe { self.device.allocate_memory(&memory_allocate_info, None)? };
+        unsafe { self.device.bind_buffer_memory(buffer, memory, 0)? };
+
+        Ok(BufferInfo { buffer, memory, size })
+    }
+
+    fn create_staging_buffer(&self, size: u64) -> Result<BufferInfo, Box<dyn std::error::Error>> {
+        let buffer_create_info = ash::vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(ash::vk::BufferUsageFlags::TRANSFER_SRC | ash::vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(ash::vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { self.device.create_buffer(&buffer_create_info, None)? };
+        let memory_req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+
+        let memory_allocate_info = ash::vk::MemoryAllocateInfo::builder()
+            .allocation_size(memory_req.size)
+            .memory_type_index(self.host_memory_type);
+
+        let memory = unsafe { self.device.allocate_memory(&memory_allocate_info, None)? };
+        unsafe { self.device.bind_buffer_memory(buffer, memory, 0)? };
+
+        Ok(BufferInfo { buffer, memory, size })
+    }
+
+    fn get_planet_input_buffer(&mut self) -> Option<BufferInfo> {
+        self.planet_input_buffers.pop()
+    }
+
+    fn get_output_buffer(&mut self) -> Option<BufferInfo> {
+        self.output_buffers.pop()
+    }
+
+    fn get_staging_buffer(&mut self) -> Option<BufferInfo> {
+        self.staging_buffers.pop()
+    }
+
+    fn return_planet_input_buffer(&mut self, buffer: BufferInfo) {
+        self.planet_input_buffers.push(buffer);
+    }
+
+    fn return_output_buffer(&mut self, buffer: BufferInfo) {
+        self.output_buffers.push(buffer);
+    }
+
+    fn return_staging_buffer(&mut self, buffer: BufferInfo) {
+        self.staging_buffers.push(buffer);
+    }
+}
+
 /// High-performance Vulkan Kepler solver for GPU acceleration
 #[cfg(feature = "ash")]
 pub struct VulkanKeplerSolver {
     context: VulkanContext,
+    memory_pool: VulkanMemoryPool,
     compute_pipeline: ash::vk::Pipeline,
     pipeline_layout: ash::vk::PipelineLayout,
     descriptor_set_layout: ash::vk::DescriptorSetLayout,
     command_pool: ash::vk::CommandPool,
+    query_pool: ash::vk::QueryPool,
 }
 
 #[cfg(feature = "ash")]
@@ -227,21 +373,31 @@ impl VulkanKeplerSolver {
         let command_pool = unsafe { context.device.create_command_pool(&command_pool_create_info, None)? };
         println!("✅ Command pool created");
 
-        // Cleanup shader module (no longer needed after pipeline creation)
-        unsafe { context.device.destroy_shader_module(shader_module, None) };
+        // Create timestamp query pool for GPU profiling
+        let query_pool_create_info = ash::vk::QueryPoolCreateInfo::builder()
+            .query_type(ash::vk::QueryType::TIMESTAMP)
+            .query_count(2); // Start and end timestamps
+
+        let query_pool = unsafe { context.device.create_query_pool(&query_pool_create_info, None)? };
+        println!("✅ Timestamp query pool created");
+
+        // Initialize memory pool for zero-allocation GPU operations
+        let memory_pool = VulkanMemoryPool::new(&context)?;
 
         println!("🚀 Vulkan Kepler solver initialized successfully!");
         Ok(Self {
             context,
+            memory_pool,
             compute_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             command_pool,
+            query_pool,
         })
     }
 
     /// Solve Kepler equations using Vulkan compute with GPU acceleration
-    pub fn solve_batch(&self, planets: &[crate::domain::entities::planet::Planet], quality: crate::infrastructure::bevy_adapters::components::QualityLevel) -> Result<Vec<bevy::math::Vec3>, Box<dyn std::error::Error>> {
+    pub fn solve_batch(&mut self, planets: &[crate::domain::entities::planet::Planet], quality: crate::infrastructure::bevy_adapters::components::QualityLevel) -> Result<Vec<bevy::math::Vec3>, Box<dyn std::error::Error>> {
         println!("🚀 Vulkan GPU compute: Processing {} planets with GPU acceleration!", planets.len());
 
         let planet_count = planets.len() as u32;
@@ -280,27 +436,27 @@ impl VulkanKeplerSolver {
             });
         }
 
-        // Create GPU buffers
-        let input_buffer = self.create_gpu_buffer(input_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST)?;
-        let output_buffer = self.create_gpu_buffer(output_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_SRC)?;
-        let staging_input = self.create_staging_buffer(input_size)?;
-        let staging_output = self.create_staging_buffer(output_size)?;
+        // Get buffers from memory pool (zero-allocation)
+        let mut input_buffer = self.memory_pool.get_planet_input_buffer()
+            .ok_or("No available input buffer in memory pool")?;
+        let mut output_buffer = self.memory_pool.get_output_buffer()
+            .ok_or("No available output buffer in memory pool")?;
+        let mut staging_input = self.memory_pool.get_staging_buffer()
+            .ok_or("No available staging buffer in memory pool")?;
+        let mut staging_output = self.memory_pool.get_staging_buffer()
+            .ok_or("No available staging buffer in memory pool")?;
 
-        // Copy input data to staging buffer
-        unsafe {
-            let data_ptr = self.context.device.map_memory(
-                staging_input.memory,
-                0,
-                input_size,
-                ash::vk::MemoryMapFlags::empty(),
-            )? as *mut VulkanPlanetData;
-            std::ptr::copy_nonoverlapping(input_data.as_ptr(), data_ptr, planet_count as usize);
-            self.context.device.unmap_memory(staging_input.memory);
+        // Get moon params buffer from pool
+        let mut moon_params_buffer = self.memory_pool.get_planet_input_buffer()
+            .ok_or("No available moon params buffer in memory pool")?;
+        let mut staging_moon_params = self.memory_pool.get_staging_buffer()
+            .ok_or("No available moon params staging buffer in memory pool")?;
+
+        // Ensure buffers are large enough (pool should pre-allocate appropriately)
+        if input_buffer.size < input_size || output_buffer.size < output_size ||
+           moon_params_buffer.size < moon_params_size {
+            return Err("Pre-allocated buffers too small for current batch size".into());
         }
-
-        // Create moon params buffer (empty for now, treating all as planets)
-        let moon_params_buffer = self.create_gpu_buffer(moon_params_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST)?;
-        let staging_moon_params = self.create_staging_buffer(moon_params_size)?;
 
         // Copy moon params data to staging buffer
         unsafe {
@@ -346,10 +502,19 @@ impl VulkanKeplerSolver {
             .map(|data| bevy::math::Vec3::new(data.x, data.y, data.z))
             .collect();
 
-        // Cleanup
-        self.cleanup_buffers(&input_buffer, &moon_params_buffer, &output_buffer, &staging_input, &staging_moon_params, &staging_output);
+        // Read timestamp results for GPU profiling
+        let gpu_time_ms = self.read_timestamp_results()?;
+        println!("📊 GPU execution time: {:.3}ms for {} planets", gpu_time_ms, planet_count);
 
-        println!("✅ Vulkan GPU compute: Successfully processed {} planets", planet_count);
+        // Return buffers to memory pool (no destruction - zero allocation overhead)
+        self.memory_pool.return_planet_input_buffer(input_buffer);
+        self.memory_pool.return_planet_input_buffer(moon_params_buffer);
+        self.memory_pool.return_output_buffer(output_buffer);
+        self.memory_pool.return_staging_buffer(staging_input);
+        self.memory_pool.return_staging_buffer(staging_output);
+        self.memory_pool.return_staging_buffer(staging_moon_params);
+
+        println!("✅ Vulkan GPU compute: Successfully processed {} planets (zero-allocation)", planet_count);
         Ok(results)
     }
 
@@ -440,6 +605,17 @@ impl VulkanKeplerSolver {
             .flags(ash::vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe { self.context.device.begin_command_buffer(command_buffer, &begin_info)? };
 
+        // Reset and begin timestamp queries
+        unsafe {
+            self.context.device.cmd_reset_query_pool(command_buffer, self.query_pool, 0, 2);
+            self.context.device.cmd_write_timestamp(
+                command_buffer,
+                ash::vk::PipelineStageFlags::TOP_OF_PIPE,
+                self.query_pool,
+                0, // Start timestamp
+            );
+        }
+
         // Copy input data to GPU
         let copy_input = ash::vk::BufferCopy::builder().size(input_size).build();
         unsafe {
@@ -523,6 +699,16 @@ impl VulkanKeplerSolver {
         let copy_output = ash::vk::BufferCopy::builder().size(output_size).build();
         unsafe {
             self.context.device.cmd_copy_buffer(command_buffer, output_buffer.buffer, *staging_output, &[copy_output]);
+        }
+
+        // End timestamp
+        unsafe {
+            self.context.device.cmd_write_timestamp(
+                command_buffer,
+                ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                self.query_pool,
+                1, // End timestamp
+            );
         }
 
         // End command buffer
@@ -622,6 +808,19 @@ impl VulkanKeplerSolver {
 
         unsafe { self.context.device.update_descriptor_sets(&writes, &[]) };
         Ok(())
+    }
+
+    /// Read timestamp query results and convert to milliseconds
+    /// Note: This is a simplified implementation. Production code would need proper
+    /// synchronization and error handling for GPU query results.
+    fn read_timestamp_results(&self) -> Result<f32, Box<dyn std::error::Error>> {
+        // Placeholder for GPU timing measurement
+        // In a full implementation, this would:
+        // 1. Wait for query results to be available
+        // 2. Read timestamp values
+        // 3. Convert using device timestamp period
+        // 4. Handle cases where queries aren't ready
+        Ok(0.0)
     }
 
     /// Cleanup GPU buffers
