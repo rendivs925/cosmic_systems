@@ -679,7 +679,7 @@ fn create_starfield(
 ) {
     // Single GPU draw: build a mesh of tiny quads with per-star color/size
     let mut rng = StdRng::seed_from_u64(1337);
-    let star_count = 16000;
+    let star_count = 18000;
     let radius = solar_params.au_to_units(400.0); // push far beyond planetary orbits
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
@@ -697,10 +697,14 @@ fn create_starfield(
 
     for i in 0..star_count {
         // Uniform point on sphere
-        // Constrain stars toward the galactic plane: bias latitude toward 0
-        let sample: f32 = rng.gen_range(-1.0..1.0);
-        let lat = (sample.asin() * 0.25).sin(); // flattened distribution
-        let z: f32 = lat;
+        // Balanced distribution: 70% biased toward galactic plane, 30% uniform
+        let use_plane_bias = rng.gen_bool(0.7);
+        let z = if use_plane_bias {
+            let sample: f32 = rng.gen_range(-1.0..1.0);
+            (sample.asin() * 0.25).sin()
+        } else {
+            rng.gen_range(-1.0..1.0)
+        };
         let theta = rng.gen_range(0.0..std::f32::consts::TAU);
         let r = (1.0_f32 - z * z).sqrt();
         let dir = Vec3::new(r * theta.cos(), z, r * theta.sin());
