@@ -49,6 +49,7 @@ impl SolarSystemParameters {
 
     /// Convert simulation time to days
     pub fn time_to_days(&self, time_seconds: f32) -> f32 {
-        time_seconds * self.time_scale / 86400.0
+        let scale = self.time_scale.max(0.0001); // never let simulation stall
+        time_seconds * scale / 86400.0
     }
 }

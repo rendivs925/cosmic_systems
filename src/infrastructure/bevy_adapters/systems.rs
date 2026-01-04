@@ -1331,12 +1331,12 @@ pub fn handle_solar_system_input(
     }
     // Time scale controls
     if keyboard.just_pressed(KeyCode::KeyT) {
-        solar_params.time_scale *= 1.1;
+        solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
         println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
     }
 
     if keyboard.just_pressed(KeyCode::KeyR) && solar_params.time_scale > 0.1 {
-        solar_params.time_scale /= 1.1;
+        solar_params.time_scale = (solar_params.time_scale / 1.1).max(0.0001);
         println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
     }
 
