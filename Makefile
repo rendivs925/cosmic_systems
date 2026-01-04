@@ -7,6 +7,7 @@
 FEATURES_BASE :=
 FEATURES_PARALLEL := --features parallel
 FEATURES_SIMD := --features parallel,simd
+FEATURES_OPTIMIZED := --features parallel,simd,native
 
 # Build profiles
 PROFILE_DEBUG := dev
@@ -115,7 +116,7 @@ build-simd:
 
 build-optimized:
 	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
-	cargo build --release $(FEATURES_SIMD)
+	cargo build --release $(FEATURES_OPTIMIZED)
 
 # ============================================================================
 # RUNNING
@@ -138,7 +139,7 @@ run-simd:
 
 run-optimized:
 	RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
-	cargo run --release $(FEATURES_SIMD)
+	cargo run --release $(FEATURES_OPTIMIZED)
 
 run-built-optimized:
 	./target/release/$(BINARY_NAME)

@@ -76,6 +76,7 @@ fn main() {
         app.insert_resource(PerformanceStats::default());
         app.insert_resource(UiPointerState::default());
         app.insert_resource(CameraInputState::default());
+        app.insert_resource(infrastructure::bevy_adapters::systems::QualityAdaptationResource::default());
         app.add_systems(Startup, setup_space);
         app.add_systems(Startup, setup_ui);
 
@@ -98,6 +99,7 @@ fn main() {
         );
         app.add_systems(Update, update_performance_stats);
         app.add_systems(Update, log_performance_stats);
+        app.add_systems(Update, adaptive_quality_system);
         #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
         app.add_systems(Update, crate::infrastructure::bevy_adapters::systems::init_vulkan_solver);
         app.add_systems(Update, update_info_card);
