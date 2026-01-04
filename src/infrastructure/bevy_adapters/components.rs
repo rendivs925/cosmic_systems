@@ -207,16 +207,41 @@ impl Default for DynamicResolutionState {
 // Performance monitoring and quality adjustment
 #[derive(Resource)]
 pub struct PerformanceStats {
-    pub frame_time: f32,             // Current frame time in milliseconds
-    pub fps: f32,                    // Current FPS
-    pub average_frame_time: f32,     // Rolling average frame time
-    pub average_fps: f32,            // Rolling average FPS
+    // PRODUCTION-GRADE FPS MEASUREMENT (per industry standards)
+    // Frame time is the truth - FPS is derived
+    pub frame_time_ms: f32,          // Current frame time in milliseconds (PRIMARY METRIC)
+    pub fps_raw: f32,                // Raw FPS = 1/frame_time (jumps violently, not for display)
+    pub fps_smoothed: f32,           // Exponential moving average FPS (stable, responsive)
+    pub fps_display: f32,            // FPS to show users (smoothed, human-friendly)
+
+    // Frame time statistics (most important for performance analysis)
+    pub frame_time_smoothed: f32,    // EMA frame time in ms (stable metric)
+    pub frame_time_99th: f32,        // 99th percentile frame time (stutter detection)
+    pub frame_time_min: f32,         // Minimum frame time this session
+    pub frame_time_max: f32,         // Maximum frame time this session
+
+    // GPU timing (when available - Vulkan/WebGPU)
+    pub gpu_frame_time_ms: f32,      // GPU execution time (if measurable)
+    pub cpu_gpu_frame_time: f32,     // Max(CPU, GPU) time = true frame rate limiter
+
+    // High-precision timing infrastructure
+    pub last_frame_time: std::time::Instant, // Monotonic high-res clock timestamp
+    pub frame_time_history: Vec<f32>, // Raw frame times for percentile calculation
+    pub history_capacity: usize,      // Frame history size (default 1000 for 99th percentile)
+
+    // LEGACY FIELDS (deprecated - use new fields above)
+    pub frame_time: f32,             // DEPRECATED: Use frame_time_ms
+    pub fps: f32,                    // DEPRECATED: Use fps_display
+    pub average_frame_time: f32,     // DEPRECATED: Use frame_time_smoothed
+    pub average_fps: f32,            // DEPRECATED: Use fps_smoothed
+
+    // Session and configuration
     pub frame_count: u64,            // Total frames rendered
     pub quality_level: QualityLevel, // Current quality setting
     pub target_fps: f32,             // Target FPS for quality adjustment
     pub adaptive_enabled: bool,      // Whether automatic quality adjustment is enabled
-    pub frame_history: VecDeque<f32>,
-    pub history_len: usize,
+    pub frame_history: VecDeque<f32>, // DEPRECATED: Use frame_time_history
+    pub history_len: usize,          // DEPRECATED: Use history_capacity
     pub adaptation_rate: f32,
 
     // Detailed optimization timing (for benchmarking)
@@ -370,16 +395,40 @@ pub enum QualityLevel {
 impl Default for PerformanceStats {
     fn default() -> Self {
         Self {
-            frame_time: 16.67, // Assume 60 FPS initially
-            fps: 60.0,
-            average_frame_time: 16.67,
-            average_fps: 60.0,
+            // Production-grade FPS measurement (primary metrics)
+            frame_time_ms: 16.67,        // Assume 60 FPS initially
+            fps_raw: 60.0,               // Raw FPS
+            fps_smoothed: 60.0,          // EMA smoothed FPS
+            fps_display: 60.0,           // Display FPS (smoothed)
+
+            // Frame time statistics
+            frame_time_smoothed: 16.67,  // EMA frame time
+            frame_time_99th: 16.67,      // 99th percentile (initially same)
+            frame_time_min: 16.67,       // Min frame time
+            frame_time_max: 16.67,       // Max frame time
+
+            // GPU timing (initially same as CPU)
+            gpu_frame_time_ms: 16.67,    // GPU time (if available)
+            cpu_gpu_frame_time: 16.67,   // Max of CPU/GPU time
+
+            // High-precision timing
+            last_frame_time: std::time::Instant::now(),
+            frame_time_history: Vec::with_capacity(1000),
+            history_capacity: 1000,      // Keep 1000 samples for 99th percentile
+
+            // LEGACY FIELDS (maintained for compatibility)
+            frame_time: 16.67,           // DEPRECATED
+            fps: 60.0,                   // DEPRECATED
+            average_frame_time: 16.67,   // DEPRECATED
+            average_fps: 60.0,           // DEPRECATED
+
+            // Session configuration
             frame_count: 0,
             quality_level: QualityLevel::High,
             target_fps: 60.0,
             adaptive_enabled: true,
-            frame_history: VecDeque::with_capacity(60),
-            history_len: 60,
+            frame_history: VecDeque::with_capacity(60), // DEPRECATED
+            history_len: 60,             // DEPRECATED
             adaptation_rate: 0.1,
 
             // Detailed optimization timing
