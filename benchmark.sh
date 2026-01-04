@@ -199,17 +199,17 @@ extract_performance_metrics() {
     local log_file="$2"
     local metrics_file="$RESULTS_DIR/${config_name}_metrics.json"
 
-    # Extract FPS from logs (assuming the app logs FPS)
+    # Extract FPS from production-grade logs (new format: "FPS: X.X | Frame: X.Xms | 99%: X.Xms | Min: X.Xms | Max: X.Xms")
     local avg_fps
-    avg_fps=$(grep -o "FPS: [0-9.]*" "$log_file" | awk '{sum+=$2; count++} END {print sum/count}' 2>/dev/null || echo "0")
+    avg_fps=$(grep "PERF_STATS:" "$log_file" | grep -o "FPS: [0-9.]*" | sed 's/FPS: //' | awk '{sum+=$1; count++} END {if(count>0) printf "%.1f", sum/count; else print "0"}' 2>/dev/null || echo "0")
     local min_fps
-    min_fps=$(grep -o "FPS: [0-9.]*" "$log_file" | awk '{print $2}' | sort -n | head -1 2>/dev/null || echo "0")
+    min_fps=$(grep "PERF_STATS:" "$log_file" | grep -o "Min: [0-9.]*" | sed 's/Min: //' | sort -n | head -1 2>/dev/null || echo "0")
     local max_fps
-    max_fps=$(grep -o "FPS: [0-9.]*" "$log_file" | awk '{print $2}' | sort -n | tail -1 2>/dev/null || echo "0")
+    max_fps=$(grep "PERF_STATS:" "$log_file" | grep -o "Max: [0-9.]*" | sed 's/Max: //' | sort -n | tail -1 2>/dev/null || echo "0")
 
-    # Extract frame times (assuming logged in ms)
+    # Extract frame times from production-grade logs (Frame: X.Xms)
     local avg_frame_time
-    avg_frame_time=$(grep -o "Frame time: [0-9.]*ms" "$log_file" | awk '{sum+=$3; count++} END {print sum/count}' 2>/dev/null || echo "0")
+    avg_frame_time=$(grep "PERF_STATS:" "$log_file" | grep -o "Frame: [0-9.]*ms" | sed 's/Frame: //' | sed 's/ms//' | awk '{sum+=$1; count++} END {if(count>0) printf "%.2f", sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     # Create JSON metrics file
     cat > "$metrics_file" << EOF
@@ -481,8 +481,8 @@ run_quick_benchmark() {
     wait $pid 2>/dev/null || true
 
     # Extract key metrics
-    local avg_fps=$(grep "PERF_STATS:" "$RESULTS_DIR/quick_benchmark.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) printf "%.1f", sum/count; else print "0"}' 2>/dev/null || echo "0")
-    local avg_frame_time=$(grep "PERF_STATS:" "$RESULTS_DIR/quick_benchmark.log" | grep -o "frame_time=[0-9.]*" | sed 's/frame_time=//' | awk '{sum+=$1; count++} END {if(count>0) printf "%.2f", sum/count; else print "0"}' 2>/dev/null || echo "0")
+    local avg_fps=$(grep "PERF_STATS:" "$RESULTS_DIR/quick_benchmark.log" | grep -o "FPS: [0-9.]*" | sed 's/FPS: //' | awk '{sum+=$1; count++} END {if(count>0) printf "%.1f", sum/count; else print "0"}' 2>/dev/null || echo "0")
+    local avg_frame_time=$(grep "PERF_STATS:" "$RESULTS_DIR/quick_benchmark.log" | grep -o "Frame: [0-9.]*ms" | sed 's/Frame: //' | sed 's/ms//' | awk '{sum+=$1; count++} END {if(count>0) printf "%.2f", sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     log_success "Quick benchmark completed"
     echo "  Average FPS: ${avg_fps:-0}"
