@@ -12,16 +12,17 @@ pub fn performance_dashboard_ui(
     egui::Window::new("Performance Monitor")
         .default_pos([10.0, 10.0])
         .show(ctx, |ui| {
-            // FPS indicator with color coding
-            let fps_color = if perf_stats.fps >= 60.0 {
+            // FPS indicator with color coding (using rolling average for stability)
+            let display_fps = perf_stats.average_fps;
+            let fps_color = if display_fps >= 60.0 {
                 egui::Color32::GREEN
-            } else if perf_stats.fps >= 45.0 {
+            } else if display_fps >= 45.0 {
                 egui::Color32::YELLOW
             } else {
                 egui::Color32::RED
             };
 
-            ui.colored_label(fps_color, format!("FPS: {:.1}", perf_stats.fps));
+            ui.colored_label(fps_color, format!("FPS: {:.1}", display_fps));
 
             // Quality level indicator
             ui.label(format!("Quality: {:?}", quality_controller.current_level));

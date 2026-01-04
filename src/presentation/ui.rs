@@ -567,8 +567,9 @@ pub(crate) fn update_navbar(
     }
 
     if let Ok(mut text) = queries.p2().get_single_mut() {
-        text.sections[0].value = format!("fps {:.0}", performance_stats.fps);
-        text.sections[0].style.color = fps_color(performance_stats.fps);
+        let display_fps = performance_stats.average_fps;
+        text.sections[0].value = format!("fps {:.0}", display_fps);
+        text.sections[0].style.color = fps_color(display_fps);
     }
 }
 
