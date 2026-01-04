@@ -88,8 +88,8 @@ vec3 solve_kepler_moon(vec3 orbital_params, vec4 moon_params, uint max_iteration
 
     // Moon orbital elements
     float i = moon_params.x;  // inclination
-    float Ω = moon_params.y;  // longitude of ascending node
-    float ω = moon_params.z;  // argument of periapsis
+    float Omega = moon_params.y;  // longitude of ascending node
+    float omega = moon_params.z;  // argument of periapsis
 
     // Initial guess (for near-circular orbits, E ≈ M)
     float E = M;
@@ -135,19 +135,19 @@ vec3 solve_kepler_moon(vec3 orbital_params, vec4 moon_params, uint max_iteration
 
     // Transform to 3D space using orbital elements
     // This matches the CPU implementation in transform_orbital_point
-    float cos_Ω = cos(Ω);
-    float sin_Ω = sin(Ω);
+    float cos_Omega = cos(Omega);
+    float sin_Omega = sin(Omega);
     float cos_i = cos(i);
     float sin_i = sin(i);
-    float cos_ω = cos(ω);
-    float sin_ω = sin(ω);
+    float cos_omega = cos(omega);
+    float sin_omega = sin(omega);
 
     // Rotation matrices for orbital element transformation
-    float x = x_orb * (cos_ω * cos_Ω - sin_ω * sin_Ω * cos_i) -
-              z_orb * (sin_ω * cos_Ω + cos_ω * sin_Ω * cos_i);
-    float y = x_orb * (cos_ω * sin_Ω + sin_ω * cos_Ω * cos_i) +
-              z_orb * (sin_ω * sin_Ω - cos_ω * cos_Ω * cos_i);
-    float z = x_orb * (sin_ω * sin_i) + z_orb * (cos_ω * sin_i);
+    float x = x_orb * (cos_omega * cos_Omega - sin_omega * sin_Omega * cos_i) -
+              z_orb * (sin_omega * cos_Omega + cos_omega * sin_Omega * cos_i);
+    float y = x_orb * (cos_omega * sin_Omega + sin_omega * cos_Omega * cos_i) +
+              z_orb * (sin_omega * sin_Omega - cos_omega * cos_Omega * cos_i);
+    float z = x_orb * (sin_omega * sin_i) + z_orb * (cos_omega * sin_i);
 
     return vec3(x, y, z);
 }

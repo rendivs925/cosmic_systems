@@ -349,15 +349,24 @@ pub fn process_hybrid_compute(
     simd_solver: &mut crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver,
 ) -> (Vec<Vec3>, ComputeBackendType) {
     // Simple routing logic: use Vulkan for planets if available, SIMD for everything else
+    println!("🔀 Hybrid compute: vulkan_available={}, planets_count={}", vulkan_available, planets.len());
     if vulkan_available && !planets.is_empty() {
+        println!("🎯 Trying Vulkan GPU compute for {} planets", planets.len());
         // Try Vulkan first
         if let Some(vulkan) = vulkan_solver {
+            println!("🚀 Vulkan solver available, calling solve_batch...");
             match vulkan.solve_batch(planets, quality) {
-                Ok(positions) => return (positions, ComputeBackendType::VulkanGpu),
-                Err(_) => {
+                Ok(positions) => {
+                    println!("✅ Vulkan GPU compute succeeded!");
+                    return (positions, ComputeBackendType::VulkanGpu);
+                },
+                Err(e) => {
+                    println!("❌ Vulkan GPU compute failed: {}", e);
                     // Vulkan failed, fall back to SIMD
                 }
             }
+        } else {
+            println!("⚠️ Vulkan solver not available despite vulkan_enabled=true");
         }
     }
 
