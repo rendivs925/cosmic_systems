@@ -98,6 +98,8 @@ fn main() {
         );
         app.add_systems(Update, update_performance_stats);
         app.add_systems(Update, log_performance_stats);
+        #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+        app.add_systems(Update, crate::infrastructure::bevy_adapters::systems::init_vulkan_solver);
         app.add_systems(Update, update_info_card);
         app.add_systems(Update, update_notifications_ui);
         app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));

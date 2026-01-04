@@ -12,6 +12,16 @@ struct VulkanPlanetData {
 #[cfg(feature = "ash")]
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct VulkanMoonData {
+    inclination_rad: f32,
+    long_asc_node_rad: f32,
+    arg_periapsis_rad: f32,
+    is_moon: u32, // 1 for moon, 0 for planet
+}
+
+#[cfg(feature = "ash")]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct VulkanOutputData {
     x: f32,
     y: f32,
@@ -26,7 +36,7 @@ struct VulkanUniformData {
     planet_count: u32,
     time_step: f32,
     quality_level: u32,
-    _padding: u32,
+    moon_start_index: u32,
 }
 
 /// Vulkan Kepler solver for native builds with maximum performance
@@ -73,7 +83,7 @@ impl VulkanKeplerSolver {
 
         // Create descriptor set layout
         let descriptor_set_layout_bindings = [
-            // Input buffer (orbital elements)
+            // Input buffer (orbital elements for planets and moons)
             ash::vk::DescriptorSetLayoutBinding::builder()
                 .binding(0)
                 .descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER)
@@ -91,6 +101,13 @@ impl VulkanKeplerSolver {
             ash::vk::DescriptorSetLayoutBinding::builder()
                 .binding(2)
                 .descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(ash::vk::ShaderStageFlags::COMPUTE)
+                .build(),
+            // Moon parameters buffer
+            ash::vk::DescriptorSetLayoutBinding::builder()
+                .binding(3)
+                .descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(ash::vk::ShaderStageFlags::COMPUTE)
                 .build(),

@@ -1,11 +1,13 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
+use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use async_trait::async_trait;
 
 
 
@@ -231,6 +233,7 @@ pub struct PerformanceStats {
     pub half_precision_kepler: u64,  // Half precision (4 iterations)
     pub quarter_precision_kepler: u64, // Quarter precision (2 iterations)
     pub minimal_precision_kepler: u64, // Minimal precision (1 iteration)
+    pub vulkan_kepler_calls: u64,     // Number of Vulkan Kepler calls
 
     // SIMD and parallel processing metrics
     pub simd_enabled: bool,          // Whether SIMD is active
@@ -241,6 +244,14 @@ pub struct PerformanceStats {
     // Memory usage
     pub memory_usage_mb: f32,        // Current memory usage in MB
     pub peak_memory_mb: f32,         // Peak memory usage in MB
+
+    // GPU acceleration
+    pub vulkan_enabled: bool,        // Whether Vulkan compute is available and active
+    pub vulkan_initialized: bool,    // Whether Vulkan initialization has been attempted
+    #[cfg(not(target_arch = "wasm32"))]
+    pub vulkan_solver: Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
+    #[cfg(target_arch = "wasm32")]
+    pub vulkan_solver: Option<()>,
 
     // Benchmark timing accumulators
     pub benchmark_start_time: Option<std::time::Instant>,
@@ -266,6 +277,85 @@ impl Default for ChromeOptimizations {
         }
     }
 }
+
+/// Compute backend abstraction for hybrid GPU+CPU processing
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ComputeBackendType {
+    VulkanGpu,
+    CpuSimd,
+    Hybrid,
+}
+
+/// Physics workload classification for optimal backend routing
+#[derive(Clone, Debug)]
+pub struct PhysicsWorkload {
+    pub bodies: Vec<Planet>,
+    pub time_days: f32,
+    pub solar_params: SolarSystemParameters,
+    pub camera_pos: Vec3,
+    pub quality_level: QualityLevel,
+    pub workload_type: WorkloadType,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WorkloadType {
+    PlanetsOnly,
+    MoonsOnly,
+    Mixed,
+    SingleBody,
+    LargeBatch,
+}
+
+/// Result from compute backend processing
+#[derive(Clone, Debug)]
+pub struct PhysicsResult {
+    pub entity_positions: Vec<(Entity, Vec3)>,
+    pub processing_time_ms: f32,
+    pub backend_used: ComputeBackendType,
+    pub success: bool,
+}
+
+/// Hybrid compute function for intelligent routing between Vulkan GPU and CPU SIMD
+pub fn process_hybrid_compute(
+    planets: &[Planet],
+    quality: QualityLevel,
+    vulkan_available: bool,
+    vulkan_solver: &mut Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
+    simd_solver: &mut crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver,
+) -> (Vec<Vec3>, ComputeBackendType) {
+    // Simple routing logic: use Vulkan for planets if available, SIMD for everything else
+    if vulkan_available && !planets.is_empty() {
+        // Try Vulkan first
+        if let Some(vulkan) = vulkan_solver {
+            let positions = vulkan.solve_batch(planets, quality);
+            return (positions, ComputeBackendType::VulkanGpu);
+        }
+    }
+
+    // Use SIMD as fallback or primary backend
+    let positions = simd_solver.solve_batch(planets, quality);
+    (positions, ComputeBackendType::CpuSimd)
+}
+
+#[derive(Clone, Debug)]
+pub struct BackendCapabilities {
+    pub max_batch_size: usize,
+    pub optimal_batch_size: usize,
+    pub supports_complex_orbits: bool,
+    pub memory_mb: usize,
+    pub concurrent_workloads: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum ComputeError {
+    BackendUnavailable,
+    MemoryError(String),
+    ProcessingError(String),
+    Timeout,
+    UnsupportedWorkload,
+}
+
+
 
 // Quality levels for automatic adjustment
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -306,6 +396,7 @@ impl Default for PerformanceStats {
             half_precision_kepler: 0,
             quarter_precision_kepler: 0,
             minimal_precision_kepler: 0,
+            vulkan_kepler_calls: 0,
 
             // SIMD and parallel processing metrics
             simd_enabled: false,
@@ -316,6 +407,14 @@ impl Default for PerformanceStats {
             // Memory usage
             memory_usage_mb: 0.0,
             peak_memory_mb: 0.0,
+
+            // GPU acceleration
+            vulkan_enabled: false,
+            vulkan_initialized: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            vulkan_solver: None,
+            #[cfg(target_arch = "wasm32")]
+            vulkan_solver: None,
 
             // Benchmark timing
             benchmark_start_time: None,

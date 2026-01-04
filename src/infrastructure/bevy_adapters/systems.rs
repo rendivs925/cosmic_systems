@@ -23,6 +23,8 @@ use crate::infrastructure::gpu_compute::webgpu_kepler::PlanetGpuInput;
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
+#[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+use crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -438,6 +440,7 @@ pub fn update_planet_positions(
             &parent_positions,
             &parent_tilts,
             &mut query,
+            &mut perf_stats,
         );
     }
 
@@ -473,6 +476,7 @@ fn update_planet_positions_parallel(
     parent_positions: &std::collections::HashMap<String, Vec3>,
     parent_tilts: &std::collections::HashMap<String, Option<f32>>,
     query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
+    perf_stats: &mut ResMut<PerformanceStats>,
 ) {
     // Collect planet data for batch processing
     let planet_data: Vec<_> = query
@@ -503,23 +507,71 @@ fn update_planet_positions_parallel(
         })
         .collect();
 
-    // Parallel batch processing
-    let position_updates: Vec<(Entity, Vec3)> = planet_data
-        .into_par_iter()
-        .map(
-            |(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
-                let position = physics::calculate_planet_position_with_quality(
-                    &planet,
-                    time_days,
-                    &solar_params,
-                    parent_pos,
-                    parent_tilt,
-                    kepler_iterations,
+    // Check if Vulkan compute is available for planets
+    #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+    let use_vulkan = perf_stats.vulkan_enabled && perf_stats.vulkan_solver.is_some();
+
+    #[cfg(not(all(not(target_arch = "wasm32"), feature = "ash")))]
+    let use_vulkan = false;
+
+    // Hybrid GPU+CPU processing with intelligent routing
+    let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled {
+        // Use hybrid compute routing when Vulkan is available
+        let mut vulkan_solver = perf_stats.vulkan_solver.take();
+        let mut simd_solver = crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
+
+        let updates = planet_data
+            .into_iter()
+            .map(|(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
+                // For now, process each planet individually with hybrid routing
+                // TODO: Batch planets together for GPU processing
+                let planets = vec![planet];
+                let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
+                    &planets,
+                    perf_stats.quality_level,
+                    perf_stats.vulkan_enabled,
+                    &mut vulkan_solver,
+                    &mut simd_solver,
                 );
-                (entity, position)
-            },
-        )
-        .collect();
+
+                // Record which backend was used for performance monitoring
+                match backend_used {
+                    crate::infrastructure::bevy_adapters::components::ComputeBackendType::VulkanGpu => {
+                        perf_stats.vulkan_kepler_calls += 1;
+                    }
+                    crate::infrastructure::bevy_adapters::components::ComputeBackendType::CpuSimd => {
+                        // SIMD calls are already tracked elsewhere
+                    }
+                    _ => {}
+                }
+
+                (entity, positions[0])
+            })
+            .collect();
+
+        // Restore the Vulkan solver
+        perf_stats.vulkan_solver = vulkan_solver;
+
+        updates
+    } else {
+        // Fallback to parallel SIMD processing when Vulkan is not available
+        planet_data
+            .into_par_iter()
+            .map(
+                |(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
+                    let position = physics::calculate_planet_position_with_quality(
+                        &planet,
+                        time_days,
+                        &solar_params,
+                        parent_pos,
+                        parent_tilt,
+                        kepler_iterations,
+                    );
+                    (entity, position)
+                },
+            )
+            .collect()
+    };
 
     // Apply position updates
     for (entity, new_position) in position_updates {
@@ -2029,6 +2081,102 @@ pub fn take_pending_screenshot(
             });
         }
     }
+}
+
+/// Initialize Vulkan compute solver for native builds
+#[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+pub fn init_vulkan_solver(
+    mut perf_stats: ResMut<PerformanceStats>,
+) {
+    // Only initialize once
+    if perf_stats.vulkan_solver.is_some() || perf_stats.vulkan_initialized {
+        return;
+    }
+
+    perf_stats.vulkan_initialized = true;
+
+    // Try to initialize Vulkan solver
+    match init_vulkan_compute() {
+        Ok(solver) => {
+            perf_stats.vulkan_solver = Some(solver);
+            perf_stats.vulkan_enabled = true;
+            println!("Vulkan compute solver initialized successfully - GPU acceleration active!");
+        }
+        Err(e) => {
+            perf_stats.vulkan_enabled = false;
+            println!("Vulkan compute initialization failed (continuing with CPU): {}", e);
+        }
+    }
+}
+
+/// Initialize Vulkan compute pipeline
+#[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+fn init_vulkan_compute() -> Result<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver, Box<dyn std::error::Error>> {
+    use ash::vk;
+
+    // Create Vulkan instance
+    let entry = ash::Entry::linked();
+    let app_info = vk::ApplicationInfo::builder()
+        .application_name(c"Cosmic Systems")
+        .application_version(vk::make_api_version(0, 1, 0, 0))
+        .engine_name(c"Cosmic Engine")
+        .engine_version(vk::make_api_version(0, 1, 0, 0))
+        .api_version(vk::API_VERSION_1_3);
+
+    let create_info = vk::InstanceCreateInfo::builder()
+        .application_info(&app_info);
+
+    let instance = unsafe { entry.create_instance(&create_info, None)? };
+
+    // Select physical device (prefer discrete GPU)
+    let physical_devices = unsafe { instance.enumerate_physical_devices()? };
+    let mut selected_device = None;
+    let mut selected_queue_family = None;
+
+    for physical_device in physical_devices {
+        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
+        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+
+        // Find compute queue family
+        for (i, queue_family) in queue_families.iter().enumerate() {
+            if queue_family.queue_flags.contains(vk::QueueFlags::COMPUTE) {
+                // Prefer discrete GPU, then integrated
+                let is_discrete = properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
+                let should_select = selected_device.is_none() ||
+                    (properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU && !is_discrete);
+
+                if should_select {
+                    selected_device = Some(physical_device);
+                    selected_queue_family = Some(i as u32);
+                }
+            }
+        }
+    }
+
+    let physical_device = selected_device.ok_or("No suitable Vulkan device found")?;
+    let queue_family_index = selected_queue_family.ok_or("No compute queue family found")?;
+
+    // Create device
+    let queue_priorities = [1.0f32];
+    let queue_create_info = vk::DeviceQueueCreateInfo::builder()
+        .queue_family_index(queue_family_index)
+        .queue_priorities(&queue_priorities);
+
+    let device_create_info = vk::DeviceCreateInfo::builder()
+        .queue_create_infos(&[queue_create_info])
+        .enabled_extension_names(&[]); // No extensions needed for basic compute
+
+    let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
+    let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
+
+    // Create Vulkan solver
+    crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver::new(
+        &instance,
+        physical_device,
+        &device,
+        queue_family_index,
+        queue,
+    )
 }
 
 // System to log detailed performance statistics for benchmarking
