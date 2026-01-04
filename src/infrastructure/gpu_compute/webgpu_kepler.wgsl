@@ -1,77 +1,104 @@
-// Kepler equation solver compute shader for WebGPU
-// Processes multiple orbital calculations in parallel
-
-struct KeplerWorkItem {
-    semi_major_axis: f32,
+struct PlanetInput {
+    semi_major_axis_au: f32,
     eccentricity: f32,
-    mean_anomaly: f32,
-    planet_id: u32,
+    inclination_rad: f32,
+    long_asc_node_rad: f32,
+    arg_periapsis_rad: f32,
+    mean_anomaly_rad: f32,
+    scale_factor: f32,
+    moon_scale: f32,
+    parent_x: f32,
+    parent_y: f32,
+    parent_z: f32,
+    parent_tilt_rad: f32,
+    iterations: u32,
+    is_moon: u32,
+    has_parent_tilt: u32,
+    _pad: u32,
 };
 
-struct KeplerResult {
-    planet_id: u32,
-    position: vec3<f32>,
-    velocity: vec3<f32>,
+struct Output {
+    x: f32,
+    y: f32,
+    z: f32,
+    _pad: f32,
 };
 
-@group(0) @binding(0)
-var<storage, read> work_items: array<KeplerWorkItem>;
+struct Params {
+    count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+};
 
-@group(0) @binding(1)
-var<storage, read_write> results: array<KeplerResult>;
+@group(0) @binding(0) var<storage, read> inputs: array<PlanetInput>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<Output>;
+@group(0) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(64)
-fn solve_kepler_batch(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let work_item_idx = global_id.x;
-
-    // Bounds check
-    if (work_item_idx >= arrayLength(&work_items)) {
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= params.count) {
         return;
     }
+    let input = inputs[idx];
 
-    let work_item = work_items[work_item_idx];
-
-    // Solve Kepler's equation using Newton-Raphson method
-    let M = work_item.mean_anomaly;  // Mean anomaly
-    let e = work_item.eccentricity;  // Eccentricity
-    let a = work_item.semi_major_axis; // Semi-major axis
-
-    // Initial guess for eccentric anomaly
-    var E = M;
-
-    // Newton-Raphson iterations (typically 3-5 iterations sufficient)
-    for (var i = 0; i < 5; i = i + 1) {
-        let f = E - e * sin(E) - M;
-        let f_prime = 1.0 - e * cos(E);
+    var E = input.mean_anomaly_rad;
+    var i: u32 = 0u;
+    loop {
+        if (i >= input.iterations) { break; }
+        let f = E - input.eccentricity * sin(E) - input.mean_anomaly_rad;
+        let f_prime = 1.0 - input.eccentricity * cos(E);
         E = E - f / f_prime;
+        i = i + 1u;
     }
 
-    // Calculate true anomaly
     let cos_E = cos(E);
     let sin_E = sin(E);
-    let cos_theta = (cos_E - e) / (1.0 - e * cos_E);
-    let sin_theta = sin_E * sqrt(1.0 - e * e) / (1.0 - e * cos_E);
+    let r_au = input.semi_major_axis_au * (1.0 - input.eccentricity * cos_E);
+    var radius = r_au * input.scale_factor;
+    if (input.is_moon != 0u) {
+        radius = radius * input.moon_scale;
+    }
 
-    // Calculate distance from focus
-    let r = a * (1.0 - e * cos_E);
+    let cos_theta = (cos_E - input.eccentricity) / (1.0 - input.eccentricity * cos_E);
+    let sin_theta = sin_E * sqrt(1.0 - input.eccentricity * input.eccentricity)
+        / (1.0 - input.eccentricity * cos_E);
 
-    // Convert to 3D position (simplified 2D orbit in XZ plane)
-    let x = r * cos_theta;
-    let z = r * sin_theta;
-    let position = vec3<f32>(x, 0.0, z);
+    let x_orbital = radius * cos_theta;
+    let z_orbital = radius * sin_theta;
 
-    // Calculate velocity (simplified - vis-viva equation)
-    let mu = 1.327e20; // Solar gravitational parameter (m^3/s^2)
-    let v_magnitude = sqrt(mu * (2.0 / r - 1.0 / a));
+    let cos_w = cos(input.arg_periapsis_rad);
+    let sin_w = sin(input.arg_periapsis_rad);
+    let x1 = x_orbital * cos_w - z_orbital * sin_w;
+    let z1 = x_orbital * sin_w + z_orbital * cos_w;
 
-    // Velocity direction (perpendicular to position vector)
-    let velocity_dir = vec3<f32>(-sin_theta, 0.0, cos_theta);
-    let velocity = velocity_dir * v_magnitude;
+    let cos_i = cos(input.inclination_rad);
+    let sin_i = sin(input.inclination_rad);
+    let y2 = z1 * sin_i;
+    let z2 = z1 * cos_i;
+    let x2 = x1;
 
-    // Store result
-    results[work_item_idx] = KeplerResult(
-        work_item.planet_id,
-        position,
-        velocity
-    );
+    let cos_omega = cos(input.long_asc_node_rad);
+    let sin_omega = sin(input.long_asc_node_rad);
+    let x3 = x2 * cos_omega - z2 * sin_omega;
+    let z3 = x2 * sin_omega + z2 * cos_omega;
+
+    var x = x3;
+    var y = y2;
+    var z = z3;
+
+    if (input.has_parent_tilt != 0u) {
+        let cos_t = cos(input.parent_tilt_rad);
+        let sin_t = sin(input.parent_tilt_rad);
+        let x_t = x * cos_t - y * sin_t;
+        let y_t = x * sin_t + y * cos_t;
+        x = x_t;
+        y = y_t;
+    }
+
+    outputs[idx].x = input.parent_x + x;
+    outputs[idx].y = input.parent_y + y;
+    outputs[idx].z = input.parent_z + z;
+    outputs[idx]._pad = 0.0;
 }

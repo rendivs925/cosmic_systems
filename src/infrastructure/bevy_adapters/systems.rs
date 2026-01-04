@@ -1693,7 +1693,7 @@ pub fn auto_inspect_selected_planet(
         Err(_) => return,
     };
 
-    let (controller, mut camera_transform, projection) = match camera_query.get_single_mut() {
+    let (_controller, mut camera_transform, projection) = match camera_query.get_single_mut() {
         Ok(data) => data,
         Err(_) => return,
     };

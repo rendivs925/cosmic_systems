@@ -101,6 +101,7 @@ impl VulkanKeplerSolver {
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: "main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         });
 
         Ok(Self {
