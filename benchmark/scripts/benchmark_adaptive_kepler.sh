@@ -63,9 +63,9 @@ for scenario in "${test_scenarios[@]}"; do
         echo "Binary not found" > "$RESULTS_DIR/${scenario_name}.log"
     fi
 
-    # Extract metrics from PERF_STATS output
-    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${scenario_name}.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
-    frame_time=$(grep "PERF_STATS:" "$RESULTS_DIR/${scenario_name}.log" | grep -o "frame_time=[0-9.]*" | sed 's/frame_time=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
+    # Extract metrics from PERF_STATS output (using rolling averages for stability)
+    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${scenario_name}.log" | grep -o "avg_fps=[0-9.]*" | sed 's/avg_fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
+    frame_time=$(grep "PERF_STATS:" "$RESULTS_DIR/${scenario_name}.log" | grep -o "avg_frame_time=[0-9.]*" | sed 's/avg_frame_time=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     echo "  FPS: ${fps:-0}"
     echo "  Frame Time: ${frame_time:-0}ms"

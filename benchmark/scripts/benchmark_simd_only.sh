@@ -78,8 +78,8 @@ for workload in "${workloads[@]}"; do
     # Additional cleanup for any remaining xvfb processes
     pkill -f "xvfb-run.*cosmic_systems" 2>/dev/null || true
 
-    # Extract SIMD-specific metrics from PERF_STATS
-    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${workload_name}.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
+    # Extract SIMD-specific metrics from PERF_STATS (using rolling averages for stability)
+    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${workload_name}.log" | grep -o "avg_fps=[0-9.]*" | sed 's/avg_fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
     kepler_time=$(grep "PERF_STATS:" "$RESULTS_DIR/${workload_name}.log" | grep -o "kepler_time=[0-9.]*" | sed 's/kepler_time=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     echo "  FPS: ${fps:-0}"

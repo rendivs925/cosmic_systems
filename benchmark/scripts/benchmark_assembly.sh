@@ -63,8 +63,8 @@ for func_test in "${functions[@]}"; do
     # Additional cleanup for any remaining xvfb processes
     pkill -f "xvfb-run.*cosmic_systems" 2>/dev/null || true
 
-    # Extract function-specific metrics from PERF_STATS
-    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${func_name}.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
+    # Extract function-specific metrics from PERF_STATS (using rolling averages for stability)
+    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${func_name}.log" | grep -o "avg_fps=[0-9.]*" | sed 's/avg_fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
     physics_time=$(grep "PERF_STATS:" "$RESULTS_DIR/${func_name}.log" | grep -o "physics_time=[0-9.]*" | sed 's/physics_time=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     echo "  FPS: ${fps:-0}"

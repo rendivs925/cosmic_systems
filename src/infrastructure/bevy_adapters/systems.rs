@@ -2038,9 +2038,11 @@ pub fn log_performance_stats(
 ) {
     // Log performance stats every 60 frames for benchmarking
     if perf_stats.frame_count % 60 == 0 {
-        println!("PERF_STATS: frame_time={:.2}ms fps={:.1} physics_time={:.3}ms kepler_time={:.3}ms rendering_time={:.3}ms",
+        println!("PERF_STATS: frame_time={:.2}ms avg_frame_time={:.2}ms fps={:.1} avg_fps={:.1} physics_time={:.3}ms kepler_time={:.3}ms rendering_time={:.3}ms",
             perf_stats.frame_time,
+            perf_stats.average_frame_time,
             perf_stats.fps,
+            perf_stats.average_fps,
             perf_stats.physics_update_time,
             perf_stats.kepler_solve_time,
             perf_stats.rendering_time
