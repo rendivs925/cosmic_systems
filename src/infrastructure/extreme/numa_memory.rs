@@ -1,9 +1,9 @@
 //! NUMA-aware memory allocation and CPU affinity for extreme performance
 //! This provides kernel-level optimizations for memory locality and thread pinning
+#![allow(dead_code)]
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::Layout;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 
 /// NUMA-aware memory allocator with custom allocation strategies
 #[derive(Debug)]
@@ -34,7 +34,7 @@ impl NumaAllocator {
     }
 
     /// Allocate memory with NUMA awareness (placeholder)
-    pub fn allocate_numa(&self, layout: Layout, _preferred_node: usize) -> *mut u8 {
+    pub fn allocate_numa(&self, _layout: Layout, _preferred_node: usize) -> *mut u8 {
         let _allocation_count = self.allocations.fetch_add(1, Ordering::Relaxed);
 
         // For extreme performance, we could implement:
@@ -99,7 +99,7 @@ impl CpuAffinityManager {
         // Set CPU affinity for current thread
         #[cfg(target_os = "linux")]
         {
-            use libc::{cpu_set_t, CPU_SET, CPU_ZERO, sched_setaffinity, sched_getaffinity};
+            use libc::{cpu_set_t, CPU_SET, CPU_ZERO, sched_setaffinity};
             use std::mem;
 
             let mut cpuset: cpu_set_t = unsafe { mem::zeroed() };

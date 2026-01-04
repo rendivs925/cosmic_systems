@@ -71,19 +71,11 @@ pub fn solve_kepler_batch(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-unsafe fn solve_kepler_avx512(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
+unsafe fn solve_kepler_avx512(planets: &[Planet], _quality: QualityLevel) -> Vec<Vec3> {
     // Ultimate AVX-512 implementation processing 16 Kepler equations simultaneously
     // This is the most advanced SIMD optimization available
 
     use std::arch::x86_64::*;
-
-    let iterations = match quality {
-        QualityLevel::Ultra => 12,
-        QualityLevel::High => 8,
-        QualityLevel::Medium => 6,
-        QualityLevel::Low => 4,
-        QualityLevel::Minimal => 2,
-    };
 
     let mut results = Vec::with_capacity(planets.len());
 
@@ -109,9 +101,6 @@ unsafe fn solve_kepler_avx512(planets: &[Planet], quality: QualityLevel) -> Vec<
         // Simplified Kepler approximation: E ≈ M + e*sin(M) for near-circular orbits
         // Using polynomial approximation for sin/cos to work with AVX-512
         let sin_m = simd_sin_approx_avx512(m_vec);
-        let e_sin_m = _mm512_mul_ps(e_vec, sin_m);
-        let e_approx = _mm512_add_ps(m_vec, e_sin_m);
-
         // Calculate r = a * (1 - e * cos(E)) ≈ a * (1 - e * cos(M))
         let cos_m_approx = simd_cos_approx_avx512(m_vec);
         let e_cos_m = _mm512_mul_ps(e_vec, cos_m_approx);
@@ -141,19 +130,11 @@ unsafe fn solve_kepler_avx512(planets: &[Planet], quality: QualityLevel) -> Vec<
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn solve_kepler_avx2(planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
+unsafe fn solve_kepler_avx2(planets: &[Planet], _quality: QualityLevel) -> Vec<Vec3> {
     // Ultimate AVX2 implementation with advanced SIMD optimizations
     // Process 8 Kepler equations simultaneously using AVX2 registers
 
     use std::arch::x86_64::*;
-
-    let iterations = match quality {
-        QualityLevel::Ultra => 8,
-        QualityLevel::High => 6,
-        QualityLevel::Medium => 4,
-        QualityLevel::Low => 2,
-        QualityLevel::Minimal => 1,
-    };
 
     let mut results = Vec::with_capacity(planets.len());
 
@@ -294,15 +275,7 @@ unsafe fn simd_cos_approx_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86
 }
 
 /// Quality-based Kepler position calculation
-fn calculate_position_with_quality(planet: &Planet, quality: QualityLevel) -> Vec3 {
-    let iterations = match quality {
-        QualityLevel::Ultra => 8,
-        QualityLevel::High => 6,
-        QualityLevel::Medium => 4,
-        QualityLevel::Low => 2,
-        QualityLevel::Minimal => 1,
-    };
-
+fn calculate_position_with_quality(planet: &Planet, _quality: QualityLevel) -> Vec3 {
     // Simplified Kepler calculation for demonstration
     // In practice, this would use the existing Kepler solver with quality-based iterations
     let angle = std::f32::consts::PI * 2.0 * 0.1; // Placeholder time-based angle

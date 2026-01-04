@@ -6,8 +6,7 @@ use bevy::prelude::*;
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
-use std::collections::{HashMap, VecDeque};
-use async_trait::async_trait;
+use std::collections::VecDeque;
 
 
 
@@ -423,8 +422,6 @@ impl AdaptiveQualityController {
             .sum::<f32>() / self.adaptation_history.len() as f32;
 
         // Target frame time in ms
-        let target_frame_time = 1000.0 / self.target_fps;
-
         // Quality adaptation logic
         let mut new_quality_index = self.current_quality_index;
 
@@ -446,7 +443,7 @@ impl AdaptiveQualityController {
         if new_quality_index != self.current_quality_index {
             self.current_quality_index = new_quality_index;
             self.last_adaptation = now;
-            println!("🎚️ Adaptive Quality: {} FPS → {} (GPU: {:.1}%, Mem: {:.1}%)",
+            println!("🎚️ Adaptive Quality: {} FPS → {:?} (GPU: {:.1}%, Mem: {:.1}%)",
                     avg_fps as i32, self.quality_levels[new_quality_index],
                     system_metrics.gpu_utilization * 100.0,
                     system_metrics.memory_pressure * 100.0);
@@ -604,7 +601,7 @@ pub fn process_hybrid_compute(
     // Fallback to SIMD
     println!("🔄 Falling back to SIMD CPU compute for {} planets", planets.len());
     let positions = simd_solver.solve_batch(planets, quality);
-    (positions, ComputeBackendType::SimdCpu)
+    (positions, ComputeBackendType::CpuSimd)
 }
 
 #[derive(Clone, Debug)]

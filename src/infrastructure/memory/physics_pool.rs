@@ -1,5 +1,4 @@
 use crate::infrastructure::bevy_adapters::components::QualityLevel;
-use bevy::math::Vec3;
 use bumpalo::Bump;
 
 /// Physics memory pool for zero-allocation physics updates
@@ -49,6 +48,7 @@ impl PhysicsMemoryPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::Vec3;
 
     #[test]
     fn test_memory_pool_allocation() {

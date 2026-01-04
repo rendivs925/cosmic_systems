@@ -375,6 +375,7 @@ fn spawn_celestial_body(
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
             // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
+            #[cfg(target_arch = "wasm32")]
             let orbit_entity = commands
                 .spawn(PbrBundle {
                     mesh: orbit_mesh.clone(),
@@ -400,6 +401,33 @@ fn spawn_celestial_body(
                 )))
                 .id();
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                commands
+                    .spawn(PbrBundle {
+                        mesh: orbit_mesh.clone(),
+                        material: orbit_material_handle.clone(),
+                        transform: Transform::default(),
+                        ..default()
+                    })
+                    .insert(OrbitComponent {
+                        radius: orbit_shape.semi_major_axis_units,
+                        planet_entity: parent_ent,
+                        material: orbit_material_handle.clone(),
+                        base_color: orbit_base_color,
+                        tilt: orbit_motion.tilt,
+                        wobble_speed: orbit_motion.wobble_speed,
+                        wobble_amount: orbit_motion.wobble_amount,
+                        spin_speed: orbit_motion.spin_speed,
+                        phase: orbit_motion.phase,
+                    })
+                    .insert(MoonOrbit)
+                    .insert(Name::new(format!(
+                        "Orbit {} around {}",
+                        planet.name, parent_name
+                    )));
+            }
+
             #[cfg(target_arch = "wasm32")]
             {
                 commands.entity(orbit_entity).insert(PendingOrbitMesh {
@@ -420,6 +448,7 @@ fn spawn_celestial_body(
         let orbit_material_handle = shared_orbit_material.clone();
         let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
+        #[cfg(target_arch = "wasm32")]
         let orbit_entity = commands
             .spawn(PbrBundle {
                 mesh: orbit_mesh.clone(),
@@ -440,6 +469,29 @@ fn spawn_celestial_body(
             })
             .insert(Name::new(format!("Orbit {}", planet.name)))
             .id();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            commands
+                .spawn(PbrBundle {
+                    mesh: orbit_mesh.clone(),
+                    material: orbit_material_handle.clone(),
+                    transform: Transform::default(),
+                    ..default()
+                })
+                .insert(OrbitComponent {
+                    radius: orbit_shape.semi_major_axis_units,
+                    planet_entity,
+                    material: orbit_material_handle.clone(),
+                    base_color: orbit_base_color,
+                    tilt: orbit_motion.tilt,
+                    wobble_speed: orbit_motion.wobble_speed,
+                    wobble_amount: orbit_motion.wobble_amount,
+                    spin_speed: orbit_motion.spin_speed,
+                    phase: orbit_motion.phase,
+                })
+                .insert(Name::new(format!("Orbit {}", planet.name)));
+        }
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -474,21 +526,20 @@ fn spawn_celestial_body(
         let ring_material_handle = materials.add(ring_material);
 
         commands.entity(planet_entity).with_children(|parent| {
-            let mut ring_entity = parent.spawn((
-                PbrBundle {
-                    mesh: create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius),
-                    material: ring_material_handle.clone(),
-                    transform: Transform::default(),
-                    ..default()
-                },
-                Selectable {
-                    name: "Saturn Rings".to_string(),
-                    selected: false,
-                },
-            ));
-
             #[cfg(target_arch = "wasm32")]
             {
+                let mut ring_entity = parent.spawn((
+                    PbrBundle {
+                        mesh: create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius),
+                        material: ring_material_handle.clone(),
+                        transform: Transform::default(),
+                        ..default()
+                    },
+                    Selectable {
+                        name: "Saturn Rings".to_string(),
+                        selected: false,
+                    },
+                ));
                 ring_entity.insert(PendingMaterialTextures {
                     material: ring_material_handle.clone(),
                     base_color_texture: None,
@@ -499,6 +550,22 @@ fn spawn_celestial_body(
                     emissive_path: None,
                     eager: false,
                 });
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                parent.spawn((
+                    PbrBundle {
+                        mesh: create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius),
+                        material: ring_material_handle.clone(),
+                        transform: Transform::default(),
+                        ..default()
+                    },
+                    Selectable {
+                        name: "Saturn Rings".to_string(),
+                        selected: false,
+                    },
+                ));
             }
         });
     }
@@ -519,19 +586,18 @@ fn spawn_celestial_body(
         commands.entity(planet_entity).with_children(|parent| {
             let cloud_material_handle = materials.add(cloud_material);
 
-            let mut cloud_entity = parent.spawn((
-                PbrBundle {
-                    mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
-                    material: cloud_material_handle.clone(),
-                    ..default()
-                },
-                CloudLayer {
-                    rotation_period_hours: clouds.rotation_period_hours,
-                },
-            ));
-
             #[cfg(target_arch = "wasm32")]
             {
+                let mut cloud_entity = parent.spawn((
+                    PbrBundle {
+                        mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
+                        material: cloud_material_handle.clone(),
+                        ..default()
+                    },
+                    CloudLayer {
+                        rotation_period_hours: clouds.rotation_period_hours,
+                    },
+                ));
                 cloud_entity.insert(PendingMaterialTextures {
                     material: cloud_material_handle.clone(),
                     base_color_texture: None,
@@ -542,6 +608,20 @@ fn spawn_celestial_body(
                     emissive_path: None,
                     eager: false,
                 });
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                parent.spawn((
+                    PbrBundle {
+                        mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
+                        material: cloud_material_handle.clone(),
+                        ..default()
+                    },
+                    CloudLayer {
+                        rotation_period_hours: clouds.rotation_period_hours,
+                    },
+                ));
             }
         });
     }
@@ -608,6 +688,7 @@ struct CloudLayerConfig {
 }
 
 #[derive(Resource)]
+#[allow(dead_code)]
 pub(crate) struct SharedOrbitMaterial {
     pub(crate) handle: Handle<StandardMaterial>,
 }

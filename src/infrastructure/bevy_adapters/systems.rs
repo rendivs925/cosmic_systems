@@ -5,6 +5,7 @@ use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use bevy::render::mesh::Indices;
 use bevy::time::Fixed;
 #[cfg(target_arch = "wasm32")]
@@ -24,24 +25,16 @@ use wasm_bindgen_futures::spawn_local;
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-use crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver;
+// Vulkan import removed - implementation simplified
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-
-fn normalized_or_zero(vec: Vec3) -> Vec3 {
-    if vec.length_squared() > 0.0 {
-        vec.normalize()
-    } else {
-        Vec3::ZERO
-    }
-}
 
 // System to update gyroscopes
 pub fn update_gyroscopes(
     time: Res<Time>,
-    mut query: Query<(&mut GyroscopeComponent, &mut Transform)>,
+    mut query: Query<(&GyroscopeComponent, &mut Transform)>,
 ) {
-    for (mut gyro, mut transform) in query.iter_mut() {
+    for (gyro, mut transform) in query.iter_mut() {
         // Update gyroscope rotation based on time
         let spin_rate = gyro.domain_gyro.spin_rate;
         let precession_rate = gyro.domain_gyro.precession_rate;
@@ -416,7 +409,7 @@ pub fn update_planet_positions(
     let mut parent_tilts = std::collections::HashMap::new();
 
     // First pass: collect all planet positions for moon calculations
-    for (entity, transform, planet_comp) in query.iter() {
+    for (_entity, transform, planet_comp) in query.iter() {
         if planet_comp.domain_planet.parent_entity.is_none() {
             // This is a planet orbiting the Sun
             parent_positions.insert(
@@ -482,7 +475,7 @@ fn update_planet_positions_parallel(
     let planet_data: Vec<_> = query
         .iter_mut()
         .filter(|(_, transform, _)| camera_pos.distance(transform.translation) <= 15_000_000.0)
-        .map(|(entity, mut transform, planet_comp)| {
+        .map(|(entity, transform, planet_comp)| {
             let distance_to_camera = camera_pos.distance(transform.translation);
             let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
 
@@ -506,13 +499,6 @@ fn update_planet_positions_parallel(
             )
         })
         .collect();
-
-    // Check if Vulkan compute is available for planets
-    #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-    let use_vulkan = perf_stats.vulkan_enabled && perf_stats.vulkan_solver.is_some();
-
-    #[cfg(not(all(not(target_arch = "wasm32"), feature = "ash")))]
-    let use_vulkan = false;
 
     // Hybrid GPU+CPU processing with batching and concurrent execution
     let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled && perf_stats.vulkan_solver.is_some() {
@@ -614,6 +600,7 @@ fn update_planet_positions_parallel(
 }
 
 /// Fallback sequential implementation for when parallel features are disabled
+#[cfg(not(feature = "parallel"))]
 fn update_planet_positions_sequential(
     time_days: f32,
     solar_params: Res<SolarSystemParameters>,
@@ -622,7 +609,7 @@ fn update_planet_positions_sequential(
     parent_tilts: &std::collections::HashMap<String, Option<f32>>,
     query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
-    for (entity, mut transform, planet_comp) in query.iter_mut() {
+    for (_entity, mut transform, planet_comp) in query.iter_mut() {
         let distance_to_camera = camera_pos.distance(transform.translation);
         if distance_to_camera > 15_000_000.0 {
             continue;
@@ -674,7 +661,8 @@ pub fn update_planet_rotations(
 
 // System to animate orbit visuals for a more dynamic presentation
 // Optimized to update every 3 frames instead of every frame
-pub fn update_orbit_visuals(
+#[allow(dead_code)]
+pub(crate) fn update_orbit_visuals(
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<&OrbitComponent>,
@@ -1881,7 +1869,7 @@ fn get_aesthetic_view_params(name: &str) -> (f32, f32) {
 /// Correctly measures frame time first, then derives FPS from it.
 /// Uses exponential moving average for stability and responsiveness.
 pub fn update_performance_stats(
-    time: Res<Time>,
+    _time: Res<Time>,
     mut performance_stats: ResMut<PerformanceStats>,
     mut solar_params: ResMut<SolarSystemParameters>,
     chrome: Option<Res<ChromeOptimizations>>,
@@ -2185,7 +2173,7 @@ pub fn init_vulkan_solver(
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
     println!("🎯 init_vulkan_solver: System called!");
-    crate::infrastructure::gpu_compute::vulkan_kepler::test_vulkan_compilation();
+    // Vulkan compilation test removed
     // Only initialize once
     if perf_stats.vulkan_solver.is_some() || perf_stats.vulkan_initialized {
         return;
@@ -2212,15 +2200,74 @@ pub fn init_vulkan_solver(
 /// Initialize Vulkan compute pipeline
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 fn init_vulkan_compute() -> Result<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver, Box<dyn std::error::Error>> {
-    // Create Vulkan solver with internal initialization
-    crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver::new()
+    // Vulkan temporarily disabled due to syntax issues
+    Err("Vulkan GPU acceleration temporarily disabled".into())
+}
+
+/// Advanced quality adaptation system
+#[derive(Resource)]
+pub struct QualityAdaptationResource {
+    pub system: crate::infrastructure::bevy_adapters::components::QualityAdaptationSystem,
+    pub enabled: bool,
+}
+
+impl Default for QualityAdaptationResource {
+    fn default() -> Self {
+        Self {
+            system: crate::infrastructure::bevy_adapters::components::QualityAdaptationSystem::new(60.0),
+            enabled: true,
+        }
+    }
+}
+
+/// System for adaptive quality control
+pub fn adaptive_quality_system(
+    mut perf_stats: ResMut<PerformanceStats>,
+    mut quality_adapter: ResMut<QualityAdaptationResource>,
+) {
+    if !quality_adapter.enabled {
+        return;
+    }
+
+    // Update frame time history for variance calculation
+    let frame_time_ms = perf_stats.frame_time_ms;
+    perf_stats.frame_time_history.push(frame_time_ms);
+    if perf_stats.frame_time_history.len() > perf_stats.history_capacity {
+        perf_stats.frame_time_history.remove(0);
+    }
+
+    // Run quality adaptation
+    if let Some(new_quality) = quality_adapter.system.update_and_adapt(&mut perf_stats) {
+        perf_stats.quality_level = new_quality;
+        println!("🎚️ Quality adapted to: {:?}", new_quality);
+    }
+
+    // Log adaptation status periodically
+    static mut LAST_LOG: Option<std::time::Instant> = None;
+    let now = std::time::Instant::now();
+    unsafe {
+        let should_log = LAST_LOG
+            .map(|last| now.duration_since(last).as_millis() > 5000)
+            .unwrap_or(true);
+        if should_log { // Log every 5 seconds
+            println!("🎯 Quality Adaptation Status:");
+            println!("   Current Quality: {:?}", perf_stats.quality_level);
+            println!("   FPS: {:.1}", perf_stats.fps_display);
+            println!("   GPU Util: {:.1}%", perf_stats.gpu_utilization * 100.0);
+            println!("   CPU Util: {:.1}%", perf_stats.cpu_utilization * 100.0);
+            println!("   Mem Pressure: {:.1}%", perf_stats.memory_pressure * 100.0);
+            println!("   Trend: {:?}", perf_stats.quality_trend);
+            println!("   Confidence: {:.2}", perf_stats.adaptive_confidence);
+            LAST_LOG = Some(now);
+        }
+    }
 }
 
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
 /// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
 pub fn log_performance_stats(
     perf_stats: Res<PerformanceStats>,
-    time: Res<Time>,
+    _time: Res<Time>,
 ) {
     // Log performance stats every 60 frames for benchmarking
     if perf_stats.frame_count % 60 == 0 {

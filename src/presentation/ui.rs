@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use bevy::prelude::*;
 use bevy::text::BreakLineOn;
 
@@ -551,7 +553,6 @@ pub(crate) fn update_navbar(
         let active = match button.action {
             MenuAction::Orbits => solar_params.show_orbits,
             MenuAction::Explore => menu_state.selector_open,
-            _ => false,
         };
         let (bg, stroke) = menu_button_colors(button.primary, active);
         *background = BackgroundColor(bg);

@@ -31,11 +31,6 @@ pub mod approximations {
         // sin(x) ≈ x * P(x²) where P is an even polynomial
         // P(t) = 1 - t/6 + t²/120 - t³/5040 + t⁴/362880 - t⁵/39916800
         let t = x_reduced * x_reduced;  // x²
-        let t2 = t * t;                  // x⁴
-        let t3 = t2 * t;                 // x⁶
-        let t4 = t3 * t;                 // x⁸
-        let t5 = t4 * t;                 // x¹⁰
-
         // Horner's method for polynomial evaluation (most efficient)
         let p = 1.0 - t * (1.0/6.0 - t * (1.0/120.0 - t * (1.0/5040.0 - t * (1.0/362880.0 - t * (1.0/39916800.0)))));
 
@@ -57,7 +52,7 @@ pub mod approximations {
     /// Extreme-performance cosine approximation using Chebyshev polynomials
     pub fn cos_approx_extreme(x: f64) -> f64 {
         // cos(x) = sin(x + π/2), so we can reuse the sine approximation
-        approximations::sin_approx_extreme(x + std::f64::consts::FRAC_PI_2)
+        self::sin_approx_extreme(x + std::f64::consts::FRAC_PI_2)
     }
 
     /// Fallback sine approximation using polynomial series
@@ -141,7 +136,7 @@ impl AsmKeplerSolver {
     /// High-performance Kepler equation solver using Newton's method with optimized approximations
     pub fn solve_kepler_optimized(&self, mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
         // Use optimized trigonometric functions
-        self.solve_kepler_optimized_impl(mean_anomaly, eccentricity, tolerance)
+        Self::solve_kepler_optimized_impl(eccentricity, mean_anomaly, tolerance)
     }
 
     /// Extreme performance implementation using algorithmic optimizations
@@ -188,6 +183,7 @@ impl AsmKeplerSolver {
 
     /// Optimized Newton-Raphson Kepler equation solver
     /// Implements proper root-finding for Kepler's equation: M = E - e*sin(E)
+    #[allow(dead_code)]
     fn solve_kepler_newton_optimized(e: f64, m: f64, tolerance: f64) -> f64 {
         // For near-circular orbits (e < 0.3), use M + e*sin(M) as initial guess
         // For higher eccentricities, use better approximations
@@ -250,6 +246,7 @@ impl AsmKeplerSolver {
 
     /// True inline assembly Kepler solver using SSE/AVX instructions
     #[cfg(target_arch = "x86_64")]
+    #[allow(dead_code)]
     unsafe fn solve_kepler_asm_avx512(e: f64, m: f64, _tolerance: f64) -> f64 {
         let mut result: f64;
 

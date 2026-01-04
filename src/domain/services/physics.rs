@@ -10,12 +10,6 @@ use rayon::prelude::*;
 #[cfg(target_arch = "x86_64")]
 use std::is_x86_feature_detected;
 
-// SIMD intrinsics
-#[cfg(all(feature = "simd", target_feature = "avx2"))]
-use std::arch::x86_64::*;
-#[cfg(all(feature = "simd", target_feature = "avx512f"))]
-use std::arch::x86_64::*;
-
 pub fn calculate_precession_angle(precession_rate: f32, delta_time: f32) -> f32 {
     precession_rate * delta_time
 }
@@ -477,10 +471,6 @@ fn elements_from_degrees(
     }
 }
 
-fn solve_kepler(mean_anomaly: f32, eccentricity: f32) -> f32 {
-    solve_kepler_adaptive(mean_anomaly, eccentricity, 8)
-}
-
 /// Adaptive Kepler equation solver with configurable iteration count
 /// Higher iterations = more accuracy, lower iterations = better performance
 pub fn solve_kepler_adaptive(mean_anomaly: f32, eccentricity: f32, max_iterations: u32) -> f32 {
@@ -636,7 +626,7 @@ pub fn solve_kepler_simd_batch(
 }
 
 /// AVX-512 Kepler solver - processes 16 equations simultaneously
-#[cfg(all(feature = "simd", target_feature = "avx512f"))]
+#[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f"))]
 fn solve_kepler_avx512_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],
@@ -709,8 +699,17 @@ fn solve_kepler_avx512_batch(
     results
 }
 
+#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "avx512f"))))]
+fn solve_kepler_avx512_batch(
+    mean_anomalies: &[f32],
+    eccentricities: &[f32],
+    max_iterations: u32,
+) -> Vec<f32> {
+    solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
+}
+
 /// AVX-256 Kepler solver - processes 8 equations simultaneously
-#[cfg(all(feature = "simd", target_feature = "avx2"))]
+#[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2"))]
 fn solve_kepler_avx2_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],
@@ -780,8 +779,17 @@ fn solve_kepler_avx2_batch(
     results
 }
 
+#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "avx2"))))]
+fn solve_kepler_avx2_batch(
+    mean_anomalies: &[f32],
+    eccentricities: &[f32],
+    max_iterations: u32,
+) -> Vec<f32> {
+    solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
+}
+
 /// SSE4 Kepler solver - processes 4 equations simultaneously
-#[cfg(all(feature = "simd", target_feature = "sse4.1"))]
+#[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1"))]
 fn solve_kepler_sse4_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],
@@ -828,6 +836,15 @@ fn solve_kepler_sse4_batch(
     }
 
     results
+}
+
+#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "sse4.1"))))]
+fn solve_kepler_sse4_batch(
+    mean_anomalies: &[f32],
+    eccentricities: &[f32],
+    max_iterations: u32,
+) -> Vec<f32> {
+    solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
 }
 
 /// Scalar fallback implementation
@@ -894,8 +911,6 @@ fn avx2_cos_approx(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
     use std::arch::x86_64::*;
 
     let x2 = unsafe { _mm256_mul_ps(x, x) };
-    let x4 = unsafe { _mm256_mul_ps(x2, x2) };
-
     let term1 = unsafe { _mm256_set1_ps(1.0) };
     let term2 = unsafe { _mm256_div_ps(x2, _mm256_set1_ps(2.0)) };
 
@@ -920,7 +935,7 @@ pub fn transform_orbital_points_simd(
 }
 
 /// AVX-512 implementation for orbital point transformations
-#[cfg(all(feature = "simd", target_feature = "avx512f"))]
+#[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f"))]
 fn transform_orbital_points_avx512(
     points: &[(f32, f32)],
     orbital_elements: &[(f32, f32, f32)],
@@ -1020,8 +1035,16 @@ fn transform_orbital_points_avx512(
     results
 }
 
+#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "avx512f"))))]
+fn transform_orbital_points_avx512(
+    points: &[(f32, f32)],
+    orbital_elements: &[(f32, f32, f32)],
+) -> Vec<Vec3> {
+    transform_orbital_points_scalar(points, orbital_elements)
+}
+
 /// AVX-256 implementation for orbital point transformations
-#[cfg(all(feature = "simd", target_feature = "avx2"))]
+#[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2"))]
 fn transform_orbital_points_avx2(
     points: &[(f32, f32)],
     orbital_elements: &[(f32, f32, f32)],
@@ -1111,6 +1134,14 @@ fn transform_orbital_points_avx2(
     }
 
     results
+}
+
+#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "avx2"))))]
+fn transform_orbital_points_avx2(
+    points: &[(f32, f32)],
+    orbital_elements: &[(f32, f32, f32)],
+) -> Vec<Vec3> {
+    transform_orbital_points_scalar(points, orbital_elements)
 }
 
 /// Scalar fallback for orbital point transformations
