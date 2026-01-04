@@ -59,8 +59,8 @@ help:
 	@echo "  test-release    - Run tests in release mode"
 	@echo "  test-parallel   - Run tests with parallel features"
 	@echo "  benchmark       - Run cargo benchmarks"
-	@echo "  benchmark-all   - Run comprehensive optimization benchmarks ⭐"
-	@echo "  benchmark-quick - Run quick individual benchmarks (recommended)"
+	@echo "  benchmark-all   - Run quick performance benchmark ⭐"
+	@echo "  benchmark-quick - Run quick individual benchmarks"
 	@echo "  benchmark-demo  - Show optimization capabilities overview"
 	@echo "  benchmark-adaptive - Test adaptive Kepler solver only"
 	@echo "  benchmark-simd  - Test SIMD optimizations only"
@@ -186,21 +186,11 @@ benchmark-prep:
 	@echo ""
 
 benchmark-run: benchmark-prep
-	@echo "Running comprehensive performance benchmarks..."
-	@echo "=============================================="
-	@echo "This will test all optimization combinations:"
-	@echo "  - Adaptive Kepler Solver"
-	@echo "  - SIMD Vectorization (AVX-512/AVX-2)"
-	@echo "  - Parallel Processing (Rayon)"
-	@echo "  - Assembly-Level Optimizations"
-	@echo "  - Rendering Throttling"
-	@echo "  - Memory Pool Optimizations"
-	@echo "  - Combined Performance Analysis"
+	@echo "Running quick performance benchmark..."
+	@echo "====================================="
+	@echo "This demonstrates real performance metrics with all optimizations enabled."
 	@echo ""
-	@echo "Note: This may take 10-15 minutes to complete all benchmarks."
-	@echo "Run 'make benchmark-adaptive', 'make benchmark-simd', or 'make benchmark-assembly' for individual tests."
-	@echo ""
-	timeout 600 ./benchmark.sh comprehensive || (echo "Benchmark timed out or failed. Check benchmark/results/ for partial results."; exit 0)
+	./benchmark.sh quick
 
 benchmark-analyze: benchmark-run
 	@echo "Analyzing benchmark results..."

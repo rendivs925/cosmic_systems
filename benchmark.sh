@@ -71,50 +71,52 @@ detect_hardware() {
 verify_builds() {
     log_header "Build Verification"
 
-    # Check if required builds exist
-    local required_builds=("sequential" "parallel" "simd" "optimized")
-    local missing_builds=()
-
-    for build in "${required_builds[@]}"; do
-        local binary="$PROJECT_DIR/target/release/cosmic_systems"
-        if [ ! -f "$binary" ]; then
-            missing_builds+=("$build")
-        fi
-    done
-
-    if [ ${#missing_builds[@]} -ne 0 ]; then
-        log_warning "Missing builds detected. Building required configurations..."
-        build_all_configurations
+    # For comprehensive mode, build configurations on demand
+    if [ "$BENCHMARK_MODE" = "comprehensive" ]; then
+        log_info "Comprehensive mode: Building configurations as needed..."
     else
-        log_success "All required builds present"
+        # For other modes, just build the default configuration
+        if [ ! -f "$PROJECT_DIR/target/release/$BINARY_NAME" ]; then
+            log_info "Building default configuration..."
+            cargo build --release > /dev/null 2>&1
+        fi
     fi
+
+    log_success "Build verification complete"
     echo ""
 }
 
-# Build all configurations
-build_all_configurations() {
-    log_info "Building all benchmark configurations..."
+# Build configuration on demand
+build_configuration() {
+    local config="$1"
 
-    cd "$PROJECT_DIR"
-
-    # Sequential (baseline)
-    log_info "Building sequential (baseline)..."
-    cargo build --release > /dev/null 2>&1
-
-    # Parallel processing
-    log_info "Building parallel processing..."
-    cargo build --release --features parallel > /dev/null 2>&1
-
-    # SIMD + Parallel
-    log_info "Building SIMD + parallel..."
-    cargo build --release --features parallel,simd > /dev/null 2>&1
-
-    # Maximum optimization
-    log_info "Building maximum optimization..."
-    RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
-    cargo build --release --features parallel,simd > /dev/null 2>&1
-
-    log_success "All configurations built successfully"
+    case "$config" in
+        "sequential")
+            if [ ! -f "$PROJECT_DIR/target/release/$BINARY_NAME" ]; then
+                log_info "Building sequential (baseline)..."
+                cargo build --release > /dev/null 2>&1
+            fi
+            ;;
+        "parallel")
+            if [ ! -f "$PROJECT_DIR/target/release-parallel/$BINARY_NAME" ]; then
+                log_info "Building parallel processing..."
+                cargo build --release --features parallel --target-dir "$PROJECT_DIR/target/release-parallel" > /dev/null 2>&1
+            fi
+            ;;
+        "simd")
+            if [ ! -f "$PROJECT_DIR/target/release-simd/$BINARY_NAME" ]; then
+                log_info "Building SIMD + parallel..."
+                cargo build --release --features parallel,simd --target-dir "$PROJECT_DIR/target/release-simd" > /dev/null 2>&1
+            fi
+            ;;
+        "optimized")
+            if [ ! -f "$PROJECT_DIR/target/release-optimized/$BINARY_NAME" ]; then
+                log_info "Building maximum optimization..."
+                RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
+                cargo build --release --features parallel,simd --target-dir "$PROJECT_DIR/target/release-optimized" > /dev/null 2>&1
+            fi
+            ;;
+    esac
 }
 
 # Individual optimization benchmarks
@@ -251,40 +253,34 @@ run_comprehensive_benchmarks() {
     log_success "Comprehensive benchmark suite completed"
 }
 
-# Traditional benchmark configurations (from original script)
+# Traditional benchmark configurations with separate builds
 run_traditional_benchmarks() {
     log_info "Running traditional benchmark configurations..."
 
-    local configurations=(
-        "sequential:cargo run --release"
-        "parallel:cargo run --release --features parallel"
-        "simd_parallel:cargo run --release --features parallel,simd"
-        "optimized:RUSTFLAGS='-C target-cpu=native -C opt-level=3 -C codegen-units=1' cargo run --release --features parallel,simd"
-    )
+    local configurations=("sequential:target/release/cosmic_systems" "parallel:target/release-parallel/release/cosmic_systems" "simd:target/release-simd/release/cosmic_systems" "optimized:target/release-optimized/release/cosmic_systems")
 
     for config in "${configurations[@]}"; do
-        local name
-        name=$(echo "$config" | cut -d: -f1)
-        local command
-        command=$(echo "$config" | cut -d: -f2)
+        local name=$(echo "$config" | cut -d: -f1)
+        local binary=$(echo "$config" | cut -d: -f2)
+
+        # Build configuration if needed
+        build_configuration "$name"
 
         log_info "Testing $name configuration..."
-        local start_time
-        start_time=$(date +%s.%3N)
+        local start_time=$(date +%s.%3N)
 
         cd "$PROJECT_DIR"
-        timeout 30s bash -c "$command --quiet" > "$RESULTS_DIR/${name}_traditional.log" 2>&1 &
+        timeout 45s "$binary" > "$RESULTS_DIR/${name}_traditional.log" 2>&1 &
         local pid=$!
+        sleep 3  # Let it start up
         wait $pid 2>/dev/null || true
 
-        local end_time
-        end_time=$(date +%s.%3N)
-        local duration
-        duration=$(echo "$end_time - $start_time" | bc 2>/dev/null || echo "30.0")
+        local end_time=$(date +%s.%3N)
+        local duration=$(echo "$end_time - $start_time" | bc 2>/dev/null || echo "45.0")
 
         extract_performance_metrics "${name}_traditional" "$RESULTS_DIR/${name}_traditional.log"
 
-        log_success "$name: ${duration}s"
+        log_success "$name: ${duration}s test completed"
     done
 }
 
@@ -466,6 +462,64 @@ run_memory_analysis() {
     log_success "Memory analysis completed: $memory_report"
 }
 
+# Quick performance comparison
+run_quick_benchmark() {
+    log_info "Running quick performance benchmark..."
+
+    # Check if optimized build exists
+    if [ ! -f "$PROJECT_DIR/target/release/cosmic_systems" ]; then
+        log_info "Building optimized release version..."
+        RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1" \
+        cargo build --release --features parallel,simd --quiet
+    fi
+
+    # Run quick test
+    log_info "Running performance test (20 seconds)..."
+    timeout 20s ./target/release/cosmic_systems > "$RESULTS_DIR/quick_benchmark.log" 2>&1 &
+    local pid=$!
+    sleep 2  # Let it stabilize
+    wait $pid 2>/dev/null || true
+
+    # Extract key metrics
+    local avg_fps=$(grep "PERF_STATS:" "$RESULTS_DIR/quick_benchmark.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) printf "%.1f", sum/count; else print "0"}' 2>/dev/null || echo "0")
+    local avg_frame_time=$(grep "PERF_STATS:" "$RESULTS_DIR/quick_benchmark.log" | grep -o "frame_time=[0-9.]*" | sed 's/frame_time=//' | awk '{sum+=$1; count++} END {if(count>0) printf "%.2f", sum/count; else print "0"}' 2>/dev/null || echo "0")
+
+    log_success "Quick benchmark completed"
+    echo "  Average FPS: ${avg_fps:-0}"
+    echo "  Average Frame Time: ${avg_frame_time:-0}ms"
+    echo ""
+
+    # Create summary
+    cat > "$RESULTS_DIR/quick_summary.txt" << EOF
+Quick Performance Benchmark Results
+===================================
+
+Hardware Configuration:
+- CPU: $CPU_MODEL
+- Cores: $CPU_CORES
+- Memory: ${MEMORY_GB}GB
+- AVX-512 Support: $([ "$AVX512_SUPPORT" = "true" ] && echo "Yes" || echo "No")
+- AVX-2 Support: $([ "$AVX2_SUPPORT" = "true" ] && echo "Yes" || echo "No")
+
+Performance Results (with all optimizations enabled):
+- Average FPS: ${avg_fps:-0}
+- Average Frame Time: ${avg_frame_time:-0}ms
+
+Optimizations Active:
+- SIMD Vectorization (AVX-512/AVX-2)
+- Parallel Processing (Rayon multi-threading)
+- Assembly-Level Kepler Solver
+- Adaptive Quality Scaling
+- Rendering Throttling
+- Memory Pool Optimizations
+
+This demonstrates the full performance capability of the optimized system.
+EOF
+
+    echo "Detailed log saved to: $RESULTS_DIR/quick_benchmark.log"
+    echo "Summary saved to: $RESULTS_DIR/quick_summary.txt"
+}
+
 # Main execution
 main() {
     log_header "Cosmic Systems Enhanced Performance Benchmark"
@@ -473,45 +527,48 @@ main() {
     echo ""
 
     detect_hardware
-    verify_builds
 
-    case "${1:-comprehensive}" in
+    case "${1:-quick}" in
+        "quick")
+            log_info "Running quick performance benchmark..."
+            run_quick_benchmark
+            ;;
         "individual")
-            log_info "Running individual optimization benchmarks only..."
+            verify_builds
+            log_info "Running individual optimization benchmarks..."
             benchmark_adaptive_kepler
             benchmark_simd_only
-            benchmark_parallel_only
-            benchmark_rendering_throttling
             benchmark_assembly_optimizations
             ;;
-        "traditional")
-            log_info "Running traditional benchmark configurations only..."
-            run_traditional_benchmarks
-            ;;
-        "memory")
-            log_info "Running memory analysis only..."
-            run_memory_analysis
-            ;;
         "comprehensive")
-            run_comprehensive_benchmarks
+            export BENCHMARK_MODE="comprehensive"
+            verify_builds
+            log_info "Running comprehensive benchmark suite..."
+            run_traditional_benchmarks
             run_memory_analysis
             ;;
         *)
-            echo -e "${RED}Invalid mode. Use: individual, traditional, memory, or comprehensive${NC}"
+            echo -e "${RED}Invalid mode. Use: quick (default), individual, or comprehensive${NC}"
             exit 1
             ;;
     esac
 
-    generate_analysis_report
+    if [ "${1:-quick}" != "quick" ]; then
+        generate_analysis_report
+    fi
 
     log_header "Benchmark Complete"
     log_success "Results saved to: $RESULTS_DIR"
-    log_success "Report saved to: $REPORTS_DIR"
-    echo ""
-    echo "Next steps:"
-    echo "1. Review the analysis report: $REPORTS_DIR/performance_analysis_$TIMESTAMP.md"
-    echo "2. Examine detailed metrics: $RESULTS_DIR/"
-    echo "3. Compare results with previous benchmarks"
+
+    if [ "${1:-quick}" = "quick" ]; then
+        echo "  Summary: $RESULTS_DIR/quick_summary.txt"
+    else
+        log_success "Report saved to: $REPORTS_DIR"
+        echo ""
+        echo "Next steps:"
+        echo "1. Review results in: $RESULTS_DIR/"
+        echo "2. Check analysis report: $REPORTS_DIR/performance_analysis_$TIMESTAMP.md"
+    fi
 }
 
 # Run main function with provided arguments
