@@ -142,7 +142,7 @@ impl VulkanKeplerSolver {
         unsafe { self.device.begin_command_buffer(command_buffer, &begin_info)? };
 
         // Copy input data to GPU
-        let copy_input = ash::vk::BufferCopy::builder().size(input_size);
+        let copy_input = ash::vk::BufferCopy::builder().size(input_size).build();
         unsafe {
             self.device.cmd_copy_buffer(command_buffer, *staging_input, input_buffer.buffer, &[copy_input]);
         }
@@ -215,7 +215,7 @@ impl VulkanKeplerSolver {
         }
 
         // Copy output back to staging
-        let copy_output = ash::vk::BufferCopy::builder().size(output_size);
+        let copy_output = ash::vk::BufferCopy::builder().size(output_size).build();
         unsafe {
             self.device.cmd_copy_buffer(command_buffer, output_buffer.buffer, *staging_output, &[copy_output]);
         }
@@ -225,10 +225,11 @@ impl VulkanKeplerSolver {
 
         // Submit and wait
         let submit_info = ash::vk::SubmitInfo::builder()
-            .command_buffers(&[command_buffer]);
+            .command_buffers(&[command_buffer])
+            .build();
         unsafe {
             self.device.queue_submit(self.queue, &[submit_info], ash::vk::Fence::null())?;
-            self.device.queue_wait_idle(self.queue)?;
+            self.device.wait_for_fences(&[self.cmd_pool.fence], true, u64::MAX)?;
         }
 
         // Cleanup
@@ -257,9 +258,10 @@ impl VulkanKeplerSolver {
 
     /// Allocate descriptor set
     fn allocate_descriptor_set(&self, descriptor_pool: ash::vk::DescriptorPool) -> Result<ash::vk::DescriptorSet, Box<dyn std::error::Error>> {
+        let set_layouts = [self.descriptor_set_layout];
         let alloc_info = ash::vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&[self.descriptor_set_layout]);
+            .set_layouts(&set_layouts);
 
         let descriptor_set = unsafe { self.device.allocate_descriptor_sets(&alloc_info)?[0] };
         Ok(descriptor_set)
