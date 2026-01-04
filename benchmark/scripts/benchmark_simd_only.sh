@@ -61,14 +61,21 @@ for workload in "${workloads[@]}"; do
 
     echo -e "${GREEN}Workload: $workload_desc${NC}"
 
-    # Run benchmark (in practice, would need app support for different planet counts)
-    timeout 25s cargo run --release --features parallel,simd --quiet > "$RESULTS_DIR/${workload_name}.log" 2>&1 &
+    # Build first, then run to avoid mixing compilation output with app output
+    echo "Building application with SIMD..."
+    cargo build --release --features parallel,simd > /dev/null 2>&1
+
+    # Run the built application with performance logging
+    echo "Running SIMD benchmark..."
+    timeout 45s ./target/release/cosmic_systems > "$RESULTS_DIR/${workload_name}.log" 2>&1 &
     pid=$!
+    # Wait a bit for the application to start and stabilize
+    sleep 3
     wait $pid 2>/dev/null || true
 
-    # Extract SIMD-specific metrics
-    fps=$(grep -o "FPS: [0-9.]*" "$RESULTS_DIR/${workload_name}.log" | awk '{sum+=$2; count++} END {print sum/count}' 2>/dev/null || echo "0")
-    kepler_time=$(grep -o "Kepler time: [0-9.]*ms" "$RESULTS_DIR/${workload_name}.log" | awk '{sum+=$3; count++} END {print sum/count}' 2>/dev/null || echo "0")
+    # Extract SIMD-specific metrics from PERF_STATS
+    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${workload_name}.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
+    kepler_time=$(grep "PERF_STATS:" "$RESULTS_DIR/${workload_name}.log" | grep -o "kepler_time=[0-9.]*" | sed 's/kepler_time=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     echo "  FPS: ${fps:-0}"
     echo "  Kepler Time: ${kepler_time:-0}ms"

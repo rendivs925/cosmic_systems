@@ -46,15 +46,21 @@ for scenario in "${test_scenarios[@]}"; do
 
     echo -e "${GREEN}Scenario: $scenario_desc${NC}"
 
-    # Run the benchmark (would need modification to app to support different scenarios)
-    # For now, just run the standard benchmark
-    timeout 20s cargo run --release --quiet > "$RESULTS_DIR/${scenario_name}.log" 2>&1 &
+    # Build first, then run to avoid mixing compilation output with app output
+    echo "Building application..."
+    cargo build --release > /dev/null 2>&1
+
+    # Run the built application with performance logging
+    echo "Running benchmark..."
+    timeout 45s ./target/release/cosmic_systems > "$RESULTS_DIR/${scenario_name}.log" 2>&1 &
     pid=$!
+    # Wait a bit for the application to start and stabilize
+    sleep 3
     wait $pid 2>/dev/null || true
 
-    # Extract metrics
-    fps=$(grep -o "FPS: [0-9.]*" "$RESULTS_DIR/${scenario_name}.log" | awk '{sum+=$2; count++} END {print sum/count}' 2>/dev/null || echo "0")
-    frame_time=$(grep -o "Frame time: [0-9.]*ms" "$RESULTS_DIR/${scenario_name}.log" | awk '{sum+=$3; count++} END {print sum/count}' 2>/dev/null || echo "0")
+    # Extract metrics from PERF_STATS output
+    fps=$(grep "PERF_STATS:" "$RESULTS_DIR/${scenario_name}.log" | grep -o "fps=[0-9.]*" | sed 's/fps=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
+    frame_time=$(grep "PERF_STATS:" "$RESULTS_DIR/${scenario_name}.log" | grep -o "frame_time=[0-9.]*" | sed 's/frame_time=//' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print "0"}' 2>/dev/null || echo "0")
 
     echo "  FPS: ${fps:-0}"
     echo "  Frame Time: ${frame_time:-0}ms"

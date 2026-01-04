@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use infrastructure::bevy_adapters::components::PerformanceStats;
+use infrastructure::bevy_adapters::systems::log_performance_stats;
 
 // Run condition for visual updates (every 3 frames)
 fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
@@ -96,6 +97,7 @@ fn main() {
             update_planet_selection_visuals.run_if(every_n_frames(2)),
         );
         app.add_systems(Update, update_performance_stats);
+        app.add_systems(Update, log_performance_stats);
         app.add_systems(Update, update_info_card);
         app.add_systems(Update, update_notifications_ui);
         app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));

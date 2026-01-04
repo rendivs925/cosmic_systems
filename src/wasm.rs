@@ -135,6 +135,7 @@ pub fn main() {
         update_planet_selection_visuals.run_if(every_n_frames(4)),
     );
     app.add_systems(Update, update_performance_stats);
+    app.add_systems(Update, log_performance_stats);
     app.add_systems(Update, adapt_worker_pool);
     app.add_systems(Update, cap_fixed_overstep);
     app.add_systems(Update, update_info_card);
