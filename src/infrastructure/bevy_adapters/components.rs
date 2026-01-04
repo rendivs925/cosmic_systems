@@ -572,6 +572,8 @@ impl QualityAdaptationSystem {
 pub fn process_hybrid_compute(
     planets: &[Planet],
     quality: QualityLevel,
+    time_days: f32,
+    scale_factor: f32,
     vulkan_available: bool,
     vulkan_solver: &mut Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
     simd_solver: &mut crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver,
@@ -583,7 +585,7 @@ pub fn process_hybrid_compute(
         // Try Vulkan first
         if let Some(vulkan) = vulkan_solver {
             println!("🚀 Vulkan solver available, calling solve_batch...");
-            match vulkan.solve_batch(planets, quality) {
+            match vulkan.solve_batch(planets, quality, time_days, scale_factor) {
                 Ok(positions) => {
                     println!("✅ Vulkan GPU compute succeeded!");
                     return (positions, ComputeBackendType::VulkanGpu);

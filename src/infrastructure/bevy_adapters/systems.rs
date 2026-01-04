@@ -532,6 +532,8 @@ fn update_planet_positions_parallel(
                         let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
                             planet_chunk,
                             perf_stats.quality_level,
+                            time_days,
+                            solar_params.scale_factor,
                             perf_stats.vulkan_enabled,
                             &mut perf_stats.vulkan_solver,
                             &mut simd_solver,
@@ -2209,8 +2211,7 @@ fn init_vulkan_compute() -> Result<
     crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver,
     Box<dyn std::error::Error>,
 > {
-    // Vulkan temporarily disabled due to syntax issues
-    Err("Vulkan GPU acceleration temporarily disabled".into())
+    crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver::new()
 }
 
 /// Advanced quality adaptation system
