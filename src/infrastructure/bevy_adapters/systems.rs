@@ -213,13 +213,9 @@ pub fn update_planet_positions(
     let mut worker_tasks: Vec<(f32, PhysicsTask)> = Vec::new();
     let mut gpu_inputs: Vec<PlanetGpuInput> = Vec::new();
     let mut gpu_entities: Vec<Entity> = Vec::new();
-    let max_distance = 15_000_000.0;
 
     for (entity, mut transform, planet_comp) in query.iter_mut() {
         let distance_to_camera = camera_pos.distance(transform.translation);
-        if distance_to_camera > max_distance {
-            continue;
-        }
 
         let (parent_position, parent_tilt) =
             if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
@@ -468,7 +464,6 @@ fn update_planet_positions_parallel(
     // Collect planet data for batch processing
     let planet_data: Vec<_> = query
         .iter_mut()
-        .filter(|(_, transform, _)| camera_pos.distance(transform.translation) <= 15_000_000.0)
         .map(|(entity, transform, planet_comp)| {
             let distance_to_camera = camera_pos.distance(transform.translation);
             let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
@@ -618,9 +613,6 @@ fn update_planet_positions_sequential(
 ) {
     for (_entity, mut transform, planet_comp) in query.iter_mut() {
         let distance_to_camera = camera_pos.distance(transform.translation);
-        if distance_to_camera > 15_000_000.0 {
-            continue;
-        }
 
         let (parent_position, parent_tilt) =
             if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
