@@ -58,7 +58,7 @@ optional = true             # Optional for parallel processing
 
 [features]
 default = ["native"]
-native = []                 # Enable native binary build
+native = []                 # Enable native binary build (Vulkan disabled for now)
 simd = []                   # Enable SIMD optimizations
 parallel = ["rayon"]        # Enable parallel processing
 

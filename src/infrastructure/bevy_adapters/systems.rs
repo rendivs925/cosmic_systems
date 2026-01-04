@@ -2184,18 +2184,20 @@ pub fn init_vulkan_solver(
         return;
     }
 
+    println!("🔥 init_vulkan_solver: Starting Vulkan compute initialization...");
     perf_stats.vulkan_initialized = true;
+    println!("🔥 init_vulkan_solver: Attempting Vulkan compute initialization...");
 
     // Try to initialize Vulkan solver
     match init_vulkan_compute() {
         Ok(solver) => {
             perf_stats.vulkan_solver = Some(solver);
             perf_stats.vulkan_enabled = true;
-            println!("Vulkan compute solver initialized successfully - GPU acceleration active!");
+            println!("✅ init_vulkan_solver: Vulkan compute solver initialized successfully - GPU acceleration active!");
         }
         Err(e) => {
             perf_stats.vulkan_enabled = false;
-            println!("Vulkan compute initialization failed (continuing with CPU): {}", e);
+            println!("❌ init_vulkan_solver: Vulkan compute initialization failed (continuing with CPU SIMD): {}", e);
         }
     }
 }
@@ -2260,6 +2262,9 @@ fn init_vulkan_compute() -> Result<crate::infrastructure::gpu_compute::vulkan_ke
     let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
     let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
+    // Get memory properties for buffer creation
+    let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
     // Create Vulkan solver
     crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver::new(
         &instance,
@@ -2267,6 +2272,7 @@ fn init_vulkan_compute() -> Result<crate::infrastructure::gpu_compute::vulkan_ke
         &device,
         queue_family_index,
         queue,
+        &memory_properties,
     )
 }
 

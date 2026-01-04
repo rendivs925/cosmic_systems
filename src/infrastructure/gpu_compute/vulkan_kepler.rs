@@ -113,6 +113,7 @@ impl VulkanKeplerSolver {
         device: &ash::Device,
         queue_family_index: u32,
         queue: ash::vk::Queue,
+        memory_properties: &ash::vk::PhysicalDeviceMemoryProperties,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Create command pool
         let command_pool_create_info = ash::vk::CommandPoolCreateInfo::builder()
@@ -168,14 +169,18 @@ impl VulkanKeplerSolver {
         let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_create_info, None)? };
 
         // Create compute pipeline
-        let shader_stage = ash::vk::PipelineShaderStageCreateInfo::builder()
-            .stage(ash::vk::ShaderStageFlags::COMPUTE)
-            .module(shader_module)
-            .name(c"main");
+        let shader_stage = ash::vk::PipelineShaderStageCreateInfo {
+            stage: ash::vk::ShaderStageFlags::COMPUTE,
+            module: shader_module,
+            p_name: c"main".as_ptr(),
+            ..Default::default()
+        };
 
-        let compute_pipeline_create_info = ash::vk::ComputePipelineCreateInfo::builder()
-            .stage(shader_stage)
-            .layout(pipeline_layout);
+        let compute_pipeline_create_info = ash::vk::ComputePipelineCreateInfo {
+            stage: shader_stage,
+            layout: pipeline_layout,
+            ..Default::default()
+        };
 
         let compute_pipeline = unsafe {
             device.create_compute_pipelines(
@@ -187,9 +192,9 @@ impl VulkanKeplerSolver {
 
         // Initialize persistent GPU memory pool (eliminates per-frame allocation)
         let max_bodies = 64; // Support up to 64 bodies (planets + major moons)
-        let memory_pool = Self::create_memory_pool(
+        let memory_pool = create_memory_pool(
             &device,
-            &memory_properties,
+            memory_properties,
             max_bodies,
         )?;
 
@@ -496,6 +501,33 @@ impl VulkanKeplerSolver {
         }
 
         Ok(())
+    }
+
+    /// Create persistent GPU memory pool for buffer reuse
+    pub fn create_memory_pool(
+        device: &ash::Device,
+        memory_properties: &ash::vk::PhysicalDeviceMemoryProperties,
+        max_bodies: usize,
+    ) -> Result<GpuMemoryPool, Box<dyn std::error::Error>> {
+        let input_size = (max_bodies * std::mem::size_of::<VulkanPlanetData>()) as u64;
+        let output_size = (max_bodies * std::mem::size_of::<VulkanOutputData>()) as u64;
+        let uniform_size = std::mem::size_of::<VulkanUniformData>() as u64;
+
+        let input_buffer = Self::create_buffer(device, input_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST, memory_properties)?;
+        let output_buffer = Self::create_buffer(device, output_size, ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_SRC, memory_properties)?;
+        let uniform_buffer = Self::create_buffer(device, uniform_size, ash::vk::BufferUsageFlags::UNIFORM_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST, memory_properties)?;
+
+        let staging_input = Self::create_staging_buffer(device, input_size, memory_properties)?;
+        let staging_output = Self::create_staging_buffer(device, output_size, memory_properties)?;
+
+        Ok(GpuMemoryPool {
+            input_buffer,
+            output_buffer,
+            uniform_buffer,
+            staging_input,
+            staging_output,
+            max_bodies,
+        })
     }
 
     /// Create descriptor pool for persistent descriptor sets
