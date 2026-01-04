@@ -122,8 +122,8 @@ impl VulkanMemoryPool {
     }
 
     fn preallocate_buffers(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Pre-allocate buffers for up to 100 planets (adjust as needed)
-        let max_planets = 100;
+        // Pre-allocate buffers for up to 200 planets (for concurrent batch processing)
+        let max_planets = 200;
         let planet_data_size = (max_planets * std::mem::size_of::<VulkanPlanetData>()) as u64;
         let output_data_size = (max_planets * std::mem::size_of::<VulkanOutputData>()) as u64;
         let staging_size = planet_data_size.max(output_data_size);

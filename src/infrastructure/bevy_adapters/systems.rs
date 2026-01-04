@@ -531,27 +531,32 @@ fn update_planet_positions_parallel(
                     let mut results = Vec::new();
                     let mut simd_solver = crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
 
-                    // Extract planets for batch processing
+                    // Extract planets for batch processing - group into larger batches for GPU efficiency
                     let planets: Vec<_> = planets_data.iter().map(|(_, planet, _, _, _, _)| planet.clone()).collect();
                     let planet_entities: Vec<_> = planets_data.iter().map(|(entity, _, _, _, _, _)| *entity).collect();
 
-                    // Batch process all planets through hybrid compute
-                    let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
-                        &planets,
-                        perf_stats.quality_level,
-                        perf_stats.vulkan_enabled,
-                        &mut perf_stats.vulkan_solver,
-                        &mut simd_solver,
-                    );
+                    // Process in batches of up to 100 planets for optimal GPU utilization
+                    for chunk in planets.chunks(100).zip(planet_entities.chunks(100)) {
+                        let (planet_chunk, entity_chunk) = chunk;
 
-                    // Record GPU usage
-                    if matches!(backend_used, crate::infrastructure::bevy_adapters::components::ComputeBackendType::VulkanGpu) {
-                        perf_stats.vulkan_kepler_calls += planets.len() as u64;
-                    }
+                        // Batch process planets through hybrid compute
+                        let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
+                            planet_chunk,
+                            perf_stats.quality_level,
+                            perf_stats.vulkan_enabled,
+                            &mut perf_stats.vulkan_solver,
+                            &mut simd_solver,
+                        );
 
-                    // Combine entity IDs with positions
-                    for (entity, position) in planet_entities.into_iter().zip(positions) {
-                        results.push((entity, position));
+                        // Record GPU usage
+                        if matches!(backend_used, crate::infrastructure::bevy_adapters::components::ComputeBackendType::VulkanGpu) {
+                            perf_stats.vulkan_kepler_calls += planet_chunk.len() as u64;
+                        }
+
+                        // Combine entity IDs with positions
+                        for (entity, position) in entity_chunk.iter().zip(positions) {
+                            results.push((*entity, position));
+                        }
                     }
                     results
                 } else {
