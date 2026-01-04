@@ -1325,12 +1325,17 @@ pub fn handle_solar_system_input(
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut screenshot_state: ResMut<ScreenshotState>,
     mut notifications: ResMut<NotificationQueue>,
+    mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
 ) {
     // Screenshot feature - F12 or P key
     // Request screenshot, will be captured next frame after notifications hide
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
         notifications.hide_for_screenshot = true;
         screenshot_state.pending = true;
+    }
+    if keyboard.just_pressed(KeyCode::KeyZ) {
+        zen_mode.enabled = !zen_mode.enabled;
+        println!("🧘 Zen mode: {}", if zen_mode.enabled { "ON" } else { "OFF" });
     }
     // Time scale controls
     if keyboard.just_pressed(KeyCode::KeyT) {

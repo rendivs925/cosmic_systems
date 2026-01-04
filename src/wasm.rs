@@ -28,7 +28,7 @@ use crate::application::solar_system_startup::spawn_bodies_progressively;
 use crate::application::startup::*;
 use crate::infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
-    UiPointerState,
+    UiPointerState, ZenMode,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::presentation::ui::*;
@@ -79,6 +79,7 @@ pub fn main() {
         hide_for_screenshot: false,
     });
     app.insert_resource(ScreenshotState { pending: false });
+    app.insert_resource(ZenMode::default());
     let (is_chrome, webgpu_supported) = detect_chrome_and_webgpu();
     let mut perf_stats = PerformanceStats::default();
     perf_stats.target_fps = if is_chrome { 90.0 } else { 60.0 };

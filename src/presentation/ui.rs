@@ -5,8 +5,8 @@ use bevy::text::BreakLineOn;
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
-    NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, Selectable,
-    SelectedPlanet, UiPointerState,
+    NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, ScreenshotState,
+    Selectable, SelectedPlanet, UiPointerState, ZenMode,
 };
 
 #[derive(Component)]
@@ -394,8 +394,8 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     ))
     .with_children(|button| {
         button.spawn(TextBundle::from_section(
-            "Info",
-            text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
+            "X",
+            text_style(12.0, Color::srgb(0.82, 0.88, 0.98)),
         ));
     });
 
@@ -412,6 +412,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     row_gap: Val::Px(8.0),
                     ..default()
                 },
+                z_index: ZIndex::Local(5),
                 ..default()
             },
             NotificationLayer,
@@ -485,6 +486,9 @@ pub(crate) fn update_navbar(
     selected_planet: Res<SelectedPlanet>,
     solar_params: Res<SolarSystemParameters>,
     performance_stats: Res<PerformanceStats>,
+    screenshot_state: Res<ScreenshotState>,
+    notifications: Res<NotificationQueue>,
+    zen_mode: Res<ZenMode>,
     menu_state: Res<UiMenuState>,
     mut queries: ParamSet<(
         Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
@@ -495,6 +499,8 @@ pub(crate) fn update_navbar(
         Query<&mut Style, With<InfoCardExternalToggle>>,
     )>,
 ) {
+    let hide_ui = zen_mode.enabled || screenshot_state.pending || notifications.hide_for_screenshot;
+
     let selected_name = selected_planet.name.as_deref();
     let active_parent = selected_name.map(|name| {
         if is_primary_body(name) {
@@ -511,7 +517,7 @@ pub(crate) fn update_navbar(
             .unwrap_or(false);
 
     if let Ok(mut style) = queries.p3().get_single_mut() {
-        style.display = if show_selector {
+        style.display = if show_selector && !hide_ui {
             Display::Flex
         } else {
             Display::None
@@ -528,6 +534,10 @@ pub(crate) fn update_navbar(
 
     for (button, mut style, mut background, mut border) in queries.p0().iter_mut() {
         let is_selected = selected_name == Some(button.name.as_str());
+        if hide_ui {
+            style.display = Display::None;
+            continue;
+        }
         match button.group {
             NavGroup::Planet => {
                 style.display = if show_selector {
@@ -554,6 +564,11 @@ pub(crate) fn update_navbar(
             MenuAction::Orbits => solar_params.show_orbits,
             MenuAction::Explore => menu_state.selector_open,
         };
+        if hide_ui {
+            *background = BackgroundColor(Color::NONE);
+            border.0 = Color::NONE;
+            continue;
+        }
         let (bg, stroke) = menu_button_colors(button.primary, active);
         *background = BackgroundColor(bg);
         border.0 = stroke;
@@ -569,8 +584,12 @@ pub(crate) fn update_navbar(
 
     if let Ok(mut text) = queries.p2().get_single_mut() {
         let display_fps = performance_stats.average_fps;
-        text.sections[0].value = format!("fps {:.0}", display_fps);
-        text.sections[0].style.color = fps_color(display_fps);
+        if hide_ui {
+            text.sections[0].value.clear();
+        } else {
+            text.sections[0].value = format!("fps {:.0}", display_fps);
+            text.sections[0].style.color = fps_color(display_fps);
+        }
     }
 }
 
@@ -579,6 +598,7 @@ pub(crate) fn update_info_card(
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<&PlanetComponent>,
     menu_state: Res<UiMenuState>,
+    zen_mode: Res<ZenMode>,
     mut root_query: Query<&mut Style, With<InfoCardRoot>>,
     mut text_queries: ParamSet<(
         Query<&mut Text, With<InfoCardTitle>>,
@@ -590,7 +610,7 @@ pub(crate) fn update_info_card(
         return;
     };
 
-    if !menu_state.info_card_open {
+    if zen_mode.enabled || !menu_state.info_card_open {
         root_style.display = Display::None;
         return;
     };
@@ -625,7 +645,12 @@ pub(crate) fn update_notifications_ui(
     time: Res<Time>,
     mut notifications: ResMut<NotificationQueue>,
     roots: Res<UiRoots>,
+    zen_mode: Res<ZenMode>,
 ) {
+    if zen_mode.enabled {
+        commands.entity(roots.notifications).despawn_descendants();
+        return;
+    }
     if notifications.hide_for_screenshot {
         notifications.hide_for_screenshot = false;
         commands.entity(roots.notifications).despawn_descendants();

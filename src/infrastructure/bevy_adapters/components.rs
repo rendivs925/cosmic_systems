@@ -161,6 +161,11 @@ pub struct ScreenshotState {
     pub pending: bool, // Screenshot requested, will capture next frame
 }
 
+#[derive(Resource, Default, Clone, Copy)]
+pub struct ZenMode {
+    pub enabled: bool,
+}
+
 // Resource to track if UI is currently under the cursor
 #[derive(Resource, Default)]
 pub struct UiPointerState {
