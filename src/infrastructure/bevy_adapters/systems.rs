@@ -1331,19 +1331,20 @@ pub fn handle_solar_system_input(
         screenshot_state.pending = true;
     }
     // Time scale controls
-    if keyboard.pressed(KeyCode::KeyT) {
+    if keyboard.just_pressed(KeyCode::KeyT) {
         solar_params.time_scale *= 1.1;
         println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
     }
-    if keyboard.pressed(KeyCode::KeyR) && solar_params.time_scale > 0.1 {
+
+    if keyboard.just_pressed(KeyCode::KeyR) && solar_params.time_scale > 0.1 {
         solar_params.time_scale /= 1.1;
         println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
     }
 
     // Reset time scale
-    if keyboard.pressed(KeyCode::KeyY) {
+    if keyboard.just_pressed(KeyCode::KeyY) {
         solar_params.time_scale = 1.0;
-        println!("⏸️  Time scale reset to: {:.1}x", solar_params.time_scale);
+        println!("⏸️ Time scale reset to: {:.1}x", solar_params.time_scale);
     }
 
     // Toggle orbit visualization
