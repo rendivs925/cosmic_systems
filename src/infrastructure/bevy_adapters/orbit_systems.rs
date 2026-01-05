@@ -30,46 +30,44 @@ pub(crate) fn update_orbit_visuals(
             // Calculate opacity based on distance hierarchy and selection
             let distance_factor = orbit_comp.distance_rank; // 0.0 = inner planets, 1.0 = outer planets
 
-            // Inner planets (Mercury, Venus, Earth, Mars) get higher base visibility
-            // Outer planets (Jupiter, Saturn, Uranus, Neptune) get lower visibility
-            let base_opacity = if distance_factor < 0.3 {
-                0.12 // Inner planets: more visible
-            } else if distance_factor < 0.6 {
-                0.08 // Middle planets: medium visibility
+            // Ultra-minimal visibility hierarchy - barely perceptible guidance
+            let base_opacity = if distance_factor < 0.25 {
+                0.06 // Inner planets: minimal but present
+            } else if distance_factor < 0.5 {
+                0.04 // Middle planets: very subtle
             } else {
-                0.05 // Outer planets: least visible
+                0.02 // Outer planets: almost invisible
             };
 
-            // Boost opacity for selected planet's orbit
+            // Subtle boost for selected planet's orbit - just enough to notice
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
             let final_base_opacity = if is_selected {
-                (base_opacity * 2.5_f32).min(0.25) // Selected orbits: significantly more visible
+                (base_opacity * 2.0_f32).min(0.12) // Gentle enhancement, not overwhelming
             } else {
                 base_opacity
             };
 
-            // Ultra-subtle cosmic breathing effect - hints at orbital motion
-            let cosmic_pulse = 0.97 + 0.03 * (elapsed * 0.008).sin();
+            // Minimal cosmic variation - barely noticeable stellar influence
+            let stellar_noise = 0.02 * (elapsed * 0.005 + orbit_comp.radius * 0.001).sin();
+            let cosmic_pulse = 0.98 + 0.02 * (elapsed * 0.006).sin() + stellar_noise;
             let alpha = final_base_opacity * cosmic_pulse;
 
-            // Contextual color palette based on distance and selection
+            // Ultra-minimal monochromatic palette - cosmic void colors
             let (r, g, b) = if is_selected {
-                (0.7, 0.8, 0.9) // Slightly brighter for selected orbits
-            } else if distance_factor < 0.4 {
-                (0.65, 0.75, 0.85) // Inner planets: warmer blue
+                (0.65, 0.72, 0.78) // Barely perceptible highlight for selection
             } else {
-                (0.55, 0.65, 0.75) // Outer planets: cooler blue
+                (0.55, 0.62, 0.68) // Deep space blue-gray - almost invisible
             };
 
             material.base_color = Color::srgb(r, g, b).with_alpha(alpha);
 
-            // Barely perceptible emissive hint - stronger for selected orbits
-            let stellar_glow = if is_selected {
-                0.025 + 0.008 * cosmic_pulse
+            // Minimal stellar residue - just a hint of cosmic energy
+            let stellar_residue = if is_selected {
+                0.008 + 0.003 * cosmic_pulse
             } else {
-                0.012 + 0.004 * cosmic_pulse
+                0.004 + 0.001 * cosmic_pulse
             };
-            material.emissive = LinearRgba::new(stellar_glow, stellar_glow, stellar_glow * 1.3, 1.0);
+            material.emissive = LinearRgba::new(stellar_residue, stellar_residue, stellar_residue * 1.2, 1.0);
         }
     }
 }
@@ -78,6 +76,7 @@ pub(crate) fn update_orbit_visuals(
 pub fn update_orbit_visibility(
     solar_params: Res<SolarSystemParameters>,
     selected_planet: Res<SelectedPlanet>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut orbit_query: Query<(&OrbitComponent, &mut Visibility)>,
 ) {
     if !solar_params.show_orbits {
@@ -88,19 +87,29 @@ pub fn update_orbit_visibility(
         return;
     }
 
-    // Show orbits with contextual hierarchy
-    for (orbit_comp, mut visibility) in orbit_query.iter_mut() {
-        // Create distance-based hierarchy: inner planets more visible than outer ones
-        let distance_factor = (orbit_comp.radius / 1000.0).clamp(0.0, 1.0); // Normalize distance
-        let visibility_threshold = 0.3 + (distance_factor * 0.4); // Inner planets: 0.3-0.7, outer: 0.3-0.4
+    let camera_pos = camera_query.single().translation();
+    let camera_distance_from_sun = camera_pos.length(); // Distance from solar system center
 
-        // Boost visibility for selected planet's orbit
+    // Show orbits with contextual hierarchy based on zoom level
+    for (orbit_comp, mut visibility) in orbit_query.iter_mut() {
+        let distance_factor = orbit_comp.distance_rank; // 0.0 = inner planets, 1.0 = outer planets
         let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
-        let final_visibility = if is_selected {
-            Visibility::Visible // Selected orbits always visible
+
+        // Zoom-based visibility: show more orbits when zoomed out
+        let zoom_factor = (camera_distance_from_sun / 10000.0).clamp(0.1, 3.0);
+        let visibility_threshold = if zoom_factor > 1.5 {
+            0.9 // Show almost all orbits when zoomed far out
+        } else if zoom_factor > 0.8 {
+            0.7 // Show more orbits at medium zoom
         } else {
-            // Distance-based probabilistic visibility (creates natural hierarchy)
-            if distance_factor > visibility_threshold {
+            0.4 // Show fewer orbits when zoomed in close
+        };
+
+        let final_visibility = if is_selected {
+            Visibility::Visible // Selected orbits always visible for context
+        } else {
+            // Distance and zoom-based visibility
+            if distance_factor <= visibility_threshold {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
