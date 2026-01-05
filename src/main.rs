@@ -107,9 +107,10 @@ fn main() {
         app.add_systems(Update, update_notifications_ui);
         app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));
         app.add_systems(Update, take_pending_screenshot);
-        app.add_systems(Update, update_camera_controller);
-        app.add_systems(Update, apply_camera_transform);
-        app.add_systems(Update, auto_inspect_selected_planet);
+         app.add_systems(Update, update_camera_controller);
+         app.add_systems(Update, apply_camera_transform);
+         app.add_systems(Update, auto_inspect_selected_planet);
+         app.add_systems(Update, update_starfield_position);
     }
 
     app.run();

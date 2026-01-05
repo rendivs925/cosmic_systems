@@ -1,4 +1,5 @@
 use super::components::*;
+use super::entity_components::Starfield;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
@@ -472,4 +473,20 @@ pub struct AutoInspectState {
     smooth_up: Vec3,
     smooth_focus: Vec3,
     smooth_offset: Vec3,
+}
+
+// System to keep starfield positioned relative to camera for constant visibility
+pub fn update_starfield_position(
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    mut starfield_query: Query<&mut Transform, With<Starfield>>,
+) {
+    if let Ok(camera_transform) = camera_query.get_single() {
+        let camera_pos = camera_transform.translation();
+
+        for mut starfield_transform in starfield_query.iter_mut() {
+            // Keep starfield centered on camera position
+            // This ensures stars are always visible regardless of camera movement
+            starfield_transform.translation = camera_pos;
+        }
+    }
 }

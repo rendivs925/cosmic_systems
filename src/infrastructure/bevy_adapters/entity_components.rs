@@ -37,6 +37,9 @@ pub struct OrbitComponent {
     pub distance_rank: f32, // 0.0 (closest to sun) to 1.0 (farthest) for hierarchy
 }
 
+#[derive(Component)]
+pub struct Starfield;
+
 // Marker component for moon orbits (orbits that need to follow their parent planet)
 #[derive(Component)]
 pub struct MoonOrbit;
