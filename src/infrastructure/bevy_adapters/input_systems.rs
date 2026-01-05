@@ -47,12 +47,15 @@ pub fn handle_planet_selection(
         }
     }
 
-    // Deselect with Escape
+    // Deselect with Escape (idempotent - only deselect if something is selected)
     if keyboard.just_pressed(KeyCode::Escape) {
-        new_selected_entity = None;
-        new_selected_name = None;
-        selection_changed = true;
-        println!("Deselected planet");
+        if selected_planet.entity.is_some() {
+            new_selected_entity = None;
+            new_selected_name = None;
+            selection_changed = true;
+            println!("Deselected planet");
+        }
+        // If nothing is selected, Escape does nothing (idempotent)
     }
 
     // Update selection resource
@@ -125,18 +128,30 @@ pub fn handle_mouse_planet_selection(
         }
     }
 
-    // Update selection
+    // Update selection (idempotent - clicking selected planet deselects it)
     if let Some(selected_entity) = closest_entity {
-        if let Ok((_, selectable, _, _)) = selectable_query.get(selected_entity) {
-            selected_planet.entity = Some(selected_entity);
-            selected_planet.name = Some(selectable.name.clone());
-            println!("Selected planet: {}", selectable.name);
+        // Check if this planet is already selected
+        if selected_planet.entity == Some(selected_entity) {
+            // Clicking on already selected planet - deselect it
+            selected_planet.entity = None;
+            selected_planet.name = None;
+            println!("Deselected planet (clicked on selected)");
+        } else {
+            // Clicking on different planet - select it
+            if let Ok((_, selectable, _, _)) = selectable_query.get(selected_entity) {
+                selected_planet.entity = Some(selected_entity);
+                selected_planet.name = Some(selectable.name.clone());
+                println!("Selected planet: {}", selectable.name);
+            }
         }
     } else {
-        // Clicked on empty space - deselect
-        selected_planet.entity = None;
-        selected_planet.name = None;
-        println!("Deselected planet");
+        // Clicked on empty space - only deselect if something is selected
+        if selected_planet.entity.is_some() {
+            selected_planet.entity = None;
+            selected_planet.name = None;
+            println!("Deselected planet (clicked on empty space)");
+        }
+        // If nothing is selected, clicking empty space does nothing (idempotent)
     }
 
     // Update all selectable components
