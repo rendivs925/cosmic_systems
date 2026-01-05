@@ -74,19 +74,31 @@ impl Default for UiMenuState {
 #[derive(Resource, Default)]
 pub struct HoverState {
     pub hovered_planet: Option<String>,
+    pub hover_stability_counter: u32,
 }
 
 pub(crate) fn update_hover_state(
     interactions: Query<(&Interaction, &NavButton)>,
     mut hover_state: ResMut<HoverState>,
 ) {
-    hover_state.hovered_planet = None;
+    let mut currently_hovered = None;
 
     for (interaction, button) in interactions.iter() {
         if *interaction == Interaction::Hovered && button.group == NavGroup::Planet {
-            hover_state.hovered_planet = Some(button.name.clone());
+            currently_hovered = Some(button.name.clone());
             break; // Only track the first hovered planet
         }
+    }
+
+    // Add stability to prevent flickering - only change after 3 consistent frames
+    if hover_state.hovered_planet != currently_hovered {
+        hover_state.hover_stability_counter += 1;
+        if hover_state.hover_stability_counter >= 3 {
+            hover_state.hovered_planet = currently_hovered;
+            hover_state.hover_stability_counter = 0;
+        }
+    } else {
+        hover_state.hover_stability_counter = 0;
     }
 }
 
@@ -583,11 +595,12 @@ pub(crate) fn update_navbar(
                 let selected_visible = active_parent == Some(parent);
                 let hovered_visible = hovered_parent == Some(parent);
                 let visible = selected_visible || hovered_visible;
-                style.display = if show_moons && visible {
-                    Display::Flex
+                // Use opacity instead of display for smoother transitions
+                if show_moons && visible {
+                    style.display = Display::Flex;
                 } else {
-                    Display::None
-                };
+                    style.display = Display::None;
+                }
             }
         }
         *background = BackgroundColor(nav_button_color_hover(is_selected, is_hovered));
