@@ -47,16 +47,17 @@ pub(crate) fn update_orbit_visuals(
                 base_opacity
             };
 
-            // Minimal cosmic variation - barely noticeable stellar influence
-            let stellar_noise = 0.02 * (elapsed * 0.005 + orbit_comp.radius * 0.001).sin();
-            let cosmic_pulse = 0.98 + 0.02 * (elapsed * 0.006).sin() + stellar_noise;
+            // Ultra-elegant stellar harmonics - sophisticated orbital resonance
+            let orbital_harmonic = orbit_comp.radius * 0.0001; // Unique frequency per orbit
+            let stellar_resonance = 0.02 * (elapsed * 0.004 + orbital_harmonic).sin();
+            let cosmic_pulse = 0.985 + 0.015 * (elapsed * 0.005).sin() + stellar_resonance;
             let alpha = final_base_opacity * cosmic_pulse;
 
-            // Ultra-minimal monochromatic palette - cosmic void colors
+            // Ultra-sophisticated spectral palette - refined cosmic elegance
             let (r, g, b) = if is_selected {
-                (0.65, 0.72, 0.78) // Barely perceptible highlight for selection
+                (0.68, 0.74, 0.80) // Subtle sterling highlight for selection
             } else {
-                (0.55, 0.62, 0.68) // Deep space blue-gray - almost invisible
+                (0.52, 0.58, 0.64) // Refined graphite blue-gray - pure minimalism
             };
 
             material.base_color = Color::srgb(r, g, b).with_alpha(alpha);
@@ -122,17 +123,18 @@ pub fn update_orbit_visibility(
 
 // System to add dynamic specular reflection response for planet materials
 // Optimized to update every 5 frames (material properties don't change dynamically)
+// Ultra-refined planet surface properties - sophisticated material evolution
 pub fn update_planet_reflections(
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<(&PlanetComponent, &GlobalTransform)>,
 ) {
-    // Performance optimization: skip most updates since values don't change
+    // Elegant update cadence - subtle material refinement
     let frame_number = (time.elapsed_seconds() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 20;
+    let update_stride = 30; // Minimal updates for web performance
     #[cfg(not(target_arch = "wasm32"))]
-    let update_stride = 5;
+    let update_stride = 10; // Sophisticated pacing for desktop
 
     if frame_number % update_stride != 0 {
         return;
@@ -143,8 +145,9 @@ pub fn update_planet_reflections(
             continue;
         }
         if let Some(material) = materials.get_mut(&planet_comp.material) {
-            material.perceptual_roughness = planet_comp.base_roughness;
-            material.reflectance = planet_comp.base_reflectance;
+            // Ultra-refined surface properties with elegant constraints
+            material.perceptual_roughness = planet_comp.base_roughness.clamp(0.08, 0.85);
+            material.reflectance = planet_comp.base_reflectance.clamp(0.015, 0.12); // Minimal but sophisticated
         }
     }
 }

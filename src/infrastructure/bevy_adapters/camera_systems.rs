@@ -425,10 +425,11 @@ pub fn auto_inspect_selected_planet(
         state.offset = elevated;
     }
 
+    // Ultra-cinematic interpolation - buttery smooth elegance
     let smooth_factor = if is_moon {
-        1.0 - (-2.5 * time.delta_seconds()).exp()
+        1.0 - (-3.5 * time.delta_seconds()).exp() // Refined smoothness for moons
     } else {
-        1.0 - (-4.0 * time.delta_seconds()).exp()
+        1.0 - (-5.5 * time.delta_seconds()).exp() // Premium smoothness for planets
     };
     if state.smooth_focus.length_squared() > 0.0 {
         state.smooth_focus = state.smooth_focus.lerp(focus_point, smooth_factor);
