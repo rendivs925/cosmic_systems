@@ -130,20 +130,26 @@ pub fn toggle_video_recording(
 ) {
     if keyboard_input.just_pressed(KeyCode::KeyV) && keyboard_input.pressed(KeyCode::ControlLeft) {
         if video_state.is_recording {
-            // Stop recording
+            // Stop recording and start conversion
             video_state.is_recording = false;
             let duration = time.elapsed_seconds_f64() - video_state.start_time;
             let frame_count = video_state.frame_count;
+            let output_dir = video_state.output_dir.clone();
 
             notifications.notifications.push(Notification {
                 message: format!(
-                    "Video recording stopped. Captured {} frames in {:.1}s. Check ~/cosmic_systems_videos/",
-                    frame_count,
-                    duration
+                    "Video recording stopped. Converting {} frames to MP4...",
+                    frame_count
                 ),
-                notification_type: NotificationType::Success,
+                notification_type: NotificationType::Info,
                 created_at: time.elapsed_seconds(),
-                duration: 5.0,
+                duration: 3.0,
+            });
+
+            // Spawn a task to convert frames to MP4
+            let notifications_clone = notifications.notifications.clone();
+            std::thread::spawn(move || {
+                convert_frames_to_mp4(&output_dir, frame_count, duration);
             });
 
             // Reset state
@@ -180,6 +186,79 @@ pub fn toggle_video_recording(
                 created_at: time.elapsed_seconds(),
                 duration: 3.0,
             });
+        }
+    }
+}
+
+// Function to convert frame sequence to MP4 using ffmpeg
+fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
+    // Check if ffmpeg is available
+    if !std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok()
+    {
+        eprintln!("ffmpeg not found. Please install ffmpeg to enable automatic MP4 conversion.");
+        eprintln!("Manual conversion: ffmpeg -framerate 60 -i {}/frame_%06d.png -c:v libx264 {}/output.mp4", output_dir, output_dir);
+        return;
+    }
+
+    let input_pattern = format!("{}/frame_%06d.png", output_dir);
+    let output_file = format!("{}/cosmic_recording.mp4", output_dir);
+
+    // Calculate appropriate framerate based on duration and frame count
+    let target_framerate = if duration > 0.0 {
+        (frame_count as f64 / duration).clamp(24.0, 60.0)
+    } else {
+        60.0
+    };
+
+    println!("Converting {} frames to MP4 at {:.1} FPS...", frame_count, target_framerate);
+
+    let result = std::process::Command::new("ffmpeg")
+        .args([
+            "-framerate", &format!("{}", target_framerate as u32),
+            "-i", &input_pattern,
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "22",  // Good quality/size balance
+            "-pix_fmt", "yuv420p",  // Compatible with most players
+            "-y",  // Overwrite output file
+            &output_file
+        ])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            println!("MP4 conversion successful! Video saved to: {}", output_file);
+
+            // Clean up PNG frames to save disk space
+            if let Ok(entries) = std::fs::read_dir(output_dir) {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        let path = entry.path();
+                        if let Some(extension) = path.extension() {
+                            if extension == "png" && path.file_name()
+                                .and_then(|n| n.to_str())
+                                .map_or(false, |n| n.starts_with("frame_")) {
+                                let _ = std::fs::remove_file(&path); // Ignore errors
+                            }
+                        }
+                    }
+                }
+            }
+
+            println!("Cleaned up {} PNG frames. Final video: {}", frame_count, output_file);
+        }
+        Ok(output) => {
+            eprintln!("ffmpeg conversion failed: {}", String::from_utf8_lossy(&output.stderr));
+            eprintln!("Manual conversion: ffmpeg -framerate {} -i {} -c:v libx264 {} -y",
+                target_framerate as u32, input_pattern, output_file);
+        }
+        Err(e) => {
+            eprintln!("Failed to run ffmpeg: {}", e);
+            eprintln!("Manual conversion: ffmpeg -framerate {} -i {} -c:v libx264 {} -y",
+                target_framerate as u32, input_pattern, output_file);
         }
     }
 }
