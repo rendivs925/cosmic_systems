@@ -34,25 +34,48 @@ pub(crate) fn update_orbit_visuals(
     };
 
     if let Some(material) = materials.get_mut(&shared.handle) {
-        let pulse = 0.5 + 0.5 * (elapsed * 0.18).sin();
-        let alpha = (0.25 + 0.15 * pulse).clamp(0.2, 0.45);
-        material.base_color = Color::srgb(1.0, 1.0, 1.0).with_alpha(alpha);
-        let glow = 0.6 + 0.35 * pulse;
-        material.emissive = LinearRgba::new(glow, glow, glow, 1.0);
+        // Very subtle, slow pulsing - almost static appearance
+        let pulse = 0.8 + 0.2 * (elapsed * 0.05).sin(); // Much slower, smaller variation
+        let alpha = 0.15 * pulse; // Base transparency with subtle modulation
+        material.base_color = Color::srgb(0.8, 0.9, 1.0).with_alpha(alpha);
+        let glow = 0.1 + 0.05 * pulse; // Much subtler glow
+        material.emissive = LinearRgba::new(glow, glow, glow * 1.2, 1.0); // Slight blue bias
     }
 }
 
-// System to toggle orbit visibility based on show_orbits parameter
+// System to toggle orbit visibility based on show_orbits parameter and distance culling
 pub fn update_orbit_visibility(
     solar_params: Res<SolarSystemParameters>,
-    mut orbit_query: Query<&mut Visibility, With<OrbitComponent>>,
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    mut orbit_query: Query<(&OrbitComponent, &mut Visibility, &GlobalTransform)>,
 ) {
-    for mut visibility in orbit_query.iter_mut() {
-        *visibility = if solar_params.show_orbits {
-            Visibility::Visible
+    if !solar_params.show_orbits {
+        // Hide all orbits if disabled
+        for (_, mut visibility, _) in orbit_query.iter_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    }
+
+    let camera_pos = camera_query.single().translation();
+
+    for (orbit_comp, mut visibility, orbit_transform) in orbit_query.iter_mut() {
+        // Distance-based culling: hide orbits that are too far from camera
+        let distance_to_camera = camera_pos.distance(orbit_transform.translation());
+        let max_orbit_distance = 50000.0; // Hide distant orbits to reduce clutter
+
+        if distance_to_camera > max_orbit_distance {
+            *visibility = Visibility::Hidden;
         } else {
-            Visibility::Hidden
-        };
+            // Scale visibility based on distance - closer orbits are more visible
+            let distance_factor = (max_orbit_distance - distance_to_camera) / max_orbit_distance;
+            // For now, just show/hide, but we could implement opacity scaling here
+            *visibility = if distance_factor > 0.1 {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+        }
     }
 }
 
