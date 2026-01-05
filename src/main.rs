@@ -93,7 +93,8 @@ fn main() {
         app.add_systems(Update, handle_planet_selection);
         app.add_systems(Update, handle_mouse_planet_selection);
         app.add_systems(Update, handle_nav_interactions);
-        app.add_systems(Update, update_navbar);
+         app.add_systems(Update, update_hover_state);
+         app.add_systems(Update, update_navbar.after(update_hover_state));
         app.add_systems(
             Update,
             update_planet_selection_visuals.run_if(every_n_frames(2)),

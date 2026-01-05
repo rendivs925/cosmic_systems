@@ -26,6 +26,7 @@ pub(crate) struct NavButton {
 }
 
 #[derive(Clone, Copy)]
+#[derive(PartialEq)]
 enum NavGroup {
     Planet,
     Moon(&'static str),
@@ -70,6 +71,25 @@ impl Default for UiMenuState {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct HoverState {
+    pub hovered_planet: Option<String>,
+}
+
+pub(crate) fn update_hover_state(
+    interactions: Query<(&Interaction, &NavButton)>,
+    mut hover_state: ResMut<HoverState>,
+) {
+    hover_state.hovered_planet = None;
+
+    for (interaction, button) in interactions.iter() {
+        if *interaction == Interaction::Hovered && button.group == NavGroup::Planet {
+            hover_state.hovered_planet = Some(button.name.clone());
+            break; // Only track the first hovered planet
+        }
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct InfoCardRoot;
 
@@ -102,6 +122,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     });
 
     commands.insert_resource(UiMenuState::default());
+    commands.insert_resource(HoverState::default());
 
     let navbar = commands
         .spawn(NodeBundle {
@@ -493,6 +514,7 @@ pub(crate) fn update_navbar(
     notifications: Res<NotificationQueue>,
     zen_mode: Res<ZenMode>,
     menu_state: Res<UiMenuState>,
+    hover_state: Res<HoverState>,
     mut queries: ParamSet<(
         Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
         Query<(&MenuButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
@@ -514,10 +536,16 @@ pub(crate) fn update_navbar(
     });
 
     let show_selector = menu_state.selector_open;
+    // Check for hovered planet to show moons on hover
+    let hovered_parent = hover_state.hovered_planet.as_deref();
+
     let show_moons = show_selector
-        && active_parent
+        && (active_parent
             .map(|parent| !moon_names_for_parent(parent).is_empty())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || hovered_parent
+                .map(|parent| !moon_names_for_parent(parent).is_empty())
+                .unwrap_or(false));
 
     if let Ok(mut style) = queries.p3().get_single_mut() {
         style.display = if show_selector && !hide_ui {
@@ -541,6 +569,8 @@ pub(crate) fn update_navbar(
             style.display = Display::None;
             continue;
         }
+        let is_hovered = hovered_parent == Some(button.name.as_str());
+
         match button.group {
             NavGroup::Planet => {
                 style.display = if show_selector {
@@ -550,7 +580,9 @@ pub(crate) fn update_navbar(
                 };
             }
             NavGroup::Moon(parent) => {
-                let visible = active_parent == Some(parent);
+                let selected_visible = active_parent == Some(parent);
+                let hovered_visible = hovered_parent == Some(parent);
+                let visible = selected_visible || hovered_visible;
                 style.display = if show_moons && visible {
                     Display::Flex
                 } else {
@@ -558,8 +590,8 @@ pub(crate) fn update_navbar(
                 };
             }
         }
-        *background = BackgroundColor(nav_button_color(is_selected));
-        border.0 = nav_button_border_color(is_selected);
+        *background = BackgroundColor(nav_button_color_hover(is_selected, is_hovered));
+        border.0 = nav_button_border_color_hover(is_selected, is_hovered);
     }
 
     for (button, mut style, mut background, mut border) in queries.p1().iter_mut() {
@@ -805,6 +837,26 @@ fn nav_button_border_color(selected: bool) -> Color {
         Color::srgb(0.31, 0.47, 0.78)
     } else {
         Color::srgba(0.196, 0.275, 0.431, 0.28)
+    }
+}
+
+fn nav_button_color_hover(selected: bool, hovered: bool) -> Color {
+    if selected {
+        Color::srgb(0.16, 0.24, 0.39) // Selected color unchanged
+    } else if hovered {
+        Color::srgba(0.051, 0.059, 0.083, 0.85) // Slightly brighter on hover
+    } else {
+        Color::srgba(0.031, 0.039, 0.063, 0.78) // Normal color
+    }
+}
+
+fn nav_button_border_color_hover(selected: bool, hovered: bool) -> Color {
+    if selected {
+        Color::srgb(0.31, 0.47, 0.78) // Selected border unchanged
+    } else if hovered {
+        Color::srgba(0.216, 0.295, 0.451, 0.35) // Slightly brighter border on hover
+    } else {
+        Color::srgba(0.196, 0.275, 0.431, 0.28) // Normal border
     }
 }
 
