@@ -775,19 +775,16 @@ fn create_starfield(
         ..default()
     });
 
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(mesh),
-            material,
-            transform: Transform::IDENTITY,
-            ..default()
-        },
-        NotShadowCaster,
-        NotShadowReceiver,
-        // Ensure stars are always visible regardless of UI or selection state
-        Visibility::Visible,
-        Name::new("Starfield"),
-    ));
+    commands.spawn(PbrBundle {
+        mesh: meshes.add(mesh),
+        material,
+        transform: Transform::IDENTITY,
+        visibility: Visibility::Visible, // Explicit visibility control
+        ..default()
+    })
+    .insert(NotShadowCaster)
+    .insert(NotShadowReceiver)
+    .insert(Name::new("Starfield"));
 }
 
 struct PlanetTextureSet {
