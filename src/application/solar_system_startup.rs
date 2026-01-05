@@ -696,15 +696,9 @@ fn create_starfield(
     ];
 
     for i in 0..star_count {
-        // Uniform point on sphere
-        // Balanced distribution: 70% biased toward galactic plane, 30% uniform
-        let use_plane_bias = rng.gen_bool(0.7);
-        let z = if use_plane_bias {
-            let sample: f32 = rng.gen_range(-1.0..1.0);
-            (sample.asin() * 0.25).sin()
-        } else {
-            rng.gen_range(-1.0..1.0)
-        };
+        // Uniform point on sphere - balanced in all directions
+        // Remove galactic plane bias for even star distribution
+        let z = rng.gen_range(-1.0..1.0);
         let theta = rng.gen_range(0.0..std::f32::consts::TAU);
         let r = (1.0_f32 - z * z).sqrt();
         let dir = Vec3::new(r * theta.cos(), z, r * theta.sin());
