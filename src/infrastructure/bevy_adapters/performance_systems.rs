@@ -267,12 +267,6 @@ fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarS
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
 /// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
 pub fn log_performance_stats(perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
-    // Log performance stats every 600 frames (10 seconds) - minimal noise
-    if perf_stats.frame_count % 600 == 0 {
-        println!("PERF: FPS {:.1}, Frame {:.1}ms, Quality {:?}",
-            perf_stats.fps_display,
-            perf_stats.frame_time_ms,
-            perf_stats.quality_level
-        );
-    }
+    // Ultra-minimal logging - silent operation
+    // Performance monitoring completely silent for elegant experience
 }
