@@ -30,19 +30,19 @@ pub(crate) fn update_orbit_visuals(
             // Calculate opacity based on distance hierarchy and selection
             let distance_factor = orbit_comp.distance_rank; // 0.0 = inner planets, 1.0 = outer planets
 
-            // Ultra-minimal visibility hierarchy - barely perceptible guidance
+            // Balanced minimal visibility - perceptible but elegant guidance
             let base_opacity = if distance_factor < 0.25 {
-                0.06 // Inner planets: minimal but present
+                0.15 // Inner planets: clearly visible but subtle
             } else if distance_factor < 0.5 {
-                0.04 // Middle planets: very subtle
+                0.10 // Middle planets: moderately visible
             } else {
-                0.02 // Outer planets: almost invisible
+                0.06 // Outer planets: minimal but present
             };
 
-            // Subtle boost for selected planet's orbit - just enough to notice
+            // Subtle boost for selected planet's orbit - clearly enhanced but elegant
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
             let final_base_opacity = if is_selected {
-                (base_opacity * 2.0_f32).min(0.12) // Gentle enhancement, not overwhelming
+                (base_opacity * 1.8_f32).min(0.25) // Enhanced visibility for context
             } else {
                 base_opacity
             };
@@ -61,11 +61,11 @@ pub(crate) fn update_orbit_visuals(
 
             material.base_color = Color::srgb(r, g, b).with_alpha(alpha);
 
-            // Minimal stellar residue - just a hint of cosmic energy
+            // Subtle stellar residue - gentle cosmic energy hints
             let stellar_residue = if is_selected {
-                0.008 + 0.003 * cosmic_pulse
+                0.015 + 0.005 * cosmic_pulse
             } else {
-                0.004 + 0.001 * cosmic_pulse
+                0.008 + 0.002 * cosmic_pulse
             };
             material.emissive = LinearRgba::new(stellar_residue, stellar_residue, stellar_residue * 1.2, 1.0);
         }
