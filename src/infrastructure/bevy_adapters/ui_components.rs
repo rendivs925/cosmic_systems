@@ -27,6 +27,26 @@ pub struct ScreenshotState {
     pub pending: bool, // Screenshot requested, will capture next frame
 }
 
+// Resource to track video recording state
+#[derive(Resource)]
+pub struct VideoRecordingState {
+    pub is_recording: bool,
+    pub frame_count: u32,
+    pub start_time: f64,
+    pub output_dir: String,
+}
+
+impl Default for VideoRecordingState {
+    fn default() -> Self {
+        Self {
+            is_recording: false,
+            frame_count: 0,
+            start_time: 0.0,
+            output_dir: String::new(),
+        }
+    }
+}
+
 #[derive(Resource, Default, Clone, Copy)]
 pub struct ZenMode {
     pub enabled: bool,

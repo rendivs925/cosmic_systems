@@ -109,6 +109,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     });
 
     commands.insert_resource(UiMenuState::default());
+    commands.insert_resource(crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState::default());
 
     let navbar = commands
         .spawn(NodeBundle {
@@ -145,7 +146,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     ..default()
                 },
                 UiCapture,
-            ))
+             ))
             .with_children(|bar| {
                 bar.spawn(NodeBundle {
                     style: Style {
@@ -158,9 +159,8 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 })
                 .with_children(|menu| {
                     spawn_menu_button(menu, "Explore", MenuAction::Explore, true);
-                    spawn_menu_button(menu, "Orbits", MenuAction::Orbits, false);
-                });
-            });
+                 });
+             });
 
         parent.spawn((
             TextBundle {
@@ -484,9 +484,11 @@ pub(crate) fn update_navbar(
     solar_params: Res<SolarSystemParameters>,
     performance_stats: Res<PerformanceStats>,
     screenshot_state: Res<ScreenshotState>,
+    video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
     notifications: Res<NotificationQueue>,
     zen_mode: Res<ZenMode>,
     menu_state: Res<UiMenuState>,
+    time: Res<Time>,
     mut queries: ParamSet<(
         Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
         Query<(&MenuButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,

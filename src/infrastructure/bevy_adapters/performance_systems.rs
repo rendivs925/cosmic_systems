@@ -1,5 +1,6 @@
 use super::components::*;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 
 // Performance monitoring and quality adaptation system
@@ -33,6 +34,7 @@ pub fn update_performance_monitor(
 // System to capture screenshot on next frame after notifications are hidden
 pub fn take_pending_screenshot(
     mut screenshot_state: ResMut<ScreenshotState>,
+    video_state: Res<VideoRecordingState>,
     mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
     main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mut notifications: ResMut<NotificationQueue>,
@@ -46,13 +48,17 @@ pub fn take_pending_screenshot(
 
     let window_entity = main_window.single();
 
-    // Create screenshots directory in home folder
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let screenshots_dir = format!("{}/cosmic_systems_images", home_dir);
+    // Determine output directory based on recording state
+    let (output_dir, filename_prefix) = if video_state.is_recording && !video_state.output_dir.is_empty() {
+        (video_state.output_dir.clone(), format!("frame_{:06}", video_state.frame_count))
+    } else {
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        (format!("{}/cosmic_systems_images", home_dir), "screenshot".to_string())
+    };
 
-    if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
         notifications.notifications.push(Notification {
-            message: format!("Failed to create screenshots directory: {}", e),
+            message: format!("Failed to create output directory: {}", e),
             notification_type: NotificationType::Error,
             created_at: time.elapsed_seconds(),
             duration: 5.0,
@@ -61,21 +67,28 @@ pub fn take_pending_screenshot(
     }
 
     // Generate filename with timestamp
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let filename = format!("{}/cosmic_systems_{}.png", screenshots_dir, timestamp);
+    let filename = if video_state.is_recording {
+        format!("{}/{}.png", output_dir, filename_prefix)
+    } else {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("{}/cosmic_systems_{}.png", output_dir, timestamp)
+    };
 
     // Take screenshot using Bevy's screenshot API
     match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
         Ok(_) => {
-            notifications.notifications.push(Notification {
-                message: format!("Screenshot saved to: {}", filename),
-                notification_type: NotificationType::Success,
-                created_at: time.elapsed_seconds(),
-                duration: 4.0,
-            });
+            // Only show notification for regular screenshots, not video frames
+            if !video_state.is_recording {
+                notifications.notifications.push(Notification {
+                    message: format!("Screenshot saved to: {}", filename),
+                    notification_type: NotificationType::Success,
+                    created_at: time.elapsed_seconds(),
+                    duration: 4.0,
+                });
+            }
         }
         Err(e) => {
             notifications.notifications.push(Notification {
@@ -83,6 +96,89 @@ pub fn take_pending_screenshot(
                 notification_type: NotificationType::Error,
                 created_at: time.elapsed_seconds(),
                 duration: 5.0,
+            });
+        }
+    }
+}
+
+// System to handle video recording frame capture
+pub fn handle_video_recording(
+    mut video_state: ResMut<VideoRecordingState>,
+    mut screenshot_state: ResMut<ScreenshotState>,
+    time: Res<Time>,
+) {
+    if !video_state.is_recording {
+        return;
+    }
+
+    // Capture frame every frame for video recording
+    // This will create a sequence of images that can be converted to video
+    if video_state.frame_count == 0 {
+        video_state.start_time = time.elapsed_seconds_f64();
+    }
+
+    video_state.frame_count += 1;
+    screenshot_state.pending = true; // Trigger screenshot capture
+}
+
+// System to start/stop video recording
+pub fn toggle_video_recording(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut video_state: ResMut<VideoRecordingState>,
+    mut notifications: ResMut<NotificationQueue>,
+    time: Res<Time>,
+) {
+    if keyboard_input.just_pressed(KeyCode::KeyV) && keyboard_input.pressed(KeyCode::ControlLeft) {
+        if video_state.is_recording {
+            // Stop recording
+            video_state.is_recording = false;
+            let duration = time.elapsed_seconds_f64() - video_state.start_time;
+            let frame_count = video_state.frame_count;
+
+            notifications.notifications.push(Notification {
+                message: format!(
+                    "Video recording stopped. Captured {} frames in {:.1}s. Check ~/cosmic_systems_videos/",
+                    frame_count,
+                    duration
+                ),
+                notification_type: NotificationType::Success,
+                created_at: time.elapsed_seconds(),
+                duration: 5.0,
+            });
+
+            // Reset state
+            video_state.frame_count = 0;
+            video_state.start_time = 0.0;
+            video_state.output_dir.clear();
+        } else {
+            // Start recording
+            video_state.is_recording = true;
+            video_state.frame_count = 0;
+
+            // Create video directory
+            let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            video_state.output_dir = format!("{}/cosmic_systems_videos/recording_{}", home_dir, timestamp);
+
+            if let Err(e) = std::fs::create_dir_all(&video_state.output_dir) {
+                notifications.notifications.push(Notification {
+                    message: format!("Failed to create video directory: {}", e),
+                    notification_type: NotificationType::Error,
+                    created_at: time.elapsed_seconds(),
+                    duration: 5.0,
+                });
+                video_state.is_recording = false;
+                return;
+            }
+
+            notifications.notifications.push(Notification {
+                message: "Video recording started. Press Ctrl+V to stop.".to_string(),
+                notification_type: NotificationType::Info,
+                created_at: time.elapsed_seconds(),
+                duration: 3.0,
             });
         }
     }
