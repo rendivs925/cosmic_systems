@@ -43,38 +43,19 @@ pub(crate) fn update_orbit_visuals(
     }
 }
 
-// System to toggle orbit visibility based on show_orbits parameter and distance culling
+// System to toggle orbit visibility based on show_orbits parameter
 pub fn update_orbit_visibility(
     solar_params: Res<SolarSystemParameters>,
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
-    planet_query: Query<&GlobalTransform, With<PlanetComponent>>,
-    mut orbit_query: Query<(&OrbitComponent, &mut Visibility)>,
+    mut orbit_query: Query<&mut Visibility, With<OrbitComponent>>,
 ) {
-    if !solar_params.show_orbits {
-        // Hide all orbits if disabled
-        for (_, mut visibility) in orbit_query.iter_mut() {
-            *visibility = Visibility::Hidden;
-        }
-        return;
-    }
+    let visibility = if solar_params.show_orbits {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
 
-    let camera_pos = camera_query.single().translation();
-
-    for (orbit_comp, mut visibility) in orbit_query.iter_mut() {
-        // Check distance to the planet this orbit belongs to, not the orbit entity position
-        if let Ok(planet_transform) = planet_query.get(orbit_comp.planet_entity) {
-            let distance_to_planet = camera_pos.distance(planet_transform.translation());
-            let max_orbit_distance = 80000.0; // Allow orbits to be visible for planets within this distance
-
-            *visibility = if distance_to_planet <= max_orbit_distance {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
-        } else {
-            // If we can't find the planet, hide the orbit
-            *visibility = Visibility::Hidden;
-        }
+    for mut orbit_visibility in orbit_query.iter_mut() {
+        *orbit_visibility = visibility;
     }
 }
 
