@@ -71,8 +71,8 @@ pub fn setup_space(
         ..default()
     });
 
-    // Create minimal starfield for subtle cosmic ambiance
-    create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
+    // Starfield disabled for now
+    // create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
 
     // Create a base orbit material template - individual orbits will get customized materials
     let base_orbit_material = create_orbit_material(
@@ -775,6 +775,8 @@ fn create_starfield(
         ..default()
     });
 
+    // Position stars relative to camera to ensure they're always visible
+    // This creates a star dome that follows the camera
     commands.spawn(PbrBundle {
         mesh: meshes.add(mesh),
         material,
@@ -784,6 +786,7 @@ fn create_starfield(
     })
     .insert(NotShadowCaster)
     .insert(NotShadowReceiver)
+    .insert(Starfield) // Custom component to identify starfield
     .insert(Name::new("Starfield"));
 }
 
