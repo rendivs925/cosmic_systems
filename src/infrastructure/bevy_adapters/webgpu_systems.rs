@@ -155,20 +155,16 @@ pub fn init_vulkan_solver(mut perf_stats: ResMut<PerformanceStats>) {
         return;
     }
 
-    println!("🔥 init_vulkan_solver: Starting Vulkan compute initialization...");
     perf_stats.vulkan_initialized = true;
-    println!("🔥 init_vulkan_solver: Attempting Vulkan compute initialization...");
 
     // Try to initialize Vulkan solver
     match init_vulkan_compute() {
         Ok(solver) => {
             perf_stats.vulkan_solver = Some(solver);
             perf_stats.vulkan_enabled = true;
-            println!("✅ init_vulkan_solver: Vulkan compute solver initialized successfully - GPU acceleration active!");
         }
-        Err(e) => {
+        Err(_) => {
             perf_stats.vulkan_enabled = false;
-            println!("❌ init_vulkan_solver: Vulkan compute initialization failed (continuing with CPU SIMD): {}", e);
         }
     }
 }
