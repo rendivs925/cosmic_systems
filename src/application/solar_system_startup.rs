@@ -679,7 +679,7 @@ fn create_starfield(
 ) {
     // Single GPU draw: build a mesh of tiny quads with per-star color/size
     let mut rng = StdRng::seed_from_u64(1337);
-    let star_count = 40000;
+    let star_count = 100000;
     let radius = solar_params.au_to_units(400.0); // push far beyond planetary orbits
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
