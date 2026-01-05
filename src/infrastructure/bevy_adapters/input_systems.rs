@@ -1,6 +1,7 @@
 use super::components::*;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::components::PerformanceStats;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 
@@ -177,6 +178,7 @@ pub fn update_planet_selection_visuals(
 pub fn handle_solar_system_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut solar_params: ResMut<SolarSystemParameters>,
+    mut perf_stats: ResMut<PerformanceStats>,
     mut camera_query: Query<(&mut CameraController, &mut Transform)>,
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
@@ -195,12 +197,22 @@ pub fn handle_solar_system_input(
         println!("🧘 Zen mode: {}", if zen_mode.enabled { "ON" } else { "OFF" });
     }
     // Time scale controls (require Ctrl key)
-    if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
+    if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) && keyboard.pressed(KeyCode::ShiftLeft) {
+        // Exponential increase: 10x
+        solar_params.time_scale = (solar_params.time_scale * 10.0).min(10000000.0);
+        println!("🚀 Time scale: {:.0}x (10x increase)", solar_params.time_scale);
+    } else if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
+        // Gradual increase: 10%
         solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
         println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
     }
 
-    if keyboard.just_pressed(KeyCode::KeyR) && keyboard.pressed(KeyCode::ControlLeft) && solar_params.time_scale > 0.1 {
+    if keyboard.just_pressed(KeyCode::KeyR) && keyboard.pressed(KeyCode::ControlLeft) && keyboard.pressed(KeyCode::ShiftLeft) && solar_params.time_scale > 0.1 {
+        // Exponential decrease: 10x
+        solar_params.time_scale = (solar_params.time_scale / 10.0).max(0.0001);
+        println!("🐌 Time scale: {:.0}x (10x decrease)", solar_params.time_scale);
+    } else if keyboard.just_pressed(KeyCode::KeyR) && keyboard.pressed(KeyCode::ControlLeft) && solar_params.time_scale > 0.1 {
+        // Gradual decrease: 10%
         solar_params.time_scale = (solar_params.time_scale / 1.1).max(0.0001);
         println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
     }
@@ -209,6 +221,15 @@ pub fn handle_solar_system_input(
     if keyboard.just_pressed(KeyCode::KeyY) && keyboard.pressed(KeyCode::ControlLeft) {
         solar_params.time_scale = 1.0;
         println!("⏸️ Time scale reset to: {:.1}x", solar_params.time_scale);
+    }
+
+    // Toggle automatic quality adaptation
+    if keyboard.just_pressed(KeyCode::KeyA) && keyboard.pressed(KeyCode::ControlLeft) && keyboard.pressed(KeyCode::ShiftLeft) {
+        perf_stats.adaptive_enabled = !perf_stats.adaptive_enabled;
+        println!("🎛️ Automatic quality adaptation: {}", if perf_stats.adaptive_enabled { "ENABLED" } else { "DISABLED (manual control)" });
+        if !perf_stats.adaptive_enabled {
+            println!("💡 Use Ctrl+T/Ctrl+R to manually adjust time scale");
+        }
     }
 
     // Toggle orbit visualization

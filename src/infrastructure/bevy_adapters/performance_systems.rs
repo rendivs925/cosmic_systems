@@ -273,37 +273,57 @@ fn adjust_quality_based_on_performance(
 
     if new_quality_level != performance_stats.quality_level {
         performance_stats.quality_level = new_quality_level;
-        apply_quality_settings(new_quality_level, solar_params);
+        apply_quality_settings(new_quality_level, solar_params, avg_fps);
     }
 }
 
 // Apply quality settings based on the quality level
-fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarSystemParameters) {
+fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarSystemParameters, current_fps: f32) {
+    // Adaptive time scaling based on actual performance
+    let performance_ratio = current_fps / 60.0; // Target FPS is 60
+
     match quality_level {
         QualityLevel::Ultra => {
-            // Maximum quality - no performance optimizations
-            solar_params.time_scale = 1.0;
-            println!("🎯 Performance excellent - Quality set to Ultra");
+            // Maximum quality - allow very high time scales when performance is excellent
+            let max_time_scale = if performance_ratio > 2.5 {
+                1000000.0 // 1M x for exceptional performance
+            } else if performance_ratio > 2.0 {
+                500000.0  // 500K x for very good performance
+            } else if performance_ratio > 1.5 {
+                200000.0  // 200K x for good performance
+            } else {
+                100000.0  // 100K x baseline
+            };
+            // Preserve current time scale if it's already high, otherwise boost it
+            solar_params.time_scale = solar_params.time_scale.max(max_time_scale);
+            println!("🎯 Performance excellent ({:.0} FPS) - Quality Ultra, Time Scale: {:.0}x", current_fps, solar_params.time_scale);
         }
         QualityLevel::High => {
-            // High quality with minimal optimizations
-            solar_params.time_scale = 1.0;
-            println!("✅ Performance good - Quality set to High");
+            // High quality - allow high time scales
+            let max_time_scale = if performance_ratio > 1.8 {
+                100000.0  // 100K x
+            } else if performance_ratio > 1.3 {
+                50000.0   // 50K x
+            } else {
+                20000.0   // 20K x
+            };
+            solar_params.time_scale = solar_params.time_scale.max(max_time_scale);
+            println!("✅ Performance good ({:.0} FPS) - Quality High, Time Scale: {:.0}x", current_fps, solar_params.time_scale);
         }
         QualityLevel::Medium => {
             // Balanced quality and performance
-            solar_params.time_scale = 0.8;
-            println!("⚖️ Performance moderate - Quality set to Medium");
+            solar_params.time_scale = (solar_params.time_scale * 0.9).max(1000.0);
+            println!("⚖️ Performance moderate ({:.0} FPS) - Quality Medium, Time Scale: {:.0}x", current_fps, solar_params.time_scale);
         }
         QualityLevel::Low => {
             // Lower quality for better performance
-            solar_params.time_scale = 0.5;
-            println!("⚡ Performance low - Quality set to Low (slower time)");
+            solar_params.time_scale = (solar_params.time_scale * 0.7).max(100.0);
+            println!("⚡ Performance low ({:.0} FPS) - Quality Low, Time Scale: {:.0}x", current_fps, solar_params.time_scale);
         }
         QualityLevel::Minimal => {
-            // Minimum quality for maximum performance
-            solar_params.time_scale = 0.2;
-            println!("🚀 Performance critical - Quality set to Minimal (maximum time scaling)");
+            // Minimum quality for maximum performance - still allow reasonable time scales
+            solar_params.time_scale = (solar_params.time_scale * 0.5).max(10.0);
+            println!("🚀 Performance critical ({:.0} FPS) - Quality Minimal, Time Scale: {:.0}x", current_fps, solar_params.time_scale);
         }
     }
 }

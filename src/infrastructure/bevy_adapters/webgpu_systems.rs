@@ -60,7 +60,7 @@ pub fn update_wasm_memory_stats(
         };
         if new_quality != performance_stats.quality_level {
             performance_stats.quality_level = new_quality;
-            apply_quality_settings(new_quality, &mut solar_params);
+            apply_quality_settings(new_quality, &mut solar_params, performance_stats.fps_display);
             web_sys::console::log_1(&"Memory pressure: reducing quality".into());
         }
     }
