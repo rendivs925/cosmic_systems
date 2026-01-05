@@ -31,7 +31,7 @@ impl SolarSystemParameters {
         Self {
             sun_radius_km: 696342.0,
             scale_factor: 75000.0, // 1 AU = 75,000 simulation units
-            time_scale: 0.01,         // Ultra-slow motion for meticulous orbital analysis
+            time_scale: 1.0,           // Real-time scale for natural orbital observation
             show_orbits: true,
             // TRUE SIZE RELATIONSHIPS between planets are preserved:
             // - Sun is 109x larger than Earth
