@@ -110,14 +110,8 @@ pub fn adaptive_quality_system(
         println!("🎚️ Quality adapted to: {:?}", new_quality);
     }
 
-        // Log adaptation status less frequently - only when quality changes
-        if perf_stats.frame_count % 600 == 0 { // Every 10 seconds
-            println!("🎯 Quality: {:?} | FPS: {:.1} | GPU: {:.1}%",
-                perf_stats.quality_level,
-                perf_stats.fps_display,
-                perf_stats.gpu_utilization * 100.0
-            );
-        }
+        // Minimal quality logging - only when quality changes significantly
+        // Removed frequent quality status logging to reduce noise
 }
 
 // PRODUCTION-GRADE FPS MEASUREMENT (Industry Standard Implementation)
@@ -266,53 +260,19 @@ fn adjust_quality_based_on_performance(
 fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarSystemParameters, current_fps: f32) {
     // Quality adaptation now preserves user-set time scale
     // Only adjust other quality parameters, not time scale
-    match quality_level {
-        QualityLevel::Ultra => {
-            // Maximum quality - no performance optimizations
-            println!("🎯 Performance excellent ({:.0} FPS) - Quality Ultra", current_fps);
-        }
-        QualityLevel::High => {
-            // High quality with minimal optimizations
-            println!("✅ Performance good ({:.0} FPS) - Quality High", current_fps);
-        }
-        QualityLevel::Medium => {
-            // Balanced quality and performance
-            println!("⚖️ Performance moderate ({:.0} FPS) - Quality Medium", current_fps);
-        }
-        QualityLevel::Low => {
-            // Lower quality for better performance
-            println!("⚡ Performance low ({:.0} FPS) - Quality Low", current_fps);
-        }
-        QualityLevel::Minimal => {
-            // Minimum quality for maximum performance
-            println!("🚀 Performance critical ({:.0} FPS) - Quality Minimal", current_fps);
-        }
-    }
+    // Quality change notifications removed to reduce console noise
+    let _ = quality_level; // Avoid unused variable warning
 }
 
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
 /// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
 pub fn log_performance_stats(perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
-    // Log performance stats every 300 frames (5 seconds) - reduced noise
-    if perf_stats.frame_count % 300 == 0 {
-        // PRIMARY DISPLAY: Essential performance info only
-        println!("🎯 PERF_STATS: FPS: {:.1} | Frame: {:.1}ms | Quality: {:?}",
+    // Log performance stats every 600 frames (10 seconds) - minimal noise
+    if perf_stats.frame_count % 600 == 0 {
+        println!("PERF: FPS {:.1}, Frame {:.1}ms, Quality {:?}",
             perf_stats.fps_display,
             perf_stats.frame_time_ms,
             perf_stats.quality_level
         );
-
-        // Only show detailed GPU timing if Vulkan is active
-        if perf_stats.vulkan_enabled && perf_stats.gpu_frame_time_ms > 0.0 {
-            println!("🎮 GPU: {:.1}ms | Vulkan calls: {}",
-                perf_stats.gpu_frame_time_ms,
-                perf_stats.vulkan_kepler_calls
-            );
-        }
-
-        // Show physics performance only if significant
-        if perf_stats.physics_update_time > 0.1 {
-            println!("⚛️ PHYSICS: {:.2}ms", perf_stats.physics_update_time);
-        }
     }
 }
