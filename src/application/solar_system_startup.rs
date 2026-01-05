@@ -74,13 +74,16 @@ pub fn setup_space(
     // Create optimized starfield background (reduced density for performance)
     create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
 
-    let shared_orbit_material = materials.add(create_orbit_material(
-        Color::srgb(0.7, 0.8, 0.9), // Very subtle cool blue tint
-        orbit_emissive(Color::srgb(0.7, 0.8, 0.9), 0.1), // Minimal glow
-        0.08, // Extremely subtle - barely visible but informative
-    ));
+    // Create a base orbit material template - individual orbits will get customized materials
+    let base_orbit_material = create_orbit_material(
+        Color::srgb(0.6, 0.7, 0.8), // Base cool cosmic blue
+        orbit_emissive(Color::srgb(0.6, 0.7, 0.8), 0.1), // Minimal glow
+        0.1, // Base transparency - will be customized per orbit
+    );
+
+    let shared_orbit_handle = materials.add(base_orbit_material);
     commands.insert_resource(SharedOrbitMaterial {
-        handle: shared_orbit_material.clone(),
+        handle: shared_orbit_handle.clone(),
     });
 
     // Create all planets and moons
@@ -166,7 +169,7 @@ pub fn setup_space(
             &mut entity_map,
             &mut position_map,
             &axial_tilts,
-            &shared_orbit_material,
+            &shared_orbit_handle,
         );
     }
 }
@@ -379,24 +382,33 @@ fn spawn_celestial_body(
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
             // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
+            // Create individual material for this moon orbit
+            let moon_material = create_orbit_material(
+                Color::srgb(0.6, 0.7, 0.8), // Cool blue for moons
+                orbit_emissive(Color::srgb(0.6, 0.7, 0.8), 0.08),
+                0.08, // Medium visibility for moons
+            );
+            let moon_material_handle = materials.add(moon_material);
+
             #[cfg(target_arch = "wasm32")]
             let orbit_entity = commands
                 .spawn(PbrBundle {
                     mesh: orbit_mesh.clone(),
-                    material: orbit_material_handle.clone(),
+                    material: moon_material_handle,
                     transform: Transform::default(),
                     ..default()
                 })
                 .insert(OrbitComponent {
                     radius: orbit_shape.semi_major_axis_units,
                     planet_entity: parent_ent,
-                    material: orbit_material_handle.clone(),
+                    material: moon_material_handle,
                     base_color: orbit_base_color,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,
                     wobble_amount: orbit_motion.wobble_amount,
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
+                    distance_rank: 0.5, // Moons get medium visibility rank
                 })
                 .insert(MoonOrbit)
                 .insert(Name::new(format!(
@@ -424,6 +436,7 @@ fn spawn_celestial_body(
                         wobble_amount: orbit_motion.wobble_amount,
                         spin_speed: orbit_motion.spin_speed,
                         phase: orbit_motion.phase,
+                        distance_rank: 0.5, // Moons get medium visibility rank
                     })
                     .insert(MoonOrbit)
                     .insert(Name::new(format!(
@@ -493,6 +506,7 @@ fn spawn_celestial_body(
                     wobble_amount: orbit_motion.wobble_amount,
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
+                    distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0), // 0=inner planets, 1=outer planets
                 })
                 .insert(Name::new(format!("Orbit {}", planet.name)));
         }

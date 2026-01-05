@@ -34,6 +34,7 @@ pub struct OrbitComponent {
     pub wobble_amount: f32,
     pub spin_speed: f32,
     pub phase: f32,
+    pub distance_rank: f32, // 0.0 (closest to sun) to 1.0 (farthest) for hierarchy
 }
 
 // Marker component for moon orbits (orbits that need to follow their parent planet)
