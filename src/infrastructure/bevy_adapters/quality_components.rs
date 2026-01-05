@@ -280,16 +280,3 @@ impl QualityController {
         }
     }
 }
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Default)]
-pub struct AutoInspectState {
-    selected: Option<Entity>,
-    offset: Vec3,
-    orbit_angle: f32,     // Cinematic orbit angle
-    orbit_elevation: f32, // Vertical orbit component
-    smooth_axis: Vec3,
-    smooth_up: Vec3,
-    smooth_focus: Vec3,
-    smooth_offset: Vec3,
-}

@@ -290,8 +290,9 @@ pub fn auto_inspect_selected_planet(
     //     return;
     // }
 
-    if input_state.last_selected_entity != Some(selected_entity) {
-        input_state.last_selected_entity = Some(selected_entity);
+    // Always reset suppression when a planet is selected (makes it idempotent)
+    if selected_planet.entity.is_some() {
+        input_state.last_selected_entity = selected_planet.entity;
         input_state.suppress_auto_inspect_for = None;
     }
 
