@@ -694,7 +694,7 @@ fn create_starfield(
     // Minimal starfield for subtle cosmic ambiance
     let mut rng = StdRng::seed_from_u64(1337);
     let star_count = 40000; // Balanced density for cosmic ambiance without distraction
-    let radius = solar_params.au_to_units(400.0); // push far beyond planetary orbits
+    let radius = solar_params.au_to_units(800.0); // push far beyond any camera movement range
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
     let mut normals: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
@@ -770,6 +770,8 @@ fn create_starfield(
         unlit: true,
         alpha_mode: AlphaMode::Add,
         emissive: LinearRgba::new(1.0, 0.98, 0.9, 1.0),
+        // Ensure stars render behind everything else
+        depth_bias: -10.0,
         ..default()
     });
 
@@ -782,6 +784,9 @@ fn create_starfield(
         },
         NotShadowCaster,
         NotShadowReceiver,
+        // Ensure stars are always visible regardless of UI or selection state
+        Visibility::Visible,
+        Name::new("Starfield"),
     ));
 }
 
