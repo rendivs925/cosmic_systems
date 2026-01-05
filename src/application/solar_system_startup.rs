@@ -75,9 +75,9 @@ pub fn setup_space(
     create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
 
     let shared_orbit_material = materials.add(create_orbit_material(
-        Color::srgb(0.8, 0.9, 1.0), // Subtle blue-white tint
-        orbit_emissive(Color::srgb(0.8, 0.9, 1.0), 0.2), // Much subtler glow
-        0.15, // Much more transparent - very subtle lines
+        Color::srgb(0.7, 0.8, 0.9), // Very subtle cool blue tint
+        orbit_emissive(Color::srgb(0.7, 0.8, 0.9), 0.1), // Minimal glow
+        0.08, // Extremely subtle - barely visible but informative
     ));
     commands.insert_resource(SharedOrbitMaterial {
         handle: shared_orbit_material.clone(),

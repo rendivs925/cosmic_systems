@@ -3,7 +3,7 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
 
 // System to animate orbit visuals for a more dynamic presentation
-// Optimized to update every 3 frames instead of every frame
+// Optimized to update every few frames for performance
 #[allow(dead_code)]
 pub(crate) fn update_orbit_visuals(
     time: Res<Time>,
@@ -11,13 +11,12 @@ pub(crate) fn update_orbit_visuals(
     query: Query<&OrbitComponent>,
     shared: Option<Res<crate::application::solar_system_startup::SharedOrbitMaterial>>,
 ) {
-    // Performance optimization: update orbit visuals only every 3 frames
-    // Visual pulsing is slow enough that this is imperceptible
-    let frame_number = (time.elapsed_seconds() * 60.0) as u32; // Assume 60 FPS
+    // Performance optimization: update orbit visuals periodically
+    let frame_number = (time.elapsed_seconds() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 12;
+    let update_stride = 15; // Less frequent on web
     #[cfg(not(target_arch = "wasm32"))]
-    let update_stride = 3;
+    let update_stride = 5; // Desktop can handle more frequent updates
 
     if frame_number % update_stride != 0 {
         return;
@@ -29,17 +28,15 @@ pub(crate) fn update_orbit_visuals(
         return;
     }
 
-    let Some(shared) = shared else {
-        return;
-    };
-
-    if let Some(material) = materials.get_mut(&shared.handle) {
-        // Very subtle, slow pulsing - almost static appearance
-        let pulse = 0.8 + 0.2 * (elapsed * 0.05).sin(); // Much slower, smaller variation
-        let alpha = 0.15 * pulse; // Base transparency with subtle modulation
-        material.base_color = Color::srgb(0.8, 0.9, 1.0).with_alpha(alpha);
-        let glow = 0.1 + 0.05 * pulse; // Much subtler glow
-        material.emissive = LinearRgba::new(glow, glow, glow * 1.2, 1.0); // Slight blue bias
+    if let Some(shared) = shared {
+        if let Some(material) = materials.get_mut(&shared.handle) {
+            // Ultra-subtle cosmic breathing effect - barely noticeable
+            let cosmic_pulse = 0.95 + 0.05 * (elapsed * 0.015).sin(); // Extremely slow, minimal variation
+            let alpha = 0.08 * cosmic_pulse; // Ultra-subtle transparency that hints at orbital motion
+            material.base_color = Color::srgb(0.65, 0.75, 0.85).with_alpha(alpha); // Cool cosmic blue
+            let stellar_glow = 0.02 + 0.01 * cosmic_pulse; // Barely perceptible stellar influence
+            material.emissive = LinearRgba::new(stellar_glow, stellar_glow, stellar_glow * 1.3, 1.0); // Subtle blue stellar accent
+        }
     }
 }
 
