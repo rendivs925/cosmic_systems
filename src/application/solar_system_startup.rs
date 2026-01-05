@@ -693,7 +693,7 @@ fn create_starfield(
 ) {
     // Minimal starfield for subtle cosmic ambiance
     let mut rng = StdRng::seed_from_u64(1337);
-    let star_count = 15000; // Reduced from 100k to 15k for minimal presence
+    let star_count = 40000; // Balanced density for cosmic ambiance without distraction
     let radius = solar_params.au_to_units(400.0); // push far beyond planetary orbits
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
@@ -718,12 +718,12 @@ fn create_starfield(
         let dir = Vec3::new(r * theta.cos(), z, r * theta.sin());
         let center = dir * radius;
 
-        let size = rng.gen_range(300.0..800.0); // Smaller, more subtle stars
-        let color_tint = rng.gen_range(0.3..0.7); // Much dimmer stars
+        let size = rng.gen_range(400.0..1000.0); // Balanced size for visibility
+        let color_tint = rng.gen_range(0.4..0.8); // Moderate brightness for ambiance
         let color = [
-            0.4 * color_tint,  // Very dim red channel
-            0.5 * color_tint,  // Dim green channel
-            0.6 * color_tint,  // Slightly brighter blue for cool star feel
+            0.5 * color_tint,  // Subtle red channel
+            0.6 * color_tint,  // Moderate green channel
+            0.7 * color_tint,  // Brighter blue for cool cosmic feel
             1.0,
         ];
 
