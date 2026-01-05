@@ -115,10 +115,7 @@ pub fn update_camera_controller(
         if keyboard.pressed(KeyCode::Space) || keyboard.pressed(KeyCode::KeyQ) {
             movement += Vec3::Y; // Up
         }
-        if keyboard.pressed(KeyCode::ControlLeft)
-            || keyboard.pressed(KeyCode::ControlRight)
-            || keyboard.pressed(KeyCode::KeyE)
-        {
+        if keyboard.pressed(KeyCode::KeyE) {
             movement -= Vec3::Y; // Down
         }
 
