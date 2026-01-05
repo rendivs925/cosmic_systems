@@ -490,6 +490,7 @@ pub(crate) fn update_navbar(
     zen_mode: Res<ZenMode>,
     menu_state: Res<UiMenuState>,
     time: Res<Time>,
+    mut last_update: Local<f32>,
     mut queries: ParamSet<(
         Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
         Query<(&MenuButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
@@ -497,7 +498,15 @@ pub(crate) fn update_navbar(
         Query<&mut Style, With<SelectorPanelRoot>>,
     )>,
 ) {
-    let hide_ui = zen_mode.enabled || screenshot_state.pending || notifications.hide_for_screenshot;
+    let current_time = time.elapsed_seconds();
+
+    // Reduce update frequency during video recording to prevent UI flickering
+    let update_interval = if video_state.is_recording { 0.1 } else { 0.016 }; // 10 FPS during recording, 60 FPS normally
+
+    if current_time - *last_update < update_interval {
+        return;
+    }
+    *last_update = current_time;
 
     let selected_name = selected_planet.name.as_deref();
     let active_parent = selected_name.map(|name| {
@@ -619,23 +628,21 @@ pub(crate) fn update_info_card(
 }
 
 pub(crate) fn update_notifications_ui(
-    mut commands: Commands,
+    notifications: Res<NotificationQueue>,
+    mut query: Query<(&mut Text, &mut BackgroundColor, &mut Style), With<NotificationUi>>,
     time: Res<Time>,
-    mut notifications: ResMut<NotificationQueue>,
-    roots: Res<UiRoots>,
-    zen_mode: Res<ZenMode>,
+    video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
+    mut last_update: Local<f32>,
 ) {
-    if zen_mode.enabled {
-        commands.entity(roots.notifications).despawn_descendants();
-        return;
-    }
-    if notifications.hide_for_screenshot {
-        notifications.hide_for_screenshot = false;
-        commands.entity(roots.notifications).despawn_descendants();
-        return;
-    }
-
     let current_time = time.elapsed_seconds();
+
+    // Reduce notification update frequency during video recording to prevent UI flickering
+    let update_interval = if video_state.is_recording { 0.2 } else { 0.016 }; // 5 FPS during recording, 60 FPS normally
+
+    if current_time - *last_update < update_interval {
+        return;
+    }
+    *last_update = current_time;
     notifications
         .notifications
         .retain(|n| current_time - n.created_at < n.duration);

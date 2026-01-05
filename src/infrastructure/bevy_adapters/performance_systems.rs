@@ -81,6 +81,7 @@ pub fn take_pending_screenshot(
     match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
         Ok(_) => {
             // Only show notification for regular screenshots, not video frames
+            // During recording, suppress all notifications to prevent UI flickering
             if !video_state.is_recording {
                 notifications.notifications.push(Notification {
                     message: format!("Screenshot saved to: {}", filename),
