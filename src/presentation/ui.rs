@@ -159,7 +159,8 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 })
                 .with_children(|menu| {
                     spawn_menu_button(menu, "Explore", MenuAction::Explore, true);
-                 });
+                    spawn_menu_button(menu, "Orbits", MenuAction::Orbits, false);
+                });
              });
 
         parent.spawn((
