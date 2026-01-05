@@ -28,8 +28,7 @@ pub(crate) struct NavButton {
 #[derive(Clone, Copy)]
 #[derive(PartialEq)]
 enum NavGroup {
-    Planet,
-    Moon(&'static str),
+    CelestialBody, // Unified for all planets and moons
 }
 
 #[derive(Component)]
@@ -53,8 +52,7 @@ enum MenuAction {
 #[derive(Component)]
 pub(crate) struct SelectorPanelRoot;
 
-#[derive(Component)]
-pub(crate) struct SelectorMoonsSection;
+
 
 #[derive(Resource)]
 pub(crate) struct UiMenuState {
@@ -71,39 +69,16 @@ impl Default for UiMenuState {
     }
 }
 
-#[derive(Resource, Default)]
-pub struct HoverState {
-    pub hovered_planet: Option<String>,
-    pub hover_stability_counter: u32,
-}
 
-pub(crate) fn update_hover_state(
-    interactions: Query<(&Interaction, &NavButton)>,
-    mut hover_state: ResMut<HoverState>,
-) {
-    let mut currently_hovered = None;
 
-    for (interaction, button) in interactions.iter() {
-        if *interaction == Interaction::Hovered && button.group == NavGroup::Planet {
-            currently_hovered = Some(button.name.clone());
-            break; // Only track the first hovered planet
-        }
-    }
 
-    // Add stability to prevent flickering - only change after 3 consistent frames
-    if hover_state.hovered_planet != currently_hovered {
-        hover_state.hover_stability_counter += 1;
-        if hover_state.hover_stability_counter >= 3 {
-            hover_state.hovered_planet = currently_hovered;
-            hover_state.hover_stability_counter = 0;
-        }
-    } else {
-        hover_state.hover_stability_counter = 0;
-    }
-}
+
+
 
 #[derive(Component)]
 pub(crate) struct InfoCardRoot;
+
+
 
 #[derive(Component)]
 pub(crate) struct InfoCardTitle;
@@ -134,7 +109,6 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     });
 
     commands.insert_resource(UiMenuState::default());
-    commands.insert_resource(HoverState::default());
 
     let navbar = commands
         .spawn(NodeBundle {
@@ -258,8 +232,10 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         text_style(12.0, Color::srgb(0.9, 0.94, 1.0)),
                     ));
 
+
+
                     panel.spawn(TextBundle::from_section(
-                        "Planets",
+                        "All Bodies",
                         text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
                     ));
 
@@ -270,43 +246,28 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                                 flex_wrap: FlexWrap::Wrap,
                                 column_gap: Val::Px(8.0),
                                 row_gap: Val::Px(6.0),
+                                max_height: Val::Px(300.0), // Add scrolling for long lists
+                                overflow: Overflow::clip_y(),
                                 ..default()
                             },
                             ..default()
                         })
-                        .with_children(|planets| {
+                        .with_children(|bodies| {
+                            // Planets first
                             for name in planet_names() {
-                                spawn_nav_button(planets, name, NavGroup::Planet);
+                                spawn_nav_button(bodies, name, NavGroup::CelestialBody);
+                            }
+                            // Then moons
+                            for parent_name in planet_names() {
+                                for moon_name in moon_names_for_parent(parent_name) {
+                                    spawn_nav_button(bodies, moon_name, NavGroup::CelestialBody);
+                                }
                             }
                         });
 
-                    panel.spawn((
-                        TextBundle::from_section(
-                            "Moons",
-                            text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
-                        ),
-                        SelectorMoonsSection,
-                    ));
 
-                    panel
-                        .spawn((
-                            NodeBundle {
-                                style: Style {
-                                    flex_direction: FlexDirection::Row,
-                                    flex_wrap: FlexWrap::Wrap,
-                                    column_gap: Val::Px(8.0),
-                                    row_gap: Val::Px(6.0),
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                            SelectorMoonsSection,
-                        ))
-                        .with_children(|moons| {
-                            for (parent_name, moon_name) in moon_pairs() {
-                                spawn_nav_button(moons, moon_name, NavGroup::Moon(parent_name));
-                            }
-                        });
+
+
                 });
         });
 
@@ -526,14 +487,11 @@ pub(crate) fn update_navbar(
     notifications: Res<NotificationQueue>,
     zen_mode: Res<ZenMode>,
     menu_state: Res<UiMenuState>,
-    hover_state: Res<HoverState>,
     mut queries: ParamSet<(
         Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
         Query<(&MenuButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
         Query<&mut Text, With<FpsText>>,
         Query<&mut Style, With<SelectorPanelRoot>>,
-        Query<&mut Style, With<SelectorMoonsSection>>,
-        Query<&mut Style, With<InfoCardExternalToggle>>,
     )>,
 ) {
     let hide_ui = zen_mode.enabled || screenshot_state.pending || notifications.hide_for_screenshot;
@@ -548,16 +506,8 @@ pub(crate) fn update_navbar(
     });
 
     let show_selector = menu_state.selector_open;
-    // Check for hovered planet to show moons on hover
-    let hovered_parent = hover_state.hovered_planet.as_deref();
 
-    let show_moons = show_selector
-        && (active_parent
-            .map(|parent| !moon_names_for_parent(parent).is_empty())
-            .unwrap_or(false)
-            || hovered_parent
-                .map(|parent| !moon_names_for_parent(parent).is_empty())
-                .unwrap_or(false));
+    // No longer need moon visibility logic - all bodies shown in unified list
 
     if let Ok(mut style) = queries.p3().get_single_mut() {
         style.display = if show_selector && !hide_ui {
@@ -567,13 +517,7 @@ pub(crate) fn update_navbar(
         };
     }
 
-    for mut style in queries.p5().iter_mut() {
-        style.display = if menu_state.info_card_open {
-            Display::None
-        } else {
-            Display::Flex
-        };
-    }
+
 
     for (button, mut style, mut background, mut border) in queries.p0().iter_mut() {
         let is_selected = selected_name == Some(button.name.as_str());
@@ -581,30 +525,17 @@ pub(crate) fn update_navbar(
             style.display = Display::None;
             continue;
         }
-        let is_hovered = hovered_parent == Some(button.name.as_str());
+        // Unified celestial body list - show all when selector is open
+        let show_button = show_selector;
 
-        match button.group {
-            NavGroup::Planet => {
-                style.display = if show_selector {
-                    Display::Flex
-                } else {
-                    Display::None
-                };
-            }
-            NavGroup::Moon(parent) => {
-                let selected_visible = active_parent == Some(parent);
-                let hovered_visible = hovered_parent == Some(parent);
-                let visible = selected_visible || hovered_visible;
-                // Use opacity instead of display for smoother transitions
-                if show_moons && visible {
-                    style.display = Display::Flex;
-                } else {
-                    style.display = Display::None;
-                }
-            }
-        }
-        *background = BackgroundColor(nav_button_color_hover(is_selected, is_hovered));
-        border.0 = nav_button_border_color_hover(is_selected, is_hovered);
+        style.display = if show_button {
+            Display::Flex
+        } else {
+            Display::None
+        };
+
+        *background = BackgroundColor(nav_button_color(is_selected));
+        border.0 = nav_button_border_color(is_selected);
     }
 
     for (button, mut style, mut background, mut border) in queries.p1().iter_mut() {
@@ -624,13 +555,7 @@ pub(crate) fn update_navbar(
         border.0 = stroke;
     }
 
-    for mut style in queries.p4().iter_mut() {
-        style.display = if show_moons {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
+
 
     if let Ok(mut text) = queries.p2().get_single_mut() {
         let display_fps = performance_stats.average_fps;
