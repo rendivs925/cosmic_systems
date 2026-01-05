@@ -1,3 +1,17 @@
 pub mod components;
 pub mod systems;
+pub mod gyroscope_systems;
+pub mod planet_systems;
+pub mod orbit_systems;
+pub mod material_systems;
+pub mod camera_systems;
+pub mod input_systems;
+pub mod performance_systems;
+pub mod webgpu_systems;
+pub mod entity_components;
+pub mod material_components;
+pub mod ui_components;
+pub mod performance_components;
+pub mod quality_components;
+pub mod compute_components;
 pub mod simd_kepler;
