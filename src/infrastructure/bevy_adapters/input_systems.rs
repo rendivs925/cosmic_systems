@@ -194,19 +194,19 @@ pub fn handle_solar_system_input(
         zen_mode.enabled = !zen_mode.enabled;
         println!("🧘 Zen mode: {}", if zen_mode.enabled { "ON" } else { "OFF" });
     }
-    // Time scale controls
-    if keyboard.just_pressed(KeyCode::KeyT) {
+    // Time scale controls (require Ctrl key)
+    if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
         solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
         println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
     }
 
-    if keyboard.just_pressed(KeyCode::KeyR) && solar_params.time_scale > 0.1 {
+    if keyboard.just_pressed(KeyCode::KeyR) && keyboard.pressed(KeyCode::ControlLeft) && solar_params.time_scale > 0.1 {
         solar_params.time_scale = (solar_params.time_scale / 1.1).max(0.0001);
         println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
     }
 
     // Reset time scale
-    if keyboard.just_pressed(KeyCode::KeyY) {
+    if keyboard.just_pressed(KeyCode::KeyY) && keyboard.pressed(KeyCode::ControlLeft) {
         solar_params.time_scale = 1.0;
         println!("⏸️ Time scale reset to: {:.1}x", solar_params.time_scale);
     }
