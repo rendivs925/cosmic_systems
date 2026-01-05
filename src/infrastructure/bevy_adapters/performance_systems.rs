@@ -110,29 +110,14 @@ pub fn adaptive_quality_system(
         println!("🎚️ Quality adapted to: {:?}", new_quality);
     }
 
-    // Log adaptation status periodically
-    static mut LAST_LOG: Option<std::time::Instant> = None;
-    let now = std::time::Instant::now();
-    unsafe {
-        let should_log = LAST_LOG
-            .map(|last| now.duration_since(last).as_millis() > 5000)
-            .unwrap_or(true);
-        if should_log {
-            // Log every 5 seconds
-            println!("🎯 Quality Adaptation Status:");
-            println!("   Current Quality: {:?}", perf_stats.quality_level);
-            println!("   FPS: {:.1}", perf_stats.fps_display);
-            println!("   GPU Util: {:.1}%", perf_stats.gpu_utilization * 100.0);
-            println!("   CPU Util: {:.1}%", perf_stats.cpu_utilization * 100.0);
-            println!(
-                "   Mem Pressure: {:.1}%",
-                perf_stats.memory_pressure * 100.0
+        // Log adaptation status less frequently - only when quality changes
+        if perf_stats.frame_count % 600 == 0 { // Every 10 seconds
+            println!("🎯 Quality: {:?} | FPS: {:.1} | GPU: {:.1}%",
+                perf_stats.quality_level,
+                perf_stats.fps_display,
+                perf_stats.gpu_utilization * 100.0
             );
-            println!("   Trend: {:?}", perf_stats.quality_trend);
-            println!("   Confidence: {:.2}", perf_stats.adaptive_confidence);
-            LAST_LOG = Some(now);
         }
-    }
 }
 
 // PRODUCTION-GRADE FPS MEASUREMENT (Industry Standard Implementation)
@@ -308,70 +293,26 @@ fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarS
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
 /// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
 pub fn log_performance_stats(perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
-    // Log performance stats every 60 frames for benchmarking
-    if perf_stats.frame_count % 60 == 0 {
-        // PRIMARY DISPLAY: Frame time and FPS (industry standard format)
-        // Shows both the truth (frame time) and human metric (FPS)
-        println!("🎯 PERF_STATS: FPS: {:.1} | Frame: {:.1}ms | 99%: {:.1}ms | Min: {:.1}ms | Max: {:.1}ms",
-            perf_stats.fps_display,      // Smoothed FPS for human consumption
-            perf_stats.frame_time_ms,    // Current frame time (the truth)
-            perf_stats.frame_time_99th,  // 99th percentile (stutter detection)
-            perf_stats.frame_time_min,   // Best case
-            perf_stats.frame_time_max    // Worst case
+    // Log performance stats every 300 frames (5 seconds) - reduced noise
+    if perf_stats.frame_count % 300 == 0 {
+        // PRIMARY DISPLAY: Essential performance info only
+        println!("🎯 PERF_STATS: FPS: {:.1} | Frame: {:.1}ms | Quality: {:?}",
+            perf_stats.fps_display,
+            perf_stats.frame_time_ms,
+            perf_stats.quality_level
         );
 
-        // GPU TIMING (when available)
-        if perf_stats.gpu_frame_time_ms > 0.0 {
-            println!(
-                "🎮 GPU_TIMING: CPU: {:.1}ms | GPU: {:.1}ms | Combined: {:.1}ms",
-                perf_stats.frame_time_ms,
+        // Only show detailed GPU timing if Vulkan is active
+        if perf_stats.vulkan_enabled && perf_stats.gpu_frame_time_ms > 0.0 {
+            println!("🎮 GPU: {:.1}ms | Vulkan calls: {}",
                 perf_stats.gpu_frame_time_ms,
-                perf_stats.cpu_gpu_frame_time
+                perf_stats.vulkan_kepler_calls
             );
         }
 
-        // PHYSICS PERFORMANCE BREAKDOWN
-        println!(
-            "⚛️  PHYSICS: update={:.2}ms kepler={:.2}ms vulkan_calls={} adaptive_calls={}",
-            perf_stats.physics_update_time,
-            perf_stats.kepler_solve_time,
-            perf_stats.vulkan_kepler_calls,
-            perf_stats.adaptive_kepler_calls
-        );
-
-        // COMPUTE BACKEND STATUS
-        let backend_status = if perf_stats.vulkan_enabled {
-            "Vulkan GPU + SIMD"
-        } else {
-            "SIMD CPU Only"
-        };
-        println!(
-            "🖥️  COMPUTE: {} | SIMD: {} | Parallel: {} | Cores: {}",
-            backend_status,
-            perf_stats.simd_enabled,
-            perf_stats.parallel_enabled,
-            perf_stats.cpu_cores_used
-        );
-
-        // QUALITY AND ADAPTATION
-        println!(
-            "🎚️  QUALITY: {:?} | Adaptive: {} | Target: {:.0} FPS",
-            perf_stats.quality_level, perf_stats.adaptive_enabled, perf_stats.target_fps
-        );
-
-        // MEMORY USAGE
-        println!(
-            "💾 MEMORY: {:.1}MB current | {:.1}MB peak",
-            perf_stats.memory_usage_mb, perf_stats.peak_memory_mb
-        );
-
-        // RAW METRICS (for debugging - not for end users)
-        if perf_stats.frame_count % 300 == 0 {
-            // Every 5 seconds
-            println!(
-                "🔍 RAW_METRICS: fps_raw={:.1} fps_smoothed={:.1} frame_time_smoothed={:.1}ms",
-                perf_stats.fps_raw, perf_stats.fps_smoothed, perf_stats.frame_time_smoothed
-            );
+        // Show physics performance only if significant
+        if perf_stats.physics_update_time > 0.1 {
+            println!("⚛️ PHYSICS: {:.2}ms", perf_stats.physics_update_time);
         }
     }
 }
