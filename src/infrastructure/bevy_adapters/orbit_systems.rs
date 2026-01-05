@@ -47,11 +47,12 @@ pub(crate) fn update_orbit_visuals(
 pub fn update_orbit_visibility(
     solar_params: Res<SolarSystemParameters>,
     camera_query: Query<&GlobalTransform, With<CameraController>>,
-    mut orbit_query: Query<(&OrbitComponent, &mut Visibility, &GlobalTransform)>,
+    planet_query: Query<&GlobalTransform, With<PlanetComponent>>,
+    mut orbit_query: Query<(&OrbitComponent, &mut Visibility)>,
 ) {
     if !solar_params.show_orbits {
         // Hide all orbits if disabled
-        for (_, mut visibility, _) in orbit_query.iter_mut() {
+        for (_, mut visibility) in orbit_query.iter_mut() {
             *visibility = Visibility::Hidden;
         }
         return;
@@ -59,22 +60,20 @@ pub fn update_orbit_visibility(
 
     let camera_pos = camera_query.single().translation();
 
-    for (orbit_comp, mut visibility, orbit_transform) in orbit_query.iter_mut() {
-        // Distance-based culling: hide orbits that are too far from camera
-        let distance_to_camera = camera_pos.distance(orbit_transform.translation());
-        let max_orbit_distance = 50000.0; // Hide distant orbits to reduce clutter
+    for (orbit_comp, mut visibility) in orbit_query.iter_mut() {
+        // Check distance to the planet this orbit belongs to, not the orbit entity position
+        if let Ok(planet_transform) = planet_query.get(orbit_comp.planet_entity) {
+            let distance_to_planet = camera_pos.distance(planet_transform.translation());
+            let max_orbit_distance = 80000.0; // Allow orbits to be visible for planets within this distance
 
-        if distance_to_camera > max_orbit_distance {
-            *visibility = Visibility::Hidden;
-        } else {
-            // Scale visibility based on distance - closer orbits are more visible
-            let distance_factor = (max_orbit_distance - distance_to_camera) / max_orbit_distance;
-            // For now, just show/hide, but we could implement opacity scaling here
-            *visibility = if distance_factor > 0.1 {
+            *visibility = if distance_to_planet <= max_orbit_distance {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
             };
+        } else {
+            // If we can't find the planet, hide the orbit
+            *visibility = Visibility::Hidden;
         }
     }
 }
