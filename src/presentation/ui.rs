@@ -130,12 +130,12 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 NodeBundle {
                     style: Style {
                         width: Val::Percent(100.0),
-                        height: Val::Px(44.0),
+                        height: Val::Px(32.0), // More compact height
                         padding: UiRect::new(
-                            Val::Px(12.0),
-                            Val::Px(12.0),
-                            Val::Px(4.0),
-                            Val::Px(4.0),
+                            Val::Px(8.0), // Reduced padding
+                            Val::Px(8.0),
+                            Val::Px(2.0),
+                            Val::Px(2.0),
                         ),
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
@@ -151,7 +151,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     style: Style {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(12.0),
+                        column_gap: Val::Px(8.0), // More compact spacing
                         ..default()
                     },
                     ..default()
@@ -166,7 +166,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
             TextBundle {
                 text: Text::from_section(
                     "fps 0",
-                    text_style(10.5, Color::srgb(0.67, 0.73, 0.84)),
+                    text_style(8.5, Color::srgb(0.6, 0.65, 0.7)), // Smaller, more subtle FPS display
                 ),
                 style: Style {
                     position_type: PositionType::Absolute,
@@ -210,26 +210,26 @@ pub(crate) fn setup_ui(mut commands: Commands) {
             container
                 .spawn(NodeBundle {
                     style: Style {
-                        width: Val::Px(600.0),
+                        width: Val::Px(500.0), // More compact width
                         padding: UiRect::new(
-                            Val::Px(16.0),
-                            Val::Px(16.0),
-                            Val::Px(14.0),
-                            Val::Px(14.0),
+                            Val::Px(12.0), // Reduced padding
+                            Val::Px(12.0),
+                            Val::Px(10.0),
+                            Val::Px(10.0),
                         ),
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(10.0),
+                        row_gap: Val::Px(6.0), // Tighter spacing
                         ..default()
                     },
-                    background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-                    border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-                    border_radius: BorderRadius::all(Val::Px(14.0)),
+                    background_color: BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.75)), // More minimal background
+                    border_color: BorderColor(Color::srgba(0.15, 0.2, 0.3, 0.3)), // Subtler border
+                    border_radius: BorderRadius::all(Val::Px(8.0)), // Smaller border radius
                     ..default()
                 })
                 .with_children(|panel| {
                     panel.spawn(TextBundle::from_section(
                         "Select Body",
-                        text_style(12.0, Color::srgb(0.9, 0.94, 1.0)),
+                        text_style(10.0, Color::srgb(0.75, 0.8, 0.85)),
                     ));
 
 
@@ -244,9 +244,9 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                             style: Style {
                                 flex_direction: FlexDirection::Row,
                                 flex_wrap: FlexWrap::Wrap,
-                                column_gap: Val::Px(8.0),
-                                row_gap: Val::Px(6.0),
-                                max_height: Val::Px(300.0), // Add scrolling for long lists
+                                column_gap: Val::Px(4.0), // Tighter horizontal spacing
+                                row_gap: Val::Px(4.0), // Tighter vertical spacing
+                                max_height: Val::Px(250.0), // More compact height
                                 overflow: Overflow::clip_y(),
                                 ..default()
                             },
@@ -317,7 +317,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 header.spawn((
                     TextBundle::from_section(
                         "",
-                        text_style(18.0, Color::srgb(0.9, 0.94, 1.0)),
+                        text_style(14.0, Color::srgb(0.8, 0.85, 0.9)), // Smaller, more subtle title
                     ),
                     InfoCardTitle,
                 ));
@@ -326,8 +326,8 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         ButtonBundle {
                             style: Style {
                                 padding: UiRect::new(
-                                    Val::Px(10.0),
-                                    Val::Px(10.0),
+                                    Val::Px(6.0), // Reduced padding
+                                    Val::Px(6.0),
                                     Val::Px(4.0),
                                     Val::Px(4.0),
                                 ),
@@ -350,7 +350,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     });
             });
         parent.spawn((
-            TextBundle::from_section("", text_style(11.0, Color::srgb(0.51, 0.59, 0.71))),
+            TextBundle::from_section("", text_style(9.5, Color::srgb(0.6, 0.65, 0.7))), // Smaller, more subtle
             InfoCardSubtitle,
         ));
         parent.spawn((
@@ -693,11 +693,11 @@ fn spawn_menu_button(
     primary: bool,
 ) {
     let padding = if primary {
-        UiRect::new(Val::Px(14.0), Val::Px(14.0), Val::Px(8.0), Val::Px(8.0))
+        UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0)) // Reduced padding
     } else {
-        UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(6.0), Val::Px(6.0))
+        UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(4.0)) // Reduced padding
     };
-    let radius = if primary { 22.0 } else { 18.0 };
+    let radius = if primary { 16.0 } else { 12.0 }; // Smaller border radius
 
     parent
         .spawn((
@@ -718,7 +718,7 @@ fn spawn_menu_button(
         .with_children(|button| {
             button.spawn(TextBundle::from_section(
                 label,
-                text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
+                text_style(9.5, Color::srgb(0.75, 0.8, 0.85)), // Smaller, more subtle font
             ));
         });
 }
@@ -728,18 +728,18 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
         .spawn((
             ButtonBundle {
                 style: Style {
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::all(Val::Px(0.5)), // Thinner borders
                     padding: UiRect::new(
-                        Val::Px(10.0),
-                        Val::Px(10.0),
-                        Val::Px(4.0),
-                        Val::Px(4.0),
+                        Val::Px(6.0), // Reduced padding
+                        Val::Px(6.0),
+                        Val::Px(2.0),
+                        Val::Px(2.0),
                     ),
                     ..default()
                 },
                 background_color: BackgroundColor(nav_button_color(false)),
                 border_color: BorderColor(nav_button_border_color(false)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(3.0)), // Smaller border radius
                 ..default()
             },
             NavButton {
@@ -751,13 +751,13 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
         .with_children(|button| {
             button.spawn((TextBundle::from_section(
                 name,
-                text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
+                text_style(9.0, Color::srgb(0.75, 0.8, 0.85)), // Smaller, more subtle font
             ), NavButtonLabel));
         });
 }
 
 fn info_body_text(text: &str) -> Text {
-    let mut body = Text::from_section(text, text_style(11.0, Color::srgb(0.89, 0.91, 0.94)));
+    let mut body = Text::from_section(text, text_style(9.5, Color::srgb(0.82, 0.85, 0.88))); // Smaller, more subtle
     body.linebreak_behavior = BreakLineOn::WordBoundary;
     body
 }
