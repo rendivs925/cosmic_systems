@@ -92,6 +92,17 @@ pub fn update_planet_positions(
 
         let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
         let is_moon = planet_comp.domain_planet.parent_entity.is_some();
+
+        let new_position = physics::calculate_planet_position_with_quality(
+            &planet_comp.domain_planet,
+            time_days,
+            &solar_params,
+            parent_position,
+            parent_tilt,
+            kepler_iterations,
+        );
+        transform.translation = new_position;
+
         if webgpu_active && !is_moon && planet_comp.domain_planet.name != "Sun" {
             let elements = physics::orbital_elements_for(&planet_comp.domain_planet);
             let mean_anomaly_rad = if let Some(elements) = elements {

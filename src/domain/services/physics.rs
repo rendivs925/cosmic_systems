@@ -73,6 +73,8 @@ pub fn calculate_planet_position_with_quality(
         return Vec3::ZERO;
     }
 
+
+
     // Calculate angle based on orbital period
     let angle = 2.0 * std::f32::consts::PI * time_days / planet.orbital_period_days;
 
