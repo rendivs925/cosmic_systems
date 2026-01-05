@@ -98,6 +98,9 @@ pub(crate) struct InfoCardExternalToggle;
 #[derive(Component)]
 pub(crate) struct NotificationLayer;
 
+#[derive(Component)]
+pub(crate) struct NotificationUi;
+
 pub(crate) fn setup_ui(mut commands: Commands) {
     commands.spawn(Camera2dBundle {
         camera: Camera {
@@ -498,6 +501,8 @@ pub(crate) fn update_navbar(
         Query<&mut Style, With<SelectorPanelRoot>>,
     )>,
 ) {
+    let hide_ui = zen_mode.enabled;
+
     let current_time = time.elapsed_seconds();
 
     // Reduce update frequency during video recording to prevent UI flickering
@@ -628,7 +633,9 @@ pub(crate) fn update_info_card(
 }
 
 pub(crate) fn update_notifications_ui(
-    notifications: Res<NotificationQueue>,
+    mut notifications: ResMut<NotificationQueue>,
+    mut commands: Commands,
+    roots: Res<UiRoots>,
     mut query: Query<(&mut Text, &mut BackgroundColor, &mut Style), With<NotificationUi>>,
     time: Res<Time>,
     video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
