@@ -2,12 +2,12 @@
 
 use bevy::prelude::*;
 
-
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
     NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, ScreenshotState,
     Selectable, SelectedPlanet, UiPointerState, ZenMode,
 };
+use bevy::hierarchy::ChildBuilder;
 
 #[derive(Component)]
 pub(crate) struct UiCapture;
@@ -25,8 +25,7 @@ pub(crate) struct NavButton {
     group: NavGroup,
 }
 
-#[derive(Clone, Copy)]
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum NavGroup {
     CelestialBody, // Unified for all planets and moons
 }
@@ -52,8 +51,6 @@ enum MenuAction {
 #[derive(Component)]
 pub(crate) struct SelectorPanelRoot;
 
-
-
 #[derive(Resource)]
 pub(crate) struct UiMenuState {
     selector_open: bool,
@@ -69,16 +66,8 @@ impl Default for UiMenuState {
     }
 }
 
-
-
-
-
-
-
 #[derive(Component)]
 pub(crate) struct InfoCardRoot;
-
-
 
 #[derive(Component)]
 pub(crate) struct InfoCardTitle;
@@ -112,7 +101,9 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     ));
 
     commands.insert_resource(UiMenuState::default());
-    commands.insert_resource(crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState::default());
+    commands.insert_resource(
+        crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState::default(),
+    );
 
     let navbar = commands
         .spawn(Node {
@@ -143,7 +134,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     ..default()
                 },
                 UiCapture,
-             ))
+            ))
             .with_children(|bar| {
                 bar.spawn(Node {
                     flex_direction: FlexDirection::Row,
@@ -155,7 +146,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     spawn_menu_button(menu, "Explore", MenuAction::Explore, true);
                     spawn_menu_button(menu, "Orbits", MenuAction::Orbits, false);
                 });
-             });
+            });
 
         parent.spawn((
             Text::new("fps 0"),
@@ -172,7 +163,6 @@ pub(crate) fn setup_ui(mut commands: Commands) {
             },
             FpsText,
         ));
-
     });
 
     commands
@@ -213,7 +203,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.75)), // More minimal background
-                    BorderColor::all(Color::srgba(0.15, 0.2, 0.3, 0.3)), // Subtler border
+                    BorderColor::all(Color::srgba(0.15, 0.2, 0.3, 0.3)),     // Subtler border
                     BorderRadius::all(Val::Px(8.0)), // Smaller border radius
                 ))
                 .with_children(|panel| {
@@ -225,8 +215,6 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         },
                         TextColor(Color::srgb(0.75, 0.8, 0.85)),
                     ));
-
-
 
                     panel.spawn((
                         Text::new("All Bodies"),
@@ -242,7 +230,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                             flex_direction: FlexDirection::Row,
                             flex_wrap: FlexWrap::Wrap,
                             column_gap: Val::Px(4.0), // Tighter horizontal spacing
-                            row_gap: Val::Px(4.0), // Tighter vertical spacing
+                            row_gap: Val::Px(4.0),    // Tighter vertical spacing
                             max_height: Val::Px(250.0), // More compact height
                             overflow: Overflow::clip_y(),
                             ..default()
@@ -259,10 +247,6 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                                 }
                             }
                         });
-
-
-
-
                 });
         });
 
@@ -274,12 +258,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 top: Val::Px(20.0),
                 width: Val::Px(380.0),
                 border: UiRect::all(Val::Px(1.0)),
-                padding: UiRect::new(
-                    Val::Px(16.0),
-                    Val::Px(16.0),
-                    Val::Px(14.0),
-                    Val::Px(14.0),
-                ),
+                padding: UiRect::new(Val::Px(16.0), Val::Px(16.0), Val::Px(14.0), Val::Px(14.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 display: Display::None,
@@ -332,14 +311,14 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         UiCapture,
                     ))
                     .with_children(|button| {
-        button.spawn((
-            Text::new("X"),
-            TextFont {
-                font_size: 12.0,
-                ..default()
-            },
-            TextColor(Color::srgb(0.74, 0.8, 0.9)),
-        ));
+                        button.spawn((
+                            Text::new("X"),
+                            TextFont {
+                                font_size: 12.0,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.74, 0.8, 0.9)),
+                        ));
                     });
             });
         parent.spawn((
@@ -364,47 +343,43 @@ pub(crate) fn setup_ui(mut commands: Commands) {
         ));
     });
 
-    commands.spawn((
-        Button,
-        Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(20.0),
-            top: Val::Px(20.0),
-            padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(6.0), Val::Px(6.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            display: Display::None,
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-        BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-        BorderRadius::all(Val::Px(12.0)),
-        InfoCardToggleButton,
-        InfoCardExternalToggle,
-        UiCapture,
-    ))
-    .with_children(|button| {
-        button.spawn(TextBundle::from_section(
-            "Info",
-            text_style(10.5, Color::srgb(0.82, 0.88, 0.98)),
-        ));
-    });
+    commands
+        .spawn((
+            Button,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(20.0),
+                top: Val::Px(20.0),
+                padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(6.0), Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+            BorderRadius::all(Val::Px(12.0)),
+            InfoCardToggleButton,
+            InfoCardExternalToggle,
+            UiCapture,
+        ))
+        .with_children(|button| {
+            let (font, color) = text_style(10.5, Color::srgb(0.82, 0.88, 0.98));
+            button.spawn((Text::new("Info"), font, color));
+        });
 
     let notifications = commands
         .spawn((
-            NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(80.0),
-                    left: Val::Px(0.0),
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    row_gap: Val::Px(8.0),
-                    ..default()
-                },
-                z_index: ZIndex(5),
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(80.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(8.0),
                 ..default()
             },
+            ZIndex(5),
             NotificationLayer,
         ))
         .id();
@@ -474,7 +449,6 @@ pub(crate) fn handle_nav_interactions(
     }
 }
 
-
 pub(crate) fn update_navbar(
     selected_planet: Res<SelectedPlanet>,
     solar_params: Res<SolarSystemParameters>,
@@ -487,8 +461,18 @@ pub(crate) fn update_navbar(
     time: Res<Time>,
     mut last_update: Local<f32>,
     mut queries: ParamSet<(
-        Query<(&NavButton, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
-        Query<(&MenuButton, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
+        Query<(
+            &NavButton,
+            &mut Node,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        )>,
+        Query<(
+            &MenuButton,
+            &mut Node,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        )>,
         Query<&mut Text, With<FpsText>>,
         Query<&mut Node, With<SelectorPanelRoot>>,
     )>,
@@ -525,8 +509,6 @@ pub(crate) fn update_navbar(
             Display::None
         };
     }
-
-
 
     for (button, mut style, mut background, mut border) in queries.p0().iter_mut() {
         let is_selected = selected_name == Some(button.name.as_str());
@@ -573,8 +555,6 @@ pub(crate) fn update_navbar(
         border.left = stroke;
     }
 
-
-
     if let Ok(mut text) = queries.p2().single_mut() {
         let display_fps = performance_stats.average_fps;
         if hide_ui {
@@ -584,7 +564,6 @@ pub(crate) fn update_navbar(
         }
     }
 }
-
 
 pub(crate) fn update_info_card(
     selected_planet: Res<SelectedPlanet>,
@@ -654,36 +633,29 @@ pub(crate) fn update_notifications_ui(
         .notifications
         .retain(|n| current_time - n.created_at < n.duration);
 
-    // commands.entity(roots.notifications).despawn_descendants(); // TODO: Update for Bevy 0.17
-
-    commands.entity(roots.notifications).with_children(|parent| {
-        for notification in notifications.notifications.iter() {
-            parent
-                .spawn((
-                    NodeBundle {
-                        style: Style {
+    commands
+        .entity(roots.notifications)
+        .with_children(|parent| {
+            for notification in notifications.notifications.iter() {
+                parent
+                    .spawn((
+                        Node {
                             border: UiRect::all(Val::Px(1.0)),
                             padding: UiRect::all(Val::Px(10.0)),
                             ..default()
                         },
-                        background_color: BackgroundColor(
-                            notification_color(&notification.notification_type),
-                        ),
-                        border_color: BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.35)),
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
-                        ..default()
-                    },
-                    UiCapture,
-                    Interaction::default(),
-                ))
-                .with_children(|row| {
-                    row.spawn(TextBundle::from_section(
-                        notification.message.clone(),
-                        text_style(12.0, Color::srgb(0.95, 0.95, 0.98)),
-                    ));
-                });
-        }
-    });
+                        BackgroundColor(notification_color(&notification.notification_type)),
+                        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                        BorderRadius::all(Val::Px(8.0)),
+                        UiCapture,
+                        Interaction::default(),
+                    ))
+                    .with_children(|row| {
+                        let (font, color) = text_style(12.0, Color::srgb(0.95, 0.95, 0.98));
+                        row.spawn((Text::new(notification.message.clone()), font, color));
+                    });
+            }
+        });
 }
 
 pub(crate) fn update_ui_hover_state(
@@ -695,20 +667,17 @@ pub(crate) fn update_ui_hover_state(
         .any(|interaction| matches!(interaction, Interaction::Hovered | Interaction::Pressed));
 }
 
-fn text_style(font_size: f32, color: Color) -> TextStyle {
-    TextStyle {
-        font_size,
-        color,
-        ..default()
-    }
+fn text_style(font_size: f32, color: Color) -> (TextFont, TextColor) {
+    (
+        TextFont {
+            font_size,
+            ..default()
+        },
+        TextColor(color),
+    )
 }
 
-fn spawn_menu_button(
-    parent: &mut ChildBuilder,
-    label: &str,
-    action: MenuAction,
-    primary: bool,
-) {
+fn spawn_menu_button(parent: &mut ChildBuilder, label: &str, action: MenuAction, primary: bool) {
     let padding = if primary {
         UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0)) // Reduced padding
     } else {
@@ -766,10 +735,13 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
             UiCapture,
         ))
         .with_children(|button| {
-            button.spawn((TextBundle::from_section(
-                name,
-                text_style(9.0, Color::srgb(0.75, 0.8, 0.85)), // Smaller, more subtle font
-            ), NavButtonLabel));
+            button.spawn((
+                TextBundle::from_section(
+                    name,
+                    text_style(9.0, Color::srgb(0.75, 0.8, 0.85)), // Smaller, more subtle font
+                ),
+                NavButtonLabel,
+            ));
         });
 }
 
@@ -822,10 +794,7 @@ fn nav_button_border_color_hover(selected: bool, hovered: bool) -> Color {
 
 fn menu_button_colors(primary: bool, active: bool) -> (Color, Color) {
     if active {
-        (
-            Color::srgb(0.16, 0.24, 0.39),
-            Color::srgb(0.31, 0.47, 0.78),
-        )
+        (Color::srgb(0.16, 0.24, 0.39), Color::srgb(0.31, 0.47, 0.78))
     } else if primary {
         (
             Color::srgba(0.031, 0.039, 0.063, 0.86),
@@ -881,7 +850,11 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
 
             section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "G-type main-sequence star (G2V)");
-            info_line(&mut lines, "Mass", "1.9885 x 10^30 kg (333,000 Earth masses)");
+            info_line(
+                &mut lines,
+                "Mass",
+                "1.9885 x 10^30 kg (333,000 Earth masses)",
+            );
             info_line(&mut lines, "Radius", "696,340 km (109 Earth radii)");
             info_line(&mut lines, "Surface Temperature", "5,778 K (5,505 deg C)");
             info_line(&mut lines, "Luminosity", "3.83 x 10^26 W");
@@ -896,7 +869,11 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "3.301 x 10^23 kg (0.055 Earth masses)");
             info_line(&mut lines, "Radius", "2,439.7 km (0.383 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "0.387 AU (57.9 million km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "0.387 AU (57.9 million km)",
+            );
             info_line(&mut lines, "Orbital Period", "87.969 Earth days");
             info_line(&mut lines, "Rotation Period", "58.646 Earth days");
             info_line(&mut lines, "Surface Temperature", "-173 to 427 deg C");
@@ -910,10 +887,22 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "4.867 x 10^24 kg (0.815 Earth masses)");
             info_line(&mut lines, "Radius", "6,051.8 km (0.949 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "0.723 AU (108.2 million km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "0.723 AU (108.2 million km)",
+            );
             info_line(&mut lines, "Orbital Period", "224.701 Earth days");
-            info_line(&mut lines, "Rotation Period", "243.025 Earth days (retrograde)");
-            info_line(&mut lines, "Surface Temperature", "462 deg C (hottest planet)");
+            info_line(
+                &mut lines,
+                "Rotation Period",
+                "243.025 Earth days (retrograde)",
+            );
+            info_line(
+                &mut lines,
+                "Surface Temperature",
+                "462 deg C (hottest planet)",
+            );
             info_line(&mut lines, "Atmosphere", "96.5% CO2, sulfuric acid clouds");
         }
         "Earth" => {
@@ -924,7 +913,11 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "5.972 x 10^24 kg");
             info_line(&mut lines, "Radius", "6,371 km");
-            info_line(&mut lines, "Distance from Sun", "1.000 AU (149.6 million km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "1.000 AU (149.6 million km)",
+            );
             info_line(&mut lines, "Orbital Period", "365.256 days");
             info_line(&mut lines, "Rotation Period", "23.934 hours");
             info_line(&mut lines, "Surface Temperature", "-89 to 58 deg C");
@@ -939,7 +932,11 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "6.417 x 10^23 kg (0.107 Earth masses)");
             info_line(&mut lines, "Radius", "3,389.5 km (0.532 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "1.524 AU (227.9 million km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "1.524 AU (227.9 million km)",
+            );
             info_line(&mut lines, "Orbital Period", "686.980 Earth days");
             info_line(&mut lines, "Rotation Period", "24.623 hours");
             info_line(&mut lines, "Surface Temperature", "-87 to -5 deg C");
@@ -954,7 +951,11 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Gas giant");
             info_line(&mut lines, "Mass", "1.898 x 10^27 kg (317.8 Earth masses)");
             info_line(&mut lines, "Radius", "69,911 km (10.97 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "5.204 AU (778.6 million km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "5.204 AU (778.6 million km)",
+            );
             info_line(&mut lines, "Orbital Period", "11.862 years");
             info_line(&mut lines, "Rotation Period", "9.925 hours");
             info_line(&mut lines, "Atmosphere", "Hydrogen, helium, ammonia clouds");
@@ -967,7 +968,11 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Gas giant");
             info_line(&mut lines, "Mass", "5.683 x 10^26 kg (95.2 Earth masses)");
             info_line(&mut lines, "Radius", "58,232 km (9.14 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "9.582 AU (1.433 billion km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "9.582 AU (1.433 billion km)",
+            );
             info_line(&mut lines, "Orbital Period", "29.457 years");
             info_line(&mut lines, "Rotation Period", "10.7 hours");
             info_line(&mut lines, "Moons", "146+ (major: Titan, Enceladus, Mimas)");
@@ -982,11 +987,19 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Ice giant");
             info_line(&mut lines, "Mass", "8.681 x 10^25 kg (14.5 Earth masses)");
             info_line(&mut lines, "Radius", "25,362 km (4.01 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "19.201 AU (2.871 billion km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "19.201 AU (2.871 billion km)",
+            );
             info_line(&mut lines, "Orbital Period", "84.0205 years");
             info_line(&mut lines, "Rotation Period", "17.24 hours (retrograde)");
             info_line(&mut lines, "Axial Tilt", "97.77 deg (rotates on its side)");
-            info_line(&mut lines, "Atmosphere", "Hydrogen, helium, methane (blue color)");
+            info_line(
+                &mut lines,
+                "Atmosphere",
+                "Hydrogen, helium, methane (blue color)",
+            );
         }
         "Neptune" => {
             section_header(&mut lines, "Overview");
@@ -996,16 +1009,27 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
             info_line(&mut lines, "Type", "Ice giant");
             info_line(&mut lines, "Mass", "1.024 x 10^26 kg (17.1 Earth masses)");
             info_line(&mut lines, "Radius", "24,622 km (3.88 Earth radii)");
-            info_line(&mut lines, "Distance from Sun", "30.047 AU (4.495 billion km)");
+            info_line(
+                &mut lines,
+                "Distance from Sun",
+                "30.047 AU (4.495 billion km)",
+            );
             info_line(&mut lines, "Orbital Period", "164.8 years");
             info_line(&mut lines, "Rotation Period", "16.11 hours");
             info_line(&mut lines, "Moons", "14 known (major: Triton)");
-            info_line(&mut lines, "Atmosphere", "Hydrogen, helium, methane (deep blue)");
+            info_line(
+                &mut lines,
+                "Atmosphere",
+                "Hydrogen, helium, methane (deep blue)",
+            );
         }
         _ => {
             let parent = get_parent_body(name);
             section_header(&mut lines, "Overview");
-            lines.push(format!("{} is a natural satellite orbiting {} in the solar system.", name, parent));
+            lines.push(format!(
+                "{} is a natural satellite orbiting {} in the solar system.",
+                name, parent
+            ));
 
             section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Natural satellite");
@@ -1022,8 +1046,10 @@ fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> String {
     section_header(&mut lines, "Exploration");
     lines.push(get_exploration_status(name).to_string());
 
-    lines.join("
-")
+    lines.join(
+        "
+",
+    )
 }
 
 fn section_header(lines: &mut Vec<String>, title: &str) {
@@ -1204,7 +1230,10 @@ fn get_fun_facts(name: &str) -> Vec<String> {
             "It is one of Neptune's inner moons".to_string(),
             "Larissa orbits inside Neptune's faint rings".to_string(),
         ],
-        _ => vec![format!("{} has unique and fascinating characteristics", name)],
+        _ => vec![format!(
+            "{} has unique and fascinating characteristics",
+            name
+        )],
     }
 }
 
@@ -1254,15 +1283,7 @@ fn get_discovery_info(name: &str) -> &'static str {
 
 fn planet_names() -> [&'static str; 9] {
     [
-        "Sun",
-        "Mercury",
-        "Venus",
-        "Earth",
-        "Mars",
-        "Jupiter",
-        "Saturn",
-        "Uranus",
-        "Neptune",
+        "Sun", "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
     ]
 }
 
@@ -1300,7 +1321,16 @@ fn moon_names_for_parent(parent: &str) -> &'static [&'static str] {
         "Earth" => &["Moon"],
         "Mars" => &["Phobos", "Deimos"],
         "Jupiter" => &["Io", "Europa", "Ganymede", "Callisto"],
-        "Saturn" => &["Mimas", "Enceladus", "Tethys", "Dione", "Rhea", "Titan", "Hyperion", "Iapetus"],
+        "Saturn" => &[
+            "Mimas",
+            "Enceladus",
+            "Tethys",
+            "Dione",
+            "Rhea",
+            "Titan",
+            "Hyperion",
+            "Iapetus",
+        ],
         "Uranus" => &["Miranda", "Ariel", "Umbriel", "Titania", "Oberon"],
         "Neptune" => &["Triton", "Proteus", "Nereid", "Larissa"],
         _ => &[],
