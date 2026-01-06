@@ -614,7 +614,7 @@ pub(crate) fn update_notifications_ui(
     mut notifications: ResMut<NotificationQueue>,
     mut commands: Commands,
     roots: Res<UiRoots>,
-    mut query: Query<(&mut Text, &mut BackgroundColor, &mut Node), With<NotificationUi>>,
+    children_query: Query<&Children>,
     time: Res<Time>,
     video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
     mut last_update: Local<f32>,
@@ -628,9 +628,24 @@ pub(crate) fn update_notifications_ui(
         return;
     }
     *last_update = current_time;
+
     notifications
         .notifications
         .retain(|n| current_time - n.created_at < n.duration);
+
+    // Keep only the most recent few notifications to avoid stacking long lists
+    const MAX_NOTIFICATIONS: usize = 3;
+    if notifications.notifications.len() > MAX_NOTIFICATIONS {
+        let excess = notifications.notifications.len() - MAX_NOTIFICATIONS;
+        notifications.notifications.drain(0..excess);
+    }
+
+    // Clear any existing notification UI elements before spawning new ones
+    if let Ok(children) = children_query.get(roots.notifications) {
+        for child in children.iter() {
+            commands.entity(child).despawn();
+        }
+    }
 
     commands
         .entity(roots.notifications)
@@ -646,6 +661,7 @@ pub(crate) fn update_notifications_ui(
                         BackgroundColor(notification_color(&notification.notification_type)),
                         BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.35)),
                         BorderRadius::all(Val::Px(8.0)),
+                        NotificationUi,
                         UiCapture,
                         Interaction::default(),
                     ))
