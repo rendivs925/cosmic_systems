@@ -1,8 +1,7 @@
 use bevy::prelude::*;
-use bevy::render::mesh::primitives::UVSphere;
-use bevy_mesh::index::Indices;
-use wgpu_types::PrimitiveTopology;
-use bevy::asset::RenderAssetUsages;
+use bevy_mesh::PrimitiveTopology;
+use bevy_mesh::Indices;
+use bevy_asset::RenderAssetUsages;
 use std::f32::consts::TAU;
 
 use crate::domain::services::physics;
@@ -13,11 +12,50 @@ pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> 
     #[cfg(not(target_arch = "wasm32"))]
     let (sectors, stacks) = (64, 32);
 
-    let mesh = Mesh::from(UVSphere {
-        radius,
-        sectors: sectors as usize,
-        stacks: stacks as usize,
-    });
+    // Create UV sphere manually since UVSphere primitive is not available
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+
+    // Generate sphere vertices
+    for stack in 0..=stacks {
+        let phi = stack as f32 * std::f32::consts::PI / stacks as f32;
+        for sector in 0..=sectors {
+            let theta = sector as f32 * 2.0 * std::f32::consts::PI / sectors as f32;
+
+            let x = radius * phi.sin() * theta.cos();
+            let y = radius * phi.cos();
+            let z = radius * phi.sin() * theta.sin();
+
+            positions.push([x, y, z]);
+            normals.push([x / radius, y / radius, z / radius]);
+            uvs.push([sector as f32 / sectors as f32, stack as f32 / stacks as f32]);
+        }
+    }
+
+    // Generate indices
+    for stack in 0..stacks {
+        for sector in 0..sectors {
+            let first = stack * (sectors + 1) + sector;
+            let second = first + sectors + 1;
+
+            indices.push(first as u32);
+            indices.push(second as u32);
+            indices.push(first + 1);
+
+            indices.push(second as u32);
+            indices.push(second + 1);
+            indices.push(first + 1);
+        }
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+
     meshes.add(mesh)
 }
 

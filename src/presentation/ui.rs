@@ -177,33 +177,30 @@ pub(crate) fn setup_ui(mut commands: Commands) {
 
     commands
         .spawn((
-            NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(0.0),
-                    right: Val::Px(0.0),
-                    top: Val::Px(0.0),
-                    bottom: Val::Px(0.0),
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    min_height: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    display: Display::None,
-                    ..default()
-                },
-                background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
-                z_index: ZIndex(10),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                min_height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                display: Display::None,
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+            ZIndex(10),
             SelectorPanelRoot,
             UiCapture,
         ))
         .with_children(|container| {
             container
-                .spawn(NodeBundle {
-                    style: Style {
+                .spawn((
+                    Node {
                         width: Val::Px(500.0), // More compact width
                         padding: UiRect::new(
                             Val::Px(12.0), // Reduced padding
@@ -215,15 +212,18 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         row_gap: Val::Px(6.0), // Tighter spacing
                         ..default()
                     },
-                    background_color: BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.75)), // More minimal background
-                    border_color: BorderColor::all(Color::srgba(0.15, 0.2, 0.3, 0.3)), // Subtler border
-                    border_radius: BorderRadius::all(Val::Px(8.0)), // Smaller border radius
-                    ..default()
-                })
+                    BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.75)), // More minimal background
+                    BorderColor::all(Color::srgba(0.15, 0.2, 0.3, 0.3)), // Subtler border
+                    BorderRadius::all(Val::Px(8.0)), // Smaller border radius
+                ))
                 .with_children(|panel| {
-                    panel.spawn(TextBundle::from_section(
-                        "Select Body",
-                        text_style(10.0, Color::srgb(0.75, 0.8, 0.85)),
+                    panel.spawn((
+                        Text::new("Select Body"),
+                        TextFont {
+                            font_size: 10.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.75, 0.8, 0.85)),
                     ));
 
 

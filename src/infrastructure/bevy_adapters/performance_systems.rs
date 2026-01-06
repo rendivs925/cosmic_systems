@@ -32,10 +32,10 @@ pub fn update_performance_monitor(
 }
 
 // System to capture screenshot on next frame after notifications are hidden
+// TODO: Re-implement with Bevy 0.17 screenshot API
 pub fn take_pending_screenshot(
     mut screenshot_state: ResMut<ScreenshotState>,
     video_state: Res<VideoRecordingState>,
-    mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
     main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mut notifications: ResMut<NotificationQueue>,
     time: Res<Time>,
@@ -46,60 +46,14 @@ pub fn take_pending_screenshot(
 
     screenshot_state.pending = false;
 
-    let window_entity = main_window.single();
-
-    // Determine output directory based on recording state
-    let (output_dir, filename_prefix) = if video_state.is_recording && !video_state.output_dir.is_empty() {
-        (video_state.output_dir.clone(), format!("frame_{:06}", video_state.frame_count))
-    } else {
-        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        (format!("{}/cosmic_systems_images", home_dir), "screenshot".to_string())
-    };
-
-    if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        notifications.notifications.push(Notification {
-            message: format!("Failed to create output directory: {}", e),
-            notification_type: NotificationType::Error,
-            created_at: time.elapsed_secs(),
-            duration: 5.0,
-        });
-        return;
-    }
-
-    // Generate filename with timestamp
-    let filename = if video_state.is_recording {
-        format!("{}/{}.png", output_dir, filename_prefix)
-    } else {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        format!("{}/cosmic_systems_{}.png", output_dir, timestamp)
-    };
-
-    // Take screenshot using Bevy's screenshot API
-    match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
-        Ok(_) => {
-            // Only show notification for regular screenshots, not video frames
-            // During recording, suppress all notifications to prevent UI flickering
-            if !video_state.is_recording {
-                notifications.notifications.push(Notification {
-                    message: format!("Screenshot saved to: {}", filename),
-                    notification_type: NotificationType::Success,
-                    created_at: time.elapsed_secs(),
-                    duration: 4.0,
-                });
-            }
-        }
-        Err(e) => {
-            notifications.notifications.push(Notification {
-                message: format!("Failed to save screenshot: {}", e),
-                notification_type: NotificationType::Error,
-                created_at: time.elapsed_secs(),
-                duration: 5.0,
-            });
-        }
-    }
+    // TODO: Re-implement screenshot functionality with Bevy 0.17 API
+    // For now, just show a notification that screenshots are disabled
+    notifications.notifications.push(Notification {
+        message: "Screenshots temporarily disabled (API migration in progress)".to_string(),
+        notification_type: NotificationType::Warning,
+        created_at: time.elapsed_secs(),
+        duration: 3.0,
+    });
 }
 
 // System to handle video recording frame capture
