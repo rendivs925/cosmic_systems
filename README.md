@@ -6,6 +6,14 @@
 
 **Cosmic System** – Rust + Bevy simulation platform for speculative physics and advanced space operations. Build autonomous spacecraft for satellite rendezvous and tethering, explore anti-gravity propulsion, zero-point energy, Casimir effects, and AI-driven debris removal. Simulate warp drives and quantum phenomena in immersive 3D.
 
+## Demo recording of the system:
+
+<video controls width="720" preload="metadata">
+  <source src="https://raw.githubusercontent.com/rendivs925/cosmic_systems/main/cosmic_recording.mp4" type="video/mp4">
+  <!-- Fallback link in case the browser or GitHub strips the video tag -->
+  <a href="https://raw.githubusercontent.com/rendivs925/cosmic_systems/main/cosmic_recording.mp4">Download the demo (MP4)</a>
+</video>
+
 ## Features planned
 
 - Autonomous spacecraft fleets with AI-driven rendezvous, tethering, and servicing of satellites
