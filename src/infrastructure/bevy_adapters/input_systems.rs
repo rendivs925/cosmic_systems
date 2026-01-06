@@ -102,8 +102,8 @@ pub fn handle_mouse_planet_selection(
         None => return,
     };
     let ray = match camera.viewport_to_world(camera_transform, cursor_pos) {
-        Some(ray) => ray,
-        None => return,
+        Ok(ray) => ray,
+        Err(_) => return,
     };
 
     // Raycast against planet spheres to find the clicked body.
@@ -264,7 +264,7 @@ pub fn handle_solar_system_input(
     }
 
     // Quick navigation shortcuts
-    if let Ok((mut controller, mut transform)) = camera_query.get_single_mut() {
+    if let Ok((mut controller, mut transform)) = camera_query.single_mut() {
         // GG (press G twice): Return to overview of entire solar system
         static mut LAST_G_PRESS: Option<std::time::Instant> = None;
         if keyboard.just_pressed(KeyCode::KeyG) {
