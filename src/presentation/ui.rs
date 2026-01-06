@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use bevy::prelude::*;
-use bevy::text::BreakLineOn;
+use bevy::text::LineBreak;
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
@@ -102,28 +102,25 @@ pub(crate) struct NotificationLayer;
 pub(crate) struct NotificationUi;
 
 pub(crate) fn setup_ui(mut commands: Commands) {
-    commands.spawn(Camera2dBundle {
-        camera: Camera {
+    commands.spawn((
+        Camera2d::default(),
+        Camera {
             order: 10,
             clear_color: ClearColorConfig::None,
             ..default()
         },
-        ..default()
-    });
+    ));
 
     commands.insert_resource(UiMenuState::default());
     commands.insert_resource(crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState::default());
 
     let navbar = commands
-        .spawn(NodeBundle {
-            style: Style {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                bottom: Val::Px(10.0),
-                width: Val::Percent(100.0),
-                height: Val::Auto,
-                ..default()
-            },
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            bottom: Val::Px(10.0),
+            width: Val::Percent(100.0),
+            height: Val::Auto,
             ..default()
         })
         .id();

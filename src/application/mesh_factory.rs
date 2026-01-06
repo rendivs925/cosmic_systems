@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use bevy::render::mesh::primitives::{Meshable, SphereKind};
-use bevy::render::mesh::Indices;
-use bevy::render::render_asset::RenderAssetUsages;
-use bevy::render::render_resource::PrimitiveTopology;
+use bevy::mesh::Meshable;
+use bevy::mesh::Indices;
+use bevy::mesh::PrimitiveTopology;
+use bevy::asset::RenderAssetUsages;
 use std::f32::consts::TAU;
 
 use crate::domain::services::physics;

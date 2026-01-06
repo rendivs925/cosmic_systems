@@ -4,9 +4,10 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
-use bevy::render::render_asset::RenderAssetUsages;
+// TODO: Fix NotShadowCaster and NotShadowReceiver imports
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
@@ -32,15 +33,14 @@ pub fn setup_space(
     commands.insert_resource(AmbientLight {
         color: Color::srgb(0.2, 0.25, 0.3), // Bright ambient light with slight blue tint
         brightness: 0.15,                   // Maximum ambient brightness for planet visibility
+        affects_lightmapped_meshes: true,
     });
 
     // Camera positioned to view the full set of orbits on load
     commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 120000.0, 1500000.0)
-                .looking_at(Vec3::ZERO, Vec3::Y),
-            ..default()
-        },
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 120000.0, 1500000.0)
+            .looking_at(Vec3::ZERO, Vec3::Y),
         CameraController {
             mode: CameraMode::FreeFlight,
             speed: 5000.0, // Increased base speed for easier navigation
@@ -333,12 +333,11 @@ fn spawn_celestial_body(
     let material_handle = materials.add(material);
 
     let planet_entity = commands
-        .spawn(PbrBundle {
-            mesh: create_uv_sphere_mesh(meshes, visual_radius),
-            material: material_handle.clone(),
-            transform: Transform::from_translation(initial_position),
-            ..default()
-        })
+        .spawn((
+            Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
+            MeshMaterial3d(material_handle.clone()),
+            Transform::from_translation(initial_position),
+        ))
         .insert(PlanetComponent {
             domain_planet: planet.clone(),
             material: material_handle.clone(),
@@ -784,8 +783,8 @@ fn create_starfield(
         visibility: Visibility::Visible, // Explicit visibility control
         ..default()
     })
-    .insert(NotShadowCaster)
-    .insert(NotShadowReceiver)
+    // .insert(NotShadowCaster)
+    // .insert(NotShadowReceiver)
     .insert(Starfield) // Custom component to identify starfield
     .insert(Name::new("Starfield"));
 }

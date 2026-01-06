@@ -13,7 +13,7 @@ path = "src/main.rs"
 required-features = ["native"]
 
 [dependencies]
-bevy = { version = "0.14.0" }
+bevy = { version = "0.17.3" }
 rand = "0.8.5"
 bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types

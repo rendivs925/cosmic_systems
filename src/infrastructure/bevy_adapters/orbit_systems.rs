@@ -12,7 +12,7 @@ pub(crate) fn update_orbit_visuals(
     orbit_query: Query<&OrbitComponent>,
 ) {
     // Performance optimization: update orbit visuals periodically
-    let frame_number = (time.elapsed_seconds() * 60.0) as u32;
+    let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
     let update_stride = 25; // Less frequent on web for performance
     #[cfg(not(target_arch = "wasm32"))]
@@ -22,7 +22,7 @@ pub(crate) fn update_orbit_visuals(
         return;
     }
 
-    let elapsed = time.elapsed_seconds();
+    let elapsed = time.elapsed_secs();
 
     // Update each orbit material based on its distance rank and selection status
     for orbit_comp in orbit_query.iter() {
@@ -88,7 +88,7 @@ pub fn update_orbit_visibility(
         return;
     }
 
-    let camera_pos = camera_query.single().translation();
+    let camera_pos = camera_query.single().unwrap().translation();
     let camera_distance_from_sun = camera_pos.length(); // Distance from solar system center
 
     // Show orbits with contextual hierarchy based on zoom level
@@ -130,7 +130,7 @@ pub fn update_planet_reflections(
     query: Query<(&PlanetComponent, &GlobalTransform)>,
 ) {
     // Elegant update cadence - subtle material refinement
-    let frame_number = (time.elapsed_seconds() * 60.0) as u32;
+    let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
     let update_stride = 30; // Minimal updates for web performance
     #[cfg(not(target_arch = "wasm32"))]

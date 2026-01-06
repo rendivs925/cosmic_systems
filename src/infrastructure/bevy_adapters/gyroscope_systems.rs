@@ -9,7 +9,7 @@ pub fn update_gyroscopes(time: Res<Time>, mut query: Query<(&GyroscopeComponent,
         // Update gyroscope rotation based on time
         let spin_rate = gyro.domain_gyro.spin_rate;
         let precession_rate = gyro.domain_gyro.precession_rate;
-        let delta_time = time.delta_seconds();
+        let delta_time = time.delta_secs();
 
         // Apply spin rotation around the angular momentum axis
         let spin_rotation = Quat::from_axis_angle(
@@ -51,7 +51,7 @@ pub fn update_thrust(
             transform.look_at(target, Vec3::Y);
         }
 
-        transform.scale *= 1.0 + 0.1 * (time.elapsed_seconds() * 5.0).sin();
+        transform.scale *= 1.0 + 0.1 * (time.elapsed_secs() * 5.0).sin();
     }
 }
 
@@ -61,7 +61,7 @@ pub fn handle_input(
     mut params: ResMut<SimulationParameters>,
     time: Res<Time>,
 ) {
-    let rpm_delta = 5000.0 * time.delta_seconds(); // Adjust RPM by 5000 per second
+    let rpm_delta = 5000.0 * time.delta_secs(); // Adjust RPM by 5000 per second
 
     if keyboard.pressed(KeyCode::ArrowUp) {
         params.rpm += rpm_delta;
@@ -76,7 +76,7 @@ pub fn handle_input(
     }
 
     // Optional: Add controls for other parameters
-    let param_delta = 10.0 * time.delta_seconds();
+    let param_delta = 10.0 * time.delta_secs();
     if keyboard.pressed(KeyCode::KeyW) {
         params.precession_hz += param_delta;
         println!("Precession Hz increased to: {:.1}", params.precession_hz);

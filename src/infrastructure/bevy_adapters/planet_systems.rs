@@ -33,10 +33,10 @@ pub fn update_planet_positions(
     // Start timing for physics update
     let physics_start = std::time::Instant::now();
 
-    let elapsed_seconds = time.elapsed_seconds();
+    let elapsed_seconds = time.elapsed_secs();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
-    let camera_pos = camera_query.single().translation();
+    let camera_pos = camera_query.single().unwrap().translation();
 
     let webgpu_enabled = chrome.as_ref().is_some_and(|chrome| chrome.webgpu_enabled);
     let solver_ready = webgpu_state
@@ -263,10 +263,10 @@ pub fn update_planet_positions(
     // Start timing for physics update
     let physics_start = std::time::Instant::now();
 
-    let elapsed_seconds = time.elapsed_seconds();
+    let elapsed_seconds = time.elapsed_secs();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
-    let camera_pos = camera_query.single().translation();
+    let camera_pos = camera_query.single().unwrap().translation();
 
     // Build parent position and tilt lookup maps
     let mut parent_positions = std::collections::HashMap::new();
@@ -517,7 +517,7 @@ pub fn update_planet_rotations(
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut Transform, &PlanetComponent)>,
 ) {
-    let elapsed_seconds = time.elapsed_seconds();
+    let elapsed_seconds = time.elapsed_secs();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
     for (mut transform, planet_comp) in query.iter_mut() {
