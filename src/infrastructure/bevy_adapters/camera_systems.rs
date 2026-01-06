@@ -318,6 +318,7 @@ pub fn auto_inspect_selected_planet(
     let fov_y = match projection {
         Projection::Perspective(perspective) => perspective.fov,
         Projection::Orthographic(_) => std::f32::consts::FRAC_PI_2,
+        Projection::Custom(_) => std::f32::consts::FRAC_PI_2, // Default to orthographic-like FOV
     };
     let fit_radius = |radius: f32, fill: f32| -> f32 {
         let half_fov = (fov_y * 0.5 * fill).max(0.05);

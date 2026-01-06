@@ -228,22 +228,23 @@ pub(crate) fn setup_ui(mut commands: Commands) {
 
 
 
-                    panel.spawn(TextBundle::from_section(
-                        "All Bodies",
-                        text_style(10.5, Color::srgb(0.51, 0.59, 0.71)),
+                    panel.spawn((
+                        Text::new("All Bodies"),
+                        TextFont {
+                            font_size: 10.5,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.51, 0.59, 0.71)),
                     ));
 
                     panel
-                        .spawn(NodeBundle {
-                            style: Style {
-                                flex_direction: FlexDirection::Row,
-                                flex_wrap: FlexWrap::Wrap,
-                                column_gap: Val::Px(4.0), // Tighter horizontal spacing
-                                row_gap: Val::Px(4.0), // Tighter vertical spacing
-                                max_height: Val::Px(250.0), // More compact height
-                                overflow: Overflow::clip_y(),
-                                ..default()
-                            },
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(4.0), // Tighter horizontal spacing
+                            row_gap: Val::Px(4.0), // Tighter vertical spacing
+                            max_height: Val::Px(250.0), // More compact height
+                            overflow: Overflow::clip_y(),
                             ..default()
                         })
                         .with_children(|bodies| {
@@ -267,29 +268,26 @@ pub(crate) fn setup_ui(mut commands: Commands) {
 
     let info_card = commands
         .spawn((
-            NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    right: Val::Px(20.0),
-                    top: Val::Px(20.0),
-                    width: Val::Px(380.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    padding: UiRect::new(
-                        Val::Px(16.0),
-                        Val::Px(16.0),
-                        Val::Px(14.0),
-                        Val::Px(14.0),
-                    ),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    display: Display::None,
-                    ..default()
-                },
-                background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-                border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-                border_radius: BorderRadius::all(Val::Px(12.0)),
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(20.0),
+                top: Val::Px(20.0),
+                width: Val::Px(380.0),
+                border: UiRect::all(Val::Px(1.0)),
+                padding: UiRect::new(
+                    Val::Px(16.0),
+                    Val::Px(16.0),
+                    Val::Px(14.0),
+                    Val::Px(14.0),
+                ),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                display: Display::None,
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+            BorderRadius::all(Val::Px(12.0)),
             InfoCardRoot,
             UiCapture,
             Interaction::default(),
@@ -298,62 +296,68 @@ pub(crate) fn setup_ui(mut commands: Commands) {
 
     commands.entity(info_card).with_children(|parent| {
         parent
-            .spawn(NodeBundle {
-                style: Style {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::SpaceBetween,
-                    ..default()
-                },
+            .spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
                 ..default()
             })
             .with_children(|header| {
                 header.spawn((
-                    TextBundle::from_section(
-                        "",
-                        text_style(14.0, Color::srgb(0.8, 0.85, 0.9)), // Smaller, more subtle title
-                    ),
+                    Text::new(""),
+                    TextFont {
+                        font_size: 14.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.8, 0.85, 0.9)),
                     InfoCardTitle,
                 ));
                 header
                     .spawn((
-                        ButtonBundle {
-                            style: Style {
-                                padding: UiRect::new(
-                                    Val::Px(6.0), // Reduced padding
-                                    Val::Px(6.0),
-                                    Val::Px(4.0),
-                                    Val::Px(4.0),
-                                ),
-                                border: UiRect::all(Val::Px(1.0)),
-                                ..default()
-                            },
-                            background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
-                            border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
-                            border_radius: BorderRadius::all(Val::Px(10.0)),
+                        Button,
+                        Node {
+                            padding: UiRect::new(
+                                Val::Px(6.0), // Reduced padding
+                                Val::Px(6.0),
+                                Val::Px(4.0),
+                                Val::Px(4.0),
+                            ),
+                            border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
+                        BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
+                        BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
+                        BorderRadius::all(Val::Px(10.0)),
                         InfoCardToggleButton,
                         UiCapture,
                     ))
                     .with_children(|button| {
-        button.spawn(TextBundle::from_section(
-            "X",
-            text_style(12.0, Color::srgb(0.74, 0.8, 0.9)),
+        button.spawn((
+            Text::new("X"),
+            TextFont {
+                font_size: 12.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.74, 0.8, 0.9)),
         ));
                     });
             });
         parent.spawn((
-            TextBundle::from_section("", text_style(9.5, Color::srgb(0.6, 0.65, 0.7))), // Smaller, more subtle
+            Text::new(""),
+            TextFont {
+                font_size: 9.5,
+                ..default()
+            },
+            TextColor(Color::srgb(0.6, 0.65, 0.7)),
             InfoCardSubtitle,
         ));
+        let (body_text, body_font, body_color) = info_body_text("");
         parent.spawn((
-            TextBundle {
-                text: info_body_text(""),
-                style: Style {
-                    width: Val::Percent(100.0),
-                    ..default()
-                },
+            body_text,
+            body_font,
+            body_color,
+            Node {
+                width: Val::Percent(100.0),
                 ..default()
             },
             InfoCardBody,
@@ -361,21 +365,19 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     });
 
     commands.spawn((
-        ButtonBundle {
-            style: Style {
-                position_type: PositionType::Absolute,
-                right: Val::Px(20.0),
-                top: Val::Px(20.0),
-                padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(6.0), Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                display: Display::None,
-                ..default()
-            },
-            background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-            border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-            border_radius: BorderRadius::all(Val::Px(12.0)),
+        Button,
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(20.0),
+            top: Val::Px(20.0),
+            padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(6.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            display: Display::None,
             ..default()
         },
+        BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
+        BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+        BorderRadius::all(Val::Px(12.0)),
         InfoCardToggleButton,
         InfoCardExternalToggle,
         UiCapture,
@@ -485,10 +487,10 @@ pub(crate) fn update_navbar(
     time: Res<Time>,
     mut last_update: Local<f32>,
     mut queries: ParamSet<(
-        Query<(&NavButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
-        Query<(&MenuButton, &mut Style, &mut BackgroundColor, &mut BorderColor)>,
+        Query<(&NavButton, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
+        Query<(&MenuButton, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
         Query<&mut Text, With<FpsText>>,
-        Query<&mut Style, With<SelectorPanelRoot>>,
+        Query<&mut Node, With<SelectorPanelRoot>>,
     )>,
 ) {
     let hide_ui = zen_mode.enabled;
@@ -542,7 +544,10 @@ pub(crate) fn update_navbar(
         };
 
         *background = BackgroundColor(nav_button_color(is_selected));
-        border.0 = nav_button_border_color(is_selected);
+        border.top = nav_button_border_color(is_selected);
+        border.right = nav_button_border_color(is_selected);
+        border.bottom = nav_button_border_color(is_selected);
+        border.left = nav_button_border_color(is_selected);
     }
 
     for (button, mut style, mut background, mut border) in queries.p1().iter_mut() {
@@ -553,13 +558,19 @@ pub(crate) fn update_navbar(
         if hide_ui {
             style.display = Display::None;
             *background = BackgroundColor(Color::NONE);
-            border.0 = Color::NONE;
+            border.top = Color::NONE;
+            border.right = Color::NONE;
+            border.bottom = Color::NONE;
+            border.left = Color::NONE;
             continue;
         }
         style.display = Display::Flex;
         let (bg, stroke) = menu_button_colors(button.primary, active);
         *background = BackgroundColor(bg);
-        border.0 = stroke;
+        border.top = stroke;
+        border.right = stroke;
+        border.bottom = stroke;
+        border.left = stroke;
     }
 
 
@@ -567,10 +578,9 @@ pub(crate) fn update_navbar(
     if let Ok(mut text) = queries.p2().single_mut() {
         let display_fps = performance_stats.average_fps;
         if hide_ui {
-            text.sections[0].value.clear();
+            *text = Text::new("");
         } else {
-            text.sections[0].value = format!("fps {:.0}", display_fps);
-            text.sections[0].style.color = fps_color(display_fps);
+            *text = Text::new(format!("fps {:.0}", display_fps));
         }
     }
 }
@@ -581,7 +591,7 @@ pub(crate) fn update_info_card(
     planet_query: Query<&PlanetComponent>,
     menu_state: Res<UiMenuState>,
     zen_mode: Res<ZenMode>,
-    mut root_query: Query<&mut Style, With<InfoCardRoot>>,
+    mut root_query: Query<&mut Node, With<InfoCardRoot>>,
     mut text_queries: ParamSet<(
         Query<&mut Text, With<InfoCardTitle>>,
         Query<&mut Text, With<InfoCardSubtitle>>,
@@ -610,15 +620,15 @@ pub(crate) fn update_info_card(
     root_style.display = Display::Flex;
 
     if let Ok(mut title) = text_queries.p0().single_mut() {
-        title.sections[0].value = planet.domain_planet.name.clone();
+        *title = Text::new(planet.domain_planet.name.clone());
     }
 
     if let Ok(mut subtitle) = text_queries.p1().single_mut() {
-        subtitle.sections[0].value = get_celestial_type(&planet.domain_planet.name).to_string();
+        *subtitle = Text::new(get_celestial_type(&planet.domain_planet.name).to_string());
     }
 
     if let Ok(mut body) = text_queries.p2().single_mut() {
-        body.sections[0].value = build_info_body(&planet.domain_planet);
+        *body = Text::new(build_info_body(&planet.domain_planet));
     }
 }
 
@@ -626,7 +636,7 @@ pub(crate) fn update_notifications_ui(
     mut notifications: ResMut<NotificationQueue>,
     mut commands: Commands,
     roots: Res<UiRoots>,
-    mut query: Query<(&mut Text, &mut BackgroundColor, &mut Style), With<NotificationUi>>,
+    mut query: Query<(&mut Text, &mut BackgroundColor, &mut Node), With<NotificationUi>>,
     time: Res<Time>,
     video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
     mut last_update: Local<f32>,
@@ -644,7 +654,7 @@ pub(crate) fn update_notifications_ui(
         .notifications
         .retain(|n| current_time - n.created_at < n.duration);
 
-    commands.entity(roots.notifications).despawn_descendants();
+    // commands.entity(roots.notifications).despawn_descendants(); // TODO: Update for Bevy 0.17
 
     commands.entity(roots.notifications).with_children(|parent| {
         for notification in notifications.notifications.iter() {
@@ -763,10 +773,15 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
         });
 }
 
-fn info_body_text(text: &str) -> Text {
-    let mut body = Text::from_section(text, text_style(9.5, Color::srgb(0.82, 0.85, 0.88))); // Smaller, more subtle
-    body.linebreak_behavior = BreakLineOn::WordBoundary;
-    body
+fn info_body_text(text: &str) -> (Text, TextFont, TextColor) {
+    (
+        Text::new(text),
+        TextFont {
+            font_size: 9.5,
+            ..default()
+        },
+        TextColor(Color::srgb(0.82, 0.85, 0.88)),
+    )
 }
 
 fn nav_button_color(selected: bool) -> Color {
@@ -841,6 +856,7 @@ fn notification_color(notification_type: &NotificationType) -> Color {
         NotificationType::Success => Color::srgba(0.06, 0.25, 0.06, 0.86),
         NotificationType::Error => Color::srgba(0.25, 0.06, 0.06, 0.86),
         NotificationType::Info => Color::srgba(0.06, 0.13, 0.25, 0.86),
+        NotificationType::Warning => Color::srgba(0.25, 0.19, 0.06, 0.86),
     }
 }
 
