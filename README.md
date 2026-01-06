@@ -8,7 +8,7 @@
 
 ## Demo recording of the system:
 
-[Watch demo](./cosmic_recording.mp4)
+https://github.com/user-attachments/assets/4d5e3e96-c477-4a10-a07a-a5eb68577be9
 
 ## Features planned
 
