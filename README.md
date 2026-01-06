@@ -8,11 +8,7 @@
 
 ## Demo recording of the system:
 
-<video controls width="720" preload="metadata">
-  <source src="https://raw.githubusercontent.com/rendivs925/cosmic_systems/main/cosmic_recording.mp4" type="video/mp4">
-  <!-- Fallback link in case the browser or GitHub strips the video tag -->
-  <a href="https://raw.githubusercontent.com/rendivs925/cosmic_systems/main/cosmic_recording.mp4">Download the demo (MP4)</a>
-</video>
+[Watch demo](./cosmic_recording.mp4)
 
 ## Features planned
 
