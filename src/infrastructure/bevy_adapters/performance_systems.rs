@@ -33,6 +33,7 @@ pub fn update_performance_monitor(
 }
 
 // System to capture screenshot on next frame after notifications are hidden
+// TODO: Re-implement with Bevy 0.17 screenshot API
 pub fn take_pending_screenshot(
     mut commands: Commands,
     mut screenshot_state: ResMut<ScreenshotState>,
@@ -50,12 +51,19 @@ pub fn take_pending_screenshot(
     let window_entity = main_window.single();
 
     // Determine output directory based on recording state
-    let (output_dir, filename_prefix) = if video_state.is_recording && !video_state.output_dir.is_empty() {
-        (video_state.output_dir.clone(), format!("frame_{:06}", video_state.frame_count))
-    } else {
-        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        (format!("{}/cosmic_systems_images", home_dir), "screenshot".to_string())
-    };
+    let (output_dir, filename_prefix) =
+        if video_state.is_recording && !video_state.output_dir.is_empty() {
+            (
+                video_state.output_dir.clone(),
+                format!("frame_{:06}", video_state.frame_count),
+            )
+        } else {
+            let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            (
+                format!("{}/cosmic_systems_images", home_dir),
+                "screenshot".to_string(),
+            )
+        };
 
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
         notifications.notifications.push(Notification {
@@ -160,7 +168,8 @@ pub fn toggle_video_recording(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            video_state.output_dir = format!("{}/cosmic_systems_videos/recording_{}", home_dir, timestamp);
+            video_state.output_dir =
+                format!("{}/cosmic_systems_videos/recording_{}", home_dir, timestamp);
 
             if let Err(e) = std::fs::create_dir_all(&video_state.output_dir) {
                 notifications.notifications.push(Notification {
@@ -206,18 +215,27 @@ fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
         60.0
     };
 
-    println!("Converting {} frames to MP4 at {:.1} FPS...", frame_count, target_framerate);
+    println!(
+        "Converting {} frames to MP4 at {:.1} FPS...",
+        frame_count, target_framerate
+    );
 
     let result = std::process::Command::new("ffmpeg")
         .args([
-            "-framerate", &format!("{}", target_framerate as u32),
-            "-i", &input_pattern,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "22",  // Good quality/size balance
-            "-pix_fmt", "yuv420p",  // Compatible with most players
-            "-y",  // Overwrite output file
-            &output_file
+            "-framerate",
+            &format!("{}", target_framerate as u32),
+            "-i",
+            &input_pattern,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "22", // Good quality/size balance
+            "-pix_fmt",
+            "yuv420p", // Compatible with most players
+            "-y",      // Overwrite output file
+            &output_file,
         ])
         .output();
 
@@ -231,9 +249,12 @@ fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
                     if let Ok(entry) = entry {
                         let path = entry.path();
                         if let Some(extension) = path.extension() {
-                            if extension == "png" && path.file_name()
-                                .and_then(|n| n.to_str())
-                                .map_or(false, |n| n.starts_with("frame_")) {
+                            if extension == "png"
+                                && path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .map_or(false, |n| n.starts_with("frame_"))
+                            {
                                 let _ = std::fs::remove_file(&path); // Ignore errors
                             }
                         }
@@ -241,17 +262,27 @@ fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
                 }
             }
 
-            println!("Cleaned up {} PNG frames. Final video: {}", frame_count, output_file);
+            println!(
+                "Cleaned up {} PNG frames. Final video: {}",
+                frame_count, output_file
+            );
         }
         Ok(output) => {
-            eprintln!("ffmpeg conversion failed: {}", String::from_utf8_lossy(&output.stderr));
-            eprintln!("Manual conversion: ffmpeg -framerate {} -i {} -c:v libx264 {} -y",
-                target_framerate as u32, input_pattern, output_file);
+            eprintln!(
+                "ffmpeg conversion failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            eprintln!(
+                "Manual conversion: ffmpeg -framerate {} -i {} -c:v libx264 {} -y",
+                target_framerate as u32, input_pattern, output_file
+            );
         }
         Err(e) => {
             eprintln!("Failed to run ffmpeg: {}", e);
-            eprintln!("Manual conversion: ffmpeg -framerate {} -i {} -c:v libx264 {} -y",
-                target_framerate as u32, input_pattern, output_file);
+            eprintln!(
+                "Manual conversion: ffmpeg -framerate {} -i {} -c:v libx264 {} -y",
+                target_framerate as u32, input_pattern, output_file
+            );
         }
     }
 }
@@ -278,8 +309,8 @@ pub fn adaptive_quality_system(
         println!("🎚️ Quality adapted to: {:?}", new_quality);
     }
 
-        // Minimal quality logging - only when quality changes significantly
-        // Removed frequent quality status logging to reduce noise
+    // Minimal quality logging - only when quality changes significantly
+    // Removed frequent quality status logging to reduce noise
 }
 
 // PRODUCTION-GRADE FPS MEASUREMENT (Industry Standard Implementation)
@@ -425,7 +456,11 @@ fn adjust_quality_based_on_performance(
 }
 
 // Apply quality settings based on the quality level
-fn apply_quality_settings(quality_level: QualityLevel, solar_params: &mut SolarSystemParameters, current_fps: f32) {
+fn apply_quality_settings(
+    quality_level: QualityLevel,
+    solar_params: &mut SolarSystemParameters,
+    current_fps: f32,
+) {
     // Quality adaptation now preserves user-set time scale
     // Only adjust other quality parameters, not time scale
     // Quality change notifications removed to reduce console noise
@@ -438,3 +473,4 @@ pub fn log_performance_stats(perf_stats: Res<PerformanceStats>, _time: Res<Time>
     // Ultra-minimal logging - silent operation
     // Performance monitoring completely silent for elegant experience
 }
+

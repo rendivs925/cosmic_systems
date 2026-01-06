@@ -1,8 +1,8 @@
-use bevy::prelude::*;
+use bevy::asset::RenderAssetUsages;
 use bevy::math::*;
+use bevy::prelude::*;
 use bevy_mesh::Indices;
 use bevy_mesh::PrimitiveTopology;
-use bevy::asset::RenderAssetUsages;
 use std::f32::consts::TAU;
 
 use crate::domain::services::physics;
