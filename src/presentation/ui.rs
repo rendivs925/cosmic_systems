@@ -7,7 +7,6 @@ use crate::infrastructure::bevy_adapters::components::{
     NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, ScreenshotState,
     Selectable, SelectedPlanet, UiPointerState, ZenMode,
 };
-use bevy::ui::ChildBuilder;
 
 #[derive(Component)]
 pub(crate) struct UiCapture;
@@ -677,12 +676,7 @@ fn text_style(font_size: f32, color: Color) -> (TextFont, TextColor) {
     )
 }
 
-fn spawn_menu_button(
-    parent: &mut ChildBuilder,
-    label: &str,
-    action: MenuAction,
-    primary: bool,
-) {
+fn spawn_menu_button(parent: &mut ChildSpawnerCommands, label: &str, action: MenuAction, primary: bool) {
     let padding = if primary {
         UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0))
     } else {
@@ -710,18 +704,13 @@ fn spawn_menu_button(
         });
 }
 
-fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
+fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, group: NavGroup) {
     parent
         .spawn((
             Button,
             Node {
                 border: UiRect::all(Val::Px(0.5)),
-                padding: UiRect::new(
-                    Val::Px(6.0),
-                    Val::Px(6.0),
-                    Val::Px(2.0),
-                    Val::Px(2.0),
-                ),
+                padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(2.0), Val::Px(2.0)),
                 ..default()
             },
             BackgroundColor(nav_button_color(false)),
@@ -735,12 +724,7 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
         ))
         .with_children(|button| {
             let (font, color) = text_style(9.0, Color::srgb(0.75, 0.8, 0.85));
-            button.spawn((
-                Text::new(name),
-                font,
-                color,
-                NavButtonLabel,
-            ));
+            button.spawn((Text::new(name), font, color, NavButtonLabel));
         });
 }
 
