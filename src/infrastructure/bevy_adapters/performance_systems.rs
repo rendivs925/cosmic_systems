@@ -2,6 +2,7 @@ use super::components::*;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
 // Performance monitoring and quality adaptation system
 pub fn update_performance_monitor(
@@ -33,9 +34,9 @@ pub fn update_performance_monitor(
 
 // System to capture screenshot on next frame after notifications are hidden
 pub fn take_pending_screenshot(
+    mut commands: Commands,
     mut screenshot_state: ResMut<ScreenshotState>,
     video_state: Res<VideoRecordingState>,
-    mut screenshot_manager: ResMut<bevy::render::view::screenshot::ScreenshotManager>,
     main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mut notifications: ResMut<NotificationQueue>,
     time: Res<Time>,
@@ -77,28 +78,19 @@ pub fn take_pending_screenshot(
         format!("{}/cosmic_systems_{}.png", output_dir, timestamp)
     };
 
-    // Take screenshot using Bevy's screenshot API
-    match screenshot_manager.save_screenshot_to_disk(window_entity, filename.clone()) {
-        Ok(_) => {
-            // Only show notification for regular screenshots, not video frames
-            // During recording, suppress all notifications to prevent UI flickering
-            if !video_state.is_recording {
-                notifications.notifications.push(Notification {
-                    message: format!("Screenshot saved to: {}", filename),
-                    notification_type: NotificationType::Success,
-                    created_at: time.elapsed_secs(),
-                    duration: 4.0,
-                });
-            }
-        }
-        Err(e) => {
-            notifications.notifications.push(Notification {
-                message: format!("Failed to save screenshot: {}", e),
-                notification_type: NotificationType::Error,
-                created_at: time.elapsed_secs(),
-                duration: 5.0,
-            });
-        }
+    // Take screenshot using Bevy's new screenshot API
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(filename.clone()));
+
+    // Show notification for screenshot taken
+    if !video_state.is_recording {
+        notifications.notifications.push(Notification {
+            message: format!("Screenshot saved to: {}", filename),
+            notification_type: NotificationType::Success,
+            created_at: time.elapsed_secs(),
+            duration: 4.0,
+        });
     }
 }
 

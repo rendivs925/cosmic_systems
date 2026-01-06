@@ -1,7 +1,7 @@
 use bevy::prelude::*;
-use bevy::render::mesh::primitives::UVSphere;
-use bevy_mesh::index::Indices;
-use wgpu_types::PrimitiveTopology;
+use bevy::math::*;
+use bevy_mesh::Indices;
+use bevy_mesh::PrimitiveTopology;
 use bevy::asset::RenderAssetUsages;
 use std::f32::consts::TAU;
 
@@ -13,11 +13,7 @@ pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> 
     #[cfg(not(target_arch = "wasm32"))]
     let (sectors, stacks) = (64, 32);
 
-    let mesh = Mesh::from(UVSphere {
-        radius,
-        sectors: sectors as usize,
-        stacks: stacks as usize,
-    });
+    let mesh = Sphere::new(radius).mesh().uv(sectors as u32, stacks as u32);
     meshes.add(mesh)
 }
 
