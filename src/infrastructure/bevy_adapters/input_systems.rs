@@ -89,8 +89,11 @@ pub fn handle_mouse_planet_selection(
         return;
     }
 
-    let (camera, camera_transform) = camera_query.single();
-    let window = match windows.get_single() {
+    let (camera, camera_transform) = match camera_query.single() {
+        Ok(result) => result,
+        Err(_) => return,
+    };
+    let window = match windows.single() {
         Ok(window) => window,
         Err(_) => return,
     };
@@ -171,7 +174,7 @@ pub fn update_planet_selection_visuals(
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(&Selectable, &mut Transform, &GlobalTransform)>,
 ) {
-    let camera_pos = camera_query.single().translation();
+    let camera_pos = camera_query.single().unwrap().translation();
 
     for (_selectable, mut transform, global_transform) in query.iter_mut() {
         // Distance culling for visual updates

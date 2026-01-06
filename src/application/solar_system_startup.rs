@@ -4,8 +4,8 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
-use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy_asset::RenderAssetUsages;
+
 use bevy::prelude::*;
 // TODO: Fix NotShadowCaster and NotShadowReceiver imports
 use rand::rngs::StdRng;
@@ -59,17 +59,16 @@ pub fn setup_space(
     ));
 
     // Sun as the main light source with enormous intensity for massive astronomical distances
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
+    commands.spawn((
+        PointLight {
             intensity: 500000000.0, // Enormous intensity for massive astronomical-scale illumination
             shadows_enabled: false, // Disable shadows for better performance
             color: Color::srgb(1.0, 1.0, 0.98), // Pure sunlight
             range: 4000000.0, // Extended range to reach outer planets with correct sun-facing light
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 0.0, 0.0),
-        ..default()
-    });
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
 
     // Starfield disabled for now
     // create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
@@ -391,12 +390,11 @@ fn spawn_celestial_body(
 
             #[cfg(target_arch = "wasm32")]
             let orbit_entity = commands
-                .spawn(PbrBundle {
-                    mesh: orbit_mesh.clone(),
-                    material: moon_material_handle,
-                    transform: Transform::default(),
-                    ..default()
-                })
+                .spawn((
+                    Mesh3d(orbit_mesh.clone()),
+                    MeshMaterial3d(moon_material_handle),
+                    Transform::default(),
+                ))
                 .insert(OrbitComponent {
                     radius: orbit_shape.semi_major_axis_units,
                     planet_entity: parent_ent,
@@ -419,12 +417,11 @@ fn spawn_celestial_body(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 commands
-                    .spawn(PbrBundle {
-                        mesh: orbit_mesh.clone(),
-                        material: orbit_material_handle.clone(),
-                        transform: Transform::default(),
-                        ..default()
-                    })
+                    .spawn((
+                        Mesh3d(orbit_mesh.clone()),
+                        MeshMaterial3d(orbit_material_handle.clone()),
+                        Transform::default(),
+                    ))
                     .insert(OrbitComponent {
                         radius: orbit_shape.semi_major_axis_units,
                         planet_entity: parent_ent,
@@ -466,12 +463,11 @@ fn spawn_celestial_body(
 
         #[cfg(target_arch = "wasm32")]
         let orbit_entity = commands
-            .spawn(PbrBundle {
-                mesh: orbit_mesh.clone(),
-                material: orbit_material_handle.clone(),
-                transform: Transform::default(),
-                ..default()
-            })
+            .spawn((
+                Mesh3d(orbit_mesh.clone()),
+                MeshMaterial3d(orbit_material_handle.clone()),
+                Transform::default(),
+            ))
             .insert(OrbitComponent {
                 radius: orbit_shape.semi_major_axis_units,
                 planet_entity,
@@ -489,12 +485,11 @@ fn spawn_celestial_body(
         #[cfg(not(target_arch = "wasm32"))]
         {
             commands
-                .spawn(PbrBundle {
-                    mesh: orbit_mesh.clone(),
-                    material: orbit_material_handle.clone(),
-                    transform: Transform::default(),
-                    ..default()
-                })
+                .spawn((
+                    Mesh3d(orbit_mesh.clone()),
+                    MeshMaterial3d(orbit_material_handle.clone()),
+                    Transform::default(),
+                ))
                 .insert(OrbitComponent {
                     radius: orbit_shape.semi_major_axis_units,
                     planet_entity,
@@ -546,12 +541,9 @@ fn spawn_celestial_body(
             #[cfg(target_arch = "wasm32")]
             {
                 let mut ring_entity = parent.spawn((
-                    PbrBundle {
-                        mesh: create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius),
-                        material: ring_material_handle.clone(),
-                        transform: Transform::default(),
-                        ..default()
-                    },
+                    Mesh3d(create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius)),
+                    MeshMaterial3d(ring_material_handle.clone()),
+                    Transform::default(),
                     Selectable {
                         name: "Saturn Rings".to_string(),
                         selected: false,
@@ -572,12 +564,9 @@ fn spawn_celestial_body(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 parent.spawn((
-                    PbrBundle {
-                        mesh: create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius),
-                        material: ring_material_handle.clone(),
-                        transform: Transform::default(),
-                        ..default()
-                    },
+                    Mesh3d(create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius)),
+                    MeshMaterial3d(ring_material_handle.clone()),
+                    Transform::default(),
                     Selectable {
                         name: "Saturn Rings".to_string(),
                         selected: false,
@@ -606,11 +595,9 @@ fn spawn_celestial_body(
             #[cfg(target_arch = "wasm32")]
             {
                 let mut cloud_entity = parent.spawn((
-                    PbrBundle {
-                        mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
-                        material: cloud_material_handle.clone(),
-                        ..default()
-                    },
+                    Mesh3d(create_uv_sphere_mesh(meshes, visual_radius * clouds.scale)),
+                    MeshMaterial3d(cloud_material_handle.clone()),
+                    Transform::default(),
                     CloudLayer {
                         rotation_period_hours: clouds.rotation_period_hours,
                     },
@@ -630,11 +617,9 @@ fn spawn_celestial_body(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 parent.spawn((
-                    PbrBundle {
-                        mesh: create_uv_sphere_mesh(meshes, visual_radius * clouds.scale),
-                        material: cloud_material_handle.clone(),
-                        ..default()
-                    },
+                    Mesh3d(create_uv_sphere_mesh(meshes, visual_radius * clouds.scale)),
+                    MeshMaterial3d(cloud_material_handle.clone()),
+                    Transform::default(),
                     CloudLayer {
                         rotation_period_hours: clouds.rotation_period_hours,
                     },
@@ -754,15 +739,12 @@ fn create_starfield(
         ]);
     }
 
-    let mut mesh = Mesh::new(
-        bevy::render::mesh::PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    );
+    let mut mesh = Mesh::new(bevy_mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+    mesh.insert_indices(bevy_mesh::Indices::U32(indices));
 
     let material = materials.add(StandardMaterial {
         base_color: Color::srgba(1.0, 1.0, 1.0, 1.0),
@@ -776,13 +758,12 @@ fn create_starfield(
 
     // Position stars relative to camera to ensure they're always visible
     // This creates a star dome that follows the camera
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(mesh),
-        material,
-        transform: Transform::IDENTITY,
-        visibility: Visibility::Visible, // Explicit visibility control
-        ..default()
-    })
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(material),
+        Transform::IDENTITY,
+        Visibility::Visible, // Explicit visibility control
+    ))
     // .insert(NotShadowCaster)
     // .insert(NotShadowReceiver)
     .insert(Starfield) // Custom component to identify starfield

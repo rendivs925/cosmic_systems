@@ -10,8 +10,8 @@ pub fn update_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut mouse_motion: EventReader<MouseMotion>,
-    mut mouse_wheel: EventReader<MouseWheel>,
+    mut mouse_motion: MessageReader<MouseMotion>,
+    mut mouse_wheel: MessageReader<MouseWheel>,
     ui_state: Res<UiPointerState>,
     selected_planet: Res<SelectedPlanet>,
     mut query: Query<(&mut CameraController, &mut Transform)>,
@@ -25,7 +25,7 @@ pub fn update_camera_controller(
             continue; // Only handle input for free flight mode for now
         }
 
-        let dt = time.delta_seconds();
+        let dt = time.delta_secs();
         let mut user_input = false;
 
         // Handle mouse look for rotation
@@ -168,7 +168,7 @@ pub fn update_camera_controller(
                     notifications.notifications.push(Notification {
                         message: format!("Zoom Sensitivity: {:.1}", controller.zoom_sensitivity),
                         notification_type: NotificationType::Info,
-                        created_at: time.elapsed_seconds(),
+                        created_at: time.elapsed_secs(),
                         duration: 2.0,
                     });
                 } else {
@@ -219,7 +219,7 @@ pub fn update_camera_controller(
         }
 
         if user_input {
-            input_state.last_input_time = time.elapsed_seconds();
+            input_state.last_input_time = time.elapsed_secs();
             if let Some(entity) = selected_planet.entity {
                 input_state.suppress_auto_inspect_for = Some(entity);
             }
@@ -236,12 +236,12 @@ pub fn apply_camera_transform(
         match controller.mode {
             CameraMode::FreeFlight => {
                 // Apply velocity to position (rotation is handled in input system for mouse look)
-                let dt = time.delta_seconds();
+        let dt = time.delta_secs();
                 transform.translation += controller.velocity * dt;
             }
             CameraMode::Orbit => {
                 // Orbit around the solar system center
-                controller.orbit_angle += time.delta_seconds() * 0.5;
+                controller.orbit_angle += time.delta_secs() * 0.5;
                 let orbit_pos = Vec3::new(
                     controller.orbit_distance * controller.orbit_angle.cos(),
                     10.0, // Slight elevation
@@ -282,7 +282,7 @@ pub fn auto_inspect_selected_planet(
         Err(_) => return,
     };
 
-    let (_controller, mut camera_transform, projection) = match camera_query.get_single_mut() {
+    let (_controller, mut camera_transform, projection) = match camera_query.single_mut() {
         Ok(data) => data,
         Err(_) => return,
     };
@@ -374,13 +374,13 @@ pub fn auto_inspect_selected_planet(
 
     // Cinematic slow orbit around the planet for aesthetic viewing
     if !is_moon {
-        state.orbit_angle += time.delta_seconds() * 0.15; // Slow orbit
+        state.orbit_angle += time.delta_secs() * 0.15; // Slow orbit
     }
 
     if let (Some(axis_dir), Some(up)) = (moon_axis, moon_up) {
         // Frame the moon large in the foreground with the parent in the background.
         let distance = moon_distance.unwrap_or(target_distance);
-        let smooth_lerp = 1.0 - (-3.0 * time.delta_seconds()).exp();
+        let smooth_lerp = 1.0 - (-3.0 * time.delta_secs()).exp();
         state.smooth_axis = if state.smooth_axis.length_squared() > 0.0 {
             state
                 .smooth_axis
@@ -427,9 +427,9 @@ pub fn auto_inspect_selected_planet(
 
     // Ultra-cinematic interpolation - buttery smooth elegance
     let smooth_factor = if is_moon {
-        1.0 - (-3.5 * time.delta_seconds()).exp() // Refined smoothness for moons
+        1.0 - (-3.5 * time.delta_secs()).exp() // Refined smoothness for moons
     } else {
-        1.0 - (-5.5 * time.delta_seconds()).exp() // Premium smoothness for planets
+        1.0 - (-5.5 * time.delta_secs()).exp() // Premium smoothness for planets
     };
     if state.smooth_focus.length_squared() > 0.0 {
         state.smooth_focus = state.smooth_focus.lerp(focus_point, smooth_factor);
@@ -443,7 +443,7 @@ pub fn auto_inspect_selected_planet(
     }
 
     let target_pos = state.smooth_focus + state.smooth_offset;
-    let lerp_factor = 1.0 - (-2.5 * time.delta_seconds()).exp(); // Smoother transitions
+    let lerp_factor = 1.0 - (-2.5 * time.delta_secs()).exp(); // Smoother transitions
     camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
 
     // Look at the focus point to frame moon + parent when applicable
@@ -481,7 +481,7 @@ pub fn update_starfield_position(
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut starfield_query: Query<&mut Transform, With<Starfield>>,
 ) {
-    if let Ok(camera_transform) = camera_query.get_single() {
+    if let Ok(camera_transform) = camera_query.single() {
         let camera_pos = camera_transform.translation();
 
         for mut starfield_transform in starfield_query.iter_mut() {

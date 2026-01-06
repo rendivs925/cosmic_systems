@@ -9,37 +9,33 @@ pub fn setup_gyro(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // Camera
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
 
     // Light
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
+    commands.spawn((
+        PointLight {
             intensity: 1500.0,
             shadows_enabled: true,
             ..default()
         },
-        transform: Transform::from_xyz(4.0, 8.0, 4.0),
-        ..default()
-    });
+        Transform::from_xyz(4.0, 8.0, 4.0),
+    ));
 
     // Spawn 3 gyros in an array
     for i in -1..=1 {
         commands.spawn((
-            PbrBundle {
-                mesh: meshes.add(Mesh::from(Cylinder {
-                    radius: 0.5,
-                    half_height: 0.05,
-                })),
-                material: materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.3, 0.5, 0.3),
-                    ..default()
-                }),
-                transform: Transform::from_xyz(i as f32 * 1.5, 0.0, 0.0),
+            Mesh3d(meshes.add(Mesh::from(Cylinder {
+                radius: 0.5,
+                half_height: 0.05,
+            }))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.3, 0.5, 0.3),
                 ..default()
-            },
+            })),
+            Transform::from_xyz(i as f32 * 1.5, 0.0, 0.0),
             GyroscopeComponent {
                 domain_gyro: Gyroscope::new(),
             },
@@ -48,32 +44,28 @@ pub fn setup_gyro(
 
     // Thrust arrow
     commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Capsule3d {
-                radius: 0.05,
-                half_length: 0.5,
-            })),
-            material: materials.add(StandardMaterial {
-                base_color: Color::srgb(1.0, 0.0, 0.0),
-                ..default()
-            }),
-            transform: Transform::from_xyz(0.0, 1.0, 0.0).with_scale(Vec3::new(0.1, 0.1, 1.0)),
+        Mesh3d(meshes.add(Mesh::from(Capsule3d {
+            radius: 0.05,
+            half_length: 0.5,
+        }))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.0, 0.0),
             ..default()
-        },
+        })),
+        Transform::from_xyz(0.0, 1.0, 0.0).with_scale(Vec3::new(0.1, 0.1, 1.0)),
         ThrustArrow,
     ));
 
     // Floor for reference
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(Mesh::from(Plane3d {
+    commands.spawn((
+        Mesh3d(meshes.add(Mesh::from(Plane3d {
             normal: Dir3::Y,
             half_size: Vec2::splat(5.0),
-        })),
-        material: materials.add(StandardMaterial {
+        }))),
+        MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.1, 0.1, 0.1),
             ..default()
-        }),
-        transform: Transform::from_xyz(0.0, -1.0, 0.0),
-        ..default()
-    });
+        })),
+        Transform::from_xyz(0.0, -1.0, 0.0),
+    ));
 }

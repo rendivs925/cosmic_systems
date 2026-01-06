@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use bevy::prelude::*;
-use bevy::text::LineBreak;
+
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
@@ -128,33 +128,27 @@ pub(crate) fn setup_ui(mut commands: Commands) {
     commands.entity(navbar).with_children(|parent| {
         parent
             .spawn((
-                NodeBundle {
-                    style: Style {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(32.0), // More compact height
-                        padding: UiRect::new(
-                            Val::Px(8.0), // Reduced padding
-                            Val::Px(8.0),
-                            Val::Px(2.0),
-                            Val::Px(2.0),
-                        ),
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    },
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(32.0), // More compact height
+                    padding: UiRect::new(
+                        Val::Px(8.0), // Reduced padding
+                        Val::Px(8.0),
+                        Val::Px(2.0),
+                        Val::Px(2.0),
+                    ),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
                     ..default()
                 },
                 UiCapture,
              ))
             .with_children(|bar| {
-                bar.spawn(NodeBundle {
-                    style: Style {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(8.0), // More compact spacing
-                        ..default()
-                    },
+                bar.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0), // More compact spacing
                     ..default()
                 })
                 .with_children(|menu| {
@@ -164,17 +158,16 @@ pub(crate) fn setup_ui(mut commands: Commands) {
              });
 
         parent.spawn((
-            TextBundle {
-                text: Text::from_section(
-                    "fps 0",
-                    text_style(8.5, Color::srgb(0.6, 0.65, 0.7)), // Smaller, more subtle FPS display
-                ),
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(20.0),
-                    bottom: Val::Px(12.0),
-                    ..default()
-                },
+            Text::new("fps 0"),
+            TextFont {
+                font_size: 8.5,
+                ..default()
+            },
+            TextColor(Color::srgb(0.6, 0.65, 0.7)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(20.0),
+                bottom: Val::Px(12.0),
                 ..default()
             },
             FpsText,
@@ -201,7 +194,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     ..default()
                 },
                 background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
-                z_index: ZIndex::Global(10),
+                z_index: ZIndex(10),
                 ..default()
             },
             SelectorPanelRoot,
@@ -223,7 +216,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                         ..default()
                     },
                     background_color: BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.75)), // More minimal background
-                    border_color: BorderColor(Color::srgba(0.15, 0.2, 0.3, 0.3)), // Subtler border
+                    border_color: BorderColor::all(Color::srgba(0.15, 0.2, 0.3, 0.3)), // Subtler border
                     border_radius: BorderRadius::all(Val::Px(8.0)), // Smaller border radius
                     ..default()
                 })
@@ -293,7 +286,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     ..default()
                 },
                 background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-                border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+                border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
                 border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
@@ -336,7 +329,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                                 ..default()
                             },
                             background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
-                            border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.28)),
+                            border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
                             border_radius: BorderRadius::all(Val::Px(10.0)),
                             ..default()
                         },
@@ -379,7 +372,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                 ..default()
             },
             background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-            border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.47)),
+            border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
             border_radius: BorderRadius::all(Val::Px(12.0)),
             ..default()
         },
@@ -407,7 +400,7 @@ pub(crate) fn setup_ui(mut commands: Commands) {
                     row_gap: Val::Px(8.0),
                     ..default()
                 },
-                z_index: ZIndex::Local(5),
+                z_index: ZIndex(5),
                 ..default()
             },
             NotificationLayer,
@@ -500,7 +493,7 @@ pub(crate) fn update_navbar(
 ) {
     let hide_ui = zen_mode.enabled;
 
-    let current_time = time.elapsed_seconds();
+    let current_time = time.elapsed_secs();
 
     // Reduce update frequency during video recording to prevent UI flickering
     let update_interval = if video_state.is_recording { 0.1 } else { 0.016 }; // 10 FPS during recording, 60 FPS normally
@@ -523,7 +516,7 @@ pub(crate) fn update_navbar(
 
     // No longer need moon visibility logic - all bodies shown in unified list
 
-    if let Ok(mut style) = queries.p3().get_single_mut() {
+    if let Ok(mut style) = queries.p3().single_mut() {
         style.display = if show_selector && !hide_ui {
             Display::Flex
         } else {
@@ -571,7 +564,7 @@ pub(crate) fn update_navbar(
 
 
 
-    if let Ok(mut text) = queries.p2().get_single_mut() {
+    if let Ok(mut text) = queries.p2().single_mut() {
         let display_fps = performance_stats.average_fps;
         if hide_ui {
             text.sections[0].value.clear();
@@ -595,7 +588,7 @@ pub(crate) fn update_info_card(
         Query<&mut Text, With<InfoCardBody>>,
     )>,
 ) {
-    let Ok(mut root_style) = root_query.get_single_mut() else {
+    let Ok(mut root_style) = root_query.single_mut() else {
         return;
     };
 
@@ -616,15 +609,15 @@ pub(crate) fn update_info_card(
 
     root_style.display = Display::Flex;
 
-    if let Ok(mut title) = text_queries.p0().get_single_mut() {
+    if let Ok(mut title) = text_queries.p0().single_mut() {
         title.sections[0].value = planet.domain_planet.name.clone();
     }
 
-    if let Ok(mut subtitle) = text_queries.p1().get_single_mut() {
+    if let Ok(mut subtitle) = text_queries.p1().single_mut() {
         subtitle.sections[0].value = get_celestial_type(&planet.domain_planet.name).to_string();
     }
 
-    if let Ok(mut body) = text_queries.p2().get_single_mut() {
+    if let Ok(mut body) = text_queries.p2().single_mut() {
         body.sections[0].value = build_info_body(&planet.domain_planet);
     }
 }
@@ -638,7 +631,7 @@ pub(crate) fn update_notifications_ui(
     video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
     mut last_update: Local<f32>,
 ) {
-    let current_time = time.elapsed_seconds();
+    let current_time = time.elapsed_secs();
 
     // Reduce notification update frequency during video recording to prevent UI flickering
     let update_interval = if video_state.is_recording { 0.2 } else { 0.016 }; // 5 FPS during recording, 60 FPS normally
@@ -666,7 +659,7 @@ pub(crate) fn update_notifications_ui(
                         background_color: BackgroundColor(
                             notification_color(&notification.notification_type),
                         ),
-                        border_color: BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                        border_color: BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.35)),
                         border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
@@ -722,7 +715,7 @@ fn spawn_menu_button(
                     ..default()
                 },
                 background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
-                border_color: BorderColor(Color::srgba(0.196, 0.275, 0.431, 0.28)),
+                border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
                 border_radius: BorderRadius::all(Val::Px(radius)),
                 ..default()
             },
@@ -752,7 +745,7 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
                     ..default()
                 },
                 background_color: BackgroundColor(nav_button_color(false)),
-                border_color: BorderColor(nav_button_border_color(false)),
+                border_color: BorderColor::all(nav_button_border_color(false)),
                 border_radius: BorderRadius::all(Val::Px(3.0)), // Smaller border radius
                 ..default()
             },

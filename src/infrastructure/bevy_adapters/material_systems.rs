@@ -15,7 +15,7 @@ pub fn apply_pending_material_textures(
     #[cfg(not(target_arch = "wasm32"))]
     let cooldown = 0.0;
 
-    *throttle -= time.delta_seconds();
+    *throttle -= time.delta_secs();
     if *throttle > 0.0 {
         return;
     }

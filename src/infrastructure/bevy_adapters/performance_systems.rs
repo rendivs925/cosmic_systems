@@ -10,7 +10,7 @@ pub fn update_performance_monitor(
     time: Res<Time>,
 ) {
     // Update frame time history
-    perf_stats.frame_time = time.delta_seconds();
+    perf_stats.frame_time = time.delta_secs();
     quality_controller
         .frame_times
         .push_back(perf_stats.frame_time);
@@ -60,7 +60,7 @@ pub fn take_pending_screenshot(
         notifications.notifications.push(Notification {
             message: format!("Failed to create output directory: {}", e),
             notification_type: NotificationType::Error,
-            created_at: time.elapsed_seconds(),
+            created_at: time.elapsed_secs(),
             duration: 5.0,
         });
         return;
@@ -86,7 +86,7 @@ pub fn take_pending_screenshot(
                 notifications.notifications.push(Notification {
                     message: format!("Screenshot saved to: {}", filename),
                     notification_type: NotificationType::Success,
-                    created_at: time.elapsed_seconds(),
+                    created_at: time.elapsed_secs(),
                     duration: 4.0,
                 });
             }
@@ -95,7 +95,7 @@ pub fn take_pending_screenshot(
             notifications.notifications.push(Notification {
                 message: format!("Failed to save screenshot: {}", e),
                 notification_type: NotificationType::Error,
-                created_at: time.elapsed_seconds(),
+                created_at: time.elapsed_secs(),
                 duration: 5.0,
             });
         }
@@ -115,7 +115,7 @@ pub fn handle_video_recording(
     // Capture frame every frame for video recording
     // This will create a sequence of images that can be converted to video
     if video_state.frame_count == 0 {
-        video_state.start_time = time.elapsed_seconds_f64();
+        video_state.start_time = time.elapsed_secs_f64();
     }
 
     video_state.frame_count += 1;
@@ -133,7 +133,7 @@ pub fn toggle_video_recording(
         if video_state.is_recording {
             // Stop recording and start conversion
             video_state.is_recording = false;
-            let duration = time.elapsed_seconds_f64() - video_state.start_time;
+            let duration = time.elapsed_secs_f64() - video_state.start_time;
             let frame_count = video_state.frame_count;
             let output_dir = video_state.output_dir.clone();
 
@@ -143,7 +143,7 @@ pub fn toggle_video_recording(
                     frame_count
                 ),
                 notification_type: NotificationType::Info,
-                created_at: time.elapsed_seconds(),
+                created_at: time.elapsed_secs(),
                 duration: 3.0,
             });
 
@@ -174,7 +174,7 @@ pub fn toggle_video_recording(
                 notifications.notifications.push(Notification {
                     message: format!("Failed to create video directory: {}", e),
                     notification_type: NotificationType::Error,
-                    created_at: time.elapsed_seconds(),
+                    created_at: time.elapsed_secs(),
                     duration: 5.0,
                 });
                 video_state.is_recording = false;
@@ -184,7 +184,7 @@ pub fn toggle_video_recording(
             notifications.notifications.push(Notification {
                 message: "Video recording started. Press Ctrl+V to stop.".to_string(),
                 notification_type: NotificationType::Info,
-                created_at: time.elapsed_seconds(),
+                created_at: time.elapsed_secs(),
                 duration: 3.0,
             });
         }
