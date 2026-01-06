@@ -7,7 +7,7 @@ use crate::infrastructure::bevy_adapters::components::{
     NotificationQueue, NotificationType, PerformanceStats, PlanetComponent, ScreenshotState,
     Selectable, SelectedPlanet, UiPointerState, ZenMode,
 };
-use bevy::hierarchy::ChildBuilder;
+use bevy::ui::ChildBuilder;
 
 #[derive(Component)]
 pub(crate) struct UiCapture;
@@ -677,57 +677,56 @@ fn text_style(font_size: f32, color: Color) -> (TextFont, TextColor) {
     )
 }
 
-fn spawn_menu_button(parent: &mut ChildBuilder, label: &str, action: MenuAction, primary: bool) {
+fn spawn_menu_button(
+    parent: &mut ChildBuilder,
+    label: &str,
+    action: MenuAction,
+    primary: bool,
+) {
     let padding = if primary {
-        UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0)) // Reduced padding
+        UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0))
     } else {
-        UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(4.0)) // Reduced padding
+        UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(4.0))
     };
-    let radius = if primary { 16.0 } else { 12.0 }; // Smaller border radius
+    let radius = if primary { 16.0 } else { 12.0 };
 
     parent
         .spawn((
-            ButtonBundle {
-                style: Style {
-                    border: UiRect::all(Val::Px(1.0)),
-                    padding,
-                    ..default()
-                },
-                background_color: BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
-                border_color: BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
-                border_radius: BorderRadius::all(Val::Px(radius)),
+            Button,
+            Node {
+                border: UiRect::all(Val::Px(1.0)),
+                padding,
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
+            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
+            BorderRadius::all(Val::Px(radius)),
             MenuButton { action, primary },
             UiCapture,
         ))
         .with_children(|button| {
-            button.spawn(TextBundle::from_section(
-                label,
-                text_style(9.5, Color::srgb(0.75, 0.8, 0.85)), // Smaller, more subtle font
-            ));
+            let (font, color) = text_style(9.5, Color::srgb(0.75, 0.8, 0.85));
+            button.spawn((Text::new(label), font, color));
         });
 }
 
 fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
     parent
         .spawn((
-            ButtonBundle {
-                style: Style {
-                    border: UiRect::all(Val::Px(0.5)), // Thinner borders
-                    padding: UiRect::new(
-                        Val::Px(6.0), // Reduced padding
-                        Val::Px(6.0),
-                        Val::Px(2.0),
-                        Val::Px(2.0),
-                    ),
-                    ..default()
-                },
-                background_color: BackgroundColor(nav_button_color(false)),
-                border_color: BorderColor::all(nav_button_border_color(false)),
-                border_radius: BorderRadius::all(Val::Px(3.0)), // Smaller border radius
+            Button,
+            Node {
+                border: UiRect::all(Val::Px(0.5)),
+                padding: UiRect::new(
+                    Val::Px(6.0),
+                    Val::Px(6.0),
+                    Val::Px(2.0),
+                    Val::Px(2.0),
+                ),
                 ..default()
             },
+            BackgroundColor(nav_button_color(false)),
+            BorderColor::all(nav_button_border_color(false)),
+            BorderRadius::all(Val::Px(3.0)),
             NavButton {
                 name: name.to_string(),
                 group,
@@ -735,11 +734,11 @@ fn spawn_nav_button(parent: &mut ChildBuilder, name: &str, group: NavGroup) {
             UiCapture,
         ))
         .with_children(|button| {
+            let (font, color) = text_style(9.0, Color::srgb(0.75, 0.8, 0.85));
             button.spawn((
-                TextBundle::from_section(
-                    name,
-                    text_style(9.0, Color::srgb(0.75, 0.8, 0.85)), // Smaller, more subtle font
-                ),
+                Text::new(name),
+                font,
+                color,
                 NavButtonLabel,
             ));
         });
