@@ -59,6 +59,11 @@ impl NumaAllocator {
     }
 
     /// Prefetch memory for optimal cache performance
+    ///
+    /// # Safety
+    /// - `ptr` must be a valid pointer to allocated memory
+    /// - `size` must not exceed the allocated memory size
+    /// - The memory region must not be deallocated while prefetching
     pub unsafe fn prefetch_memory(&self, ptr: *const u8, size: usize) {
         unsafe {
             // Use SIMD prefetch instructions for extreme performance

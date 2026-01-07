@@ -283,9 +283,7 @@ fn spawn_celestial_body(
     };
 
     #[cfg(not(target_arch = "wasm32"))]
-    let emissive_texture = if planet.name == "Sun" {
-        albedo_handle.clone()
-    } else if has_albedo {
+    let emissive_texture = if planet.name == "Sun" || has_albedo {
         albedo_handle.clone()
     } else {
         emissive_handle.clone()
@@ -313,17 +311,18 @@ fn spawn_celestial_body(
         perceptual_roughness,
     );
     #[cfg(not(target_arch = "wasm32"))]
-    let material = create_planet_material(
-        albedo_handle.clone(),
-        None,
-        emissive_texture.clone(),
+    let material_config = PlanetMaterialConfig {
+        base_color_texture: Some(albedo_handle.clone()),
+        normal_map_texture: None,
+        emissive_texture: Some(emissive_texture.clone()),
         base_color,
         emissive,
-        planet.name == "Sun",
+        unlit: planet.name == "Sun",
         metallic,
         reflectance,
         perceptual_roughness,
-    );
+    };
+    let material = create_planet_material(material_config);
 
     let material_handle = materials.add(material);
 

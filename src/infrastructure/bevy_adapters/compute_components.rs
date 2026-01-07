@@ -70,6 +70,7 @@ pub struct ComputeBackend {
     pub vulkan_available: bool,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for ComputeBackend {
     fn default() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
