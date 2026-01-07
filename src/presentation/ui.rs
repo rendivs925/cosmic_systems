@@ -452,9 +452,9 @@ pub(crate) fn update_navbar(
     selected_planet: Res<SelectedPlanet>,
     solar_params: Res<SolarSystemParameters>,
     performance_stats: Res<PerformanceStats>,
-    screenshot_state: Res<ScreenshotState>,
+    _screenshot_state: Res<ScreenshotState>,
     video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
-    notifications: Res<NotificationQueue>,
+    _notifications: Res<NotificationQueue>,
     zen_mode: Res<ZenMode>,
     menu_state: Res<UiMenuState>,
     time: Res<Time>,
@@ -489,7 +489,7 @@ pub(crate) fn update_navbar(
     *last_update = current_time;
 
     let selected_name = selected_planet.name.as_deref();
-    let active_parent = selected_name.map(|name| {
+    let _active_parent = selected_name.map(|name| {
         if is_primary_body(name) {
             name
         } else {

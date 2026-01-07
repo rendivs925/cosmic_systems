@@ -162,11 +162,11 @@ pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemP
         // Moon orbiting a planet - convert astronomical distance to simulation units
         // orbital_distance_au represents actual AU distance from parent planet
         // Scale massively for clear separation while maintaining relative accuracy
-        return planet.orbital_distance_au * solar_params.scale_factor * MOON_ORBIT_SCALE;
+        planet.orbital_distance_au * solar_params.scale_factor * MOON_ORBIT_SCALE
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
-        return solar_params.au_to_units(elements.semi_major_axis_au);
+        solar_params.au_to_units(elements.semi_major_axis_au)
     } else {
-        return solar_params.au_to_units(planet.orbital_distance_au);
+        solar_params.au_to_units(planet.orbital_distance_au)
     }
 }
 
@@ -182,42 +182,42 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
     if planet.parent_entity.is_some() {
         // Moon - use real orbital elements if available
         if let Some(elements) = get_moon_orbital_elements(&planet.name) {
-            return OrbitShape {
+            OrbitShape {
                 semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au)
                     * MOON_ORBIT_SCALE,
                 eccentricity: elements.eccentricity,
                 inclination_rad: elements.inclination_rad,
                 long_asc_node_rad: elements.long_asc_node_rad,
                 arg_periapsis_rad: elements.arg_periapsis_rad,
-            };
+            }
         } else {
             // Fallback for moons without defined elements
-            return OrbitShape {
+            OrbitShape {
                 semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
                 eccentricity: 0.0,
                 inclination_rad: 0.0,
                 long_asc_node_rad: 0.0,
                 arg_periapsis_rad: 0.0,
-            };
+            }
         }
     } else if let Some(elements) = get_orbital_elements(&planet.name) {
         // Planet - use real orbital elements
-        return OrbitShape {
+        OrbitShape {
             semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au),
             eccentricity: elements.eccentricity,
             inclination_rad: elements.inclination_rad,
             long_asc_node_rad: elements.long_asc_node_rad,
             arg_periapsis_rad: elements.arg_periapsis_rad,
-        };
+        }
     } else {
         // Fallback for bodies without defined elements
-        return OrbitShape {
+        OrbitShape {
             semi_major_axis_units: calculate_orbit_radius_units(planet, solar_params),
             eccentricity: 0.0,
             inclination_rad: 0.0,
             long_asc_node_rad: 0.0,
             arg_periapsis_rad: 0.0,
-        };
+        }
     }
 }
 

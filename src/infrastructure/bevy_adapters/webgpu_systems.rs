@@ -179,7 +179,6 @@ fn init_vulkan_compute() -> Result<
 }
 
 use super::components::*;
-use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;

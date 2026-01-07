@@ -4,12 +4,8 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
-use bevy_asset::RenderAssetUsages;
 
 use bevy::prelude::*;
-// TODO: Fix NotShadowCaster and NotShadowReceiver imports
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
 #[cfg(target_arch = "wasm32")]
 use std::collections::VecDeque;
@@ -386,7 +382,7 @@ fn spawn_celestial_body(
                 orbit_emissive(Color::srgb(0.6, 0.7, 0.8), 0.08),
                 0.08, // Medium visibility for moons
             );
-            let moon_material_handle = materials.add(moon_material);
+            let _moon_material_handle = materials.add(moon_material);
 
             #[cfg(target_arch = "wasm32")]
             let orbit_entity = commands
@@ -668,107 +664,7 @@ fn orbit_hash(name: &str, seed: u32) -> f32 {
     (hash % 10_000) as f32 / 10_000.0
 }
 
-// Create minimal starfield for performance (disabled for optimal performance)
-fn create_starfield(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    solar_params: &SolarSystemParameters,
-) {
-    // Minimal starfield for subtle cosmic ambiance
-    let mut rng = StdRng::seed_from_u64(1337);
-    let star_count = 40000; // Balanced density for cosmic ambiance without distraction
-    let radius = solar_params.au_to_units(800.0); // push far beyond any camera movement range
 
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(star_count * 4);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(star_count * 4);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(star_count * 4);
-    let mut indices: Vec<u32> = Vec::with_capacity(star_count * 6);
-
-    let quad = [
-        (Vec2::new(-1.0, -1.0), Vec2::new(0.0, 0.0)),
-        (Vec2::new(1.0, -1.0), Vec2::new(1.0, 0.0)),
-        (Vec2::new(1.0, 1.0), Vec2::new(1.0, 1.0)),
-        (Vec2::new(-1.0, 1.0), Vec2::new(0.0, 1.0)),
-    ];
-
-    for i in 0..star_count {
-        // Uniform point on sphere - balanced in all directions
-        // Remove galactic plane bias for even star distribution
-        let z = rng.gen_range(-1.0..1.0);
-        let theta = rng.gen_range(0.0..std::f32::consts::TAU);
-        let r = (1.0_f32 - z * z).sqrt();
-        let dir = Vec3::new(r * theta.cos(), z, r * theta.sin());
-        let center = dir * radius;
-
-        let size = rng.gen_range(400.0..1000.0); // Balanced size for visibility
-        let color_tint = rng.gen_range(0.4..0.8); // Moderate brightness for ambiance
-        let color = [
-            0.5 * color_tint,  // Subtle red channel
-            0.6 * color_tint,  // Moderate green channel
-            0.7 * color_tint,  // Brighter blue for cool cosmic feel
-            1.0,
-        ];
-
-        // Build a camera-independent quad facing outward along dir
-        let up_hint = if dir.dot(Vec3::Y).abs() > 0.9 {
-            Vec3::X
-        } else {
-            Vec3::Y
-        };
-        let right = dir.cross(up_hint).normalize_or_zero();
-        let up_vec = right.cross(dir).normalize_or_zero();
-
-        let base_index = (i * 4) as u32;
-        for (offset, uv) in quad {
-            let world_pos = center + right * offset.x * size + up_vec * offset.y * size;
-            positions.push(world_pos.into());
-            normals.push(dir.into());
-            uvs.push(uv.into());
-            colors.push(color);
-        }
-
-        indices.extend_from_slice(&[
-            base_index,
-            base_index + 1,
-            base_index + 2,
-            base_index,
-            base_index + 2,
-            base_index + 3,
-        ]);
-    }
-
-    let mut mesh = Mesh::new(bevy_mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(bevy_mesh::Indices::U32(indices));
-
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgba(1.0, 1.0, 1.0, 1.0),
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        emissive: LinearRgba::new(1.0, 0.98, 0.9, 1.0),
-        // Ensure stars render behind everything else
-        depth_bias: -10.0,
-        ..default()
-    });
-
-    // Position stars relative to camera to ensure they're always visible
-    // This creates a star dome that follows the camera
-    commands.spawn((
-        Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(material),
-        Transform::IDENTITY,
-        Visibility::Visible, // Explicit visibility control
-    ))
-    // .insert(NotShadowCaster)
-    // .insert(NotShadowReceiver)
-    .insert(Starfield) // Custom component to identify starfield
-    .insert(Name::new("Starfield"));
-}
 
 struct PlanetTextureSet {
     albedo: Option<&'static str>,

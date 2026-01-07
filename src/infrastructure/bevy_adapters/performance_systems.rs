@@ -48,7 +48,7 @@ pub fn take_pending_screenshot(
 
     screenshot_state.pending = false;
 
-    let window_entity = main_window.single();
+    let _window_entity = main_window.single();
 
     // Determine output directory based on recording state
     let (output_dir, filename_prefix) =
@@ -148,7 +148,7 @@ pub fn toggle_video_recording(
             });
 
             // Spawn a task to convert frames to MP4
-            let notifications_clone = notifications.notifications.clone();
+            let _notifications_clone = notifications.notifications.clone();
             std::thread::spawn(move || {
                 convert_frames_to_mp4(&output_dir, frame_count, duration);
             });
@@ -458,18 +458,18 @@ fn adjust_quality_based_on_performance(
 // Apply quality settings based on the quality level
 fn apply_quality_settings(
     quality_level: QualityLevel,
-    solar_params: &mut SolarSystemParameters,
-    current_fps: f32,
+    _solar_params: &mut SolarSystemParameters,
+    _current_fps: f32,
 ) {
     // Quality adaptation now preserves user-set time scale
     // Only adjust other quality parameters, not time scale
     // Quality change notifications removed to reduce console noise
-    let _ = quality_level; // Avoid unused variable warning
+    let _ = quality_level;
 }
 
 /// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
 /// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
-pub fn log_performance_stats(perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
+pub fn log_performance_stats(_perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
     // Ultra-minimal logging - silent operation
     // Performance monitoring completely silent for elegant experience
 }
