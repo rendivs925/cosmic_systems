@@ -48,14 +48,11 @@ pub fn handle_planet_selection(
     }
 
     // Deselect with Escape (idempotent - only deselect if something is selected)
-    if keyboard.just_pressed(KeyCode::Escape) {
-        if selected_planet.entity.is_some() {
-            new_selected_entity = None;
-            new_selected_name = None;
-            selection_changed = true;
-            println!("Deselected planet");
-        }
-        // If nothing is selected, Escape does nothing (idempotent)
+    if keyboard.just_pressed(KeyCode::Escape) && selected_planet.entity.is_some() {
+        new_selected_entity = None;
+        new_selected_name = None;
+        selection_changed = true;
+        println!("Deselected planet");
     }
 
     // Update selection resource
@@ -120,7 +117,7 @@ pub fn handle_mouse_planet_selection(
         let oc = ray.origin - center;
         let b = 2.0 * oc.dot(*ray.direction);
         let c = oc.length_squared() - radius * radius;
-        let discriminant = (b * b - 4.0 * c) as f32;
+        let discriminant = b * b - 4.0 * c;
         if discriminant < 0.0 {
             continue;
         }
@@ -296,14 +293,14 @@ pub fn handle_solar_system_input(
                         physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
 
                     // Position camera to frame the planet nicely
-                    let distance = (radius * 10.0).max(5000.0).min(500000.0);
+                    let distance = (radius * 10.0).clamp(5000.0, 500000.0);
                     let offset = Vec3::new(distance * 0.7, distance * 0.5, distance * 0.7);
                     transform.translation = planet_pos + offset;
                     transform.look_at(planet_pos, Vec3::Y);
                     controller.velocity = Vec3::ZERO;
 
                     // Adjust speed based on planet size
-                    controller.speed = (radius * 2.0).max(50.0).min(50000.0);
+                    controller.speed = (radius * 2.0).clamp(50.0, 50000.0);
 
                     println!("🎯 Focused on {}", planet_comp.domain_planet.name);
                 }

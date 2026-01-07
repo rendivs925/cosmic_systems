@@ -142,7 +142,7 @@ impl AsmKeplerSolver {
     /// Extreme performance implementation using algorithmic optimizations
     fn solve_kepler_extreme_impl(&self, mut mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
         // Range reduction for mean anomaly to improve convergence
-        mean_anomaly = mean_anomaly % (2.0 * std::f64::consts::PI);
+        mean_anomaly %= 2.0 * std::f64::consts::PI;
         if mean_anomaly < 0.0 {
             mean_anomaly += 2.0 * std::f64::consts::PI;
         }

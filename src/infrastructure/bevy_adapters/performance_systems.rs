@@ -195,10 +195,10 @@ pub fn toggle_video_recording(
 // Function to convert frame sequence to MP4 using ffmpeg
 fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
     // Check if ffmpeg is available
-    if !std::process::Command::new("ffmpeg")
+    if std::process::Command::new("ffmpeg")
         .arg("-version")
         .output()
-        .is_ok()
+        .is_err()
     {
         eprintln!("ffmpeg not found. Please install ffmpeg to enable automatic MP4 conversion.");
         eprintln!("Manual conversion: ffmpeg -framerate 60 -i {}/frame_%06d.png -c:v libx264 {}/output.mp4", output_dir, output_dir);
@@ -245,18 +245,16 @@ fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
 
             // Clean up PNG frames to save disk space
             if let Ok(entries) = std::fs::read_dir(output_dir) {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        let path = entry.path();
-                        if let Some(extension) = path.extension() {
-                            if extension == "png"
-                                && path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .map_or(false, |n| n.starts_with("frame_"))
-                            {
-                                let _ = std::fs::remove_file(&path); // Ignore errors
-                            }
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(extension) = path.extension() {
+                        if extension == "png"
+                            && path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .is_some_and(|n| n.starts_with("frame_"))
+                        {
+                            let _ = std::fs::remove_file(&path); // Ignore errors
                         }
                     }
                 }

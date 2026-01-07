@@ -18,7 +18,7 @@ pub(crate) fn update_orbit_visuals(
     #[cfg(not(target_arch = "wasm32"))]
     let update_stride = 10; // Desktop can handle more frequent updates
 
-    if frame_number % update_stride != 0 {
+    if !frame_number.is_multiple_of(update_stride) {
         return;
     }
 
@@ -136,7 +136,7 @@ pub fn update_planet_reflections(
     #[cfg(not(target_arch = "wasm32"))]
     let update_stride = 10; // Sophisticated pacing for desktop
 
-    if frame_number % update_stride != 0 {
+    if !frame_number.is_multiple_of(update_stride) {
         return;
     }
 

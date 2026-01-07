@@ -91,7 +91,7 @@ pub(crate) struct NotificationUi;
 
 pub(crate) fn setup_ui(mut commands: Commands) {
     commands.spawn((
-        Camera2d::default(),
+        Camera2d,
         Camera {
             order: 10,
             clear_color: ClearColorConfig::None,

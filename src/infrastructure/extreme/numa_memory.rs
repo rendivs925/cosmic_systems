@@ -53,7 +53,7 @@ impl NumaAllocator {
     }
 
     /// Prefetch memory for optimal cache performance
-    pub fn prefetch_memory(&self, ptr: *const u8, size: usize) {
+    pub unsafe fn prefetch_memory(&self, ptr: *const u8, size: usize) {
         unsafe {
             // Use SIMD prefetch instructions for extreme performance
             #[cfg(target_arch = "x86_64")]
@@ -192,7 +192,7 @@ impl MemoryBandwidthOptimizer {
 
         // Ensure alignment for SIMD operations
         let data_ptr = data.as_ptr() as usize;
-        if data_ptr % self.cache_line_size != 0 {
+        if !data_ptr.is_multiple_of(self.cache_line_size) {
             // warn!("Data not cache-line aligned: {:#x}", data_ptr);
         }
     }
@@ -229,9 +229,7 @@ impl MemoryBandwidthOptimizer {
             }
 
             // Copy remaining elements
-            for j in i..len {
-                dst[j] = src[j];
-            }
+            dst[i..len].copy_from_slice(&src[i..len]);
         }
 
         #[cfg(not(target_arch = "x86_64"))]

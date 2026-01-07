@@ -201,7 +201,7 @@ impl VulkanKeplerSolver {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            let workgroups = ((inputs.len() as u32) + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let workgroups = (inputs.len() as u32).div_ceil(WORKGROUP_SIZE);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
         encoder.copy_buffer_to_buffer(
@@ -364,7 +364,7 @@ fn build_planet_input(
 
 #[cfg(feature = "ash")]
 fn mean_motion_rad_per_day(semi_major_axis_au: f32) -> f32 {
-    const GAUSS_K: f32 = 0.01720209895;
+    const GAUSS_K: f32 = 0.0172021;
     GAUSS_K / semi_major_axis_au.powf(1.5)
 }
 
