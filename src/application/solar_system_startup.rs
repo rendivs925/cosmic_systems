@@ -312,9 +312,9 @@ fn spawn_celestial_body(
     );
     #[cfg(not(target_arch = "wasm32"))]
     let material_config = PlanetMaterialConfig {
-        base_color_texture: Some(albedo_handle.clone()),
+        base_color_texture: albedo_handle.clone(),
         normal_map_texture: None,
-        emissive_texture: Some(emissive_texture.clone()),
+        emissive_texture: emissive_texture.clone(),
         base_color,
         emissive,
         unlit: planet.name == "Sun",

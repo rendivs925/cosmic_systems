@@ -1,7 +1,52 @@
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
 
-pub fn create_planet_material(
+#[derive(Debug, Clone)]
+pub struct PlanetMaterialConfig {
+    pub base_color_texture: Option<Handle<Image>>,
+    pub normal_map_texture: Option<Handle<Image>>,
+    pub emissive_texture: Option<Handle<Image>>,
+    pub base_color: Color,
+    pub emissive: LinearRgba,
+    pub unlit: bool,
+    pub metallic: f32,
+    pub reflectance: f32,
+    pub perceptual_roughness: f32,
+}
+
+impl Default for PlanetMaterialConfig {
+    fn default() -> Self {
+        Self {
+            base_color_texture: None,
+            normal_map_texture: None,
+            emissive_texture: None,
+            base_color: Color::WHITE,
+            emissive: LinearRgba::BLACK,
+            unlit: false,
+            metallic: 0.0,
+            reflectance: 0.5,
+            perceptual_roughness: 0.5,
+        }
+    }
+}
+
+pub fn create_planet_material(config: PlanetMaterialConfig) -> StandardMaterial {
+    StandardMaterial {
+        base_color_texture: config.base_color_texture,
+        normal_map_texture: config.normal_map_texture,
+        emissive_texture: config.emissive_texture,
+        base_color: config.base_color,
+        emissive: config.emissive,
+        unlit: config.unlit,
+        metallic: config.metallic,
+        reflectance: config.reflectance,
+        perceptual_roughness: config.perceptual_roughness,
+        ..default()
+    }
+}
+
+// Keep the old function signature for backward compatibility
+pub fn create_planet_material_legacy(
     base_color_texture: Option<Handle<Image>>,
     normal_map_texture: Option<Handle<Image>>,
     emissive_texture: Option<Handle<Image>>,
@@ -12,7 +57,7 @@ pub fn create_planet_material(
     reflectance: f32,
     perceptual_roughness: f32,
 ) -> StandardMaterial {
-    StandardMaterial {
+    create_planet_material(PlanetMaterialConfig {
         base_color_texture,
         normal_map_texture,
         emissive_texture,
@@ -22,8 +67,7 @@ pub fn create_planet_material(
         metallic,
         reflectance,
         perceptual_roughness,
-        ..default()
-    }
+    })
 }
 
 pub fn create_orbit_material(
