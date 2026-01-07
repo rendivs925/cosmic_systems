@@ -1,7 +1,6 @@
 /// Extreme performance Kepler solver implementations
 /// High-performance CPU acceleration using advanced numerical methods
 /// This demonstrates assembly-level optimization concepts through algorithmic improvements
-
 #[cfg(target_arch = "x86_64")]
 use std::arch::asm;
 

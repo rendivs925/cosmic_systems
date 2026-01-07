@@ -95,10 +95,15 @@ impl Default for ComputeBackend {
 impl ComputeBackend {
     /// Initialize compute backends with hardware detection
     pub fn new() -> Self {
-        let mut backend = Self::default();
         // Vulkan initialization would go here - for now not available
-        backend.vulkan_available = false;
-        backend
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            vulkan_solver: None,
+            #[cfg(target_arch = "wasm32")]
+            vulkan_solver: None,
+            fallback_solver: crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
+            vulkan_available: false,
+        }
     }
 
     pub fn solve_kepler(&mut self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {

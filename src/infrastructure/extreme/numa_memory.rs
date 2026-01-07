@@ -15,6 +15,12 @@ pub struct NumaAllocator {
 // Note: GlobalAlloc implementation removed for compatibility
 // Custom allocators can be implemented when stable allocator_api is available
 
+impl Default for NumaAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NumaAllocator {
     pub const fn new() -> Self {
         Self {
@@ -76,6 +82,12 @@ pub struct CpuAffinityManager {
     cpu_count: usize,
     numa_nodes: usize,
     thread_mappings: Vec<usize>,
+}
+
+impl Default for CpuAffinityManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CpuAffinityManager {
@@ -172,6 +184,12 @@ impl CpuAffinityManager {
 pub struct MemoryBandwidthOptimizer {
     cache_line_size: usize,
     page_size: usize,
+}
+
+impl Default for MemoryBandwidthOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryBandwidthOptimizer {
