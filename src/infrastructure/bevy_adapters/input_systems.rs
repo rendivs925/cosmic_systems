@@ -284,25 +284,36 @@ pub fn handle_solar_system_input(
             }
         }
 
-        // F key: Focus on selected planet
+        // F key: Focus on selected planet (or terrain view for Earth with Ctrl)
         if keyboard.just_pressed(KeyCode::KeyF) {
             if let Some(entity) = selected_planet.entity {
                 if let Ok((planet_comp, planet_transform)) = planet_query.get(entity) {
-                    let planet_pos = planet_transform.translation();
-                    let radius =
-                        physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
+                    // Check if Earth is selected and Ctrl is pressed - switch to terrain view
+                    if planet_comp.domain_planet.name == "Earth" && keyboard.pressed(KeyCode::ControlLeft) {
+                        controller.mode = CameraMode::TerrainView;
+                        // Position camera at terrain level
+                        transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
+                        transform.look_at(Vec3::ZERO, Vec3::Y);
+                        controller.velocity = Vec3::ZERO;
+                        println!("🌍 Switched to terrain view for Earth (Ctrl+F)");
+                    } else {
+                        // Normal focus on planet
+                        let planet_pos = planet_transform.translation();
+                        let radius =
+                            physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
 
-                    // Position camera to frame the planet nicely
-                    let distance = (radius * 10.0).clamp(5000.0, 500000.0);
-                    let offset = Vec3::new(distance * 0.7, distance * 0.5, distance * 0.7);
-                    transform.translation = planet_pos + offset;
-                    transform.look_at(planet_pos, Vec3::Y);
-                    controller.velocity = Vec3::ZERO;
+                        // Position camera to frame the planet nicely
+                        let distance = (radius * 10.0).clamp(5000.0, 500000.0);
+                        let offset = Vec3::new(distance * 0.7, distance * 0.5, distance * 0.7);
+                        transform.translation = planet_pos + offset;
+                        transform.look_at(planet_pos, Vec3::Y);
+                        controller.velocity = Vec3::ZERO;
 
-                    // Adjust speed based on planet size
-                    controller.speed = (radius * 2.0).clamp(50.0, 50000.0);
+                        // Adjust speed based on planet size
+                        controller.speed = (radius * 2.0).clamp(50.0, 50000.0);
 
-                    println!("🎯 Focused on {}", planet_comp.domain_planet.name);
+                        println!("🎯 Focused on {}", planet_comp.domain_planet.name);
+                    }
                 }
             } else {
                 println!("❌ No planet selected. Click on a planet first!");
