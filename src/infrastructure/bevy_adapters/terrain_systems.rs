@@ -18,16 +18,37 @@ pub fn update_terrain_visibility(
 
     let camera_pos = camera_transform.translation;
 
-    for (mut visibility, terrain) in terrain_query.iter_mut() {
-        // Show terrain only when in TerrainView mode and Earth is selected
-        let should_show = camera_controller.mode == CameraMode::TerrainView
-            && selected_planet.name.as_ref() == Some(&terrain.planet_name);
+    println!("👁️ Terrain visibility check - Camera mode: {:?}, Selected planet: {:?}, Camera pos: {:?}",
+             camera_controller.mode, selected_planet.name, camera_pos);
 
-        *visibility = if should_show {
+    let mut terrain_count = 0;
+    for (mut visibility, terrain) in terrain_query.iter_mut() {
+        // Show terrain when in TerrainView mode AND Earth is selected
+        // OR when Earth is selected (temporary for testing)
+        let should_show = (camera_controller.mode == CameraMode::TerrainView
+            && selected_planet.name.as_ref() == Some(&terrain.planet_name))
+            || (selected_planet.name.as_ref() == Some(&terrain.planet_name) && camera_controller.mode == CameraMode::FreeFlight);
+
+        let new_visibility = if should_show {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
+
+        if *visibility != new_visibility {
+            println!("🌍 Terrain visibility change for {}: {:?} -> {:?} (mode: {:?}, selected: {:?})",
+                     terrain.planet_name, *visibility, new_visibility,
+                     camera_controller.mode, selected_planet.name);
+        }
+
+        *visibility = new_visibility;
+        terrain_count += 1;
+    }
+
+    if terrain_count == 0 {
+        println!("⚠️ No terrain entities found in the world!");
+    } else {
+        println!("📊 Found {} terrain entities", terrain_count);
     }
 }
 
@@ -39,9 +60,14 @@ pub fn generate_terrain_mesh(
     terrain_query: Query<(Entity, &TerrainComponent), Added<TerrainComponent>>,
     images: Res<Assets<Image>>,
 ) {
+    println!("🏗️ Terrain mesh generation system called");
+
     for (entity, terrain) in terrain_query.iter() {
+        println!("🔨 Generating mesh for terrain entity: {:?}", entity);
+        println!("   Planet: {}, Size: {}km, Resolution: {}", terrain.planet_name, terrain.size_km, terrain.resolution);
+
         // Create terrain mesh from heightmap
-        let mesh = create_terrain_mesh(terrain, &images);
+        let mesh = create_terrain_mesh(&terrain, &images);
         let mesh_handle = meshes.add(mesh);
 
         // Create terrain material with normal mapping
@@ -54,11 +80,15 @@ pub fn generate_terrain_mesh(
         };
         let material_handle = materials.add(material);
 
+        println!("✅ Created mesh {:?} and material {:?} for terrain", mesh_handle, material_handle);
+
         // Update the entity with mesh and material
         commands.entity(entity).insert((
             Mesh3d(mesh_handle),
             MeshMaterial3d(material_handle),
         ));
+
+        println!("🎯 Attached mesh and material to terrain entity");
     }
 }
 

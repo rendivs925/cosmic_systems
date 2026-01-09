@@ -170,7 +170,6 @@ pub fn setup_space(
     }
 
     // Spawn terrain patches
-    #[cfg(not(target_arch = "wasm32"))]
     spawn_terrain_patches(&mut commands, &asset_server, &mut meshes, &mut materials, &mut images, &entity_map);
 
     // Spawn rockets
@@ -902,9 +901,11 @@ pub fn spawn_terrain_patches(
 
     // Create Kennedy Space Center terrain for Earth
     if let Some(earth_entity) = entity_map.get("Earth") {
+        println!("🌍 Creating Kennedy Space Center terrain for Earth");
         let site_type = LaunchSiteType::KennedySpaceCenter;
 
         // Generate heightmap and textures
+        println!("🏔️ Generating KSC heightmap and textures...");
         let heightmap = generate_launch_site_heightmap(site_type, 10.0, 256);
         let (diffuse_texture, normal_texture) = generate_terrain_textures(site_type, 256);
 
@@ -912,6 +913,10 @@ pub fn spawn_terrain_patches(
         let diffuse_handle = images.add(diffuse_texture);
         let normal_handle = images.add(normal_texture);
 
+        println!("✅ Created KSC terrain assets: heightmap={:?}, diffuse={:?}, normal={:?}",
+                heightmap_handle, diffuse_handle, normal_handle);
+
+        println!("🚀 Spawning KSC terrain entity...");
         commands.spawn((
             TerrainComponent {
                 planet_entity: *earth_entity,
@@ -932,6 +937,7 @@ pub fn spawn_terrain_patches(
                 selected: false,
             },
         ));
+        println!("✅ KSC terrain entity spawned successfully");
     }
 
     // Create RTLS landing pad (adjacent to KSC)
