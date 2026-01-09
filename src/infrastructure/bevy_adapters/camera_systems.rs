@@ -297,16 +297,34 @@ pub fn auto_inspect_selected_planet(
         Err(_) => return,
     };
 
-    // Switch to terrain view for Earth
+    // Handle Earth terrain view with double-click detection
     if planet_comp.domain_planet.name == "Earth" {
-        if controller.mode != CameraMode::TerrainView {
-            controller.mode = CameraMode::TerrainView;
-            // Position camera at terrain level
-            camera_transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
-            camera_transform.look_at(Vec3::ZERO, Vec3::Y);
+        // Track double-clicks for Earth (within 0.3 seconds)
+        let current_time = time.elapsed_secs();
+        if let Some(last_earth_click) = state.last_earth_click {
+            if current_time - last_earth_click < 0.3 {
+                // Double-click detected - switch to terrain view
+                if controller.mode != CameraMode::TerrainView {
+                    controller.mode = CameraMode::TerrainView;
+                    // Position camera at terrain level
+                    camera_transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
+                    camera_transform.look_at(Vec3::ZERO, Vec3::Y);
+                }
+                state.last_earth_click = None; // Reset to prevent triple-clicks
+                return; // Skip orbital inspection for terrain view
+            }
         }
-        return; // Skip the normal orbital inspection for Earth
+        // Single click - record time and continue with orbital inspection
+        state.last_earth_click = Some(current_time);
+
+        // If currently in terrain view, switch back to orbital view on single click
+        if controller.mode == CameraMode::TerrainView {
+            controller.mode = CameraMode::FreeFlight;
+        }
     } else {
+        // Reset Earth double-click timer for non-Earth planets
+        state.last_earth_click = None;
+
         // Use orbital inspection for other planets
         if controller.mode == CameraMode::TerrainView {
             controller.mode = CameraMode::FreeFlight;
@@ -501,6 +519,7 @@ pub struct AutoInspectState {
     smooth_up: Vec3,
     smooth_focus: Vec3,
     smooth_offset: Vec3,
+    last_earth_click: Option<f32>, // Timestamp of last Earth click for double-click detection
 }
 
 // System to keep starfield positioned relative to camera for constant visibility
