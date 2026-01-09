@@ -282,32 +282,64 @@ pub fn auto_inspect_selected_planet(
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut state: Local<AutoInspectState>,
 ) {
+    println!("=== AUTO INSPECT START ===");
+    println!("Selected planet: {:?}", selected_planet.name);
+    println!("Earth terrain flag: {}", input_state.earth_terrain_active);
+
     let selected_entity = match selected_planet.entity {
-        Some(entity) => entity,
-        None => return,
+        Some(entity) => {
+            println!("Selected entity: {:?}", entity);
+            entity
+        },
+        None => {
+            println!("No planet selected, returning");
+            return;
+        },
     };
 
     let (planet_comp, planet_transform) = match planet_query.get(selected_entity) {
-        Ok(data) => data,
-        Err(_) => return,
+        Ok(data) => {
+            println!("Planet found: {}", data.0.domain_planet.name);
+            data
+        },
+        Err(_) => {
+            println!("Planet entity not found in query!");
+            return;
+        },
     };
 
     let (mut controller, mut camera_transform, projection) = match camera_query.single_mut() {
-        Ok(data) => data,
-        Err(_) => return,
+        Ok(data) => {
+            println!("Camera mode before: {:?}", data.0.mode);
+            data
+        },
+        Err(_) => {
+            println!("Camera not found!");
+            return;
+        },
     };
 
     // All planets use orbital inspection by default
     // All planets (including Earth) use orbital view by default
     // Terrain view is only activated via Ctrl+F for Earth specifically
+    println!("Planet: {}, Current mode: {:?}", planet_comp.domain_planet.name, controller.mode);
     if controller.mode == CameraMode::TerrainView && planet_comp.domain_planet.name != "Earth" {
         // Switch back to orbital view if terrain view is active but we're not on Earth
+        println!("Non-Earth planet selected while in TerrainView - switching to FreeFlight");
         controller.mode = CameraMode::FreeFlight;
     }
-    // When Earth is selected, always start in orbital view (like other planets)
-    // Terrain view is only activated via explicit Ctrl+F press
+    // Earth selection logic with terrain view persistence
     if planet_comp.domain_planet.name == "Earth" {
-        controller.mode = CameraMode::FreeFlight;
+        println!("EARTH SELECTED - terrain_active: {}", input_state.earth_terrain_active);
+        if input_state.earth_terrain_active {
+            // Terrain view was activated, stay in terrain view
+            println!("Keeping Earth in TerrainView mode");
+            controller.mode = CameraMode::TerrainView;
+        } else {
+            // Default to orbital view like other planets
+            println!("Setting Earth to FreeFlight mode (default)");
+            controller.mode = CameraMode::FreeFlight;
+        }
     }
 
     // if controller.mode != CameraMode::FreeFlight {

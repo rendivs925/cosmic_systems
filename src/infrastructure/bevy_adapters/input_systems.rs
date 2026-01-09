@@ -200,7 +200,11 @@ pub fn handle_solar_system_input(
     mut screenshot_state: ResMut<ScreenshotState>,
     mut notifications: ResMut<NotificationQueue>,
     mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
+    mut camera_input_state: ResMut<CameraInputState>,
 ) {
+    println!("=== INPUT SYSTEM START ===");
+    println!("Selected planet: {:?}", selected_planet.name);
+    println!("Earth terrain flag: {}", camera_input_state.earth_terrain_active);
     // Screenshot feature - F12 or P key
     // Request screenshot, will be captured next frame after notifications hide
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
@@ -286,16 +290,19 @@ pub fn handle_solar_system_input(
 
         // F key: Focus on selected planet (or terrain view for Earth with Ctrl)
         if keyboard.just_pressed(KeyCode::KeyF) {
+            println!("F key pressed!");
             if let Some(entity) = selected_planet.entity {
                 if let Ok((planet_comp, planet_transform)) = planet_query.get(entity) {
                     // Check if Earth is selected and Ctrl is pressed - switch to terrain view
                     if planet_comp.domain_planet.name == "Earth" && keyboard.pressed(KeyCode::ControlLeft) {
+                        println!("🎯 Ctrl+F detected on Earth - setting terrain flag and mode");
+                        camera_input_state.earth_terrain_active = true;
                         controller.mode = CameraMode::TerrainView;
                         // Position camera at terrain level
                         transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
                         transform.look_at(Vec3::ZERO, Vec3::Y);
                         controller.velocity = Vec3::ZERO;
-                        println!("🌍 Switched to terrain view for Earth (Ctrl+F)");
+                        println!("🌍 Terrain view activated for Earth (flag: {})", camera_input_state.earth_terrain_active);
                     } else {
                         // Normal focus on planet
                         let planet_pos = planet_transform.translation();
