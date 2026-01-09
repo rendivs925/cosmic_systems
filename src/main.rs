@@ -130,6 +130,14 @@ fn main() {
         );
         app.add_systems(
             Update,
+            crate::infrastructure::bevy_adapters::terrain_systems::initialize_terrain_lod,
+        );
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_lod,
+        );
+        app.add_systems(
+            Update,
             crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics,
         );
         app.add_systems(

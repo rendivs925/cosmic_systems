@@ -2,6 +2,15 @@ use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::Planet;
 use bevy::prelude::*;
 
+/// Types of launch sites with different terrain characteristics
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub enum LaunchSiteType {
+    KennedySpaceCenter,
+    RtlsLandingPad,
+    DroneShip,
+    LunarLanding,
+}
+
 // Component for gyroscope entities
 #[derive(Component)]
 pub struct GyroscopeComponent {
@@ -90,12 +99,14 @@ pub struct Selectable {
 pub struct TerrainComponent {
     pub planet_entity: Entity,
     pub planet_name: String,
-    pub position_offset: Vec3,  // Offset from planet center
-    pub scale: f32,             // Terrain scale factor
+    pub position_offset: Vec3,     // Offset from planet center
+    pub scale: f32,                // Terrain scale factor
     pub heightmap: Handle<Image>,
     pub surface_texture: Handle<Image>,
-    pub size_km: f32,           // Terrain patch size in km
-    pub resolution: u32,        // Heightmap resolution
+    pub normal_texture: Handle<Image>, // Normal map for surface details
+    pub size_km: f32,              // Terrain patch size in km
+    pub resolution: u32,           // Heightmap resolution
+    pub launch_site_type: LaunchSiteType, // Type of launch site for terrain generation
 }
 
 // Component for rocket entities
