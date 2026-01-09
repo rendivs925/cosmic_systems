@@ -14,4 +14,6 @@ pub mod ui_components;
 pub mod performance_components;
 pub mod quality_components;
 pub mod compute_components;
+pub mod terrain_systems;
+pub mod rocket_systems;
 pub mod simd_kepler;

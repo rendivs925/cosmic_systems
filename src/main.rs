@@ -110,8 +110,12 @@ fn main() {
          app.add_systems(Update, toggle_video_recording);
          app.add_systems(Update, handle_video_recording);
          app.add_systems(Update, update_camera_controller);
-         app.add_systems(Update, apply_camera_transform);
-         app.add_systems(Update, auto_inspect_selected_planet);
+          app.add_systems(Update, apply_camera_transform);
+          app.add_systems(Update, auto_inspect_selected_planet);
+          app.add_systems(Update, crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_visibility);
+          app.add_systems(Update, crate::infrastructure::bevy_adapters::terrain_systems::generate_terrain_mesh);
+          app.add_systems(Update, crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics);
+          app.add_systems(Update, crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_controls);
          // Starfield update disabled for now
          // app.add_systems(Update, update_starfield_position);
     }

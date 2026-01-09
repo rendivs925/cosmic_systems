@@ -258,6 +258,16 @@ pub fn apply_camera_transform(
                 // Approach a planet (placeholder)
                 // Would smoothly interpolate toward target
             }
+            CameraMode::TerrainView => {
+                // Ground-level terrain exploration
+                // Use free flight controls but constrain to terrain surface
+                let dt = time.delta_secs();
+                transform.translation += controller.velocity * dt;
+                // Keep camera above terrain (simplified - would need terrain height sampling)
+                if transform.translation.y < 5.0 {
+                    transform.translation.y = 5.0;
+                }
+            }
         }
     }
 }
@@ -268,7 +278,7 @@ pub fn auto_inspect_selected_planet(
     solar_params: Res<SolarSystemParameters>,
     selected_planet: Res<SelectedPlanet>,
     mut input_state: ResMut<CameraInputState>,
-    mut camera_query: Query<(&CameraController, &mut Transform, &Projection)>,
+    mut camera_query: Query<(&mut CameraController, &mut Transform, &Projection)>,
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut state: Local<AutoInspectState>,
 ) {
@@ -282,10 +292,26 @@ pub fn auto_inspect_selected_planet(
         Err(_) => return,
     };
 
-    let (_controller, mut camera_transform, projection) = match camera_query.single_mut() {
+    let (mut controller, mut camera_transform, projection) = match camera_query.single_mut() {
         Ok(data) => data,
         Err(_) => return,
     };
+
+    // Switch to terrain view for Earth
+    if planet_comp.domain_planet.name == "Earth" {
+        if controller.mode != CameraMode::TerrainView {
+            controller.mode = CameraMode::TerrainView;
+            // Position camera at terrain level
+            camera_transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
+            camera_transform.look_at(Vec3::ZERO, Vec3::Y);
+        }
+        return; // Skip the normal orbital inspection for Earth
+    } else {
+        // Use orbital inspection for other planets
+        if controller.mode == CameraMode::TerrainView {
+            controller.mode = CameraMode::FreeFlight;
+        }
+    }
 
     // if controller.mode != CameraMode::FreeFlight {
     //     return;

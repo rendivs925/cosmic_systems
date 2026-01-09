@@ -167,6 +167,14 @@ pub fn setup_space(
             &shared_orbit_handle,
         );
     }
+
+    // Spawn terrain patches
+    #[cfg(not(target_arch = "wasm32"))]
+    spawn_terrain_patches(&mut commands, &asset_server, &entity_map);
+
+    // Spawn rockets
+    #[cfg(not(target_arch = "wasm32"))]
+    spawn_rockets(&mut commands, &mut meshes, &mut materials);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -878,4 +886,78 @@ fn load_texture(asset_server: &AssetServer, path: Option<&'static str>) -> Optio
     } else {
         None
     }
+}
+
+// Spawn terrain patches for planets
+pub fn spawn_terrain_patches(
+    commands: &mut Commands,
+    _asset_server: &Res<AssetServer>,
+    entity_map: &HashMap<String, Entity>,
+) {
+    // Create Kennedy Space Center terrain for Earth
+    if let Some(earth_entity) = entity_map.get("Earth") {
+        commands.spawn((
+            TerrainComponent {
+                planet_entity: *earth_entity,
+                planet_name: "Earth".to_string(),
+                position_offset: Vec3::new(0.0, -6371.0, 0.0), // On Earth's surface
+                scale: 1.0,
+                heightmap: Handle::default(), // Placeholder - will be loaded when needed
+                surface_texture: Handle::default(), // Placeholder - will be loaded when needed
+                size_km: 10.0,
+                resolution: 256,
+            },
+            Transform::from_translation(Vec3::new(0.0, -6371.0, 0.0)),
+            Visibility::Hidden, // Hidden by default
+            Selectable {
+                name: "Kennedy Space Center".to_string(),
+                selected: false,
+            },
+        ));
+    }
+}
+
+// Spawn rockets
+pub fn spawn_rockets(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) {
+    use crate::domain::entities::rocket::Rocket;
+
+    let rocket = Rocket::falcon9();
+
+    // Create simple rocket mesh (cylinder)
+    let mesh = Mesh::from(Cylinder::new(1.85, 70.0)); // Falcon 9 dimensions
+    let mesh_handle = meshes.add(mesh);
+
+    // Create rocket material
+    let material = StandardMaterial {
+        base_color: Color::srgb(0.8, 0.8, 0.8),
+        metallic: 0.9,
+        perceptual_roughness: 0.2,
+        ..default()
+    };
+    let material_handle = materials.add(material);
+
+    commands.spawn((
+        RocketComponent {
+            position: Vec3::new(0.0, -6300.0, 0.0), // Near Earth's surface
+            velocity: Vec3::ZERO,
+            orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+            mass: rocket.total_mass_kg(),
+            dry_mass_kg: rocket.dry_mass_kg,
+            fuel_mass: rocket.fuel_mass_kg,
+            thrust: Vec3::ZERO,
+            mission_state: crate::infrastructure::bevy_adapters::components::RocketMissionState::PreLaunch,
+        },
+        Mesh3d(mesh_handle),
+        MeshMaterial3d(material_handle),
+        Transform::from_translation(Vec3::new(0.0, -6300.0, 0.0)),
+        Selectable {
+            name: "Falcon 9".to_string(),
+            selected: false,
+        },
+    ));
 }

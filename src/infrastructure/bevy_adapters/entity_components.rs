@@ -57,6 +57,7 @@ pub enum CameraMode {
     Orbit,          // Orbital view around solar system center
     FollowPlanet,   // Follow a specific planet
     ApproachPlanet, // Approach and potentially "land" on a planet
+    TerrainView,    // Ground-level terrain exploration view
 }
 
 // Component for camera controller
@@ -82,4 +83,52 @@ pub struct CameraController {
 pub struct Selectable {
     pub name: String,
     pub selected: bool,
+}
+
+// Component for terrain patches (localized high-detail terrain)
+#[derive(Component)]
+pub struct TerrainComponent {
+    pub planet_entity: Entity,
+    pub planet_name: String,
+    pub position_offset: Vec3,  // Offset from planet center
+    pub scale: f32,             // Terrain scale factor
+    pub heightmap: Handle<Image>,
+    pub surface_texture: Handle<Image>,
+    pub size_km: f32,           // Terrain patch size in km
+    pub resolution: u32,        // Heightmap resolution
+}
+
+// Component for rocket entities
+#[derive(Component)]
+pub struct RocketComponent {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub orientation: Quat,
+    pub angular_velocity: Vec3,
+    pub mass: f32,
+    pub dry_mass_kg: f32,
+    pub fuel_mass: f32,
+    pub thrust: Vec3,
+    pub mission_state: RocketMissionState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RocketMissionState {
+    PreLaunch,
+    Launch,
+    Ascent,
+    Orbit,
+    Deorbit,
+    Descent,
+    Landing,
+    Landed,
+}
+
+// Component for launch sites (terrain markers)
+#[derive(Component)]
+pub struct LaunchSiteComponent {
+    pub name: String,
+    pub planet_entity: Entity,
+    pub position: Vec3,  // Local position on terrain
+    pub launch_pad_model: Option<Handle<Scene>>,
 }
