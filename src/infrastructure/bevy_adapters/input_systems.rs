@@ -293,16 +293,25 @@ pub fn handle_solar_system_input(
             println!("F key pressed!");
             if let Some(entity) = selected_planet.entity {
                 if let Ok((planet_comp, planet_transform)) = planet_query.get(entity) {
-                    // Check if Earth is selected and Ctrl is pressed - switch to terrain view
+                    // Check if Earth is selected and Ctrl is pressed - toggle terrain view
                     if planet_comp.domain_planet.name == "Earth" && keyboard.pressed(KeyCode::ControlLeft) {
-                        println!("🎯 Ctrl+F detected on Earth - setting terrain flag and mode");
-                        camera_input_state.earth_terrain_active = true;
-                        controller.mode = CameraMode::TerrainView;
-                        // Position camera at terrain level
-                        transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
-                        transform.look_at(Vec3::ZERO, Vec3::Y);
-                        controller.velocity = Vec3::ZERO;
-                        println!("🌍 Terrain view activated for Earth (flag: {})", camera_input_state.earth_terrain_active);
+                        if camera_input_state.earth_terrain_active {
+                            // Deactivate terrain view
+                            println!("🎯 Ctrl+F detected on Earth - deactivating terrain flag and mode");
+                            camera_input_state.earth_terrain_active = false;
+                            controller.mode = CameraMode::FreeFlight;
+                            println!("🌍 Terrain view deactivated for Earth (flag: {})", camera_input_state.earth_terrain_active);
+                        } else {
+                            // Activate terrain view
+                            println!("🎯 Ctrl+F detected on Earth - setting terrain flag and mode");
+                            camera_input_state.earth_terrain_active = true;
+                            controller.mode = CameraMode::TerrainView;
+                            // Position camera at terrain level
+                            transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
+                            transform.look_at(Vec3::ZERO, Vec3::Y);
+                            controller.velocity = Vec3::ZERO;
+                            println!("🌍 Terrain view activated for Earth (flag: {})", camera_input_state.earth_terrain_active);
+                        }
                     } else {
                         // Normal focus on planet
                         let planet_pos = planet_transform.translation();

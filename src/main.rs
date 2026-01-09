@@ -24,8 +24,8 @@ pub mod presentation;
 use application::startup::*;
 use domain::value_objects::simulation_params::SimulationParameters;
 use infrastructure::bevy_adapters::components::{
-    CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet, ZenMode,
-    UiPointerState,
+    CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
+    UiPointerState, ZenMode,
 };
 use infrastructure::bevy_adapters::systems::*;
 use presentation::ui::*;
@@ -77,7 +77,9 @@ fn main() {
         app.insert_resource(UiPointerState::default());
         app.insert_resource(CameraInputState::default());
         app.insert_resource(ZenMode::default());
-        app.insert_resource(infrastructure::bevy_adapters::systems::QualityAdaptationResource::default());
+        app.insert_resource(
+            infrastructure::bevy_adapters::systems::QualityAdaptationResource::default(),
+        );
         app.add_systems(Startup, setup_space);
         app.add_systems(Startup, setup_ui);
 
@@ -93,7 +95,7 @@ fn main() {
         app.add_systems(Update, handle_planet_selection);
         app.add_systems(Update, handle_mouse_planet_selection);
         app.add_systems(Update, handle_nav_interactions);
-         app.add_systems(Update, update_navbar);
+        app.add_systems(Update, update_navbar);
         app.add_systems(
             Update,
             update_planet_selection_visuals.run_if(every_n_frames(2)),
@@ -102,22 +104,40 @@ fn main() {
         app.add_systems(Update, log_performance_stats);
         app.add_systems(Update, adaptive_quality_system);
         #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-        app.add_systems(Update, crate::infrastructure::bevy_adapters::systems::init_vulkan_solver);
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::systems::init_vulkan_solver,
+        );
         app.add_systems(Update, update_info_card);
         app.add_systems(Update, update_notifications_ui);
-        app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));
-         app.add_systems(Update, take_pending_screenshot);
-         app.add_systems(Update, toggle_video_recording);
-         app.add_systems(Update, handle_video_recording);
-         app.add_systems(Update, update_camera_controller);
-          app.add_systems(Update, apply_camera_transform);
-          app.add_systems(Update, auto_inspect_selected_planet);
-          app.add_systems(Update, crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_visibility);
-          app.add_systems(Update, crate::infrastructure::bevy_adapters::terrain_systems::generate_terrain_mesh);
-          app.add_systems(Update, crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics);
-          app.add_systems(Update, crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_controls);
-         // Starfield update disabled for now
-         // app.add_systems(Update, update_starfield_position);
+        app.add_systems(
+            Update,
+            update_ui_hover_state.before(update_camera_controller),
+        );
+        app.add_systems(Update, take_pending_screenshot);
+        app.add_systems(Update, toggle_video_recording);
+        app.add_systems(Update, handle_video_recording);
+        app.add_systems(Update, update_camera_controller);
+        app.add_systems(Update, apply_camera_transform);
+        app.add_systems(Update, auto_inspect_selected_planet);
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_visibility,
+        );
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::terrain_systems::generate_terrain_mesh,
+        );
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics,
+        );
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_controls,
+        );
+        // Starfield update disabled for now
+        // app.add_systems(Update, update_starfield_position);
     }
 
     app.run();
