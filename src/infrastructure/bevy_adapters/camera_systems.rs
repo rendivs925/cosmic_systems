@@ -298,9 +298,15 @@ pub fn auto_inspect_selected_planet(
     };
 
     // All planets use orbital inspection by default
-    // Terrain view is activated via Ctrl+F for Earth specifically
+    // All planets (including Earth) use orbital view by default
+    // Terrain view is only activated via Ctrl+F for Earth specifically
     if controller.mode == CameraMode::TerrainView && planet_comp.domain_planet.name != "Earth" {
         // Switch back to orbital view if terrain view is active but we're not on Earth
+        controller.mode = CameraMode::FreeFlight;
+    }
+    // When Earth is selected, always start in orbital view (like other planets)
+    // Terrain view is only activated via explicit Ctrl+F press
+    if planet_comp.domain_planet.name == "Earth" {
         controller.mode = CameraMode::FreeFlight;
     }
 
