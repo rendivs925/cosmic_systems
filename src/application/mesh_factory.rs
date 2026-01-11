@@ -131,6 +131,12 @@ pub fn create_orbital_plane_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32)
     meshes.add(mesh)
 }
 
+pub fn create_eccentricity_marker_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+    // Create a simple glowing sphere for eccentricity markers
+    // Use UV sphere for better visual quality at small sizes
+    create_uv_sphere_mesh(meshes, radius)
+}
+
 pub fn create_ring_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     inner_radius: f32,

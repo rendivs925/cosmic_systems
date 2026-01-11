@@ -1,5 +1,5 @@
 use super::components::*;
-use crate::application::mesh_factory::create_orbital_plane_mesh;
+use crate::application::mesh_factory::{create_orbital_plane_mesh, create_eccentricity_marker_mesh};
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
 
@@ -222,6 +222,117 @@ pub fn update_orbital_planes(
                 0.03 - inclination_pulse * 0.005,
                 1.0,
             ).with_alpha(dynamic_opacity * 0.3);
+        }
+    }
+}
+
+// System to spawn eccentricity markers (apoapsis/periapsis points) for elliptical orbits
+pub fn spawn_eccentricity_markers(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    orbit_query: Query<(Entity, &OrbitComponent), Without<EccentricityMarkersComponent>>,
+) {
+    for (orbit_entity, orbit_comp) in orbit_query.iter() {
+        // Only create markers for orbits with significant eccentricity (>0.01)
+        // For now, we'll use a placeholder eccentricity value since we need to access orbit shape data
+        // In a real implementation, this would come from the planet's orbital elements
+        let eccentricity = 0.0167; // Earth's actual eccentricity as example
+        if eccentricity < 0.01 {
+            continue;
+        }
+
+        // Calculate apoapsis and periapsis positions
+        let semi_major_axis = orbit_comp.radius;
+        let apoapsis_distance = semi_major_axis * (1.0 + eccentricity);
+        let periapsis_distance = semi_major_axis * (1.0 - eccentricity);
+
+        // For simplicity, place markers along the orbit path
+        // In a full implementation, these would use proper Keplerian orbital calculations
+        let apoapsis_pos = Vec3::new(apoapsis_distance, 0.0, 0.0);
+        let periapsis_pos = Vec3::new(-periapsis_distance, 0.0, 0.0);
+
+        // Create glowing sphere markers
+        let marker_mesh = create_eccentricity_marker_mesh(&mut meshes, 2.0); // Small 2-unit radius spheres
+        let apoapsis_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.85, 0.89, 0.93).with_alpha(0.8), // Bright cool white for apoapsis
+            emissive: LinearRgba::new(0.1, 0.12, 0.15, 1.0),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        });
+        let periapsis_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.75, 0.82, 0.88).with_alpha(0.9), // Slightly dimmer for periapsis
+            emissive: LinearRgba::new(0.08, 0.10, 0.12, 1.0),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        });
+
+        // Spawn apoapsis marker
+        commands.spawn((
+            Mesh3d(marker_mesh.clone()),
+            MeshMaterial3d(apoapsis_material.clone()),
+            Transform::from_translation(apoapsis_pos),
+            Name::new(format!("Apoapsis marker for {:?}", orbit_comp.planet_entity)),
+        ));
+
+        // Spawn periapsis marker
+        commands.spawn((
+            Mesh3d(marker_mesh),
+            MeshMaterial3d(periapsis_material.clone()),
+            Transform::from_translation(periapsis_pos),
+            Name::new(format!("Periapsis marker for {:?}", orbit_comp.planet_entity)),
+        ));
+
+        // Add eccentricity markers component to orbit
+        commands.entity(orbit_entity).insert(EccentricityMarkersComponent {
+            planet_entity: orbit_comp.planet_entity,
+            apoapsis_position: apoapsis_pos,
+            periapsis_position: periapsis_pos,
+            apoapsis_material,
+            periapsis_material,
+            eccentricity,
+        });
+    }
+}
+
+// System to update eccentricity markers with pulsing effects
+pub fn update_eccentricity_markers(
+    time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    marker_query: Query<&EccentricityMarkersComponent>,
+) {
+    let frame_number = (time.elapsed_secs() * 60.0) as u32;
+    if !frame_number.is_multiple_of(20) { // Less frequent updates
+        return;
+    }
+
+    let elapsed = time.elapsed_secs();
+
+    for marker_comp in marker_query.iter() {
+        // Update apoapsis marker
+        if let Some(apoapsis_material) = materials.get_mut(&marker_comp.apoapsis_material) {
+            let apoapsis_pulse = 0.1 * (elapsed * 0.5 + marker_comp.eccentricity * 20.0).sin();
+            let apoapsis_intensity = (0.8 + apoapsis_pulse).clamp(0.5, 1.2);
+            apoapsis_material.emissive = LinearRgba::new(
+                0.1 * apoapsis_intensity,
+                0.12 * apoapsis_intensity,
+                0.15 * apoapsis_intensity,
+                1.0,
+            );
+        }
+
+        // Update periapsis marker
+        if let Some(periapsis_material) = materials.get_mut(&marker_comp.periapsis_material) {
+            let periapsis_pulse = 0.08 * (elapsed * 0.7 + marker_comp.eccentricity * 15.0).sin();
+            let periapsis_intensity = (0.9 + periapsis_pulse).clamp(0.6, 1.1);
+            periapsis_material.emissive = LinearRgba::new(
+                0.08 * periapsis_intensity,
+                0.10 * periapsis_intensity,
+                0.12 * periapsis_intensity,
+                1.0,
+            );
         }
     }
 }

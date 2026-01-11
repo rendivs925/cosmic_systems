@@ -92,6 +92,8 @@ fn main() {
         app.add_systems(Update, update_planet_reflections);
         app.add_systems(Startup, spawn_orbital_planes);
         app.add_systems(Update, update_orbital_planes);
+        app.add_systems(Startup, spawn_eccentricity_markers);
+        app.add_systems(Update, update_eccentricity_markers);
         app.add_systems(Update, apply_pending_material_textures);
         app.add_systems(Update, handle_solar_system_input);
         app.add_systems(Update, handle_planet_selection);

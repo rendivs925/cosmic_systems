@@ -64,8 +64,8 @@ pub struct EccentricityMarkersComponent {
     pub planet_entity: Entity,
     pub apoapsis_position: Vec3,
     pub periapsis_position: Vec3,
-    pub apoapsis_entity: Entity,
-    pub periapsis_entity: Entity,
+    pub apoapsis_material: Handle<StandardMaterial>,
+    pub periapsis_material: Handle<StandardMaterial>,
     pub eccentricity: f32,
 }
 
