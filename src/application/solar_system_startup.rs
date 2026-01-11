@@ -3,9 +3,6 @@ pub use super::texture_config::*;
 pub use super::terrain_spawning::*;
 pub use super::rocket_spawning::*;
 
-// Import functions from texture_config
-use super::texture_config::{orbit_motion_params, get_planet_textures, get_cloud_layer_config, get_ring_texture_path, load_texture};
-
 use crate::application::material_factory::*;
 use crate::application::mesh_factory::*;
 use crate::domain::entities::planet::Planet;
