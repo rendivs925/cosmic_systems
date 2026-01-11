@@ -306,9 +306,11 @@ pub fn handle_solar_system_input(
                             println!("🎯 Ctrl+F detected on Earth - setting terrain flag and mode");
                             camera_input_state.earth_terrain_active = true;
                             controller.mode = CameraMode::TerrainView;
-                            // Position camera at terrain level
-                            transform.translation = Vec3::new(0.0, 100.0, 0.0); // Above Kennedy Space Center
-                            transform.look_at(Vec3::ZERO, Vec3::Y);
+                            // Position camera above the current Earth position for terrain view
+                            let earth_pos = planet_transform.translation();
+                            let terrain_height_above_earth = 6371.0 + 100.0; // Earth radius + 100m above surface
+                            transform.translation = earth_pos + Vec3::new(0.0, terrain_height_above_earth, 0.0);
+                            transform.look_at(earth_pos, Vec3::Y);
                             controller.velocity = Vec3::ZERO;
                             println!("🌍 Terrain view activated for Earth (flag: {})", camera_input_state.earth_terrain_active);
                         }
