@@ -20,7 +20,7 @@ pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> 
 pub fn create_orbit_mesh_ellipse(
     meshes: &mut ResMut<Assets<Mesh>>,
     orbit_shape: &physics::OrbitShape,
-    color: Color,
+    _color: Color, // Color parameter kept for compatibility but not used - all orbits are cool white
 ) -> Handle<Mesh> {
     #[cfg(target_arch = "wasm32")]
     const SEGMENTS: usize = 128;
@@ -31,8 +31,9 @@ pub fn create_orbit_mesh_ellipse(
     let mut uvs = Vec::with_capacity(SEGMENTS);
     let mut colors = Vec::with_capacity(SEGMENTS);
     let mut indices = Vec::with_capacity(SEGMENTS * 2);
-    let color: LinearRgba = color.into();
-    let color = [color.red, color.green, color.blue, color.alpha];
+    // Use cool elegant white for all orbit vertex colors
+    let cool_white: LinearRgba = Color::srgb(0.82, 0.86, 0.90).into();
+    let color = [cool_white.red, cool_white.green, cool_white.blue, cool_white.alpha];
 
     let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
     let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);

@@ -74,8 +74,8 @@ pub fn setup_space(
 
     // Create a base orbit material template - individual orbits will get customized materials
     let base_orbit_material = create_orbit_material(
-        Color::srgb(0.6, 0.7, 0.8), // Base cool cosmic blue
-        orbit_emissive(Color::srgb(0.6, 0.7, 0.8), 0.1), // Minimal glow
+        Color::srgb(0.82, 0.86, 0.90), // Refined cool elegant white
+        orbit_emissive(Color::srgb(0.82, 0.86, 0.90), 0.1), // Minimal glow
         0.1, // Base transparency - will be customized per orbit
     );
 
@@ -387,8 +387,8 @@ fn spawn_celestial_body(
             // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
             // Create individual material for this moon orbit
             let moon_material = create_orbit_material(
-                Color::srgb(0.6, 0.7, 0.8), // Cool blue for moons
-                orbit_emissive(Color::srgb(0.6, 0.7, 0.8), 0.08),
+                Color::srgb(0.82, 0.86, 0.90), // Refined cool elegant white for moons
+                orbit_emissive(Color::srgb(0.82, 0.86, 0.90), 0.08),
                 0.08, // Medium visibility for moons
             );
             let _moon_material_handle = materials.add(moon_material);

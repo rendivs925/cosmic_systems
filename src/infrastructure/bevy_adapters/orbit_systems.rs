@@ -55,9 +55,9 @@ pub(crate) fn update_orbit_visuals(
 
             // Ultra-sophisticated spectral palette - refined cosmic elegance
             let (r, g, b) = if is_selected {
-                (0.68, 0.74, 0.80) // Subtle sterling highlight for selection
+                (0.85, 0.89, 0.93) // Refined cool white highlight for selection
             } else {
-                (0.52, 0.58, 0.64) // Refined graphite blue-gray - pure minimalism
+                (0.82, 0.86, 0.90) // Refined cool elegant white - pure sophistication
             };
 
             material.base_color = Color::srgb(r, g, b).with_alpha(alpha);
