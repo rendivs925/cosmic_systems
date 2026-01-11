@@ -4,3 +4,6 @@ pub mod mesh_factory;
 pub mod simulation_service;
 pub mod solar_system_startup;
 pub mod startup;
+pub mod texture_config;
+pub mod terrain_spawning;
+pub mod rocket_spawning;
