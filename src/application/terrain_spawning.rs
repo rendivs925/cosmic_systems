@@ -10,7 +10,8 @@ pub fn spawn_terrain_patches(
     images: &mut ResMut<Assets<Image>>,
     entity_map: &HashMap<String, Entity>,
 ) {
-    use crate::infrastructure::bevy_adapters::terrain_systems::{generate_launch_site_heightmap, generate_terrain_textures};
+    use crate::infrastructure::bevy_adapters::terrain_heightmaps::generate_launch_site_heightmap;
+    use crate::infrastructure::bevy_adapters::terrain_textures::generate_terrain_textures;
 
     // Create Kennedy Space Center terrain for Earth
     if let Some(earth_entity) = entity_map.get("Earth") {
