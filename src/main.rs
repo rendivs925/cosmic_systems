@@ -140,6 +140,11 @@ fn main() {
             Update,
             crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_lod,
         );
+        // Terrain orbital synchronization - high priority
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_synchronization,
+        );
         app.add_systems(
             Update,
             crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics,
@@ -147,6 +152,10 @@ fn main() {
         app.add_systems(
             Update,
             crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_controls,
+        );
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_terrain_interaction,
         );
         // Starfield update disabled for now
         // app.add_systems(Update, update_starfield_position);

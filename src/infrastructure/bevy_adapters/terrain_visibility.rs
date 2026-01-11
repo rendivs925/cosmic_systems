@@ -1,29 +1,27 @@
 use crate::infrastructure::bevy_adapters::components::*;
 use bevy::prelude::*;
 
-// System to update terrain patches based on camera proximity and planet selection
+// System to update terrain patches based on camera proximity
+// Terrain is shown when camera is within a reasonable distance, regardless of camera mode
 pub fn update_terrain_visibility(
-    mut terrain_query: Query<(&mut Visibility, &TerrainComponent)>,
-    camera_query: Query<(&CameraController, &Transform), With<Camera>>,
-    selected_planet: Res<SelectedPlanet>,
+    mut terrain_query: Query<(&mut Visibility, &Transform, &TerrainComponent)>,
+    camera_query: Query<&Transform, With<Camera>>,
 ) {
-    let (camera_controller, camera_transform) = match camera_query.single().ok() {
-        Some(data) => data,
+    let camera_transform = match camera_query.single().ok() {
+        Some(transform) => transform,
         None => return,
     };
 
     let camera_pos = camera_transform.translation;
 
-    println!("👁️ Terrain visibility check - Camera mode: {:?}, Selected planet: {:?}, Camera pos: {:?}",
-             camera_controller.mode, selected_planet.name, camera_pos);
+    println!("👁️ Terrain proximity visibility check - Camera pos: {:?}", camera_pos);
 
     let mut terrain_count = 0;
-    for (mut visibility, terrain) in terrain_query.iter_mut() {
-        // Show terrain when in TerrainView mode AND Earth is selected
-        // OR when Earth is selected (temporary for testing)
-        let should_show = (camera_controller.mode == CameraMode::TerrainView
-            && selected_planet.name.as_ref() == Some(&terrain.planet_name))
-            || (selected_planet.name.as_ref() == Some(&terrain.planet_name) && camera_controller.mode == CameraMode::FreeFlight);
+    for (mut visibility, terrain_transform, terrain) in terrain_query.iter_mut() {
+        let distance = camera_pos.distance(terrain_transform.translation);
+        let max_visible_distance = terrain.size_km * 1000.0 * 2.0; // 2x terrain size in meters
+
+        let should_show = distance < max_visible_distance;
 
         let new_visibility = if should_show {
             Visibility::Visible
@@ -32,9 +30,9 @@ pub fn update_terrain_visibility(
         };
 
         if *visibility != new_visibility {
-            println!("🌍 Terrain visibility change for {}: {:?} -> {:?} (mode: {:?}, selected: {:?})",
+            println!("🌍 Terrain visibility change for {}: {:?} -> {:?} (distance: {:.1}km, max: {:.1}km)",
                      terrain.planet_name, *visibility, new_visibility,
-                     camera_controller.mode, selected_planet.name);
+                     distance / 1000.0, max_visible_distance / 1000.0);
         }
 
         *visibility = new_visibility;

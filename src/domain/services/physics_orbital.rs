@@ -437,3 +437,38 @@ fn normalize_radians(angle: f32) -> f32 {
         normalized
     }
 }
+
+/// Calculate the position of terrain/launch sites in orbital mechanics
+/// This combines planet orbital position with terrain local coordinates
+pub fn calculate_terrain_orbital_position(
+    terrain_coords: &crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates,
+    planet: &Planet,
+    time_days: f32,
+    solar_params: &SolarSystemParameters,
+) -> Vec3 {
+    // First, get planet's orbital position
+    let planet_position = calculate_planet_position(
+        planet,
+        time_days,
+        solar_params,
+        Vec3::ZERO, // Sun at origin
+        None, // No parent for Earth
+    );
+
+    // Calculate Earth's rotation at this time
+    let earth_rotation_angle = if planet.name == "Earth" {
+        use crate::domain::services::physics_utils::calculate_planet_rotation;
+        calculate_planet_rotation(planet, time_days)
+    } else {
+        0.0 // For other planets, rotation not implemented yet
+    };
+
+    // Convert launch site coordinates to position relative to planet center
+    let relative_position = terrain_coords.to_planet_relative_position(planet);
+
+    // Apply planet's axial rotation
+    let rotated_position = Quat::from_rotation_y(earth_rotation_angle) * relative_position;
+
+    // Add to planet's orbital position
+    planet_position + rotated_position
+}
