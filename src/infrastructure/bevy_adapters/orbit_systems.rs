@@ -30,19 +30,19 @@ pub(crate) fn update_orbit_visuals(
             // Calculate opacity based on distance hierarchy and selection
             let distance_factor = orbit_comp.distance_rank; // 0.0 = inner planets, 1.0 = outer planets
 
-            // Balanced minimal visibility - perceptible but elegant guidance
+            // Enhanced visibility for long-distance viewing - all orbits clearly visible
             let base_opacity = if distance_factor < 0.25 {
-                0.15 // Inner planets: clearly visible but subtle
+                0.18 // Inner planets: clearly visible
             } else if distance_factor < 0.5 {
-                0.10 // Middle planets: moderately visible
+                0.15 // Middle planets: well visible
             } else {
-                0.06 // Outer planets: minimal but present
+                0.12 // Outer planets: sufficiently visible at long distance
             };
 
-            // Subtle boost for selected planet's orbit - clearly enhanced but elegant
+            // Boost for selected planet's orbit - clearly enhanced for navigation
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
             let final_base_opacity = if is_selected {
-                (base_opacity * 1.8_f32).min(0.25) // Enhanced visibility for context
+                (base_opacity * 2.0_f32).min(0.30) // Enhanced visibility for selected orbit
             } else {
                 base_opacity
             };
@@ -73,11 +73,11 @@ pub(crate) fn update_orbit_visuals(
     }
 }
 
-// System to toggle orbit visibility based on show_orbits parameter with contextual hierarchy
+// System to toggle orbit visibility based on show_orbits parameter
+// Orbits are now visible at all distances for better navigation
 pub fn update_orbit_visibility(
     solar_params: Res<SolarSystemParameters>,
     selected_planet: Res<SelectedPlanet>,
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut orbit_query: Query<(&OrbitComponent, &mut Visibility)>,
 ) {
     if !solar_params.show_orbits {
@@ -88,36 +88,12 @@ pub fn update_orbit_visibility(
         return;
     }
 
-    let camera_pos = camera_query.single().unwrap().translation();
-    let camera_distance_from_sun = camera_pos.length(); // Distance from solar system center
-
-    // Show orbits with contextual hierarchy based on zoom level
+    // Show all orbits regardless of distance - always visible for navigation
     for (orbit_comp, mut visibility) in orbit_query.iter_mut() {
-        let distance_factor = orbit_comp.distance_rank; // 0.0 = inner planets, 1.0 = outer planets
         let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
 
-        // Zoom-based visibility: show more orbits when zoomed out
-        let zoom_factor = (camera_distance_from_sun / 10000.0).clamp(0.1, 3.0);
-        let visibility_threshold = if zoom_factor > 1.5 {
-            0.9 // Show almost all orbits when zoomed far out
-        } else if zoom_factor > 0.8 {
-            0.7 // Show more orbits at medium zoom
-        } else {
-            0.4 // Show fewer orbits when zoomed in close
-        };
-
-        let final_visibility = if is_selected {
-            Visibility::Visible // Selected orbits always visible for context
-        } else {
-            // Distance and zoom-based visibility
-            if distance_factor <= visibility_threshold {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            }
-        };
-
-        *visibility = final_visibility;
+        // All orbits are visible, but selected ones are highlighted
+        *visibility = Visibility::Visible;
     }
 }
 
