@@ -46,6 +46,40 @@ pub struct OrbitComponent {
     pub distance_rank: f32, // 0.0 (closest to sun) to 1.0 (farthest) for hierarchy
 }
 
+// Component for orbital plane visualization with inclination-based effects
+#[derive(Component)]
+pub struct OrbitalPlaneComponent {
+    pub planet_entity: Entity,
+    pub inclination_rad: f32,
+    pub ascending_node_rad: f32,
+    pub semi_major_axis: f32,
+    pub eccentricity: f32,
+    pub material: Handle<StandardMaterial>,
+    pub opacity: f32,
+}
+
+// Component for apoapsis/periapsis markers showing orbit eccentricity
+#[derive(Component)]
+pub struct EccentricityMarkersComponent {
+    pub planet_entity: Entity,
+    pub apoapsis_position: Vec3,
+    pub periapsis_position: Vec3,
+    pub apoapsis_entity: Entity,
+    pub periapsis_entity: Entity,
+    pub eccentricity: f32,
+}
+
+// Component for velocity trail particle system
+#[derive(Component)]
+pub struct VelocityTrailComponent {
+    pub planet_entity: Entity,
+    pub trail_length: usize,
+    pub particle_entities: Vec<Entity>,
+    pub last_positions: Vec<Vec3>,
+    pub update_interval: f32,
+    pub trail_timer: f32,
+}
+
 #[derive(Component)]
 pub struct Starfield;
 

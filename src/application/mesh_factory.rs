@@ -88,6 +88,49 @@ pub fn create_placeholder_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handl
     meshes.add(mesh)
 }
 
+pub fn create_orbital_plane_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+    const SEGMENTS: usize = 32;
+    let mut positions = Vec::with_capacity(SEGMENTS + 1);
+    let mut normals = Vec::with_capacity(SEGMENTS + 1);
+    let mut uvs = Vec::with_capacity(SEGMENTS + 1);
+    let mut colors = Vec::with_capacity(SEGMENTS + 1);
+    let mut indices = Vec::with_capacity(SEGMENTS * 3);
+
+    // Center vertex
+    positions.push([0.0, 0.0, 0.0]);
+    normals.push([0.0, 1.0, 0.0]); // Pointing up in local space
+    uvs.push([0.5, 0.5]);
+    colors.push([0.82, 0.86, 0.90, 1.0]); // Cool white
+
+    // Outer ring vertices
+    for i in 0..SEGMENTS {
+        let angle = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let x = angle.cos() * radius;
+        let z = angle.sin() * radius;
+
+        positions.push([x, 0.0, z]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([0.5 + x / (radius * 2.0), 0.5 + z / (radius * 2.0)]);
+        colors.push([0.82, 0.86, 0.90, 0.8]); // Slightly more transparent at edges
+    }
+
+    // Create triangles from center to outer ring
+    for i in 0..SEGMENTS {
+        let next_i = (i + 1) % SEGMENTS;
+        indices.push(0); // Center
+        indices.push((i + 1) as u32); // Current outer vertex
+        indices.push((next_i + 1) as u32); // Next outer vertex
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    meshes.add(mesh)
+}
+
 pub fn create_ring_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     inner_radius: f32,
