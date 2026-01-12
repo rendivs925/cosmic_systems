@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gargantua Procedural Simulator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        background: #000;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      #ui {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        color: white;
+        pointer-events: none;
+        text-shadow: 1px 1px 2px black;
+      }
+      canvas {
+        display: block;
+      }
+      .label {
+        font-size: 12px;
+        opacity: 0.7;
+        margin-bottom: 5px;
+      }
+      .value {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <div class="label">OBJECT:</div>
+      <div class="value">GARGANTUA (Black Hole)</div>
+      <div class="label">METHOD:</div>
+      <div class="value">PROCEDURAL RAYMARCHING</div>
+      <div class="label">LENSING:</div>
+      <div class="value">GENERAL RELATIVITY (APPROX)</div>
+    </div>
+
+    <script id="fragmentShader" type="x-shader/x-fragment">
+      uniform float uTime;
+      uniform vec2 uResolution;
+      uniform vec3 uCameraPos;
+
+      #define MAX_STEPS 128
+      #define STEP_SIZE 0.15
+      #define RS 1.0 // Schwarzschild Radius
+      #define DISK_INNER 2.5
+      #define DISK_OUTER 7.0
+
+      // Procedural Noise Functions (FBM) for Plasma
+      float hash(float n) { return fract(sin(n) * 43758.5453123); }
+      float noise(vec2 x) {
+          vec2 p = floor(x);
+          vec2 f = fract(x);
+          f = f*f*(3.0-2.0*f);
+          float n = p.x + p.y*57.0;
+          return mix(mix(hash(n+0.0), hash(n+1.0), f.x),
+                     mix(hash(n+57.0), hash(n+58.0), f.x), f.y);
+      }
+
+      float fbm(vec2 p) {
+          float f = 0.0;
+          f += 0.5000 * noise(p); p *= 2.02;
+          f += 0.2500 * noise(p); p *= 2.03;
+          f += 0.1250 * noise(p); p *= 2.01;
+          f += 0.0625 * noise(p);
+          return f;
+      }
+
+      // Color mapping for "Hot" Plasma
+      vec3 plasmaColor(float t) {
+          vec3 darkRed = vec3(0.4, 0.05, 0.0);
+          vec3 orange = vec3(1.0, 0.4, 0.1);
+          vec3 white = vec3(1.0, 0.9, 0.7);
+          if(t < 0.5) return mix(darkRed, orange, t*2.0);
+          return mix(orange, white, (t-0.5)*2.0);
+      }
+
+      void main() {
+          vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution.xy) / uResolution.y;
+
+          // Initial ray setup
+          vec3 ro = uCameraPos;
+          vec3 rd = normalize(vec4(uv, -1.0, 1.0)).xyz; // Basic perspective
+
+          // Orbit camera logic (static for this demo)
+          float angle = uTime * 0.1;
+          mat3 rot = mat3(cos(angle), 0, sin(angle), 0, 1, 0, -sin(angle), 0, cos(angle));
+          ro = rot * ro;
+          rd = rot * rd;
+
+          vec3 p = ro;
+          vec3 col = vec3(0.0);
+          float opacity = 1.0;
+
+          // RAYMARCHING LOOP (THE PHYSICS)
+          for (int i = 0; i < MAX_STEPS; i++) {
+              float r = length(p);
+
+              // 1. EVENT HORIZON CHECK
+              if (r < RS) {
+                  col = mix(col, vec3(0.0), 1.0);
+                  break;
+              }
+
+              // 2. GRAVITATIONAL LENSING
+              // Bend the ray direction toward the center
+              // Force ~ 1.5 * RS / r^3 (Relativistic approximation)
+              vec3 forceDir = normalize(-p);
+              float forceMag = (1.5 * RS) / (r * r * r);
+              rd = normalize(rd + forceDir * forceMag * STEP_SIZE);
+
+              // 3. ACCRETION DISK INTERSECTION
+              // Check if we crossed the Y=0 plane
+              float prevY = p.y;
+              p += rd * STEP_SIZE;
+              float currY = p.y;
+
+              if (prevY * currY < 0.0) { // Crossed the disk plane
+                  float dist = length(p);
+                  if (dist > DISK_INNER && dist < DISK_OUTER) {
+                      // Calculate disk texture
+                      float phi = atan(p.z, p.x);
+                      vec2 polarUV = vec2(dist * 1.5, phi * 2.0 + uTime * 2.0);
+
+                      float d = fbm(polarUV);
+
+                      // Doppler Beaming (one side brighter)
+                      float doppler = 0.5 + 0.5 * (p.x / dist);
+
+                      vec3 diskCol = plasmaColor(d) * (d * 1.5) * doppler;
+                      float diskAlpha = smoothstep(DISK_INNER, DISK_INNER+0.5, dist) * smoothstep(DISK_OUTER, DISK_OUTER-1.0, dist) * d;
+
+                      col += diskCol * diskAlpha * opacity;
+                      opacity *= (1.0 - diskAlpha);
+                  }
+              }
+
+              if (opacity < 0.01) break;
+              if (r > 20.0) {
+                  // Starfield Background (Static)
+                  float stars = pow(hash(dot(rd, vec3(123.4, 456.7, 789.0))), 500.0) * 2.0;
+                  col += vec3(stars) * opacity;
+                  break;
+              }
+          }
+
+          // Bloom/Glow Post-process
+          col += col * col * 0.5;
+          gl_FragColor = vec4(col, 1.0);
+      }
+    </script>
+
+    <script>
+      const scene = new THREE.Scene();
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      const renderer = new THREE.WebGLRenderer();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const geometry = new THREE.PlaneGeometry(2, 2);
+      const uniforms = {
+        uTime: { value: 0 },
+        uResolution: {
+          value: new THREE.Vector2(window.innerWidth, window.innerHeight),
+        },
+        uCameraPos: { value: new THREE.Vector3(0, 2, 10) },
+      };
+
+      const material = new THREE.ShaderMaterial({
+        fragmentShader: document.getElementById("fragmentShader").textContent,
+        uniforms: uniforms,
+      });
+
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
+
+      function animate(time) {
+        uniforms.uTime.value = time * 0.001;
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+      });
+
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>
