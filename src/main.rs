@@ -30,6 +30,138 @@ use infrastructure::bevy_adapters::components::{
 use infrastructure::bevy_adapters::systems::*;
 use presentation::ui::*;
 
+fn setup_gyro_mode(app: &mut App) {
+    app.insert_resource(SimulationParameters::new());
+    app.add_systems(Startup, setup_gyro);
+    app.add_systems(Update, update_gyroscopes);
+    app.add_systems(Update, update_thrust);
+    app.add_systems(Update, handle_input);
+}
+
+fn setup_solar_system_mode(app: &mut App) {
+    // Insert resources
+    app.insert_resource(SelectedPlanet {
+        entity: None,
+        name: None,
+    });
+    app.insert_resource(HoveredPlanet {
+        name: None,
+        info: None,
+    });
+    app.insert_resource(NotificationQueue {
+        notifications: Vec::new(),
+        hide_for_screenshot: false,
+    });
+    app.insert_resource(ScreenshotState { pending: false });
+    app.insert_resource(PerformanceStats::default());
+    app.insert_resource(UiPointerState::default());
+    app.insert_resource(CameraInputState::default());
+    app.insert_resource(ZenMode::default());
+    app.insert_resource(
+        infrastructure::bevy_adapters::systems::QualityAdaptationResource::default(),
+    );
+
+    // Startup systems
+    app.add_systems(Startup, setup_space);
+    app.add_systems(Startup, setup_ui);
+    app.add_systems(Startup, spawn_orbital_planes);
+    app.add_systems(Startup, spawn_eccentricity_markers);
+
+    // Physics systems run on FixedUpdate for consistent simulation
+    app.add_systems(FixedUpdate, update_planet_positions);
+    app.add_systems(FixedUpdate, update_planet_rotations);
+    app.add_systems(FixedUpdate, update_moon_orbit_positions);
+
+    // Visual and interaction systems
+    app.add_systems(Update, update_orbit_visuals);
+    app.add_systems(Update, update_orbit_visibility);
+    app.add_systems(Update, update_planet_reflections);
+    app.add_systems(Update, update_orbital_planes);
+    app.add_systems(Update, update_eccentricity_markers);
+    app.add_systems(Update, apply_pending_material_textures);
+
+    // Input handling
+    app.add_systems(Update, handle_solar_system_input);
+    app.add_systems(Update, handle_planet_selection);
+    app.add_systems(Update, handle_mouse_planet_selection);
+    app.add_systems(Update, handle_nav_interactions);
+
+    // UI systems
+    app.add_systems(Update, update_navbar);
+    app.add_systems(Update, update_info_card);
+    app.add_systems(Update, update_notifications_ui);
+    app.add_systems(
+        Update,
+        update_ui_hover_state.before(update_camera_controller),
+    );
+
+    // Camera and controls
+    app.add_systems(Update, update_camera_controller);
+    app.add_systems(Update, apply_camera_transform);
+    app.add_systems(Update, auto_inspect_selected_planet);
+
+    // Performance and quality systems
+    app.add_systems(
+        Update,
+        update_planet_selection_visuals.run_if(every_n_frames(2)),
+    );
+    app.add_systems(Update, update_performance_stats);
+    app.add_systems(Update, log_performance_stats);
+    app.add_systems(Update, adaptive_quality_system);
+
+    // Vulkan compute (native only)
+    #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::systems::init_vulkan_solver,
+    );
+
+    // Screenshot and recording
+    app.add_systems(Update, take_pending_screenshot);
+    app.add_systems(Update, toggle_video_recording);
+    app.add_systems(Update, handle_video_recording);
+
+    // Terrain systems
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_visibility,
+    );
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::terrain_systems::generate_terrain_mesh,
+    );
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::terrain_systems::initialize_terrain_lod,
+    );
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_lod,
+    );
+    // Terrain orbital synchronization - high priority
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_synchronization,
+    );
+
+    // Rocket systems
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics,
+    );
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_controls,
+    );
+    app.add_systems(
+        Update,
+        crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_terrain_interaction,
+    );
+
+    // Starfield update disabled for now
+    // app.add_systems(Update, update_starfield_position);
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let is_gyro_mode = args.contains(&"gyro".to_string());
@@ -53,112 +185,11 @@ fn main() {
 
     let mut app = App::new();
     app.add_plugins(plugins);
-    if is_gyro_mode {
-        app.insert_resource(SimulationParameters::new());
-        app.add_systems(Startup, setup_gyro);
-        app.add_systems(Update, update_gyroscopes);
-        app.add_systems(Update, update_thrust);
-        app.add_systems(Update, handle_input);
-    } else {
-        app.insert_resource(SelectedPlanet {
-            entity: None,
-            name: None,
-        });
-        app.insert_resource(HoveredPlanet {
-            name: None,
-            info: None,
-        });
-        app.insert_resource(NotificationQueue {
-            notifications: Vec::new(),
-            hide_for_screenshot: false,
-        });
-        app.insert_resource(ScreenshotState { pending: false });
-        app.insert_resource(PerformanceStats::default());
-        app.insert_resource(UiPointerState::default());
-        app.insert_resource(CameraInputState::default());
-        app.insert_resource(ZenMode::default());
-        app.insert_resource(
-            infrastructure::bevy_adapters::systems::QualityAdaptationResource::default(),
-        );
-        app.add_systems(Startup, setup_space);
-        app.add_systems(Startup, setup_ui);
 
-        // Physics systems run on FixedUpdate for consistent simulation
-        app.add_systems(FixedUpdate, update_planet_positions);
-        app.add_systems(FixedUpdate, update_planet_rotations);
-        app.add_systems(FixedUpdate, update_moon_orbit_positions);
-        app.add_systems(Update, update_orbit_visuals);
-        app.add_systems(Update, update_orbit_visibility);
-        app.add_systems(Update, update_planet_reflections);
-        app.add_systems(Startup, spawn_orbital_planes);
-        app.add_systems(Update, update_orbital_planes);
-        app.add_systems(Startup, spawn_eccentricity_markers);
-        app.add_systems(Update, update_eccentricity_markers);
-        app.add_systems(Update, apply_pending_material_textures);
-        app.add_systems(Update, handle_solar_system_input);
-        app.add_systems(Update, handle_planet_selection);
-        app.add_systems(Update, handle_mouse_planet_selection);
-        app.add_systems(Update, handle_nav_interactions);
-        app.add_systems(Update, update_navbar);
-        app.add_systems(
-            Update,
-            update_planet_selection_visuals.run_if(every_n_frames(2)),
-        );
-        app.add_systems(Update, update_performance_stats);
-        app.add_systems(Update, log_performance_stats);
-        app.add_systems(Update, adaptive_quality_system);
-        #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::systems::init_vulkan_solver,
-        );
-        app.add_systems(Update, update_info_card);
-        app.add_systems(Update, update_notifications_ui);
-        app.add_systems(
-            Update,
-            update_ui_hover_state.before(update_camera_controller),
-        );
-        app.add_systems(Update, take_pending_screenshot);
-        app.add_systems(Update, toggle_video_recording);
-        app.add_systems(Update, handle_video_recording);
-        app.add_systems(Update, update_camera_controller);
-        app.add_systems(Update, apply_camera_transform);
-        app.add_systems(Update, auto_inspect_selected_planet);
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_visibility,
-        );
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::terrain_systems::generate_terrain_mesh,
-        );
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::terrain_systems::initialize_terrain_lod,
-        );
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_lod,
-        );
-        // Terrain orbital synchronization - high priority
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::terrain_systems::update_terrain_synchronization,
-        );
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_physics,
-        );
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_controls,
-        );
-        app.add_systems(
-            Update,
-            crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_terrain_interaction,
-        );
-        // Starfield update disabled for now
-        // app.add_systems(Update, update_starfield_position);
+    if is_gyro_mode {
+        setup_gyro_mode(&mut app);
+    } else {
+        setup_solar_system_mode(&mut app);
     }
 
     app.run();

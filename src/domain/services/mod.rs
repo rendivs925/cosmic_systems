@@ -4,4 +4,6 @@ pub mod physics_orbital;
 pub mod physics_kepler;
 pub mod physics_utils;
 pub mod gyroscope;
+pub mod planet_factory;
+pub mod simd_processor;
 pub mod units;
