@@ -1,4 +1,5 @@
 use crate::domain::entities::planet::Planet;
+use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 
 /// Calculate the rotation angle for a planet at a given time
@@ -72,7 +73,7 @@ pub fn calculate_sun_visual_radius(solar_params: &SolarSystemParameters) -> f32 
     // Use the same TRUE mathematical proportions as planets
     // Sun will be ~285x larger than Mercury, ~109x larger than Earth
     // This preserves the real-world dominance of the Sun in the solar system
-    let sun = Planet::create_sun();
+    let sun = PlanetFactory::create_by_name("Sun").unwrap();
     calculate_visual_radius(&sun, solar_params)
 }
 

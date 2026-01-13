@@ -7,6 +7,7 @@ use crate::application::material_factory::*;
 use crate::application::mesh_factory::*;
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics;
+use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 
@@ -84,52 +85,9 @@ pub fn setup_space(
         handle: shared_orbit_handle.clone(),
     });
 
-    // Create all planets and moons
-    let planets = vec![
-        Planet::create_sun(),
-        Planet::create_mercury(),
-        Planet::create_venus(),
-        Planet::create_earth(),
-        Planet::create_mars(),
-        Planet::create_jupiter(),
-        Planet::create_saturn(),
-        Planet::create_uranus(),
-        Planet::create_neptune(),
-    ];
-
-    // Create all moons
-    let moons = vec![
-        // Earth's moon
-        Planet::create_moon(),
-        // Mars' moons
-        Planet::create_phobos(),
-        Planet::create_deimos(),
-        // Jupiter's major moons
-        Planet::create_io(),
-        Planet::create_europa(),
-        Planet::create_ganymede(),
-        Planet::create_callisto(),
-        // Saturn's major moons
-        Planet::create_mimas(),
-        Planet::create_enceladus(),
-        Planet::create_tethys(),
-        Planet::create_dione(),
-        Planet::create_rhea(),
-        Planet::create_titan(),
-        Planet::create_hyperion(),
-        Planet::create_iapetus(),
-        // Uranus' major moons
-        Planet::create_miranda(),
-        Planet::create_ariel(),
-        Planet::create_umbriel(),
-        Planet::create_titania(),
-        Planet::create_oberon(),
-        // Neptune's major moons
-        Planet::create_triton(),
-        Planet::create_proteus(),
-        Planet::create_nereid(),
-        Planet::create_larissa(),
-    ];
+    // Create all planets and moons using the factory
+    let planets = PlanetFactory::get_planets();
+    let moons = PlanetFactory::get_moons();
 
     // Combine planets and moons
     let all_celestial_bodies = [planets, moons].concat();

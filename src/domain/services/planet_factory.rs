@@ -62,145 +62,7 @@ impl PlanetFactory {
     }
 }
 
-// Convenience methods for backward compatibility
-impl Planet {
-    pub fn create_mercury() -> Self {
-        PlanetFactory::create_by_name("Mercury").expect("Mercury config should exist")
-    }
 
-    pub fn create_venus() -> Self {
-        PlanetFactory::create_by_name("Venus").expect("Venus config should exist")
-    }
-
-    pub fn create_earth() -> Self {
-        PlanetFactory::create_by_name("Earth").expect("Earth config should exist")
-    }
-
-    pub fn create_mars() -> Self {
-        PlanetFactory::create_by_name("Mars").expect("Mars config should exist")
-    }
-
-    pub fn create_jupiter() -> Self {
-        PlanetFactory::create_by_name("Jupiter").expect("Jupiter config should exist")
-    }
-
-    pub fn create_saturn() -> Self {
-        PlanetFactory::create_by_name("Saturn").expect("Saturn config should exist")
-    }
-
-    pub fn create_uranus() -> Self {
-        PlanetFactory::create_by_name("Uranus").expect("Uranus config should exist")
-    }
-
-    pub fn create_neptune() -> Self {
-        PlanetFactory::create_by_name("Neptune").expect("Neptune config should exist")
-    }
-
-    pub fn create_sun() -> Self {
-        PlanetFactory::create_by_name("Sun").expect("Sun config should exist")
-    }
-
-    // Moon creation methods
-    pub fn create_moon() -> Self {
-        PlanetFactory::create_by_name("Moon").expect("Moon config should exist")
-    }
-
-    pub fn create_phobos() -> Self {
-        PlanetFactory::create_by_name("Phobos").expect("Phobos config should exist")
-    }
-
-    pub fn create_deimos() -> Self {
-        PlanetFactory::create_by_name("Deimos").expect("Deimos config should exist")
-    }
-
-    pub fn create_io() -> Self {
-        PlanetFactory::create_by_name("Io").expect("Io config should exist")
-    }
-
-    pub fn create_europa() -> Self {
-        PlanetFactory::create_by_name("Europa").expect("Europa config should exist")
-    }
-
-    pub fn create_ganymede() -> Self {
-        PlanetFactory::create_by_name("Ganymede").expect("Ganymede config should exist")
-    }
-
-    pub fn create_callisto() -> Self {
-        PlanetFactory::create_by_name("Callisto").expect("Callisto config should exist")
-    }
-
-    pub fn create_mimas() -> Self {
-        PlanetFactory::create_by_name("Mimas").expect("Mimas config should exist")
-    }
-
-    pub fn create_enceladus() -> Self {
-        PlanetFactory::create_by_name("Enceladus").expect("Enceladus config should exist")
-    }
-
-    pub fn create_tethys() -> Self {
-        PlanetFactory::create_by_name("Tethys").expect("Tethys config should exist")
-    }
-
-    pub fn create_dione() -> Self {
-        PlanetFactory::create_by_name("Dione").expect("Dione config should exist")
-    }
-
-    pub fn create_rhea() -> Self {
-        PlanetFactory::create_by_name("Rhea").expect("Rhea config should exist")
-    }
-
-    pub fn create_titan() -> Self {
-        PlanetFactory::create_by_name("Titan").expect("Titan config should exist")
-    }
-
-    pub fn create_hyperion() -> Self {
-        PlanetFactory::create_by_name("Hyperion").expect("Hyperion config should exist")
-    }
-
-    pub fn create_iapetus() -> Self {
-        PlanetFactory::create_by_name("Iapetus").expect("Iapetus config should exist")
-    }
-
-    pub fn create_miranda() -> Self {
-        PlanetFactory::create_by_name("Miranda").expect("Miranda config should exist")
-    }
-
-    pub fn create_ariel() -> Self {
-        PlanetFactory::create_by_name("Ariel").expect("Ariel config should exist")
-    }
-
-    pub fn create_umbriel() -> Self {
-        PlanetFactory::create_by_name("Umbriel").expect("Umbriel config should exist")
-    }
-
-    pub fn create_titania() -> Self {
-        PlanetFactory::create_by_name("Titania").expect("Titania config should exist")
-    }
-
-    pub fn create_oberon() -> Self {
-        PlanetFactory::create_by_name("Oberon").expect("Oberon config should exist")
-    }
-
-    pub fn create_triton() -> Self {
-        PlanetFactory::create_by_name("Triton").expect("Triton config should exist")
-    }
-
-    pub fn create_proteus() -> Self {
-        PlanetFactory::create_by_name("Proteus").expect("Proteus config should exist")
-    }
-
-    pub fn create_nereid() -> Self {
-        PlanetFactory::create_by_name("Nereid").expect("Nereid config should exist")
-    }
-
-    pub fn create_larissa() -> Self {
-        PlanetFactory::create_by_name("Larissa").expect("Larissa config should exist")
-    }
-
-    pub fn create_charon() -> Self {
-        PlanetFactory::create_by_name("Charon").expect("Charon config should exist")
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -288,22 +150,22 @@ mod tests {
     }
 
     #[test]
-    fn test_backward_compatibility_methods() {
-        // Test that the old static methods still work
-        let mercury = Planet::create_mercury();
+    fn test_factory_methods_work() {
+        // Test that the factory methods work correctly
+        let mercury = PlanetFactory::create_by_name("Mercury").unwrap();
         assert_eq!(mercury.name, "Mercury");
 
-        let earth = Planet::create_earth();
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
         assert_eq!(earth.name, "Earth");
 
-        let moon = Planet::create_moon();
+        let moon = PlanetFactory::create_by_name("Moon").unwrap();
         assert_eq!(moon.name, "Moon");
         assert_eq!(moon.parent_entity, Some("Earth".to_string()));
 
-        let jupiter = Planet::create_jupiter();
+        let jupiter = PlanetFactory::create_by_name("Jupiter").unwrap();
         assert_eq!(jupiter.name, "Jupiter");
 
-        let saturn = Planet::create_saturn();
+        let saturn = PlanetFactory::create_by_name("Saturn").unwrap();
         assert_eq!(saturn.name, "Saturn");
     }
 
