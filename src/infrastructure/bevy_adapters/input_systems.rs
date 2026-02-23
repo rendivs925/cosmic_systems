@@ -202,9 +202,6 @@ pub fn handle_solar_system_input(
     mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
     mut camera_input_state: ResMut<CameraInputState>,
 ) {
-    println!("=== INPUT SYSTEM START ===");
-    println!("Selected planet: {:?}", selected_planet.name);
-    println!("Earth terrain flag: {}", camera_input_state.earth_terrain_active);
     // Screenshot feature - F12 or P key
     // Request screenshot, will be captured next frame after notifications hide
     if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
@@ -213,24 +210,43 @@ pub fn handle_solar_system_input(
     }
     if keyboard.just_pressed(KeyCode::KeyZ) {
         zen_mode.enabled = !zen_mode.enabled;
-        println!("🧘 Zen mode: {}", if zen_mode.enabled { "ON" } else { "OFF" });
+        println!(
+            "🧘 Zen mode: {}",
+            if zen_mode.enabled { "ON" } else { "OFF" }
+        );
     }
     // Time scale controls (require Ctrl key)
-    if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) && keyboard.pressed(KeyCode::ShiftLeft) {
+    if keyboard.just_pressed(KeyCode::KeyT)
+        && keyboard.pressed(KeyCode::ControlLeft)
+        && keyboard.pressed(KeyCode::ShiftLeft)
+    {
         // Exponential increase: 10x
         solar_params.time_scale = (solar_params.time_scale * 10.0).min(10000000.0);
-        println!("🚀 Time scale: {:.0}x (10x increase)", solar_params.time_scale);
+        println!(
+            "🚀 Time scale: {:.0}x (10x increase)",
+            solar_params.time_scale
+        );
     } else if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
         // Gradual increase: 10%
         solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
         println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
     }
 
-    if keyboard.just_pressed(KeyCode::KeyR) && keyboard.pressed(KeyCode::ControlLeft) && keyboard.pressed(KeyCode::ShiftLeft) && solar_params.time_scale > 0.1 {
+    if keyboard.just_pressed(KeyCode::KeyR)
+        && keyboard.pressed(KeyCode::ControlLeft)
+        && keyboard.pressed(KeyCode::ShiftLeft)
+        && solar_params.time_scale > 0.1
+    {
         // Exponential decrease: 10x
         solar_params.time_scale = (solar_params.time_scale / 10.0).max(0.0001);
-        println!("🐌 Time scale: {:.0}x (10x decrease)", solar_params.time_scale);
-    } else if keyboard.just_pressed(KeyCode::KeyR) && keyboard.pressed(KeyCode::ControlLeft) && solar_params.time_scale > 0.1 {
+        println!(
+            "🐌 Time scale: {:.0}x (10x decrease)",
+            solar_params.time_scale
+        );
+    } else if keyboard.just_pressed(KeyCode::KeyR)
+        && keyboard.pressed(KeyCode::ControlLeft)
+        && solar_params.time_scale > 0.1
+    {
         // Gradual decrease: 10%
         solar_params.time_scale = (solar_params.time_scale / 1.1).max(0.0001);
         println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
@@ -243,9 +259,19 @@ pub fn handle_solar_system_input(
     }
 
     // Toggle automatic quality adaptation
-    if keyboard.just_pressed(KeyCode::KeyA) && keyboard.pressed(KeyCode::ControlLeft) && keyboard.pressed(KeyCode::ShiftLeft) {
+    if keyboard.just_pressed(KeyCode::KeyA)
+        && keyboard.pressed(KeyCode::ControlLeft)
+        && keyboard.pressed(KeyCode::ShiftLeft)
+    {
         perf_stats.adaptive_enabled = !perf_stats.adaptive_enabled;
-        println!("🎛️ Automatic quality adaptation: {}", if perf_stats.adaptive_enabled { "ENABLED" } else { "DISABLED (manual control)" });
+        println!(
+            "🎛️ Automatic quality adaptation: {}",
+            if perf_stats.adaptive_enabled {
+                "ENABLED"
+            } else {
+                "DISABLED (manual control)"
+            }
+        );
         if !perf_stats.adaptive_enabled {
             println!("💡 Use Ctrl+T/Ctrl+R to manually adjust time scale");
         }
@@ -294,13 +320,20 @@ pub fn handle_solar_system_input(
             if let Some(entity) = selected_planet.entity {
                 if let Ok((planet_comp, planet_transform)) = planet_query.get(entity) {
                     // Check if Earth is selected and Ctrl is pressed - toggle terrain view
-                    if planet_comp.domain_planet.name == "Earth" && keyboard.pressed(KeyCode::ControlLeft) {
+                    if planet_comp.domain_planet.name == "Earth"
+                        && keyboard.pressed(KeyCode::ControlLeft)
+                    {
                         if camera_input_state.earth_terrain_active {
                             // Deactivate terrain view
-                            println!("🎯 Ctrl+F detected on Earth - deactivating terrain flag and mode");
+                            println!(
+                                "🎯 Ctrl+F detected on Earth - deactivating terrain flag and mode"
+                            );
                             camera_input_state.earth_terrain_active = false;
                             controller.mode = CameraMode::FreeFlight;
-                            println!("🌍 Terrain view deactivated for Earth (flag: {})", camera_input_state.earth_terrain_active);
+                            println!(
+                                "🌍 Terrain view deactivated for Earth (flag: {})",
+                                camera_input_state.earth_terrain_active
+                            );
                         } else {
                             // Activate terrain view
                             println!("🎯 Ctrl+F detected on Earth - setting terrain flag and mode");
@@ -309,16 +342,22 @@ pub fn handle_solar_system_input(
                             // Position camera above the current Earth position for terrain view
                             let earth_pos = planet_transform.translation();
                             let terrain_height_above_earth = 6371.0 + 100.0; // Earth radius + 100m above surface
-                            transform.translation = earth_pos + Vec3::new(0.0, terrain_height_above_earth, 0.0);
+                            transform.translation =
+                                earth_pos + Vec3::new(0.0, terrain_height_above_earth, 0.0);
                             transform.look_at(earth_pos, Vec3::Y);
                             controller.velocity = Vec3::ZERO;
-                            println!("🌍 Terrain view activated for Earth (flag: {})", camera_input_state.earth_terrain_active);
+                            println!(
+                                "🌍 Terrain view activated for Earth (flag: {})",
+                                camera_input_state.earth_terrain_active
+                            );
                         }
                     } else {
                         // Normal focus on planet
                         let planet_pos = planet_transform.translation();
-                        let radius =
-                            physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params);
+                        let radius = physics::calculate_visual_radius(
+                            &planet_comp.domain_planet,
+                            &solar_params,
+                        );
 
                         // Position camera to frame the planet nicely
                         let distance = (radius * 10.0).clamp(5000.0, 500000.0);

@@ -282,81 +282,40 @@ pub fn auto_inspect_selected_planet(
     planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut state: Local<AutoInspectState>,
 ) {
-    println!("=== AUTO INSPECT START ===");
-    println!("Selected planet: {:?}", selected_planet.name);
-    println!("Earth terrain flag: {}", input_state.earth_terrain_active);
-
-    let selected_entity = match selected_planet.entity {
-        Some(entity) => {
-            println!("Selected entity: {:?}", entity);
-            entity
-        }
-        None => {
-            println!("No planet selected, returning");
-            return;
-        }
+    let Some(selected_entity) = selected_planet.entity else {
+        return;
     };
 
     let (planet_comp, planet_transform) = match planet_query.get(selected_entity) {
-        Ok(data) => {
-            println!("Planet found: {}", data.0.domain_planet.name);
-            data
-        }
-        Err(_) => {
-            println!("Planet entity not found in query!");
-            return;
-        }
+        Ok(data) => data,
+        Err(_) => return,
     };
 
     let (mut controller, mut camera_transform, projection) = match camera_query.single_mut() {
-        Ok(data) => {
-            println!("Camera mode before: {:?}", data.0.mode);
-            data
-        }
-        Err(_) => {
-            println!("Camera not found!");
-            return;
-        }
+        Ok(data) => data,
+        Err(_) => return,
     };
 
-    println!(
-        "Planet: {}, Current mode: {:?}",
-        planet_comp.domain_planet.name, controller.mode
-    );
-
-    // If terrain view is explicitly active, do not auto-inspect at all
     if input_state.earth_terrain_active {
-        println!("Terrain flag active -> skipping auto inspect");
         return;
     }
     // All planets use orbital inspection by default
     // All planets (including Earth) use orbital view by default
     // Terrain view is only activated via Ctrl+F for Earth specifically
-    println!(
-        "Planet: {}, Current mode: {:?}",
-        planet_comp.domain_planet.name, controller.mode
-    );
     if controller.mode == CameraMode::TerrainView
         && planet_comp.domain_planet.name != "Earth"
         && !input_state.earth_terrain_active
     {
         // Switch back to orbital view if terrain view is active but we're not on Earth AND terrain flag is not active
-        println!("Non-Earth planet selected while in TerrainView and flag not active - switching to FreeFlight");
         controller.mode = CameraMode::FreeFlight;
     }
     // Earth selection logic with terrain view persistence
     if planet_comp.domain_planet.name == "Earth" {
-        println!(
-            "EARTH SELECTED - terrain_active: {}",
-            input_state.earth_terrain_active
-        );
         if input_state.earth_terrain_active {
             // Terrain view was activated, stay in terrain view
-            println!("Keeping Earth in TerrainView mode");
             controller.mode = CameraMode::TerrainView;
         } else {
             // Default to orbital view like other planets
-            println!("Setting Earth to FreeFlight mode (default)");
             controller.mode = CameraMode::FreeFlight;
         }
     }
@@ -566,4 +525,3 @@ pub fn update_starfield_position(
         }
     }
 }
-

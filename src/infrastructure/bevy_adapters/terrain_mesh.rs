@@ -1,7 +1,7 @@
 use crate::infrastructure::bevy_adapters::{components::*, entity_components::LaunchSiteType};
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
-use bevy::asset::RenderAssetUsages;
 
 // System to generate terrain mesh from heightmap
 pub fn generate_terrain_mesh(
@@ -11,12 +11,7 @@ pub fn generate_terrain_mesh(
     terrain_query: Query<(Entity, &TerrainComponent), Added<TerrainComponent>>,
     images: Res<Assets<Image>>,
 ) {
-    println!("🏗️ Terrain mesh generation system called");
-
     for (entity, terrain) in terrain_query.iter() {
-        println!("🔨 Generating mesh for terrain entity: {:?}", entity);
-        println!("   Planet: {}, Size: {}km, Resolution: {}", terrain.planet_name, terrain.size_km, terrain.resolution);
-
         // Create terrain mesh from heightmap
         let mesh = create_terrain_mesh(&terrain, &images);
         let mesh_handle = meshes.add(mesh);
@@ -31,15 +26,10 @@ pub fn generate_terrain_mesh(
         };
         let material_handle = materials.add(material);
 
-        println!("✅ Created mesh {:?} and material {:?} for terrain", mesh_handle, material_handle);
-
         // Update the entity with mesh and material
-        commands.entity(entity).insert((
-            Mesh3d(mesh_handle),
-            MeshMaterial3d(material_handle),
-        ));
-
-        println!("🎯 Attached mesh and material to terrain entity");
+        commands
+            .entity(entity)
+            .insert((Mesh3d(mesh_handle), MeshMaterial3d(material_handle)));
     }
 }
 
@@ -84,7 +74,10 @@ fn create_terrain_mesh(terrain: &TerrainComponent, images: &Assets<Image>) -> Me
             positions.push([x_pos, y_pos, z_pos]);
             // Normals will be calculated later
             normals.push([0.0, 1.0, 0.0]); // Temporary up normal
-            uvs.push([x as f32 / (resolution - 1) as f32, z as f32 / (resolution - 1) as f32]);
+            uvs.push([
+                x as f32 / (resolution - 1) as f32,
+                z as f32 / (resolution - 1) as f32,
+            ]);
         }
     }
 
