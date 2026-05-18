@@ -2,37 +2,27 @@ use super::craft_components::*;
 use bevy::prelude::*;
 use rand::Rng;
 
+#[derive(Component)]
+pub struct CraftGlowMaterial(pub Handle<StandardMaterial>);
+
 pub fn update_craft_visuals(
     time: Res<Time>,
     control: Res<CraftControlState>,
-    mut part_query: Query<(&mut Transform, &CraftPart), (Without<ExpandingRing>, Without<SparkParticle>)>,
+    craft_query: Query<(&CraftGlowMaterial, &Children)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dc = control.dc_current;
-    let pulse_val = (time.elapsed_secs() * 3.0).sin() * 0.5 + 0.5;
-    let emissive_intensity = pulse_val * 5.0;
+    let pulse = control.pulse_current;
+    let pulse_phase = (time.elapsed_secs() * 3.0).sin() * 0.5 + 0.5;
+    let emissive_power = pulse_phase * 1.5 + dc * 0.5;
 
-    for (mut transform, part) in part_query.iter_mut() {
-        match part.part_type {
-            CraftPartType::Core => {
-                if let Some(mat) = materials.get_mut(&part.material_handle) {
-                    mat.emissive =
-                        LinearRgba::new(emissive_intensity * 0.8, emissive_intensity * 0.4, 0.0, 1.0);
-                }
-            }
-            CraftPartType::Rim => {
-                if let Some(mat) = materials.get_mut(&part.material_handle) {
-                    mat.emissive = LinearRgba::new(0.0, 0.2, dc * 2.0, 1.0);
-                }
-            }
-            CraftPartType::InnerRing => {
-                transform.rotation = Quat::from_rotation_y(time.elapsed_secs() * 1.5);
-            }
-            CraftPartType::Dome => {
-                let dome_scale = 1.0 + dc * 2.0;
-                transform.scale = Vec3::splat(dome_scale);
-            }
-            _ => {}
+    for (glow, _children) in craft_query.iter() {
+        if let Some(mat) = materials.get_mut(&glow.0) {
+            let r = emissive_power * (0.3 + pulse * 0.7);
+            let g = emissive_power * (0.1 + dc * 0.3);
+            let b = emissive_power * (0.05 + dc * 0.15);
+            mat.emissive = LinearRgba::new(r, g, b, 1.0);
+            mat.base_color = Color::srgba(r * 0.3, g * 0.2, b * 0.3, 0.1 + dc * 0.2);
         }
     }
 }
@@ -119,8 +109,8 @@ pub struct SparkParticle {
 pub fn update_zpe_effects(
     time: Res<Time>,
     mut commands: Commands,
-    mut ring_query: Query<(Entity, &mut Transform, &mut ExpandingRing), (Without<CraftPart>, Without<SparkParticle>)>,
-    mut spark_query: Query<(Entity, &mut Transform, &mut SparkParticle), (Without<CraftPart>, Without<ExpandingRing>)>,
+    mut ring_query: Query<(Entity, &mut Transform, &mut ExpandingRing)>,
+    mut spark_query: Query<(Entity, &mut Transform, &mut SparkParticle)>,
 ) {
     let dt = time.delta_secs();
 

@@ -1,61 +1,23 @@
 use crate::infrastructure::bevy_adapters::components::CameraController;
 use crate::infrastructure::bevy_adapters::craft_components::*;
+use crate::infrastructure::bevy_adapters::craft_effects::CraftGlowMaterial;
 use crate::infrastructure::bevy_adapters::craft_ui::*;
 use bevy::prelude::*;
 
 pub fn spawn_craft(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     solar_camera_query: Query<Entity, With<CameraController>>,
 ) {
-    let disc_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.6, 0.65),
-        metallic: 0.95,
-        perceptual_roughness: 0.15,
-        ..default()
-    });
-    let dome_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.7, 0.8, 0.9, 0.25),
-        metallic: 0.0,
-        perceptual_roughness: 0.1,
+    let glow_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.0, 0.0, 0.0, 0.0),
+        emissive: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
+        unlit: true,
         alpha_mode: AlphaMode::Blend,
         ..default()
     });
-    let rim_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.1, 0.2, 0.4),
-        metallic: 0.8,
-        perceptual_roughness: 0.3,
-        emissive: LinearRgba::new(0.0, 0.1, 0.3, 1.0),
-        ..default()
-    });
-    let core_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.3, 0.15, 0.0),
-        metallic: 0.6,
-        perceptual_roughness: 0.4,
-        emissive: LinearRgba::new(0.8, 0.4, 0.0, 1.0),
-        ..default()
-    });
-    let sphere_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.4, 0.45, 0.55),
-        metallic: 0.85,
-        perceptual_roughness: 0.25,
-        ..default()
-    });
-    let ring_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.0, 0.6, 0.8),
-        metallic: 0.5,
-        perceptual_roughness: 0.2,
-        emissive: LinearRgba::new(0.0, 0.4, 0.6, 1.0),
-        ..default()
-    });
-
-    let disc = meshes.add(Torus::new(0.72, 0.88));
-    let dome = meshes.add(Sphere::new(0.6));
-    let rim = meshes.add(Cylinder::new(1.0, 0.08));
-    let core = meshes.add(Sphere::new(0.2));
-    let sphere = meshes.add(Sphere::new(0.5));
-    let ring = meshes.add(Torus::new(0.46, 0.54));
 
     commands
         .spawn((
@@ -66,46 +28,17 @@ pub fn spawn_craft(
                 ring_rotation: 0.0,
                 dome_base_scale: 1.0,
             },
+            SceneRoot(asset_server.load("models/ufo_flying_saucer_spaceship_ovni.glb#Scene0")),
             Transform::from_translation(Vec3::new(0.0, 5.0, 0.0)),
             Visibility::default(),
+            CraftGlowMaterial(glow_mat.clone()),
         ))
         .with_children(|parent| {
+            // Glow halo sphere around the craft for emissive pulse effects
             parent.spawn((
-                Mesh3d(sphere),
-                MeshMaterial3d(sphere_mat.clone()),
+                Mesh3d(meshes.add(Sphere::new(1.2))),
+                MeshMaterial3d(glow_mat),
                 Transform::from_xyz(0.0, 0.0, 0.0),
-                CraftPart { part_type: CraftPartType::Sphere, material_handle: sphere_mat.clone() },
-            ));
-            parent.spawn((
-                Mesh3d(disc),
-                MeshMaterial3d(disc_mat.clone()),
-                Transform::from_xyz(0.0, -0.1, 0.0)
-                    .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
-                CraftPart { part_type: CraftPartType::Disc, material_handle: disc_mat.clone() },
-            ));
-            parent.spawn((
-                Mesh3d(dome),
-                MeshMaterial3d(dome_mat.clone()),
-                Transform::from_xyz(0.0, 0.4, 0.0),
-                CraftPart { part_type: CraftPartType::Dome, material_handle: dome_mat.clone() },
-            ));
-            parent.spawn((
-                Mesh3d(rim),
-                MeshMaterial3d(rim_mat.clone()),
-                Transform::from_xyz(0.0, -0.3, 0.0),
-                CraftPart { part_type: CraftPartType::Rim, material_handle: rim_mat.clone() },
-            ));
-            parent.spawn((
-                Mesh3d(core),
-                MeshMaterial3d(core_mat.clone()),
-                Transform::from_xyz(0.0, 0.0, 0.0),
-                CraftPart { part_type: CraftPartType::Core, material_handle: core_mat.clone() },
-            ));
-            parent.spawn((
-                Mesh3d(ring),
-                MeshMaterial3d(ring_mat.clone()),
-                Transform::from_xyz(0.0, 0.05, 0.0),
-                CraftPart { part_type: CraftPartType::InnerRing, material_handle: ring_mat.clone() },
             ));
         });
 
