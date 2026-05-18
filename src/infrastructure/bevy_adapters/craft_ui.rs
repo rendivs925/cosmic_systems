@@ -4,17 +4,11 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct DcFieldLabel;
 #[derive(Component)]
-pub struct PulseLabel;
-#[derive(Component)]
 pub struct LiftLabel;
-#[derive(Component)]
-pub struct ZpeLabel;
 #[derive(Component)]
 pub struct EnergyLabel;
 #[derive(Component)]
 pub struct CamLabel;
-#[derive(Component)]
-pub struct GainLabel;
 #[derive(Component)]
 pub struct FlightLabel;
 
@@ -23,12 +17,9 @@ pub fn update_craft_ui(
     control: Res<CraftControlState>,
     mut set: ParamSet<(
         Query<&mut Text, With<DcFieldLabel>>,
-        Query<&mut Text, With<PulseLabel>>,
         Query<&mut Text, With<LiftLabel>>,
-        Query<&mut Text, With<ZpeLabel>>,
         Query<&mut Text, With<EnergyLabel>>,
         Query<&mut Text, With<CamLabel>>,
-        Query<&mut Text, With<GainLabel>>,
         Query<&mut Text, With<FlightLabel>>,
     )>,
 ) {
@@ -41,18 +32,12 @@ pub fn update_craft_ui(
         text.0 = format!("DC: {:.2}", control.dc_current);
     }
     for mut text in set.p1().iter_mut() {
-        text.0 = format!("Pulse: {:.2}", control.pulse_current);
-    }
-    for mut text in set.p2().iter_mut() {
         text.0 = format!("Lift: {:.1} kN", craft.physics.lift_force);
     }
-    for mut text in set.p3().iter_mut() {
-        text.0 = format!("ZPE: {:.1} kW", craft.physics.zpe_kilowatts);
-    }
-    for mut text in set.p4().iter_mut() {
+    for mut text in set.p2().iter_mut() {
         text.0 = format!("Energy: {:.2} MJ", craft.physics.net_energy_mj);
     }
-    for mut text in set.p5().iter_mut() {
+    for mut text in set.p3().iter_mut() {
         let name = match craft.camera_mode {
             CraftCameraMode::Chase => "Chase",
             CraftCameraMode::Orbit => "Orbit",
@@ -62,14 +47,7 @@ pub fn update_craft_ui(
         };
         text.0 = format!("CAM: {}", name);
     }
-    for mut text in set.p6().iter_mut() {
-        if craft.physics.parametric_gain {
-            text.0 = "PARAMETRIC GAIN ACTIVE".to_string();
-        } else if !text.0.is_empty() {
-            text.0 = "".to_string();
-        }
-    }
-    for mut text in set.p7().iter_mut() {
+    for mut text in set.p4().iter_mut() {
         let speed = craft.linear_velocity.length();
         let alt = craft.physics.vertical_position;
         let mode = match craft.speed_mode {

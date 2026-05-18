@@ -98,13 +98,10 @@ pub fn spawn_craft_ui(mut commands: Commands) {
         p.spawn(txt("0m/s  5m  0%", bright)).insert(FlightLabel);
         p.spawn(txt("---", dim));
         p.spawn(txt("DC: 0.00", bright)).insert(DcFieldLabel);
-        p.spawn(txt("Pulse: 0.00", bright)).insert(PulseLabel);
         p.spawn(txt("Lift: 0.0 kN", bright)).insert(LiftLabel);
-        p.spawn(txt("ZPE: 0.0 kW", bright)).insert(ZpeLabel);
         p.spawn(txt("Energy: 0.00 MJ", bright)).insert(EnergyLabel);
         p.spawn(txt("---", dim));
         p.spawn(txt("CAM: Chase", bright)).insert(CamLabel);
-        p.spawn(txt("", bright)).insert(GainLabel);
         p.spawn(txt("---", dim));
         p.spawn(txt("WASD=move  QE=yaw", dim));
         p.spawn(txt("Arrows=pitch/roll  RF=vert", dim));

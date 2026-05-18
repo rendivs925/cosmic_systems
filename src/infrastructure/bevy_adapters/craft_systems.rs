@@ -87,16 +87,9 @@ pub fn handle_craft_input(
     if keyboard.pressed(KeyCode::Period) {
         control.dc_target = (control.dc_target + 0.5 * dt).clamp(0.0, 1.0);
     }
-    if keyboard.pressed(KeyCode::BracketLeft) {
-        control.pulse_target = (control.pulse_target - 0.3 * dt).clamp(0.0, 1.0);
-    }
-    if keyboard.pressed(KeyCode::BracketRight) {
-        control.pulse_target = (control.pulse_target + 0.3 * dt).clamp(0.0, 1.0);
-    }
-
     let smooth = 3.0 * dt;
     control.dc_current += (control.dc_target - control.dc_current) * smooth;
-    control.pulse_current += (control.pulse_target - control.pulse_current) * smooth;
+    control.pulse_current = 0.0;
 
     for wheel in mouse_wheel.read() {
         cam_state.target_distance = (cam_state.target_distance - wheel.y * 2.0).clamp(2.0, 60.0);
