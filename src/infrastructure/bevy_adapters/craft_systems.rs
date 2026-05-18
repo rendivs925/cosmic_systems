@@ -78,7 +78,7 @@ pub fn handle_craft_input(
         }
 
         let dc = craft.dc_field;
-        let move_speed = 4.0 * (dc * 0.5 + 0.5).max(0.1);
+        let move_speed = 12.0 * dc;
         let mut move_dir = Vec3::ZERO;
         if keyboard.pressed(KeyCode::KeyW) {
             move_dir -= transform.forward().as_vec3();

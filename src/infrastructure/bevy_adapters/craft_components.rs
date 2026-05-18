@@ -54,9 +54,9 @@ pub struct CraftControlState {
 impl Default for CraftControlState {
     fn default() -> Self {
         Self {
-            dc_target: 0.0,
+            dc_target: 0.38,
             pulse_target: 0.0,
-            dc_current: 0.0,
+            dc_current: 0.38,
             pulse_current: 0.0,
         }
     }

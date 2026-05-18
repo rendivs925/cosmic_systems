@@ -1,3 +1,4 @@
+use crate::infrastructure::bevy_adapters::components::CameraController;
 use crate::infrastructure::bevy_adapters::craft_components::*;
 use crate::infrastructure::bevy_adapters::craft_ui::*;
 use bevy::prelude::*;
@@ -6,6 +7,7 @@ pub fn spawn_craft(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    solar_camera_query: Query<Entity, With<CameraController>>,
 ) {
     let disc_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.55, 0.6, 0.65),
@@ -106,6 +108,14 @@ pub fn spawn_craft(
                 CraftPart { part_type: CraftPartType::InnerRing, material_handle: ring_mat.clone() },
             ));
         });
+
+    for entity in solar_camera_query.iter() {
+        commands.entity(entity).insert(Camera {
+            order: 1,
+            is_active: false,
+            ..default()
+        });
+    }
 
     commands.spawn((
         Camera3d::default(),
