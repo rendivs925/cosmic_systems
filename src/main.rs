@@ -27,6 +27,10 @@ use infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
     UiPointerState, ZenMode,
 };
+use infrastructure::bevy_adapters::craft_components::CraftControlState;
+use infrastructure::bevy_adapters::craft_effects::{spawn_zpe_effects, update_craft_visuals, update_zpe_effects};
+use infrastructure::bevy_adapters::craft_systems::{handle_craft_input, update_craft_camera, update_craft_physics};
+use infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use infrastructure::bevy_adapters::systems::*;
 use presentation::ui::*;
 
@@ -36,6 +40,19 @@ fn setup_gyro_mode(app: &mut App) {
     app.add_systems(Update, update_gyroscopes);
     app.add_systems(Update, update_thrust);
     app.add_systems(Update, handle_input);
+}
+
+fn setup_craft_systems(app: &mut App) {
+    app.insert_resource(CraftControlState::default());
+    app.add_systems(Startup, spawn_craft);
+    app.add_systems(Startup, spawn_craft_ui);
+    app.add_systems(FixedUpdate, update_craft_physics);
+    app.add_systems(Update, handle_craft_input);
+    app.add_systems(Update, update_craft_camera);
+    app.add_systems(Update, update_craft_visuals);
+    app.add_systems(Update, spawn_zpe_effects);
+    app.add_systems(Update, update_zpe_effects);
+    app.add_systems(Update, update_craft_ui);
 }
 
 fn setup_solar_system_mode(app: &mut App) {
@@ -165,9 +182,12 @@ fn setup_solar_system_mode(app: &mut App) {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let is_gyro_mode = args.contains(&"gyro".to_string());
+    let is_craft_mode = args.contains(&"craft".to_string());
 
     let title = if is_gyro_mode {
         "Cosmic Systems - Gyro Propulsion"
+    } else if is_craft_mode {
+        "Cosmic Systems - ZPE Craft"
     } else {
         "Cosmic Systems Simulator"
     };
@@ -188,6 +208,9 @@ fn main() {
 
     if is_gyro_mode {
         setup_gyro_mode(&mut app);
+    } else if is_craft_mode {
+        setup_solar_system_mode(&mut app);
+        setup_craft_systems(&mut app);
     } else {
         setup_solar_system_mode(&mut app);
     }

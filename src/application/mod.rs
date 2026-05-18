@@ -1,3 +1,4 @@
+pub mod craft_startup;
 pub mod gyro_startup;
 pub mod material_factory;
 pub mod mesh_factory;

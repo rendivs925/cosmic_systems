@@ -1,4 +1,8 @@
 pub mod components;
+pub mod craft_components;
+pub mod craft_effects;
+pub mod craft_systems;
+pub mod craft_ui;
 pub mod systems;
 pub mod gyroscope_systems;
 pub mod planet_systems;
