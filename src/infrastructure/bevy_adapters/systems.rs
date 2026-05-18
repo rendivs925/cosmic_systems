@@ -1,3 +1,6 @@
+// Education systems
+pub use super::education_systems::*;
+
 // Re-export all system functions from their respective modules
 // This maintains backward compatibility while organizing code better
 

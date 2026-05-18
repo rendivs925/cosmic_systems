@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use infrastructure::bevy_adapters::components::PerformanceStats;
+use infrastructure::bevy_adapters::education_systems::register_education_systems;
 use infrastructure::bevy_adapters::systems::log_performance_stats;
 
 // Run condition for visual updates (every 3 frames)
@@ -212,6 +213,7 @@ fn main() {
     } else if is_craft_mode {
         setup_solar_system_mode(&mut app);
         setup_craft_systems(&mut app);
+        register_education_systems(&mut app);
     } else {
         setup_solar_system_mode(&mut app);
     }

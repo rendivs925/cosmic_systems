@@ -1,5 +1,6 @@
 pub mod components;
 pub mod craft_components;
+pub mod education_systems;
 pub mod craft_effects;
 pub mod craft_systems;
 pub mod craft_ui;

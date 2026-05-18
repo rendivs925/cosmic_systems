@@ -8,3 +8,4 @@ pub mod gyroscope;
 pub mod planet_factory;
 pub mod simd_processor;
 pub mod units;
+pub mod vacuum_physics;
