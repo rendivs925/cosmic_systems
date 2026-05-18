@@ -11,7 +11,7 @@ pub struct CraftComponent {
     pub camera_mode: CraftCameraMode,
     pub angular_velocity: Vec3,
     pub linear_velocity: Vec3,
-    pub throttle: f32,
+    pub move_input: Vec2,
     pub speed_mode: SpeedMode,
 }
 
@@ -25,7 +25,7 @@ impl CraftComponent {
             camera_mode: CraftCameraMode::Chase,
             angular_velocity: Vec3::ZERO,
             linear_velocity: Vec3::ZERO,
-            throttle: 0.0,
+            move_input: Vec2::ZERO,
             speed_mode: SpeedMode::Cruise,
         }
     }

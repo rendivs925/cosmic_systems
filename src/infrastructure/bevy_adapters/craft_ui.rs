@@ -72,7 +72,11 @@ pub fn update_craft_ui(
     for mut text in set.p7().iter_mut() {
         let speed = craft.linear_velocity.length();
         let alt = craft.physics.vertical_position;
-        let throttle = (craft.throttle * 100.0) as u32;
-        text.0 = format!("{:.0}m/s  {:.0}m  {}%", speed, alt, throttle);
+        let mode = match craft.speed_mode {
+            SpeedMode::Hover => "HOV",
+            SpeedMode::Cruise => "CRZ",
+            SpeedMode::Sprint => "SPR",
+        };
+        text.0 = format!("{:.0}m/s  {:.0}m  {}", speed, alt, mode);
     }
 }

@@ -39,11 +39,20 @@ pub fn update_craft_physics(
             SpeedMode::Sprint => 3.0,
         };
         let max_speed = 8.0 * dc * speed_mul;
-        let accel = if max_speed > 0.01 { 6.0 } else { 0.0 };
-        let target_vel = craft.throttle * max_speed * transform.forward().as_vec3();
-        craft.linear_velocity = craft
-            .linear_velocity
-            .lerp(target_vel, (accel * dt).min(1.0));
+        let accel = if max_speed > 0.01 { 6.0 } else { 3.0 };
+        let move_input = craft.move_input.clamp_length_max(1.0);
+        let magnitude = move_input.length();
+        let local_dir = if magnitude > 0.001 {
+            Vec3::new(move_input.x, 0.0, move_input.y).normalize()
+        } else {
+            Vec3::ZERO
+        };
+        let world_dir = transform.rotation * local_dir;
+        let target_vel = world_dir * magnitude * max_speed;
+        craft.linear_velocity =
+            craft
+                .linear_velocity
+                .lerp(target_vel, (accel * dt).min(1.0));
         craft.linear_velocity *= 1.0 - 2.0 * dt;
 
         let lift = craft.physics.lift_force;
@@ -133,32 +142,37 @@ pub fn handle_craft_input(
     }
 
     for (mut craft, _) in craft_query.iter_mut() {
-        let pitch_rate = 2.0;
-        let yaw_rate = 2.5;
-        let roll_rate = 3.0;
+        let mut move_x = 0.0;
+        let mut move_z = 0.0;
+        if keyboard.pressed(KeyCode::KeyW) { move_z -= 1.0; }
+        if keyboard.pressed(KeyCode::KeyS) { move_z += 1.0; }
+        if keyboard.pressed(KeyCode::KeyA) { move_x -= 1.0; }
+        if keyboard.pressed(KeyCode::KeyD) { move_x += 1.0; }
+        craft.move_input = Vec2::new(move_x, move_z);
 
-        if keyboard.pressed(KeyCode::KeyW) {
-            craft.angular_velocity.x -= pitch_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyS) {
-            craft.angular_velocity.x += pitch_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyA) {
-            craft.angular_velocity.z += roll_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyD) {
-            craft.angular_velocity.z -= roll_rate * dt;
-        }
+        let yaw_rate = 2.5;
+        let pitch_rate = 2.0;
+        let roll_rate = 3.0;
         if keyboard.pressed(KeyCode::KeyQ) {
             craft.angular_velocity.y -= yaw_rate * dt;
         }
         if keyboard.pressed(KeyCode::KeyE) {
             craft.angular_velocity.y += yaw_rate * dt;
         }
-
+        if keyboard.pressed(KeyCode::ArrowUp) {
+            craft.angular_velocity.x -= pitch_rate * dt;
+        }
+        if keyboard.pressed(KeyCode::ArrowDown) {
+            craft.angular_velocity.x += pitch_rate * dt;
+        }
+        if keyboard.pressed(KeyCode::ArrowLeft) {
+            craft.angular_velocity.z += roll_rate * dt;
+        }
+        if keyboard.pressed(KeyCode::ArrowRight) {
+            craft.angular_velocity.z -= roll_rate * dt;
+        }
         craft.angular_velocity = craft.angular_velocity.clamp_length_max(6.0);
 
-        let mut throttle_dir = 0.0;
         if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
             craft.speed_mode = SpeedMode::Sprint;
         } else if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
@@ -168,19 +182,10 @@ pub fn handle_craft_input(
         }
 
         if craft.speed_mode == SpeedMode::Hover {
-            throttle_dir = 0.0;
+            craft.move_input = Vec2::ZERO;
             craft.linear_velocity = Vec3::ZERO;
             craft.angular_velocity *= 1.0 - 6.0 * dt;
-        } else {
-            if keyboard.pressed(KeyCode::ArrowUp) {
-                throttle_dir += 1.0;
-            }
-            if keyboard.pressed(KeyCode::ArrowDown) {
-                throttle_dir -= 1.0;
-            }
         }
-
-        craft.throttle = (craft.throttle + throttle_dir * 2.0 * dt).clamp(0.0, 1.0);
 
         if keyboard.pressed(KeyCode::KeyR) {
             craft.physics.vertical_velocity += 3.0 * dt;
@@ -188,7 +193,6 @@ pub fn handle_craft_input(
         if keyboard.pressed(KeyCode::KeyF) {
             craft.physics.vertical_velocity -= 3.0 * dt;
         }
-
     }
 }
 
