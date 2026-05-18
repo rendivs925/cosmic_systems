@@ -52,6 +52,10 @@ pub fn spawn_craft(
 
     commands.spawn((
         Camera3d::default(),
+        Camera {
+            order: 2,
+            ..default()
+        },
         Transform::from_xyz(0.0, 8.0, 10.0).looking_at(Vec3::new(0.0, 5.0, 0.0), Vec3::Y),
         CraftCameraTag,
     ));

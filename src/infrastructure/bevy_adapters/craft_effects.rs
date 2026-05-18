@@ -6,23 +6,21 @@ use rand::Rng;
 pub struct CraftGlowMaterial(pub Handle<StandardMaterial>);
 
 pub fn update_craft_visuals(
-    time: Res<Time>,
     control: Res<CraftControlState>,
-    craft_query: Query<(&CraftGlowMaterial, &Children)>,
+    craft_query: Query<&CraftGlowMaterial>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dc = control.dc_current;
     let pulse = control.pulse_current;
-    let pulse_phase = (time.elapsed_secs() * 3.0).sin() * 0.5 + 0.5;
-    let emissive_power = pulse_phase * 1.5 + dc * 0.5;
+    let emissive_base = 0.2 + dc * 0.8;
 
-    for (glow, _children) in craft_query.iter() {
+    for glow in craft_query.iter() {
         if let Some(mat) = materials.get_mut(&glow.0) {
-            let r = emissive_power * (0.3 + pulse * 0.7);
-            let g = emissive_power * (0.1 + dc * 0.3);
-            let b = emissive_power * (0.05 + dc * 0.15);
+            let r = emissive_base * (0.3 + pulse * 0.7);
+            let g = emissive_base * (0.1 + dc * 0.3);
+            let b = emissive_base * (0.05 + dc * 0.15);
             mat.emissive = LinearRgba::new(r, g, b, 1.0);
-            mat.base_color = Color::srgba(r * 0.3, g * 0.2, b * 0.3, 0.1 + dc * 0.2);
+            mat.base_color = Color::srgba(0.0, 0.0, 0.0, 0.0);
         }
     }
 }
