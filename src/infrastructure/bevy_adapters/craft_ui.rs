@@ -25,48 +25,48 @@ pub struct GainLabel;
 pub fn update_craft_ui(
     craft_query: Query<&CraftComponent>,
     control: Res<CraftControlState>,
-    mut dc_query: Query<&mut Text, With<DcFieldLabel>>,
-    mut pulse_query: Query<&mut Text, (With<PulseLabel>, Without<DcFieldLabel>)>,
-    mut lift_query: Query<&mut Text, (With<LiftLabel>, Without<DcFieldLabel>)>,
-    mut zpe_query: Query<&mut Text, (With<ZpeLabel>, Without<DcFieldLabel>)>,
-    mut energy_query: Query<&mut Text, (With<EnergyLabel>, Without<DcFieldLabel>)>,
-    mut cam_query: Query<&mut Text, (With<CamLabel>, Without<DcFieldLabel>)>,
-    mut gain_query: Query<&mut Text, (With<GainLabel>, Without<DcFieldLabel>)>,
+    mut set: ParamSet<(
+        Query<&mut Text, With<DcFieldLabel>>,
+        Query<&mut Text, With<PulseLabel>>,
+        Query<&mut Text, With<LiftLabel>>,
+        Query<&mut Text, With<ZpeLabel>>,
+        Query<&mut Text, With<EnergyLabel>>,
+        Query<&mut Text, With<CamLabel>>,
+        Query<&mut Text, With<GainLabel>>,
+    )>,
 ) {
     let craft = match craft_query.single() {
         Ok(c) => c,
         _ => return,
     };
 
-    for mut text in dc_query.iter_mut() {
+    for mut text in set.p0().iter_mut() {
         text.0 = format!("DC Field: {:.2}", control.dc_current);
     }
-    for mut text in pulse_query.iter_mut() {
+    for mut text in set.p1().iter_mut() {
         text.0 = format!("Pulse: {:.2}", control.pulse_current);
     }
-    for mut text in lift_query.iter_mut() {
+    for mut text in set.p2().iter_mut() {
         text.0 = format!("Lift: {:.1} kN", craft.physics.lift_force);
     }
-    for mut text in zpe_query.iter_mut() {
+    for mut text in set.p3().iter_mut() {
         text.0 = format!("ZPE: {:.1} kW", craft.physics.zpe_kilowatts);
     }
-    for mut text in energy_query.iter_mut() {
+    for mut text in set.p4().iter_mut() {
         text.0 = format!("Energy: {:.2} MJ", craft.physics.net_energy_mj);
     }
-    for mut text in cam_query.iter_mut() {
+    for mut text in set.p5().iter_mut() {
         let mode = match craft.camera_mode {
             CraftCameraMode::External => "External",
             CraftCameraMode::FirstPerson => "First-Person",
         };
         text.0 = format!("CAM: {}", mode);
     }
-    for mut text in gain_query.iter_mut() {
+    for mut text in set.p6().iter_mut() {
         if craft.physics.parametric_gain {
             text.0 = "PARAMETRIC GAIN ACTIVE".to_string();
-        } else {
-            if text.0 != "" {
-                text.0 = "".to_string();
-            }
+        } else if !text.0.is_empty() {
+            text.0 = "".to_string();
         }
     }
 }
