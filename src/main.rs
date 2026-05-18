@@ -27,7 +27,7 @@ use infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
     UiPointerState, ZenMode,
 };
-use infrastructure::bevy_adapters::craft_components::CraftControlState;
+use infrastructure::bevy_adapters::craft_components::{CraftCameraState, CraftControlState};
 use infrastructure::bevy_adapters::craft_effects::{spawn_zpe_effects, update_craft_visuals, update_zpe_effects};
 use infrastructure::bevy_adapters::craft_systems::{handle_craft_input, update_craft_camera, update_craft_physics};
 use infrastructure::bevy_adapters::craft_ui::update_craft_ui;
@@ -44,6 +44,7 @@ fn setup_gyro_mode(app: &mut App) {
 
 fn setup_craft_systems(app: &mut App) {
     app.insert_resource(CraftControlState::default());
+    app.insert_resource(CraftCameraState::default());
     app.add_systems(Startup, spawn_craft);
     app.add_systems(Startup, spawn_craft_ui);
     app.add_systems(FixedUpdate, update_craft_physics);
