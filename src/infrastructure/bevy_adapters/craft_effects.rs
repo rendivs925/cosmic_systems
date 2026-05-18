@@ -109,8 +109,8 @@ pub struct SparkParticle {
 pub fn update_zpe_effects(
     time: Res<Time>,
     mut commands: Commands,
-    mut ring_query: Query<(Entity, &mut Transform, &mut ExpandingRing)>,
-    mut spark_query: Query<(Entity, &mut Transform, &mut SparkParticle)>,
+    mut ring_query: Query<(Entity, &mut Transform, &mut ExpandingRing), Without<SparkParticle>>,
+    mut spark_query: Query<(Entity, &mut Transform, &mut SparkParticle), Without<ExpandingRing>>,
 ) {
     let dt = time.delta_secs();
 
