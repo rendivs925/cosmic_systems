@@ -11,10 +11,6 @@ use crate::presentation::education_panel::{
 use crate::presentation::knowledge_journal::{
     spawn_knowledge_journal, update_journal_display,
 };
-use crate::presentation::vacuum_visualization::{
-    spawn_field_gradient, update_field_gradient, spawn_virtual_particles,
-    update_virtual_particles, spawn_zpe_ripple, update_zpe_ripples,
-};
 use crate::presentation::compare_mode::{spawn_rocket_craft, update_rocket_physics, update_rocket_hud};
 
 /// Handle education mode input toggles.
@@ -102,18 +98,12 @@ pub fn register_education_systems(app: &mut App) {
     app.add_systems(Startup, (
         spawn_education_panel,
         spawn_knowledge_journal,
-        spawn_field_gradient,
     ));
     app.add_systems(Update, (
         handle_education_input,
         check_journal_unlocks,
         update_education_panel,
         update_journal_display,
-        update_field_gradient,
-        spawn_virtual_particles,
-        update_virtual_particles,
-        spawn_zpe_ripple,
-        update_zpe_ripples,
         spawn_rocket_craft,
         update_rocket_physics,
         update_rocket_hud,
