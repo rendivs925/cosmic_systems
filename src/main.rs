@@ -29,7 +29,7 @@ use infrastructure::bevy_adapters::components::{
     UiPointerState, ZenMode,
 };
 use infrastructure::bevy_adapters::craft_components::{CraftCameraState, CraftControlState};
-use infrastructure::bevy_adapters::craft_effects::update_craft_visuals;
+use application::craft_startup::spawn_craft_model;
 use infrastructure::bevy_adapters::craft_systems::{handle_craft_input, update_craft_camera, update_craft_physics};
 use infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use infrastructure::bevy_adapters::systems::*;
@@ -51,7 +51,7 @@ fn setup_craft_systems(app: &mut App) {
     app.add_systems(FixedUpdate, update_craft_physics);
     app.add_systems(Update, handle_craft_input);
     app.add_systems(Update, update_craft_camera);
-    app.add_systems(Update, update_craft_visuals);
+    app.add_systems(Update, spawn_craft_model);
     app.add_systems(Update, update_craft_ui);
 }
 

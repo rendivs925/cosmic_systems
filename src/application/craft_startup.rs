@@ -1,47 +1,16 @@
 use crate::infrastructure::bevy_adapters::components::CameraController;
 use crate::infrastructure::bevy_adapters::craft_components::*;
-use crate::infrastructure::bevy_adapters::craft_effects::CraftGlowMaterial;
 use crate::infrastructure::bevy_adapters::craft_ui::*;
+use bevy::gltf::Gltf;
 use bevy::prelude::*;
 
 pub fn spawn_craft(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     solar_camera_query: Query<Entity, With<CameraController>>,
 ) {
-    let glow_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.0, 0.0, 0.0, 0.0),
-        emissive: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        ..default()
-    });
-
-    commands
-        .spawn((
-            CraftComponent::saucer(),
-            CraftVisual {
-                kind: crate::domain::entities::craft::CraftKind::Saucer,
-                core_pulse_phase: 0.0,
-                ring_rotation: 0.0,
-                dome_base_scale: 1.0,
-            },
-            SceneRoot(asset_server.load("models/ufo_flying_saucer_spaceship_ovni.glb#Scene0")),
-            Transform::from_translation(Vec3::new(0.0, 5.0, 0.0))
-                .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-            Visibility::default(),
-            CraftGlowMaterial(glow_mat.clone()),
-        ))
-        .with_children(|parent| {
-            // Glow halo sphere around the craft for emissive pulse effects
-            parent.spawn((
-                Mesh3d(meshes.add(Sphere::new(1.2))),
-                MeshMaterial3d(glow_mat),
-                Transform::from_xyz(0.0, 0.0, 0.0),
-            ));
-        });
+    let gltf_handle: Handle<Gltf> = asset_server.load("models/ufo_flying_saucer_spaceship_ovni.glb");
+    commands.insert_resource(CraftModelLoad { gltf_handle, done: false });
 
     for entity in solar_camera_query.iter() {
         commands.entity(entity).despawn();
@@ -56,14 +25,6 @@ pub fn spawn_craft(
         Transform::from_xyz(0.0, 8.0, 10.0).looking_at(Vec3::new(0.0, 5.0, 0.0), Vec3::Y),
         CraftCameraTag,
     ));
-}
-
-fn txt(s: &str, c: Color) -> (Text, TextFont, TextColor) {
-    (
-        Text::new(s),
-        TextFont { font_size: 10.0, ..default() },
-        TextColor(c),
-    )
 }
 
 pub fn spawn_craft_ui(mut commands: Commands) {
@@ -108,4 +69,50 @@ pub fn spawn_craft_ui(mut commands: Commands) {
         p.spawn(txt("Shift=sprint  Ctrl=hover", dim));
         p.spawn(txt("V=camera  wheel=zoom", dim));
     });
+}
+
+#[derive(Resource)]
+pub struct CraftModelLoad {
+    pub gltf_handle: Handle<Gltf>,
+    pub done: bool,
+}
+
+pub fn spawn_craft_model(
+    mut commands: Commands,
+    mut load: ResMut<CraftModelLoad>,
+    gltf_assets: Res<Assets<Gltf>>,
+) {
+    if load.done {
+        return;
+    }
+    let Some(gltf) = gltf_assets.get(&load.gltf_handle) else {
+        return;
+    };
+    let Some(scene) = gltf.default_scene.clone().or_else(|| gltf.scenes.first().cloned()) else {
+        return;
+    };
+
+    load.done = true;
+
+    commands.spawn((
+        CraftComponent::saucer(),
+        CraftVisual {
+            kind: crate::domain::entities::craft::CraftKind::Saucer,
+            core_pulse_phase: 0.0,
+            ring_rotation: 0.0,
+            dome_base_scale: 1.0,
+        },
+        SceneRoot(scene),
+        Transform::from_translation(Vec3::new(0.0, 5.0, 0.0))
+            .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+        Visibility::default(),
+    ));
+}
+
+fn txt(s: &str, c: Color) -> (Text, TextFont, TextColor) {
+    (
+        Text::new(s),
+        TextFont { font_size: 10.0, ..default() },
+        TextColor(c),
+    )
 }
