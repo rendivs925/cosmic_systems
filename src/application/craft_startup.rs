@@ -160,18 +160,21 @@ pub fn spawn_craft_ui(mut commands: Commands) {
         BorderRadius::all(Val::Px(8.0)),
         CraftUiRoot,
     )).with_children(|p| {
-        p.spawn(txt("=== CRAFT CONTROL ===", bright));
-        p.spawn(txt("DC Field: 0.00", bright)).insert(DcFieldLabel);
-        p.spawn(txt("Pulse: 0.00", bright)).insert(PulseLabel);
+        p.spawn(txt("=== CRAFT ===", bright));
+        p.spawn(txt("0m/s  5m  0%", bright)).insert(FlightLabel);
         p.spawn(txt("---", dim));
+        p.spawn(txt("DC: 0.00", bright)).insert(DcFieldLabel);
+        p.spawn(txt("Pulse: 0.00", bright)).insert(PulseLabel);
         p.spawn(txt("Lift: 0.0 kN", bright)).insert(LiftLabel);
         p.spawn(txt("ZPE: 0.0 kW", bright)).insert(ZpeLabel);
         p.spawn(txt("Energy: 0.00 MJ", bright)).insert(EnergyLabel);
         p.spawn(txt("---", dim));
-        p.spawn(txt("CAM: External", bright)).insert(CamLabel);
-        p.spawn(txt("---", dim));
-        p.spawn(txt("[< , .>  DC]  [[ ]  Pulse]", dim));
-        p.spawn(txt("[V] Camera  [Esc] Release", dim));
+        p.spawn(txt("CAM: Chase", bright)).insert(CamLabel);
         p.spawn(txt("", bright)).insert(GainLabel);
+        p.spawn(txt("---", dim));
+        p.spawn(txt("WASD=pitch/roll  QE=yaw", dim));
+        p.spawn(txt("Arrows=throttle  RF=vert", dim));
+        p.spawn(txt("Shift=sprint  Ctrl=hover", dim));
+        p.spawn(txt("V=camera  wheel=zoom", dim));
     });
 }

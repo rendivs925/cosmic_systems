@@ -9,9 +9,10 @@ pub struct CraftComponent {
     pub dc_field: f32,
     pub pulse_resonance: f32,
     pub camera_mode: CraftCameraMode,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub horizontal_velocity: Vec3,
+    pub angular_velocity: Vec3,
+    pub linear_velocity: Vec3,
+    pub throttle: f32,
+    pub speed_mode: SpeedMode,
 }
 
 impl CraftComponent {
@@ -21,10 +22,11 @@ impl CraftComponent {
             physics: CraftPhysicsState::default(),
             dc_field: 0.0,
             pulse_resonance: 0.0,
-            camera_mode: CraftCameraMode::External,
-            yaw: 0.0,
-            pitch: 0.0,
-            horizontal_velocity: Vec3::ZERO,
+            camera_mode: CraftCameraMode::Chase,
+            angular_velocity: Vec3::ZERO,
+            linear_velocity: Vec3::ZERO,
+            throttle: 0.0,
+            speed_mode: SpeedMode::Cruise,
         }
     }
 }
@@ -39,8 +41,18 @@ pub struct CraftVisual {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CraftCameraMode {
-    External,
+    Chase,
+    Orbit,
     FirstPerson,
+    Free,
+    Cinematic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeedMode {
+    Hover,
+    Cruise,
+    Sprint,
 }
 
 #[derive(Resource)]
@@ -49,6 +61,7 @@ pub struct CraftControlState {
     pub pulse_target: f32,
     pub dc_current: f32,
     pub pulse_current: f32,
+    pub camera_index: usize,
 }
 
 impl Default for CraftControlState {
@@ -58,6 +71,32 @@ impl Default for CraftControlState {
             pulse_target: 0.0,
             dc_current: 0.38,
             pulse_current: 0.0,
+            camera_index: 0,
+        }
+    }
+}
+
+#[derive(Resource)]
+pub struct CraftCameraState {
+    pub target_distance: f32,
+    pub zoom: f32,
+    pub orbit_yaw: f32,
+    pub orbit_pitch: f32,
+    pub smooth_position: Vec3,
+    pub smooth_look: Vec3,
+    pub locked: bool,
+}
+
+impl Default for CraftCameraState {
+    fn default() -> Self {
+        Self {
+            target_distance: 8.0,
+            zoom: 1.0,
+            orbit_yaw: 0.0,
+            orbit_pitch: 0.4,
+            smooth_position: Vec3::ZERO,
+            smooth_look: Vec3::ZERO,
+            locked: false,
         }
     }
 }

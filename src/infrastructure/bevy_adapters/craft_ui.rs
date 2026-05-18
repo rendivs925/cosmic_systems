@@ -3,24 +3,20 @@ use bevy::prelude::*;
 
 #[derive(Component)]
 pub struct DcFieldLabel;
-
 #[derive(Component)]
 pub struct PulseLabel;
-
 #[derive(Component)]
 pub struct LiftLabel;
-
 #[derive(Component)]
 pub struct ZpeLabel;
-
 #[derive(Component)]
 pub struct EnergyLabel;
-
 #[derive(Component)]
 pub struct CamLabel;
-
 #[derive(Component)]
 pub struct GainLabel;
+#[derive(Component)]
+pub struct FlightLabel;
 
 pub fn update_craft_ui(
     craft_query: Query<&CraftComponent>,
@@ -33,6 +29,7 @@ pub fn update_craft_ui(
         Query<&mut Text, With<EnergyLabel>>,
         Query<&mut Text, With<CamLabel>>,
         Query<&mut Text, With<GainLabel>>,
+        Query<&mut Text, With<FlightLabel>>,
     )>,
 ) {
     let craft = match craft_query.single() {
@@ -41,7 +38,7 @@ pub fn update_craft_ui(
     };
 
     for mut text in set.p0().iter_mut() {
-        text.0 = format!("DC Field: {:.2}", control.dc_current);
+        text.0 = format!("DC: {:.2}", control.dc_current);
     }
     for mut text in set.p1().iter_mut() {
         text.0 = format!("Pulse: {:.2}", control.pulse_current);
@@ -56,11 +53,14 @@ pub fn update_craft_ui(
         text.0 = format!("Energy: {:.2} MJ", craft.physics.net_energy_mj);
     }
     for mut text in set.p5().iter_mut() {
-        let mode = match craft.camera_mode {
-            CraftCameraMode::External => "External",
+        let name = match craft.camera_mode {
+            CraftCameraMode::Chase => "Chase",
+            CraftCameraMode::Orbit => "Orbit",
             CraftCameraMode::FirstPerson => "First-Person",
+            CraftCameraMode::Free => "Free",
+            CraftCameraMode::Cinematic => "Cinematic",
         };
-        text.0 = format!("CAM: {}", mode);
+        text.0 = format!("CAM: {}", name);
     }
     for mut text in set.p6().iter_mut() {
         if craft.physics.parametric_gain {
@@ -68,5 +68,11 @@ pub fn update_craft_ui(
         } else if !text.0.is_empty() {
             text.0 = "".to_string();
         }
+    }
+    for mut text in set.p7().iter_mut() {
+        let speed = craft.linear_velocity.length();
+        let alt = craft.physics.vertical_position;
+        let throttle = (craft.throttle * 100.0) as u32;
+        text.0 = format!("{:.0}m/s  {:.0}m  {}%", speed, alt, throttle);
     }
 }
