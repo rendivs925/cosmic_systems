@@ -5,7 +5,7 @@ use rand::Rng;
 pub fn update_craft_visuals(
     time: Res<Time>,
     control: Res<CraftControlState>,
-    mut part_query: Query<(&mut Transform, &CraftPart)>,
+    mut part_query: Query<(&mut Transform, &CraftPart), (Without<ExpandingRing>, Without<SparkParticle>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dc = control.dc_current;
@@ -119,8 +119,8 @@ pub struct SparkParticle {
 pub fn update_zpe_effects(
     time: Res<Time>,
     mut commands: Commands,
-    mut ring_query: Query<(Entity, &mut Transform, &mut ExpandingRing)>,
-    mut spark_query: Query<(Entity, &mut Transform, &mut SparkParticle)>,
+    mut ring_query: Query<(Entity, &mut Transform, &mut ExpandingRing), (Without<CraftPart>, Without<SparkParticle>)>,
+    mut spark_query: Query<(Entity, &mut Transform, &mut SparkParticle), (Without<CraftPart>, Without<ExpandingRing>)>,
 ) {
     let dt = time.delta_secs();
 
