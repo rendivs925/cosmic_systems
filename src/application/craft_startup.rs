@@ -29,7 +29,8 @@ pub fn spawn_craft(
                 dome_base_scale: 1.0,
             },
             SceneRoot(asset_server.load("models/ufo_flying_saucer_spaceship_ovni.glb#Scene0")),
-            Transform::from_translation(Vec3::new(0.0, 5.0, 0.0)),
+            Transform::from_translation(Vec3::new(0.0, 5.0, 0.0))
+                .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
             Visibility::default(),
             CraftGlowMaterial(glow_mat.clone()),
         ))
@@ -43,11 +44,7 @@ pub fn spawn_craft(
         });
 
     for entity in solar_camera_query.iter() {
-        commands.entity(entity).insert(Camera {
-            order: 1,
-            is_active: false,
-            ..default()
-        });
+        commands.entity(entity).despawn();
     }
 
     commands.spawn((
