@@ -17,6 +17,9 @@ const CAMERA_MODES: &[CraftCameraMode] = &[
 ];
 
 const CRAFT_CRUISE_SPEED_UNITS: f32 = 40_000.0;
+const CHASE_CAMERA_HEIGHT: f32 = 4.0;
+const CHASE_CAMERA_LOOK_HEIGHT: f32 = 1.0;
+const CHASE_CAMERA_MAX_LAG: f32 = 28.0;
 
 pub fn update_craft_physics(
     time: Res<Time>,
@@ -254,7 +257,7 @@ pub fn update_craft_camera(
     };
 
     let target = craft_transform.translation;
-    let forward = -craft_transform.forward().as_vec3();
+    let look_target = target + Vec3::Y * CHASE_CAMERA_LOOK_HEIGHT;
 
     match craft.camera_mode {
         CraftCameraMode::Chase => {
@@ -267,13 +270,14 @@ pub fn update_craft_camera(
             let dist = cam_state.target_distance;
             let yaw = cam_state.orbit_yaw;
             let pitch = cam_state.orbit_pitch;
-            let desired_pos = target
-                + Quat::from_rotation_y(yaw) * (Vec3::new(0.0, pitch.sin() * dist + 2.0, pitch.cos() * dist))
-                + forward * 4.0;
-            let lerp = 1.0 - (-4.0 * dt).exp();
-            let new_pos = camera_transform.translation.lerp(desired_pos, lerp);
-            camera_transform.translation = new_pos;
-            camera_transform.look_at(target, Vec3::Y);
+            let chase_offset = Vec3::new(0.0, CHASE_CAMERA_HEIGHT + pitch.sin() * dist, dist);
+            let desired_pos = target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
+            let lerp = 1.0 - (-12.0 * dt).exp();
+            camera_transform.translation = camera_transform.translation.lerp(desired_pos, lerp);
+            if camera_transform.translation.distance(desired_pos) > CHASE_CAMERA_MAX_LAG {
+                camera_transform.translation = desired_pos;
+            }
+            camera_transform.look_at(look_target, Vec3::Y);
         }
         CraftCameraMode::Orbit => {
             let sensitivity = 0.006;
@@ -293,7 +297,7 @@ pub fn update_craft_camera(
             let lerp = 1.0 - (-4.0 * dt).exp();
             let new_pos = camera_transform.translation.lerp(desired_pos, lerp);
             camera_transform.translation = new_pos;
-            camera_transform.look_at(target, Vec3::Y);
+            camera_transform.look_at(look_target, Vec3::Y);
         }
         CraftCameraMode::FirstPerson => {
             let sensitivity = 0.005;
@@ -338,7 +342,7 @@ pub fn update_craft_camera(
             let lerp = 1.0 - (-2.0 * dt).exp();
             let new_pos = camera_transform.translation.lerp(desired_pos, lerp);
             camera_transform.translation = new_pos;
-            camera_transform.look_at(target, Vec3::Y);
+            camera_transform.look_at(look_target, Vec3::Y);
         }
     }
 }

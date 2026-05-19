@@ -96,7 +96,7 @@ pub struct CraftCameraState {
 impl Default for CraftCameraState {
     fn default() -> Self {
         Self {
-            target_distance: 8.0,
+            target_distance: 14.0,
             zoom: 1.0,
             orbit_yaw: 0.0,
             orbit_pitch: 0.4,

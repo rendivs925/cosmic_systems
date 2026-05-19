@@ -30,8 +30,8 @@ pub fn spawn_craft(
             far: 10_000_000.0,
             ..default()
         }),
-        Transform::from_translation(spawn_position + Vec3::new(0.0, 8.0, 10.0))
-            .looking_at(spawn_position, Vec3::Y),
+        Transform::from_translation(spawn_position + Vec3::new(0.0, 5.0, 16.0))
+            .looking_at(spawn_position + Vec3::Y, Vec3::Y),
         CraftCameraTag,
     ));
 }
@@ -129,7 +129,7 @@ pub fn spawn_craft_model(
         .with_children(|parent| {
             parent.spawn((
                 SceneRoot(scene),
-                Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                Transform::default(),
             ));
         });
 }
