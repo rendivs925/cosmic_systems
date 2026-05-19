@@ -16,6 +16,9 @@ use std::collections::HashMap;
 #[cfg(target_arch = "wasm32")]
 use std::collections::VecDeque;
 
+#[derive(Resource)]
+pub struct SolarCameraEnabled(pub bool);
+
 // Setup scene for solar system simulation
 pub fn setup_space(
     mut commands: Commands,
@@ -23,6 +26,7 @@ pub fn setup_space(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
+    solar_camera_enabled: Option<Res<SolarCameraEnabled>>,
 ) {
     // Insert solar system parameters as a resource
     let solar_params = SolarSystemParameters::for_visualization();
@@ -36,11 +40,17 @@ pub fn setup_space(
         affects_lightmapped_meshes: true,
     });
 
-    // Camera positioned to view the full set of orbits on load
+    let solar_camera_active = solar_camera_enabled.as_deref().map_or(true, |enabled| enabled.0);
+
+    // Camera positioned to view the full set of orbits on load.
+    // Craft mode keeps this controller for solar systems that query it, but disables rendering.
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 120000.0, 1500000.0)
-            .looking_at(Vec3::ZERO, Vec3::Y),
+        Camera {
+            is_active: solar_camera_active,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 120000.0, 1500000.0).looking_at(Vec3::ZERO, Vec3::Y),
         CameraController {
             mode: CameraMode::FreeFlight,
             speed: 5000.0, // Increased base speed for easier navigation

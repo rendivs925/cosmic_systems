@@ -5,6 +5,7 @@ use crate::infrastructure::bevy_adapters::components::{
     NotificationQueue, PerformanceStats, PlanetComponent, ScreenshotState,
     Selectable, SelectedPlanet, UiPointerState, ZenMode,
 };
+use crate::infrastructure::bevy_adapters::craft_components::CraftTravelTarget;
 use crate::presentation::ui_components::*;
 use crate::presentation::ui_helpers::*;
 
@@ -16,6 +17,7 @@ pub fn handle_nav_interactions(
     mut selectable_query: Query<(Entity, &mut Selectable)>,
     mut solar_params: ResMut<SolarSystemParameters>,
     mut menu_state: ResMut<UiMenuState>,
+    mut craft_target: Option<ResMut<CraftTravelTarget>>,
 ) {
     for (interaction, button) in menu_interactions.iter() {
         if *interaction != Interaction::Pressed {
@@ -48,6 +50,11 @@ pub fn handle_nav_interactions(
                 target_entity = Some(entity);
                 break;
             }
+        }
+
+        if let Some(target) = craft_target.as_mut() {
+            target.entity = target_entity;
+            target.name = target_entity.map(|_| button.name.clone());
         }
 
         // Only update selection if it's different (idempotent)

@@ -1,5 +1,8 @@
 use super::craft_components::*;
+use super::components::PlanetComponent;
 use crate::domain::services::craft_physics;
+use crate::domain::services::physics;
+use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::CursorGrabMode;
@@ -13,9 +16,14 @@ const CAMERA_MODES: &[CraftCameraMode] = &[
     CraftCameraMode::Cinematic,
 ];
 
+const CRAFT_CRUISE_SPEED_UNITS: f32 = 40_000.0;
+
 pub fn update_craft_physics(
     time: Res<Time>,
     control: Res<CraftControlState>,
+    solar_params: Res<SolarSystemParameters>,
+    mut travel_target: ResMut<CraftTravelTarget>,
+    planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
     mut craft_query: Query<(&mut CraftComponent, &mut Transform)>,
 ) {
     let dt = time.delta_secs().min(0.05);
@@ -38,34 +46,70 @@ pub fn update_craft_physics(
             SpeedMode::Cruise => 1.0,
             SpeedMode::Sprint => 3.0,
         };
-        let max_speed = 8.0 * dc * speed_mul;
-        let accel = if max_speed > 0.01 { 6.0 } else { 3.0 };
-        let move_input = craft.move_input.clamp_length_max(1.0);
-        let magnitude = move_input.length();
-        let local_dir = if magnitude > 0.001 {
-            Vec3::new(move_input.x, 0.0, move_input.y).normalize()
+        let max_speed = CRAFT_CRUISE_SPEED_UNITS * dc * speed_mul;
+        let accel = if max_speed > 0.01 { 3.0 } else { 3.0 };
+        let mut autopilot_position = None;
+        if let Some(target_entity) = travel_target.entity {
+            if let Ok((planet, planet_transform)) = planet_query.get(target_entity) {
+                autopilot_position = Some((planet, planet_transform.translation()));
+            } else {
+                travel_target.entity = None;
+                travel_target.name = None;
+            }
+        }
+
+        let autopilot_active = autopilot_position.is_some();
+
+        if let Some((planet, target_position)) = autopilot_position {
+            let radius = if planet.domain_planet.name == "Sun" {
+                physics::calculate_sun_visual_radius(&solar_params)
+            } else {
+                physics::calculate_visual_radius(&planet.domain_planet, &solar_params)
+            };
+            let away_from_target = (transform.translation - target_position).normalize_or_zero();
+            let approach_direction = if away_from_target.length_squared() > 0.0 {
+                away_from_target
+            } else {
+                Vec3::X
+            };
+            let destination = target_position + approach_direction * (radius * 3.0 + 500.0);
+
+            transform.translation = destination;
+            transform.look_at(target_position, Vec3::Y);
+            craft.linear_velocity = Vec3::ZERO;
+            craft.physics.vertical_velocity = 0.0;
+            craft.physics.vertical_position = destination.y;
+            travel_target.entity = None;
+            travel_target.name = None;
         } else {
-            Vec3::ZERO
-        };
-        let world_dir = transform.rotation * local_dir;
-        let target_vel = world_dir * magnitude * max_speed;
-        craft.linear_velocity =
-            craft
+            let move_input = craft.move_input.clamp_length_max(1.0);
+            let magnitude = move_input.length();
+            let local_dir = if magnitude > 0.001 {
+                Vec3::new(move_input.x, 0.0, move_input.y).normalize()
+            } else {
+                Vec3::ZERO
+            };
+            let world_dir = transform.rotation * local_dir;
+            let target_vel = world_dir * magnitude * max_speed;
+            craft.linear_velocity = craft
                 .linear_velocity
                 .lerp(target_vel, (accel * dt).min(1.0));
-        craft.linear_velocity *= 1.0 - 2.0 * dt;
+            craft.linear_velocity *= 1.0 - 2.0 * dt;
+        }
 
-        let lift = craft.physics.lift_force;
-        let net_vert = lift - craft.craft.weight_kilonewtons;
-        let grav_accel = net_vert / craft.craft.mass_tonnes - 0.29;
-        craft.physics.vertical_velocity += grav_accel * dt;
-        craft.physics.vertical_position += craft.physics.vertical_velocity * dt;
+        if !autopilot_active {
+            let lift = craft.physics.lift_force;
+            let net_vert = lift - craft.craft.weight_kilonewtons;
+            let grav_accel = net_vert / craft.craft.mass_tonnes - 0.29;
+            craft.physics.vertical_velocity += grav_accel * dt;
+            craft.linear_velocity.y = craft.physics.vertical_velocity;
+        }
 
-        transform.translation = Vec3::new(
-            transform.translation.x + craft.linear_velocity.x * dt,
-            craft.physics.vertical_position,
-            transform.translation.z + craft.linear_velocity.z * dt,
-        );
+        transform.translation += craft.linear_velocity * dt;
+        craft.physics.vertical_position = transform.translation.y;
+        if autopilot_active {
+            craft.physics.vertical_velocity = craft.linear_velocity.y;
+        }
     }
 }
 

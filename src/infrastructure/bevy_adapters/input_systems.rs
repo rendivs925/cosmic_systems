@@ -1,4 +1,5 @@
 use super::components::*;
+use super::craft_components::{CraftCameraTag, CraftTravelTarget};
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::PerformanceStats;
@@ -71,11 +72,15 @@ pub fn handle_planet_selection(
 // System to handle mouse clicking for planet selection
 pub fn handle_mouse_planet_selection(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<CameraController>>,
+    camera_query: Query<
+        (&Camera, &GlobalTransform),
+        Or<(With<CameraController>, With<CraftCameraTag>)>,
+    >,
     windows: Query<&Window>,
     solar_params: Res<SolarSystemParameters>,
     ui_state: Res<UiPointerState>,
     mut selected_planet: ResMut<SelectedPlanet>,
+    mut craft_target: Option<ResMut<CraftTravelTarget>>,
     mut selectable_query: Query<(Entity, &mut Selectable, &PlanetComponent, &GlobalTransform)>,
 ) {
     // Only handle left mouse button clicks
@@ -86,9 +91,8 @@ pub fn handle_mouse_planet_selection(
         return;
     }
 
-    let (camera, camera_transform) = match camera_query.single() {
-        Ok(result) => result,
-        Err(_) => return,
+    let Some((camera, camera_transform)) = camera_query.iter().find(|(camera, _)| camera.is_active) else {
+        return;
     };
     let window = match windows.single() {
         Ok(window) => window,
@@ -135,12 +139,21 @@ pub fn handle_mouse_planet_selection(
             // Clicking on already selected planet - deselect it
             selected_planet.entity = None;
             selected_planet.name = None;
+            if let Some(target) = craft_target.as_mut() {
+                target.entity = None;
+                target.name = None;
+            }
             println!("Deselected planet (clicked on selected)");
         } else {
             // Clicking on different planet - select it
             if let Ok((_, selectable, _, _)) = selectable_query.get(selected_entity) {
                 selected_planet.entity = Some(selected_entity);
                 selected_planet.name = Some(selectable.name.clone());
+                if let Some(target) = craft_target.as_mut() {
+                    target.entity = Some(selected_entity);
+                    target.name = Some(selectable.name.clone());
+                    println!("Craft traveling to {}", selectable.name);
+                }
                 println!("Selected planet: {}", selectable.name);
             }
         }
@@ -149,6 +162,10 @@ pub fn handle_mouse_planet_selection(
         if selected_planet.entity.is_some() {
             selected_planet.entity = None;
             selected_planet.name = None;
+            if let Some(target) = craft_target.as_mut() {
+                target.entity = None;
+                target.name = None;
+            }
             println!("Deselected planet (clicked on empty space)");
         }
         // If nothing is selected, clicking empty space does nothing (idempotent)

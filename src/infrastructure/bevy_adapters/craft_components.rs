@@ -64,6 +64,12 @@ pub struct CraftControlState {
     pub camera_index: usize,
 }
 
+#[derive(Resource, Default)]
+pub struct CraftTravelTarget {
+    pub entity: Option<Entity>,
+    pub name: Option<String>,
+}
+
 impl Default for CraftControlState {
     fn default() -> Self {
         Self {

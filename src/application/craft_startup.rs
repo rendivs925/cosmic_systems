@@ -1,19 +1,23 @@
 use crate::infrastructure::bevy_adapters::components::CameraController;
 use crate::infrastructure::bevy_adapters::craft_components::*;
 use crate::infrastructure::bevy_adapters::craft_ui::*;
+use crate::domain::services::{physics, planet_factory::PlanetFactory};
+use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use bevy::audio::{PlaybackMode, Volume};
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
 
 pub fn spawn_craft(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    solar_camera_query: Query<Entity, With<CameraController>>,
+    mut solar_camera_query: Query<&mut Camera, With<CameraController>>,
 ) {
     let gltf_handle: Handle<Gltf> = asset_server.load("models/ufo_flying_saucer_spaceship_ovni.glb");
-    commands.insert_resource(CraftModelLoad { gltf_handle, done: false });
+    let spawn_position = craft_spawn_position();
+    commands.insert_resource(CraftModelLoad { gltf_handle, done: false, spawn_position });
 
-    for entity in solar_camera_query.iter() {
-        commands.entity(entity).despawn();
+    for mut camera in solar_camera_query.iter_mut() {
+        camera.is_active = false;
     }
 
     commands.spawn((
@@ -22,7 +26,12 @@ pub fn spawn_craft(
             order: 2,
             ..default()
         },
-        Transform::from_xyz(0.0, 8.0, 10.0).looking_at(Vec3::new(0.0, 5.0, 0.0), Vec3::Y),
+        Projection::Perspective(PerspectiveProjection {
+            far: 10_000_000.0,
+            ..default()
+        }),
+        Transform::from_translation(spawn_position + Vec3::new(0.0, 8.0, 10.0))
+            .looking_at(spawn_position, Vec3::Y),
         CraftCameraTag,
     ));
 }
@@ -75,11 +84,13 @@ pub fn spawn_craft_ui(mut commands: Commands) {
 pub struct CraftModelLoad {
     pub gltf_handle: Handle<Gltf>,
     pub done: bool,
+    pub spawn_position: Vec3,
 }
 
 pub fn spawn_craft_model(
     mut commands: Commands,
     mut load: ResMut<CraftModelLoad>,
+    asset_server: Res<AssetServer>,
     gltf_assets: Res<Assets<Gltf>>,
 ) {
     if load.done {
@@ -94,19 +105,51 @@ pub fn spawn_craft_model(
 
     load.done = true;
 
-    commands.spawn((
-        CraftComponent::saucer(),
-        CraftVisual {
-            kind: crate::domain::entities::craft::CraftKind::Saucer,
-            core_pulse_phase: 0.0,
-            ring_rotation: 0.0,
-            dome_base_scale: 1.0,
-        },
-        SceneRoot(scene),
-        Transform::from_translation(Vec3::new(0.0, 5.0, 0.0))
-            .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-        Visibility::default(),
-    ));
+    let mut craft = CraftComponent::saucer();
+    craft.physics.vertical_position = load.spawn_position.y;
+
+    commands
+        .spawn((
+            craft,
+            CraftVisual {
+                kind: crate::domain::entities::craft::CraftKind::Saucer,
+                core_pulse_phase: 0.0,
+                ring_rotation: 0.0,
+                dome_base_scale: 1.0,
+            },
+            AudioPlayer::new(asset_server.load("sounds/craft_electronic.ogg")),
+            PlaybackSettings {
+                mode: PlaybackMode::Loop,
+                volume: Volume::Linear(0.28),
+                ..default()
+            },
+            Transform::from_translation(load.spawn_position),
+            Visibility::default(),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                SceneRoot(scene),
+                Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            ));
+        });
+}
+
+fn craft_spawn_position() -> Vec3 {
+    let solar_params = SolarSystemParameters::for_visualization();
+    let Some(earth) = PlanetFactory::create_by_name("Earth") else {
+        return Vec3::new(0.0, 5.0, 0.0);
+    };
+
+    let earth_position = physics::calculate_planet_position(
+        &earth,
+        0.0,
+        &solar_params,
+        Vec3::ZERO,
+        None,
+    );
+    let earth_radius = physics::calculate_visual_radius(&earth, &solar_params);
+
+    earth_position + Vec3::new(earth_radius + 50.0, 5.0, 0.0)
 }
 
 fn txt(s: &str, c: Color) -> (Text, TextFont, TextColor) {

@@ -28,7 +28,9 @@ use infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, ScreenshotState, SelectedPlanet,
     UiPointerState, ZenMode,
 };
-use infrastructure::bevy_adapters::craft_components::{CraftCameraState, CraftControlState};
+use infrastructure::bevy_adapters::craft_components::{
+    CraftCameraState, CraftControlState, CraftTravelTarget,
+};
 use application::craft_startup::spawn_craft_model;
 use infrastructure::bevy_adapters::craft_systems::{handle_craft_input, update_craft_camera, update_craft_physics};
 use infrastructure::bevy_adapters::craft_ui::update_craft_ui;
@@ -46,6 +48,7 @@ fn setup_gyro_mode(app: &mut App) {
 fn setup_craft_systems(app: &mut App) {
     app.insert_resource(CraftControlState::default());
     app.insert_resource(CraftCameraState::default());
+    app.insert_resource(CraftTravelTarget::default());
     app.add_systems(Startup, spawn_craft);
     app.add_systems(Startup, spawn_craft_ui);
     app.add_systems(FixedUpdate, update_craft_physics);
@@ -209,6 +212,7 @@ fn main() {
     if is_gyro_mode {
         setup_gyro_mode(&mut app);
     } else if is_craft_mode {
+        app.insert_resource(SolarCameraEnabled(false));
         setup_solar_system_mode(&mut app);
         setup_craft_systems(&mut app);
         register_education_systems(&mut app);
