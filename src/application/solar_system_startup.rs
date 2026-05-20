@@ -372,8 +372,8 @@ fn spawn_celestial_body(
             let moon_orbit_color = orbit_color_for(BodyClass::Moon, false);
             let moon_material = create_orbit_material(
                 moon_orbit_color,
-                orbit_emissive(moon_orbit_color, 0.06),
-                0.08,
+                orbit_emissive(moon_orbit_color, 0.03),
+                0.06,
             );
             let moon_material_handle = materials.add(moon_material);
 
@@ -459,8 +459,8 @@ fn spawn_celestial_body(
         let orbit_mesh = create_placeholder_orbit_mesh(meshes);
         let orbit_material = create_orbit_material(
             orbit_base_color,
-            orbit_emissive(orbit_base_color, 0.08),
-            0.12,
+            orbit_emissive(orbit_base_color, 0.04),
+            0.06,
         );
         let orbit_material_handle = materials.add(orbit_material);
         let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);

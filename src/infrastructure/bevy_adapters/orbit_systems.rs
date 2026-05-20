@@ -42,13 +42,14 @@ pub(crate) fn update_orbit_visuals(
             let dist = camera_pos.distance(orbit_center).max(1.0);
             let radius = orbit_comp.radius.max(1.0);
             let ratio = dist / radius;
-            let near_fade = ((ratio / 0.3).min(1.0)).powf(1.5);
-            let far_fade = (1.0 - (ratio / 15.0).clamp(0.0, 1.0)).max(0.02);
+            // Fade in gradually from 0.1× to 0.5× radius, hold, fade out from 5× to 8× radius
+            let near_fade = ((ratio / 0.5).min(1.0)).powf(2.0);
+            let far_fade = (1.0 - ((ratio - 3.0) / 5.0).clamp(0.0, 1.0)).max(0.01);
             let base_opacity = near_fade * far_fade;
 
-            let base_opacity = base_opacity.clamp(0.02, 0.25);
+            let base_opacity = base_opacity.clamp(0.01, 0.07);
             let final_base_opacity = if is_selected {
-                (base_opacity * 2.5).min(0.50)
+                (base_opacity * 2.5).min(0.16)
             } else {
                 base_opacity
             };
@@ -60,8 +61,8 @@ pub(crate) fn update_orbit_visuals(
 
             material.base_color = class_color.with_alpha(alpha);
 
-            let emissive_intensity = if is_selected { 0.15 } else { 0.08 };
-            let emissive_pulse = 0.85 + 0.15 * cosmic_pulse;
+            let emissive_intensity = if is_selected { 0.06 } else { 0.03 };
+            let emissive_pulse = 0.90 + 0.10 * cosmic_pulse;
             material.emissive = LinearRgba::new(
                 linear_color.red * emissive_intensity * emissive_pulse,
                 linear_color.green * emissive_intensity * emissive_pulse,
