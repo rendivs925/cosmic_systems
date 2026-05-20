@@ -99,7 +99,13 @@ pub fn setup_space(
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    spawn_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
+    spawn_starfield(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        &solar_params,
+    );
 
     // Create a base orbit material template - individual orbits will get customized materials
     let base_orbit_material = create_orbit_material(

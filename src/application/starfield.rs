@@ -2,6 +2,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_mesh::{Indices, PrimitiveTopology};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -22,13 +23,16 @@ pub fn spawn_starfield(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
+    images: &mut ResMut<Assets<Image>>,
     solar_params: &SolarSystemParameters,
 ) {
     let near_radius = solar_params.au_to_units(STARFIELD_NEAR_RADIUS_AU);
     let far_radius = solar_params.au_to_units(STARFIELD_FAR_RADIUS_AU);
     let mesh = meshes.add(create_starfield_mesh(near_radius, far_radius));
+    let star_texture = images.add(create_gaussian_star_texture());
     let material = materials.add(StandardMaterial {
         base_color: Color::WHITE,
+        base_color_texture: Some(star_texture),
         emissive: LinearRgba::rgb(0.25, 0.28, 0.34),
         unlit: true,
         alpha_mode: AlphaMode::Blend,
@@ -51,11 +55,11 @@ pub fn spawn_starfield(
 
 fn create_starfield_mesh(near_radius: f32, far_radius: f32) -> Mesh {
     let total = NEAR_STAR_COUNT + FAR_STAR_COUNT + MILKY_WAY_COUNT + MILKY_WAY_GLOW_COUNT;
-    let mut positions = Vec::with_capacity(total * 5);
-    let mut normals = Vec::with_capacity(total * 5);
-    let mut uvs = Vec::with_capacity(total * 5);
-    let mut colors = Vec::with_capacity(total * 5);
-    let mut indices = Vec::with_capacity(total * 12);
+    let mut positions = Vec::with_capacity(total * 4);
+    let mut normals = Vec::with_capacity(total * 4);
+    let mut uvs = Vec::with_capacity(total * 4);
+    let mut colors = Vec::with_capacity(total * 4);
+    let mut indices = Vec::with_capacity(total * 6);
     let mut rng = StdRng::seed_from_u64(STAR_SEED);
 
     for _ in 0..NEAR_STAR_COUNT {
@@ -134,6 +138,44 @@ fn create_starfield_mesh(near_radius: f32, far_radius: f32) -> Mesh {
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh
+}
+
+fn create_gaussian_star_texture() -> Image {
+    const TEXTURE_SIZE: u32 = 128;
+    const CHANNELS: usize = 4;
+
+    let mut pixels = Vec::with_capacity((TEXTURE_SIZE * TEXTURE_SIZE) as usize * CHANNELS);
+    let max = (TEXTURE_SIZE - 1) as f32;
+
+    for y in 0..TEXTURE_SIZE {
+        for x in 0..TEXTURE_SIZE {
+            let u = x as f32 / max * 2.0 - 1.0;
+            let v = y as f32 / max * 2.0 - 1.0;
+            let radius = (u * u + v * v).sqrt();
+            let core = (-radius * radius * 5.8).exp();
+            let edge_fade = 1.0 - smoothstep(0.72, 1.0, radius);
+            let alpha = (core * edge_fade).clamp(0.0, 1.0);
+
+            pixels.extend_from_slice(&[255, 255, 255, (alpha * 255.0).round() as u8]);
+        }
+    }
+
+    Image::new(
+        Extent3d {
+            width: TEXTURE_SIZE,
+            height: TEXTURE_SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
+}
+
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 #[derive(Clone, Copy)]
@@ -346,19 +388,17 @@ fn push_star_quad(
     let up = direction.cross(right).normalize_or_zero() * size;
     let base_index = positions.len() as u32;
     let normal = (-direction).to_array();
-    let edge_color = [color[0], color[1], color[2], 0.0];
 
-    for (offset, uv, vertex_color) in [
-        (Vec3::ZERO, [0.5, 0.5], color),
-        (-up, [0.5, 0.0], edge_color),
-        (right, [1.0, 0.5], edge_color),
-        (up, [0.5, 1.0], edge_color),
-        (-right, [0.0, 0.5], edge_color),
+    for (offset, uv) in [
+        (-right - up, [0.0, 0.0]),
+        (right - up, [1.0, 0.0]),
+        (right + up, [1.0, 1.0]),
+        (-right + up, [0.0, 1.0]),
     ] {
         positions.push((center + offset).to_array());
         normals.push(normal);
         uvs.push(uv);
-        colors.push(vertex_color);
+        colors.push(color);
     }
 
     indices.extend_from_slice(&[
@@ -368,11 +408,5 @@ fn push_star_quad(
         base_index,
         base_index + 2,
         base_index + 3,
-        base_index,
-        base_index + 3,
-        base_index + 4,
-        base_index,
-        base_index + 4,
-        base_index + 1,
     ]);
 }
