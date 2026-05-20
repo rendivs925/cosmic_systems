@@ -13,7 +13,7 @@ pub(crate) fn update_orbit_visuals(
     time: Res<Time>,
     selected_planet: Res<SelectedPlanet>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    orbit_query: Query<&OrbitComponent>,
+    orbit_query: Query<(&OrbitComponent, &GlobalTransform)>,
 ) {
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
@@ -31,17 +31,17 @@ pub(crate) fn update_orbit_visuals(
     let camera_pos = camera.translation();
     let elapsed = time.elapsed_secs();
 
-    for orbit_comp in orbit_query.iter() {
+    for (orbit_comp, orbit_transform) in orbit_query.iter() {
         if let Some(material) = materials.get_mut(&orbit_comp.material) {
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
             let class_color = orbit_color_for(orbit_comp.body_class, is_selected);
             let linear_color: LinearRgba = class_color.into();
 
-            // Distance-based opacity: sigmoid curve based on camera distance
-            let dist = camera_pos.length().max(1.0);
+            // Distance-based opacity using actual orbit center in world space
+            let orbit_center = orbit_transform.translation();
+            let dist = camera_pos.distance(orbit_center).max(1.0);
             let radius = orbit_comp.radius.max(1.0);
             let ratio = dist / radius;
-            // Fade in from 0.05× to 0.5× radius, hold, fade out from 5× to 20× radius
             let near_fade = ((ratio / 0.3).min(1.0)).powf(1.5);
             let far_fade = (1.0 - (ratio / 15.0).clamp(0.0, 1.0)).max(0.02);
             let base_opacity = near_fade * far_fade;
@@ -344,7 +344,7 @@ pub fn update_orbit_thickness(
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d)>,
+    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d, &GlobalTransform)>,
 ) {
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
@@ -361,8 +361,9 @@ pub fn update_orbit_thickness(
     };
     let camera_pos = camera.translation();
 
-    for (mut orbit_comp, mut mesh3d) in orbit_query.iter_mut() {
-        let dist_to_camera = camera_pos.length().max(1.0);
+    for (mut orbit_comp, mut mesh3d, orbit_transform) in orbit_query.iter_mut() {
+        let orbit_center = orbit_transform.translation();
+        let dist_to_camera = camera_pos.distance(orbit_center).max(1.0);
         let ref_dist = orbit_comp.radius.max(1.0);
         let thickness_scale = (dist_to_camera / ref_dist).clamp(0.5, 8.0);
         let new_thickness = orbit_comp.radius * 0.0005 * thickness_scale;
@@ -387,7 +388,7 @@ pub fn spawn_position_trackers(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    orbit_query: Query<(Entity, &OrbitComponent), Without<PositionTracker>>,
+    orbit_query: Query<(Entity, &OrbitComponent), Without<TrackerSpawned>>,
     planet_query: Query<&PlanetComponent>,
 ) {
     for (orbit_entity, orbit_comp) in orbit_query.iter() {
@@ -407,10 +408,7 @@ pub fn spawn_position_trackers(
             alpha_mode: AlphaMode::Blend,
             ..default()
         });
-        commands.entity(orbit_entity).insert(PositionTracker {
-            planet_entity: orbit_comp.planet_entity,
-            planet_name: planet_comp.domain_planet.name.clone(),
-        });
+        commands.entity(orbit_entity).insert(TrackerSpawned);
         commands.spawn((
             Mesh3d(tracker_mesh),
             MeshMaterial3d(tracker_material),

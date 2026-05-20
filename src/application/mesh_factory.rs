@@ -105,7 +105,14 @@ pub fn create_orbit_ribbon_mesh(
         orbit_positions.push(pos_3d);
     }
 
-    let up = Vec3::Y;
+    // Compute orbit plane normal from two non-collinear points on the orbit
+    let orbit_normal = orbit_positions[0]
+        .cross(orbit_positions[segments / 4])
+        .normalize_or_zero();
+
+    // Ensure minimum thickness for small orbits (tiny moons)
+    let thickness = thickness.max(1.0);
+
     let linear_color: LinearRgba = orbit_color.into();
     let color_arr = [linear_color.red, linear_color.green, linear_color.blue, linear_color.alpha];
 
@@ -114,7 +121,7 @@ pub fn create_orbit_ribbon_mesh(
         let prev = orbit_positions[(i + segments - 1) % segments];
         let next = orbit_positions[(i + 1) % segments];
         let tangent = (next - prev).normalize_or_zero();
-        let normal = tangent.cross(up).normalize_or_zero();
+        let normal = tangent.cross(orbit_normal).normalize_or_zero();
 
         let left = pos - normal * (thickness * 0.5);
         let right = pos + normal * (thickness * 0.5);

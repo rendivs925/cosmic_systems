@@ -95,6 +95,10 @@ pub struct PositionTracker {
     pub planet_name: String,
 }
 
+// Marker spawned on orbit entities after their position tracker is created
+#[derive(Component)]
+pub struct TrackerSpawned;
+
 // Marker component for moon orbits (orbits that need to follow their parent planet)
 #[derive(Component)]
 pub struct MoonOrbit;
