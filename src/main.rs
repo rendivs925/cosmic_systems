@@ -22,6 +22,7 @@ pub mod domain;
 pub mod infrastructure;
 pub mod presentation;
 
+use application::craft_startup::spawn_craft_model;
 use application::startup::*;
 use domain::value_objects::simulation_params::SimulationParameters;
 use infrastructure::bevy_adapters::components::{
@@ -31,8 +32,9 @@ use infrastructure::bevy_adapters::components::{
 use infrastructure::bevy_adapters::craft_components::{
     CraftCameraState, CraftControlState, CraftTravelTarget,
 };
-use application::craft_startup::spawn_craft_model;
-use infrastructure::bevy_adapters::craft_systems::{handle_craft_input, update_craft_camera, update_craft_physics};
+use infrastructure::bevy_adapters::craft_systems::{
+    handle_craft_input, update_craft_camera, update_craft_physics,
+};
 use infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use infrastructure::bevy_adapters::systems::*;
 use presentation::ui::*;
@@ -178,8 +180,7 @@ fn setup_solar_system_mode(app: &mut App) {
         crate::infrastructure::bevy_adapters::rocket_systems::update_rocket_terrain_interaction,
     );
 
-    // Starfield update disabled for now
-    // app.add_systems(Update, update_starfield_position);
+    app.add_systems(Update, update_starfield_position);
 }
 
 fn main() {

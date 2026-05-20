@@ -1,4 +1,5 @@
 use super::components::*;
+use super::craft_components::CraftCameraTag;
 use super::entity_components::Starfield;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -512,10 +513,13 @@ pub struct AutoInspectState {
 
 // System to keep starfield positioned relative to camera for constant visibility
 pub fn update_starfield_position(
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    camera_query: Query<
+        (&Camera, &GlobalTransform),
+        Or<(With<CameraController>, With<CraftCameraTag>)>,
+    >,
     mut starfield_query: Query<&mut Transform, With<Starfield>>,
 ) {
-    if let Ok(camera_transform) = camera_query.single() {
+    if let Some((_, camera_transform)) = camera_query.iter().find(|(camera, _)| camera.is_active) {
         let camera_pos = camera_transform.translation();
 
         for mut starfield_transform in starfield_query.iter_mut() {

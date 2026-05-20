@@ -1,16 +1,20 @@
 // Re-export functionality from split modules
-pub use super::texture_config::*;
-pub use super::terrain_spawning::*;
 pub use super::rocket_spawning::*;
+pub use super::terrain_spawning::*;
+pub use super::texture_config::*;
 
 use crate::application::material_factory::*;
 use crate::application::mesh_factory::*;
+use crate::application::starfield::spawn_starfield;
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 
+use bevy::anti_alias::taa::TemporalAntiAliasing;
+use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 use std::collections::HashMap;
 #[cfg(target_arch = "wasm32")]
@@ -32,15 +36,17 @@ pub fn setup_space(
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
 
-    // Set up dark space environment with maximum ambient light for planet visibility
+    // Set up dark space environment with restrained ambient light for premium contrast.
     commands.insert_resource(ClearColor(Color::srgb(0.005, 0.005, 0.01))); // Extremely dark space
     commands.insert_resource(AmbientLight {
-        color: Color::srgb(0.2, 0.25, 0.3), // Bright ambient light with slight blue tint
-        brightness: 0.15,                   // Maximum ambient brightness for planet visibility
+        color: Color::srgb(0.2, 0.25, 0.3),
+        brightness: 0.07,
         affects_lightmapped_meshes: true,
     });
 
-    let solar_camera_active = solar_camera_enabled.as_deref().map_or(true, |enabled| enabled.0);
+    let solar_camera_active = solar_camera_enabled
+        .as_deref()
+        .map_or(true, |enabled| enabled.0);
 
     // Camera positioned to view the full set of orbits on load.
     // Craft mode keeps this controller for solar systems that query it, but disables rendering.
@@ -49,6 +55,21 @@ pub fn setup_space(
         Camera {
             is_active: solar_camera_active,
             ..default()
+        },
+        Projection::Perspective(PerspectiveProjection {
+            far: 10_000_000.0,
+            ..default()
+        }),
+        Msaa::Off,
+        TemporalAntiAliasing::default(),
+        Tonemapping::TonyMcMapface,
+        Bloom {
+            intensity: 0.08,
+            prefilter: BloomPrefilter {
+                threshold: 0.85,
+                threshold_softness: 0.15,
+            },
+            ..Bloom::NATURAL
         },
         Transform::from_xyz(0.0, 120000.0, 1500000.0).looking_at(Vec3::ZERO, Vec3::Y),
         CameraController {
@@ -80,14 +101,13 @@ pub fn setup_space(
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    // Starfield disabled for now
-    // create_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
+    spawn_starfield(&mut commands, &mut meshes, &mut materials, &solar_params);
 
     // Create a base orbit material template - individual orbits will get customized materials
     let base_orbit_material = create_orbit_material(
         Color::srgb(0.82, 0.86, 0.90), // Refined cool elegant white
         orbit_emissive(Color::srgb(0.82, 0.86, 0.90), 0.1), // Minimal glow
-        0.1, // Base transparency - will be customized per orbit
+        0.1,                           // Base transparency - will be customized per orbit
     );
 
     let shared_orbit_handle = materials.add(base_orbit_material);
@@ -140,7 +160,14 @@ pub fn setup_space(
     }
 
     // Spawn terrain patches
-    spawn_terrain_patches(&mut commands, &asset_server, &mut meshes, &mut materials, &mut images, &entity_map);
+    spawn_terrain_patches(
+        &mut commands,
+        &asset_server,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        &entity_map,
+    );
 
     // Spawn rockets
     #[cfg(not(target_arch = "wasm32"))]
@@ -326,16 +353,18 @@ fn spawn_celestial_body(
     #[cfg(target_arch = "wasm32")]
     {
         let eager = matches!(planet.name.as_str(), "Sun" | "Earth");
-        commands.entity(planet_entity).insert(PendingMaterialTextures {
-            material: material_handle.clone(),
-            base_color_texture: None,
-            normal_map_texture: None,
-            emissive_texture: None,
-            base_color_path: textures.albedo,
-            normal_map_path: None,
-            emissive_path,
-            eager,
-        });
+        commands
+            .entity(planet_entity)
+            .insert(PendingMaterialTextures {
+                material: material_handle.clone(),
+                base_color_texture: None,
+                normal_map_texture: None,
+                emissive_texture: None,
+                base_color_path: textures.albedo,
+                normal_map_path: None,
+                emissive_path,
+                eager,
+            });
     }
 
     entity_map.insert(planet.name.clone(), planet_entity);
@@ -514,7 +543,11 @@ fn spawn_celestial_body(
             #[cfg(target_arch = "wasm32")]
             {
                 let mut ring_entity = parent.spawn((
-                    Mesh3d(create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius)),
+                    Mesh3d(create_ring_mesh(
+                        meshes,
+                        ring_inner_radius,
+                        ring_outer_radius,
+                    )),
                     MeshMaterial3d(ring_material_handle.clone()),
                     Transform::default(),
                     Selectable {
@@ -537,7 +570,11 @@ fn spawn_celestial_body(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 parent.spawn((
-                    Mesh3d(create_ring_mesh(meshes, ring_inner_radius, ring_outer_radius)),
+                    Mesh3d(create_ring_mesh(
+                        meshes,
+                        ring_inner_radius,
+                        ring_outer_radius,
+                    )),
                     MeshMaterial3d(ring_material_handle.clone()),
                     Transform::default(),
                     Selectable {
@@ -553,8 +590,7 @@ fn spawn_celestial_body(
         #[cfg(not(target_arch = "wasm32"))]
         let cloud_texture = load_texture(asset_server, Some(clouds.texture_path));
         #[cfg(not(target_arch = "wasm32"))]
-        let cloud_material =
-            create_cloud_material(cloud_texture.clone(), clouds.alpha);
+        let cloud_material = create_cloud_material(cloud_texture.clone(), clouds.alpha);
         #[cfg(target_arch = "wasm32")]
         let cloud_material = create_cloud_material(None, clouds.alpha);
         #[cfg(not(target_arch = "wasm32"))]
