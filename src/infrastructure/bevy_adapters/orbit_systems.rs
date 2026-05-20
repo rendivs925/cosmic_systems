@@ -1,5 +1,5 @@
 use super::components::*;
-use crate::application::material_factory::orbit_color_for;
+use crate::application::material_factory::ORBIT_LINE_COLOR;
 use crate::application::mesh_factory::{create_orbit_ribbon_mesh, create_orbital_plane_mesh, create_eccentricity_marker_mesh, create_uv_sphere_mesh};
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -34,8 +34,7 @@ pub(crate) fn update_orbit_visuals(
     for (orbit_comp, orbit_transform) in orbit_query.iter() {
         if let Some(material) = materials.get_mut(&orbit_comp.material) {
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
-            let class_color = orbit_color_for(orbit_comp.body_class, is_selected);
-            let linear_color: LinearRgba = class_color.into();
+            let linear_color: LinearRgba = ORBIT_LINE_COLOR.into();
 
             // Distance-based opacity using actual orbit center in world space
             let orbit_center = orbit_transform.translation();
@@ -59,7 +58,7 @@ pub(crate) fn update_orbit_visuals(
             let cosmic_pulse = 0.985 + 0.015 * (elapsed * 0.005).sin() + stellar_resonance;
             let alpha = final_base_opacity * cosmic_pulse;
 
-            material.base_color = class_color.with_alpha(alpha);
+            material.base_color = ORBIT_LINE_COLOR.with_alpha(alpha);
 
             let emissive_intensity = if is_selected { 0.06 } else { 0.03 };
             let emissive_pulse = 0.90 + 0.10 * cosmic_pulse;
@@ -371,11 +370,10 @@ pub fn update_orbit_thickness(
 
         if (new_thickness - orbit_comp.thickness).abs() > orbit_comp.thickness * 0.15 {
             orbit_comp.thickness = new_thickness;
-            let class_color = orbit_color_for(orbit_comp.body_class, false);
             let new_mesh = create_orbit_ribbon_mesh(
                 &mut meshes,
                 &orbit_comp.orbit_shape,
-                class_color,
+                ORBIT_LINE_COLOR,
                 new_thickness,
                 orbit_comp.segments,
             );
@@ -398,7 +396,7 @@ pub fn spawn_position_trackers(
         };
         let tracker_radius = 3.0;
         let tracker_mesh = create_uv_sphere_mesh(&mut meshes, tracker_radius);
-        let tracker_color = orbit_color_for(orbit_comp.body_class, true);
+        let tracker_color = ORBIT_LINE_COLOR;
         let tracker_material = materials.add(StandardMaterial {
             base_color: tracker_color,
             emissive: {
@@ -461,11 +459,10 @@ pub fn update_orbit_quality(
             orbit_comp.segments = segments;
             let new_thickness = orbit_comp.radius * 0.0005 * thickness_mult;
             orbit_comp.thickness = new_thickness;
-            let class_color = orbit_color_for(orbit_comp.body_class, false);
             let new_mesh = create_orbit_ribbon_mesh(
                 &mut meshes,
                 &orbit_comp.orbit_shape,
-                class_color,
+                ORBIT_LINE_COLOR,
                 new_thickness,
                 segments,
             );

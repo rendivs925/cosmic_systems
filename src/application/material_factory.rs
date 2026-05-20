@@ -92,6 +92,8 @@ pub fn orbit_color_for(body_class: BodyClass, selected: bool) -> Color {
     }
 }
 
+pub const ORBIT_LINE_COLOR: Color = Color::srgb(0.72, 0.72, 0.76);
+
 pub fn create_orbit_material(
     base_color: Color,
     emissive: LinearRgba,

@@ -363,16 +363,15 @@ fn spawn_celestial_body(
             let moon_thickness = orbit_shape.semi_major_axis_units * 0.0005;
             let moon_segments = 256;
             #[cfg(not(target_arch = "wasm32"))]
-            let orbit_mesh = create_orbit_ribbon_mesh(meshes, &orbit_shape, orbit_color_for(BodyClass::Moon, false), moon_thickness, moon_segments);
+            let orbit_mesh = create_orbit_ribbon_mesh(meshes, &orbit_shape, ORBIT_LINE_COLOR, moon_thickness, moon_segments);
             #[cfg(target_arch = "wasm32")]
             let orbit_mesh = create_placeholder_orbit_mesh(meshes);
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
-            // Create individual material for this moon orbit with class-based color
-            let moon_orbit_color = orbit_color_for(BodyClass::Moon, false);
+            // Create individual material for this moon orbit
             let moon_material = create_orbit_material(
-                moon_orbit_color,
-                orbit_emissive(moon_orbit_color, 0.03),
+                ORBIT_LINE_COLOR,
+                orbit_emissive(ORBIT_LINE_COLOR, 0.03),
                 0.06,
             );
             let moon_material_handle = materials.add(moon_material);
@@ -388,7 +387,7 @@ fn spawn_celestial_body(
                     radius: orbit_shape.semi_major_axis_units,
                     planet_entity: parent_ent,
                     material: moon_material_handle.clone(),
-                    base_color: moon_orbit_color,
+                    base_color: ORBIT_LINE_COLOR,
                     body_class: BodyClass::Moon,
                     orbit_shape,
                     thickness: orbit_shape.semi_major_axis_units * 0.0005,
@@ -419,7 +418,7 @@ fn spawn_celestial_body(
                         radius: orbit_shape.semi_major_axis_units,
                         planet_entity: parent_ent,
                         material: moon_material_handle.clone(),
-                        base_color: moon_orbit_color,
+                        base_color: ORBIT_LINE_COLOR,
                         body_class: BodyClass::Moon,
                         orbit_shape,
                         thickness: orbit_shape.semi_major_axis_units * 0.0005,
@@ -450,7 +449,7 @@ fn spawn_celestial_body(
         }
     } else if planet.name != "Sun" {
         let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
-        let orbit_base_color = orbit_color_for(planet.body_class, false);
+        let orbit_base_color = ORBIT_LINE_COLOR;
         let planet_thickness = orbit_shape.semi_major_axis_units * 0.0005;
         let planet_segments = 256;
         #[cfg(not(target_arch = "wasm32"))]
