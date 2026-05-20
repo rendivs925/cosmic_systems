@@ -3,7 +3,6 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::CameraController;
 use crate::infrastructure::bevy_adapters::craft_components::*;
 use crate::infrastructure::bevy_adapters::craft_ui::*;
-use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::gltf::Gltf;
@@ -38,8 +37,7 @@ pub fn spawn_craft(
             far: 10_000_000.0,
             ..default()
         }),
-        Msaa::Off,
-        TemporalAntiAliasing::default(),
+        Msaa::Sample4,
         Tonemapping::TonyMcMapface,
         Bloom {
             intensity: 0.08,

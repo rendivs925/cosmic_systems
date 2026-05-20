@@ -12,7 +12,6 @@ use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 
-use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
@@ -60,8 +59,7 @@ pub fn setup_space(
             far: 10_000_000.0,
             ..default()
         }),
-        Msaa::Off,
-        TemporalAntiAliasing::default(),
+        Msaa::Sample4,
         Tonemapping::TonyMcMapface,
         Bloom {
             intensity: 0.08,
