@@ -168,12 +168,17 @@ pub fn setup_ui(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(20.0),
-                top: Val::Px(56.0), // Below the Info toggle button
-                width: Val::Px(340.0), // Slightly narrower
+                top: Val::Px(56.0),
+                width: Val::Px(340.0),
                 border: UiRect::all(Val::Px(1.0)),
                 padding: UiRect::new(Val::Px(14.0), Val::Px(14.0), Val::Px(12.0), Val::Px(12.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(6.0),
+                max_height: Val::Px(520.0),
+                overflow: Overflow {
+                    x: OverflowAxis::Clip,
+                    y: OverflowAxis::Scroll,
+                },
                 display: Display::None,
                 ..default()
             },

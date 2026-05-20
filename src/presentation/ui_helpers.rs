@@ -165,41 +165,50 @@ pub fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> Stri
 
     match name {
         "Sun" => {
-            info_line(&mut lines, "Type", "G2V main-sequence star");
             info_line(&mut lines, "Mass", "1.989 x 10^30 kg (333,000 Earth)");
-            info_line(&mut lines, "Radius", "696,340 km (109 Earth)");
-            info_line(&mut lines, "Surface", "5,778 K");
+            info_line(&mut lines, "Radius", "696,340 km");
+            info_line(&mut lines, "Surface", "5,778 K            Core: 15 million K");
             info_line(&mut lines, "Luminosity", "3.83 x 10^26 W");
-            info_line(&mut lines, "Age", "4.6 billion years");
             lines.push(String::new());
-            lines.push("• 99.86% of solar system mass".to_string());
-            lines.push("• Core reaches 15 million deg C".to_string());
+            lines.push("Our Sun is a G2V yellow dwarf — one of billions of stars in the Milky Way, yet the single most important object in human existence. Every photon that warms Earth's surface began a journey from the Sun's core 100,000 years ago, slowly diffusing through dense plasma before streaming across space in just 8 minutes. Nuclear fusion converts 600 million tons of hydrogen into helium every second, converting mere grams of mass into pure energy via E=mc².".to_string());
+            lines.push(String::new());
+            lines.push("The Sun contains 99.86% of all mass in the solar system. Its immense gravity sculpts the orbits of everything from Mercury to the distant Oort Cloud. The solar wind — a supersonic stream of charged particles — inflates a giant magnetic bubble called the heliosphere that shields our entire solar system from galactic cosmic rays.".to_string());
+            lines.push(String::new());
+            lines.push("• 1.3 million Earths could fit inside the Sun".to_string());
+            lines.push("• Sunlight takes 8.3 minutes to reach Earth".to_string());
+            lines.push("• In 5 billion years it will expand into a red giant".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Mercury" => {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "3.301 x 10^23 kg (0.055 Earth)");
-            info_line(&mut lines, "Radius", "2,440 km (0.383 Earth)");
+            info_line(&mut lines, "Radius", "2,440 km");
             info_line(&mut lines, "Distance", "0.387 AU");
-            info_line(&mut lines, "Orbit", "87.97 days");
-            info_line(&mut lines, "Rotation", "58.65 days");
-            info_line(&mut lines, "Temp", "-173 to 427 deg C");
+            info_line(&mut lines, "Orbit", "87.97 days          Rotation: 58.65 days");
             lines.push(String::new());
-            lines.push("• Most eccentric orbit of all planets".to_string());
-            lines.push("• A day is longer than its year".to_string());
+            lines.push("Mercury is a world of extremes — the closest planet to the Sun, yet not the hottest. With virtually no atmosphere to retain heat, daytime temperatures soar to 427°C, while night-side plunges to -173°C. This 600-degree swing is the largest of any planet. Its 3:2 spin-orbit resonance means it rotates exactly three times for every two orbits, a gravitational lock unique in the solar system.".to_string());
+            lines.push(String::new());
+            lines.push("Beneath its cratered, Moon-like surface lies an enormous iron core that makes up 85% of its radius — proportionally the largest of any planet. Planetary scientists believe Mercury was once much larger, until a giant impact stripped away much of its rocky mantle. Its weak magnetic field, just 1% of Earth's, hints at a partially liquid core, defying expectations for such a small world.".to_string());
+            lines.push(String::new());
+            lines.push("• A day on Mercury (sunrise to sunrise) lasts 176 Earth days".to_string());
+            lines.push("• Ice exists in permanently shadowed polar craters despite the heat".to_string());
+            lines.push("• Its orbit precesses due to general relativistic effects".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Venus" => {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "4.867 x 10^24 kg (0.815 Earth)");
-            info_line(&mut lines, "Radius", "6,052 km (0.949 Earth)");
+            info_line(&mut lines, "Radius", "6,052 km");
             info_line(&mut lines, "Distance", "0.723 AU");
-            info_line(&mut lines, "Orbit", "224.7 days");
-            info_line(&mut lines, "Rotation", "243 days (retrograde)");
-            info_line(&mut lines, "Temp", "462 deg C (hottest)");
+            info_line(&mut lines, "Orbit", "224.7 days          Rotation: 243 days (retrograde)");
             lines.push(String::new());
-            lines.push("• Rotates backwards (retrograde)".to_string());
-            lines.push("• Surface pressure 92x Earth's".to_string());
+            lines.push("Venus is Earth's twin in size and composition — and a cautionary tale about runaway greenhouse effects. A CO₂ atmosphere 92 times thicker than Earth's traps heat so efficiently that the surface stays at a uniform 462°C, hot enough to melt lead. Despite being farther from the Sun than Mercury, Venus is far hotter. Clouds of sulfuric acid shroud the entire planet, reflecting 75% of sunlight, yet the greenhouse effect overwhelms this cooling.".to_string());
+            lines.push(String::new());
+            lines.push("Venus rotates backwards (retrograde) — the Sun rises in the west and sets in the east — and so slowly that a single Venusian day lasts longer than its year. Some theories suggest a giant impact tipped the planet upside down early in its history. Beneath the clouds, the surface is surprisingly young, reshaped by ongoing volcanism within the last few hundred million years.".to_string());
+            lines.push(String::new());
+            lines.push("• Surface pressure is equivalent to being 1 km underwater on Earth".to_string());
+            lines.push("• Soviet Venera probes survived only 2 hours on the surface".to_string());
+            lines.push("• Venus has no moons or rings".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Earth" => {
@@ -207,92 +216,115 @@ pub fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> Stri
             info_line(&mut lines, "Mass", "5.972 x 10^24 kg");
             info_line(&mut lines, "Radius", "6,371 km");
             info_line(&mut lines, "Distance", "1.000 AU");
-            info_line(&mut lines, "Orbit", "365.26 days");
-            info_line(&mut lines, "Rotation", "23.93 hours");
-            info_line(&mut lines, "Temp", "-89 to 58 deg C");
-            info_line(&mut lines, "Atmosphere", "78% N2, 21% O2");
+            info_line(&mut lines, "Orbit", "365.26 days          Rotation: 23.93 hours");
             lines.push(String::new());
-            lines.push("• Only known planet with liquid surface water".to_string());
-            lines.push("• Powerful magnetic field protects life".to_string());
+            lines.push("Earth is the only world known to harbor life — a pale blue dot suspended in a sunbeam. Liquid water covers 71% of the surface, cycling between oceans, atmosphere, and ice in a delicate dance powered by solar energy. Life has existed here for 3.5 billion years, reshaping the atmosphere and geology in ways we are only beginning to understand as a unified system.".to_string());
+            lines.push(String::new());
+            lines.push("Earth's magnetic field, generated by the churning liquid iron outer core, deflects the solar wind and protects our atmosphere from being stripped into space. Plate tectonics continuously recycle the crust, driving the carbon-silicate cycle that stabilizes climate over geological timescales. The Moon, formed from debris after a Mars-sized impact, stabilizes our axial tilt and drives the tides that may have nurtured the origin of life.".to_string());
+            lines.push(String::new());
+            lines.push("• Earth has the highest density of all planets in the solar system".to_string());
+            lines.push("• The Great Oxidation Event 2.4 billion years ago transformed the atmosphere".to_string());
+            lines.push("• Liquid water has existed continuously for at least 4 billion years".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Mars" => {
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "6.417 x 10^23 kg (0.107 Earth)");
-            info_line(&mut lines, "Radius", "3,390 km (0.532 Earth)");
+            info_line(&mut lines, "Radius", "3,390 km");
             info_line(&mut lines, "Distance", "1.524 AU");
-            info_line(&mut lines, "Orbit", "686.98 days");
-            info_line(&mut lines, "Rotation", "24.62 hours");
-            info_line(&mut lines, "Temp", "-87 to -5 deg C");
-            info_line(&mut lines, "Moons", "2 (Phobos, Deimos)");
+            info_line(&mut lines, "Orbit", "686.98 days          Rotation: 24.62 hours");
             lines.push(String::new());
-            lines.push("• Olympus Mons — tallest volcano in solar system".to_string());
-            lines.push("• Valles Marineris — largest canyon".to_string());
+            lines.push("Mars is a frozen desert world that once flowed with water. Vast river valleys, lakebeds, and delta formations reveal that liquid water sculpted its surface for billions of years. Today, water is locked in polar ice caps and beneath the surface as permafrost. Seasonal dark streaks called recurring slope lineae may hint at briny liquid water flowing even now.".to_string());
+            lines.push(String::new());
+            lines.push("Mars hosts the solar system's most extreme geology: Olympus Mons, a shield volcano 21.9 km tall — nearly 2.5 times the height of Everest — and Valles Marineris, a canyon system stretching 4,000 km across (the width of the United States). With a thin atmosphere composed mostly of CO₂ and global dust storms that can engulf the entire planet, Mars challenges our understanding of planetary habitability and holds the clearest promise for human exploration beyond the Moon.".to_string());
+            lines.push(String::new());
+            lines.push("• Mars has seasons like Earth due to its 25.2° axial tilt".to_string());
+            lines.push("• Its two moons, Phobos and Deimos, are captured asteroids".to_string());
+            lines.push("• A Martian year lasts 687 Earth days".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Jupiter" => {
             info_line(&mut lines, "Type", "Gas giant");
             info_line(&mut lines, "Mass", "1.898 x 10^27 kg (318 Earth)");
-            info_line(&mut lines, "Radius", "69,911 km (10.97 Earth)");
+            info_line(&mut lines, "Radius", "69,911 km");
             info_line(&mut lines, "Distance", "5.204 AU");
-            info_line(&mut lines, "Orbit", "11.86 years");
-            info_line(&mut lines, "Rotation", "9.93 hours");
-            info_line(&mut lines, "Moons", "95+ known");
+            info_line(&mut lines, "Orbit", "11.86 years          Rotation: 9.93 hours");
             lines.push(String::new());
-            lines.push("• Great Red Spot is a storm larger than Earth".to_string());
-            lines.push("• Emits more heat than it receives from Sun".to_string());
+            lines.push("Jupiter is the solar system's undisputed giant — more massive than all other planets combined. Its iconic Great Red Spot is an anticyclonic storm larger than Earth that has raged for centuries. Jupiter's rotation is the fastest of any planet, completing a day in under 10 hours, which flattens the gas giant into an oblate spheroid visible even through small telescopes.".to_string());
+            lines.push(String::new());
+            lines.push("Composed primarily of hydrogen and helium, Jupiter has no solid surface — the atmosphere gradually transitions from gas to liquid metallic hydrogen under crushing pressure. This metallic hydrogen layer generates the strongest magnetic field of any planet, extending millions of kilometers and creating deadly radiation belts. Its 95 known moons form a miniature solar system, with four Galilean moons — Io, Europa, Ganymede, and Callisto — each a world unto itself.".to_string());
+            lines.push(String::new());
+            lines.push("• Jupiter emits more heat than it receives from the Sun".to_string());
+            lines.push("• Its magnetic field is 20,000 times Earth's".to_string());
+            lines.push("• The Galileo probe plunged into Jupiter's atmosphere in 2003".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Saturn" => {
             info_line(&mut lines, "Type", "Gas giant");
             info_line(&mut lines, "Mass", "5.683 x 10^26 kg (95.2 Earth)");
-            info_line(&mut lines, "Radius", "58,232 km (9.14 Earth)");
+            info_line(&mut lines, "Radius", "58,232 km");
             info_line(&mut lines, "Distance", "9.582 AU");
-            info_line(&mut lines, "Orbit", "29.46 years");
-            info_line(&mut lines, "Rotation", "10.7 hours");
-            info_line(&mut lines, "Moons", "146+ known");
+            info_line(&mut lines, "Orbit", "29.46 years          Rotation: 10.7 hours");
             lines.push(String::new());
-            lines.push("• Rings span 282,000 km but are only ~10 m thick".to_string());
-            lines.push("• Least dense planet — would float in water".to_string());
+            lines.push("Saturn is the jewel of the solar system — a gas giant encircled by the most spectacular ring system known. The rings span 282,000 km yet are only about 10 meters thick. Composed of billions of ice and rock particles ranging from dust grains to house-sized boulders, they are likely the remains of a shattered moon or comet, torn apart by Saturn's gravity within the last 100 million years.".to_string());
+            lines.push(String::new());
+            lines.push("Saturn is so buoyant it would float in water — its density is less than water's. Like Jupiter, its atmosphere is predominantly hydrogen and helium, with wind speeds reaching 1,800 km/h at the equator. Beneath the clouds, pressures become so extreme that hydrogen is compressed into a liquid metallic state. Saturn's moon Titan has a thick atmosphere and methane lakes, while Enceladus shoots geysers of water ice from a subsurface ocean — making it one of the most promising places to search for extraterrestrial life.".to_string());
+            lines.push(String::new());
+            lines.push("• Saturn has 146+ known moons — the most of any planet".to_string());
+            lines.push("• Its rings are only 10 meters thick despite spanning 282,000 km".to_string());
+            lines.push("• A year on Saturn lasts 29.5 Earth years".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Uranus" => {
             info_line(&mut lines, "Type", "Ice giant");
             info_line(&mut lines, "Mass", "8.681 x 10^25 kg (14.5 Earth)");
-            info_line(&mut lines, "Radius", "25,362 km (4.01 Earth)");
+            info_line(&mut lines, "Radius", "25,362 km");
             info_line(&mut lines, "Distance", "19.20 AU");
-            info_line(&mut lines, "Orbit", "84.02 years");
-            info_line(&mut lines, "Rotation", "17.24 h (retrograde)");
-            info_line(&mut lines, "Tilt", "97.77 deg (on its side)");
+            info_line(&mut lines, "Orbit", "84.02 years          Rotation: 17.24 h (retrograde)");
             lines.push(String::new());
-            lines.push("• Rotates on its side — likely from massive collision".to_string());
-            lines.push("• Coldest planetary atmosphere".to_string());
+            lines.push("Uranus is the solar system's oddball — an ice giant tipped on its side with an axial tilt of 97.77 degrees. It essentially rolls around the Sun on its orbit, likely the result of a cataclysmic collision early in its history. Discovered by William Herschel in 1781, Uranus was the first planet found with a telescope, expanding the known boundaries of the solar system.".to_string());
+            lines.push(String::new());
+            lines.push("Beneath its pale blue-green atmosphere of hydrogen, helium, and methane (which gives the planet its color), Uranus likely harbors a mantle of hot supercritical water, methane, and ammonia surrounding a rocky core. Its magnetic field is wildly misaligned — tilted 59 degrees from the rotation axis and offset from the planet's center. Uranus has the coldest planetary atmosphere at -224°C, and its faint ring system and 27 known moons, named after Shakespearean characters, add to its singular character.".to_string());
+            lines.push(String::new());
+            lines.push("• Uranus was the first planet discovered by telescope (1781)".to_string());
+            lines.push("• Its magnetic field is tilted 59 degrees from its rotation axis".to_string());
+            lines.push("• Voyager 2 is the only spacecraft to have visited (1986)".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Neptune" => {
             info_line(&mut lines, "Type", "Ice giant");
             info_line(&mut lines, "Mass", "1.024 x 10^26 kg (17.1 Earth)");
-            info_line(&mut lines, "Radius", "24,622 km (3.88 Earth)");
+            info_line(&mut lines, "Radius", "24,622 km");
             info_line(&mut lines, "Distance", "30.05 AU");
-            info_line(&mut lines, "Orbit", "164.8 years");
-            info_line(&mut lines, "Rotation", "16.11 hours");
-            info_line(&mut lines, "Moons", "14 known (major: Triton)");
+            info_line(&mut lines, "Orbit", "164.8 years          Rotation: 16.11 hours");
             lines.push(String::new());
-            lines.push("• Fastest winds in the solar system".to_string());
-            lines.push("• Predicted mathematically before discovery".to_string());
+            lines.push("Neptune is the solar system's final planet — a deep blue world at the edge of the known. Its vibrant color comes from methane absorbing red light, with an additional unknown component giving Neptune a richer blue than Uranus. It is a world of superlatives: wind speeds reach 2,100 km/h, the fastest measured in the solar system, driven by internal heat rather than solar energy.".to_string());
+            lines.push(String::new());
+            lines.push("Neptune's existence was predicted mathematically by Urbain Le Verrier in 1846 based on perturbations in Uranus's orbit — a triumph of Newtonian mechanics. Its largest moon, Triton, orbits retrograde (opposite to Neptune's rotation), strongly suggesting it was a Kuiper Belt object captured by Neptune's gravity. Triton has active nitrogen geysers and a thin atmosphere, hinting at subsurface warmth. Neptune's faint rings and 14 known moons complete the portrait of a dynamic system at the frontier of our solar system.".to_string());
+            lines.push(String::new());
+            lines.push("• Wind speeds on Neptune exceed 2,100 km/h — the fastest in the solar system".to_string());
+            lines.push("• It was the first planet located via mathematical prediction".to_string());
+            lines.push("• Neptune has completed only one orbit since its 1846 discovery".to_string());
             lines.push(format!("• {}", get_exploration_status(name)));
         }
         _ => {
             let parent = get_parent_body(name);
             info_line(&mut lines, "Type", "Natural satellite");
             info_line(&mut lines, "Parent", parent);
+            info_line(&mut lines, "Distance", &format!("{:.3} AU", planet.orbital_distance_au));
+            info_line(&mut lines, "Orbit", &format!("{:.1} days", planet.orbital_period_days));
+            info_line(&mut lines, "Radius", &format!("{:.0} km", planet.radius_km));
+            info_line(&mut lines, "Mass", &format!("{:.2e} kg", planet.mass_kg));
             info_line(&mut lines, "Discovery", get_discovery_info(name));
             lines.push(String::new());
             let facts = get_fun_facts(name);
-            for fact in facts.iter().take(2) {
+            for fact in facts.iter().take(3) {
                 lines.push(format!("• {}", fact));
             }
-            lines.push(format!("• {}", get_exploration_status(name)));
+            if !facts.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(get_exploration_status(name).to_string());
         }
     }
 
