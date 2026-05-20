@@ -1,4 +1,6 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::NoFrustumCulling;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use rand::rngs::StdRng;
@@ -10,6 +12,7 @@ use crate::infrastructure::bevy_adapters::components::Starfield;
 const STAR_SEED: u64 = 0xC05F_1C5A;
 const STAR_COUNT: usize = 3_000;
 const MILKY_WAY_COUNT: usize = 900;
+const STARFIELD_RADIUS_AU: f32 = 75.0;
 
 pub fn spawn_starfield(
     commands: &mut Commands,
@@ -17,7 +20,7 @@ pub fn spawn_starfield(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     solar_params: &SolarSystemParameters,
 ) {
-    let radius = solar_params.au_to_units(90.0);
+    let radius = solar_params.au_to_units(STARFIELD_RADIUS_AU);
     let mesh = meshes.add(create_starfield_mesh(radius));
     let material = materials.add(StandardMaterial {
         base_color: Color::WHITE,
@@ -25,6 +28,7 @@ pub fn spawn_starfield(
         unlit: true,
         alpha_mode: AlphaMode::Blend,
         double_sided: true,
+        cull_mode: None,
         ..default()
     });
 
@@ -32,6 +36,9 @@ pub fn spawn_starfield(
         Mesh3d(mesh),
         MeshMaterial3d(material),
         Transform::default(),
+        NoFrustumCulling,
+        NotShadowCaster,
+        NotShadowReceiver,
         Starfield,
         Name::new("Procedural Starfield"),
     ));
@@ -48,7 +55,7 @@ fn create_starfield_mesh(radius: f32) -> Mesh {
 
     for _ in 0..STAR_COUNT {
         let direction = random_unit_vector(&mut rng);
-        let size = rng.gen_range(260.0..900.0) * brightness_bias(&mut rng);
+        let size = rng.gen_range(5_500.0..14_000.0) * brightness_bias(&mut rng);
         let alpha = rng.gen_range(0.35..0.85);
         let color = star_color(&mut rng, alpha);
         push_star_quad(
@@ -66,7 +73,7 @@ fn create_starfield_mesh(radius: f32) -> Mesh {
 
     for _ in 0..MILKY_WAY_COUNT {
         let direction = milky_way_direction(&mut rng);
-        let size = rng.gen_range(320.0..1_300.0) * brightness_bias(&mut rng);
+        let size = rng.gen_range(7_000.0..22_000.0) * brightness_bias(&mut rng);
         let alpha = rng.gen_range(0.10..0.32);
         let color = star_color(&mut rng, alpha);
         push_star_quad(
