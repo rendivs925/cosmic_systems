@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::window::{CursorIcon, SystemCursorIcon};
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
@@ -305,4 +306,35 @@ pub fn update_ui_hover_state(
     ui_state.is_over_ui = query
         .iter()
         .any(|interaction| matches!(interaction, Interaction::Hovered | Interaction::Pressed));
+}
+
+pub fn update_cursor_icon(
+    mut commands: Commands,
+    mut last_cursor: Local<Option<SystemCursorIcon>>,
+    windows: Query<Entity, With<Window>>,
+    nav_buttons: Query<&Interaction, With<NavButton>>,
+    menu_buttons: Query<&Interaction, With<MenuButton>>,
+    toggle_buttons: Query<&Interaction, With<InfoCardToggleButton>>,
+    ext_buttons: Query<&Interaction, With<InfoCardExternalToggle>>,
+) {
+    let Ok(window_entity) = windows.single() else {
+        return;
+    };
+    let hovering = nav_buttons
+        .iter()
+        .chain(menu_buttons.iter())
+        .chain(toggle_buttons.iter())
+        .chain(ext_buttons.iter())
+        .any(|interaction| *interaction == Interaction::Hovered);
+
+    let new_cursor = if hovering {
+        SystemCursorIcon::Pointer
+    } else {
+        SystemCursorIcon::Default
+    };
+    if *last_cursor == Some(new_cursor) {
+        return;
+    }
+    *last_cursor = Some(new_cursor);
+    commands.entity(window_entity).insert(CursorIcon::System(new_cursor));
 }

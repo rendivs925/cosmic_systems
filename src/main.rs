@@ -120,6 +120,7 @@ fn setup_solar_system_mode(app: &mut App) {
         Update,
         update_ui_hover_state.before(update_camera_controller),
     );
+    app.add_systems(Update, update_cursor_icon);
 
     // Camera and controls
     app.add_systems(Update, update_camera_controller);
