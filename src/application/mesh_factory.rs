@@ -110,8 +110,8 @@ pub fn create_orbit_ribbon_mesh(
         .cross(orbit_positions[segments / 4])
         .normalize_or_zero();
 
-    // Ensure minimum thickness for small orbits (tiny moons)
-    let thickness = thickness.max(1.0);
+    // Clamp thickness for consistent elegant appearance
+    let thickness = thickness.clamp(1.0, 15.0);
 
     let linear_color: LinearRgba = orbit_color.into();
     let color_arr = [linear_color.red, linear_color.green, linear_color.blue, linear_color.alpha];

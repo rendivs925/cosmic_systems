@@ -366,7 +366,7 @@ pub fn update_orbit_thickness(
         let dist_to_camera = camera_pos.distance(orbit_center).max(1.0);
         let ref_dist = orbit_comp.radius.max(1.0);
         let thickness_scale = (dist_to_camera / ref_dist).clamp(0.5, 8.0);
-        let new_thickness = orbit_comp.radius * 0.0005 * thickness_scale;
+        let new_thickness = orbit_comp.radius * 0.0001 * thickness_scale;
 
         if (new_thickness - orbit_comp.thickness).abs() > orbit_comp.thickness * 0.15 {
             orbit_comp.thickness = new_thickness;
@@ -457,7 +457,7 @@ pub fn update_orbit_quality(
     for (mut orbit_comp, mut mesh3d) in orbit_query.iter_mut() {
         if orbit_comp.segments != segments {
             orbit_comp.segments = segments;
-            let new_thickness = orbit_comp.radius * 0.0005 * thickness_mult;
+            let new_thickness = orbit_comp.radius * 0.0001 * thickness_mult;
             orbit_comp.thickness = new_thickness;
             let new_mesh = create_orbit_ribbon_mesh(
                 &mut meshes,
