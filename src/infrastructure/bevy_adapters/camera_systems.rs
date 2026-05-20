@@ -280,7 +280,7 @@ pub fn auto_inspect_selected_planet(
     selected_planet: Res<SelectedPlanet>,
     mut input_state: ResMut<CameraInputState>,
     mut camera_query: Query<(&mut CameraController, &mut Transform, &Projection)>,
-    planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
+    planet_query: Query<(&PlanetComponent, &Transform), Without<CameraController>>,
     mut state: Local<AutoInspectState>,
 ) {
     let Some(selected_entity) = selected_planet.entity else {
@@ -341,7 +341,7 @@ pub fn auto_inspect_selected_planet(
         physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
     };
 
-    let planet_pos = planet_transform.translation();
+    let planet_pos = planet_transform.translation;
     let mut focus_point = planet_pos;
     let mut target_distance = planet_radius * 5.0;
     let mut moon_axis: Option<Vec3> = None;
@@ -362,7 +362,7 @@ pub fn auto_inspect_selected_planet(
     if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
         for (other_comp, other_transform) in planet_query.iter() {
             if other_comp.domain_planet.name == *parent_name {
-                let parent_pos = other_transform.translation();
+                let parent_pos = other_transform.translation;
                 let axis = parent_pos - planet_pos;
                 let axis_dir = if axis.length_squared() > 0.0 {
                     axis.normalize()
@@ -476,7 +476,7 @@ pub fn auto_inspect_selected_planet(
     }
 
     let target_pos = state.smooth_focus + state.smooth_offset;
-    let lerp_factor = 1.0 - (-2.5 * time.delta_secs()).exp(); // Smoother transitions
+    let lerp_factor = 1.0 - (-5.5 * time.delta_secs()).exp();
     camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
 
     // Look at the focus point to frame moon + parent when applicable

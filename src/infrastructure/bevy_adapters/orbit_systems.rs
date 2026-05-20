@@ -423,12 +423,12 @@ pub fn spawn_position_trackers(
 
 // System to update position tracker markers to follow their planet's position
 pub fn update_position_trackers(
-    planet_query: Query<(Entity, &GlobalTransform), With<PlanetComponent>>,
+    planet_query: Query<(Entity, &Transform), With<PlanetComponent>>,
     mut tracker_query: Query<(&PositionTracker, &mut Transform), Without<PlanetComponent>>,
 ) {
     for (tracker, mut transform) in tracker_query.iter_mut() {
         if let Ok((_, planet_transform)) = planet_query.get(tracker.planet_entity) {
-            transform.translation = planet_transform.translation();
+            transform.translation = planet_transform.translation;
         }
     }
 }
