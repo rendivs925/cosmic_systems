@@ -410,12 +410,14 @@ pub fn auto_inspect_selected_planet(
     // Cinematic slow orbit around the planet for aesthetic viewing
     if !is_moon {
         state.orbit_angle += time.delta_secs() * 0.15; // Slow orbit
+    } else {
+        state.orbit_angle += time.delta_secs() * 0.10; // Gentle orbital drift for moons
     }
 
     if let (Some(axis_dir), Some(up)) = (moon_axis, moon_up) {
         // Frame the moon large in the foreground with the parent in the background.
         let distance = moon_distance.unwrap_or(target_distance);
-        let smooth_lerp = 1.0 - (-3.0 * time.delta_secs()).exp();
+        let smooth_lerp = 1.0 - (-5.5 * time.delta_secs()).exp();
         state.smooth_axis = if state.smooth_axis.length_squared() > 0.0 {
             state
                 .smooth_axis
@@ -460,12 +462,8 @@ pub fn auto_inspect_selected_planet(
         state.offset = elevated;
     }
 
-    // Ultra-cinematic interpolation - buttery smooth elegance
-    let smooth_factor = if is_moon {
-        1.0 - (-3.5 * time.delta_secs()).exp() // Refined smoothness for moons
-    } else {
-        1.0 - (-5.5 * time.delta_secs()).exp() // Premium smoothness for planets
-    };
+    // Consistent smooth interpolation for all bodies
+    let smooth_factor = 1.0 - (-5.5 * time.delta_secs()).exp();
     if state.smooth_focus.length_squared() > 0.0 {
         state.smooth_focus = state.smooth_focus.lerp(focus_point, smooth_factor);
     } else {

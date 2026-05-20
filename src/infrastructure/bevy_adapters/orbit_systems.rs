@@ -17,9 +17,9 @@ pub(crate) fn update_orbit_visuals(
 ) {
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 25;
+    let update_stride = 4;
     #[cfg(not(target_arch = "wasm32"))]
-    let update_stride = 10;
+    let update_stride = 2;
 
     if !frame_number.is_multiple_of(update_stride) {
         return;
@@ -107,9 +107,9 @@ pub fn update_planet_reflections(
     // Elegant update cadence - subtle material refinement
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 30; // Minimal updates for web performance
+    let update_stride = 6;
     #[cfg(not(target_arch = "wasm32"))]
-    let update_stride = 10; // Sophisticated pacing for desktop
+    let update_stride = 3;
 
     if !frame_number.is_multiple_of(update_stride) {
         return;
@@ -348,9 +348,9 @@ pub fn update_orbit_thickness(
 ) {
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 15;
+    let update_stride = 6;
     #[cfg(not(target_arch = "wasm32"))]
-    let update_stride = 10;
+    let update_stride = 3;
 
     if !frame_number.is_multiple_of(update_stride) {
         return;
