@@ -96,7 +96,11 @@ fn setup_solar_system_mode(app: &mut App) {
 
     // Visual and interaction systems
     app.add_systems(Update, update_orbit_visuals);
+    app.add_systems(Update, update_orbit_thickness);
+    app.add_systems(Update, update_orbit_quality);
     app.add_systems(Update, update_orbit_visibility);
+    app.add_systems(Update, spawn_position_trackers);
+    app.add_systems(Update, update_position_trackers);
     app.add_systems(Update, update_planet_reflections);
     app.add_systems(Update, update_orbital_planes);
     app.add_systems(Update, update_eccentricity_markers);

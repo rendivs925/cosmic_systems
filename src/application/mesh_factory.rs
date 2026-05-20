@@ -20,7 +20,7 @@ pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> 
 pub fn create_orbit_mesh_ellipse(
     meshes: &mut ResMut<Assets<Mesh>>,
     orbit_shape: &physics::OrbitShape,
-    _color: Color, // Color parameter kept for compatibility but not used - all orbits are cool white
+    orbit_color: Color,
 ) -> Handle<Mesh> {
     #[cfg(target_arch = "wasm32")]
     const SEGMENTS: usize = 128;
@@ -31,9 +31,8 @@ pub fn create_orbit_mesh_ellipse(
     let mut uvs = Vec::with_capacity(SEGMENTS);
     let mut colors = Vec::with_capacity(SEGMENTS);
     let mut indices = Vec::with_capacity(SEGMENTS * 2);
-    // Use cool elegant white for all orbit vertex colors
-    let cool_white: LinearRgba = Color::srgb(0.82, 0.86, 0.90).into();
-    let color = [cool_white.red, cool_white.green, cool_white.blue, cool_white.alpha];
+    let linear_color: LinearRgba = orbit_color.into();
+    let color = [linear_color.red, linear_color.green, linear_color.blue, linear_color.alpha];
 
     let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
     let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
@@ -64,6 +63,80 @@ pub fn create_orbit_mesh_ellipse(
     }
 
     let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    meshes.add(mesh)
+}
+
+pub fn create_orbit_ribbon_mesh(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    orbit_shape: &physics::OrbitShape,
+    orbit_color: Color,
+    thickness: f32,
+    segments: usize,
+) -> Handle<Mesh> {
+    let vertex_count = segments * 2;
+    let mut positions = Vec::with_capacity(vertex_count);
+    let mut normals = Vec::with_capacity(vertex_count);
+    let mut uvs = Vec::with_capacity(vertex_count);
+    let mut colors = Vec::with_capacity(vertex_count);
+    let mut indices = Vec::with_capacity(segments * 6);
+
+    let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
+    let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
+
+    // Compute all orbit positions first
+    let mut orbit_positions: Vec<Vec3> = Vec::with_capacity(segments);
+    for i in 0..segments {
+        let true_anomaly = (i as f32 / segments as f32) * TAU;
+        let radius = semi_latus / (1.0 + e * true_anomaly.cos());
+        let x_orbital = radius * true_anomaly.cos();
+        let z_orbital = radius * true_anomaly.sin();
+        let pos_3d = physics::transform_orbital_point(
+            x_orbital,
+            z_orbital,
+            orbit_shape.inclination_rad,
+            orbit_shape.long_asc_node_rad,
+            orbit_shape.arg_periapsis_rad,
+        );
+        orbit_positions.push(pos_3d);
+    }
+
+    let up = Vec3::Y;
+    let linear_color: LinearRgba = orbit_color.into();
+    let color_arr = [linear_color.red, linear_color.green, linear_color.blue, linear_color.alpha];
+
+    for i in 0..segments {
+        let pos = orbit_positions[i];
+        let prev = orbit_positions[(i + segments - 1) % segments];
+        let next = orbit_positions[(i + 1) % segments];
+        let tangent = (next - prev).normalize_or_zero();
+        let normal = tangent.cross(up).normalize_or_zero();
+
+        let left = pos - normal * (thickness * 0.5);
+        let right = pos + normal * (thickness * 0.5);
+
+        let u = i as f32 / segments as f32;
+        positions.push([left.x, left.y, left.z]);
+        positions.push([right.x, right.y, right.z]);
+        normals.push([0.0, 1.0, 0.0]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([u, 0.0]);
+        uvs.push([u, 1.0]);
+        colors.push(color_arr);
+        colors.push(color_arr);
+
+        let i0 = (i * 2) as u32;
+        let i1 = i0 + 1;
+        let i2 = ((i + 1) % segments * 2) as u32;
+        let i3 = i2 + 1;
+        indices.extend_from_slice(&[i1, i0, i2, i1, i2, i3]);
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);

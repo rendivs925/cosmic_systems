@@ -15,6 +15,7 @@ pub struct OrbitalElements {
     pub mean_anomaly_rad: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct OrbitShape {
     pub semi_major_axis_units: f32,
     pub eccentricity: f32,

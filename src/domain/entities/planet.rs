@@ -1,5 +1,15 @@
 use bevy::prelude::*;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BodyClass {
+    Star,
+    Terrestrial,
+    GasGiant,
+    IceGiant,
+    Dwarf,
+    Moon,
+}
+
 /// Celestial body entity representing planets, moons, and stars
 #[derive(Clone, Debug)]
 pub struct Planet {
@@ -7,6 +17,7 @@ pub struct Planet {
     pub radius_km: f32,
     pub mass_kg: f64,
     pub color: Color,
+    pub body_class: BodyClass,
     pub orbital_distance_au: f32, // Average distance from Sun (or parent planet) in AU
     pub orbital_period_days: f32,
     pub rotation_period_hours: f32,
@@ -20,6 +31,7 @@ pub struct PlanetBuilder {
     radius_km: Option<f32>,
     mass_kg: Option<f64>,
     color: Option<Color>,
+    body_class: Option<BodyClass>,
     orbital_distance_au: Option<f32>,
     orbital_period_days: Option<f32>,
     rotation_period_hours: Option<f32>,
@@ -49,6 +61,11 @@ impl PlanetBuilder {
 
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    pub fn body_class(mut self, body_class: BodyClass) -> Self {
+        self.body_class = Some(body_class);
         self
     }
 
@@ -83,6 +100,7 @@ impl PlanetBuilder {
             radius_km: self.radius_km.expect("radius_km is required"),
             mass_kg: self.mass_kg.expect("mass_kg is required"),
             color: self.color.expect("color is required"),
+            body_class: self.body_class.expect("body_class is required"),
             orbital_distance_au: self.orbital_distance_au.expect("orbital_distance_au is required"),
             orbital_period_days: self.orbital_period_days.expect("orbital_period_days is required"),
             rotation_period_hours: self.rotation_period_hours.expect("rotation_period_hours is required"),
@@ -98,6 +116,7 @@ impl Planet {
         radius_km: f32,
         mass_kg: f64,
         color: Color,
+        body_class: BodyClass,
         orbital_distance_au: f32,
         orbital_period_days: f32,
         rotation_period_hours: f32,
@@ -109,6 +128,7 @@ impl Planet {
             radius_km,
             mass_kg,
             color,
+            body_class,
             orbital_distance_au,
             orbital_period_days,
             rotation_period_hours,
@@ -116,6 +136,4 @@ impl Planet {
             parent_entity,
         }
     }
-
-
 }

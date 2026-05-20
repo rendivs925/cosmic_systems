@@ -1,75 +1,73 @@
 use super::components::*;
-use crate::application::mesh_factory::{create_orbital_plane_mesh, create_eccentricity_marker_mesh};
+use crate::application::material_factory::orbit_color_for;
+use crate::application::mesh_factory::{create_orbit_ribbon_mesh, create_orbital_plane_mesh, create_eccentricity_marker_mesh, create_uv_sphere_mesh};
+use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::performance_components::{PerformanceStats, QualityLevel};
 use bevy::prelude::*;
+use bevy::render::alpha::AlphaMode;
 
-// System to animate orbit visuals with contextual hierarchy and elegance
-// Creates sophisticated visual hierarchy based on distance and selection
-#[allow(dead_code)]
+// System to update orbit visuals with class-based colors and camera-distance-based opacity
 pub(crate) fn update_orbit_visuals(
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
     time: Res<Time>,
     selected_planet: Res<SelectedPlanet>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     orbit_query: Query<&OrbitComponent>,
 ) {
-    // Performance optimization: update orbit visuals periodically
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
     #[cfg(target_arch = "wasm32")]
-    let update_stride = 25; // Less frequent on web for performance
+    let update_stride = 25;
     #[cfg(not(target_arch = "wasm32"))]
-    let update_stride = 10; // Desktop can handle more frequent updates
+    let update_stride = 10;
 
     if !frame_number.is_multiple_of(update_stride) {
         return;
     }
 
+    let Ok(camera) = camera_query.single() else {
+        return;
+    };
+    let camera_pos = camera.translation();
     let elapsed = time.elapsed_secs();
 
-    // Update each orbit material based on its distance rank and selection status
     for orbit_comp in orbit_query.iter() {
         if let Some(material) = materials.get_mut(&orbit_comp.material) {
-            // Calculate opacity based on distance hierarchy and selection
-            let distance_factor = orbit_comp.distance_rank; // 0.0 = inner planets, 1.0 = outer planets
-
-            // Enhanced visibility for long-distance viewing - all orbits clearly visible
-            let base_opacity = if distance_factor < 0.25 {
-                0.18 // Inner planets: clearly visible
-            } else if distance_factor < 0.5 {
-                0.15 // Middle planets: well visible
-            } else {
-                0.12 // Outer planets: sufficiently visible at long distance
-            };
-
-            // Boost for selected planet's orbit - clearly enhanced for navigation
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
+            let class_color = orbit_color_for(orbit_comp.body_class, is_selected);
+            let linear_color: LinearRgba = class_color.into();
+
+            // Distance-based opacity: sigmoid curve based on camera distance
+            let dist = camera_pos.length().max(1.0);
+            let radius = orbit_comp.radius.max(1.0);
+            let ratio = dist / radius;
+            // Fade in from 0.05× to 0.5× radius, hold, fade out from 5× to 20× radius
+            let near_fade = ((ratio / 0.3).min(1.0)).powf(1.5);
+            let far_fade = (1.0 - (ratio / 15.0).clamp(0.0, 1.0)).max(0.02);
+            let base_opacity = near_fade * far_fade;
+
+            let base_opacity = base_opacity.clamp(0.02, 0.25);
             let final_base_opacity = if is_selected {
-                (base_opacity * 2.0_f32).min(0.30) // Enhanced visibility for selected orbit
+                (base_opacity * 2.5).min(0.50)
             } else {
                 base_opacity
             };
 
-            // Ultra-elegant stellar harmonics - sophisticated orbital resonance
-            let orbital_harmonic = orbit_comp.radius * 0.0001; // Unique frequency per orbit
+            let orbital_harmonic = orbit_comp.radius * 0.0001;
             let stellar_resonance = 0.02 * (elapsed * 0.004 + orbital_harmonic).sin();
             let cosmic_pulse = 0.985 + 0.015 * (elapsed * 0.005).sin() + stellar_resonance;
             let alpha = final_base_opacity * cosmic_pulse;
 
-            // Ultra-sophisticated spectral palette - refined cosmic elegance
-            let (r, g, b) = if is_selected {
-                (0.85, 0.89, 0.93) // Refined cool white highlight for selection
-            } else {
-                (0.82, 0.86, 0.90) // Refined cool elegant white - pure sophistication
-            };
+            material.base_color = class_color.with_alpha(alpha);
 
-            material.base_color = Color::srgb(r, g, b).with_alpha(alpha);
-
-            // Subtle stellar residue - gentle cosmic energy hints
-            let stellar_residue = if is_selected {
-                0.015 + 0.005 * cosmic_pulse
-            } else {
-                0.008 + 0.002 * cosmic_pulse
-            };
-            material.emissive = LinearRgba::new(stellar_residue, stellar_residue, stellar_residue * 1.2, 1.0);
+            let emissive_intensity = if is_selected { 0.15 } else { 0.08 };
+            let emissive_pulse = 0.85 + 0.15 * cosmic_pulse;
+            material.emissive = LinearRgba::new(
+                linear_color.red * emissive_intensity * emissive_pulse,
+                linear_color.green * emissive_intensity * emissive_pulse,
+                linear_color.blue * emissive_intensity * emissive_pulse,
+                1.0,
+            );
         }
     }
 }
@@ -234,42 +232,48 @@ pub fn spawn_eccentricity_markers(
     orbit_query: Query<(Entity, &OrbitComponent), Without<EccentricityMarkersComponent>>,
 ) {
     for (orbit_entity, orbit_comp) in orbit_query.iter() {
-        // Only create markers for orbits with significant eccentricity (>0.01)
-        // For now, we'll use a placeholder eccentricity value since we need to access orbit shape data
-        // In a real implementation, this would come from the planet's orbital elements
-        let eccentricity = 0.0167; // Earth's actual eccentricity as example
+        let eccentricity = orbit_comp.orbit_shape.eccentricity;
         if eccentricity < 0.01 {
             continue;
         }
 
-        // Calculate apoapsis and periapsis positions
-        let semi_major_axis = orbit_comp.radius;
-        let apoapsis_distance = semi_major_axis * (1.0 + eccentricity);
-        let periapsis_distance = semi_major_axis * (1.0 - eccentricity);
+        let semi_major = orbit_comp.orbit_shape.semi_major_axis_units;
 
-        // For simplicity, place markers along the orbit path
-        // In a full implementation, these would use proper Keplerian orbital calculations
-        let apoapsis_pos = Vec3::new(apoapsis_distance, 0.0, 0.0);
-        let periapsis_pos = Vec3::new(-periapsis_distance, 0.0, 0.0);
+        // Apoapsis at true anomaly = 0°, periapsis at true anomaly = π
+        let e = orbit_comp.orbit_shape.eccentricity.clamp(0.0, 0.99);
+        let semi_latus = semi_major * (1.0 - e * e);
+        let apoapsis_r = semi_latus / (1.0 + e * 1.0);
+        let periapsis_r = semi_latus / (1.0 - e);
 
-        // Create glowing sphere markers
-        let marker_mesh = create_eccentricity_marker_mesh(&mut meshes, 2.0); // Small 2-unit radius spheres
+        let apoapsis_pos = physics::transform_orbital_point(
+            apoapsis_r, 0.0,
+            orbit_comp.orbit_shape.inclination_rad,
+            orbit_comp.orbit_shape.long_asc_node_rad,
+            orbit_comp.orbit_shape.arg_periapsis_rad,
+        );
+        let periapsis_pos = physics::transform_orbital_point(
+            -periapsis_r, 0.0,
+            orbit_comp.orbit_shape.inclination_rad,
+            orbit_comp.orbit_shape.long_asc_node_rad,
+            orbit_comp.orbit_shape.arg_periapsis_rad,
+        );
+
+        let marker_mesh = create_eccentricity_marker_mesh(&mut meshes, 2.0);
         let apoapsis_material = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.89, 0.93).with_alpha(0.8), // Bright cool white for apoapsis
+            base_color: Color::srgb(0.85, 0.89, 0.93).with_alpha(0.8),
             emissive: LinearRgba::new(0.1, 0.12, 0.15, 1.0),
             unlit: true,
             alpha_mode: AlphaMode::Blend,
             ..default()
         });
         let periapsis_material = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.75, 0.82, 0.88).with_alpha(0.9), // Slightly dimmer for periapsis
+            base_color: Color::srgb(0.75, 0.82, 0.88).with_alpha(0.9),
             emissive: LinearRgba::new(0.08, 0.10, 0.12, 1.0),
             unlit: true,
             alpha_mode: AlphaMode::Blend,
             ..default()
         });
 
-        // Spawn apoapsis marker
         commands.spawn((
             Mesh3d(marker_mesh.clone()),
             MeshMaterial3d(apoapsis_material.clone()),
@@ -277,7 +281,6 @@ pub fn spawn_eccentricity_markers(
             Name::new(format!("Apoapsis marker for {:?}", orbit_comp.planet_entity)),
         ));
 
-        // Spawn periapsis marker
         commands.spawn((
             Mesh3d(marker_mesh),
             MeshMaterial3d(periapsis_material.clone()),
@@ -285,7 +288,6 @@ pub fn spawn_eccentricity_markers(
             Name::new(format!("Periapsis marker for {:?}", orbit_comp.planet_entity)),
         ));
 
-        // Add eccentricity markers component to orbit
         commands.entity(orbit_entity).insert(EccentricityMarkersComponent {
             planet_entity: orbit_comp.planet_entity,
             apoapsis_position: apoapsis_pos,
@@ -333,6 +335,142 @@ pub fn update_eccentricity_markers(
                 0.12 * periapsis_intensity,
                 1.0,
             );
+        }
+    }
+}
+
+// System to update orbit ribbon thickness based on camera distance
+pub fn update_orbit_thickness(
+    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    time: Res<Time>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d)>,
+) {
+    let frame_number = (time.elapsed_secs() * 60.0) as u32;
+    #[cfg(target_arch = "wasm32")]
+    let update_stride = 15;
+    #[cfg(not(target_arch = "wasm32"))]
+    let update_stride = 10;
+
+    if !frame_number.is_multiple_of(update_stride) {
+        return;
+    }
+
+    let Ok(camera) = camera_query.single() else {
+        return;
+    };
+    let camera_pos = camera.translation();
+
+    for (mut orbit_comp, mut mesh3d) in orbit_query.iter_mut() {
+        let dist_to_camera = camera_pos.length().max(1.0);
+        let ref_dist = orbit_comp.radius.max(1.0);
+        let thickness_scale = (dist_to_camera / ref_dist).clamp(0.5, 8.0);
+        let new_thickness = orbit_comp.radius * 0.0005 * thickness_scale;
+
+        if (new_thickness - orbit_comp.thickness).abs() > orbit_comp.thickness * 0.15 {
+            orbit_comp.thickness = new_thickness;
+            let class_color = orbit_color_for(orbit_comp.body_class, false);
+            let new_mesh = create_orbit_ribbon_mesh(
+                &mut meshes,
+                &orbit_comp.orbit_shape,
+                class_color,
+                new_thickness,
+                orbit_comp.segments,
+            );
+            mesh3d.0 = new_mesh;
+        }
+    }
+}
+
+// System to spawn position tracker markers for each orbit
+pub fn spawn_position_trackers(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    orbit_query: Query<(Entity, &OrbitComponent), Without<PositionTracker>>,
+    planet_query: Query<&PlanetComponent>,
+) {
+    for (orbit_entity, orbit_comp) in orbit_query.iter() {
+        let Ok(planet_comp) = planet_query.get(orbit_comp.planet_entity) else {
+            continue;
+        };
+        let tracker_radius = 3.0;
+        let tracker_mesh = create_uv_sphere_mesh(&mut meshes, tracker_radius);
+        let tracker_color = orbit_color_for(orbit_comp.body_class, true);
+        let tracker_material = materials.add(StandardMaterial {
+            base_color: tracker_color,
+            emissive: {
+                let c: LinearRgba = tracker_color.into();
+                LinearRgba::new(c.red * 0.5, c.green * 0.5, c.blue * 0.5, 1.0)
+            },
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        });
+        commands.entity(orbit_entity).insert(PositionTracker {
+            planet_entity: orbit_comp.planet_entity,
+            planet_name: planet_comp.domain_planet.name.clone(),
+        });
+        commands.spawn((
+            Mesh3d(tracker_mesh),
+            MeshMaterial3d(tracker_material),
+            Transform::default(),
+            PositionTracker {
+                planet_entity: orbit_comp.planet_entity,
+                planet_name: planet_comp.domain_planet.name.clone(),
+            },
+            Name::new(format!("Position tracker {}", planet_comp.domain_planet.name)),
+        ));
+    }
+}
+
+// System to update position tracker markers to follow their planet's position
+pub fn update_position_trackers(
+    planet_query: Query<(Entity, &GlobalTransform), With<PlanetComponent>>,
+    mut tracker_query: Query<(&PositionTracker, &mut Transform), Without<PlanetComponent>>,
+) {
+    for (tracker, mut transform) in tracker_query.iter_mut() {
+        if let Ok((_, planet_transform)) = planet_query.get(tracker.planet_entity) {
+            transform.translation = planet_transform.translation();
+        }
+    }
+}
+
+// System to adapt orbit segment count and thickness based on quality level
+pub fn update_orbit_quality(
+    perf_stats: Res<PerformanceStats>,
+    mut last_quality: Local<Option<QualityLevel>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d)>,
+) {
+    let current_quality = perf_stats.quality_level;
+    if *last_quality == Some(current_quality) {
+        return;
+    }
+    *last_quality = Some(current_quality);
+
+    let (segments, thickness_mult) = match current_quality {
+        QualityLevel::Ultra => (512, 1.4),
+        QualityLevel::High => (256, 1.2),
+        QualityLevel::Medium => (128, 1.0),
+        QualityLevel::Low => (64, 0.7),
+        QualityLevel::Minimal => (32, 0.4),
+    };
+
+    for (mut orbit_comp, mut mesh3d) in orbit_query.iter_mut() {
+        if orbit_comp.segments != segments {
+            orbit_comp.segments = segments;
+            let new_thickness = orbit_comp.radius * 0.0005 * thickness_mult;
+            orbit_comp.thickness = new_thickness;
+            let class_color = orbit_color_for(orbit_comp.body_class, false);
+            let new_mesh = create_orbit_ribbon_mesh(
+                &mut meshes,
+                &orbit_comp.orbit_shape,
+                class_color,
+                new_thickness,
+                segments,
+            );
+            mesh3d.0 = new_mesh;
         }
     }
 }

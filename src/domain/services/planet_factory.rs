@@ -53,6 +53,7 @@ impl PlanetFactory {
             config.radius_km,
             config.mass_kg,
             config.color,
+            config.body_class,
             config.orbital_distance_au,
             config.orbital_period_days,
             config.rotation_period_hours,

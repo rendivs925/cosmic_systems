@@ -6,7 +6,7 @@ pub use super::texture_config::*;
 use crate::application::material_factory::*;
 use crate::application::mesh_factory::*;
 use crate::application::starfield::spawn_starfield;
-use crate::domain::entities::planet::Planet;
+use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::physics;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -107,18 +107,6 @@ pub fn setup_space(
         &solar_params,
     );
 
-    // Create a base orbit material template - individual orbits will get customized materials
-    let base_orbit_material = create_orbit_material(
-        Color::srgb(0.82, 0.86, 0.90), // Refined cool elegant white
-        orbit_emissive(Color::srgb(0.82, 0.86, 0.90), 0.1), // Minimal glow
-        0.1,                           // Base transparency - will be customized per orbit
-    );
-
-    let shared_orbit_handle = materials.add(base_orbit_material);
-    commands.insert_resource(SharedOrbitMaterial {
-        handle: shared_orbit_handle.clone(),
-    });
-
     // Create all planets and moons using the factory
     let planets = PlanetFactory::get_planets();
     let moons = PlanetFactory::get_moons();
@@ -159,7 +147,6 @@ pub fn setup_space(
             &mut entity_map,
             &mut position_map,
             &axial_tilts,
-            &shared_orbit_handle,
         );
     }
 
@@ -185,7 +172,6 @@ pub(crate) struct SpawnQueue {
     entity_map: HashMap<String, Entity>,
     position_map: HashMap<String, Vec3>,
     axial_tilts: HashMap<String, f32>,
-    shared_orbit_material: Handle<StandardMaterial>,
     spawn_per_frame: usize,
 }
 
@@ -203,7 +189,6 @@ pub fn spawn_bodies_progressively(
         entity_map,
         position_map,
         axial_tilts,
-        shared_orbit_material,
         spawn_per_frame,
     } = &mut *queue;
 
@@ -221,7 +206,6 @@ pub fn spawn_bodies_progressively(
             entity_map,
             position_map,
             axial_tilts,
-            shared_orbit_material,
         );
     }
 }
@@ -236,7 +220,6 @@ fn spawn_celestial_body(
     entity_map: &mut HashMap<String, Entity>,
     position_map: &mut HashMap<String, Vec3>,
     axial_tilts: &HashMap<String, f32>,
-    shared_orbit_material: &Handle<StandardMaterial>,
 ) {
     let visual_radius = if planet.name == "Sun" {
         physics::calculate_sun_visual_radius(solar_params)
@@ -377,41 +360,45 @@ fn spawn_celestial_body(
     if let Some(parent_name) = &planet.parent_entity {
         if let Some(parent_ent) = entity_map.get(parent_name).copied() {
             let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
-            let orbit_base_color = planet.color;
+            let moon_thickness = orbit_shape.semi_major_axis_units * 0.0005;
+            let moon_segments = 256;
             #[cfg(not(target_arch = "wasm32"))]
-            let orbit_mesh = create_orbit_mesh_ellipse(meshes, &orbit_shape, orbit_base_color);
+            let orbit_mesh = create_orbit_ribbon_mesh(meshes, &orbit_shape, orbit_color_for(BodyClass::Moon, false), moon_thickness, moon_segments);
             #[cfg(target_arch = "wasm32")]
             let orbit_mesh = create_placeholder_orbit_mesh(meshes);
-            let orbit_material_handle = shared_orbit_material.clone();
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
-            // Spawn moon orbit as a separate entity (not a child) to avoid inheriting parent spin.
-            // Create individual material for this moon orbit
+            // Create individual material for this moon orbit with class-based color
+            let moon_orbit_color = orbit_color_for(BodyClass::Moon, false);
             let moon_material = create_orbit_material(
-                Color::srgb(0.82, 0.86, 0.90), // Refined cool elegant white for moons
-                orbit_emissive(Color::srgb(0.82, 0.86, 0.90), 0.08),
-                0.08, // Medium visibility for moons
+                moon_orbit_color,
+                orbit_emissive(moon_orbit_color, 0.06),
+                0.08,
             );
-            let _moon_material_handle = materials.add(moon_material);
+            let moon_material_handle = materials.add(moon_material);
 
             #[cfg(target_arch = "wasm32")]
             let orbit_entity = commands
                 .spawn((
                     Mesh3d(orbit_mesh.clone()),
-                    MeshMaterial3d(moon_material_handle),
+                    MeshMaterial3d(moon_material_handle.clone()),
                     Transform::default(),
                 ))
                 .insert(OrbitComponent {
                     radius: orbit_shape.semi_major_axis_units,
                     planet_entity: parent_ent,
-                    material: moon_material_handle,
-                    base_color: orbit_base_color,
+                    material: moon_material_handle.clone(),
+                    base_color: moon_orbit_color,
+                    body_class: BodyClass::Moon,
+                    orbit_shape,
+                    thickness: orbit_shape.semi_major_axis_units * 0.0005,
+                    segments: 256,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,
                     wobble_amount: orbit_motion.wobble_amount,
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
-                    distance_rank: 0.5, // Moons get medium visibility rank
+                    distance_rank: 0.5,
                 })
                 .insert(MoonOrbit)
                 .insert(Name::new(format!(
@@ -425,20 +412,24 @@ fn spawn_celestial_body(
                 commands
                     .spawn((
                         Mesh3d(orbit_mesh.clone()),
-                        MeshMaterial3d(orbit_material_handle.clone()),
+                        MeshMaterial3d(moon_material_handle.clone()),
                         Transform::default(),
                     ))
                     .insert(OrbitComponent {
                         radius: orbit_shape.semi_major_axis_units,
                         planet_entity: parent_ent,
-                        material: orbit_material_handle.clone(),
-                        base_color: orbit_base_color,
+                        material: moon_material_handle.clone(),
+                        base_color: moon_orbit_color,
+                        body_class: BodyClass::Moon,
+                        orbit_shape,
+                        thickness: orbit_shape.semi_major_axis_units * 0.0005,
+                        segments: 256,
                         tilt: orbit_motion.tilt,
                         wobble_speed: orbit_motion.wobble_speed,
                         wobble_amount: orbit_motion.wobble_amount,
                         spin_speed: orbit_motion.spin_speed,
                         phase: orbit_motion.phase,
-                        distance_rank: 0.5, // Moons get medium visibility rank
+                        distance_rank: 0.5,
                     })
                     .insert(MoonOrbit)
                     .insert(Name::new(format!(
@@ -459,12 +450,19 @@ fn spawn_celestial_body(
         }
     } else if planet.name != "Sun" {
         let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
-        let orbit_base_color = planet.color;
+        let orbit_base_color = orbit_color_for(planet.body_class, false);
+        let planet_thickness = orbit_shape.semi_major_axis_units * 0.0005;
+        let planet_segments = 256;
         #[cfg(not(target_arch = "wasm32"))]
-        let orbit_mesh = create_orbit_mesh_ellipse(meshes, &orbit_shape, orbit_base_color);
+        let orbit_mesh = create_orbit_ribbon_mesh(meshes, &orbit_shape, orbit_base_color, planet_thickness, planet_segments);
         #[cfg(target_arch = "wasm32")]
         let orbit_mesh = create_placeholder_orbit_mesh(meshes);
-        let orbit_material_handle = shared_orbit_material.clone();
+        let orbit_material = create_orbit_material(
+            orbit_base_color,
+            orbit_emissive(orbit_base_color, 0.08),
+            0.12,
+        );
+        let orbit_material_handle = materials.add(orbit_material);
         let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
         #[cfg(target_arch = "wasm32")]
@@ -479,6 +477,10 @@ fn spawn_celestial_body(
                 planet_entity,
                 material: orbit_material_handle.clone(),
                 base_color: orbit_base_color,
+                body_class: planet.body_class,
+                orbit_shape,
+                thickness: orbit_shape.semi_major_axis_units * 0.0005,
+                segments: 256,
                 tilt: orbit_motion.tilt,
                 wobble_speed: orbit_motion.wobble_speed,
                 wobble_amount: orbit_motion.wobble_amount,
@@ -501,12 +503,16 @@ fn spawn_celestial_body(
                     planet_entity,
                     material: orbit_material_handle.clone(),
                     base_color: orbit_base_color,
+                    body_class: planet.body_class,
+                    orbit_shape,
+                    thickness: orbit_shape.semi_major_axis_units * 0.0005,
+                    segments: 256,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,
                     wobble_amount: orbit_motion.wobble_amount,
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
-                    distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0), // 0=inner planets, 1=outer planets
+                    distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
                 })
                 .insert(Name::new(format!("Orbit {}", planet.name)));
         }

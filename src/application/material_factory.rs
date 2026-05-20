@@ -1,3 +1,4 @@
+use crate::domain::entities::planet::BodyClass;
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
 
@@ -68,6 +69,27 @@ pub fn create_planet_material_legacy(
         reflectance,
         perceptual_roughness,
     })
+}
+
+pub fn orbit_color_for(body_class: BodyClass, selected: bool) -> Color {
+    let base = match body_class {
+        BodyClass::Star => Color::srgb(1.0, 0.95, 0.85),
+        BodyClass::Terrestrial => Color::srgb(0.95, 0.90, 0.80),
+        BodyClass::GasGiant => Color::srgb(0.90, 0.85, 0.65),
+        BodyClass::IceGiant => Color::srgb(0.65, 0.80, 0.90),
+        BodyClass::Dwarf => Color::srgb(0.75, 0.75, 0.80),
+        BodyClass::Moon => Color::srgb(0.72, 0.72, 0.76),
+    };
+    if selected {
+        let linear: LinearRgba = base.into();
+        Color::srgb(
+            (linear.red * 1.3).min(1.0),
+            (linear.green * 1.3).min(1.0),
+            (linear.blue * 1.3).min(1.0),
+        )
+    } else {
+        base
+    }
 }
 
 pub fn create_orbit_material(

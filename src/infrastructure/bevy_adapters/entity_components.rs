@@ -1,5 +1,6 @@
 use crate::domain::entities::gyroscope::Gyroscope;
-use crate::domain::entities::planet::Planet;
+use crate::domain::entities::planet::{BodyClass, Planet};
+use crate::domain::services::physics_orbital::OrbitShape;
 use bevy::prelude::*;
 
 /// Types of launch sites with different terrain characteristics
@@ -38,12 +39,16 @@ pub struct OrbitComponent {
     pub planet_entity: Entity,
     pub material: Handle<StandardMaterial>,
     pub base_color: Color,
+    pub body_class: BodyClass,
+    pub orbit_shape: OrbitShape,
+    pub thickness: f32,
+    pub segments: usize,
     pub tilt: Vec2,
     pub wobble_speed: f32,
     pub wobble_amount: f32,
     pub spin_speed: f32,
     pub phase: f32,
-    pub distance_rank: f32, // 0.0 (closest to sun) to 1.0 (farthest) for hierarchy
+    pub distance_rank: f32,
 }
 
 // Component for orbital plane visualization with inclination-based effects
@@ -82,6 +87,13 @@ pub struct VelocityTrailComponent {
 
 #[derive(Component)]
 pub struct Starfield;
+
+// Component for the orbital position tracker marker (small dot on orbit at planet's position)
+#[derive(Component)]
+pub struct PositionTracker {
+    pub planet_entity: Entity,
+    pub planet_name: String,
+}
 
 // Marker component for moon orbits (orbits that need to follow their parent planet)
 #[derive(Component)]

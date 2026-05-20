@@ -3,11 +3,6 @@ use std::f32::consts::TAU;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
-#[derive(Resource)]
-pub struct SharedOrbitMaterial {
-    pub handle: Handle<StandardMaterial>,
-}
-
 pub struct PlanetTextureSet {
     pub albedo: Option<&'static str>,
     pub emissive: Option<&'static str>,
