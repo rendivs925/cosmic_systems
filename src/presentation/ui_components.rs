@@ -52,7 +52,7 @@ impl Default for UiMenuState {
     fn default() -> Self {
         Self {
             selector_open: false,
-            info_card_open: true,
+            info_card_open: false,
         }
     }
 }

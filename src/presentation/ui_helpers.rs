@@ -165,206 +165,136 @@ pub fn build_info_body(planet: &crate::domain::entities::planet::Planet) -> Stri
 
     match name {
         "Sun" => {
-            section_header(&mut lines, "Overview");
-            lines.push("The solar system's central star, a hot ball of plasma powering planetary climates. Its gravity holds every planet, moon, and comet in orbit.".to_string());
-
-            section_header(&mut lines, "Key Data");
-            info_line(&mut lines, "Type", "G-type main-sequence star (G2V)");
-            info_line(
-                &mut lines,
-                "Mass",
-                "1.9885 x 10^30 kg (333,000 Earth masses)",
-            );
-            info_line(&mut lines, "Radius", "696,340 km (109 Earth radii)");
-            info_line(&mut lines, "Surface Temperature", "5,778 K (5,505 deg C)");
+            info_line(&mut lines, "Type", "G2V main-sequence star");
+            info_line(&mut lines, "Mass", "1.989 x 10^30 kg (333,000 Earth)");
+            info_line(&mut lines, "Radius", "696,340 km (109 Earth)");
+            info_line(&mut lines, "Surface", "5,778 K");
             info_line(&mut lines, "Luminosity", "3.83 x 10^26 W");
             info_line(&mut lines, "Age", "4.6 billion years");
-            info_line(&mut lines, "Distance from Earth", "149.6 million km (1 AU)");
+            lines.push(String::new());
+            lines.push("• 99.86% of solar system mass".to_string());
+            lines.push("• Core reaches 15 million deg C".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Mercury" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Mercury is the smallest planet and closest to the Sun. It experiences extreme temperature swings due to its lack of atmosphere.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Terrestrial planet");
-            info_line(&mut lines, "Mass", "3.301 x 10^23 kg (0.055 Earth masses)");
-            info_line(&mut lines, "Radius", "2,439.7 km (0.383 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "0.387 AU (57.9 million km)",
-            );
-            info_line(&mut lines, "Orbital Period", "87.969 Earth days");
-            info_line(&mut lines, "Rotation Period", "58.646 Earth days");
-            info_line(&mut lines, "Surface Temperature", "-173 to 427 deg C");
-            info_line(&mut lines, "Moons", "0");
+            info_line(&mut lines, "Mass", "3.301 x 10^23 kg (0.055 Earth)");
+            info_line(&mut lines, "Radius", "2,440 km (0.383 Earth)");
+            info_line(&mut lines, "Distance", "0.387 AU");
+            info_line(&mut lines, "Orbit", "87.97 days");
+            info_line(&mut lines, "Rotation", "58.65 days");
+            info_line(&mut lines, "Temp", "-173 to 427 deg C");
+            lines.push(String::new());
+            lines.push("• Most eccentric orbit of all planets".to_string());
+            lines.push("• A day is longer than its year".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Venus" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Venus is Earth's twin in size but has a toxic atmosphere that traps heat, making it the hottest planet in the solar system.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Terrestrial planet");
-            info_line(&mut lines, "Mass", "4.867 x 10^24 kg (0.815 Earth masses)");
-            info_line(&mut lines, "Radius", "6,051.8 km (0.949 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "0.723 AU (108.2 million km)",
-            );
-            info_line(&mut lines, "Orbital Period", "224.701 Earth days");
-            info_line(
-                &mut lines,
-                "Rotation Period",
-                "243.025 Earth days (retrograde)",
-            );
-            info_line(
-                &mut lines,
-                "Surface Temperature",
-                "462 deg C (hottest planet)",
-            );
-            info_line(&mut lines, "Atmosphere", "96.5% CO2, sulfuric acid clouds");
+            info_line(&mut lines, "Mass", "4.867 x 10^24 kg (0.815 Earth)");
+            info_line(&mut lines, "Radius", "6,052 km (0.949 Earth)");
+            info_line(&mut lines, "Distance", "0.723 AU");
+            info_line(&mut lines, "Orbit", "224.7 days");
+            info_line(&mut lines, "Rotation", "243 days (retrograde)");
+            info_line(&mut lines, "Temp", "462 deg C (hottest)");
+            lines.push(String::new());
+            lines.push("• Rotates backwards (retrograde)".to_string());
+            lines.push("• Surface pressure 92x Earth's".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Earth" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Earth is the only planet known to support life, with liquid water on its surface and a protective atmosphere.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Terrestrial planet");
             info_line(&mut lines, "Mass", "5.972 x 10^24 kg");
             info_line(&mut lines, "Radius", "6,371 km");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "1.000 AU (149.6 million km)",
-            );
-            info_line(&mut lines, "Orbital Period", "365.256 days");
-            info_line(&mut lines, "Rotation Period", "23.934 hours");
-            info_line(&mut lines, "Surface Temperature", "-89 to 58 deg C");
-            info_line(&mut lines, "Moons", "1 (The Moon)");
-            info_line(&mut lines, "Atmosphere", "78% N2, 21% O2, trace gases");
+            info_line(&mut lines, "Distance", "1.000 AU");
+            info_line(&mut lines, "Orbit", "365.26 days");
+            info_line(&mut lines, "Rotation", "23.93 hours");
+            info_line(&mut lines, "Temp", "-89 to 58 deg C");
+            info_line(&mut lines, "Atmosphere", "78% N2, 21% O2");
+            lines.push(String::new());
+            lines.push("• Only known planet with liquid surface water".to_string());
+            lines.push("• Powerful magnetic field protects life".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Mars" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Mars is the Red Planet with polar ice caps and the largest volcano in the solar system. It is a prime target for exploration.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Terrestrial planet");
-            info_line(&mut lines, "Mass", "6.417 x 10^23 kg (0.107 Earth masses)");
-            info_line(&mut lines, "Radius", "3,389.5 km (0.532 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "1.524 AU (227.9 million km)",
-            );
-            info_line(&mut lines, "Orbital Period", "686.980 Earth days");
-            info_line(&mut lines, "Rotation Period", "24.623 hours");
-            info_line(&mut lines, "Surface Temperature", "-87 to -5 deg C");
+            info_line(&mut lines, "Mass", "6.417 x 10^23 kg (0.107 Earth)");
+            info_line(&mut lines, "Radius", "3,390 km (0.532 Earth)");
+            info_line(&mut lines, "Distance", "1.524 AU");
+            info_line(&mut lines, "Orbit", "686.98 days");
+            info_line(&mut lines, "Rotation", "24.62 hours");
+            info_line(&mut lines, "Temp", "-87 to -5 deg C");
             info_line(&mut lines, "Moons", "2 (Phobos, Deimos)");
-            info_line(&mut lines, "Atmosphere", "95% CO2, thin and dusty");
+            lines.push(String::new());
+            lines.push("• Olympus Mons — tallest volcano in solar system".to_string());
+            lines.push("• Valles Marineris — largest canyon".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Jupiter" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Jupiter is the largest planet in the solar system, a gas giant with a powerful magnetic field and the famous Great Red Spot storm.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Gas giant");
-            info_line(&mut lines, "Mass", "1.898 x 10^27 kg (317.8 Earth masses)");
-            info_line(&mut lines, "Radius", "69,911 km (10.97 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "5.204 AU (778.6 million km)",
-            );
-            info_line(&mut lines, "Orbital Period", "11.862 years");
-            info_line(&mut lines, "Rotation Period", "9.925 hours");
-            info_line(&mut lines, "Atmosphere", "Hydrogen, helium, ammonia clouds");
+            info_line(&mut lines, "Mass", "1.898 x 10^27 kg (318 Earth)");
+            info_line(&mut lines, "Radius", "69,911 km (10.97 Earth)");
+            info_line(&mut lines, "Distance", "5.204 AU");
+            info_line(&mut lines, "Orbit", "11.86 years");
+            info_line(&mut lines, "Rotation", "9.93 hours");
+            info_line(&mut lines, "Moons", "95+ known");
+            lines.push(String::new());
+            lines.push("• Great Red Spot is a storm larger than Earth".to_string());
+            lines.push("• Emits more heat than it receives from Sun".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Saturn" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Saturn is known for its spectacular ring system, composed of ice and rock particles. It is a gas giant like Jupiter.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Gas giant");
-            info_line(&mut lines, "Mass", "5.683 x 10^26 kg (95.2 Earth masses)");
-            info_line(&mut lines, "Radius", "58,232 km (9.14 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "9.582 AU (1.433 billion km)",
-            );
-            info_line(&mut lines, "Orbital Period", "29.457 years");
-            info_line(&mut lines, "Rotation Period", "10.7 hours");
-            info_line(&mut lines, "Moons", "146+ (major: Titan, Enceladus, Mimas)");
-            info_line(&mut lines, "Rings", "Complex ring system of ice and rock");
-            info_line(&mut lines, "Atmosphere", "Hydrogen, helium, trace methane");
+            info_line(&mut lines, "Mass", "5.683 x 10^26 kg (95.2 Earth)");
+            info_line(&mut lines, "Radius", "58,232 km (9.14 Earth)");
+            info_line(&mut lines, "Distance", "9.582 AU");
+            info_line(&mut lines, "Orbit", "29.46 years");
+            info_line(&mut lines, "Rotation", "10.7 hours");
+            info_line(&mut lines, "Moons", "146+ known");
+            lines.push(String::new());
+            lines.push("• Rings span 282,000 km but are only ~10 m thick".to_string());
+            lines.push("• Least dense planet — would float in water".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Uranus" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Uranus is an ice giant with a unique sideways rotation. Its atmosphere gives it a pale blue-green color.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Ice giant");
-            info_line(&mut lines, "Mass", "8.681 x 10^25 kg (14.5 Earth masses)");
-            info_line(&mut lines, "Radius", "25,362 km (4.01 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "19.201 AU (2.871 billion km)",
-            );
-            info_line(&mut lines, "Orbital Period", "84.0205 years");
-            info_line(&mut lines, "Rotation Period", "17.24 hours (retrograde)");
-            info_line(&mut lines, "Axial Tilt", "97.77 deg (rotates on its side)");
-            info_line(
-                &mut lines,
-                "Atmosphere",
-                "Hydrogen, helium, methane (blue color)",
-            );
+            info_line(&mut lines, "Mass", "8.681 x 10^25 kg (14.5 Earth)");
+            info_line(&mut lines, "Radius", "25,362 km (4.01 Earth)");
+            info_line(&mut lines, "Distance", "19.20 AU");
+            info_line(&mut lines, "Orbit", "84.02 years");
+            info_line(&mut lines, "Rotation", "17.24 h (retrograde)");
+            info_line(&mut lines, "Tilt", "97.77 deg (on its side)");
+            lines.push(String::new());
+            lines.push("• Rotates on its side — likely from massive collision".to_string());
+            lines.push("• Coldest planetary atmosphere".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         "Neptune" => {
-            section_header(&mut lines, "Overview");
-            lines.push("Neptune is an ice giant known for its vivid blue color and supersonic winds. It is the farthest planet from the Sun.".to_string());
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Ice giant");
-            info_line(&mut lines, "Mass", "1.024 x 10^26 kg (17.1 Earth masses)");
-            info_line(&mut lines, "Radius", "24,622 km (3.88 Earth radii)");
-            info_line(
-                &mut lines,
-                "Distance from Sun",
-                "30.047 AU (4.495 billion km)",
-            );
-            info_line(&mut lines, "Orbital Period", "164.8 years");
-            info_line(&mut lines, "Rotation Period", "16.11 hours");
+            info_line(&mut lines, "Mass", "1.024 x 10^26 kg (17.1 Earth)");
+            info_line(&mut lines, "Radius", "24,622 km (3.88 Earth)");
+            info_line(&mut lines, "Distance", "30.05 AU");
+            info_line(&mut lines, "Orbit", "164.8 years");
+            info_line(&mut lines, "Rotation", "16.11 hours");
             info_line(&mut lines, "Moons", "14 known (major: Triton)");
-            info_line(
-                &mut lines,
-                "Atmosphere",
-                "Hydrogen, helium, methane (deep blue)",
-            );
+            lines.push(String::new());
+            lines.push("• Fastest winds in the solar system".to_string());
+            lines.push("• Predicted mathematically before discovery".to_string());
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
         _ => {
             let parent = get_parent_body(name);
-            section_header(&mut lines, "Overview");
-            lines.push(format!(
-                "{} is a natural satellite orbiting {} in the solar system.",
-                name, parent
-            ));
-
-            section_header(&mut lines, "Key Data");
             info_line(&mut lines, "Type", "Natural satellite");
-            info_line(&mut lines, "Parent Planet", parent);
+            info_line(&mut lines, "Parent", parent);
             info_line(&mut lines, "Discovery", get_discovery_info(name));
+            lines.push(String::new());
+            let facts = get_fun_facts(name);
+            for fact in facts.iter().take(2) {
+                lines.push(format!("• {}", fact));
+            }
+            lines.push(format!("• {}", get_exploration_status(name)));
         }
     }
-
-    section_header(&mut lines, "Interesting Facts");
-    for fact in get_fun_facts(name) {
-        lines.push(format!("- {}", fact));
-    }
-
-    section_header(&mut lines, "Exploration");
-    lines.push(get_exploration_status(name).to_string());
 
     lines.join(
         "

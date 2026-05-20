@@ -63,9 +63,6 @@ pub fn handle_nav_interactions(
             selected_planet.entity = target_entity;
             selected_planet.name = target_entity.map(|_| button.name.clone());
             menu_state.selector_open = false;
-            if target_entity.is_some() {
-                menu_state.info_card_open = true;
-            }
 
             for (entity, mut selectable) in selectable_query.iter_mut() {
                 selectable.selected = Some(entity) == target_entity;

@@ -168,18 +168,18 @@ pub fn setup_ui(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(20.0),
-                top: Val::Px(20.0),
-                width: Val::Px(380.0),
+                top: Val::Px(56.0), // Below the Info toggle button
+                width: Val::Px(340.0), // Slightly narrower
                 border: UiRect::all(Val::Px(1.0)),
-                padding: UiRect::new(Val::Px(16.0), Val::Px(16.0), Val::Px(14.0), Val::Px(14.0)),
+                padding: UiRect::new(Val::Px(14.0), Val::Px(14.0), Val::Px(12.0), Val::Px(12.0)),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
+                row_gap: Val::Px(6.0),
                 display: Display::None,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-            BorderRadius::all(Val::Px(12.0)),
+            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.88)),
+            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.35)),
+            BorderRadius::all(Val::Px(10.0)),
             InfoCardRoot,
             UiCapture,
             Interaction::default(),
@@ -187,60 +187,22 @@ pub fn setup_ui(mut commands: Commands) {
         .id();
 
     commands.entity(info_card).with_children(|parent| {
-        parent
-            .spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                ..default()
-            })
-            .with_children(|header| {
-                header.spawn((
-                    Text::new(""),
-                    TextFont {
-                        font_size: 14.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.8, 0.85, 0.9)),
-                    InfoCardTitle,
-                ));
-                header
-                    .spawn((
-                        Button,
-                        Node {
-                            padding: UiRect::new(
-                                Val::Px(6.0), // Reduced padding
-                                Val::Px(6.0),
-                                Val::Px(4.0),
-                                Val::Px(4.0),
-                            ),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
-                        BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.28)),
-                        BorderRadius::all(Val::Px(10.0)),
-                        InfoCardToggleButton,
-                        UiCapture,
-                    ))
-                    .with_children(|button| {
-                        button.spawn((
-                            Text::new("X"),
-                            TextFont {
-                                font_size: 12.0,
-                                ..default()
-                            },
-                            TextColor(Color::srgb(0.74, 0.8, 0.9)),
-                        ));
-                    });
-            });
         parent.spawn((
             Text::new(""),
             TextFont {
-                font_size: 9.5,
+                font_size: 13.0,
                 ..default()
             },
-            TextColor(Color::srgb(0.6, 0.65, 0.7)),
+            TextColor(Color::srgb(0.82, 0.87, 0.92)),
+            InfoCardTitle,
+        ));
+        parent.spawn((
+            Text::new(""),
+            TextFont {
+                font_size: 9.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.55, 0.62, 0.72)),
             InfoCardSubtitle,
         ));
         let (body_text, body_font, body_color) = info_body_text("");
@@ -263,20 +225,19 @@ pub fn setup_ui(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: Val::Px(20.0),
                 top: Val::Px(20.0),
-                padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(6.0), Val::Px(6.0)),
+                padding: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                display: Display::None,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.86)),
-            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.47)),
-            BorderRadius::all(Val::Px(12.0)),
+            BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
+            BorderColor::all(Color::srgba(0.196, 0.275, 0.431, 0.35)),
+            BorderRadius::all(Val::Px(8.0)),
             InfoCardToggleButton,
             InfoCardExternalToggle,
             UiCapture,
         ))
         .with_children(|button| {
-            let (font, color) = text_style(10.5, Color::srgb(0.82, 0.88, 0.98));
+            let (font, color) = text_style(10.0, Color::srgb(0.78, 0.84, 0.94));
             button.spawn((Text::new("Info"), font, color));
         });
 
