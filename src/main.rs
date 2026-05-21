@@ -54,7 +54,7 @@ fn setup_craft_systems(app: &mut App) {
     app.insert_resource(CraftTravelTarget::default());
     app.add_systems(Startup, spawn_craft);
     app.add_systems(Startup, spawn_craft_ui);
-    app.add_systems(FixedUpdate, update_craft_physics);
+    app.add_systems(Update, update_craft_physics);
     app.add_systems(Update, handle_craft_input);
     app.add_systems(Update, update_craft_camera);
     app.add_systems(Update, spawn_craft_model);
