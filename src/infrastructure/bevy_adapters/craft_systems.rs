@@ -197,10 +197,10 @@ pub fn handle_craft_input(
         if keyboard.pressed(KeyCode::KeyE) {
             craft.angular_velocity.y -= yaw_rate * dt;
         }
-        if keyboard.pressed(KeyCode::ArrowUp) {
+        if keyboard.pressed(KeyCode::KeyK) {
             craft.angular_velocity.x += pitch_rate * dt;
         }
-        if keyboard.pressed(KeyCode::ArrowDown) {
+        if keyboard.pressed(KeyCode::KeyJ) {
             craft.angular_velocity.x -= pitch_rate * dt;
         }
         if keyboard.pressed(KeyCode::ArrowLeft) {
@@ -225,10 +225,10 @@ pub fn handle_craft_input(
             craft.angular_velocity *= 1.0 - 6.0 * dt;
         }
 
-        if keyboard.pressed(KeyCode::KeyK) {
+        if keyboard.pressed(KeyCode::KeyR) {
             craft.physics.vertical_velocity += 3.0 * dt;
         }
-        if keyboard.pressed(KeyCode::KeyJ) {
+        if keyboard.pressed(KeyCode::KeyF) {
             craft.physics.vertical_velocity -= 3.0 * dt;
         }
     }
