@@ -1,3 +1,4 @@
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use infrastructure::bevy_adapters::components::PerformanceStats;
 use infrastructure::bevy_adapters::education_systems::register_education_systems;
@@ -214,7 +215,12 @@ fn main() {
         ..default()
     };
 
-    let plugins = DefaultPlugins.set(window_plugin);
+    let plugins = DefaultPlugins
+        .set(window_plugin)
+        .set(LogPlugin {
+            filter: "info,bevy_render::view::window=error".to_string(),
+            ..default()
+        });
 
     let mut app = App::new();
     app.add_plugins(plugins);
