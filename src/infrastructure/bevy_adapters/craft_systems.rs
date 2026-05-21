@@ -192,10 +192,10 @@ pub fn handle_craft_input(
         let pitch_rate = 2.0;
         let roll_rate = 3.0;
         if keyboard.pressed(KeyCode::KeyQ) {
-            craft.angular_velocity.y -= yaw_rate * dt;
+            craft.angular_velocity.y += yaw_rate * dt;
         }
         if keyboard.pressed(KeyCode::KeyE) {
-            craft.angular_velocity.y += yaw_rate * dt;
+            craft.angular_velocity.y -= yaw_rate * dt;
         }
         if keyboard.pressed(KeyCode::ArrowUp) {
             craft.angular_velocity.x -= pitch_rate * dt;
