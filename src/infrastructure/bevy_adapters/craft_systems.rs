@@ -19,8 +19,6 @@ const CAMERA_MODES: &[CraftCameraMode] = &[
 const CRAFT_CRUISE_SPEED_UNITS: f32 = 40_000.0;
 const CHASE_CAMERA_HEIGHT: f32 = 4.0;
 const CHASE_CAMERA_LOOK_HEIGHT: f32 = 1.0;
-const CHASE_CAMERA_MAX_LAG: f32 = 28.0;
-
 pub fn update_craft_physics(
     time: Res<Time>,
     control: Res<CraftControlState>,
@@ -272,11 +270,7 @@ pub fn update_craft_camera(
             let pitch = cam_state.orbit_pitch;
             let chase_offset = Vec3::new(0.0, CHASE_CAMERA_HEIGHT + pitch.sin() * dist, dist);
             let desired_pos = target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
-            let lerp = 1.0 - (-12.0 * dt).exp();
-            camera_transform.translation = camera_transform.translation.lerp(desired_pos, lerp);
-            if camera_transform.translation.distance(desired_pos) > CHASE_CAMERA_MAX_LAG {
-                camera_transform.translation = desired_pos;
-            }
+            camera_transform.translation = desired_pos;
             camera_transform.look_at(look_target, Vec3::Y);
         }
         CraftCameraMode::Orbit => {
