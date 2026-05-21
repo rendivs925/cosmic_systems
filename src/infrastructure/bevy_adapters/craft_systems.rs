@@ -239,9 +239,10 @@ pub fn update_craft_camera(
     mut mouse_motion: MessageReader<MouseMotion>,
     craft_query: Query<(&CraftComponent, &Transform)>,
     mut cam_state: ResMut<CraftCameraState>,
-    mut camera_query: Query<&mut Transform, (With<CraftCameraTag>, Without<CraftComponent>)>,
+    mut camera_query: Query<(&mut Transform, &mut Projection), (With<CraftCameraTag>, Without<CraftComponent>)>,
 ) {
     let dt = time.delta_secs().min(0.05);
+    let elapsed = time.elapsed_secs();
     let mut mouse_delta = Vec2::ZERO;
     for motion in mouse_motion.read() {
         mouse_delta += motion.delta;
@@ -250,12 +251,18 @@ pub fn update_craft_camera(
     let Ok((craft, craft_transform)) = craft_query.single() else {
         return;
     };
-    let Ok(mut camera_transform) = camera_query.single_mut() else {
+    let Ok((mut camera_transform, mut projection)) = camera_query.single_mut() else {
         return;
     };
 
     let target = craft_transform.translation;
     let look_target = target + Vec3::Y * CHASE_CAMERA_LOOK_HEIGHT;
+
+    let speed = craft.linear_velocity.length();
+    let is_hover = matches!(craft.speed_mode, SpeedMode::Hover);
+    let is_sprint = matches!(craft.speed_mode, SpeedMode::Sprint);
+    let parametric = craft.physics.parametric_gain;
+    let zpe = craft.physics.zpe_kilowatts;
 
     match craft.camera_mode {
         CraftCameraMode::Chase => {
@@ -265,13 +272,32 @@ pub fn update_craft_camera(
                 cam_state.orbit_pitch =
                     (cam_state.orbit_pitch - mouse_delta.y * sensitivity).clamp(-0.8, 0.8);
             }
-            let dist = cam_state.target_distance;
+            let mut dist = cam_state.target_distance;
+            let mut height_offset = CHASE_CAMERA_HEIGHT;
+            if is_hover {
+                dist *= 0.6;
+                height_offset = 2.0;
+            } else if is_sprint {
+                dist *= 1.3;
+                height_offset = 5.0;
+            }
             let yaw = cam_state.orbit_yaw;
             let pitch = cam_state.orbit_pitch;
-            let chase_offset = Vec3::new(0.0, CHASE_CAMERA_HEIGHT + pitch.sin() * dist, dist);
-            let desired_pos = target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
+            let chase_offset = Vec3::new(0.0, height_offset + pitch.sin() * dist, dist);
+            let mut desired_pos = target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
+            if parametric {
+                let shake_amp = 0.02 + (zpe / 1250.0) * 0.04;
+                desired_pos += Vec3::new(
+                    (elapsed * 44.8).sin() * shake_amp,
+                    (elapsed * 37.3 + 1.2).sin() * shake_amp * 0.5,
+                    (elapsed * 52.1 + 0.7).sin() * shake_amp * 0.7,
+                );
+            }
             camera_transform.translation = desired_pos;
             camera_transform.look_at(look_target, Vec3::Y);
+            if let Projection::Perspective(ref mut proj) = *projection {
+                proj.fov = (55.0_f32.to_radians() + (is_sprint as u32 as f32 * 2.0 + is_hover as u32 as f32 * -3.0).to_radians()).clamp(50.0_f32.to_radians(), 65.0_f32.to_radians());
+            }
         }
         CraftCameraMode::Orbit => {
             let sensitivity = 0.006;
@@ -326,8 +352,8 @@ pub fn update_craft_camera(
         }
         CraftCameraMode::Cinematic => {
             let time_secs = time.elapsed_secs();
-            let orbit_speed = 0.3;
-            let dist = cam_state.target_distance * 1.2;
+            let orbit_speed = 0.3 + (speed / 40000.0).min(1.0) * 0.1;
+            let dist = cam_state.target_distance * 1.2 + (speed / 40000.0).min(1.0) * 4.0;
             let yaw = time_secs * orbit_speed;
             let pitch = 0.3 + (time_secs * 0.15).sin() * 0.15;
             let desired_pos = target
@@ -337,6 +363,9 @@ pub fn update_craft_camera(
             let new_pos = camera_transform.translation.lerp(desired_pos, lerp);
             camera_transform.translation = new_pos;
             camera_transform.look_at(look_target, Vec3::Y);
+            if let Projection::Perspective(ref mut proj) = *projection {
+                proj.fov = 55.0_f32.to_radians() + (time_secs * 0.1).sin() * 2.0_f32.to_radians();
+            }
         }
     }
 }

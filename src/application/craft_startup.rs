@@ -111,6 +111,8 @@ pub fn spawn_craft_model(
     mut load: ResMut<CraftModelLoad>,
     asset_server: Res<AssetServer>,
     gltf_assets: Res<Assets<Gltf>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if load.done {
         return;
@@ -131,6 +133,43 @@ pub fn spawn_craft_model(
     let mut craft = CraftComponent::saucer();
     craft.physics.vertical_position = load.spawn_position.y;
 
+    let bubble_mesh = meshes.add(Mesh::from(Sphere::new(5.0)));
+    let ring_mesh = meshes.add(Mesh::from(Torus::new(4.5, 0.2)));
+    let core_mesh = meshes.add(Mesh::from(Sphere::new(0.8)));
+    let lens_mesh = meshes.add(Mesh::from(Sphere::new(4.0)));
+    let wake_mesh = meshes.add(Mesh::from(Sphere::new(1.0)));
+
+    let bubble_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.05, 0.1, 0.25, 0.15),
+        emissive: LinearRgba::new(0.02, 0.05, 0.15, 1.0),
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+    let ring_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.2, 0.4, 0.8, 0.4),
+        emissive: LinearRgba::new(0.1, 0.3, 0.6, 1.0),
+        alpha_mode: AlphaMode::Blend,
+        metallic: 0.8,
+        perceptual_roughness: 0.1,
+        ..default()
+    });
+    let core_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.8, 0.9, 1.0, 1.0),
+        emissive: LinearRgba::new(0.3, 0.5, 0.8, 1.0),
+        ..default()
+    });
+    let lens_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.08, 0.12, 0.25, 0.08),
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+    let wake_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.08, 0.04, 0.15, 0.0),
+        emissive: LinearRgba::new(0.0, 0.0, 0.02, 1.0),
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+
     commands
         .spawn((
             craft,
@@ -139,6 +178,12 @@ pub fn spawn_craft_model(
                 core_pulse_phase: 0.0,
                 ring_rotation: 0.0,
                 dome_base_scale: 1.0,
+                field_strength: 0.0,
+                resonance_phase: 0.0,
+                zpe_gain: 0.0,
+                polarization_asymmetry: 0.0,
+                bubble_radius: 5.0,
+                wake_intensity: 0.0,
             },
             AudioPlayer::new(asset_server.load("sounds/craft_electronic.ogg")),
             PlaybackSettings {
@@ -151,6 +196,41 @@ pub fn spawn_craft_model(
         ))
         .with_children(|parent| {
             parent.spawn((SceneRoot(scene), Transform::default()));
+            parent.spawn((
+                Mesh3d(bubble_mesh),
+                MeshMaterial3d(bubble_mat),
+                CraftBubble,
+                Transform::default(),
+                Visibility::default(),
+            ));
+            parent.spawn((
+                Mesh3d(ring_mesh),
+                MeshMaterial3d(ring_mat),
+                CraftRing,
+                Transform::default(),
+                Visibility::default(),
+            ));
+            parent.spawn((
+                Mesh3d(core_mesh),
+                MeshMaterial3d(core_mat),
+                CraftCoreGlow,
+                Transform::default(),
+                Visibility::default(),
+            ));
+            parent.spawn((
+                Mesh3d(lens_mesh),
+                MeshMaterial3d(lens_mat),
+                CraftLens,
+                Transform::from_xyz(0.0, 0.0, 2.0),
+                Visibility::default(),
+            ));
+            parent.spawn((
+                Mesh3d(wake_mesh),
+                MeshMaterial3d(wake_mat),
+                CraftWake,
+                Transform::from_xyz(0.0, 0.0, -2.0),
+                Visibility::default(),
+            ));
         });
 }
 

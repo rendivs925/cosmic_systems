@@ -33,6 +33,7 @@ use infrastructure::bevy_adapters::components::{
 use infrastructure::bevy_adapters::craft_components::{
     CraftCameraState, CraftControlState, CraftTravelTarget,
 };
+use infrastructure::bevy_adapters::craft_effects::update_craft_visuals;
 use infrastructure::bevy_adapters::craft_systems::{
     handle_craft_input, update_craft_camera, update_craft_physics,
 };
@@ -59,6 +60,7 @@ fn setup_craft_systems(app: &mut App) {
         handle_craft_input,
         update_craft_camera,
         spawn_craft_model,
+        update_craft_visuals,
         update_craft_ui,
     ).chain());
 }

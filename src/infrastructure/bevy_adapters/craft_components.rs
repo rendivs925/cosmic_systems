@@ -37,7 +37,28 @@ pub struct CraftVisual {
     pub core_pulse_phase: f32,
     pub ring_rotation: f32,
     pub dome_base_scale: f32,
+    pub field_strength: f32,
+    pub resonance_phase: f32,
+    pub zpe_gain: f32,
+    pub polarization_asymmetry: f32,
+    pub bubble_radius: f32,
+    pub wake_intensity: f32,
 }
+
+#[derive(Component)]
+pub struct CraftBubble;
+
+#[derive(Component)]
+pub struct CraftRing;
+
+#[derive(Component)]
+pub struct CraftCoreGlow;
+
+#[derive(Component)]
+pub struct CraftLens;
+
+#[derive(Component)]
+pub struct CraftWake;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CraftCameraMode {
