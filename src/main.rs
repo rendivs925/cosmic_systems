@@ -79,6 +79,7 @@ fn setup_solar_system_mode(app: &mut App) {
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     app.insert_resource(ZenMode::default());
+    app.insert_resource(UiIdleState::default());
     app.insert_resource(
         infrastructure::bevy_adapters::systems::QualityAdaptationResource::default(),
     );
@@ -115,6 +116,7 @@ fn setup_solar_system_mode(app: &mut App) {
     app.add_systems(Update, handle_nav_interactions);
 
     // UI systems
+    app.add_systems(Update, update_ui_idle);
     app.add_systems(Update, update_navbar);
     app.add_systems(Update, update_info_card);
     app.add_systems(Update, update_notifications_ui);

@@ -80,3 +80,18 @@ pub(crate) struct NotificationLayer;
 
 #[derive(Component)]
 pub(crate) struct NotificationUi;
+
+#[derive(Resource)]
+pub(crate) struct UiIdleState {
+    pub last_activity: f32,
+    pub idle_timeout: f32,
+}
+
+impl Default for UiIdleState {
+    fn default() -> Self {
+        Self {
+            last_activity: 0.0,
+            idle_timeout: 3.0,
+        }
+    }
+}

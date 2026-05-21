@@ -1,3 +1,4 @@
+use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, SystemCursorIcon};
 
@@ -9,6 +10,17 @@ use crate::infrastructure::bevy_adapters::components::{
 use crate::infrastructure::bevy_adapters::craft_components::CraftTravelTarget;
 use crate::presentation::ui_components::*;
 use crate::presentation::ui_helpers::*;
+
+pub fn update_ui_idle(
+    mut cursor_moved: EventReader<CursorMoved>,
+    mut mouse_motion: EventReader<MouseMotion>,
+    mut idle_state: ResMut<UiIdleState>,
+    time: Res<Time>,
+) {
+    if cursor_moved.read().next().is_some() || mouse_motion.read().next().is_some() {
+        idle_state.last_activity = time.elapsed_secs();
+    }
+}
 
 pub fn handle_nav_interactions(
     interactions: Query<(&Interaction, &NavButton), Changed<Interaction>>,
@@ -79,6 +91,7 @@ pub fn update_navbar(
     video_state: Res<crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState>,
     _notifications: Res<NotificationQueue>,
     zen_mode: Res<ZenMode>,
+    idle_state: Res<UiIdleState>,
     menu_state: Res<UiMenuState>,
     time: Res<Time>,
     mut last_update: Local<f32>,
@@ -99,7 +112,9 @@ pub fn update_navbar(
         Query<&mut Node, With<SelectorPanelRoot>>,
     )>,
 ) {
-    let hide_ui = zen_mode.enabled;
+    let has_open_panels = menu_state.selector_open || menu_state.info_card_open;
+    let is_idle = time.elapsed_secs() - idle_state.last_activity > idle_state.idle_timeout;
+    let hide_ui = zen_mode.enabled || (is_idle && !has_open_panels);
 
     let current_time = time.elapsed_secs();
 
