@@ -93,7 +93,7 @@ pub fn spawn_craft_ui(mut commands: Commands) {
             p.spawn(txt("CAM: Chase", bright)).insert(CamLabel);
             p.spawn(txt("---", dim));
             p.spawn(txt("WASD=move  HL=yaw", dim));
-            p.spawn(txt("KJ=pitch  QE=roll  RF=vert", dim));
+            p.spawn(txt("KJ=pitch  QE=roll", dim));
             p.spawn(txt("Shift=sprint  Ctrl=hover", dim));
             p.spawn(txt("V=camera  wheel=zoom", dim));
         });

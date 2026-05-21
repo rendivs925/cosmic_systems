@@ -225,12 +225,6 @@ pub fn handle_craft_input(
             craft.angular_velocity *= 1.0 - 6.0 * dt;
         }
 
-        if keyboard.pressed(KeyCode::KeyR) {
-            craft.physics.vertical_velocity += 3.0 * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyF) {
-            craft.physics.vertical_velocity -= 3.0 * dt;
-        }
     }
 }
 
