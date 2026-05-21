@@ -218,7 +218,7 @@ fn main() {
     let plugins = DefaultPlugins
         .set(window_plugin)
         .set(LogPlugin {
-            filter: "info,bevy_render::view::window=error".to_string(),
+            filter: "info,bevy_render::view::window=error,wgpu_hal::vulkan::instance=error".to_string(),
             ..default()
         });
 
