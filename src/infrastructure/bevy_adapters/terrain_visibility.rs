@@ -14,7 +14,7 @@ pub fn update_terrain_visibility(
 
     let camera_pos = camera_transform.translation;
 
-    println!("👁️ Terrain proximity visibility check - Camera pos: {:?}", camera_pos);
+    println!("Terrain proximity visibility check - Camera pos: {:?}", camera_pos);
 
     let mut terrain_count = 0;
     for (mut visibility, terrain_transform, terrain) in terrain_query.iter_mut() {
@@ -30,7 +30,7 @@ pub fn update_terrain_visibility(
         };
 
         if *visibility != new_visibility {
-            println!("🌍 Terrain visibility change for {}: {:?} -> {:?} (distance: {:.1}km, max: {:.1}km)",
+            println!("Terrain visibility change for {}: {:?} -> {:?} (distance: {:.1}km, max: {:.1}km)",
                      terrain.planet_name, *visibility, new_visibility,
                      distance / 1000.0, max_visible_distance / 1000.0);
         }
@@ -40,9 +40,9 @@ pub fn update_terrain_visibility(
     }
 
     if terrain_count == 0 {
-        println!("⚠️ No terrain entities found in the world!");
+        println!("Warning: No terrain entities found in the world!");
     } else {
-        println!("📊 Found {} terrain entities", terrain_count);
+        println!("Found {} terrain entities", terrain_count);
     }
 }
 

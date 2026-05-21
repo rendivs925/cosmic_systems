@@ -304,7 +304,7 @@ pub fn adaptive_quality_system(
     // Run quality adaptation
     if let Some(new_quality) = quality_adapter.system.update_and_adapt(&mut perf_stats) {
         perf_stats.quality_level = new_quality;
-        println!("🎚️ Quality adapted to: {:?}", new_quality);
+        println!("Quality adapted to: {:?}", new_quality);
     }
 
     // Minimal quality logging - only when quality changes significantly

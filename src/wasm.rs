@@ -39,7 +39,7 @@ pub fn main() {
     let _ = console_log::init_with_level(log::Level::Info);
 
     prepare_dom_for_wasm();
-    web_sys::console::log_1(&"🚀 Starting Cosmic Systems Simulator (WASM)".into());
+    web_sys::console::log_1(&"Starting Cosmic Systems Simulator (WASM)".into());
 
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
@@ -157,7 +157,7 @@ pub fn main() {
             &format!("Worker pool initialized with {worker_target} workers").into(),
         );
     }
-    web_sys::console::log_1(&"✅ Cosmic Systems Simulator initialized successfully".into());
+    web_sys::console::log_1(&"Cosmic Systems Simulator initialized successfully".into());
     app.run();
 }
 

@@ -148,11 +148,11 @@ pub fn process_hybrid_compute(
                 },
                 Err(e) => {
                     // Vulkan failed, fall back to SIMD
-                    println!("❌ Vulkan GPU compute failed: {}", e);
+                    println!("Vulkan GPU compute failed: {}", e);
                 }
             }
         } else {
-            println!("⚠️ Vulkan solver not available despite vulkan_enabled=true");
+            println!("Warning: Vulkan solver not available despite vulkan_enabled=true");
         }
     }
 

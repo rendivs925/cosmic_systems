@@ -228,7 +228,7 @@ pub fn handle_solar_system_input(
     if keyboard.just_pressed(KeyCode::KeyZ) {
         zen_mode.enabled = !zen_mode.enabled;
         println!(
-            "🧘 Zen mode: {}",
+            "Zen mode: {}",
             if zen_mode.enabled { "ON" } else { "OFF" }
         );
     }
@@ -240,13 +240,13 @@ pub fn handle_solar_system_input(
         // Exponential increase: 10x
         solar_params.time_scale = (solar_params.time_scale * 10.0).min(10000000.0);
         println!(
-            "🚀 Time scale: {:.0}x (10x increase)",
+            "Time scale: {:.0}x (10x increase)",
             solar_params.time_scale
         );
     } else if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
         // Gradual increase: 10%
         solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
-        println!("⏩ Time scale: {:.1}x", solar_params.time_scale);
+        println!("Time scale: {:.1}x", solar_params.time_scale);
     }
 
     if keyboard.just_pressed(KeyCode::KeyR)
@@ -257,7 +257,7 @@ pub fn handle_solar_system_input(
         // Exponential decrease: 10x
         solar_params.time_scale = (solar_params.time_scale / 10.0).max(0.0001);
         println!(
-            "🐌 Time scale: {:.0}x (10x decrease)",
+            "Time scale: {:.0}x (10x decrease)",
             solar_params.time_scale
         );
     } else if keyboard.just_pressed(KeyCode::KeyR)
@@ -266,13 +266,13 @@ pub fn handle_solar_system_input(
     {
         // Gradual decrease: 10%
         solar_params.time_scale = (solar_params.time_scale / 1.1).max(0.0001);
-        println!("⏪ Time scale: {:.1}x", solar_params.time_scale);
+        println!("Time scale: {:.1}x", solar_params.time_scale);
     }
 
     // Reset time scale
     if keyboard.just_pressed(KeyCode::KeyY) && keyboard.pressed(KeyCode::ControlLeft) {
         solar_params.time_scale = 1.0;
-        println!("⏸️ Time scale reset to: {:.1}x", solar_params.time_scale);
+        println!("Time scale reset to: {:.1}x", solar_params.time_scale);
     }
 
     // Toggle automatic quality adaptation
@@ -282,7 +282,7 @@ pub fn handle_solar_system_input(
     {
         perf_stats.adaptive_enabled = !perf_stats.adaptive_enabled;
         println!(
-            "🎛️ Automatic quality adaptation: {}",
+            "Automatic quality adaptation: {}",
             if perf_stats.adaptive_enabled {
                 "ENABLED"
             } else {
@@ -290,7 +290,7 @@ pub fn handle_solar_system_input(
             }
         );
         if !perf_stats.adaptive_enabled {
-            println!("💡 Use Ctrl+T/Ctrl+R to manually adjust time scale");
+            println!("Use Ctrl+T/Ctrl+R to manually adjust time scale");
         }
     }
 
@@ -298,7 +298,7 @@ pub fn handle_solar_system_input(
     if keyboard.just_pressed(KeyCode::KeyO) {
         solar_params.show_orbits = !solar_params.show_orbits;
         println!(
-            "🛸 Orbit visualization: {}",
+            "Orbit visualization: {}",
             if solar_params.show_orbits {
                 "ON"
             } else {
@@ -320,7 +320,7 @@ pub fn handle_solar_system_input(
                         transform.look_at(Vec3::ZERO, Vec3::Y);
                         controller.velocity = Vec3::ZERO;
                         controller.speed = 5000.0;
-                        println!("🏠 Returned to solar system overview (gg)");
+                        println!("Returned to solar system overview (gg)");
                         LAST_G_PRESS = None;
                     } else {
                         LAST_G_PRESS = Some(std::time::Instant::now());
@@ -343,17 +343,17 @@ pub fn handle_solar_system_input(
                         if camera_input_state.earth_terrain_active {
                             // Deactivate terrain view
                             println!(
-                                "🎯 Ctrl+F detected on Earth - deactivating terrain flag and mode"
+                                "Ctrl+F detected on Earth - deactivating terrain flag and mode"
                             );
                             camera_input_state.earth_terrain_active = false;
                             controller.mode = CameraMode::FreeFlight;
                             println!(
-                                "🌍 Terrain view deactivated for Earth (flag: {})",
+                                "Terrain view deactivated for Earth (flag: {})",
                                 camera_input_state.earth_terrain_active
                             );
                         } else {
                             // Activate terrain view
-                            println!("🎯 Ctrl+F detected on Earth - setting terrain flag and mode");
+                            println!("Ctrl+F detected on Earth - setting terrain flag and mode");
                             camera_input_state.earth_terrain_active = true;
                             controller.mode = CameraMode::TerrainView;
                             // Position camera above the current Earth position for terrain view
@@ -364,7 +364,7 @@ pub fn handle_solar_system_input(
                             transform.look_at(earth_pos, Vec3::Y);
                             controller.velocity = Vec3::ZERO;
                             println!(
-                                "🌍 Terrain view activated for Earth (flag: {})",
+                                "Terrain view activated for Earth (flag: {})",
                                 camera_input_state.earth_terrain_active
                             );
                         }
@@ -386,11 +386,11 @@ pub fn handle_solar_system_input(
                         // Adjust speed based on planet size
                         controller.speed = (radius * 2.0).clamp(50.0, 50000.0);
 
-                        println!("🎯 Focused on {}", planet_comp.domain_planet.name);
+                        println!("Focused on {}", planet_comp.domain_planet.name);
                     }
                 }
             } else {
-                println!("❌ No planet selected. Click on a planet first!");
+                println!("No planet selected. Click on a planet first!");
             }
         }
     }

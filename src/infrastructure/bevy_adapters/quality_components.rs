@@ -88,7 +88,7 @@ impl AdaptiveQualityController {
         if new_quality_index != self.current_quality_index {
             self.current_quality_index = new_quality_index;
             self.last_adaptation = now;
-            println!("🎚️ Adaptive Quality: {} FPS → {:?} (GPU: {:.1}%, Mem: {:.1}%)",
+            println!("Adaptive Quality: {} FPS -> {:?} (GPU: {:.1}%, Mem: {:.1}%)",
                     avg_fps as i32, self.quality_levels[new_quality_index],
                     system_metrics.gpu_utilization * 100.0,
                     system_metrics.memory_pressure * 100.0);
