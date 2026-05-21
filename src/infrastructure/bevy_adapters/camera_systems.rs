@@ -347,8 +347,6 @@ pub fn auto_inspect_selected_planet(
     let mut moon_axis: Option<Vec3> = None;
     let mut moon_up: Option<Vec3> = None;
     let mut moon_distance: Option<f32> = None;
-    let is_moon = planet_comp.domain_planet.parent_entity.is_some();
-
     let fov_y = match projection {
         Projection::Perspective(perspective) => perspective.fov,
         Projection::Orthographic(_) => std::f32::consts::FRAC_PI_2,
@@ -407,12 +405,8 @@ pub fn auto_inspect_selected_planet(
         state.smooth_offset = Vec3::ZERO;
     }
 
-    // Cinematic slow orbit around the planet for aesthetic viewing
-    if !is_moon {
-        state.orbit_angle += time.delta_secs() * 0.15; // Slow orbit
-    } else {
-        state.orbit_angle += time.delta_secs() * 0.10; // Gentle orbital drift for moons
-    }
+    // Cinematic orbit for all bodies
+    state.orbit_angle += time.delta_secs() * 0.15;
 
     if let (Some(axis_dir), Some(up)) = (moon_axis, moon_up) {
         // Frame the moon large in the foreground with the parent in the background.
@@ -440,7 +434,7 @@ pub fn auto_inspect_selected_planet(
         }
         let smooth_lateral = smooth_lateral.normalize();
 
-        let rotation = Quat::from_axis_angle(smooth_axis, state.orbit_angle * 0.06);
+        let rotation = Quat::from_axis_angle(smooth_axis, state.orbit_angle * 0.5);
         let side_offset =
             rotation * (smooth_up * (distance * 0.35) + smooth_lateral * (distance * 0.12));
         state.offset = (-smooth_axis * distance) + side_offset;

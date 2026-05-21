@@ -89,10 +89,12 @@ fn setup_solar_system_mode(app: &mut App) {
     app.add_systems(Startup, spawn_orbital_planes);
     app.add_systems(Startup, spawn_eccentricity_markers);
 
-    // Physics systems run on FixedUpdate for consistent simulation
-    app.add_systems(FixedUpdate, update_planet_positions);
-    app.add_systems(FixedUpdate, update_planet_rotations);
-    app.add_systems(FixedUpdate, update_moon_orbit_positions);
+    // Physics systems run on Update for display-synced updates (eliminates FixedUpdate jitter)
+    app.add_systems(Update, (
+        update_planet_positions,
+        update_planet_rotations,
+        update_moon_orbit_positions,
+    ).chain());
 
     // Visual and interaction systems
     app.add_systems(Update, update_orbit_visuals);
