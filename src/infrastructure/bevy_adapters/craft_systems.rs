@@ -203,10 +203,10 @@ pub fn handle_craft_input(
         if keyboard.pressed(KeyCode::KeyJ) {
             craft.angular_velocity.x -= pitch_rate * dt;
         }
-        if keyboard.pressed(KeyCode::ArrowLeft) {
+        if keyboard.pressed(KeyCode::KeyH) {
             craft.angular_velocity.z += roll_rate * dt;
         }
-        if keyboard.pressed(KeyCode::ArrowRight) {
+        if keyboard.pressed(KeyCode::KeyL) {
             craft.angular_velocity.z -= roll_rate * dt;
         }
         craft.angular_velocity = craft.angular_velocity.clamp_length_max(6.0);
