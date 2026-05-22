@@ -230,8 +230,11 @@ pub fn setup_ui(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: Val::Px(20.0),
                 top: Val::Px(20.0),
-                padding: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0)),
+                width: Val::Px(22.0),
+                height: Val::Px(22.0),
                 border: UiRect::all(Val::Px(1.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
             BackgroundColor(Color::srgba(0.031, 0.039, 0.063, 0.78)),
@@ -242,8 +245,36 @@ pub fn setup_ui(mut commands: Commands) {
             UiCapture,
         ))
         .with_children(|button| {
-            let (font, color) = text_style(10.0, Color::srgb(0.78, 0.84, 0.94));
-            button.spawn((Text::new("Info"), font, color));
+            button.spawn((
+                Node {
+                    width: Val::Px(7.0),
+                    height: Val::Px(11.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(1.5),
+                    ..default()
+                },
+            )).with_children(|icon| {
+                icon.spawn((
+                    Node {
+                        width: Val::Px(2.0),
+                        height: Val::Px(2.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
+                    BorderRadius::all(Val::Px(8.0)),
+                ));
+                icon.spawn((
+                    Node {
+                        width: Val::Px(2.0),
+                        height: Val::Px(7.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
+                    BorderRadius::all(Val::Px(2.0)),
+                ));
+            });
         });
 
     let notifications = commands
