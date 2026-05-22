@@ -2,6 +2,7 @@
 pub mod education_data;
 pub mod education_panel;
 pub mod knowledge_journal;
+pub mod markdown_renderer;
 pub mod ui_components;
 pub mod ui_setup;
 pub mod ui_handlers;

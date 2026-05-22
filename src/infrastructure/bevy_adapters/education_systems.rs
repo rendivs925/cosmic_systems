@@ -5,39 +5,31 @@ use crate::domain::value_objects::education::{
 };
 use crate::infrastructure::bevy_adapters::craft_components::{CraftComponent, CraftControlState};
 use crate::presentation::education_data::create_journal_database;
-use crate::presentation::education_panel::{
-    spawn_education_panel, update_education_panel,
-};
-use crate::presentation::knowledge_journal::{
-    spawn_knowledge_journal, update_journal_display,
-};
+use crate::presentation::education_panel::{spawn_education_panel, update_education_panel};
+use crate::presentation::knowledge_journal::handle_journal_selection;
 
-
-/// Handle education mode input toggles.
 pub fn handle_education_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<EducationState>,
     mut journal: ResMut<JournalDatabase>,
-    craft_query: Query<Entity, With<CraftComponent>>,
+    _craft_query: Query<Entity, With<CraftComponent>>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyB) {
         state.panel_open = !state.panel_open;
         if state.panel_open {
-            state.journal_open = false;
-            // Show unlock notifications on open
-            for idx in journal.drain_notifications() {
-                // Notifications handled by UI system
-            }
+            state.journal_section_open = false;
+            for _ in journal.drain_notifications() {}
         }
     }
 
     if keyboard.just_pressed(KeyCode::KeyJ) && state.panel_open {
-        state.journal_open = !state.journal_open;
+        state.journal_section_open = !state.journal_section_open;
+        if !state.journal_section_open {
+            state.current_entry_index = None;
+        }
     }
-
 }
 
-/// Periodically check and unlock journal entries based on craft state.
 pub fn check_journal_unlocks(
     time: Res<Time>,
     craft_query: Query<&CraftComponent>,
@@ -67,7 +59,6 @@ pub fn check_journal_unlocks(
                 craft_query.single().ok().map_or(false, |c| c.linear_velocity.length() > s)
             }
             UnlockCondition::OrbitAchieved => {
-                // Simplified: altitude > 500 + speed > 500
                 craft_query.single().ok().map_or(false, |c| {
                     c.physics.vertical_position > 500.0 && c.linear_velocity.length() > 500.0
                 })
@@ -84,18 +75,18 @@ pub fn check_journal_unlocks(
     }
 }
 
-/// Register education systems manually (for non-plugin mode).
 pub fn register_education_systems(app: &mut App) {
     app.insert_resource(EducationState::default());
     app.insert_resource(create_journal_database());
-    app.add_systems(Startup, (
-        spawn_education_panel,
-        spawn_knowledge_journal,
-    ));
-    app.add_systems(Update, (
-        handle_education_input,
-        check_journal_unlocks,
-        update_education_panel,
-        update_journal_display,
-    ).chain());
+    app.add_systems(Startup, spawn_education_panel);
+    app.add_systems(
+        Update,
+        (
+            handle_education_input,
+            handle_journal_selection,
+            check_journal_unlocks,
+            update_education_panel,
+        )
+            .chain(),
+    );
 }
