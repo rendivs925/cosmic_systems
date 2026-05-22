@@ -100,13 +100,6 @@ pub fn spawn_education_panel(mut commands: Commands) {
                 TextColor(Color::srgb(0.5, 0.7, 0.5)),
             ));
 
-            // Compare mode button
-            p.spawn((
-                Text::new("[ C ] Compare Mode"),
-                TextFont { font_size: 11.0, ..default() },
-                TextColor(Color::srgb(0.7, 0.7, 0.4)),
-            ));
-
             // Category indicator
             p.spawn((
                 Text::new("Category: --"),

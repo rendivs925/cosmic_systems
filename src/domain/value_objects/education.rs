@@ -4,7 +4,6 @@ use bevy::prelude::Resource;
 pub enum EducationMode {
     Simulation,
     Education,
-    Compare,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

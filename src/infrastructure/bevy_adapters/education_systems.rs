@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::domain::value_objects::education::{
-    EducationMode, EducationState, JournalDatabase, UnlockCondition,
+    EducationState, JournalDatabase, UnlockCondition,
 };
 use crate::infrastructure::bevy_adapters::craft_components::{CraftComponent, CraftControlState};
 use crate::presentation::education_data::create_journal_database;
@@ -11,7 +11,7 @@ use crate::presentation::education_panel::{
 use crate::presentation::knowledge_journal::{
     spawn_knowledge_journal, update_journal_display,
 };
-use crate::presentation::compare_mode::{spawn_rocket_craft, update_rocket_physics, update_rocket_hud};
+
 
 /// Handle education mode input toggles.
 pub fn handle_education_input(
@@ -35,13 +35,6 @@ pub fn handle_education_input(
         state.journal_open = !state.journal_open;
     }
 
-    if keyboard.just_pressed(KeyCode::KeyC) && state.panel_open {
-        state.mode = match state.mode {
-            EducationMode::Education => EducationMode::Compare,
-            EducationMode::Compare => EducationMode::Education,
-            EducationMode::Simulation => EducationMode::Education,
-        };
-    }
 }
 
 /// Periodically check and unlock journal entries based on craft state.
@@ -104,8 +97,5 @@ pub fn register_education_systems(app: &mut App) {
         check_journal_unlocks,
         update_education_panel,
         update_journal_display,
-        spawn_rocket_craft,
-        update_rocket_physics,
-        update_rocket_hud,
     ).chain());
 }

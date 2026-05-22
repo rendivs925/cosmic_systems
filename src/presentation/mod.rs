@@ -1,5 +1,4 @@
 // Presentation layer: UI, rendering
-pub mod compare_mode;
 pub mod education_data;
 pub mod education_panel;
 pub mod knowledge_journal;
