@@ -230,8 +230,8 @@ pub fn setup_ui(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 right: Val::Px(20.0),
                 top: Val::Px(20.0),
-                width: Val::Px(22.0),
-                height: Val::Px(22.0),
+                width: Val::Px(26.0),
+                height: Val::Px(26.0),
                 border: UiRect::all(Val::Px(1.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -247,19 +247,19 @@ pub fn setup_ui(mut commands: Commands) {
         .with_children(|button| {
             button.spawn((
                 Node {
-                    width: Val::Px(7.0),
-                    height: Val::Px(11.0),
+                    width: Val::Px(8.0),
+                    height: Val::Px(13.0),
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    row_gap: Val::Px(1.5),
+                    row_gap: Val::Px(2.0),
                     ..default()
                 },
             )).with_children(|icon| {
                 icon.spawn((
                     Node {
-                        width: Val::Px(2.0),
-                        height: Val::Px(2.0),
+                        width: Val::Px(2.5),
+                        height: Val::Px(2.5),
                         ..default()
                     },
                     BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
@@ -267,8 +267,8 @@ pub fn setup_ui(mut commands: Commands) {
                 ));
                 icon.spawn((
                     Node {
-                        width: Val::Px(2.0),
-                        height: Val::Px(7.0),
+                        width: Val::Px(2.5),
+                        height: Val::Px(8.0),
                         ..default()
                     },
                     BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
