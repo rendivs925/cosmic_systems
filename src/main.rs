@@ -31,7 +31,7 @@ use infrastructure::bevy_adapters::components::{
     UiPointerState, ZenMode,
 };
 use infrastructure::bevy_adapters::craft_components::{
-    CraftCameraState, CraftControlState, CraftTravelTarget,
+    CraftCameraState, CraftControlState, CraftEffectsEnabled, CraftTravelTarget,
 };
 use infrastructure::bevy_adapters::craft_effects::update_craft_visuals;
 use infrastructure::bevy_adapters::craft_systems::{
@@ -53,6 +53,7 @@ fn setup_craft_systems(app: &mut App) {
     app.insert_resource(CraftControlState::default());
     app.insert_resource(CraftCameraState::default());
     app.insert_resource(CraftTravelTarget::default());
+    app.insert_resource(CraftEffectsEnabled(false));
     app.add_systems(Startup, spawn_craft);
     app.add_systems(Startup, spawn_craft_ui);
     app.add_systems(Update, (

@@ -7,6 +7,7 @@ pub fn update_craft_visuals(
     children_query: Query<&Children>,
     mut effect_query: Query<(
         &mut Transform,
+        &mut Visibility,
         &mut MeshMaterial3d<StandardMaterial>,
         Option<&CraftBubble>,
         Option<&CraftRing>,
@@ -15,6 +16,7 @@ pub fn update_craft_visuals(
         Option<&CraftWake>,
     )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    effects_enabled: Res<CraftEffectsEnabled>,
 ) {
     let Ok((craft_entity, craft)) = craft_query.single() else { return };
     let Ok(children) = children_query.get(craft_entity) else { return };
@@ -36,9 +38,17 @@ pub fn update_craft_visuals(
 
     for i in 0..children.len() {
         let child = children[i];
-        let Ok((mut transform, mat_handle, bubble, ring, core, lens, wake)) = effect_query.get_mut(child) else {
+        let Ok((mut transform, mut vis, mat_handle, bubble, ring, core, lens, wake)) = effect_query.get_mut(child) else {
             continue;
         };
+        let is_effect = bubble.is_some() || ring.is_some() || core.is_some() || lens.is_some() || wake.is_some();
+        if !effects_enabled.0 && is_effect {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        if is_effect {
+            *vis = Visibility::Visible;
+        }
 
         if bubble.is_some() {
             let breathe = 1.0 + (resonance_phase * 0.5).sin() * 0.04;

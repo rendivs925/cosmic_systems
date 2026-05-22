@@ -123,6 +123,7 @@ pub fn handle_craft_input(
     mut control: ResMut<CraftControlState>,
     mut cam_state: ResMut<CraftCameraState>,
     mut cursor_query: Query<&mut CursorOptions>,
+    mut effects_enabled: ResMut<CraftEffectsEnabled>,
 ) {
     let dt = time.delta_secs().min(0.05);
 
@@ -170,6 +171,10 @@ pub fn handle_craft_input(
                 }
             }
         }
+    }
+
+    if keyboard.just_pressed(KeyCode::KeyB) {
+        effects_enabled.0 = !effects_enabled.0;
     }
 
     let mouse_down = mouse_buttons.pressed(MouseButton::Left);

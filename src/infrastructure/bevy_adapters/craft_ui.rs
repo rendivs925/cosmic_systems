@@ -11,6 +11,8 @@ pub struct EnergyLabel;
 pub struct CamLabel;
 #[derive(Component)]
 pub struct FlightLabel;
+#[derive(Component)]
+pub struct EffectsLabel;
 
 pub fn update_craft_ui(
     craft_query: Query<&CraftComponent>,
@@ -21,7 +23,9 @@ pub fn update_craft_ui(
         Query<&mut Text, With<EnergyLabel>>,
         Query<&mut Text, With<CamLabel>>,
         Query<&mut Text, With<FlightLabel>>,
+        Query<&mut Text, With<EffectsLabel>>,
     )>,
+    effects_enabled: Res<CraftEffectsEnabled>,
 ) {
     let craft = match craft_query.single() {
         Ok(c) => c,
@@ -56,5 +60,12 @@ pub fn update_craft_ui(
             SpeedMode::Sprint => "SPR",
         };
         text.0 = format!("{:.0}m/s  {:.0}m  {}", speed, alt, mode);
+    }
+    for mut text in set.p5().iter_mut() {
+        text.0 = if effects_enabled.0 {
+            "FX: ON".to_string()
+        } else {
+            "FX: OFF".to_string()
+        };
     }
 }

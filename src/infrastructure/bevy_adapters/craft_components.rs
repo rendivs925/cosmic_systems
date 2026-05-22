@@ -134,6 +134,9 @@ pub struct CraftCameraTag;
 #[derive(Component)]
 pub struct CraftUiRoot;
 
+#[derive(Resource)]
+pub struct CraftEffectsEnabled(pub bool);
+
 #[derive(Component)]
 pub struct CraftPart {
     pub part_type: CraftPartType,
