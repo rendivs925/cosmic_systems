@@ -133,6 +133,25 @@ The proof of this picture does not require a new experiment, a new telescope, or
 
 The evidence was always there. The sun and the moon swim in their orbits, and any eye that looks up, or any telescope that looks out, confirms it. The question was never whether the universe behaves this way. It always has. The question was only whether the model would admit what the eye already sees.
 
+## The Pattern of Signs: The Word Was Never Alone
+
+The sign of the swimming sun and moon is not an isolated curiosity. It is one entry in a long, consistent pattern of precise words in the Quran that described reality before science had the means to confirm it. Again and again, the text chose a word or an image that made no sense in its own era, and again and again science later caught up and found the description exact.
+
+- The ant (27:18): the Quran describes an ant speaking to its companions and warning them. For centuries this was read as fable, because ants were thought to be simple machines. Science has since shown that ants communicate through complex chemical and sound signals, warn their colonies of danger, and coordinate as a society. The description was not fantasy. It was accurate.
+- The bee (16:68-69): the Quran describes the bee as taking instructed paths, building its home in mountains, trees, and erected structures, and producing honey that is a healing for people. Modern entomology has confirmed the bee's remarkable navigation, its role in the balance of nature, and honey's medicinal properties. The verse even uses the feminine verb for the worker bee, which is the one that actually gathers and produces honey, a detail invisible to anyone in the seventh century who did not know that the foraging bee is female.
+- The spider (29:41): the Quran compares those who take protectors besides the true to the spider that builds a house, and says the weakest of houses is the spider's house, if only they knew. The image is precise, and it was chosen for a reason. The spider's web is indeed fragile, and the female spider, which builds the web, is notable, another detail hidden to the original audience.
+- The fly and the mosquito (22:73, 2:26): the Quran challenges that even a fly cannot be created by all those invoked besides God, and it does not hesitate to give the example of a mosquito. Science has since found that the mosquito and the fly are marvels of biological engineering, with sensory systems and aerodynamics beyond what a seventh century observer could have imagined.
+- The two seas (25:53, 55:19-20): the Quran says the two seas do not mix, with a barrier between them. Oceanography has confirmed that where fresh and salt water meet, distinct water masses remain separated by density differences and boundaries that prevent them from merging.
+- The sun's corona (41:12): the Quran describes the lowest heaven as adorned with lamps and guards, and other verses speak of the sun's outer atmosphere. Modern astronomy has confirmed that the sun has a corona, a vast outer layer of plasma, reaching into space like a structured envelope, far hotter than the surface it surrounds.
+- The night and the day (21:33, 31:29, 36:37): the Quran describes night and day, and how the night is folded over the day and the day over the night. The image of one giving way to the other, of the shadow of night spreading over the earth, is exact, and it is confirmed by every rotation of the planet.
+- The splitting of the sea (26:63): the Quran describes the sea being split so that a people passed through on dry land, with the waters parted. The physics of a standing wave or a parted water column is real, and the description of two walls of water is consistent with what such an event would require.
+- The Thamud (7:73, 11:64): the Quran describes the people of Thamud, who carved homes into the mountains and were given a sign. Archaeology has since uncovered the rock-cut dwellings and cities of the Thamud in the Arabian Peninsula, confirming that such a people existed and carved their homes from the rock exactly as described.
+- The sky as a protective ceiling (21:32): the Quran says the sky is a well-protected canopy. Atmospheric science has confirmed that the atmosphere acts as a protective shield, blocking harmful radiation and cosmic rays, guarding the earth exactly as the word describes.
+
+Each of these was dismissed in its time as metaphor or fable, and each has since been confirmed. They are not scattered coincidences. They are the same consistent voice, describing the natural world with a precision that its own era could not verify.
+
+This is why the word swimming should be taken as seriously as all the rest. Every other sign of this kind has been confirmed. There is no reason to treat this one differently. The sun and the moon swim in a medium, and the same pattern of confirmed signs says the word is exact. Science has caught up with the ant, the bee, the spider, the fly, the two seas, the corona, and the night and the day. It is only a matter of time before it fully catches up with the swimming.
+
 ## Who's Who
 
 The scientists whose work this article builds upon, in one line each.
@@ -156,6 +175,8 @@ The evidence has already been presented, and it is already in plain sight. The b
 
 And the Quran said all of it fourteen centuries ago. It said the sun and the moon swim, and they do. It said every body moves in an orbit, and it does. It said the heaven is built and expanding, and it is. It said there is no inconsistency in creation, and there is none. The word choices were not guesses and were not poetry. They were statements about the nature of space that physics has spent a century confirming.
 
+Nor is the swimming an isolated word. It stands in a line of signs, each one dismissed in its time and each one later confirmed. The ant that warns its colony, the bee that gathers with purpose, the spider's fragile house, the fly and the mosquito too intricate to create, the two seas that do not mix, the corona that wraps the sun, the night that folds over the day, the sky that guards the earth. Every one of those was called metaphor, and every one has been found exact. The swimming is the same kind of sign, and it will be found exact as well.
+
 This is not a claim that requires belief. It is a statement of what is observable. The universe behaves exactly as the text describes, and it has behaved that way all along. The only mistake was in the human model, the model that insisted space was empty and then had to invent invisible substances and contradictory frames to patch the damage. The model was wrong. The text was not.
 
 There is no mistake in the Quran. There never was. The mistake was in the physics that could not see what the text already described.
@@ -165,5 +186,7 @@ There is no mistake in the Quran. There never was. The mistake was in the physic
 Return to the sky and look again. The Quran invites the reader to look, and to look again, and to find no inconsistency, and the reader will not find one.
 
 The picture that emerges is one substance. Matter is its structure, motion is its flow, black holes are its whirlpools, inertia is its stillness, and expansion is its breath. There are no separate forces and no invisible ingredients. There is one fluid, in many forms, moving as one thing.
+
+And the same voice that described this describes the ant, the bee, the spider, the fly, the two seas, the corona, and the night and the day. One sign after another, science has caught up. The swimming is the sign that remains, and it will be caught up with as well, because it is true.
 
 We are swimming in it right now, and we always were.
