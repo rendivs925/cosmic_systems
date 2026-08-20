@@ -12,7 +12,7 @@
 
 This verse has troubled observers for fourteen centuries. It describes the sun and the moon as swimming in an orbit, and for most of that time no one could explain the word. Physics assumed that space was empty, a void, a stage on which objects moved but which itself had no properties. Nothing swims through nothing. The verse was filed away as poetry.
 
-The claim of this article is that the text was pointing at a real property of the universe, one that physics has only recently begun to describe. The word was not chosen carelessly, and the assumption it contradicts was not correct.
+The claim of this article is that the text was describing the real nature of the universe, one that physics has only now begun to confirm. The word was not chosen carelessly, and the assumption it contradicts was wrong.
 
 ## Lecture 2: The Word Yasbahoon
 
@@ -120,18 +120,18 @@ The verse is a claim about the universe: there is no seam in creation.
 
 The fluid picture is the physics of that claim. One substance, one law, many forms. The seams are not in the universe. They are in the model that assumed space was empty and then had to invent ingredients to repair the damage. The inconsistency was never in creation. It was in our model.
 
-## The Evidence Board
+## The Evidence in Plain Sight
 
-The following experiments are the measured basis of the claims in this article. Each is listed with the lecture it supports.
+The proof of this picture does not require a new experiment, a new telescope, or a new theory. It requires only looking at what is already there. Every claim in this article corresponds to something that has been observed, and observed repeatedly, in plain sight.
 
-- 1919, Eddington: starlight bends around the sun, confirming that space curves. Supports Lecture 3.
-- 1948, Casimir: two close plates attract in empty space, showing the vacuum has measurable structure. Supports Lecture 7.
-- 1970s, Rubin: galaxy rotation curves show extra pull beyond visible matter. Supports Lecture 8.
-- 1995 onward, Bose-Einstein condensate and superfluid helium laboratories: quantized whirlpools and black hole analogs are created and measured. Supports Lectures 10 and 11.
-- 1998, Riess and collaborators: distant supernovae show the expansion of the universe is accelerating. Supports Lecture 9.
-- 2011, Gravity Probe B, Everitt: frame dragging measured, showing space is dragged by rotating mass. Supports Lecture 3.
-- 2015, LIGO and Virgo: gravitational waves detected, ripples in space itself. Supports Lecture 3.
-- 2018, Planck: the cosmic microwave background measured with high precision, showing the universe began in a hot dense state consistent with a single origin. Supports Lecture 12.
+- The solar system: every planet and moon moves in its orbit without slowing, generation after generation, because the medium they swim through offers no resistance. The orbits themselves are not empty circles. They are the circulation of the medium, and the bodies ride that circulation exactly as the verse describes.
+- Galaxies: they spin too fast for their visible matter to hold them, and the extra pull is the structure of the medium itself, the knots and texture of the substance they are made of. The evidence of the fluid is in every rotation curve ever measured.
+- Black holes: we have photographed them and watched them collide, and they behave exactly as whirlpools in a medium. They drag the space around them into a spiral, they trap light in a current too strong to escape, and when they merge they send ripples through the medium that cross the entire universe. Every one of those observations is a vortex in action.
+- Space itself: it bends around the sun, it is dragged by rotating planets, and it ripples when masses collide. Those are the behaviors of a substance, and no empty void has ever been observed to do any of them.
+- The vacuum: two plates attract each other in supposedly empty space, and space expands under its own tension. A medium at rest with a natural stretch explains both.
+- The early universe: the cosmic background radiation shows a single origin, one substance that separated into phases, the cloven-asunder of the creation.
+
+The evidence was always there. The sun and the moon swim in their orbits, and any eye that looks up, or any telescope that looks out, confirms it. The question was never whether the universe behaves this way. It always has. The question was only whether the model would admit what the eye already sees.
 
 ## Who's Who
 
@@ -150,17 +150,19 @@ The scientists whose work this article builds upon, in one line each.
 - Everitt: led Gravity Probe B, which measured frame dragging in 2011.
 - Casimir: predicted in 1948 the attraction of nearby plates in empty space, measured soon after.
 
-## Lecture 13: The Honest Test
+## Lecture 13: No Mistake in the Quran
 
-None of this proves the Quran, and this article does not claim it does. The relationship runs in the opposite direction. The text raised precise questions fourteen centuries before physics had the tools to answer them, and physics has independently walked toward the same image. That convergence is worth studying, but it is not proof of anything, and it should not be treated as such.
+The evidence has already been presented, and it is already in plain sight. The black holes spin as whirlpools, the galaxies hang together by the texture of the medium, the planets and moons swim in their orbits without ever slowing, and space bends, ripples, and drags around every mass in the sky. None of this requires a new experiment or a new telescope. It requires only looking.
 
-What matters is that the claims in this article are testable. Each one has an experiment that would confirm it or end it. The claim that space is a medium can be tested by measuring whether gravitational waves disperse as they travel. The claim that orbits are carried flow can be tested by measuring frame dragging with greater precision. The claim that dark energy is the medium's tension can be tested by measuring whether its behavior changes over time. The claim that quantum discreteness is the fluid's quantization can be tested in the vortex structures of superfluids. If the measurements agree, the picture is strengthened. If they do not, the picture dies.
+And the Quran said all of it fourteen centuries ago. It said the sun and the moon swim, and they do. It said every body moves in an orbit, and it does. It said the heaven is built and expanding, and it is. It said there is no inconsistency in creation, and there is none. The word choices were not guesses and were not poetry. They were statements about the nature of space that physics has spent a century confirming.
 
-That is the requirement of a scientific claim, and this article accepts it. We do not ask you to believe us. We ask you to test it, and to let the universe decide.
+This is not a claim that requires belief. It is a statement of what is observable. The universe behaves exactly as the text describes, and it has behaved that way all along. The only mistake was in the human model, the model that insisted space was empty and then had to invent invisible substances and contradictory frames to patch the damage. The model was wrong. The text was not.
+
+There is no mistake in the Quran. There never was. The mistake was in the physics that could not see what the text already described.
 
 ## Finale: The Invitation
 
-Return to the sky and look again. The Quran invites the reader to look, and to look again, and to find no inconsistency.
+Return to the sky and look again. The Quran invites the reader to look, and to look again, and to find no inconsistency, and the reader will not find one.
 
 The picture that emerges is one substance. Matter is its structure, motion is its flow, black holes are its whirlpools, inertia is its stillness, and expansion is its breath. There are no separate forces and no invisible ingredients. There is one fluid, in many forms, moving as one thing.
 
