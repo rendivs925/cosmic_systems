@@ -77,12 +77,12 @@ pub fn queue_pending_material_textures(
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<&PlanetComponent>,
     transforms: Query<&GlobalTransform>,
-    parents: Query<&Parent>,
+    parents: Query<&ChildOf>,
     mut pending_query: Query<(Entity, &mut PendingMaterialTextures)>,
     mut texture_worker: NonSendMut<crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker>,
     memory_stats: Option<Res<crate::infrastructure::bevy_adapters::components::WasmMemoryStats>>,
 ) {
-    let camera_pos = camera_query.single().translation();
+    let camera_pos = camera_query.single().expect("camera present").translation();
     let worker_count = texture_worker.worker_count();
     let mut load_budget = if worker_count == 0 {
         1
@@ -105,7 +105,7 @@ pub fn queue_pending_material_textures(
         let target_entity = if planet_query.get(entity).is_ok() {
             entity
         } else if let Ok(parent) = parents.get(entity) {
-            parent.get()
+            parent.parent()
         } else {
             entity
         };

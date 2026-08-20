@@ -181,6 +181,18 @@ fn init_vulkan_compute() -> Result<
 use super::components::*;
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
+use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::bevy_adapters::performance_systems::apply_quality_settings;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::web_workers::orbit_mesh_worker::{
+    entity_from_task_id, task_id_from_entity, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData,
+};
+#[cfg(target_arch = "wasm32")]
+use bevy_mesh::Indices;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;

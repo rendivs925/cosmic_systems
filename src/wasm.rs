@@ -1,8 +1,9 @@
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
-use bevy::render::view::Msaa;
 use bevy::time::Fixed;
-use crate::infrastructure::bevy_adapters::components::{ChromeOptimizations, PerformanceStats};
+use crate::infrastructure::bevy_adapters::components::{
+    ChromeOptimizations, PerformanceStats, WebGpuKeplerState,
+};
 use crate::infrastructure::web_workers::physics_worker::{adapt_worker_pool, PhysicsWorkerPool};
 use crate::infrastructure::web_workers::orbit_mesh_worker::OrbitMeshWorkerPool;
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
@@ -46,7 +47,7 @@ pub fn main() {
             title: "Cosmic Systems Simulator".to_string(),
             canvas: Some("#bevy".to_owned()),
             fit_canvas_to_parent: true,
-            resolution: (1280.0, 720.0).into(),
+            resolution: (1280u32, 720u32).into(),
             ..default()
         }),
         ..default()
@@ -63,7 +64,6 @@ pub fn main() {
 
     let mut app = App::new();
     app.add_plugins(plugins);
-    app.insert_resource(Msaa::Off);
 
     // Solar system mode (no gyro mode for web)
     app.insert_resource(SelectedPlanet {

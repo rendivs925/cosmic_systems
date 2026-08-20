@@ -2,6 +2,21 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
 use super::performance_components::QualityLevel;
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+pub struct WebGpuKeplerState {
+    pub solver: Rc<RefCell<Option<WebGpuKeplerSolver>>>,
+    pub initializing: Rc<RefCell<bool>>,
+    pub in_flight: Rc<RefCell<bool>>,
+    pub results: Rc<RefCell<Vec<(Entity, Vec3)>>>,
+}
 
 // Compute backend abstraction for hybrid GPU+CPU processing
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

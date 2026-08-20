@@ -9,7 +9,7 @@ use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use bevy::render::mesh::Indices;
+use bevy_mesh::Indices;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;

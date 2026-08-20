@@ -128,7 +128,6 @@ pub fn setup_space(
             entity_map,
             position_map,
             axial_tilts,
-            shared_orbit_material,
             spawn_per_frame: 1,
         });
         return;
@@ -291,17 +290,17 @@ fn spawn_celestial_body(
     };
 
     #[cfg(target_arch = "wasm32")]
-    let material = create_planet_material(
-        None,
-        None,
-        None,
+    let material = create_planet_material(PlanetMaterialConfig {
+        base_color_texture: None,
+        normal_map_texture: None,
+        emissive_texture: None,
         base_color,
         emissive,
-        planet.name == "Sun",
+        unlit: planet.name == "Sun",
         metallic,
         reflectance,
         perceptual_roughness,
-    );
+    });
     #[cfg(not(target_arch = "wasm32"))]
     let material_config = PlanetMaterialConfig {
         base_color_texture: albedo_handle.clone(),
@@ -314,6 +313,7 @@ fn spawn_celestial_body(
         reflectance,
         perceptual_roughness,
     };
+    #[cfg(not(target_arch = "wasm32"))]
     let material = create_planet_material(material_config);
 
     let material_handle = materials.add(material);
@@ -442,7 +442,7 @@ fn spawn_celestial_body(
                 commands.entity(orbit_entity).insert(PendingOrbitMesh {
                     mesh: orbit_mesh,
                     orbit_shape,
-                    color: orbit_base_color,
+                    color: ORBIT_LINE_COLOR,
                     segments: 128,
                 });
             }
@@ -485,6 +485,7 @@ fn spawn_celestial_body(
                 wobble_amount: orbit_motion.wobble_amount,
                 spin_speed: orbit_motion.spin_speed,
                 phase: orbit_motion.phase,
+                distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
             })
             .insert(Name::new(format!("Orbit {}", planet.name)))
             .id();

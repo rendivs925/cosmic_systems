@@ -1,7 +1,7 @@
+use bevy::asset::RenderAssetUsages;
+use bevy::image::Image;
 use bevy::prelude::{Assets, Handle};
-use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::render::texture::Image;
 use js_sys::Reflect;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
