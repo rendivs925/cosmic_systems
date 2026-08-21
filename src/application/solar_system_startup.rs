@@ -337,6 +337,7 @@ fn spawn_celestial_body(
             base_roughness: perceptual_roughness,
         })
         .insert(PlanetAtmosphere::default_for(&planet.name))
+        .insert(PlanetTerrain::default_for(&planet.name))
         .insert(Selectable {
             name: planet.name.clone(),
             selected: false,

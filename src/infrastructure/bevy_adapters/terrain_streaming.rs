@@ -1,0 +1,179 @@
+//! Cube-sphere terrain streaming (AGENTS.md sections 22-23).
+//!
+//! A `TerrainPatchManager` resource is driven each tick by a streaming system
+//! that keeps the quadtree patch set around the rocket/camera alive through the
+//! requested → generating → ready → visible → cached → evicted lifecycle, and
+//! enforces the configured memory budget by evicting least-recently-used cached
+//! patches. Generated patch geometry is built deterministically from the shared
+//! per-planet `TerrainSource`; only patches near the focus are ever requested,
+//! never the whole planet.
+
+use crate::domain::services::cube_sphere::{
+    build_patch_geometry, lod_for_distance, patch_world_size_m, PatchGeometry, TerrainPatch,
+};
+use crate::domain::services::terrain_patch_manager::TerrainPatchManager;
+use crate::infrastructure::bevy_adapters::components::*;
+use bevy::prelude::*;
+use std::collections::HashMap;
+
+/// Camera/LOD constants.
+const MAX_PATCH_LEVEL: u32 = 10;
+const FOV_RAD: f64 = 1.0;
+const SCREEN_HEIGHT_PX: f64 = 1080.0;
+const SCREEN_ERROR_PX: f64 = 4.0;
+/// Approximate bytes per generated patch vertex (f64 position + normal).
+const BYTES_PER_VERTEX: u64 = 48;
+/// Patch resolution (vertices per side).
+const PATCH_RESOLUTION: u32 = 8;
+const DEFAULT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Bevy resource wrapping the domain streaming manager plus the generated
+/// patch geometry cache.
+#[derive(Resource)]
+pub struct TerrainStreamingResource {
+    pub manager: TerrainPatchManager,
+    pub budget_bytes: u64,
+    pub generated: HashMap<TerrainPatch, PatchGeometry>,
+}
+
+impl Default for TerrainStreamingResource {
+    fn default() -> Self {
+        Self {
+            manager: TerrainPatchManager::new(),
+            budget_bytes: DEFAULT_BUDGET_BYTES,
+            generated: HashMap::new(),
+        }
+    }
+}
+
+/// Streaming system: request the patch set around the rocket (falling back to
+/// the camera view for the dominant body), drive lifecycle, generate
+/// deterministic geometry from the shared terrain source, and enforce the
+/// memory budget. It only updates the streaming resource; it never writes
+/// rendered geometry or the rocket's state.
+pub fn stream_terrain_patches(
+    mut streaming: ResMut<TerrainStreamingResource>,
+    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketComponent)>,
+) {
+    streaming.manager.tick();
+
+    // No rocket yet: keep the manager tidy and return.
+    let Some((binding, rocket)) = rocket_query.iter().next() else {
+        let budget = streaming.budget_bytes;
+        streaming.manager.enforce_memory_budget(budget);
+        return;
+    };
+    let Some((planet, planet_terrain)) = planet_query
+        .iter()
+        .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+    else {
+        return;
+    };
+
+    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+    let position_m = rocket.dynamics.position_m;
+    let r = position_m.length();
+    if r < 1e-6 {
+        return;
+    }
+    let dir = position_m / r;
+    let altitude_m = (r - radius_m).max(0.0);
+
+    // Request the ring of patches around the focus direction at the LOD
+    // appropriate for the current altitude (distance to the surface).
+    let level = lod_for_distance(
+        (altitude_m + radius_m * 0.05).max(10_000.0),
+        radius_m,
+        FOV_RAD,
+        SCREEN_HEIGHT_PX,
+        SCREEN_ERROR_PX,
+        MAX_PATCH_LEVEL,
+    );
+    let focus = TerrainPatch::for_direction(dir, level);
+
+    // Drive lifecycle for the focus window and generate geometry.
+    let window = surrounding_patches(&focus);
+    for patch in window.iter() {
+        let patch_size = patch_world_size_m(patch.level, radius_m);
+        let resolution = PATCH_RESOLUTION as u64;
+        let size_bytes = BYTES_PER_VERTEX * resolution * resolution;
+        streaming.manager.request(*patch, size_bytes);
+        streaming.manager.begin_generation(patch);
+        let geometry = build_patch_geometry(
+            patch,
+            planet_terrain.source.as_ref(),
+            radius_m,
+            PATCH_RESOLUTION,
+            30.0,
+        );
+        streaming.generated.insert(*patch, geometry);
+        streaming.manager.mark_ready(patch);
+        streaming.manager.mark_visible(patch);
+    }
+
+    // Drop geometry for patches no longer in the visible window.
+    streaming
+        .generated
+        .retain(|patch, _| window.contains(patch));
+
+    let budget = streaming.budget_bytes;
+    streaming.manager.enforce_memory_budget(budget);
+}
+
+/// The focus patch plus its neighbors at the same level (a 3×3 patch window
+/// clipped to the face bounds).
+fn surrounding_patches(focus: &TerrainPatch) -> Vec<TerrainPatch> {
+    let span = (1u64 << focus.level) as i64;
+    let cx = focus.tile_x as i64;
+    let cy = focus.tile_y as i64;
+    let mut out = Vec::with_capacity(9);
+    for dy in -1..=1i64 {
+        for dx in -1..=1i64 {
+            let tx = cx + dx;
+            let ty = cy + dy;
+            if tx < 0 || tx >= span || ty < 0 || ty >= span {
+                continue; // across a face edge; neighbor faces are out of scope here
+            }
+            out.push(TerrainPatch {
+                face: focus.face,
+                level: focus.level,
+                tile_x: tx as u32,
+                tile_y: ty as u32,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_window_has_neighbors_within_face() {
+        let focus = TerrainPatch {
+            face: crate::domain::services::cube_sphere::CubeFace::PosZ,
+            level: 2,
+            tile_x: 2,
+            tile_y: 2,
+        };
+        let window = surrounding_patches(&focus);
+        // Interior 3×3 window.
+        assert_eq!(window.len(), 9);
+        assert!(window.contains(&focus));
+    }
+
+    #[test]
+    fn focus_window_clips_at_face_edge() {
+        let focus = TerrainPatch {
+            face: crate::domain::services::cube_sphere::CubeFace::PosX,
+            level: 1,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let window = surrounding_patches(&focus);
+        // Corner tile: 2 of the 8 neighbors are outside the face.
+        assert_eq!(window.len(), 4);
+    }
+}

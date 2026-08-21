@@ -13,6 +13,7 @@ pub enum RocketMissionState {
     Descent,
     Landing,
     Landed,
+    Crashed,
 }
 
 /// A single rocket engine. Positions/axes are expressed in the vehicle body

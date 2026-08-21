@@ -105,5 +105,6 @@ pub fn spawn_rockets(
         MaxQTracker::default(),
         RocketCommands::default(),
         RocketAutopilot::default(),
+        TerrainCollisionState::default(),
     ));
 }

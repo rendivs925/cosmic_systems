@@ -13,6 +13,9 @@ use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
     consume_propellant, gimbal_torque_body, shed_stage, stage_thrust_body,
 };
+use crate::domain::services::terrain_collision::{
+    detect_ground_contact, lat_lon_from_direction, radar_altitude_m, sample_surface, GroundContact,
+};
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::*;
 use bevy::math::DVec3;
@@ -436,7 +439,8 @@ pub fn control_system(
             | RocketMissionState::Deorbit
             | RocketMissionState::Descent
             | RocketMissionState::Landing
-            | RocketMissionState::Landed => 0.0,
+            | RocketMissionState::Landed
+            | RocketMissionState::Crashed => 0.0,
         };
 
         let gains = autopilot.gains;
@@ -501,138 +505,70 @@ pub fn actuation_system(
     }
 }
 
-/// System to handle rocket interaction with terrain
-/// Enables rockets to launch from and land on terrain surfaces
+/// Rocket–terrain interaction: sample the authoritative collision terrain
+/// (radar altitude, surface normal, slope, ground contact) from the rocket's
+/// f64 planet-centered inertial position and the shared per-planet
+/// `TerrainSource`. Detects landing and crash states. Never writes the
+/// transform; the 6-DOF dynamics remain authoritative.
 pub fn update_rocket_terrain_interaction(
-    mut rocket_query: Query<(&mut RocketComponent, &Transform)>,
-    terrain_query: Query<(&TerrainComponent, &Transform)>,
-    images: Res<Assets<Image>>,
+    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &mut RocketComponent,
+        &mut TerrainCollisionState,
+    )>,
 ) {
-    for (mut rocket, rocket_transform) in rocket_query.iter_mut() {
-        // Find nearest terrain within influence distance
-        let mut nearest_terrain: Option<(&TerrainComponent, &Transform, f32)> = None;
+    const CONTACT_ALTITUDE_M: f64 = 3.0;
+    const TOUCH_DOWN_SPEED_MPS: f64 = 5.0;
+    const CRASH_SPEED_MPS: f64 = 15.0;
 
-        for (terrain, terrain_transform) in terrain_query.iter() {
-            let distance_to_terrain = rocket_transform
-                .translation
-                .distance(terrain_transform.translation);
-            let influence_distance = terrain.size_km * 500.0; // Within terrain influence range
+    for (binding, mut rocket, mut collision) in rocket_query.iter_mut() {
+        let Some((planet, planet_terrain)) = planet_query
+            .iter()
+            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
-            if distance_to_terrain < influence_distance {
-                if let Some((_, _, current_min_distance)) = nearest_terrain {
-                    if distance_to_terrain < current_min_distance {
-                        nearest_terrain = Some((terrain, terrain_transform, distance_to_terrain));
-                    }
-                } else {
-                    nearest_terrain = Some((terrain, terrain_transform, distance_to_terrain));
+        let position_m = rocket.dynamics.position_m;
+        let altitude_m = radar_altitude_m(&*planet_terrain.source, position_m, radius_m);
+        let dir = position_m.normalize_or_zero();
+        if dir.length_squared() < 1e-12 {
+            continue;
+        }
+        let (lat, lon) = lat_lon_from_direction(dir);
+        let sample = sample_surface(&*planet_terrain.source, lat, lon, radius_m);
+
+        collision.radar_altitude_m = altitude_m;
+        collision.slope_deg = sample.slope_deg;
+
+        let vertical_speed = rocket.dynamics.velocity_mps.dot(dir);
+        let contact = detect_ground_contact(
+            altitude_m,
+            vertical_speed,
+            CONTACT_ALTITUDE_M,
+            TOUCH_DOWN_SPEED_MPS,
+            CRASH_SPEED_MPS,
+        );
+        collision.ground_contact = contact;
+
+        match contact {
+            GroundContact::Landed => {
+                if matches!(
+                    rocket.mission_state,
+                    RocketMissionState::Descent | RocketMissionState::Landing
+                ) {
+                    rocket.mission_state = RocketMissionState::Landed;
                 }
             }
-        }
-
-        if let Some((terrain, terrain_transform, _)) = nearest_terrain {
-            // Sample terrain height at rocket position relative to terrain
-            let terrain_height = sample_terrain_height(
-                rocket_transform.translation - terrain_transform.translation,
-                terrain,
-                &images,
-            );
-
-            // Apply terrain effects
-            apply_terrain_effects(
-                &mut rocket,
-                rocket_transform,
-                terrain_height,
-                terrain_transform,
-            );
-        }
-    }
-}
-
-/// Sample terrain height at a given position relative to terrain center
-fn sample_terrain_height(
-    relative_position: Vec3,
-    terrain: &TerrainComponent,
-    images: &Assets<Image>,
-) -> f32 {
-    // Convert world position to terrain local coordinates
-    let terrain_size_m = terrain.size_km * 1000.0;
-    let half_size = terrain_size_m / 2.0;
-
-    // Check if position is within terrain bounds
-    if relative_position.x < -half_size
-        || relative_position.x > half_size
-        || relative_position.z < -half_size
-        || relative_position.z > half_size
-    {
-        return 0.0; // Outside terrain, assume sea level
-    }
-
-    // Convert to texture coordinates (0-1 range)
-    let u = (relative_position.x + half_size) / terrain_size_m;
-    let v = (relative_position.z + half_size) / terrain_size_m;
-
-    // Sample heightmap
-    if let Some(heightmap_image) = images.get(&terrain.heightmap) {
-        if let Some(data) = &heightmap_image.data {
-            let width = heightmap_image.width() as usize;
-            let height = heightmap_image.height() as usize;
-
-            // Convert UV to pixel coordinates
-            let x = (u * (width - 1) as f32) as usize;
-            let y = (v * (height - 1) as f32) as usize;
-
-            let pixel_index = y * width + x;
-            if pixel_index < data.len() {
-                let height_normalized = data[pixel_index] as f32 / 255.0;
-
-                // Get height range based on terrain type
-                let (height_min, height_max) = match terrain.launch_site_type {
-                    crate::infrastructure::bevy_adapters::entity_components::LaunchSiteType::KennedySpaceCenter => (-10.0, 10.0),
-                    crate::infrastructure::bevy_adapters::entity_components::LaunchSiteType::RtlsLandingPad => (-8.0, 8.0),
-                    crate::infrastructure::bevy_adapters::entity_components::LaunchSiteType::DroneShip => (-2.0, 2.0),
-                    crate::infrastructure::bevy_adapters::entity_components::LaunchSiteType::LunarLanding => (-10.0, 10.0),
-                };
-
-                return height_min + height_normalized * (height_max - height_min);
+            GroundContact::Crash => {
+                // A pad-hold at zero speed during pre-launch is not a crash.
+                if rocket.mission_state != RocketMissionState::PreLaunch {
+                    rocket.mission_state = RocketMissionState::Crashed;
+                }
             }
+            GroundContact::None => {}
         }
-    }
-
-    0.0 // Default height if sampling fails
-}
-
-/// Apply terrain effects to rocket (collision detection, ground effect, etc.)
-fn apply_terrain_effects(
-    rocket: &mut RocketComponent,
-    rocket_transform: &Transform,
-    terrain_height: f32,
-    terrain_transform: &Transform,
-) {
-    // Calculate rocket's height above terrain
-    let rocket_world_height = rocket_transform.translation.y;
-    let terrain_world_height = terrain_transform.translation.y + terrain_height;
-
-    let height_above_terrain = rocket_world_height - terrain_world_height;
-
-    // Simple collision detection and ground effect
-    if height_above_terrain < 5.0 && rocket.velocity.y < 0.0 {
-        // Rocket is close to ground and descending - apply ground effect
-        let ground_effect_strength = (5.0 - height_above_terrain).max(0.0) / 5.0;
-        let ground_effect_force = Vec3::new(0.0, ground_effect_strength * 50000.0, 0.0);
-
-        // Add ground effect to thrust (simplified)
-        rocket.thrust += ground_effect_force;
-
-        // If very close to ground and moving slowly, simulate landing
-        if height_above_terrain < 1.0 && rocket.velocity.length() < 10.0 {
-            rocket.velocity.y = rocket.velocity.y.max(0.0); // Stop downward motion
-            rocket.mission_state =
-                crate::infrastructure::bevy_adapters::entity_components::RocketMissionState::Landed;
-        }
-    }
-
-    // Update mission state based on height
-    if height_above_terrain > 100.0 && rocket.mission_state == crate::infrastructure::bevy_adapters::entity_components::RocketMissionState::PreLaunch {
-        rocket.mission_state = crate::infrastructure::bevy_adapters::entity_components::RocketMissionState::Launch;
     }
 }

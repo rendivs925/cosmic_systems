@@ -38,6 +38,9 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     update_rocket_gravity, update_rocket_terrain_interaction,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
+use crate::infrastructure::bevy_adapters::terrain_streaming::{
+    stream_terrain_patches, TerrainStreamingResource,
+};
 use crate::infrastructure::bevy_adapters::terrain_systems::{
     generate_terrain_mesh, initialize_terrain_lod, update_terrain_lod,
     update_terrain_synchronization, update_terrain_visibility,
@@ -238,6 +241,10 @@ impl Plugin for RocketModePlugin {
     fn build(&self, app: &mut App) {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, spawn_rockets_system);
+
+        // Cube-sphere terrain streaming around the rocket.
+        app.insert_resource(TerrainStreamingResource::default());
+        app.add_systems(Update, stream_terrain_patches);
 
         app.add_systems(Update, update_rocket_gravity);
         // Ordered flight loop: guidance → control → actuation → forces →

@@ -5,6 +5,7 @@ use crate::domain::services::atmosphere::atmosphere_for;
 use crate::domain::services::atmosphere::AtmosphereSource;
 use crate::domain::services::physics_orbital::OrbitShape;
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+use crate::domain::services::terrain_source::{terrain_source_for, TerrainSource};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::sync::Arc;
@@ -237,6 +238,30 @@ impl PlanetAtmosphere {
             source: atmosphere_for(name),
         }
     }
+}
+
+/// Per-planet terrain height source (AGENTS.md sections 20-21). Attached to
+/// planet entities; render mesh and collision query the same source.
+#[derive(Component, Debug, Clone)]
+pub struct PlanetTerrain {
+    pub source: Arc<dyn TerrainSource>,
+}
+
+impl PlanetTerrain {
+    pub fn default_for(name: &str) -> Self {
+        Self {
+            source: terrain_source_for(name),
+        }
+    }
+}
+
+/// Cached terrain collision state for a vehicle, computed each tick by the
+/// rocket interaction system for telemetry/debug.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TerrainCollisionState {
+    pub radar_altitude_m: f64,
+    pub slope_deg: f64,
+    pub ground_contact: crate::domain::services::terrain_collision::GroundContact,
 }
 
 /// Cached atmosphere state at the vehicle's current altitude, computed by the
