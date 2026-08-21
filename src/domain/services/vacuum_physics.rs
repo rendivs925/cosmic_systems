@@ -1,5 +1,7 @@
 /// Lift force from asymmetric vacuum polarization (kN)
 /// F_lift = 47.0 * dc^1.35, capped at 65 kN
+use crate::domain::services::gravity::GRAVITATIONAL_CONSTANT;
+
 pub fn lift_force(dc: f32) -> f32 {
     (47.0 * dc.clamp(0.0, 1.0).powf(1.35)).min(65.0)
 }
@@ -47,9 +49,8 @@ pub fn polarization_gradient(dc: f32, distance_from_hull: f32) -> f32 {
 /// where r is distance from body center (m), M is body mass (kg).
 /// Returns relative density (1.0 = far space, >1.0 = near mass).
 pub fn vacuum_density(mass_kg: f64, distance_m: f64) -> f64 {
-    const G: f64 = 6.67430e-11;
     const C2: f64 = 8.987551787e16;
-    let correction = G * mass_kg / (C2 * distance_m.max(1.0));
+    let correction = GRAVITATIONAL_CONSTANT * mass_kg / (C2 * distance_m.max(1.0));
     (1.0 + correction).min(2.0)
 }
 

@@ -1,5 +1,44 @@
+use crate::domain::services::gravity::gravitational_acceleration;
+use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::*;
+use bevy::math::DVec3;
 use bevy::prelude::*;
+
+/// Compute authoritative gravitational acceleration for each rocket from its
+/// dominant body (see [`RocketPlanetBinding`]) and store it for the 6-DOF
+/// integration to consume. Gravity is computed in the planet-centered inertial
+/// meter frame via the shared `PhysicalScale` and the single gravity
+/// implementation in `domain::services::gravity`.
+pub fn update_rocket_gravity(
+    planet_query: Query<(&PlanetComponent, &Transform)>,
+    physical_scale: Res<PhysicalScale>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketComponent,
+        &mut GravityAcceleration,
+    )>,
+) {
+    for (binding, rocket, mut gravity) in rocket_query.iter_mut() {
+        let Some((planet, planet_transform)) = planet_query
+            .iter()
+            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        // Rocket position relative to the planet in solar display units, then
+        // to planet-centered inertial meters via the central physical scale.
+        let relative_units = rocket.position - planet_transform.translation;
+        let position_m = DVec3::new(
+            physical_scale.solar_units_to_meters(relative_units.x as f64),
+            physical_scale.solar_units_to_meters(relative_units.y as f64),
+            physical_scale.solar_units_to_meters(relative_units.z as f64),
+        );
+
+        gravity.value =
+            gravitational_acceleration(planet.domain_planet.mass_kg, position_m, DVec3::ZERO);
+    }
+}
 
 // System to update rocket physics
 pub fn update_rocket_physics(

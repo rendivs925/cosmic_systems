@@ -1,4 +1,5 @@
 pub mod craft_physics;
+pub mod gravity;
 pub mod gyroscope;
 pub mod physics;
 pub mod physics_gyroscope;

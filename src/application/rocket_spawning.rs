@@ -42,5 +42,9 @@ pub fn spawn_rockets(
             name: "Falcon 9".to_string(),
             selected: false,
         },
+        RocketPlanetBinding {
+            planet_name: "Earth".to_string(),
+        },
+        GravityAcceleration::default(),
     ));
 }

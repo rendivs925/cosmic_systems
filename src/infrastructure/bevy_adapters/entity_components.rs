@@ -1,6 +1,7 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::physics_orbital::OrbitShape;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 
 /// Types of launch sites with different terrain characteristics
@@ -183,6 +184,22 @@ pub enum RocketMissionState {
     Descent,
     Landing,
     Landed,
+}
+
+/// Binds a rocket to its dominant-body frame parent. Gravity is computed from
+/// the planet with this name (resolved against `PlanetComponent`), per the
+/// dominant-body selection rule in the gravity design.
+#[derive(Component, Debug, Clone)]
+pub struct RocketPlanetBinding {
+    pub planet_name: String,
+}
+
+/// Authoritative gravitational acceleration (m/s², f64) acting on a vehicle.
+/// Computed each tick by the gravity system and stored for the 6-DOF
+/// integration to consume.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct GravityAcceleration {
+    pub value: DVec3,
 }
 
 // Component for launch sites (terrain markers)
