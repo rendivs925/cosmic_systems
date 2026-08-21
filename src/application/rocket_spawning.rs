@@ -39,8 +39,8 @@ pub fn spawn_rockets(
     let total_mass_kg = rocket.total_mass_kg() as f64;
     let radius_m = (rocket.diameter_m / 2.0) as f64;
     let (inertia, com) = rocket_inertia_tensor(
-        rocket.dry_mass_kg as f64,
-        rocket.fuel_mass_kg as f64,
+        rocket.total_dry_mass_kg() as f64,
+        rocket.total_propellant_mass_kg() as f64,
         radius_m,
         rocket.height_m as f64,
     );
@@ -53,12 +53,17 @@ pub fn spawn_rockets(
         com,
     );
 
+    let propellant_remaining_kg = rocket
+        .stages
+        .iter()
+        .map(|stage| stage.propellant_mass_kg)
+        .collect();
+
     commands.spawn((
         RocketComponent {
             dynamics,
             force_accum_n: DVec3::ZERO,
             torque_accum_nm: DVec3::ZERO,
-            control_torque_nm: Vec3::ZERO,
             radius_m: radius_m as f32,
             height_m: rocket.height_m,
             position: Vec3::ZERO,
@@ -66,10 +71,18 @@ pub fn spawn_rockets(
             orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
             mass: total_mass_kg as f32,
-            dry_mass_kg: rocket.dry_mass_kg,
-            fuel_mass: rocket.fuel_mass_kg,
+            dry_mass_kg: rocket.total_dry_mass_kg(),
+            fuel_mass: rocket.total_propellant_mass_kg(),
             thrust: Vec3::ZERO,
             mission_state: RocketMissionState::PreLaunch,
+        },
+        RocketPropulsion {
+            vehicle: rocket,
+            active_stage: 0,
+            propellant_remaining_kg,
+            throttle: 0.0,
+            gimbal_pitch_rad: 0.0,
+            gimbal_yaw_rad: 0.0,
         },
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),

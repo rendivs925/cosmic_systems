@@ -1,5 +1,6 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::{BodyClass, Planet};
+use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::physics_orbital::OrbitShape;
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use bevy::math::DVec3;
@@ -170,8 +171,6 @@ pub struct RocketComponent {
     pub force_accum_n: DVec3,
     /// Net torque accumulator (body frame), consumed by integration.
     pub torque_accum_nm: DVec3,
-    /// Commanded control torque (body frame) written by control/input systems.
-    pub control_torque_nm: Vec3,
     /// Vehicle geometry (radius/height in meters) for the inertia model.
     pub radius_m: f32,
     pub height_m: f32,
@@ -189,6 +188,19 @@ pub struct RocketComponent {
     pub fuel_mass: f32,
     pub thrust: Vec3,
     pub mission_state: RocketMissionState,
+}
+
+/// Runtime propulsion state: the vehicle definition plus throttle, gimbal
+/// commands, active stage, and per-stage remaining propellant. Propulsion
+/// systems consume this and feed the 6-DOF accumulators.
+#[derive(Component, Debug, Clone)]
+pub struct RocketPropulsion {
+    pub vehicle: Rocket,
+    pub active_stage: usize,
+    pub propellant_remaining_kg: Vec<f32>,
+    pub throttle: f32,
+    pub gimbal_pitch_rad: f32,
+    pub gimbal_yaw_rad: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

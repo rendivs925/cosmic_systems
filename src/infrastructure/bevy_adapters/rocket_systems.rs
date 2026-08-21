@@ -1,5 +1,8 @@
 use crate::domain::services::gravity::gravitational_acceleration;
-use crate::domain::services::rocket_dynamics::rocket_inertia_tensor;
+use crate::domain::services::rocket_propulsion::{
+    active_vehicle_inertia, active_vehicle_mass, clamp_gimbal, consume_propellant,
+    gimbal_torque_body, selected_isp, shed_stage, stage_thrust_body,
+};
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::*;
 use bevy::math::DVec3;
@@ -34,27 +37,19 @@ pub fn update_rocket_gravity(
     }
 }
 
-/// Accumulate the net force acting on each rocket: gravity (from
-/// [`GravityAcceleration`]) plus commanded thrust. Forces are in the
-/// planet-centered inertial meter frame.
+/// Accumulate the gravitational force acting on each rocket. Forces are in the
+/// planet-centered inertial meter frame. Thrust is added by the propulsion
+/// thrust system.
 pub fn accumulate_forces(mut rocket_query: Query<(&mut RocketComponent, &GravityAcceleration)>) {
     for (mut rocket, gravity) in rocket_query.iter_mut() {
         let gravity_force = gravity.value * rocket.dynamics.mass_kg;
-        rocket.force_accum_n = gravity_force + rocket.thrust.as_dvec3();
+        rocket.force_accum_n = gravity_force;
     }
 }
 
-/// Accumulate the net torque acting on each rocket (body frame). Commanded
-/// control torque is the only input until propulsion/gimbal lands.
-pub fn accumulate_torques(mut rocket_query: Query<&mut RocketComponent>) {
-    for mut rocket in rocket_query.iter_mut() {
-        rocket.torque_accum_nm = rocket.control_torque_nm.as_dvec3();
-    }
-}
-
-/// Integrate the authoritative 6-DOF dynamics (semi-implicit Euler in f64),
-/// apply simplified propellant depletion, and refresh the inertia tensor /
-/// center of mass as mass changes. Resets the force and torque accumulators.
+/// Integrate the authoritative 6-DOF dynamics (semi-implicit Euler in f64)
+/// from the accumulated force/torque, then reset the accumulators. Propellant
+/// depletion and staging are handled by the propulsion systems.
 pub fn integrate_6dof(time: Res<Time>, mut rocket_query: Query<&mut RocketComponent>) {
     let dt = time.delta_secs() as f64;
 
@@ -63,24 +58,184 @@ pub fn integrate_6dof(time: Res<Time>, mut rocket_query: Query<&mut RocketCompon
         let torque = rocket.torque_accum_nm;
         rocket.dynamics.integrate_translation(force, dt);
         rocket.dynamics.integrate_rotation(torque, dt);
-
-        // Simplified propellant depletion (kept from the previous behavior);
-        // the propulsion change will replace this with an authoritative model.
-        if rocket.fuel_mass > 0.0 && rocket.thrust.length() > 0.0 {
-            const MASS_FLOW_RATE_KG_S: f32 = 100.0;
-            rocket.fuel_mass = (rocket.fuel_mass - MASS_FLOW_RATE_KG_S * dt as f32).max(0.0);
-            let dry = rocket.dry_mass_kg as f64;
-            let fuel = rocket.fuel_mass as f64;
-            rocket.dynamics.mass_kg = dry + fuel;
-            let (inertia, com) =
-                rocket_inertia_tensor(dry, fuel, rocket.radius_m as f64, rocket.height_m as f64);
-            rocket.dynamics.inertia_body = inertia;
-            rocket.dynamics.center_of_mass_m = com;
-        }
         rocket.mass = rocket.dynamics.mass_kg as f32;
 
         rocket.force_accum_n = DVec3::ZERO;
         rocket.torque_accum_nm = DVec3::ZERO;
+    }
+}
+
+/// Compute thrust from the active stage's engines (T = m_dot · Isp · g0, with
+/// altitude-selected ISP) and add it to the translational accumulator in the
+/// planet-inertial frame. Never writes the transform.
+pub fn propulsion_thrust(
+    planet_query: Query<(&PlanetComponent, &Transform)>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &mut RocketComponent,
+        &mut RocketPropulsion,
+    )>,
+) {
+    for (binding, mut rocket, mut propulsion) in rocket_query.iter_mut() {
+        let Some((planet, _)) = planet_query
+            .iter()
+            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+        let altitude_m = (rocket.dynamics.position_m.length() - radius_m) as f32;
+        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
+            continue;
+        };
+        let remaining = propulsion
+            .propellant_remaining_kg
+            .get(propulsion.active_stage)
+            .copied()
+            .unwrap_or(0.0);
+        let throttle = propulsion.throttle.clamp(0.0, 1.0);
+        if throttle <= 0.0 || remaining <= 0.0 {
+            continue;
+        }
+        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, altitude_m);
+        let thrust_world = rocket.dynamics.orientation * thrust_body;
+        rocket.force_accum_n += thrust_world;
+    }
+}
+
+/// Deplete the active stage's propellant at the engine mass flow and update the
+/// vehicle mass, inertia tensor, and center of mass. Mass always derives from
+/// the vehicle state (single source).
+pub fn propulsion_consumption(
+    time: Res<Time>,
+    planet_query: Query<(&PlanetComponent, &Transform)>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &mut RocketComponent,
+        &mut RocketPropulsion,
+    )>,
+) {
+    let dt = time.delta_secs() as f64;
+    for (binding, mut rocket, mut propulsion) in rocket_query.iter_mut() {
+        let Some((planet, _)) = planet_query
+            .iter()
+            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+        let altitude_m = (rocket.dynamics.position_m.length() - radius_m) as f32;
+        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
+            continue;
+        };
+        let remaining = propulsion
+            .propellant_remaining_kg
+            .get(propulsion.active_stage)
+            .copied()
+            .unwrap_or(0.0);
+        let throttle = propulsion.throttle.clamp(0.0, 1.0);
+        if throttle <= 0.0 || remaining <= 0.0 {
+            continue;
+        }
+        let (_, mass_flow) = stage_thrust_body(&stage.engines, throttle, altitude_m);
+        let (remaining_new, _consumed) = consume_propellant(remaining, mass_flow, dt);
+        let active_stage = propulsion.active_stage;
+        propulsion.propellant_remaining_kg[active_stage] = remaining_new;
+
+        rocket.dynamics.mass_kg = active_vehicle_mass(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+        );
+        let (inertia, com) = active_vehicle_inertia(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+            rocket.radius_m as f64,
+            rocket.height_m as f64,
+        );
+        rocket.dynamics.inertia_body = inertia;
+        rocket.dynamics.center_of_mass_m = com;
+        rocket.mass = rocket.dynamics.mass_kg as f32;
+        rocket.fuel_mass = propulsion
+            .propellant_remaining_kg
+            .iter()
+            .skip(propulsion.active_stage)
+            .sum();
+    }
+}
+
+/// Separate the spent stage when its propellant is exhausted and the vehicle is
+/// still thrusting. The shed stage's dry and residual mass is removed and the
+/// vehicle mass/inertia are recomputed.
+pub fn propulsion_staging(mut rocket_query: Query<(&mut RocketComponent, &mut RocketPropulsion)>) {
+    for (mut rocket, mut propulsion) in rocket_query.iter_mut() {
+        let remaining = propulsion
+            .propellant_remaining_kg
+            .get(propulsion.active_stage)
+            .copied()
+            .unwrap_or(0.0);
+        let thrusting = propulsion.throttle.clamp(0.0, 1.0) > 0.0;
+        if remaining > 0.0 || !thrusting {
+            continue;
+        }
+        let Some((next, _shed)) = shed_stage(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+        ) else {
+            continue;
+        };
+        propulsion.active_stage = next;
+
+        rocket.dynamics.mass_kg = active_vehicle_mass(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+        );
+        let (inertia, com) = active_vehicle_inertia(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+            rocket.radius_m as f64,
+            rocket.height_m as f64,
+        );
+        rocket.dynamics.inertia_body = inertia;
+        rocket.dynamics.center_of_mass_m = com;
+        rocket.mass = rocket.dynamics.mass_kg as f32;
+    }
+}
+
+/// Apply engine gimbal deflection to produce torque about the rocket's center
+/// of mass, added to the rotational accumulator (body frame).
+pub fn propulsion_gimbal(mut rocket_query: Query<(&mut RocketComponent, &mut RocketPropulsion)>) {
+    for (mut rocket, mut propulsion) in rocket_query.iter_mut() {
+        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
+            continue;
+        };
+        let remaining = propulsion
+            .propellant_remaining_kg
+            .get(propulsion.active_stage)
+            .copied()
+            .unwrap_or(0.0);
+        let throttle = propulsion.throttle.clamp(0.0, 1.0);
+        if throttle <= 0.0 || remaining <= 0.0 {
+            continue;
+        }
+        let com = rocket.dynamics.center_of_mass_m;
+        for engine in &stage.engines {
+            let pitch = clamp_gimbal(propulsion.gimbal_pitch_rad, engine.gimbal_range_deg) as f64;
+            let yaw = clamp_gimbal(propulsion.gimbal_yaw_rad, engine.gimbal_range_deg) as f64;
+            let thrust = engine.max_thrust_kn as f64 * 1000.0 * throttle as f64;
+            rocket.torque_accum_nm += gimbal_torque_body(
+                engine.position_m.as_dvec3(),
+                com,
+                engine.thrust_axis.as_dvec3(),
+                thrust,
+                pitch,
+                yaw,
+            );
+        }
     }
 }
 
@@ -122,38 +277,39 @@ pub fn sync_render_transform(
 }
 
 // System to handle rocket controls (placeholder)
-// Issues commanded thrust and control torque; physics (not this system)
-// integrates motion. Replaced by the guidance/control change later.
+// Issues throttle and gimbal commands; physics (not this system) integrates
+// motion. Replaced by the guidance/control change later.
 pub fn update_rocket_controls(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut rocket_query: Query<&mut RocketComponent>,
+    mut rocket_query: Query<&mut RocketPropulsion>,
 ) {
-    for mut rocket in rocket_query.iter_mut() {
-        // Simple thrust command (world frame, newtons)
-        let mut thrust = Vec3::ZERO;
+    for mut propulsion in rocket_query.iter_mut() {
+        // Throttle command (bounded)
+        let throttle: f32 = if keyboard_input.pressed(KeyCode::Space) {
+            1.0
+        } else {
+            0.0
+        };
+        propulsion.throttle = throttle.clamp(0.0, 1.0);
 
-        if keyboard_input.pressed(KeyCode::Space) {
-            thrust.y = 100000.0; // Upward thrust
-        }
-
-        // Basic attitude torque commands (body frame, N·m)
-        let mut torque = Vec3::ZERO;
-
+        // Gimbal deflection commands (radians; the gimbal system clamps to
+        // each engine's mechanical range)
+        let mut pitch = 0.0;
+        let mut yaw = 0.0;
         if keyboard_input.pressed(KeyCode::KeyW) {
-            torque.x = 10.0; // Pitch up
+            pitch = 0.05; // Pitch up
         }
         if keyboard_input.pressed(KeyCode::KeyS) {
-            torque.x = -10.0; // Pitch down
+            pitch = -0.05; // Pitch down
         }
         if keyboard_input.pressed(KeyCode::KeyA) {
-            torque.z = 10.0; // Roll left
+            yaw = 0.05; // Yaw left
         }
         if keyboard_input.pressed(KeyCode::KeyD) {
-            torque.z = -10.0; // Roll right
+            yaw = -0.05; // Yaw right
         }
-
-        rocket.thrust = thrust;
-        rocket.control_torque_nm = torque;
+        propulsion.gimbal_pitch_rad = pitch;
+        propulsion.gimbal_yaw_rad = yaw;
     }
 }
 

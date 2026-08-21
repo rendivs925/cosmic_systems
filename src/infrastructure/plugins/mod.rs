@@ -32,8 +32,9 @@ use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
 use crate::infrastructure::bevy_adapters::rocket_systems::{
-    accumulate_forces, accumulate_torques, integrate_6dof, sync_render_transform,
-    update_rocket_controls, update_rocket_gravity, update_rocket_terrain_interaction,
+    accumulate_forces, integrate_6dof, propulsion_consumption, propulsion_gimbal,
+    propulsion_staging, propulsion_thrust, sync_render_transform, update_rocket_controls,
+    update_rocket_gravity, update_rocket_terrain_interaction,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_systems::{
@@ -238,14 +239,17 @@ impl Plugin for RocketModePlugin {
         app.add_systems(Startup, spawn_rockets_system);
 
         app.add_systems(Update, update_rocket_gravity);
-        // Ordered 6-DOF pipeline: forces → torques → integration → presentation.
+        // Ordered pipeline: forces → torques → mass/staging → integration → presentation.
         app.add_systems(
             Update,
             (
                 update_rocket_controls,
                 update_rocket_terrain_interaction,
                 accumulate_forces,
-                accumulate_torques,
+                propulsion_thrust,
+                propulsion_gimbal,
+                propulsion_consumption,
+                propulsion_staging,
                 integrate_6dof,
                 sync_render_transform,
             )
