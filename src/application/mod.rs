@@ -2,6 +2,7 @@ pub mod craft_startup;
 pub mod gyro_startup;
 pub mod material_factory;
 pub mod mesh_factory;
+pub mod modes;
 pub mod rocket_spawning;
 pub mod simulation_service;
 pub mod solar_system_startup;

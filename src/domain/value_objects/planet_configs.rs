@@ -127,7 +127,6 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         axial_tilt_deg: 28.32,
         parent_entity: None,
     },
-
     // Moons
     PlanetConfig {
         name: "Moon",

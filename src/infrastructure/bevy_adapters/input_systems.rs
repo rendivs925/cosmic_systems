@@ -91,7 +91,8 @@ pub fn handle_mouse_planet_selection(
         return;
     }
 
-    let Some((camera, camera_transform)) = camera_query.iter().find(|(camera, _)| camera.is_active) else {
+    let Some((camera, camera_transform)) = camera_query.iter().find(|(camera, _)| camera.is_active)
+    else {
         return;
     };
     let window = match windows.single() {
@@ -227,10 +228,7 @@ pub fn handle_solar_system_input(
     }
     if keyboard.just_pressed(KeyCode::KeyZ) {
         zen_mode.enabled = !zen_mode.enabled;
-        println!(
-            "Zen mode: {}",
-            if zen_mode.enabled { "ON" } else { "OFF" }
-        );
+        println!("Zen mode: {}", if zen_mode.enabled { "ON" } else { "OFF" });
     }
     // Time scale controls (require Ctrl key)
     if keyboard.just_pressed(KeyCode::KeyT)
@@ -239,10 +237,7 @@ pub fn handle_solar_system_input(
     {
         // Exponential increase: 10x
         solar_params.time_scale = (solar_params.time_scale * 10.0).min(10000000.0);
-        println!(
-            "Time scale: {:.0}x (10x increase)",
-            solar_params.time_scale
-        );
+        println!("Time scale: {:.0}x (10x increase)", solar_params.time_scale);
     } else if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
         // Gradual increase: 10%
         solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
@@ -256,10 +251,7 @@ pub fn handle_solar_system_input(
     {
         // Exponential decrease: 10x
         solar_params.time_scale = (solar_params.time_scale / 10.0).max(0.0001);
-        println!(
-            "Time scale: {:.0}x (10x decrease)",
-            solar_params.time_scale
-        );
+        println!("Time scale: {:.0}x (10x decrease)", solar_params.time_scale);
     } else if keyboard.just_pressed(KeyCode::KeyR)
         && keyboard.pressed(KeyCode::ControlLeft)
         && solar_params.time_scale > 0.1

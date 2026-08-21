@@ -245,8 +245,8 @@ pub fn setup_ui(mut commands: Commands) {
             UiCapture,
         ))
         .with_children(|button| {
-            button.spawn((
-                Node {
+            button
+                .spawn((Node {
                     width: Val::Px(8.0),
                     height: Val::Px(13.0),
                     flex_direction: FlexDirection::Column,
@@ -254,27 +254,27 @@ pub fn setup_ui(mut commands: Commands) {
                     align_items: AlignItems::Center,
                     row_gap: Val::Px(2.0),
                     ..default()
-                },
-            )).with_children(|icon| {
-                icon.spawn((
-                    Node {
-                        width: Val::Px(2.5),
-                        height: Val::Px(2.5),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
-                    BorderRadius::all(Val::Px(8.0)),
-                ));
-                icon.spawn((
-                    Node {
-                        width: Val::Px(2.5),
-                        height: Val::Px(8.0),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
-                    BorderRadius::all(Val::Px(2.0)),
-                ));
-            });
+                },))
+                .with_children(|icon| {
+                    icon.spawn((
+                        Node {
+                            width: Val::Px(2.5),
+                            height: Val::Px(2.5),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
+                        BorderRadius::all(Val::Px(8.0)),
+                    ));
+                    icon.spawn((
+                        Node {
+                            width: Val::Px(2.5),
+                            height: Val::Px(8.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.78, 0.84, 0.94)),
+                        BorderRadius::all(Val::Px(2.0)),
+                    ));
+                });
         });
 
     let notifications = commands

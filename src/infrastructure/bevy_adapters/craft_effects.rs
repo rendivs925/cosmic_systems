@@ -18,8 +18,12 @@ pub fn update_craft_visuals(
     mut materials: ResMut<Assets<StandardMaterial>>,
     effects_enabled: Res<CraftEffectsEnabled>,
 ) {
-    let Ok((craft_entity, craft)) = craft_query.single() else { return };
-    let Ok(children) = children_query.get(craft_entity) else { return };
+    let Ok((craft_entity, craft)) = craft_query.single() else {
+        return;
+    };
+    let Ok(children) = children_query.get(craft_entity) else {
+        return;
+    };
     let dt = time.delta_secs().min(0.05);
     let elapsed = time.elapsed_secs();
 
@@ -33,15 +37,25 @@ pub fn update_craft_visuals(
         SpeedMode::Cruise => 40000.0 * dc,
         SpeedMode::Sprint => 120000.0 * dc,
     };
-    let speed_ratio = if speed_max > 0.01 { (speed / speed_max).min(1.0) } else { 0.0 };
+    let speed_ratio = if speed_max > 0.01 {
+        (speed / speed_max).min(1.0)
+    } else {
+        0.0
+    };
     let resonance_phase = elapsed * 22.4 * pulse;
 
     for i in 0..children.len() {
         let child = children[i];
-        let Ok((mut transform, mut vis, mat_handle, bubble, ring, core, lens, wake)) = effect_query.get_mut(child) else {
+        let Ok((mut transform, mut vis, mat_handle, bubble, ring, core, lens, wake)) =
+            effect_query.get_mut(child)
+        else {
             continue;
         };
-        let is_effect = bubble.is_some() || ring.is_some() || core.is_some() || lens.is_some() || wake.is_some();
+        let is_effect = bubble.is_some()
+            || ring.is_some()
+            || core.is_some()
+            || lens.is_some()
+            || wake.is_some();
         if !effects_enabled.0 && is_effect {
             *vis = Visibility::Hidden;
             continue;
@@ -63,7 +77,8 @@ pub fn update_craft_visuals(
         }
 
         if ring.is_some() {
-            transform.rotation *= Quat::from_rotation_y((0.5 + pulse * 2.0 + speed_ratio * 1.5) * dt);
+            transform.rotation *=
+                Quat::from_rotation_y((0.5 + pulse * 2.0 + speed_ratio * 1.5) * dt);
             if let Some(mat) = materials.get_mut(&mat_handle.0) {
                 let b = 0.1 + pulse * 0.5 + zpe * 0.0008;
                 let a = 0.2 + pulse * 0.4 + parametric as u32 as f32 * 0.25;
@@ -82,7 +97,12 @@ pub fn update_craft_visuals(
         }
 
         if core.is_some() {
-            let p = if zpe > 5.0 { 0.5 + (resonance_phase * 3.0).sin() * 0.3 + zpe * 0.0003 } else { 0.2 }.min(1.0);
+            let p = if zpe > 5.0 {
+                0.5 + (resonance_phase * 3.0).sin() * 0.3 + zpe * 0.0003
+            } else {
+                0.2
+            }
+            .min(1.0);
             if let Some(mat) = materials.get_mut(&mat_handle.0) {
                 mat.emissive = LinearRgba::new(0.2 + p * 0.8, 0.5 + p * 0.5, 0.8 + p * 0.2, 1.0);
                 if parametric {
@@ -97,7 +117,12 @@ pub fn update_craft_visuals(
             transform.scale = Vec3::new(1.0, 1.0 - speed_ratio * 0.2, 1.0 + speed_ratio * 2.0);
             transform.translation.z = speed_ratio * 3.0;
             if let Some(mat) = materials.get_mut(&mat_handle.0) {
-                mat.base_color = Color::srgba(0.08, 0.12, 0.25, (0.02 + dc * 0.06 + speed_ratio * 0.05).min(0.2));
+                mat.base_color = Color::srgba(
+                    0.08,
+                    0.12,
+                    0.25,
+                    (0.02 + dc * 0.06 + speed_ratio * 0.05).min(0.2),
+                );
             }
         }
 

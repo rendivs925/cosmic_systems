@@ -19,7 +19,8 @@ pub fn update_rocket_physics(
         rocket.position += current_velocity * dt;
 
         // Update angular velocity
-        rocket.orientation = rocket.orientation * Quat::from_vec4(rocket.angular_velocity.extend(0.0)) * dt;
+        rocket.orientation =
+            rocket.orientation * Quat::from_vec4(rocket.angular_velocity.extend(0.0)) * dt;
 
         // Update transform
         transform.translation = rocket.position;
@@ -83,7 +84,9 @@ pub fn update_rocket_terrain_interaction(
         let mut nearest_terrain: Option<(&TerrainComponent, &Transform, f32)> = None;
 
         for (terrain, terrain_transform) in terrain_query.iter() {
-            let distance_to_terrain = rocket_transform.translation.distance(terrain_transform.translation);
+            let distance_to_terrain = rocket_transform
+                .translation
+                .distance(terrain_transform.translation);
             let influence_distance = terrain.size_km * 500.0; // Within terrain influence range
 
             if distance_to_terrain < influence_distance {
@@ -102,11 +105,16 @@ pub fn update_rocket_terrain_interaction(
             let terrain_height = sample_terrain_height(
                 rocket_transform.translation - terrain_transform.translation,
                 terrain,
-                &images
+                &images,
             );
 
             // Apply terrain effects
-            apply_terrain_effects(&mut rocket, rocket_transform, terrain_height, terrain_transform);
+            apply_terrain_effects(
+                &mut rocket,
+                rocket_transform,
+                terrain_height,
+                terrain_transform,
+            );
         }
     }
 }
@@ -122,8 +130,11 @@ fn sample_terrain_height(
     let half_size = terrain_size_m / 2.0;
 
     // Check if position is within terrain bounds
-    if relative_position.x < -half_size || relative_position.x > half_size ||
-       relative_position.z < -half_size || relative_position.z > half_size {
+    if relative_position.x < -half_size
+        || relative_position.x > half_size
+        || relative_position.z < -half_size
+        || relative_position.z > half_size
+    {
         return 0.0; // Outside terrain, assume sea level
     }
 
@@ -186,7 +197,8 @@ fn apply_terrain_effects(
         // If very close to ground and moving slowly, simulate landing
         if height_above_terrain < 1.0 && rocket.velocity.length() < 10.0 {
             rocket.velocity.y = rocket.velocity.y.max(0.0); // Stop downward motion
-            rocket.mission_state = crate::infrastructure::bevy_adapters::entity_components::RocketMissionState::Landed;
+            rocket.mission_state =
+                crate::infrastructure::bevy_adapters::entity_components::RocketMissionState::Landed;
         }
     }
 

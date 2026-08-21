@@ -248,12 +248,18 @@ fn solve_kepler_scalar_parallel(planets: &[Planet], quality: QualityLevel) -> Ve
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        planets.par_iter().map(|planet| calculate_position_with_quality(planet, quality)).collect()
+        planets
+            .par_iter()
+            .map(|planet| calculate_position_with_quality(planet, quality))
+            .collect()
     }
 
     #[cfg(not(feature = "parallel"))]
     {
-        planets.iter().map(|planet| calculate_position_with_quality(planet, quality)).collect()
+        planets
+            .iter()
+            .map(|planet| calculate_position_with_quality(planet, quality))
+            .collect()
     }
 }
 
@@ -281,9 +287,5 @@ fn calculate_position_with_quality(planet: &Planet, _quality: QualityLevel) -> V
     let angle = std::f32::consts::PI * 2.0 * 0.1; // Placeholder time-based angle
     let distance = planet.orbital_distance_au * 100.0; // Scale for visualization
 
-    Vec3::new(
-        distance * angle.cos(),
-        0.0,
-        distance * angle.sin(),
-    )
+    Vec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
 }

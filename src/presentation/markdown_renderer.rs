@@ -43,9 +43,7 @@ pub fn parse_markdown(text: &str) -> Vec<MdBlock> {
                     pulldown_cmark::HeadingLevel::H6 => 6,
                 };
                 let mut content = Vec::new();
-                while i < events.len()
-                    && !matches!(&events[i], Event::End(TagEnd::Heading(..)))
-                {
+                while i < events.len() && !matches!(&events[i], Event::End(TagEnd::Heading(..))) {
                     content.push(events[i].clone());
                     i += 1;
                 }
@@ -61,9 +59,7 @@ pub fn parse_markdown(text: &str) -> Vec<MdBlock> {
             Event::Start(Tag::Paragraph) => {
                 i += 1;
                 let mut content = Vec::new();
-                while i < events.len()
-                    && !matches!(&events[i], Event::End(TagEnd::Paragraph))
-                {
+                while i < events.len() && !matches!(&events[i], Event::End(TagEnd::Paragraph)) {
                     content.push(events[i].clone());
                     i += 1;
                 }
@@ -100,9 +96,7 @@ pub fn parse_markdown(text: &str) -> Vec<MdBlock> {
                 };
                 i += 1;
                 let mut content = Vec::new();
-                while i < events.len()
-                    && !matches!(&events[i], Event::End(TagEnd::CodeBlock))
-                {
+                while i < events.len() && !matches!(&events[i], Event::End(TagEnd::CodeBlock)) {
                     if let Event::Text(t) = &events[i] {
                         content.push(t.clone());
                     }
@@ -115,9 +109,7 @@ pub fn parse_markdown(text: &str) -> Vec<MdBlock> {
             Event::Start(Tag::List(..)) => {
                 let mut items = Vec::new();
                 i += 1;
-                while i < events.len()
-                    && !matches!(&events[i], Event::End(TagEnd::List(..)))
-                {
+                while i < events.len() && !matches!(&events[i], Event::End(TagEnd::List(..))) {
                     if matches!(&events[i], Event::Start(Tag::Item)) {
                         i += 1;
                         let mut content = Vec::new();
@@ -159,11 +151,7 @@ pub fn parse_markdown(text: &str) -> Vec<MdBlock> {
     blocks
 }
 
-pub fn spawn_markdown_blocks(
-    parent: Entity,
-    blocks: &[MdBlock],
-    commands: &mut Commands,
-) {
+pub fn spawn_markdown_blocks(parent: Entity, blocks: &[MdBlock], commands: &mut Commands) {
     let text_color = Color::srgb(0.75, 0.8, 0.85);
     let heading_color = Color::srgb(0.3, 0.6, 0.9);
     let dim_color = Color::srgb(0.4, 0.45, 0.5);

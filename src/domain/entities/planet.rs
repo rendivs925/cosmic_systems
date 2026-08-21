@@ -101,9 +101,15 @@ impl PlanetBuilder {
             mass_kg: self.mass_kg.expect("mass_kg is required"),
             color: self.color.expect("color is required"),
             body_class: self.body_class.expect("body_class is required"),
-            orbital_distance_au: self.orbital_distance_au.expect("orbital_distance_au is required"),
-            orbital_period_days: self.orbital_period_days.expect("orbital_period_days is required"),
-            rotation_period_hours: self.rotation_period_hours.expect("rotation_period_hours is required"),
+            orbital_distance_au: self
+                .orbital_distance_au
+                .expect("orbital_distance_au is required"),
+            orbital_period_days: self
+                .orbital_period_days
+                .expect("orbital_period_days is required"),
+            rotation_period_hours: self
+                .rotation_period_hours
+                .expect("rotation_period_hours is required"),
             axial_tilt_deg: self.axial_tilt_deg.expect("axial_tilt_deg is required"),
             parent_entity: self.parent_entity.expect("parent_entity is required"),
         }

@@ -64,21 +64,21 @@ impl OrbitMeshWorkerPool {
                     .ok()
                     .and_then(|value| value.as_f64())
                     .map(|value| value as u64);
-                let positions_value =
-                    Reflect::get(&data, &JsValue::from_str("positions")).ok();
-                let positions = positions_value
-                    .and_then(|value| {
-                        let array = Float32Array::new(&value);
-                        let mut vec = vec![0.0; array.length() as usize];
-                        array.copy_to(&mut vec);
-                        Some(vec)
-                    });
+                let positions_value = Reflect::get(&data, &JsValue::from_str("positions")).ok();
+                let positions = positions_value.and_then(|value| {
+                    let array = Float32Array::new(&value);
+                    let mut vec = vec![0.0; array.length() as usize];
+                    array.copy_to(&mut vec);
+                    Some(vec)
+                });
 
                 let (Some(task_id), Some(positions)) = (task_id, positions) else {
                     return;
                 };
 
-                results.borrow_mut().push_back(OrbitMeshResult { task_id, positions });
+                results
+                    .borrow_mut()
+                    .push_back(OrbitMeshResult { task_id, positions });
             }));
 
             worker.set_onmessage(Some(callback.as_ref().unchecked_ref()));

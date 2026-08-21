@@ -116,7 +116,7 @@ impl CpuAffinityManager {
         // Set CPU affinity for current thread
         #[cfg(target_os = "linux")]
         {
-            use libc::{cpu_set_t, CPU_SET, CPU_ZERO, sched_setaffinity};
+            use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
             use std::mem;
 
             let mut cpuset: cpu_set_t = unsafe { mem::zeroed() };
@@ -124,9 +124,8 @@ impl CpuAffinityManager {
             unsafe { CPU_SET(core_id, &mut cpuset) };
 
             let tid = unsafe { libc::gettid() };
-            let result = unsafe {
-                sched_setaffinity(tid as i32, mem::size_of::<cpu_set_t>(), &cpuset)
-            };
+            let result =
+                unsafe { sched_setaffinity(tid as i32, mem::size_of::<cpu_set_t>(), &cpuset) };
 
             if result != 0 {
                 return Err("Failed to set CPU affinity".into());
@@ -143,8 +142,8 @@ impl CpuAffinityManager {
         #[cfg(target_os = "windows")]
         {
             // Windows thread affinity
-            use winapi::um::processthreadsapi::SetThreadAffinityMask;
             use winapi::um::processthreadsapi::GetCurrentThread;
+            use winapi::um::processthreadsapi::SetThreadAffinityMask;
 
             let thread_handle = unsafe { GetCurrentThread() };
             let mask = 1u64 << core_id;
@@ -201,7 +200,7 @@ impl MemoryBandwidthOptimizer {
     pub fn new() -> Self {
         Self {
             cache_line_size: 64, // Typical x86 cache line
-            page_size: 4096,      // Typical page size
+            page_size: 4096,     // Typical page size
         }
     }
 

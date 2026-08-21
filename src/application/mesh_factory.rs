@@ -32,7 +32,12 @@ pub fn create_orbit_mesh_ellipse(
     let mut colors = Vec::with_capacity(SEGMENTS);
     let mut indices = Vec::with_capacity(SEGMENTS * 2);
     let linear_color: LinearRgba = orbit_color.into();
-    let color = [linear_color.red, linear_color.green, linear_color.blue, linear_color.alpha];
+    let color = [
+        linear_color.red,
+        linear_color.green,
+        linear_color.blue,
+        linear_color.alpha,
+    ];
 
     let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
     let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
@@ -114,7 +119,12 @@ pub fn create_orbit_ribbon_mesh(
     let thickness = thickness.clamp(1.0, 15.0);
 
     let linear_color: LinearRgba = orbit_color.into();
-    let color_arr = [linear_color.red, linear_color.green, linear_color.blue, linear_color.alpha];
+    let color_arr = [
+        linear_color.red,
+        linear_color.green,
+        linear_color.blue,
+        linear_color.alpha,
+    ];
 
     for i in 0..segments {
         let pos = orbit_positions[i];
@@ -143,7 +153,10 @@ pub fn create_orbit_ribbon_mesh(
         indices.extend_from_slice(&[i1, i0, i2, i1, i2, i3]);
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -202,7 +215,10 @@ pub fn create_orbital_plane_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32)
         indices.push((next_i + 1) as u32); // Next outer vertex
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -211,7 +227,10 @@ pub fn create_orbital_plane_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32)
     meshes.add(mesh)
 }
 
-pub fn create_eccentricity_marker_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+pub fn create_eccentricity_marker_mesh(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    radius: f32,
+) -> Handle<Mesh> {
     // Create a simple glowing sphere for eccentricity markers
     // Use UV sphere for better visual quality at small sizes
     create_uv_sphere_mesh(meshes, radius)

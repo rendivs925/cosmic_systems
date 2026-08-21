@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
-use bevy::prelude::*;
 use super::performance_components::{PerformanceStats, QualityLevel, QualityTrend};
+use bevy::prelude::*;
+use std::collections::VecDeque;
 
 // System monitoring for adaptive quality control
 #[derive(Clone, Debug)]
@@ -43,7 +43,11 @@ impl AdaptiveQualityController {
     }
 
     /// Analyze system metrics and determine optimal quality level
-    pub fn adapt_quality(&mut self, current_fps: f32, system_metrics: &SystemMetrics) -> Option<QualityLevel> {
+    pub fn adapt_quality(
+        &mut self,
+        current_fps: f32,
+        system_metrics: &SystemMetrics,
+    ) -> Option<QualityLevel> {
         let now = std::time::Instant::now();
         if now.duration_since(self.last_adaptation).as_millis() < self.cooldown_ms as u128 {
             return None; // Cooldown active
@@ -61,10 +65,14 @@ impl AdaptiveQualityController {
         }
 
         // Calculate metrics
-        let avg_fps = self.adaptation_history.iter().sum::<f32>() / self.adaptation_history.len() as f32;
-        let fps_variance = self.adaptation_history.iter()
+        let avg_fps =
+            self.adaptation_history.iter().sum::<f32>() / self.adaptation_history.len() as f32;
+        let fps_variance = self
+            .adaptation_history
+            .iter()
             .map(|fps| (fps - avg_fps).powi(2))
-            .sum::<f32>() / self.adaptation_history.len() as f32;
+            .sum::<f32>()
+            / self.adaptation_history.len() as f32;
 
         // Target frame time in ms
         // Quality adaptation logic
@@ -79,8 +87,11 @@ impl AdaptiveQualityController {
             new_quality_index = new_quality_index.saturating_sub(1);
         }
         // Performance improving
-        else if avg_fps > self.target_fps * 1.1 && system_metrics.gpu_utilization < 0.7 &&
-                system_metrics.memory_pressure < 0.5 && fps_variance < 2.0 {
+        else if avg_fps > self.target_fps * 1.1
+            && system_metrics.gpu_utilization < 0.7
+            && system_metrics.memory_pressure < 0.5
+            && fps_variance < 2.0
+        {
             new_quality_index = (new_quality_index + 1).min(self.quality_levels.len() - 1);
         }
 
@@ -88,10 +99,13 @@ impl AdaptiveQualityController {
         if new_quality_index != self.current_quality_index {
             self.current_quality_index = new_quality_index;
             self.last_adaptation = now;
-            println!("Adaptive Quality: {} FPS -> {:?} (GPU: {:.1}%, Mem: {:.1}%)",
-                    avg_fps as i32, self.quality_levels[new_quality_index],
-                    system_metrics.gpu_utilization * 100.0,
-                    system_metrics.memory_pressure * 100.0);
+            println!(
+                "Adaptive Quality: {} FPS -> {:?} (GPU: {:.1}%, Mem: {:.1}%)",
+                avg_fps as i32,
+                self.quality_levels[new_quality_index],
+                system_metrics.gpu_utilization * 100.0,
+                system_metrics.memory_pressure * 100.0
+            );
             return Some(self.quality_levels[new_quality_index]);
         }
 
@@ -124,7 +138,9 @@ impl QualityAdaptationSystem {
         let now = std::time::Instant::now();
 
         // Update metrics periodically
-        if now.duration_since(self.last_metrics_update).as_millis() >= self.metrics_update_interval_ms as u128 {
+        if now.duration_since(self.last_metrics_update).as_millis()
+            >= self.metrics_update_interval_ms as u128
+        {
             self.update_system_metrics(perf_stats);
             self.last_metrics_update = now;
         }
@@ -149,10 +165,14 @@ impl QualityAdaptationSystem {
     fn update_system_metrics(&self, perf_stats: &mut PerformanceStats) {
         // Calculate frame time variance from recent history
         if perf_stats.frame_time_history.len() >= 10 {
-            let mean = perf_stats.frame_time_history.iter().sum::<f32>() / perf_stats.frame_time_history.len() as f32;
-            let variance = perf_stats.frame_time_history.iter()
+            let mean = perf_stats.frame_time_history.iter().sum::<f32>()
+                / perf_stats.frame_time_history.len() as f32;
+            let variance = perf_stats
+                .frame_time_history
+                .iter()
                 .map(|ft| (ft - mean).powi(2))
-                .sum::<f32>() / perf_stats.frame_time_history.len() as f32;
+                .sum::<f32>()
+                / perf_stats.frame_time_history.len() as f32;
             perf_stats.frame_time_variance = variance;
         }
 

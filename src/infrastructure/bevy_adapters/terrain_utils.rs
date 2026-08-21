@@ -2,7 +2,11 @@ use crate::infrastructure::bevy_adapters::{components::*, entity_components::Lau
 use bevy::prelude::*;
 
 /// Sample terrain height at a world position
-pub fn sample_terrain_height(world_pos: Vec3, terrain: &TerrainComponent, images: &Assets<Image>) -> f32 {
+pub fn sample_terrain_height(
+    world_pos: Vec3,
+    terrain: &TerrainComponent,
+    images: &Assets<Image>,
+) -> f32 {
     // Convert world position to local terrain coordinates
     let local_pos = world_pos - terrain.position_offset;
 
@@ -28,9 +32,9 @@ pub fn sample_terrain_height(world_pos: Vec3, terrain: &TerrainComponent, images
                 // Convert back to actual height based on terrain type
                 match terrain.launch_site_type {
                     LaunchSiteType::KennedySpaceCenter => height_normalized * 20.0 - 10.0, // -10m to +10m for Earth
-                    LaunchSiteType::RtlsLandingPad => height_normalized * 15.0 - 7.5,     // -7.5m to +7.5m
-                    LaunchSiteType::DroneShip => height_normalized * 4.0 - 2.0,          // -2m to +2m for ocean
-                    LaunchSiteType::LunarLanding => height_normalized * 20.0 - 10.0,    // -10m to +10m for Moon
+                    LaunchSiteType::RtlsLandingPad => height_normalized * 15.0 - 7.5, // -7.5m to +7.5m
+                    LaunchSiteType::DroneShip => height_normalized * 4.0 - 2.0, // -2m to +2m for ocean
+                    LaunchSiteType::LunarLanding => height_normalized * 20.0 - 10.0, // -10m to +10m for Moon
                 }
             } else {
                 0.0 // Default height
@@ -44,7 +48,11 @@ pub fn sample_terrain_height(world_pos: Vec3, terrain: &TerrainComponent, images
 }
 
 /// Get terrain surface normal at a world position
-pub fn get_terrain_normal(_world_pos: Vec3, _terrain: &TerrainComponent, _images: &Assets<Image>) -> Vec3 {
+pub fn get_terrain_normal(
+    _world_pos: Vec3,
+    _terrain: &TerrainComponent,
+    _images: &Assets<Image>,
+) -> Vec3 {
     // For now, return up vector. In a full implementation, you'd sample
     // the normal map or calculate normals from heightmap
     Vec3::Y
@@ -96,7 +104,11 @@ pub fn check_landing_zone_clearance(
 }
 
 /// Calculate ground effect on rocket thrust near terrain
-pub fn calculate_ground_effect(thrust_vector: Vec3, distance_to_ground: f32, terrain_type: LaunchSiteType) -> f32 {
+pub fn calculate_ground_effect(
+    thrust_vector: Vec3,
+    distance_to_ground: f32,
+    terrain_type: LaunchSiteType,
+) -> f32 {
     let _ = thrust_vector; // Unused parameter
 
     if distance_to_ground > 50.0 {
@@ -120,7 +132,7 @@ pub fn calculate_ground_effect(thrust_vector: Vec3, distance_to_ground: f32, ter
 #[derive(Debug, Clone)]
 pub struct TerrainProperties {
     pub friction_coefficient: f32,
-    pub restitution: f32, // Bounciness
+    pub restitution: f32,      // Bounciness
     pub surface_hardness: f32, // For impact calculations
 }
 

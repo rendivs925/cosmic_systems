@@ -175,10 +175,7 @@ pub fn spawn_education_panel(mut commands: Commands) {
         });
 }
 
-fn build_context_markdown(
-    craft: Option<&CraftComponent>,
-    control: &CraftControlState,
-) -> String {
+fn build_context_markdown(craft: Option<&CraftComponent>, control: &CraftControlState) -> String {
     let Some(craft) = craft else {
         return "Spawn the craft (craft mode) to begin exploring vacuum physics.\n\nPress **B** to toggle this panel.".to_string();
     };
@@ -201,10 +198,7 @@ fn build_context_markdown(
     }
 }
 
-fn build_entry_markdown(
-    journal: &JournalDatabase,
-    index: usize,
-) -> String {
+fn build_entry_markdown(journal: &JournalDatabase, index: usize) -> String {
     let Some(entry) = journal.entries.get(index) else {
         return String::new();
     };
@@ -258,7 +252,13 @@ pub fn update_education_panel(
     journal: Res<JournalDatabase>,
     mut panel_query: Query<&mut Visibility, With<EducationPanelRoot>>,
     context_container: Query<Entity, With<EducationContextContainer>>,
-    detail_container: Query<Entity, (With<EducationJournalContainer>, Without<EducationContextContainer>)>,
+    detail_container: Query<
+        Entity,
+        (
+            With<EducationJournalContainer>,
+            Without<EducationContextContainer>,
+        ),
+    >,
     children_query: Query<&Children>,
     mut text_queries: ParamSet<(
         Query<&mut Text, With<EducationTelemetryText>>,
@@ -268,7 +268,9 @@ pub fn update_education_panel(
     mut last_context: Local<String>,
     mut last_detail: Local<Option<usize>>,
 ) {
-    let Ok(mut vis) = panel_query.single_mut() else { return };
+    let Ok(mut vis) = panel_query.single_mut() else {
+        return;
+    };
     *vis = if state.panel_open {
         Visibility::Visible
     } else {
@@ -298,7 +300,13 @@ pub fn update_education_panel(
         *last_context = context_md.clone();
         if let Ok(entity) = context_container.single() {
             let blocks = parse_markdown(&context_md);
-            replace_wrapper(entity, EducationContextWrapper, &blocks, &mut commands, &children_query);
+            replace_wrapper(
+                entity,
+                EducationContextWrapper,
+                &blocks,
+                &mut commands,
+                &children_query,
+            );
         }
     }
 
@@ -353,7 +361,13 @@ pub fn update_education_panel(
                 if journal.is_unlocked(idx) {
                     let md = build_entry_markdown(&journal, idx);
                     let blocks = parse_markdown(&md);
-                    replace_wrapper(entity, EducationDetailWrapper, &blocks, &mut commands, &children_query);
+                    replace_wrapper(
+                        entity,
+                        EducationDetailWrapper,
+                        &blocks,
+                        &mut commands,
+                        &children_query,
+                    );
                 }
             }
         }

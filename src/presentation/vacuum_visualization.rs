@@ -31,7 +31,9 @@ pub fn spawn_field_gradient(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Ok(craft_entity) = craft_query.single() else { return };
+    let Ok(craft_entity) = craft_query.single() else {
+        return;
+    };
 
     let upper_mat = materials.add(StandardMaterial {
         base_color: Color::srgba(1.0, 0.3, 0.0, 0.15),
@@ -43,9 +45,8 @@ pub fn spawn_field_gradient(
     commands.entity(craft_entity).with_child((
         Mesh3d(meshes.add(Torus::new(1.0, 0.05))),
         MeshMaterial3d(upper_mat),
-        Transform::from_xyz(0.0, 0.6, 0.0).with_rotation(Quat::from_rotation_x(
-            std::f32::consts::FRAC_PI_2,
-        )),
+        Transform::from_xyz(0.0, 0.6, 0.0)
+            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
         FieldGradientRing { dc_field: 0.0 },
     ));
 
@@ -59,16 +60,18 @@ pub fn spawn_field_gradient(
     commands.entity(craft_entity).with_child((
         Mesh3d(meshes.add(Torus::new(1.1, 0.06))),
         MeshMaterial3d(lower_mat),
-        Transform::from_xyz(0.0, -0.4, 0.0).with_rotation(Quat::from_rotation_x(
-            std::f32::consts::FRAC_PI_2,
-        )),
+        Transform::from_xyz(0.0, -0.4, 0.0)
+            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
         FieldGradientRing { dc_field: 0.0 },
     ));
 }
 
 pub fn update_field_gradient(
     control: Res<CraftControlState>,
-    mut ring_query: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut FieldGradientRing)>,
+    mut ring_query: Query<(
+        &mut MeshMaterial3d<StandardMaterial>,
+        &mut FieldGradientRing,
+    )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dc = control.dc_current;
@@ -95,7 +98,9 @@ pub fn spawn_virtual_particles(
     if !state.show_particles || !state.panel_open {
         return;
     }
-    let Ok(transform) = craft_query.single() else { return };
+    let Ok(transform) = craft_query.single() else {
+        return;
+    };
 
     let mut rng = rand::thread_rng();
     let spawn_rate = control.dc_current * 30.0 * time.delta_secs();
@@ -123,7 +128,11 @@ pub fn spawn_virtual_particles(
         MeshMaterial3d(particle_mat),
         Transform::from_translation(pos),
         VirtualParticle {
-            velocity: Vec3::new(rng.gen_range(-0.2..0.2), rng.gen_range(0.1..0.3), rng.gen_range(-0.2..0.2)),
+            velocity: Vec3::new(
+                rng.gen_range(-0.2..0.2),
+                rng.gen_range(0.1..0.3),
+                rng.gen_range(-0.2..0.2),
+            ),
             lifetime: 0.5 + rng.gen::<f32>() * 1.0,
             age: 0.0,
         },
@@ -170,7 +179,9 @@ pub fn spawn_zpe_ripple(
         return;
     }
 
-    let Ok(transform) = craft_query.single() else { return };
+    let Ok(transform) = craft_query.single() else {
+        return;
+    };
     let pos = transform.translation;
 
     let ripple_mat = materials.add(StandardMaterial {
@@ -184,8 +195,9 @@ pub fn spawn_zpe_ripple(
     commands.spawn((
         Mesh3d(meshes.add(Torus::new(0.3, 0.03))),
         MeshMaterial3d(ripple_mat),
-        Transform::from_translation(pos)
-            .with_rotation(Quat::from_rotation_x(rng.gen::<f32>() * std::f32::consts::TAU)),
+        Transform::from_translation(pos).with_rotation(Quat::from_rotation_x(
+            rng.gen::<f32>() * std::f32::consts::TAU,
+        )),
         ZpeRipple {
             lifetime: 1.2,
             age: 0.0,

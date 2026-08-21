@@ -1,5 +1,5 @@
-use super::craft_components::*;
 use super::components::PlanetComponent;
+use super::craft_components::*;
 use crate::domain::services::craft_physics;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -201,10 +201,18 @@ pub fn handle_craft_input(
     for (mut craft, _) in craft_query.iter_mut() {
         let mut move_x = 0.0;
         let mut move_z = 0.0;
-        if keyboard.pressed(KeyCode::KeyW) { move_z -= 1.0; }
-        if keyboard.pressed(KeyCode::KeyS) { move_z += 1.0; }
-        if keyboard.pressed(KeyCode::KeyA) { move_x -= 1.0; }
-        if keyboard.pressed(KeyCode::KeyD) { move_x += 1.0; }
+        if keyboard.pressed(KeyCode::KeyW) {
+            move_z -= 1.0;
+        }
+        if keyboard.pressed(KeyCode::KeyS) {
+            move_z += 1.0;
+        }
+        if keyboard.pressed(KeyCode::KeyA) {
+            move_x -= 1.0;
+        }
+        if keyboard.pressed(KeyCode::KeyD) {
+            move_x += 1.0;
+        }
         craft.move_input = Vec2::new(move_x, move_z);
 
         let yaw_rate = 2.5;
@@ -232,7 +240,8 @@ pub fn handle_craft_input(
 
         if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
             craft.speed_mode = SpeedMode::Sprint;
-        } else if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        } else if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight)
+        {
             craft.speed_mode = SpeedMode::Hover;
         } else {
             craft.speed_mode = SpeedMode::Cruise;
@@ -243,7 +252,6 @@ pub fn handle_craft_input(
             craft.linear_velocity = Vec3::ZERO;
             craft.angular_velocity *= 1.0 - 6.0 * dt;
         }
-
     }
 }
 
@@ -252,7 +260,10 @@ pub fn update_craft_camera(
     mut mouse_motion: MessageReader<MouseMotion>,
     craft_query: Query<(&CraftComponent, &Transform)>,
     mut cam_state: ResMut<CraftCameraState>,
-    mut camera_query: Query<(&mut Transform, &mut Projection), (With<CraftCameraTag>, Without<CraftComponent>)>,
+    mut camera_query: Query<
+        (&mut Transform, &mut Projection),
+        (With<CraftCameraTag>, Without<CraftComponent>),
+    >,
     planet_query: Query<&GlobalTransform, With<PlanetComponent>>,
 ) {
     let dt = time.delta_secs().min(0.05);
@@ -298,7 +309,8 @@ pub fn update_craft_camera(
             let yaw = cam_state.orbit_yaw;
             let pitch = cam_state.orbit_pitch;
             let chase_offset = Vec3::new(0.0, height_offset + pitch.sin() * dist, dist);
-            let mut desired_pos = target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
+            let mut desired_pos =
+                target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
             if parametric {
                 let shake_amp = 0.02 + (zpe / 1250.0) * 0.04;
                 desired_pos += Vec3::new(
@@ -310,7 +322,9 @@ pub fn update_craft_camera(
             camera_transform.translation = desired_pos;
             camera_transform.look_at(look_target, Vec3::Y);
             if let Projection::Perspective(ref mut proj) = *projection {
-                proj.fov = (55.0_f32.to_radians() + (is_sprint as u32 as f32 * 2.0 + is_hover as u32 as f32 * -3.0).to_radians()).clamp(50.0_f32.to_radians(), 65.0_f32.to_radians());
+                proj.fov = (55.0_f32.to_radians()
+                    + (is_sprint as u32 as f32 * 2.0 + is_hover as u32 as f32 * -3.0).to_radians())
+                .clamp(50.0_f32.to_radians(), 65.0_f32.to_radians());
             }
         }
         CraftCameraMode::Orbit => {
@@ -338,8 +352,8 @@ pub fn update_craft_camera(
             cam_state.orbit_yaw -= mouse_delta.x * sensitivity;
             cam_state.orbit_pitch =
                 (cam_state.orbit_pitch - mouse_delta.y * sensitivity).clamp(-1.5, 1.5);
-            let view_rot =
-                Quat::from_rotation_y(cam_state.orbit_yaw) * Quat::from_rotation_x(cam_state.orbit_pitch);
+            let view_rot = Quat::from_rotation_y(cam_state.orbit_yaw)
+                * Quat::from_rotation_x(cam_state.orbit_pitch);
             let local_offset = Vec3::new(0.0, 0.5, 0.8);
             let world_offset = view_rot * local_offset;
             let cam_pos = target + world_offset;

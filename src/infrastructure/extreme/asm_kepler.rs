@@ -29,9 +29,12 @@ pub mod approximations {
         // Chebyshev polynomial approximation for sin(x) on [-π/2, π/2]
         // sin(x) ≈ x * P(x²) where P is an even polynomial
         // P(t) = 1 - t/6 + t²/120 - t³/5040 + t⁴/362880 - t⁵/39916800
-        let t = x_reduced * x_reduced;  // x²
-        // Horner's method for polynomial evaluation (most efficient)
-        let p = 1.0 - t * (1.0/6.0 - t * (1.0/120.0 - t * (1.0/5040.0 - t * (1.0/362880.0 - t * (1.0/39916800.0)))));
+        let t = x_reduced * x_reduced; // x²
+                                       // Horner's method for polynomial evaluation (most efficient)
+        let p = 1.0
+            - t * (1.0 / 6.0
+                - t * (1.0 / 120.0
+                    - t * (1.0 / 5040.0 - t * (1.0 / 362880.0 - t * (1.0 / 39916800.0)))));
 
         let mut result = x_reduced * p;
 
@@ -45,7 +48,11 @@ pub mod approximations {
         };
 
         // Apply sign correction
-        if x < 0.0 { -result } else { result }
+        if x < 0.0 {
+            -result
+        } else {
+            result
+        }
     }
 
     /// Extreme-performance cosine approximation using Chebyshev polynomials
@@ -78,7 +85,7 @@ pub mod approximations {
         let x5 = x3 * x2;
         let x7 = x5 * x2;
 
-        x_norm - x3/6.0 + x5/120.0 - x7/5040.0
+        x_norm - x3 / 6.0 + x5 / 120.0 - x7 / 5040.0
     }
 
     /// Optimized cosine approximation using polynomial series
@@ -127,19 +134,34 @@ pub mod approximations {
 
 impl AsmKeplerSolver {
     /// Extreme-performance Kepler equation solver using Newton's method with optimized approximations
-    pub fn solve_kepler_extreme(&self, mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
+    pub fn solve_kepler_extreme(
+        &self,
+        mean_anomaly: f64,
+        eccentricity: f64,
+        tolerance: f64,
+    ) -> f64 {
         // Use extreme trigonometric approximations for maximum performance
         self.solve_kepler_extreme_impl(mean_anomaly, eccentricity, tolerance)
     }
 
     /// High-performance Kepler equation solver using Newton's method with optimized approximations
-    pub fn solve_kepler_optimized(&self, mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
+    pub fn solve_kepler_optimized(
+        &self,
+        mean_anomaly: f64,
+        eccentricity: f64,
+        tolerance: f64,
+    ) -> f64 {
         // Use optimized trigonometric functions
         Self::solve_kepler_optimized_impl(eccentricity, mean_anomaly, tolerance)
     }
 
     /// Extreme performance implementation using algorithmic optimizations
-    fn solve_kepler_extreme_impl(&self, mut mean_anomaly: f64, eccentricity: f64, tolerance: f64) -> f64 {
+    fn solve_kepler_extreme_impl(
+        &self,
+        mut mean_anomaly: f64,
+        eccentricity: f64,
+        tolerance: f64,
+    ) -> f64 {
         // Range reduction for mean anomaly to improve convergence
         mean_anomaly %= 2.0 * std::f64::consts::PI;
         if mean_anomaly < 0.0 {
@@ -157,7 +179,8 @@ impl AsmKeplerSolver {
         };
 
         // Newton's method with optimized trigonometric functions
-        for _ in 0..20 {  // Limit iterations for performance
+        for _ in 0..20 {
+            // Limit iterations for performance
             let sin_e = approximations::sin_approx_extreme(eccentric_anomaly);
             let cos_e = approximations::cos_approx_extreme(eccentric_anomaly);
 
@@ -344,15 +367,19 @@ impl AsmKeplerSolver {
 
             // Adaptive damping for improved convergence stability
             let damping = match iteration {
-                0..=2 => 1.0,    // Full step for initial iterations
-                3..=6 => 0.8,    // Reduced damping for stability
-                _ => 0.6,        // Conservative damping for convergence
+                0..=2 => 1.0, // Full step for initial iterations
+                3..=6 => 0.8, // Reduced damping for stability
+                _ => 0.6,     // Conservative damping for convergence
             };
 
             e_anomaly -= damping * delta;
 
             // Early convergence check with relaxed tolerance for first few iterations
-            let convergence_tolerance = if iteration < 3 { tolerance * 100.0 } else { tolerance };
+            let convergence_tolerance = if iteration < 3 {
+                tolerance * 100.0
+            } else {
+                tolerance
+            };
             if delta.abs() < convergence_tolerance {
                 break;
             }
@@ -361,16 +388,11 @@ impl AsmKeplerSolver {
         e_anomaly
     }
 
-
-
-
     #[cfg(not(target_arch = "x86_64"))]
     unsafe fn solve_kepler_asm(_e: f64, m: f64, _tolerance: f64) -> f64 {
         // Fallback to mean anomaly for non-x86 platforms
         m
     }
-
-
 
     /// SIMD-accelerated batch processing for multiple Kepler equations
     /// This is where the real performance gains come from - vectorizing across multiple equations
@@ -383,7 +405,6 @@ impl AsmKeplerSolver {
             .map(|(&e, &m)| solver.solve_kepler_optimized(m, e, 1e-12))
             .collect()
     }
-
 }
 
 #[cfg(test)]
@@ -393,7 +414,7 @@ mod tests {
     #[test]
     fn test_optimized_kepler_solver() {
         let e = 0.0167; // Earth's eccentricity
-        let m = 0.1;    // Mean anomaly
+        let m = 0.1; // Mean anomaly
 
         let solver = AsmKeplerSolver;
         let result = solver.solve_kepler_optimized(m, e, 1e-12);

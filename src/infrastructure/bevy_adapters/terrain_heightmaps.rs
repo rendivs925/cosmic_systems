@@ -1,20 +1,24 @@
 use crate::infrastructure::bevy_adapters::entity_components::LaunchSiteType;
-use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
-use rand::{Rng, SeedableRng};
+use bevy::prelude::*;
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 /// Generate a heightmap for a specific launch site type
-pub fn generate_launch_site_heightmap(site_type: LaunchSiteType, size_km: f32, resolution: u32) -> Image {
+pub fn generate_launch_site_heightmap(
+    site_type: LaunchSiteType,
+    size_km: f32,
+    resolution: u32,
+) -> Image {
     let size_pixels = resolution as usize;
     let mut height_data = vec![0u8; size_pixels * size_pixels];
 
     // Seed based on site type for consistent but varied terrain
     let seed = match site_type {
         LaunchSiteType::KennedySpaceCenter => 0x4B5343, // "KSC"
-        LaunchSiteType::RtlsLandingPad => 0x52544C53, // "RTLS"
-        LaunchSiteType::DroneShip => 0x44524F4E, // "DRON"
-        LaunchSiteType::LunarLanding => 0x4C554E41, // "LUNA"
+        LaunchSiteType::RtlsLandingPad => 0x52544C53,   // "RTLS"
+        LaunchSiteType::DroneShip => 0x44524F4E,        // "DRON"
+        LaunchSiteType::LunarLanding => 0x4C554E41,     // "LUNA"
     };
 
     let mut rng = StdRng::seed_from_u64(seed);
@@ -60,7 +64,9 @@ fn generate_ksc_heightmap(height_data: &mut [u8], size: usize, size_km: f32, rng
     for y in 0..size {
         for x in 0..size {
             let idx = y * size + x;
-            let dist_from_center = (((x as i32 - center_x as i32).pow(2) + (y as i32 - center_y as i32).pow(2)) as f32).sqrt();
+            let dist_from_center = (((x as i32 - center_x as i32).pow(2)
+                + (y as i32 - center_y as i32).pow(2)) as f32)
+                .sqrt();
 
             let height_m = if dist_from_center <= pad_radius_pixels as f32 {
                 // Launch pad - perfectly flat at 2m elevation
@@ -75,7 +81,9 @@ fn generate_ksc_heightmap(height_data: &mut [u8], size: usize, size_km: f32, rng
                 let distance_factor = (dist_from_center / (size as f32 * 0.3)).min(1.0);
                 let slope_effect = (1.0 - distance_factor) * 2.0;
 
-                (base_elevation + variation + slope_effect).max(0.0).min(15.0)
+                (base_elevation + variation + slope_effect)
+                    .max(0.0)
+                    .min(15.0)
             };
 
             // Convert to 0-255 range (assuming 0-20m total range)
@@ -86,7 +94,12 @@ fn generate_ksc_heightmap(height_data: &mut [u8], size: usize, size_km: f32, rng
 
 /// Generate RTLS landing pad terrain
 /// Features: Concrete landing pad, matching KSC surrounding terrain
-fn generate_rtls_pad_heightmap(height_data: &mut [u8], size: usize, size_km: f32, rng: &mut StdRng) {
+fn generate_rtls_pad_heightmap(
+    height_data: &mut [u8],
+    size: usize,
+    size_km: f32,
+    rng: &mut StdRng,
+) {
     let meters_per_pixel = (size_km * 1000.0) / size as f32;
     let center_x = size / 2;
     let center_y = size / 2;
@@ -97,7 +110,9 @@ fn generate_rtls_pad_heightmap(height_data: &mut [u8], size: usize, size_km: f32
     for y in 0..size {
         for x in 0..size {
             let idx = y * size + x;
-            let dist_from_center = (((x as i32 - center_x as i32).pow(2) + (y as i32 - center_y as i32).pow(2)) as f32).sqrt();
+            let dist_from_center = (((x as i32 - center_x as i32).pow(2)
+                + (y as i32 - center_y as i32).pow(2)) as f32)
+                .sqrt();
 
             let height_m = if dist_from_center <= pad_radius_pixels as f32 {
                 // Landing pad - flat concrete surface at 3m elevation
@@ -109,7 +124,9 @@ fn generate_rtls_pad_heightmap(height_data: &mut [u8], size: usize, size_km: f32
                 let distance_factor = (dist_from_center / (size as f32 * 0.4)).min(1.0);
                 let slope_effect = (1.0 - distance_factor) * 1.5;
 
-                (base_elevation + variation + slope_effect).max(0.0).min(12.0)
+                (base_elevation + variation + slope_effect)
+                    .max(0.0)
+                    .min(12.0)
             };
 
             height_data[idx] = ((height_m / 15.0) * 255.0) as u8;
@@ -181,13 +198,17 @@ fn generate_lunar_heightmap(height_data: &mut [u8], size: usize, size_km: f32, r
             let mut height_m = base_height + large_scale;
 
             // Add craters of various sizes
-            for _ in 0..5 { // Add several craters
+            for _ in 0..5 {
+                // Add several craters
                 let crater_x = rng.gen_range(0..size);
                 let crater_y = rng.gen_range(0..size);
                 let crater_radius = rng.gen_range(5.0..=50.0); // 5-50 pixels radius
                 let crater_depth = rng.gen_range(1.0..=5.0); // 1-5m deep
 
-                let dist_to_crater = (((x as i32 - crater_x as i32).pow(2) + (y as i32 - crater_y as i32).pow(2)) as f32).sqrt();
+                let dist_to_crater = (((x as i32 - crater_x as i32).pow(2)
+                    + (y as i32 - crater_y as i32).pow(2))
+                    as f32)
+                    .sqrt();
                 let dist_ratio = dist_to_crater / crater_radius;
 
                 if dist_ratio <= 1.0 {

@@ -8,9 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{
-    CanvasRenderingContext2d, HtmlCanvasElement, ImageBitmap, MessageEvent, Worker,
-};
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageBitmap, MessageEvent, Worker};
 
 pub struct TextureDecodeWorker {
     enabled: bool,
@@ -43,8 +41,7 @@ impl TextureDecodeWorker {
             cache: HashMap::new(),
             canvas: None,
             context: None,
-            base_url: web_sys::window()
-                .and_then(|window| window.location().href().ok()),
+            base_url: web_sys::window().and_then(|window| window.location().href().ok()),
             next_worker: 0,
         };
 
@@ -79,8 +76,7 @@ impl TextureDecodeWorker {
                     .ok()
                     .and_then(|value| value.as_string());
                 let bitmap_value = Reflect::get(&data, &JsValue::from_str("bitmap")).ok();
-                let bitmap = bitmap_value
-                    .and_then(|value| value.dyn_into::<ImageBitmap>().ok());
+                let bitmap = bitmap_value.and_then(|value| value.dyn_into::<ImageBitmap>().ok());
                 let error = Reflect::get(&data, &JsValue::from_str("error"))
                     .ok()
                     .and_then(|value| value.as_string());
@@ -89,7 +85,11 @@ impl TextureDecodeWorker {
                     return;
                 };
 
-                results.borrow_mut().push_back(TextureWorkerResult { path, bitmap, error });
+                results.borrow_mut().push_back(TextureWorkerResult {
+                    path,
+                    bitmap,
+                    error,
+                });
             }));
 
             worker_handle.set_onmessage(Some(callback.as_ref().unchecked_ref()));

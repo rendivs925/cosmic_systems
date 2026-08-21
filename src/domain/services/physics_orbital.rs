@@ -408,8 +408,6 @@ fn elements_from_degrees(
     }
 }
 
-
-
 fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
     let cos_e = eccentric_anomaly.cos();
     let sin_e = eccentric_anomaly.sin();
@@ -453,7 +451,7 @@ pub fn calculate_terrain_orbital_position(
         time_days,
         solar_params,
         Vec3::ZERO, // Sun at origin
-        None, // No parent for Earth
+        None,       // No parent for Earth
     );
 
     // Calculate Earth's rotation at this time

@@ -2,9 +2,9 @@ use crate::domain::entities::planet::Planet;
 use crate::infrastructure::bevy_adapters::components::QualityLevel;
 use bevy::math::Vec3;
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
+use wgpu::util::DeviceExt;
 
 /// Most Advanced Kepler Solver with Ultimate CPU Optimizations
 /// Implements the most sophisticated numerical methods and SIMD acceleration
@@ -50,42 +50,41 @@ impl WebGpuKeplerSolver {
             source: wgpu::ShaderSource::Wgsl(KEPLER_SHADER.into()),
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Kepler Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Kepler Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Kepler Pipeline Layout"),
@@ -112,33 +111,33 @@ impl WebGpuKeplerSolver {
     /// Solve Kepler equations with ultimate numerical precision and performance
     pub fn solve_batch(&mut self, planets: &[Planet], quality: QualityLevel) -> Vec<Vec3> {
         let iterations = match quality {
-            QualityLevel::Ultra => 12,    // Maximum precision
-            QualityLevel::High => 8,      // High precision
-            QualityLevel::Medium => 6,    // Balanced precision
-            QualityLevel::Low => 4,       // Fast approximation
-            QualityLevel::Minimal => 2,   // Ultra-fast
+            QualityLevel::Ultra => 12,  // Maximum precision
+            QualityLevel::High => 8,    // High precision
+            QualityLevel::Medium => 6,  // Balanced precision
+            QualityLevel::Low => 4,     // Fast approximation
+            QualityLevel::Minimal => 2, // Ultra-fast
         };
 
         // Ultimate optimization: adaptive algorithm selection
-        planets.iter().map(|planet| {
-            self.solve_single_kepler_ultimate(planet, iterations)
-        }).collect()
+        planets
+            .iter()
+            .map(|planet| self.solve_single_kepler_ultimate(planet, iterations))
+            .collect()
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub async fn solve_positions(
-        &self,
-        inputs: &[PlanetGpuInput],
-    ) -> Result<Vec<Vec3>, JsValue> {
+    pub async fn solve_positions(&self, inputs: &[PlanetGpuInput]) -> Result<Vec<Vec3>, JsValue> {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
 
-        let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Kepler Input Buffer"),
-            contents: bytemuck::cast_slice(inputs),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let input_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Kepler Input Buffer"),
+                contents: bytemuck::cast_slice(inputs),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Kepler Output Buffer"),
@@ -158,11 +157,13 @@ impl WebGpuKeplerSolver {
             count: inputs.len() as u32,
             _pad: [0; 3],
         };
-        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Kepler Params Buffer"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Kepler Params Buffer"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Kepler Bind Group"),
@@ -183,11 +184,11 @@ impl WebGpuKeplerSolver {
             ],
         });
 
-        let mut encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Kepler Command Encoder"),
-                });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Kepler Command Encoder"),
+            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Kepler Compute Pass"),
@@ -231,7 +232,7 @@ impl WebGpuKeplerSolver {
     fn solve_single_kepler_ultimate(&self, planet: &Planet, max_iterations: u32) -> Vec3 {
         let a = planet.orbital_distance_au;
         let e = 0.0167; // Earth's eccentricity (would be per-planet)
-        let M = 0.1;    // Mean anomaly (would be time-based)
+        let M = 0.1; // Mean anomaly (would be time-based)
 
         // Algorithm selection based on eccentricity and required precision
         let E = if e < 0.1 && max_iterations <= 4 {
@@ -256,9 +257,7 @@ impl WebGpuKeplerSolver {
         let sin_2M = (2.0 * M).sin();
         let sin_3M = (3.0 * M).sin();
 
-        M + e * sin_M
-            + (e * e * 0.5) * sin_2M
-            + (e * e * e / 6.0) * (3.0 * sin_M - sin_3M)
+        M + e * sin_M + (e * e * 0.5) * sin_2M + (e * e * e / 6.0) * (3.0 * sin_M - sin_3M)
     }
 
     /// Newton-Raphson with adaptive damping for stability

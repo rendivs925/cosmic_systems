@@ -15,7 +15,11 @@ pub struct CloudLayerConfig {
     pub scale: f32,
 }
 
-pub fn orbit_motion_params(name: &str, orbital_distance_au: f32, is_moon: bool) -> OrbitMotionParams {
+pub fn orbit_motion_params(
+    name: &str,
+    orbital_distance_au: f32,
+    is_moon: bool,
+) -> OrbitMotionParams {
     let base = orbit_hash(name, 1);
     let offset = orbit_hash(name, 7);
     let max_tilt = if is_moon { 0.28 } else { 0.16 };
@@ -243,7 +247,10 @@ pub fn asset_exists(path: &str) -> bool {
     }
 }
 
-pub fn load_texture(asset_server: &AssetServer, path: Option<&'static str>) -> Option<Handle<Image>> {
+pub fn load_texture(
+    asset_server: &AssetServer,
+    path: Option<&'static str>,
+) -> Option<Handle<Image>> {
     let path = path?;
     if asset_exists(path) {
         Some(asset_server.load(path))

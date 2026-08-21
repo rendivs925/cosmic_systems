@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 
-use crate::domain::value_objects::education::{
-    EducationState, JournalDatabase, UnlockCondition,
-};
+use crate::domain::value_objects::education::{EducationState, JournalDatabase, UnlockCondition};
 use crate::infrastructure::bevy_adapters::craft_components::{CraftComponent, CraftControlState};
 use crate::presentation::education_data::create_journal_database;
 use crate::presentation::education_panel::{spawn_education_panel, update_education_panel};
@@ -52,20 +50,21 @@ pub fn check_journal_unlocks(
             UnlockCondition::Immediate => true,
             UnlockCondition::CraftSpawned => craft_exists,
             UnlockCondition::PulseAbove(t) => craft_exists && pulse > t,
-            UnlockCondition::AltitudeAbove(a) => {
-                craft_query.single().ok().map_or(false, |c| c.physics.vertical_position > a)
-            }
-            UnlockCondition::SpeedAbove(s) => {
-                craft_query.single().ok().map_or(false, |c| c.linear_velocity.length() > s)
-            }
-            UnlockCondition::OrbitAchieved => {
-                craft_query.single().ok().map_or(false, |c| {
-                    c.physics.vertical_position > 500.0 && c.linear_velocity.length() > 500.0
-                })
-            }
-            UnlockCondition::Landed => {
-                craft_query.single().ok().map_or(false, |c| c.physics.vertical_position < 1.0)
-            }
+            UnlockCondition::AltitudeAbove(a) => craft_query
+                .single()
+                .ok()
+                .map_or(false, |c| c.physics.vertical_position > a),
+            UnlockCondition::SpeedAbove(s) => craft_query
+                .single()
+                .ok()
+                .map_or(false, |c| c.linear_velocity.length() > s),
+            UnlockCondition::OrbitAchieved => craft_query.single().ok().map_or(false, |c| {
+                c.physics.vertical_position > 500.0 && c.linear_velocity.length() > 500.0
+            }),
+            UnlockCondition::Landed => craft_query
+                .single()
+                .ok()
+                .map_or(false, |c| c.physics.vertical_position < 1.0),
             UnlockCondition::TimeElapsed(t) => state.flight_time > t,
         };
 

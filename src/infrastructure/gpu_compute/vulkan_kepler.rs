@@ -1,8 +1,8 @@
 use crate::domain::entities::planet::Planet;
-use crate::infrastructure::bevy_adapters::components::QualityLevel;
-use bevy::math::Vec3;
 #[cfg(feature = "ash")]
 use crate::domain::services::physics;
+use crate::infrastructure::bevy_adapters::components::QualityLevel;
+use bevy::math::Vec3;
 #[cfg(feature = "ash")]
 use bytemuck::{Pod, Zeroable};
 #[cfg(feature = "ash")]
@@ -53,42 +53,41 @@ impl VulkanKeplerSolver {
             source: wgpu::ShaderSource::Wgsl(KEPLER_SHADER.into()),
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Vulkan Kepler Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Vulkan Kepler Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Vulkan Kepler Pipeline Layout"),
@@ -140,11 +139,13 @@ impl VulkanKeplerSolver {
             ));
         }
 
-        let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vulkan Kepler Input Buffer"),
-            contents: bytemuck::cast_slice(&inputs),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let input_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vulkan Kepler Input Buffer"),
+                contents: bytemuck::cast_slice(&inputs),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vulkan Kepler Output Buffer"),
@@ -164,11 +165,13 @@ impl VulkanKeplerSolver {
             count: inputs.len() as u32,
             _pad: [0; 3],
         };
-        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vulkan Kepler Params Buffer"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vulkan Kepler Params Buffer"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Vulkan Kepler Bind Group"),
@@ -189,11 +192,11 @@ impl VulkanKeplerSolver {
             ],
         });
 
-        let mut encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Vulkan Kepler Command Encoder"),
-                });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Vulkan Kepler Command Encoder"),
+            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Vulkan Kepler Compute Pass"),
@@ -312,35 +315,33 @@ fn build_planet_input(
     scale_factor: f32,
     iterations: u32,
 ) -> PlanetGpuInput {
-    let (semi_major_axis_au, eccentricity, inclination_rad, long_asc_node_rad, arg_periapsis_rad, mean_anomaly_rad) =
-        if planet.name == "Sun" {
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        } else if let Some(elements) = physics::orbital_elements_for(planet) {
-            let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
-            let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-            (
-                elements.semi_major_axis_au,
-                elements.eccentricity,
-                elements.inclination_rad,
-                elements.long_asc_node_rad,
-                elements.arg_periapsis_rad,
-                mean_anomaly,
-            )
-        } else if planet.orbital_period_days > 0.0 {
-            let mean_anomaly = normalize_radians(
-                std::f32::consts::TAU * (time_days / planet.orbital_period_days),
-            );
-            (
-                planet.orbital_distance_au,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                mean_anomaly,
-            )
-        } else {
-            (planet.orbital_distance_au, 0.0, 0.0, 0.0, 0.0, 0.0)
-        };
+    let (
+        semi_major_axis_au,
+        eccentricity,
+        inclination_rad,
+        long_asc_node_rad,
+        arg_periapsis_rad,
+        mean_anomaly_rad,
+    ) = if planet.name == "Sun" {
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    } else if let Some(elements) = physics::orbital_elements_for(planet) {
+        let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
+        let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
+        (
+            elements.semi_major_axis_au,
+            elements.eccentricity,
+            elements.inclination_rad,
+            elements.long_asc_node_rad,
+            elements.arg_periapsis_rad,
+            mean_anomaly,
+        )
+    } else if planet.orbital_period_days > 0.0 {
+        let mean_anomaly =
+            normalize_radians(std::f32::consts::TAU * (time_days / planet.orbital_period_days));
+        (planet.orbital_distance_au, 0.0, 0.0, 0.0, 0.0, mean_anomaly)
+    } else {
+        (planet.orbital_distance_au, 0.0, 0.0, 0.0, 0.0, 0.0)
+    };
 
     PlanetGpuInput {
         semi_major_axis_au,
@@ -374,7 +375,9 @@ fn normalize_radians(angle: f32) -> f32 {
 }
 
 #[cfg(feature = "ash")]
-fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, Box<dyn std::error::Error>> {
+fn block_on<T>(
+    future: impl std::future::Future<Output = T>,
+) -> Result<T, Box<dyn std::error::Error>> {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         Ok(handle.block_on(future))
     } else {

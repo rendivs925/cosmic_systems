@@ -473,12 +473,10 @@ pub fn log_performance_stats(_perf_stats: Res<PerformanceStats>, _time: Res<Time
 }
 
 pub fn cap_fixed_overstep(mut fixed_time: ResMut<Time<Fixed>>) {
-    let max_overstep = std::time::Duration::from_secs_f32(
-        fixed_time.timestep().as_secs_f32() * 2.0,
-    );
+    let max_overstep =
+        std::time::Duration::from_secs_f32(fixed_time.timestep().as_secs_f32() * 2.0);
     let overstep = fixed_time.overstep();
     if overstep > max_overstep {
         fixed_time.discard_overstep(overstep - max_overstep);
     }
 }
-

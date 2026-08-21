@@ -60,7 +60,11 @@ pub fn update_wasm_memory_stats(
         };
         if new_quality != performance_stats.quality_level {
             performance_stats.quality_level = new_quality;
-            apply_quality_settings(new_quality, &mut solar_params, performance_stats.fps_display);
+            apply_quality_settings(
+                new_quality,
+                &mut solar_params,
+                performance_stats.fps_display,
+            );
             web_sys::console::log_1(&"Memory pressure: reducing quality".into());
         }
     }
@@ -179,7 +183,6 @@ fn init_vulkan_compute() -> Result<
 }
 
 use super::components::*;
-use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 #[cfg(target_arch = "wasm32")]
@@ -190,6 +193,7 @@ use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 use crate::infrastructure::web_workers::orbit_mesh_worker::{
     entity_from_task_id, task_id_from_entity, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData,
 };
+use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use bevy_mesh::Indices;
 #[cfg(target_arch = "wasm32")]

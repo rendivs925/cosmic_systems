@@ -27,9 +27,7 @@ impl MetalKeplerSolver {
 
         // Create shader library from source
         let source = Self::get_metal_shader_source();
-        let source_nsstring = unsafe {
-            NSString::alloc(nil).init_str(&source)
-        };
+        let source_nsstring = unsafe { NSString::alloc(nil).init_str(&source) };
 
         let library: id = unsafe {
             let options: id = msg_send![class!(MTLCompileOptions), new];
@@ -53,18 +51,15 @@ impl MetalKeplerSolver {
         }
 
         // Create compute pipeline
-        let pipeline: id = unsafe {
-            msg_send![device, newComputePipelineStateWithFunction:function error:nil]
-        };
+        let pipeline: id =
+            unsafe { msg_send![device, newComputePipelineStateWithFunction:function error:nil] };
 
         if pipeline == nil {
             return Err("Failed to create compute pipeline".into());
         }
 
         // Create command queue
-        let command_queue: id = unsafe {
-            msg_send![device, newCommandQueue]
-        };
+        let command_queue: id = unsafe { msg_send![device, newCommandQueue] };
 
         Ok(Self {
             device,
@@ -76,7 +71,11 @@ impl MetalKeplerSolver {
     }
 
     /// Solve Kepler equations using Metal compute
-    pub fn solve_batch(&self, eccentricities: &[f32], mean_anomalies: &[f32]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    pub fn solve_batch(
+        &self,
+        eccentricities: &[f32],
+        mean_anomalies: &[f32],
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         let num_equations = eccentricities.len();
         if num_equations != mean_anomalies.len() {
             return Err("Input arrays must have same length".into());
@@ -106,13 +105,9 @@ impl MetalKeplerSolver {
         }
 
         // Create command buffer and encoder
-        let command_buffer: id = unsafe {
-            msg_send![self.command_queue, commandBuffer]
-        };
+        let command_buffer: id = unsafe { msg_send![self.command_queue, commandBuffer] };
 
-        let encoder: id = unsafe {
-            msg_send![command_buffer, computeCommandEncoder]
-        };
+        let encoder: id = unsafe { msg_send![command_buffer, computeCommandEncoder] };
 
         // Configure compute pass
         unsafe {
@@ -197,7 +192,8 @@ kernel void solve_kepler_batch(
 
     results[id] = E;
 }
-        "#.to_string()
+        "#
+        .to_string()
     }
 }
 

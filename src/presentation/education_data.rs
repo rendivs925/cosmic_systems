@@ -1,5 +1,5 @@
 use crate::domain::value_objects::education::{
-    JournalCategory, JournalEntry, JournalDatabase, QuranicReference, UnlockCondition,
+    JournalCategory, JournalDatabase, JournalEntry, QuranicReference, UnlockCondition,
 };
 
 fn qr(
@@ -9,7 +9,13 @@ fn qr(
     translation: &'static str,
     explanation: &'static str,
 ) -> QuranicReference {
-    QuranicReference { sura, verse, arabic, translation, explanation }
+    QuranicReference {
+        sura,
+        verse,
+        arabic,
+        translation,
+        explanation,
+    }
 }
 
 fn entry(
@@ -21,7 +27,15 @@ fn entry(
     formula: Option<&'static str>,
     unlock: UnlockCondition,
 ) -> JournalEntry {
-    JournalEntry { id, title, category, body, quranic_refs, formula, unlock }
+    JournalEntry {
+        id,
+        title,
+        category,
+        body,
+        quranic_refs,
+        formula,
+        unlock,
+    }
 }
 
 pub fn create_journal_database() -> JournalDatabase {

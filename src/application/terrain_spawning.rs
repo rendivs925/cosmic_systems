@@ -27,8 +27,10 @@ pub fn spawn_terrain_patches(
         let diffuse_handle = images.add(diffuse_texture);
         let normal_handle = images.add(normal_texture);
 
-        println!("Created KSC terrain assets: heightmap={:?}, diffuse={:?}, normal={:?}",
-                heightmap_handle, diffuse_handle, normal_handle);
+        println!(
+            "Created KSC terrain assets: heightmap={:?}, diffuse={:?}, normal={:?}",
+            heightmap_handle, diffuse_handle, normal_handle
+        );
 
         println!("Spawning KSC terrain entity...");
         commands.spawn((

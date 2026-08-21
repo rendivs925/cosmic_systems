@@ -1,4 +1,4 @@
-use crate::domain::services::physics_kepler::{CpuFeatureLevel, detect_cpu_features};
+use crate::domain::services::physics_kepler::{detect_cpu_features, CpuFeatureLevel};
 
 /// Safe SIMD processor that encapsulates all unsafe SIMD operations
 pub struct SimdProcessor {
@@ -43,9 +43,7 @@ impl SimdProcessor {
             CpuFeatureLevel::SSE4 => {
                 self.solve_kepler_sse4_batch(mean_anomalies, eccentricities, max_iterations)
             }
-            _ => {
-                self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
-            }
+            _ => self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations),
         }
     }
 
@@ -53,20 +51,12 @@ impl SimdProcessor {
     pub fn sin_approx(&self, x: &[f32]) -> Vec<f32> {
         match self.level {
             #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f"))]
-            CpuFeatureLevel::AVX512 => {
-                self.avx512_sin_approx_batch(x)
-            }
+            CpuFeatureLevel::AVX512 => self.avx512_sin_approx_batch(x),
             #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2"))]
-            CpuFeatureLevel::AVX2 => {
-                self.avx2_sin_approx_batch(x)
-            }
+            CpuFeatureLevel::AVX2 => self.avx2_sin_approx_batch(x),
             #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1"))]
-            CpuFeatureLevel::SSE4 => {
-                self.sse4_sin_approx_batch(x)
-            }
-            _ => {
-                x.iter().map(|&val| val.sin()).collect()
-            }
+            CpuFeatureLevel::SSE4 => self.sse4_sin_approx_batch(x),
+            _ => x.iter().map(|&val| val.sin()).collect(),
         }
     }
 
@@ -74,20 +64,12 @@ impl SimdProcessor {
     pub fn cos_approx(&self, x: &[f32]) -> Vec<f32> {
         match self.level {
             #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f"))]
-            CpuFeatureLevel::AVX512 => {
-                self.avx512_cos_approx_batch(x)
-            }
+            CpuFeatureLevel::AVX512 => self.avx512_cos_approx_batch(x),
             #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2"))]
-            CpuFeatureLevel::AVX2 => {
-                self.avx2_cos_approx_batch(x)
-            }
+            CpuFeatureLevel::AVX2 => self.avx2_cos_approx_batch(x),
             #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1"))]
-            CpuFeatureLevel::SSE4 => {
-                self.sse4_cos_approx_batch(x)
-            }
-            _ => {
-                x.iter().map(|&val| val.cos()).collect()
-            }
+            CpuFeatureLevel::SSE4 => self.sse4_cos_approx_batch(x),
+            _ => x.iter().map(|&val| val.cos()).collect(),
         }
     }
 
@@ -131,19 +113,9 @@ impl SimdProcessor {
                 let e_sin_e = unsafe { _mm512_mul_ps(e_vec, sin_e) };
                 let e_cos_e = unsafe { _mm512_mul_ps(e_vec, cos_e) };
 
-                let f = unsafe {
-                    _mm512_sub_ps(
-                        _mm512_sub_ps(e_anomaly, e_sin_e),
-                        ma_vec
-                    )
-                };
+                let f = unsafe { _mm512_sub_ps(_mm512_sub_ps(e_anomaly, e_sin_e), ma_vec) };
 
-                let f_prime = unsafe {
-                    _mm512_sub_ps(
-                        _mm512_set1_ps(1.0),
-                        e_cos_e
-                    )
-                };
+                let f_prime = unsafe { _mm512_sub_ps(_mm512_set1_ps(1.0), e_cos_e) };
 
                 // delta = f / f'
                 let delta = unsafe { _mm512_div_ps(f, f_prime) };
@@ -154,7 +126,9 @@ impl SimdProcessor {
 
             // Store results
             let mut result_data = [0.0f32; 16];
-            unsafe { _mm512_storeu_ps(result_data.as_mut_ptr(), e_anomaly); }
+            unsafe {
+                _mm512_storeu_ps(result_data.as_mut_ptr(), e_anomaly);
+            }
 
             for &result in &result_data[..ma_chunk.len()] {
                 results.push(result);
@@ -202,19 +176,9 @@ impl SimdProcessor {
                 let e_sin_e = unsafe { _mm256_mul_ps(e_vec, sin_e) };
                 let e_cos_e = unsafe { _mm256_mul_ps(e_vec, cos_e) };
 
-                let f = unsafe {
-                    _mm256_sub_ps(
-                        _mm256_sub_ps(e_anomaly, e_sin_e),
-                        ma_vec
-                    )
-                };
+                let f = unsafe { _mm256_sub_ps(_mm256_sub_ps(e_anomaly, e_sin_e), ma_vec) };
 
-                let f_prime = unsafe {
-                    _mm256_sub_ps(
-                        _mm256_set1_ps(1.0),
-                        e_cos_e
-                    )
-                };
+                let f_prime = unsafe { _mm256_sub_ps(_mm256_set1_ps(1.0), e_cos_e) };
 
                 // delta = f / f'
                 let delta = unsafe { _mm256_div_ps(f, f_prime) };
@@ -225,7 +189,9 @@ impl SimdProcessor {
 
             // Store results
             let mut result_data = [0.0f32; 8];
-            unsafe { _mm256_storeu_ps(result_data.as_mut_ptr(), e_anomaly); }
+            unsafe {
+                _mm256_storeu_ps(result_data.as_mut_ptr(), e_anomaly);
+            }
 
             for &result in &result_data[..ma_chunk.len()] {
                 results.push(result);
@@ -273,19 +239,9 @@ impl SimdProcessor {
                 let e_sin_e = unsafe { _mm_mul_ps(e_vec, sin_e) };
                 let e_cos_e = unsafe { _mm_mul_ps(e_vec, cos_e) };
 
-                let f = unsafe {
-                    _mm_sub_ps(
-                        _mm_sub_ps(e_anomaly, e_sin_e),
-                        ma_vec
-                    )
-                };
+                let f = unsafe { _mm_sub_ps(_mm_sub_ps(e_anomaly, e_sin_e), ma_vec) };
 
-                let f_prime = unsafe {
-                    _mm_sub_ps(
-                        _mm_set1_ps(1.0),
-                        e_cos_e
-                    )
-                };
+                let f_prime = unsafe { _mm_sub_ps(_mm_set1_ps(1.0), e_cos_e) };
 
                 // delta = f / f'
                 let delta = unsafe { _mm_div_ps(f, f_prime) };
@@ -296,7 +252,9 @@ impl SimdProcessor {
 
             // Store results
             let mut result_data = [0.0f32; 4];
-            unsafe { _mm_storeu_ps(result_data.as_mut_ptr(), e_anomaly); }
+            unsafe {
+                _mm_storeu_ps(result_data.as_mut_ptr(), e_anomaly);
+            }
 
             for &result in &result_data[..ma_chunk.len()] {
                 results.push(result);
@@ -315,7 +273,13 @@ impl SimdProcessor {
         mean_anomalies
             .iter()
             .zip(eccentricities.iter())
-            .map(|(&ma, &e)| crate::domain::services::physics_kepler::solve_kepler_adaptive(ma, e, max_iterations))
+            .map(|(&ma, &e)| {
+                crate::domain::services::physics_kepler::solve_kepler_adaptive(
+                    ma,
+                    e,
+                    max_iterations,
+                )
+            })
             .collect()
     }
 
@@ -364,7 +328,9 @@ impl SimdProcessor {
             let sin_vec = self.avx512_sin_approx(vec);
 
             let mut result_data = [0.0f32; 16];
-            unsafe { _mm512_storeu_ps(result_data.as_mut_ptr(), sin_vec); }
+            unsafe {
+                _mm512_storeu_ps(result_data.as_mut_ptr(), sin_vec);
+            }
 
             for &result in &result_data[..chunk.len()] {
                 results.push(result);
@@ -390,7 +356,9 @@ impl SimdProcessor {
             let cos_vec = self.avx512_cos_approx(vec);
 
             let mut result_data = [0.0f32; 16];
-            unsafe { _mm512_storeu_ps(result_data.as_mut_ptr(), cos_vec); }
+            unsafe {
+                _mm512_storeu_ps(result_data.as_mut_ptr(), cos_vec);
+            }
 
             for &result in &result_data[..chunk.len()] {
                 results.push(result);
@@ -440,7 +408,9 @@ impl SimdProcessor {
             let sin_vec = self.avx2_sin_approx(vec);
 
             let mut result_data = [0.0f32; 8];
-            unsafe { _mm256_storeu_ps(result_data.as_mut_ptr(), sin_vec); }
+            unsafe {
+                _mm256_storeu_ps(result_data.as_mut_ptr(), sin_vec);
+            }
 
             for &result in &result_data[..chunk.len()] {
                 results.push(result);
@@ -466,7 +436,9 @@ impl SimdProcessor {
             let cos_vec = self.avx2_cos_approx(vec);
 
             let mut result_data = [0.0f32; 8];
-            unsafe { _mm256_storeu_ps(result_data.as_mut_ptr(), cos_vec); }
+            unsafe {
+                _mm256_storeu_ps(result_data.as_mut_ptr(), cos_vec);
+            }
 
             for &result in &result_data[..chunk.len()] {
                 results.push(result);
@@ -516,7 +488,9 @@ impl SimdProcessor {
             let sin_vec = self.sse4_sin_approx(vec);
 
             let mut result_data = [0.0f32; 4];
-            unsafe { _mm_storeu_ps(result_data.as_mut_ptr(), sin_vec); }
+            unsafe {
+                _mm_storeu_ps(result_data.as_mut_ptr(), sin_vec);
+            }
 
             for &result in &result_data[..chunk.len()] {
                 results.push(result);
@@ -542,7 +516,9 @@ impl SimdProcessor {
             let cos_vec = self.sse4_cos_approx(vec);
 
             let mut result_data = [0.0f32; 4];
-            unsafe { _mm_storeu_ps(result_data.as_mut_ptr(), cos_vec); }
+            unsafe {
+                _mm_storeu_ps(result_data.as_mut_ptr(), cos_vec);
+            }
 
             for &result in &result_data[..chunk.len()] {
                 results.push(result);
@@ -554,7 +530,12 @@ impl SimdProcessor {
 
     // Fallback implementations for when SIMD is not available
     #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f")))]
-    fn solve_kepler_avx512_batch(&self, mean_anomalies: &[f32], eccentricities: &[f32], max_iterations: u32) -> Vec<f32> {
+    fn solve_kepler_avx512_batch(
+        &self,
+        mean_anomalies: &[f32],
+        eccentricities: &[f32],
+        max_iterations: u32,
+    ) -> Vec<f32> {
         self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
     }
 
@@ -569,7 +550,12 @@ impl SimdProcessor {
     }
 
     #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2")))]
-    fn solve_kepler_avx2_batch(&self, mean_anomalies: &[f32], eccentricities: &[f32], max_iterations: u32) -> Vec<f32> {
+    fn solve_kepler_avx2_batch(
+        &self,
+        mean_anomalies: &[f32],
+        eccentricities: &[f32],
+        max_iterations: u32,
+    ) -> Vec<f32> {
         self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
     }
 
@@ -584,7 +570,12 @@ impl SimdProcessor {
     }
 
     #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1")))]
-    fn solve_kepler_sse4_batch(&self, mean_anomalies: &[f32], eccentricities: &[f32], max_iterations: u32) -> Vec<f32> {
+    fn solve_kepler_sse4_batch(
+        &self,
+        mean_anomalies: &[f32],
+        eccentricities: &[f32],
+        max_iterations: u32,
+    ) -> Vec<f32> {
         self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
     }
 

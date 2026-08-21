@@ -79,7 +79,9 @@ pub fn queue_pending_material_textures(
     transforms: Query<&GlobalTransform>,
     parents: Query<&ChildOf>,
     mut pending_query: Query<(Entity, &mut PendingMaterialTextures)>,
-    mut texture_worker: NonSendMut<crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker>,
+    mut texture_worker: NonSendMut<
+        crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker,
+    >,
     memory_stats: Option<Res<crate::infrastructure::bevy_adapters::components::WasmMemoryStats>>,
 ) {
     let camera_pos = camera_query.single().expect("camera present").translation();
@@ -170,7 +172,9 @@ pub fn queue_pending_material_textures(
 
 #[cfg(target_arch = "wasm32")]
 pub fn apply_texture_worker_results(
-    mut texture_worker: NonSendMut<crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker>,
+    mut texture_worker: NonSendMut<
+        crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker,
+    >,
     mut images: ResMut<Assets<Image>>,
     mut pending_query: Query<&mut PendingMaterialTextures>,
 ) {

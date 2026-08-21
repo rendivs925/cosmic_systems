@@ -1,9 +1,14 @@
 use super::components::*;
 use crate::application::material_factory::ORBIT_LINE_COLOR;
-use crate::application::mesh_factory::{create_orbit_ribbon_mesh, create_orbital_plane_mesh, create_eccentricity_marker_mesh, create_uv_sphere_mesh};
+use crate::application::mesh_factory::{
+    create_eccentricity_marker_mesh, create_orbit_ribbon_mesh, create_orbital_plane_mesh,
+    create_uv_sphere_mesh,
+};
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::performance_components::{PerformanceStats, QualityLevel};
+use crate::infrastructure::bevy_adapters::performance_components::{
+    PerformanceStats, QualityLevel,
+};
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
 
@@ -122,7 +127,8 @@ pub fn update_planet_reflections(
         if let Some(material) = materials.get_mut(&planet_comp.material) {
             // Ultra-refined surface properties with elegant constraints
             material.perceptual_roughness = planet_comp.base_roughness.clamp(0.08, 0.85);
-            material.reflectance = planet_comp.base_reflectance.clamp(0.015, 0.12); // Minimal but sophisticated
+            material.reflectance = planet_comp.base_reflectance.clamp(0.015, 0.12);
+            // Minimal but sophisticated
         }
     }
 }
@@ -136,7 +142,8 @@ pub fn spawn_orbital_planes(
 ) {
     for (orbit_entity, orbit_comp) in orbit_query.iter() {
         // Skip orbits with negligible inclination (mostly equatorial)
-        if orbit_comp.tilt.x.abs() < 0.1 { // Less than ~6 degrees
+        if orbit_comp.tilt.x.abs() < 0.1 {
+            // Less than ~6 degrees
             continue;
         }
 
@@ -167,26 +174,28 @@ pub fn spawn_orbital_planes(
             let plane_material_handle = materials.add(plane_material);
 
             // Spawn orbital plane entity as child of orbit
-            let plane_entity = commands.spawn((
-                Mesh3d(plane_mesh),
-                MeshMaterial3d(plane_material_handle.clone()),
-                Transform::from_rotation(Quat::from_euler(
-                    EulerRot::XYZ,
-                    orbit_comp.tilt.x, // Inclination
-                    orbit_comp.tilt.y, // Argument of periapsis approximation
-                    0.0, // Ascending node (would need additional data)
-                )),
-                OrbitalPlaneComponent {
-                    planet_entity: orbit_comp.planet_entity,
-                    inclination_rad: orbit_comp.tilt.x,
-                    ascending_node_rad: orbit_comp.tilt.y,
-                    semi_major_axis: orbit_comp.radius,
-                    eccentricity: 0.0, // Would need access to orbit shape data
-                    material: plane_material_handle,
-                    opacity: plane_opacity,
-                },
-                Name::new(format!("Orbital Plane for {:?}", orbit_comp.planet_entity)),
-            )).id();
+            let plane_entity = commands
+                .spawn((
+                    Mesh3d(plane_mesh),
+                    MeshMaterial3d(plane_material_handle.clone()),
+                    Transform::from_rotation(Quat::from_euler(
+                        EulerRot::XYZ,
+                        orbit_comp.tilt.x, // Inclination
+                        orbit_comp.tilt.y, // Argument of periapsis approximation
+                        0.0,               // Ascending node (would need additional data)
+                    )),
+                    OrbitalPlaneComponent {
+                        planet_entity: orbit_comp.planet_entity,
+                        inclination_rad: orbit_comp.tilt.x,
+                        ascending_node_rad: orbit_comp.tilt.y,
+                        semi_major_axis: orbit_comp.radius,
+                        eccentricity: 0.0, // Would need access to orbit shape data
+                        material: plane_material_handle,
+                        opacity: plane_opacity,
+                    },
+                    Name::new(format!("Orbital Plane for {:?}", orbit_comp.planet_entity)),
+                ))
+                .id();
 
             // Add as child of orbit entity
             commands.entity(orbit_entity).add_child(plane_entity);
@@ -201,7 +210,8 @@ pub fn update_orbital_planes(
     mut plane_query: Query<&mut OrbitalPlaneComponent>,
 ) {
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
-    if !frame_number.is_multiple_of(15) { // Less frequent updates for planes
+    if !frame_number.is_multiple_of(15) {
+        // Less frequent updates for planes
         return;
     }
 
@@ -210,7 +220,8 @@ pub fn update_orbital_planes(
     for plane_comp in plane_query.iter_mut() {
         if let Some(material) = materials.get_mut(&plane_comp.material) {
             // Subtle pulsing effect based on inclination
-            let inclination_pulse = 0.02 * (elapsed * 0.3 + plane_comp.inclination_rad * 10.0).sin();
+            let inclination_pulse =
+                0.02 * (elapsed * 0.3 + plane_comp.inclination_rad * 10.0).sin();
             let dynamic_opacity = (plane_comp.opacity + inclination_pulse).clamp(0.03, 0.25);
 
             material.base_color = material.base_color.with_alpha(dynamic_opacity);
@@ -219,7 +230,8 @@ pub fn update_orbital_planes(
                 0.025 + inclination_pulse * 0.005,
                 0.03 - inclination_pulse * 0.005,
                 1.0,
-            ).with_alpha(dynamic_opacity * 0.3);
+            )
+            .with_alpha(dynamic_opacity * 0.3);
         }
     }
 }
@@ -246,13 +258,15 @@ pub fn spawn_eccentricity_markers(
         let periapsis_r = semi_latus / (1.0 - e);
 
         let apoapsis_pos = physics::transform_orbital_point(
-            apoapsis_r, 0.0,
+            apoapsis_r,
+            0.0,
             orbit_comp.orbit_shape.inclination_rad,
             orbit_comp.orbit_shape.long_asc_node_rad,
             orbit_comp.orbit_shape.arg_periapsis_rad,
         );
         let periapsis_pos = physics::transform_orbital_point(
-            -periapsis_r, 0.0,
+            -periapsis_r,
+            0.0,
             orbit_comp.orbit_shape.inclination_rad,
             orbit_comp.orbit_shape.long_asc_node_rad,
             orbit_comp.orbit_shape.arg_periapsis_rad,
@@ -278,24 +292,32 @@ pub fn spawn_eccentricity_markers(
             Mesh3d(marker_mesh.clone()),
             MeshMaterial3d(apoapsis_material.clone()),
             Transform::from_translation(apoapsis_pos),
-            Name::new(format!("Apoapsis marker for {:?}", orbit_comp.planet_entity)),
+            Name::new(format!(
+                "Apoapsis marker for {:?}",
+                orbit_comp.planet_entity
+            )),
         ));
 
         commands.spawn((
             Mesh3d(marker_mesh),
             MeshMaterial3d(periapsis_material.clone()),
             Transform::from_translation(periapsis_pos),
-            Name::new(format!("Periapsis marker for {:?}", orbit_comp.planet_entity)),
+            Name::new(format!(
+                "Periapsis marker for {:?}",
+                orbit_comp.planet_entity
+            )),
         ));
 
-        commands.entity(orbit_entity).insert(EccentricityMarkersComponent {
-            planet_entity: orbit_comp.planet_entity,
-            apoapsis_position: apoapsis_pos,
-            periapsis_position: periapsis_pos,
-            apoapsis_material,
-            periapsis_material,
-            eccentricity,
-        });
+        commands
+            .entity(orbit_entity)
+            .insert(EccentricityMarkersComponent {
+                planet_entity: orbit_comp.planet_entity,
+                apoapsis_position: apoapsis_pos,
+                periapsis_position: periapsis_pos,
+                apoapsis_material,
+                periapsis_material,
+                eccentricity,
+            });
     }
 }
 
@@ -306,7 +328,8 @@ pub fn update_eccentricity_markers(
     marker_query: Query<&EccentricityMarkersComponent>,
 ) {
     let frame_number = (time.elapsed_secs() * 60.0) as u32;
-    if !frame_number.is_multiple_of(20) { // Less frequent updates
+    if !frame_number.is_multiple_of(20) {
+        // Less frequent updates
         return;
     }
 
@@ -416,7 +439,10 @@ pub fn spawn_position_trackers(
                 planet_entity: orbit_comp.planet_entity,
                 planet_name: planet_comp.domain_planet.name.clone(),
             },
-            Name::new(format!("Position tracker {}", planet_comp.domain_planet.name)),
+            Name::new(format!(
+                "Position tracker {}",
+                planet_comp.domain_planet.name
+            )),
         ));
     }
 }

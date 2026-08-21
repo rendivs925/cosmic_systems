@@ -531,10 +531,7 @@ fn update_planet_positions_sequential(
         let parent_position = *updated_parent_positions
             .get(parent_name)
             .unwrap_or(&Vec3::ZERO);
-        let parent_tilt = updated_parent_tilts
-            .get(parent_name)
-            .copied()
-            .flatten();
+        let parent_tilt = updated_parent_tilts.get(parent_name).copied().flatten();
         let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
         let new_position = physics::calculate_planet_position_with_quality(
             &planet_comp.domain_planet,

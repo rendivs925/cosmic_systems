@@ -158,10 +158,6 @@ pub fn setup_space(
         &mut images,
         &entity_map,
     );
-
-    // Spawn rockets
-    #[cfg(not(target_arch = "wasm32"))]
-    spawn_rockets(&mut commands, &mut meshes, &mut materials);
 }
 
 #[cfg(target_arch = "wasm32")]

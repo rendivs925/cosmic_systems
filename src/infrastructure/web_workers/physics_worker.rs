@@ -255,15 +255,13 @@ impl PhysicsWorkerPool {
                 Err(_) => return,
             };
             let entity = Entity::from_bits(message.entity_bits);
-            let position = Vec3::new(
-                message.position.x,
-                message.position.y,
-                message.position.z,
-            );
+            let position = Vec3::new(message.position.x, message.position.y, message.position.z);
 
-            results
-                .borrow_mut()
-                .push_back(WorkerResult { entity, position, worker_id: message.worker_id });
+            results.borrow_mut().push_back(WorkerResult {
+                entity,
+                position,
+                worker_id: message.worker_id,
+            });
         }));
 
         let worker = match Self::create_worker() {

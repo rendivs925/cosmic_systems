@@ -10,11 +10,11 @@ pub struct PhysicsMemoryPool {
 impl PhysicsMemoryPool {
     pub fn new(quality: QualityLevel) -> Self {
         let max_allocations = match quality {
-            QualityLevel::Ultra => 1024 * 1024,    // 1MB for high quality
-            QualityLevel::High => 512 * 1024,      // 512KB
-            QualityLevel::Medium => 256 * 1024,    // 256KB
-            QualityLevel::Low => 128 * 1024,       // 128KB
-            QualityLevel::Minimal => 64 * 1024,    // 64KB
+            QualityLevel::Ultra => 1024 * 1024, // 1MB for high quality
+            QualityLevel::High => 512 * 1024,   // 512KB
+            QualityLevel::Medium => 256 * 1024, // 256KB
+            QualityLevel::Low => 128 * 1024,    // 128KB
+            QualityLevel::Minimal => 64 * 1024, // 64KB
         };
 
         Self {

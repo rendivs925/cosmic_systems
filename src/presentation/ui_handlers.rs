@@ -4,8 +4,8 @@ use bevy::window::{CursorIcon, SystemCursorIcon};
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::{
-    NotificationQueue, PerformanceStats, PlanetComponent, ScreenshotState,
-    Selectable, SelectedPlanet, UiPointerState, ZenMode,
+    NotificationQueue, PerformanceStats, PlanetComponent, ScreenshotState, Selectable,
+    SelectedPlanet, UiPointerState, ZenMode,
 };
 use crate::infrastructure::bevy_adapters::craft_components::CraftTravelTarget;
 use crate::presentation::ui_components::*;
@@ -348,5 +348,7 @@ pub fn update_cursor_icon(
         return;
     }
     *last_cursor = Some(new_cursor);
-    commands.entity(window_entity).insert(CursorIcon::System(new_cursor));
+    commands
+        .entity(window_entity)
+        .insert(CursorIcon::System(new_cursor));
 }

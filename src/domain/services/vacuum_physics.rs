@@ -69,7 +69,10 @@ mod tests {
         // 0.38^1.35 = exp(1.35 * ln(0.38)) = exp(1.35 * -0.9676) = exp(-1.306) = 0.271
         // 47.0 * 0.271 = 12.74
         let expected = 12.26;
-        assert!((lift - expected).abs() < 1.0, "lift at dc=0.38: got {lift}, expected ~{expected}");
+        assert!(
+            (lift - expected).abs() < 1.0,
+            "lift at dc=0.38: got {lift}, expected ~{expected}"
+        );
     }
 
     #[test]
@@ -86,7 +89,10 @@ mod tests {
         // parametric_boost = 1.0 + 0.08 * 2.6 = 1.208
         // synergy = 1.0 + 0.4 * 0.38 = 1.152
         // P = 60.3 * 1.208 * 1.152 = 83.9
-        assert!(power > 50.0 && power < 200.0, "zpe at pulse=0.5, dc=0.38: got {power}, expected ~84");
+        assert!(
+            power > 50.0 && power < 200.0,
+            "zpe at pulse=0.5, dc=0.38: got {power}, expected ~84"
+        );
     }
 
     #[test]
@@ -109,14 +115,24 @@ mod tests {
         // Near Earth surface (r ~ 6.37e6 m, M ~ 5.97e24 kg)
         // Correction = G*M/(c^2*r) ~ 7e-10, so density ≈ 1.0000000007
         let near_earth = vacuum_density(5.972e24, 6.371e6);
-        assert!(near_earth > 1.0, "near Earth density should be > 1.0, got {near_earth}");
-        assert!((near_earth - 1.0) < 1e-6, "correction should be tiny, got {}", near_earth - 1.0);
+        assert!(
+            near_earth > 1.0,
+            "near Earth density should be > 1.0, got {near_earth}"
+        );
+        assert!(
+            (near_earth - 1.0) < 1e-6,
+            "correction should be tiny, got {}",
+            near_earth - 1.0
+        );
         // Far space (1e15 m ~ 0.1 ly)
         let far = vacuum_density(5.972e24, 1.0e15);
         assert!((far - 1.0).abs() < 1e-20);
         // Near a neutron star proxy: M=2e30 kg, r=1e4 m
         let near_ns = vacuum_density(2.0e30, 1.0e4);
-        assert!(near_ns > 1.001, "near neutron star density should show correction, got {near_ns}");
+        assert!(
+            near_ns > 1.001,
+            "near neutron star density should show correction, got {near_ns}"
+        );
     }
 
     #[test]
@@ -134,7 +150,10 @@ mod tests {
         for i in 0..=10 {
             let dc = i as f32 / 10.0;
             let lift = lift_force(dc);
-            assert!(lift >= prev, "lift not monotonic at dc={dc}: {lift} < {prev}");
+            assert!(
+                lift >= prev,
+                "lift not monotonic at dc={dc}: {lift} < {prev}"
+            );
             prev = lift;
         }
     }

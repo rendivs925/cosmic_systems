@@ -1,6 +1,6 @@
-use bevy::prelude::*;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::planet_configs::{PlanetConfig, PLANET_CONFIGS};
+use bevy::prelude::*;
 
 /// Factory service for creating celestial bodies
 pub struct PlanetFactory;
@@ -63,8 +63,6 @@ impl PlanetFactory {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,7 +115,11 @@ mod tests {
 
         // Check that moons have parent entities
         for moon in &moons {
-            assert!(moon.parent_entity.is_some(), "Moon {} should have a parent", moon.name);
+            assert!(
+                moon.parent_entity.is_some(),
+                "Moon {} should have a parent",
+                moon.name
+            );
         }
     }
 

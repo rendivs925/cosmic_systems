@@ -1,13 +1,13 @@
+use super::performance_components::QualityLevel;
 use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+#[cfg(target_arch = "wasm32")]
+use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 use bevy::prelude::*;
-use super::performance_components::QualityLevel;
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
@@ -78,7 +78,8 @@ pub enum ComputeError {
 #[derive(Resource)]
 pub struct ComputeBackend {
     #[cfg(not(target_arch = "wasm32"))]
-    pub vulkan_solver: Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
+    pub vulkan_solver:
+        Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
     #[cfg(target_arch = "wasm32")]
     pub vulkan_solver: Option<()>,
     pub fallback_solver: crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver,
@@ -92,7 +93,8 @@ impl Default for ComputeBackend {
         {
             Self {
                 vulkan_solver: None,
-                fallback_solver: crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
+                fallback_solver:
+                    crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
                 vulkan_available: false,
             }
         }
@@ -101,7 +103,8 @@ impl Default for ComputeBackend {
         {
             Self {
                 vulkan_solver: None,
-                fallback_solver: crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
+                fallback_solver:
+                    crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
                 vulkan_available: false,
             }
         }
@@ -117,7 +120,8 @@ impl ComputeBackend {
             vulkan_solver: None,
             #[cfg(target_arch = "wasm32")]
             vulkan_solver: None,
-            fallback_solver: crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
+            fallback_solver:
+                crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new(),
             vulkan_available: false,
         }
     }
@@ -150,7 +154,9 @@ pub fn process_hybrid_compute(
     time_days: f32,
     scale_factor: f32,
     vulkan_available: bool,
-    vulkan_solver: &mut Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
+    vulkan_solver: &mut Option<
+        crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver,
+    >,
     simd_solver: &mut crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver,
 ) -> (Vec<Vec3>, ComputeBackendType) {
     // Simple routing logic: use Vulkan for planets if available, SIMD for everything else
@@ -160,7 +166,7 @@ pub fn process_hybrid_compute(
             match vulkan.solve_batch(planets, quality, time_days, scale_factor) {
                 Ok(positions) => {
                     return (positions, ComputeBackendType::VulkanGpu);
-                },
+                }
                 Err(e) => {
                     // Vulkan failed, fall back to SIMD
                     println!("Vulkan GPU compute failed: {}", e);

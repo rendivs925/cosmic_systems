@@ -4,11 +4,11 @@ use crate::infrastructure::bevy_adapters::components::*;
 use bevy::prelude::*;
 
 // Re-export terrain functionality from split modules
-pub use super::terrain_visibility::*;
-pub use super::terrain_mesh::*;
 pub use super::terrain_heightmaps::*;
+pub use super::terrain_mesh::*;
 pub use super::terrain_textures::*;
 pub use super::terrain_utils::*;
+pub use super::terrain_visibility::*;
 
 /// System to synchronize terrain positions with their parent planet's orbital motion
 /// This ensures terrain moves with Earth around the Sun and rotates with Earth's axial tilt
@@ -30,7 +30,7 @@ pub fn update_terrain_orbital_positions(
                 time_days,
                 &solar_params,
                 Vec3::ZERO, // Sun at origin
-                None, // No parent for Earth
+                None,       // No parent for Earth
             );
 
             // Calculate terrain position relative to planet's current orbital position
@@ -66,7 +66,7 @@ pub fn update_terrain_synchronization(
                 time_days,
                 &solar_params,
                 Vec3::ZERO, // Sun at origin
-                None, // No parent for Earth
+                None,       // No parent for Earth
             );
 
             // Get planet's current transform
@@ -80,7 +80,8 @@ pub fn update_terrain_synchronization(
                 // Apply additional rotation for Earth (axial tilt + daily rotation)
                 if terrain_comp.planet_name == "Earth" {
                     use crate::domain::services::physics_utils::calculate_planet_rotation;
-                    let earth_rotation_angle = calculate_planet_rotation(&planet_comp.domain_planet, time_days);
+                    let earth_rotation_angle =
+                        calculate_planet_rotation(&planet_comp.domain_planet, time_days);
                     let axial_rotation = Quat::from_rotation_y(earth_rotation_angle);
                     terrain_transform.rotation = planet_transform.rotation * axial_rotation;
                 } else {

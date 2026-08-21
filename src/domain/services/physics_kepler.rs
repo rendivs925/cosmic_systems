@@ -165,19 +165,9 @@ fn solve_kepler_avx512_batch(
             let e_sin_e = unsafe { _mm512_mul_ps(e_vec, sin_e) };
             let e_cos_e = unsafe { _mm512_mul_ps(e_vec, cos_e) };
 
-            let f = unsafe {
-                _mm512_sub_ps(
-                    _mm512_sub_ps(e_anomaly, e_sin_e),
-                    ma_vec
-                )
-            };
+            let f = unsafe { _mm512_sub_ps(_mm512_sub_ps(e_anomaly, e_sin_e), ma_vec) };
 
-            let f_prime = unsafe {
-                _mm512_sub_ps(
-                    _mm512_set1_ps(1.0),
-                    e_cos_e
-                )
-            };
+            let f_prime = unsafe { _mm512_sub_ps(_mm512_set1_ps(1.0), e_cos_e) };
 
             // delta = f / f'
             let delta = unsafe { _mm512_div_ps(f, f_prime) };
@@ -188,7 +178,9 @@ fn solve_kepler_avx512_batch(
 
         // Store results
         let mut result_data = [0.0f32; 16];
-        unsafe { _mm512_storeu_ps(result_data.as_mut_ptr(), e_anomaly); }
+        unsafe {
+            _mm512_storeu_ps(result_data.as_mut_ptr(), e_anomaly);
+        }
 
         for &result in &result_data[..ma_chunk.len()] {
             results.push(result);
@@ -198,7 +190,10 @@ fn solve_kepler_avx512_batch(
     results
 }
 
-#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "avx512f"))))]
+#[cfg(all(
+    feature = "simd",
+    not(all(target_arch = "x86_64", target_feature = "avx512f"))
+))]
 fn solve_kepler_avx512_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],
@@ -245,19 +240,9 @@ fn solve_kepler_avx2_batch(
             let e_sin_e = unsafe { _mm256_mul_ps(e_vec, sin_e) };
             let e_cos_e = unsafe { _mm256_mul_ps(e_vec, cos_e) };
 
-            let f = unsafe {
-                _mm256_sub_ps(
-                    _mm256_sub_ps(e_anomaly, e_sin_e),
-                    ma_vec
-                )
-            };
+            let f = unsafe { _mm256_sub_ps(_mm256_sub_ps(e_anomaly, e_sin_e), ma_vec) };
 
-            let f_prime = unsafe {
-                _mm256_sub_ps(
-                    _mm256_set1_ps(1.0),
-                    e_cos_e
-                )
-            };
+            let f_prime = unsafe { _mm256_sub_ps(_mm256_set1_ps(1.0), e_cos_e) };
 
             // delta = f / f'
             let delta = unsafe { _mm256_div_ps(f, f_prime) };
@@ -268,7 +253,9 @@ fn solve_kepler_avx2_batch(
 
         // Store results
         let mut result_data = [0.0f32; 8];
-        unsafe { _mm256_storeu_ps(result_data.as_mut_ptr(), e_anomaly); }
+        unsafe {
+            _mm256_storeu_ps(result_data.as_mut_ptr(), e_anomaly);
+        }
 
         for &result in &result_data[..ma_chunk.len()] {
             results.push(result);
@@ -278,7 +265,10 @@ fn solve_kepler_avx2_batch(
     results
 }
 
-#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "avx2"))))]
+#[cfg(all(
+    feature = "simd",
+    not(all(target_arch = "x86_64", target_feature = "avx2"))
+))]
 fn solve_kepler_avx2_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],
@@ -327,7 +317,9 @@ fn solve_kepler_sse4_batch(
 
         // Store results
         let mut result_data = [0.0f32; 4];
-        unsafe { _mm_storeu_ps(result_data.as_mut_ptr(), e_anomaly); }
+        unsafe {
+            _mm_storeu_ps(result_data.as_mut_ptr(), e_anomaly);
+        }
 
         for &result in &result_data[..ma_chunk.len()] {
             results.push(result);
@@ -337,7 +329,10 @@ fn solve_kepler_sse4_batch(
     results
 }
 
-#[cfg(all(feature = "simd", not(all(target_arch = "x86_64", target_feature = "sse4.1"))))]
+#[cfg(all(
+    feature = "simd",
+    not(all(target_arch = "x86_64", target_feature = "sse4.1"))
+))]
 fn solve_kepler_sse4_batch(
     mean_anomalies: &[f32],
     eccentricities: &[f32],

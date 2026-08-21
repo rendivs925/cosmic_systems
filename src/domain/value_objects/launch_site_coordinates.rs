@@ -7,14 +7,19 @@ use bevy::prelude::Component;
 #[derive(Component, Debug, Clone)]
 pub struct LaunchSiteCoordinates {
     pub planet_name: String,
-    pub latitude_deg: f32,    // -90 to 90 degrees
-    pub longitude_deg: f32,   // -180 to 180 degrees
-    pub altitude_m: f32,      // Height above reference ellipsoid in meters
+    pub latitude_deg: f32,  // -90 to 90 degrees
+    pub longitude_deg: f32, // -180 to 180 degrees
+    pub altitude_m: f32,    // Height above reference ellipsoid in meters
 }
 
 impl LaunchSiteCoordinates {
     /// Create a new launch site coordinate
-    pub fn new(planet_name: String, latitude_deg: f32, longitude_deg: f32, altitude_m: f32) -> Self {
+    pub fn new(
+        planet_name: String,
+        latitude_deg: f32,
+        longitude_deg: f32,
+        altitude_m: f32,
+    ) -> Self {
         Self {
             planet_name,
             latitude_deg: latitude_deg.clamp(-90.0, 90.0),
@@ -56,9 +61,9 @@ impl Default for LaunchSiteCoordinates {
     fn default() -> Self {
         Self {
             planet_name: "Earth".to_string(),
-            latitude_deg: 28.5721,  // Kennedy Space Center latitude
+            latitude_deg: 28.5721,   // Kennedy Space Center latitude
             longitude_deg: -80.6480, // Kennedy Space Center longitude
-            altitude_m: 0.0,        // Sea level
+            altitude_m: 0.0,         // Sea level
         }
     }
 }
@@ -70,36 +75,36 @@ pub mod predefined_sites {
     pub fn kennedy_space_center() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
             "Earth".to_string(),
-            28.5721,   // Latitude
-            -80.6480,  // Longitude
-            3.0,       // Altitude above sea level (meters)
+            28.5721,  // Latitude
+            -80.6480, // Longitude
+            3.0,      // Altitude above sea level (meters)
         )
     }
 
     pub fn cape_canaveral() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
             "Earth".to_string(),
-            28.4889,   // Latitude
-            -80.5778,  // Longitude
-            3.0,       // Altitude above sea level (meters)
+            28.4889,  // Latitude
+            -80.5778, // Longitude
+            3.0,      // Altitude above sea level (meters)
         )
     }
 
     pub fn baikonur_cosmodrome() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
             "Earth".to_string(),
-            45.9650,   // Latitude
-            63.3050,   // Longitude
-            90.0,      // Altitude above sea level (meters)
+            45.9650, // Latitude
+            63.3050, // Longitude
+            90.0,    // Altitude above sea level (meters)
         )
     }
 
     pub fn guiana_space_centre() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
             "Earth".to_string(),
-            5.2360,    // Latitude
-            -52.7750,  // Longitude
-            10.0,      // Altitude above sea level (meters)
+            5.2360,   // Latitude
+            -52.7750, // Longitude
+            10.0,     // Altitude above sea level (meters)
         )
     }
 }
