@@ -35,6 +35,15 @@ pub fn setup_space(
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
 
+    // Central physical scale (meters <-> display units) derived from the
+    // authoritative solar-system parameters. Reused by all rocket/terrain
+    // subsystems (AGENTS.md sections 15 and 39).
+    commands.insert_resource(
+        crate::domain::value_objects::physical_scale::PhysicalScale::from_solar_parameters(
+            &solar_params,
+        ),
+    );
+
     // Set up dark space environment with restrained ambient light for premium contrast.
     commands.insert_resource(ClearColor(Color::srgb(0.005, 0.005, 0.01))); // Extremely dark space
     commands.insert_resource(AmbientLight {

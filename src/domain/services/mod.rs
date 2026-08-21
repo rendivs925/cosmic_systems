@@ -6,6 +6,7 @@ pub mod physics_kepler;
 pub mod physics_orbital;
 pub mod physics_utils;
 pub mod planet_factory;
+pub mod reference_frames;
 pub mod simd_processor;
 pub mod units;
 pub mod vacuum_physics;
