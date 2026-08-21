@@ -1,3 +1,5 @@
+pub mod aerodynamics;
+pub mod atmosphere;
 pub mod craft_physics;
 pub mod gravity;
 pub mod gyroscope;

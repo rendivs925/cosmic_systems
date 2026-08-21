@@ -1,7 +1,12 @@
+use crate::domain::services::aerodynamics::{
+    aerodynamic_coefficients, aerodynamic_torque_body, angle_of_attack, angle_of_sideslip,
+    center_of_pressure_m, drag_force_body, dynamic_pressure_q, lift_force_body, side_force_body,
+    update_max_q,
+};
 use crate::domain::services::gravity::gravitational_acceleration;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass, clamp_gimbal, consume_propellant,
-    gimbal_torque_body, selected_isp, shed_stage, stage_thrust_body,
+    gimbal_torque_body, shed_stage, stage_thrust_body,
 };
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::*;
@@ -65,26 +70,95 @@ pub fn integrate_6dof(time: Res<Time>, mut rocket_query: Query<&mut RocketCompon
     }
 }
 
-/// Compute thrust from the active stage's engines (T = m_dot · Isp · g0, with
-/// altitude-selected ISP) and add it to the translational accumulator in the
-/// planet-inertial frame. Never writes the transform.
-pub fn propulsion_thrust(
-    planet_query: Query<(&PlanetComponent, &Transform)>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &mut RocketComponent,
-        &mut RocketPropulsion,
-    )>,
+/// Cache the atmosphere state (altitude → temperature/pressure/density/speed
+/// of sound) at each rocket's position, using the shared per-planet atmosphere
+/// model. Aero and propulsion systems consume this rather than recomputing
+/// planet lookups or scattering their own formulas.
+pub fn atmosphere_properties(
+    planet_query: Query<(&PlanetComponent, &PlanetAtmosphere)>,
+    mut rocket_query: Query<(&RocketPlanetBinding, &RocketComponent, &mut AtmosphereState)>,
 ) {
-    for (binding, mut rocket, mut propulsion) in rocket_query.iter_mut() {
-        let Some((planet, _)) = planet_query
+    for (binding, rocket, mut atmosphere) in rocket_query.iter_mut() {
+        let Some((planet, planet_atmosphere)) = planet_query
             .iter()
             .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
         else {
             continue;
         };
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let altitude_m = (rocket.dynamics.position_m.length() - radius_m) as f32;
+        let altitude_m = (rocket.dynamics.position_m.length() - radius_m).max(0.0);
+        let props = planet_atmosphere.source.properties(altitude_m);
+        atmosphere.altitude_m = altitude_m;
+        atmosphere.temperature_k = props.temperature_k;
+        atmosphere.pressure_pa = props.pressure_pa;
+        atmosphere.density_kg_m3 = props.density_kg_m3;
+        atmosphere.speed_of_sound_mps = props.speed_of_sound_mps;
+    }
+}
+
+/// Compute aerodynamic forces (drag, lift, side) from the atmosphere and
+/// vehicle orientation, add them to the translational accumulator, track Max Q,
+/// and store the body-frame force for the torque system. Never writes the
+/// transform.
+pub fn aerodynamic_forces(
+    mut rocket_query: Query<(
+        &mut RocketComponent,
+        &AtmosphereState,
+        &mut AerodynamicForces,
+        &mut MaxQTracker,
+    )>,
+) {
+    for (mut rocket, atmosphere, mut aero, mut max_q) in rocket_query.iter_mut() {
+        let velocity = rocket.dynamics.velocity_mps;
+        let speed = velocity.length();
+        aero.center_of_pressure_body = center_of_pressure_m(rocket.height_m as f64);
+        if speed < 1.0 || atmosphere.density_kg_m3 <= 0.0 {
+            aero.force_body = DVec3::ZERO;
+            continue;
+        }
+
+        let q = dynamic_pressure_q(atmosphere.density_kg_m3, speed);
+        max_q.max_q_pa = update_max_q(q, max_q.max_q_pa);
+
+        let reference_area_m2 = std::f64::consts::PI * (rocket.radius_m as f64).powi(2);
+        let body_velocity = rocket.dynamics.orientation.inverse() * velocity;
+        let (cd, cl, cy) = aerodynamic_coefficients(
+            angle_of_attack(body_velocity),
+            angle_of_sideslip(body_velocity),
+        );
+
+        let total_body = drag_force_body(q, cd, reference_area_m2, body_velocity)
+            + lift_force_body(q, cl, reference_area_m2, body_velocity)
+            + side_force_body(q, cy, reference_area_m2, body_velocity);
+        aero.force_body = total_body;
+        let orientation = rocket.dynamics.orientation;
+        rocket.force_accum_n += orientation * total_body;
+    }
+}
+
+/// Apply the aerodynamic force at the center of pressure to produce a torque
+/// about the center of mass, added to the rotational accumulator (body frame).
+pub fn aerodynamic_torque(mut rocket_query: Query<(&mut RocketComponent, &AerodynamicForces)>) {
+    for (mut rocket, aero) in rocket_query.iter_mut() {
+        if aero.force_body.length_squared() == 0.0 {
+            continue;
+        }
+        let center_of_mass_m = rocket.dynamics.center_of_mass_m;
+        rocket.torque_accum_nm += aerodynamic_torque_body(
+            aero.force_body,
+            aero.center_of_pressure_body,
+            center_of_mass_m,
+        );
+    }
+}
+
+/// Compute thrust from the active stage's engines (T = m_dot · Isp · g0, with
+/// density-selected ISP) and add it to the translational accumulator in the
+/// planet-inertial frame. Never writes the transform.
+pub fn propulsion_thrust(
+    mut rocket_query: Query<(&mut RocketComponent, &AtmosphereState, &RocketPropulsion)>,
+) {
+    for (mut rocket, atmosphere, propulsion) in rocket_query.iter_mut() {
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
@@ -97,7 +171,8 @@ pub fn propulsion_thrust(
         if throttle <= 0.0 || remaining <= 0.0 {
             continue;
         }
-        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, altitude_m);
+        let (thrust_body, _) =
+            stage_thrust_body(&stage.engines, throttle, atmosphere.density_kg_m3);
         let thrust_world = rocket.dynamics.orientation * thrust_body;
         rocket.force_accum_n += thrust_world;
     }
@@ -108,23 +183,14 @@ pub fn propulsion_thrust(
 /// the vehicle state (single source).
 pub fn propulsion_consumption(
     time: Res<Time>,
-    planet_query: Query<(&PlanetComponent, &Transform)>,
     mut rocket_query: Query<(
-        &RocketPlanetBinding,
         &mut RocketComponent,
+        &AtmosphereState,
         &mut RocketPropulsion,
     )>,
 ) {
     let dt = time.delta_secs() as f64;
-    for (binding, mut rocket, mut propulsion) in rocket_query.iter_mut() {
-        let Some((planet, _)) = planet_query
-            .iter()
-            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let altitude_m = (rocket.dynamics.position_m.length() - radius_m) as f32;
+    for (mut rocket, atmosphere, mut propulsion) in rocket_query.iter_mut() {
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
@@ -137,7 +203,7 @@ pub fn propulsion_consumption(
         if throttle <= 0.0 || remaining <= 0.0 {
             continue;
         }
-        let (_, mass_flow) = stage_thrust_body(&stage.engines, throttle, altitude_m);
+        let (_, mass_flow) = stage_thrust_body(&stage.engines, throttle, atmosphere.density_kg_m3);
         let (remaining_new, _consumed) = consume_propellant(remaining, mass_flow, dt);
         let active_stage = propulsion.active_stage;
         propulsion.propellant_remaining_kg[active_stage] = remaining_new;

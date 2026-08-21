@@ -336,6 +336,7 @@ fn spawn_celestial_body(
             base_reflectance: reflectance,
             base_roughness: perceptual_roughness,
         })
+        .insert(PlanetAtmosphere::default_for(&planet.name))
         .insert(Selectable {
             name: planet.name.clone(),
             selected: false,
@@ -368,7 +369,13 @@ fn spawn_celestial_body(
             let moon_thickness = orbit_shape.semi_major_axis_units * 0.0001;
             let moon_segments = 256;
             #[cfg(not(target_arch = "wasm32"))]
-            let orbit_mesh = create_orbit_ribbon_mesh(meshes, &orbit_shape, ORBIT_LINE_COLOR, moon_thickness, moon_segments);
+            let orbit_mesh = create_orbit_ribbon_mesh(
+                meshes,
+                &orbit_shape,
+                ORBIT_LINE_COLOR,
+                moon_thickness,
+                moon_segments,
+            );
             #[cfg(target_arch = "wasm32")]
             let orbit_mesh = create_placeholder_orbit_mesh(meshes);
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
@@ -458,7 +465,13 @@ fn spawn_celestial_body(
         let planet_thickness = orbit_shape.semi_major_axis_units * 0.0001;
         let planet_segments = 256;
         #[cfg(not(target_arch = "wasm32"))]
-        let orbit_mesh = create_orbit_ribbon_mesh(meshes, &orbit_shape, orbit_base_color, planet_thickness, planet_segments);
+        let orbit_mesh = create_orbit_ribbon_mesh(
+            meshes,
+            &orbit_shape,
+            orbit_base_color,
+            planet_thickness,
+            planet_segments,
+        );
         #[cfg(target_arch = "wasm32")]
         let orbit_mesh = create_placeholder_orbit_mesh(meshes);
         let orbit_material = create_orbit_material(

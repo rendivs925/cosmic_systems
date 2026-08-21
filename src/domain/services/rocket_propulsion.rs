@@ -7,6 +7,7 @@
 //! accumulator and never write the transform directly (AGENTS.md section 17).
 
 use crate::domain::entities::rocket::{RocketEngine, RocketStage};
+use crate::domain::services::atmosphere::SEA_LEVEL_DENSITY_KG_M3;
 use crate::domain::services::rocket_dynamics::rocket_inertia_tensor;
 use bevy::math::{DMat3, DQuat, DVec3};
 
@@ -23,13 +24,12 @@ pub fn mass_flow_from_thrust(thrust_n: f64, isp_s: f32) -> f64 {
     thrust_n / (isp_s as f64 * STANDARD_GRAVITY_MPS2)
 }
 
-/// Select the effective specific impulse by altitude, blending between
-/// sea-level and vacuum ISP across the 5–15 km band. Replaced by a true
-/// density-based atmosphere model when the atmosphere capability lands.
-pub fn selected_isp(isp_sea_level: f32, isp_vacuum: f32, altitude_m: f32) -> f32 {
-    const BLEND_LOW_M: f32 = 5_000.0;
-    const BLEND_HIGH_M: f32 = 15_000.0;
-    let t = ((altitude_m - BLEND_LOW_M) / (BLEND_HIGH_M - BLEND_LOW_M)).clamp(0.0, 1.0);
+/// Select the effective specific impulse from ambient density, blending
+/// between sea-level and vacuum ISP as density drops toward vacuum (back-
+/// pressure effect). At standard sea-level density the sea-level ISP applies;
+/// in a vacuum the vacuum ISP applies. Consumes the shared atmosphere model.
+pub fn selected_isp(isp_sea_level: f32, isp_vacuum: f32, density_kg_m3: f64) -> f32 {
+    let t = (1.0 - (density_kg_m3 / SEA_LEVEL_DENSITY_KG_M3).clamp(0.0, 1.0)) as f32;
     isp_sea_level + (isp_vacuum - isp_sea_level) * t
 }
 
@@ -124,13 +124,17 @@ pub fn shed_stage(
 }
 
 /// Total running-engine thrust (body frame) for the active stage at a throttle,
-/// honoring per-engine ISP selection by altitude.
-pub fn stage_thrust_body(engines: &[RocketEngine], throttle: f32, altitude_m: f32) -> (DVec3, f64) {
+/// honoring per-engine ISP selection by ambient density.
+pub fn stage_thrust_body(
+    engines: &[RocketEngine],
+    throttle: f32,
+    density_kg_m3: f64,
+) -> (DVec3, f64) {
     let throttle = throttle.clamp(0.0, 1.0);
     let mut force = DVec3::ZERO;
     let mut mass_flow = 0.0;
     for engine in engines {
-        let isp = selected_isp(engine.isp_sea_level, engine.isp_vacuum, altitude_m);
+        let isp = selected_isp(engine.isp_sea_level, engine.isp_vacuum, density_kg_m3);
         let thrust = engine.max_thrust_kn as f64 * 1000.0 * throttle as f64;
         force += engine.thrust_axis.as_dvec3() * thrust;
         mass_flow += mass_flow_from_thrust(thrust, isp);
@@ -220,10 +224,10 @@ mod tests {
     }
 
     #[test]
-    fn isp_selection_blends_with_altitude() {
-        assert_eq!(selected_isp(282.0, 311.0, 0.0), 282.0);
-        assert_eq!(selected_isp(282.0, 311.0, 20_000.0), 311.0);
-        let mid = selected_isp(282.0, 311.0, 10_000.0);
+    fn isp_selection_blends_with_density() {
+        assert_eq!(selected_isp(282.0, 311.0, 1.225), 282.0); // sea level
+        assert_eq!(selected_isp(282.0, 311.0, 0.0), 311.0); // vacuum
+        let mid = selected_isp(282.0, 311.0, 0.6);
         assert!(mid > 282.0 && mid < 311.0);
     }
 

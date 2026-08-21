@@ -95,5 +95,8 @@ pub fn spawn_rockets(
             planet_name: "Earth".to_string(),
         },
         GravityAcceleration::default(),
+        AtmosphereState::default(),
+        AerodynamicForces::default(),
+        MaxQTracker::default(),
     ));
 }

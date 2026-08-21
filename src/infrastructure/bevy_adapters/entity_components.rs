@@ -1,10 +1,13 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::entities::rocket::Rocket;
+use crate::domain::services::atmosphere::atmosphere_for;
+use crate::domain::services::atmosphere::AtmosphereSource;
 use crate::domain::services::physics_orbital::OrbitShape;
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use std::sync::Arc;
 
 /// Types of launch sites with different terrain characteristics
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
@@ -229,6 +232,46 @@ pub struct RocketPlanetBinding {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GravityAcceleration {
     pub value: DVec3,
+}
+
+/// Per-planet atmosphere source (AGENTS.md section 19). Attached to planet
+/// entities; the shared single implementation for all atmosphere consumers.
+#[derive(Component, Debug, Clone)]
+pub struct PlanetAtmosphere {
+    pub source: Arc<dyn AtmosphereSource>,
+}
+
+impl PlanetAtmosphere {
+    pub fn default_for(name: &str) -> Self {
+        Self {
+            source: atmosphere_for(name),
+        }
+    }
+}
+
+/// Cached atmosphere state at the vehicle's current altitude, computed by the
+/// `atmosphere_properties` system before aero and propulsion consume it.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct AtmosphereState {
+    pub altitude_m: f64,
+    pub temperature_k: f64,
+    pub pressure_pa: f64,
+    pub density_kg_m3: f64,
+    pub speed_of_sound_mps: f64,
+}
+
+/// Aerodynamic force computed by `aerodynamic_forces`, consumed by
+/// `aerodynamic_torque`. Body frame; fed to the 6-DOF accumulators.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct AerodynamicForces {
+    pub force_body: DVec3,
+    pub center_of_pressure_body: DVec3,
+}
+
+/// Running maximum dynamic pressure (Max Q) reached during flight, Pa.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct MaxQTracker {
+    pub max_q_pa: f64,
 }
 
 // Component for launch sites (terrain markers)
