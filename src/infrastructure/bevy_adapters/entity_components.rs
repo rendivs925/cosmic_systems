@@ -1,6 +1,7 @@
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::physics_orbital::OrbitShape;
+use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -163,6 +164,22 @@ pub struct TerrainComponent {
 // Component for rocket entities
 #[derive(Component)]
 pub struct RocketComponent {
+    /// Authoritative 6-DOF physical state (f64, planet-centered inertial meters).
+    pub dynamics: RocketDynamicsState,
+    /// Net force accumulator (world/planet-inertial frame), consumed by integration.
+    pub force_accum_n: DVec3,
+    /// Net torque accumulator (body frame), consumed by integration.
+    pub torque_accum_nm: DVec3,
+    /// Commanded control torque (body frame) written by control/input systems.
+    pub control_torque_nm: Vec3,
+    /// Vehicle geometry (radius/height in meters) for the inertia model.
+    pub radius_m: f32,
+    pub height_m: f32,
+    // ------------------------------------------------------------------
+    // Compatible facade fields synced from the f64 dynamics state each tick.
+    // Existing consumers that have not yet migrated to the f64 state read
+    // these; they are never the source of truth for motion.
+    // ------------------------------------------------------------------
     pub position: Vec3,
     pub velocity: Vec3,
     pub orientation: Quat,

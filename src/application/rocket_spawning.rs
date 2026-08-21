@@ -1,4 +1,12 @@
+use crate::domain::entities::rocket::Rocket;
+use crate::domain::services::planet_factory::PlanetFactory;
+use crate::domain::services::reference_frames::{
+    body_fixed_to_planet_inertial, geodetic_to_body_fixed,
+};
+use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
+use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 use crate::infrastructure::bevy_adapters::components::*;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 pub fn spawn_rockets(
@@ -6,8 +14,6 @@ pub fn spawn_rockets(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
-    use crate::domain::entities::rocket::Rocket;
-
     let rocket = Rocket::falcon9();
 
     // Create simple rocket mesh (cylinder)
@@ -23,13 +29,43 @@ pub fn spawn_rockets(
     };
     let material_handle = materials.add(material);
 
+    // Place the rocket on the Kennedy Space Center pad in planet-centered
+    // inertial meters (authoritative 6-DOF frame).
+    let earth = PlanetFactory::create_by_name("Earth").unwrap();
+    let ksc = predefined_sites::kennedy_space_center();
+    let body_fixed = geodetic_to_body_fixed(&ksc, &earth);
+    let position_m = body_fixed_to_planet_inertial(body_fixed, &earth, 0.0);
+
+    let total_mass_kg = rocket.total_mass_kg() as f64;
+    let radius_m = (rocket.diameter_m / 2.0) as f64;
+    let (inertia, com) = rocket_inertia_tensor(
+        rocket.dry_mass_kg as f64,
+        rocket.fuel_mass_kg as f64,
+        radius_m,
+        rocket.height_m as f64,
+    );
+    let dynamics = RocketDynamicsState::new(
+        position_m,
+        DVec3::ZERO,
+        DQuat::IDENTITY,
+        total_mass_kg,
+        inertia,
+        com,
+    );
+
     commands.spawn((
         RocketComponent {
-            position: Vec3::new(0.0, -6300.0, 0.0), // Near Earth's surface
+            dynamics,
+            force_accum_n: DVec3::ZERO,
+            torque_accum_nm: DVec3::ZERO,
+            control_torque_nm: Vec3::ZERO,
+            radius_m: radius_m as f32,
+            height_m: rocket.height_m,
+            position: Vec3::ZERO,
             velocity: Vec3::ZERO,
             orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
-            mass: rocket.total_mass_kg(),
+            mass: total_mass_kg as f32,
             dry_mass_kg: rocket.dry_mass_kg,
             fuel_mass: rocket.fuel_mass_kg,
             thrust: Vec3::ZERO,
@@ -37,7 +73,7 @@ pub fn spawn_rockets(
         },
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
-        Transform::from_translation(Vec3::new(0.0, -6300.0, 0.0)),
+        Transform::default(),
         Selectable {
             name: "Falcon 9".to_string(),
             selected: false,
