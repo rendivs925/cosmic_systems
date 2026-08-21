@@ -279,7 +279,7 @@ pub fn auto_inspect_selected_planet(
     solar_params: Res<SolarSystemParameters>,
     selected_planet: Res<SelectedPlanet>,
     mut input_state: ResMut<CameraInputState>,
-    mut camera_query: Query<(&mut CameraController, &mut Transform, &Projection)>,
+    mut camera_query: Query<(&mut CameraController, &mut Transform, &mut Projection)>,
     planet_query: Query<(&PlanetComponent, &Transform), Without<CameraController>>,
     mut state: Local<AutoInspectState>,
 ) {
@@ -347,7 +347,7 @@ pub fn auto_inspect_selected_planet(
     let mut moon_axis: Option<Vec3> = None;
     let mut moon_up: Option<Vec3> = None;
     let mut moon_distance: Option<f32> = None;
-    let fov_y = match projection {
+    let fov_y = match &*projection {
         Projection::Perspective(perspective) => perspective.fov,
         Projection::Orthographic(_) => std::f32::consts::FRAC_PI_2,
         Projection::Custom(_) => std::f32::consts::FRAC_PI_2, // Default to orthographic-like FOV
@@ -475,6 +475,22 @@ pub fn auto_inspect_selected_planet(
 
     // Look at the focus point to frame moon + parent when applicable
     camera_transform.look_at(state.smooth_focus, Vec3::Y);
+
+    // Adaptive near/far planes: keep the depth range proportional to the framing distance
+    // so the near:far ratio stays bounded when inspecting a massive body like the Sun.
+    // An extreme ratio degrades depth precision and inflates the GPU render workload.
+    if let Projection::Perspective(proj) = projection.into_inner() {
+        let world_radius = target_distance.max(1.0);
+        let desired_far = (world_radius * 8.0).clamp(100_000.0, 10_000_000.0);
+        let desired_near = (desired_far * 0.00001).clamp(0.1, 1.0);
+        let far_lerp = 1.0 - (-2.0 * time.delta_secs()).exp();
+        let near_lerp = 1.0 - (-4.0 * time.delta_secs()).exp();
+        proj.far = proj.far.lerp(desired_far, far_lerp);
+        proj.near = proj.near.lerp(desired_near, near_lerp);
+        if proj.near >= proj.far {
+            proj.near = proj.far * 0.01;
+        }
+    }
 }
 
 // Get aesthetic viewing parameters for different celestial bodies

@@ -75,13 +75,27 @@ pub fn update_craft_physics(
             };
             let destination = target_position + approach_direction * (radius * 3.0 + 500.0);
 
-            transform.translation = destination;
+            // Smooth travel: approach the destination with a bounded per-frame step so the
+            // renderer never sees an instantaneous teleport onto a body. Exponential decay
+            // decelerates near arrival and a hard step cap prevents any single-frame jump,
+            // which is what triggered GPU device loss when snapping to the Sun.
+            let to_destination = destination - transform.translation;
+            let distance = to_destination.length();
+            let approach_step = (1.0 - (-1.2 * dt).exp()).clamp(0.001, 1.0);
+            let max_step = 500_000.0;
+            let step = (distance * approach_step).min(max_step);
+
+            if step < 1.0 {
+                transform.translation = destination;
+                travel_target.entity = None;
+                travel_target.name = None;
+            } else {
+                transform.translation += to_destination.normalize() * step;
+                craft.linear_velocity = Vec3::ZERO;
+            }
             transform.look_at(target_position, Vec3::Y);
-            craft.linear_velocity = Vec3::ZERO;
             craft.physics.vertical_velocity = 0.0;
-            craft.physics.vertical_position = destination.y;
-            travel_target.entity = None;
-            travel_target.name = None;
+            craft.physics.vertical_position = transform.translation.y;
         } else {
             let move_input = craft.move_input.clamp_length_max(1.0);
             let magnitude = move_input.length();
@@ -239,6 +253,7 @@ pub fn update_craft_camera(
     craft_query: Query<(&CraftComponent, &Transform)>,
     mut cam_state: ResMut<CraftCameraState>,
     mut camera_query: Query<(&mut Transform, &mut Projection), (With<CraftCameraTag>, Without<CraftComponent>)>,
+    planet_query: Query<&GlobalTransform, With<PlanetComponent>>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let elapsed = time.elapsed_secs();
@@ -365,6 +380,31 @@ pub fn update_craft_camera(
             if let Projection::Perspective(ref mut proj) = *projection {
                 proj.fov = 55.0_f32.to_radians() + (time_secs * 0.1).sin() * 2.0_f32.to_radians();
             }
+        }
+    }
+
+    // Adaptive near/far planes: keep the depth range proportional to the distance to the
+    // nearest planet. This bounds the GPU workload (depth precision, light clusters, and
+    // culling) when the craft is next to a massive body like the Sun, preventing the
+    // pathological frame that previously caused swap-chain/device loss.
+    if let Projection::Perspective(ref mut proj) = *projection {
+        let camera_pos = camera_transform.translation;
+        let mut nearest_distance = f32::MAX;
+        for planet_gt in planet_query.iter() {
+            let d = camera_pos.distance(planet_gt.translation());
+            if d < nearest_distance {
+                nearest_distance = d;
+            }
+        }
+        let world_radius = nearest_distance.max(1.0);
+        let desired_far = (world_radius * 8.0).clamp(100_000.0, 10_000_000.0);
+        let desired_near = (desired_far * 0.00001).clamp(0.1, 1.0);
+        let far_lerp = 1.0 - (-2.0 * dt).exp();
+        let near_lerp = 1.0 - (-4.0 * dt).exp();
+        proj.far = proj.far.lerp(desired_far, far_lerp);
+        proj.near = proj.near.lerp(desired_near, near_lerp);
+        if proj.near >= proj.far {
+            proj.near = proj.far * 0.01;
         }
     }
 }
