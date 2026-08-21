@@ -66,6 +66,55 @@ pub fn gimbal_torque_body(
     offset.cross(deflected * thrust_n)
 }
 
+/// Map a commanded body-frame torque into gimbal pitch/yaw deflections for the
+/// active stage's engines by inverting the real gimbal torque coupling at the
+/// current stage geometry. The sign/magnitude therefore match the actual engine
+/// layout (including a flipped sign when the engines sit above the COM, as on
+/// the second stage). Returns `(pitch_rad, yaw_rad)` before the mechanical
+/// range clamp.
+pub fn allocate_gimbal_deflections(
+    engines: &[RocketEngine],
+    center_of_mass_m: DVec3,
+    torque_cmd: DVec3,
+    thrust_scale: f32,
+) -> (f32, f32) {
+    if engines.is_empty() {
+        return (0.0, 0.0);
+    }
+    const TEST_DEFLECTION_RAD: f64 = 1e-3;
+    let scale = thrust_scale.clamp(0.0, 1.0) as f64;
+
+    let torque_for = |pitch: f64, yaw: f64| -> DVec3 {
+        let mut total = DVec3::ZERO;
+        for engine in engines {
+            total += gimbal_torque_body(
+                engine.position_m.as_dvec3(),
+                center_of_mass_m,
+                engine.thrust_axis.as_dvec3(),
+                engine.max_thrust_kn as f64 * 1000.0 * scale,
+                pitch,
+                yaw,
+            );
+        }
+        total
+    };
+
+    let t_pitch = torque_for(TEST_DEFLECTION_RAD, 0.0);
+    let t_yaw = torque_for(0.0, TEST_DEFLECTION_RAD);
+
+    let pitch_cmd = if t_pitch.x.abs() > 1e-6 {
+        (torque_cmd.x / t_pitch.x * TEST_DEFLECTION_RAD) as f32
+    } else {
+        0.0
+    };
+    let yaw_cmd = if t_yaw.z.abs() > 1e-6 {
+        (torque_cmd.z / t_yaw.z * TEST_DEFLECTION_RAD) as f32
+    } else {
+        0.0
+    };
+    (pitch_cmd, yaw_cmd)
+}
+
 /// Total mass of the vehicle considering only the active and future stages.
 pub fn active_vehicle_mass(
     stages: &[RocketStage],
@@ -251,6 +300,43 @@ mod tests {
         assert!((clamped - 5.0_f32.to_radians()).abs() < 1e-9);
         let clamped_neg = clamp_gimbal(-1.0, 5.0);
         assert!((clamped_neg - -5.0_f32.to_radians()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gimbal_allocation_inverts_real_torque_coupling() {
+        let rocket = Rocket::falcon9();
+        let engines = &rocket.stages[0].engines;
+        // First-stage COM sits below the mid-length (engines below COM).
+        let com = DVec3::new(0.0, -20.0, 0.0);
+        let torque_cmd = DVec3::new(5.0e6, 0.0, -3.0e6);
+
+        let (pitch, yaw) = allocate_gimbal_deflections(engines, com, torque_cmd, 1.0);
+        // Positive X torque needs a negative pitch (engines below COM).
+        assert!(pitch < 0.0);
+        assert!(yaw > 0.0);
+
+        // The real torque from the allocated deflections reproduces the command.
+        let mut produced = DVec3::ZERO;
+        for engine in engines {
+            produced += gimbal_torque_body(
+                engine.position_m.as_dvec3(),
+                com,
+                engine.thrust_axis.as_dvec3(),
+                engine.max_thrust_kn as f64 * 1000.0,
+                pitch as f64,
+                yaw as f64,
+            );
+        }
+        assert!(
+            (produced - torque_cmd).length() < torque_cmd.length() * 5e-3,
+            "allocation did not reproduce the torque: {produced}"
+        );
+
+        // No engines → no deflections.
+        assert_eq!(
+            allocate_gimbal_deflections(&[], com, torque_cmd, 1.0),
+            (0.0, 0.0)
+        );
     }
 
     #[test]

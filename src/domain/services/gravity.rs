@@ -22,6 +22,11 @@ pub fn gravitational_parameter(body_mass_kg: f64) -> f64 {
     GRAVITATIONAL_CONSTANT * body_mass_kg
 }
 
+/// Circular orbital speed at radius `radius_m` around a body, m/s.
+pub fn circular_orbit_speed_mps(body_mass_kg: f64, radius_m: f64) -> f64 {
+    (gravitational_parameter(body_mass_kg) / radius_m).sqrt()
+}
+
 /// Gravitational acceleration (m/s²) at `position_m` due to a body of mass
 /// `body_mass_kg` located at `body_position_m`, both in the same physical
 /// meter frame (typically planet-centered inertial).
@@ -130,5 +135,15 @@ mod tests {
     fn singularity_returns_zero() {
         let a = gravitational_acceleration(EARTH_MASS_KG, DVec3::ZERO, DVec3::ZERO);
         assert_eq!(a, DVec3::ZERO);
+    }
+
+    #[test]
+    fn circular_orbit_speed_is_sqrt_mu_over_r() {
+        let mu = gravitational_parameter(EARTH_MASS_KG);
+        let r = 6_778_000.0;
+        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
+        assert!((v - (mu / r).sqrt()).abs() < 1e-6);
+        // 400 km LEO ≈ 7.67 km/s.
+        assert!((v - 7_670.0).abs() < 60.0);
     }
 }

@@ -36,6 +36,11 @@ pub fn spawn_rockets(
     let body_fixed = geodetic_to_body_fixed(&ksc, &earth);
     let position_m = body_fixed_to_planet_inertial(body_fixed, &earth, 0.0);
 
+    // Stand vertical on the pad: body +Y aligned with the local up direction
+    // (radial). Guidance's launch target is the same attitude, so the
+    // closed-loop ascent starts from zero attitude error.
+    let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, position_m.normalize());
+
     let total_mass_kg = rocket.total_mass_kg() as f64;
     let radius_m = (rocket.diameter_m / 2.0) as f64;
     let (inertia, com) = rocket_inertia_tensor(
@@ -47,7 +52,7 @@ pub fn spawn_rockets(
     let dynamics = RocketDynamicsState::new(
         position_m,
         DVec3::ZERO,
-        DQuat::IDENTITY,
+        launch_attitude,
         total_mass_kg,
         inertia,
         com,
@@ -98,5 +103,7 @@ pub fn spawn_rockets(
         AtmosphereState::default(),
         AerodynamicForces::default(),
         MaxQTracker::default(),
+        RocketCommands::default(),
+        RocketAutopilot::default(),
     ));
 }

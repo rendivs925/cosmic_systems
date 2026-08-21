@@ -5,9 +5,11 @@ use crate::domain::services::atmosphere::atmosphere_for;
 use crate::domain::services::atmosphere::AtmosphereSource;
 use crate::domain::services::physics_orbital::OrbitShape;
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::sync::Arc;
+
+pub use crate::domain::entities::rocket::RocketMissionState;
 
 /// Types of launch sites with different terrain characteristics
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
@@ -206,18 +208,6 @@ pub struct RocketPropulsion {
     pub gimbal_yaw_rad: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RocketMissionState {
-    PreLaunch,
-    Launch,
-    Ascent,
-    Orbit,
-    Deorbit,
-    Descent,
-    Landing,
-    Landed,
-}
-
 /// Binds a rocket to its dominant-body frame parent. Gravity is computed from
 /// the planet with this name (resolved against `PlanetComponent`), per the
 /// dominant-body selection rule in the gravity design.
@@ -272,6 +262,33 @@ pub struct AerodynamicForces {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct MaxQTracker {
     pub max_q_pa: f64,
+}
+
+/// The flight-computer command interface between the guidance, control,
+/// actuation, and physics layers (AGENTS.md section 18). Each layer writes its
+/// outputs here; no layer writes the rocket's motion directly.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct RocketCommands {
+    /// Guidance output: the target body→world attitude.
+    pub target_attitude: DQuat,
+    /// Control output: commanded throttle (0..1).
+    pub throttle_cmd: f32,
+    /// Control output: commanded gimbal pitch deflection, radians.
+    pub gimbal_pitch_cmd_rad: f32,
+    /// Control output: commanded gimbal yaw deflection, radians.
+    pub gimbal_yaw_cmd_rad: f32,
+    /// Control output: commanded RCS torque, body frame, N·m.
+    pub rcs_torque_cmd_body: DVec3,
+}
+
+/// Autopilot configuration and state for the rocket: PID gains, integral
+/// accumulation, the ascent guidance profile, and actuator limits.
+#[derive(Component, Debug, Clone, Default)]
+pub struct RocketAutopilot {
+    pub gains: crate::domain::services::control::PidGains,
+    pub integral: DVec3,
+    pub ascent_profile: crate::domain::services::guidance::AscentGuidanceProfile,
+    pub actuation: crate::domain::services::actuation::ActuationLimits,
 }
 
 // Component for launch sites (terrain markers)

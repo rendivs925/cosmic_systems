@@ -1,17 +1,26 @@
+use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
 use crate::domain::services::aerodynamics::{
     aerodynamic_coefficients, aerodynamic_torque_body, angle_of_attack, angle_of_sideslip,
     center_of_pressure_m, drag_force_body, dynamic_pressure_q, lift_force_body, side_force_body,
     update_max_q,
 };
-use crate::domain::services::gravity::gravitational_acceleration;
+use crate::domain::services::control::control_torque_body;
+use crate::domain::services::gravity::{circular_orbit_speed_mps, gravitational_acceleration};
+use crate::domain::services::guidance::{
+    advance_ascent_phase, pitch_axis_from_reference, target_attitude_for_phase,
+};
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass, clamp_gimbal, consume_propellant,
-    gimbal_torque_body, shed_stage, stage_thrust_body,
+    active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
+    consume_propellant, gimbal_torque_body, shed_stage, stage_thrust_body,
 };
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+
+/// Fraction of the circular orbital speed at which ascent guidance declares
+/// orbit insertion.
+const ORBIT_SPEED_FRACTION: f64 = 0.98;
 
 /// Compute authoritative gravitational acceleration for each rocket from its
 /// dominant body (see [`RocketPlanetBinding`]) and store it for the force
@@ -342,40 +351,153 @@ pub fn sync_render_transform(
     }
 }
 
-// System to handle rocket controls (placeholder)
-// Issues throttle and gimbal commands; physics (not this system) integrates
-// motion. Replaced by the guidance/control change later.
-pub fn update_rocket_controls(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut rocket_query: Query<&mut RocketPropulsion>,
+/// Mission guidance: computes the target attitude from the mission phase and
+/// current state, and advances the ascent phase (Launch → Ascent → Orbit).
+/// Writes only the command interface; never the vehicle's motion (AGENTS.md
+/// section 18).
+pub fn guidance_system(
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &mut RocketComponent,
+        &RocketAutopilot,
+        &mut RocketCommands,
+    )>,
 ) {
-    for mut propulsion in rocket_query.iter_mut() {
-        // Throttle command (bounded)
-        let throttle: f32 = if keyboard_input.pressed(KeyCode::Space) {
-            1.0
-        } else {
-            0.0
+    for (binding, mut rocket, autopilot, mut commands) in rocket_query.iter_mut() {
+        let Some(planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
         };
-        propulsion.throttle = throttle.clamp(0.0, 1.0);
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+        let position_m = rocket.dynamics.position_m;
+        let radius = position_m.length();
+        if radius < 1.0 {
+            continue;
+        }
+        let up_dir = position_m / radius;
+        let altitude_m = (radius - radius_m).max(0.0);
+        let velocity = rocket.dynamics.velocity_mps;
 
-        // Gimbal deflection commands (radians; the gimbal system clamps to
-        // each engine's mechanical range)
-        let mut pitch = 0.0;
-        let mut yaw = 0.0;
-        if keyboard_input.pressed(KeyCode::KeyW) {
-            pitch = 0.05; // Pitch up
+        // Auto-launch: begin the ascent flight on the first guidance pass.
+        if rocket.mission_state == RocketMissionState::PreLaunch {
+            rocket.mission_state = RocketMissionState::Launch;
         }
-        if keyboard_input.pressed(KeyCode::KeyS) {
-            pitch = -0.05; // Pitch down
-        }
-        if keyboard_input.pressed(KeyCode::KeyA) {
-            yaw = 0.05; // Yaw left
-        }
-        if keyboard_input.pressed(KeyCode::KeyD) {
-            yaw = -0.05; // Yaw right
-        }
-        propulsion.gimbal_pitch_rad = pitch;
-        propulsion.gimbal_yaw_rad = yaw;
+
+        // Advance the ascent phase from the current state.
+        let circular_speed = circular_orbit_speed_mps(planet.domain_planet.mass_kg, radius);
+        rocket.mission_state = advance_ascent_phase(
+            rocket.mission_state,
+            altitude_m,
+            velocity.length(),
+            circular_speed,
+            autopilot.ascent_profile.ascent_start_altitude_m,
+            ORBIT_SPEED_FRACTION,
+        );
+
+        // The ascent plane is fixed in the planet-inertial frame; the pitch
+        // axis is the horizontal perpendicular to it.
+        let pitch_axis = pitch_axis_from_reference(up_dir, DVec3::Z)
+            .or_else(|| pitch_axis_from_reference(up_dir, DVec3::X))
+            .unwrap_or(DVec3::X);
+
+        commands.target_attitude = target_attitude_for_phase(
+            rocket.mission_state,
+            &autopilot.ascent_profile,
+            up_dir,
+            pitch_axis,
+            altitude_m,
+            velocity,
+        );
+    }
+}
+
+/// Attitude control: converts the guidance target and current state into
+/// commanded throttle, gimbal deflections, and RCS torque using the PID with
+/// anti-windup. Writes only the command interface; never the vehicle's motion.
+pub fn control_system(
+    time: Res<Time>,
+    mut rocket_query: Query<(
+        &mut RocketCommands,
+        &mut RocketComponent,
+        &RocketPropulsion,
+        &mut RocketAutopilot,
+    )>,
+) {
+    let dt = time.delta_secs() as f64;
+    for (mut commands, mut rocket, propulsion, mut autopilot) in rocket_query.iter_mut() {
+        // Throttle schedule from the mission phase.
+        commands.throttle_cmd = match rocket.mission_state {
+            RocketMissionState::Launch | RocketMissionState::Ascent => 1.0,
+            RocketMissionState::PreLaunch
+            | RocketMissionState::Orbit
+            | RocketMissionState::Deorbit
+            | RocketMissionState::Descent
+            | RocketMissionState::Landing
+            | RocketMissionState::Landed => 0.0,
+        };
+
+        let gains = autopilot.gains;
+        let torque = control_torque_body(
+            commands.target_attitude,
+            rocket.dynamics.orientation,
+            rocket.dynamics.angular_velocity_radps,
+            &gains,
+            &mut autopilot.integral,
+            dt,
+        );
+
+        // Allocate the commanded torque to gimbal pitch/yaw (inverting the
+        // real engine geometry) and RCS (roll).
+        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
+            continue;
+        };
+        let (gimbal_pitch, gimbal_yaw) = allocate_gimbal_deflections(
+            &stage.engines,
+            rocket.dynamics.center_of_mass_m,
+            torque,
+            propulsion.throttle,
+        );
+        commands.gimbal_pitch_cmd_rad = gimbal_pitch;
+        commands.gimbal_yaw_cmd_rad = gimbal_yaw;
+        commands.rcs_torque_cmd_body = DVec3::new(0.0, torque.y, 0.0);
+    }
+}
+
+/// Actuation: apply the physical actuator limits (throttle slew, gimbal range,
+/// RCS torque) to the control commands and deliver the bounded outputs to the
+/// propulsion systems and the torque accumulator. The last layer before
+/// physics; it never writes the vehicle's motion directly.
+pub fn actuation_system(
+    time: Res<Time>,
+    mut rocket_query: Query<(
+        &RocketCommands,
+        &mut RocketPropulsion,
+        &mut RocketComponent,
+        &RocketAutopilot,
+    )>,
+) {
+    let dt = time.delta_secs() as f32;
+    for (commands, mut propulsion, mut rocket, autopilot) in rocket_query.iter_mut() {
+        let limits = autopilot.actuation;
+        propulsion.throttle = limit_throttle_slew(
+            propulsion.throttle,
+            commands.throttle_cmd,
+            limits.max_throttle_slew_per_s,
+            dt,
+        );
+        propulsion.gimbal_pitch_rad = clamp_deflection(
+            commands.gimbal_pitch_cmd_rad,
+            limits.max_gimbal_deflection_rad,
+        );
+        propulsion.gimbal_yaw_rad = clamp_deflection(
+            commands.gimbal_yaw_cmd_rad,
+            limits.max_gimbal_deflection_rad,
+        );
+        let rcs = clamp_rcs_torque(commands.rcs_torque_cmd_body, limits.max_rcs_torque_nm);
+        rocket.torque_accum_nm += rcs;
     }
 }
 

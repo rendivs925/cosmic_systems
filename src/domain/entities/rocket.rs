@@ -1,5 +1,20 @@
 use bevy::prelude::*;
 
+/// Mission phase of a rocket flight. Drives which guidance targets are
+/// produced (AGENTS.md section 18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RocketMissionState {
+    #[default]
+    PreLaunch,
+    Launch,
+    Ascent,
+    Orbit,
+    Deorbit,
+    Descent,
+    Landing,
+    Landed,
+}
+
 /// A single rocket engine. Positions/axes are expressed in the vehicle body
 /// frame where +Y is the longitudinal axis (nose-up).
 #[derive(Clone, Debug)]

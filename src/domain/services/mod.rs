@@ -1,7 +1,10 @@
+pub mod actuation;
 pub mod aerodynamics;
 pub mod atmosphere;
+pub mod control;
 pub mod craft_physics;
 pub mod gravity;
+pub mod guidance;
 pub mod gyroscope;
 pub mod physics;
 pub mod physics_gyroscope;
