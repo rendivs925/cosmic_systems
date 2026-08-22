@@ -11,8 +11,9 @@
 use crate::domain::services::cube_sphere::{
     build_patch_geometry, lod_for_distance, patch_world_size_m, PatchGeometry, TerrainPatch,
 };
-use crate::domain::services::terrain_patch_manager::TerrainPatchManager;
+use crate::domain::services::terrain_patch_manager::{TerrainPatchManager, PatchState};
 use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::terrain_render::{TerrainPatchReady, TerrainPatchEvicted};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -53,25 +54,38 @@ impl Default for TerrainStreamingResource {
 /// rendered geometry or the rocket's state.
 pub fn stream_terrain_patches(
     mut streaming: ResMut<TerrainStreamingResource>,
-    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
+    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketComponent)>,
+    mut ready_events: MessageWriter<TerrainPatchReady>,
+    mut evicted_events: MessageWriter<TerrainPatchEvicted>,
 ) {
     streaming.manager.tick();
 
     // No rocket yet: keep the manager tidy and return.
     let Some((binding, rocket)) = rocket_query.iter().next() else {
         let budget = streaming.budget_bytes;
-        streaming.manager.enforce_memory_budget(budget);
+        let evicted = streaming.manager.enforce_memory_budget(budget);
+        for patch in evicted {
+            evicted_events.write(TerrainPatchEvicted {
+                patch,
+                planet_entity: Entity::PLACEHOLDER, // No planet when no rocket
+            });
+        }
         return;
     };
-    let Some((planet, planet_terrain)) = planet_query
+    let Some((planet_entity, _planet, planet_terrain)) = planet_query
         .iter()
-        .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        .find(|(_, planet, _)| planet.domain_planet.name == binding.planet_name)
     else {
         return;
     };
 
-    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+    let radius_m = planet_query
+        .iter()
+        .find(|(_, planet, _)| planet.domain_planet.name == binding.planet_name)
+        .map(|(_, planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
+        .unwrap_or(6_371_000.0);
+
     let position_m = rocket.dynamics.position_m;
     let r = position_m.length();
     if r < 1e-6 {
@@ -92,6 +106,13 @@ pub fn stream_terrain_patches(
     );
     let focus = TerrainPatch::for_direction(dir, level);
 
+    // Track patches that were already visible to detect newly ready ones.
+    let previously_visible: Vec<TerrainPatch> = streaming
+        .manager
+        .visible_patches()
+        .copied()
+        .collect();
+
     // Drive lifecycle for the focus window and generate geometry.
     let window = surrounding_patches(&focus);
     for patch in window.iter() {
@@ -99,6 +120,12 @@ pub fn stream_terrain_patches(
         let resolution = PATCH_RESOLUTION as u64;
         let size_bytes = BYTES_PER_VERTEX * resolution * resolution;
         streaming.manager.request(*patch, size_bytes);
+
+        let was_ready = matches!(
+            streaming.manager.state_of(patch),
+            Some(PatchState::Ready) | Some(PatchState::Visible)
+        );
+
         streaming.manager.begin_generation(patch);
         let geometry = build_patch_geometry(
             patch,
@@ -110,6 +137,14 @@ pub fn stream_terrain_patches(
         streaming.generated.insert(*patch, geometry);
         streaming.manager.mark_ready(patch);
         streaming.manager.mark_visible(patch);
+
+        // Emit ready event for newly ready patches.
+        if !was_ready {
+            ready_events.write(TerrainPatchReady {
+                patch: *patch,
+                planet_entity,
+            });
+        }
     }
 
     // Drop geometry for patches no longer in the visible window.
@@ -118,7 +153,13 @@ pub fn stream_terrain_patches(
         .retain(|patch, _| window.contains(patch));
 
     let budget = streaming.budget_bytes;
-    streaming.manager.enforce_memory_budget(budget);
+    let evicted = streaming.manager.enforce_memory_budget(budget);
+    for patch in evicted {
+        evicted_events.write(TerrainPatchEvicted {
+            patch,
+            planet_entity,
+        });
+    }
 }
 
 /// The focus patch plus its neighbors at the same level (a 3×3 patch window
@@ -149,11 +190,12 @@ fn surrounding_patches(focus: &TerrainPatch) -> Vec<TerrainPatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::cube_sphere::CubeFace;
 
     #[test]
     fn focus_window_has_neighbors_within_face() {
         let focus = TerrainPatch {
-            face: crate::domain::services::cube_sphere::CubeFace::PosZ,
+            face: CubeFace::PosZ,
             level: 2,
             tile_x: 2,
             tile_y: 2,
@@ -167,7 +209,7 @@ mod tests {
     #[test]
     fn focus_window_clips_at_face_edge() {
         let focus = TerrainPatch {
-            face: crate::domain::services::cube_sphere::CubeFace::PosX,
+            face: CubeFace::PosX,
             level: 1,
             tile_x: 0,
             tile_y: 0,

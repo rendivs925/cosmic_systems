@@ -22,6 +22,7 @@ pub mod systems;
 pub mod terrain_heightmaps;
 pub mod terrain_mesh;
 pub mod terrain_streaming;
+pub mod terrain_render;
 pub mod terrain_systems;
 pub mod terrain_textures;
 pub mod terrain_utils;
