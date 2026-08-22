@@ -21,10 +21,11 @@ use crate::domain::services::guidance::{
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
-    consume_propellant, gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse,
-    shed_stage, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M, SEPARATION_UPPER_DV_MPS,
-    SPENT_STAGE_RETRO_DV_MPS,
+    active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed,
+    allocate_gimbal_deflections, clamp_gimbal, clamp_throttle_range, consume_propellant,
+    gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse, shed_stage,
+    stage_throttle_envelope, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
+    SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
@@ -284,6 +285,12 @@ pub fn propulsion_thrust(
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
+        // Air-start gate: after any separation, only restartable engines may
+        // light. Combined with the ullage settle gate below.
+        let engines_restartable = stage.engines.iter().all(|e| e.restartable);
+        if !air_start_allowed(propulsion.separations_count > 0, engines_restartable) {
+            continue;
+        }
         // Ullage gate: no ignition until propellant has settled post-staging.
         if !ignition_allowed_during_ullage(
             propulsion.time_since_separation_s,
@@ -325,6 +332,12 @@ pub fn propulsion_consumption(
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
+        // Air-start gate: consumption follows the same ignition authority as
+        // thrust so mass bookkeeping can never diverge from applied force.
+        let engines_restartable = stage.engines.iter().all(|e| e.restartable);
+        if !air_start_allowed(propulsion.separations_count > 0, engines_restartable) {
+            continue;
+        }
         // Ullage gate: consumption follows the same ignition authority as
         // thrust so mass bookkeeping can never diverge from applied force.
         if !ignition_allowed_during_ullage(
@@ -347,10 +360,11 @@ pub fn propulsion_consumption(
         let active_stage = propulsion.active_stage;
         propulsion.propellant_remaining_kg[active_stage] = remaining_new;
 
-        let new_mass = active_vehicle_mass(
+        let new_mass = active_vehicle_mass_with_payload(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
+            propulsion.attached_payload_kg,
         );
         mass.0 = new_mass;
         rocket.dynamics.mass_kg = new_mass;
@@ -417,6 +431,9 @@ pub fn propulsion_staging(
         let pre_separation = rocket.dynamics;
 
         propulsion.active_stage = next;
+        // The next stage's ignition is now an air-start: it requires the
+        // stage's engines to be restartable, on top of the ullage settle.
+        propulsion.separations_count += 1;
 
         // Separation impulses: pusher Δv to the upper stage, optional retro
         // Δv to the spent stage (pure domain function).
@@ -429,10 +446,11 @@ pub fn propulsion_staging(
         );
         rocket.dynamics.velocity_mps = outcome.upper_velocity_mps;
 
-        let new_mass = active_vehicle_mass(
+        let new_mass = active_vehicle_mass_with_payload(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
+            propulsion.attached_payload_kg,
         );
         mass.0 = new_mass;
         rocket.dynamics.mass_kg = new_mass;
@@ -1012,12 +1030,22 @@ pub fn actuation_system(
         rocket_query.iter_mut()
     {
         let limits = autopilot.actuation;
-        propulsion.throttle = limit_throttle_slew(
+        // Slew limit first, then clamp to the active stage's per-engine
+        // throttle envelope (intersection of individual engine ranges), so
+        // no engine is commanded outside its own capability.
+        let slewed = limit_throttle_slew(
             propulsion.throttle,
             commands.throttle_cmd,
             limits.max_throttle_slew_per_s,
             dt,
         );
+        let envelope = propulsion
+            .vehicle
+            .stages
+            .get(propulsion.active_stage)
+            .map(|stage| stage_throttle_envelope(&stage.engines))
+            .unwrap_or((0.0, 1.0));
+        propulsion.throttle = clamp_throttle_range(slewed, envelope.0, envelope.1);
         propulsion.gimbal_pitch_rad = clamp_deflection(
             commands.gimbal_pitch_cmd_rad,
             limits.max_gimbal_deflection_rad,

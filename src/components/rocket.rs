@@ -85,6 +85,15 @@ pub struct RocketPropulsion {
     /// Required settle time after staging before engines may ignite (ullage).
     /// Zero disables the gate.
     pub ullage_settle_time_s: f32,
+    /// Number of stage separations so far. Zero means the vehicle has never
+    /// separated a stage, so its first ignition is not an air-start; after
+    /// any separation, ignition additionally requires the stage's engines to
+    /// be `restartable`.
+    pub separations_count: u32,
+    /// Mass of attached payload hardware (payload fairing) still on the
+    /// vehicle, kg. Included in every mass recompute so consumption, staging,
+    /// and fairing jettison share one mass authority. Zeroed on jettison.
+    pub attached_payload_kg: f32,
 }
 
 /// Flight computer command interface between guidance, control, actuation, physics.

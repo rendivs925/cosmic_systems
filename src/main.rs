@@ -10,7 +10,8 @@ pub mod infrastructure;
 pub mod presentation;
 pub mod systems;
 
-use application::modes::Mode;
+use application::modes::{parse_launch_options, Mode};
+use application::rocket_config::VehicleSelection;
 use application::solar_system_startup::SolarCameraEnabled;
 use infrastructure::plugins::{
     CraftModePlugin, GyroModePlugin, RocketModePlugin, SharedSimulationPlugin,
@@ -18,11 +19,11 @@ use infrastructure::plugins::{
 };
 
 fn main() {
-    let mode = Mode::from_args(env::args());
+    let options = parse_launch_options(env::args());
 
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
-            title: mode.title().to_string(),
+            title: options.mode.title().to_string(),
             resolution: (1280, 720).into(),
             ..default()
         }),
@@ -39,7 +40,7 @@ fn main() {
     // explicit registration needed here.
     app.add_plugins(plugins);
 
-    match mode {
+    match options.mode {
         Mode::Solar => {
             app.add_plugins((SharedSimulationPlugin, SolarSystemModePlugin));
         }
@@ -52,6 +53,7 @@ fn main() {
             ));
         }
         Mode::Rocket => {
+            app.insert_resource(VehicleSelection(options.vehicle));
             app.add_plugins((
                 SharedSimulationPlugin,
                 SolarSystemModePlugin,

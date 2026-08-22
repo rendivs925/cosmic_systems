@@ -161,8 +161,9 @@ fn planet_terrain_radius(
 
 /// Jettison the payload fairing once the vehicle climbs through the jettison
 /// altitude. Drops the fairing mass from the authoritative dynamics, removes
-/// the component, spawns two short-lived halves as debris, and emits
-/// [`FairingSeparatedEvent`].
+/// the component, clears the propulsion payload tracker (so the shared
+/// mass authority stops counting it), spawns two short-lived halves as
+/// debris, and emits [`FairingSeparatedEvent`].
 pub fn check_fairing_separation(
     mut commands: Commands,
     mut fairing_writer: MessageWriter<FairingSeparatedEvent>,
@@ -174,18 +175,24 @@ pub fn check_fairing_separation(
         &mut RocketPhysicsState,
         &AtmosphereState,
         &mut RocketMass,
+        &mut RocketPropulsion,
         &PayloadFairing,
     )>,
 ) {
-    for (entity, binding, mut rocket, atmosphere, mut mass, fairing) in rocket_query.iter_mut() {
+    for (entity, binding, mut rocket, atmosphere, mut mass, mut propulsion, fairing) in
+        rocket_query.iter_mut()
+    {
         if atmosphere.altitude_m < FAIRING_JETTISON_ALTITUDE_M {
             continue;
         }
 
-        // Drop the mass from the authoritative state first (single source).
+        // Drop the mass from the authoritative state first (single source),
+        // then clear the payload tracker so consumption/staging recomputes
+        // agree with the dropped mass.
         let new_mass = (mass.0 - fairing.dry_mass_kg as f64).max(1.0);
         rocket.dynamics.mass_kg = new_mass;
         mass.0 = new_mass;
+        propulsion.attached_payload_kg = 0.0;
         commands.entity(entity).remove::<PayloadFairing>();
 
         // Two halves pushed apart along the body ±X axis.

@@ -171,6 +171,47 @@ pub fn allocate_gimbal_deflections(
     (pitch_cmd, yaw_cmd)
 }
 
+/// Clamp a commanded throttle to a per-engine throttle range and then to the
+/// physical 0..1 band. A zero (or negative) command means "engine off" and
+/// stays zero — otherwise an engine with a positive minimum throttle could
+/// never be shut down.
+pub fn clamp_throttle_range(cmd: f32, throttle_min: f32, throttle_max: f32) -> f32 {
+    if cmd <= 0.0 {
+        return 0.0;
+    }
+    cmd.clamp(
+        throttle_min.clamp(0.0, 1.0),
+        throttle_max.clamp(throttle_min.min(1.0), 1.0),
+    )
+}
+
+/// Commanded-throttle envelope shared by every engine in a stage: the command
+/// must be valid for each engine individually, so the stage envelope is the
+/// intersection (highest lower bound, lowest upper bound).
+pub fn stage_throttle_envelope(engines: &[RocketEngine]) -> (f32, f32) {
+    let Some(first) = engines.first() else {
+        return (0.0, 1.0);
+    };
+    (
+        engines
+            .iter()
+            .map(|e| e.throttle_min)
+            .fold(first.throttle_min, f32::max),
+        engines
+            .iter()
+            .map(|e| e.throttle_max)
+            .fold(first.throttle_max, f32::min),
+    )
+}
+
+/// May this stage's engines ignite after a separation? Engines marked
+/// non-restartable cannot air-start once separated; the pad ignition before
+/// any separation is never a restart. Combined with the ullage settle gate at
+/// the call sites.
+pub fn air_start_allowed(separated_since_ignition: bool, engines_restartable: bool) -> bool {
+    !separated_since_ignition || engines_restartable
+}
+
 /// Total mass of the vehicle considering only the active and future stages.
 pub fn active_vehicle_mass(
     stages: &[RocketStage],
@@ -183,6 +224,18 @@ pub fn active_vehicle_mass(
         mass += propellant_remaining_kg.get(i).copied().unwrap_or(0.0) as f64;
     }
     mass
+}
+
+/// Vehicle mass including any attached payload hardware (fairing): one
+/// authority so consumption/staging/jettison can never disagree about what
+/// the vehicle currently weighs.
+pub fn active_vehicle_mass_with_payload(
+    stages: &[RocketStage],
+    propellant_remaining_kg: &[f32],
+    active_stage: usize,
+    attached_payload_kg: f32,
+) -> f64 {
+    active_vehicle_mass(stages, propellant_remaining_kg, active_stage) + attached_payload_kg as f64
 }
 
 /// Inertia tensor and center of mass for the active vehicle, using the shared
@@ -455,15 +508,7 @@ mod tests {
     #[test]
     fn stage_thrust_ignores_shutdown_engines() {
         use crate::domain::entities::rocket::EngineState;
-        let running = RocketEngine {
-            position_m: bevy::math::Vec3::ZERO,
-            thrust_axis: bevy::math::Vec3::Y,
-            isp_sea_level: 282.0,
-            isp_vacuum: 311.0,
-            gimbal_range_deg: 5.0,
-            max_thrust_kn: 1000.0,
-            state: EngineState::Running,
-        };
+        let running = engine_with_throttle(0.0, 1.0);
         let mut shutdown = running.clone();
         shutdown.state = EngineState::Off;
 
@@ -536,6 +581,78 @@ mod tests {
         ));
         // Disabled (settle time zero): always allowed.
         assert!(ignition_allowed_during_ullage(0.0, 0.0));
+    }
+
+    #[test]
+    fn throttle_range_clamps_into_engine_envelope() {
+        // A zero/negative command is "engine off" and stays off even when the
+        // engine has a positive minimum throttle.
+        assert_eq!(clamp_throttle_range(0.0, 0.4, 0.9), 0.0);
+        assert_eq!(clamp_throttle_range(-1.0, 0.4, 0.9), 0.0);
+        // Command inside the range is untouched.
+        assert_eq!(clamp_throttle_range(0.5, 0.4, 0.9), 0.5);
+        // Commands outside the range are clamped to it.
+        assert_eq!(clamp_throttle_range(0.1, 0.4, 0.9), 0.4);
+        assert_eq!(clamp_throttle_range(0.95, 0.4, 0.9), 0.9);
+        // Degenerate ranges stay within the physical 0..1 band.
+        assert_eq!(clamp_throttle_range(1.5, 0.0, 2.5), 1.0);
+        assert_eq!(clamp_throttle_range(0.3, -0.5, 0.5), 0.3);
+        // Fixed-thrust engine: any positive command runs full throttle.
+        assert_eq!(clamp_throttle_range(0.2, 1.0, 1.0), 1.0);
+    }
+
+    fn engine_with_throttle(min: f32, max: f32) -> RocketEngine {
+        RocketEngine {
+            position_m: bevy::math::Vec3::ZERO,
+            thrust_axis: bevy::math::Vec3::Y,
+            isp_sea_level: 282.0,
+            isp_vacuum: 311.0,
+            gimbal_range_deg: 5.0,
+            max_thrust_kn: 1000.0,
+            throttle_min: min,
+            throttle_max: max,
+            restartable: true,
+            state: EngineState::Running,
+        }
+    }
+
+    #[test]
+    fn stage_throttle_envelope_is_the_intersection() {
+        let engines = [
+            engine_with_throttle(0.3, 0.9),
+            engine_with_throttle(0.4, 1.0),
+            engine_with_throttle(0.0, 0.7),
+        ];
+        let (min, max) = stage_throttle_envelope(&engines);
+        assert_eq!(min, 0.4, "highest lower bound wins");
+        assert_eq!(max, 0.7, "lowest upper bound wins");
+        // No engines → full physical range.
+        assert_eq!(stage_throttle_envelope(&[]), (0.0, 1.0));
+    }
+
+    #[test]
+    fn air_start_requires_restartable_engines_after_separation() {
+        // Before any separation the first ignition is not a restart.
+        assert!(air_start_allowed(false, false));
+        assert!(air_start_allowed(false, true));
+        // After a separation only restartable engines may light.
+        assert!(!air_start_allowed(true, false));
+        assert!(air_start_allowed(true, true));
+    }
+
+    #[test]
+    fn payload_mass_rides_with_active_vehicle_mass() {
+        let rocket = Rocket::falcon9();
+        let propellant = vec![90_000.0_f32, 30_000.0];
+        assert_eq!(
+            active_vehicle_mass_with_payload(&rocket.stages, &propellant, 0, 1_900.0),
+            142_200.0 + 1_900.0
+        );
+        // Zero payload matches plain active_vehicle_mass.
+        assert_eq!(
+            active_vehicle_mass_with_payload(&rocket.stages, &propellant, 1, 0.0),
+            active_vehicle_mass(&rocket.stages, &propellant, 1)
+        );
     }
 
     #[test]

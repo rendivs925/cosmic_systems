@@ -22,6 +22,7 @@ bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types
 num_cpus = "1.16"       # CPU core detection
 serde = { version = "1.0", features = ["derive"] }  # Serialization for Web Workers
+ron = "0.10"            # Rocket vehicle configuration files (assets/configs/rockets)
 async-trait = "0.1"     # Async trait definitions
 tokio = { version = "1.0", features = ["rt", "macros", "io-util", "time"] }  # Async runtime (wasm-compatible features)
 wgpu = "0.20"           # WebGPU for WASM compute

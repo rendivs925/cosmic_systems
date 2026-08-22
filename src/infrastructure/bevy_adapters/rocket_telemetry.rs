@@ -9,7 +9,7 @@ use crate::domain::services::aerodynamics::{
 };
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_mass, stage_thrust_body, STANDARD_GRAVITY_MPS2,
+    active_vehicle_mass_with_payload, stage_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{PlanetAtmosphere, PlanetComponent};
@@ -161,10 +161,13 @@ impl<'a> TelemetryContext<'a> {
     }
 
     fn compute_mass_properties(&self) -> (f64, f64) {
-        let dry_mass = active_vehicle_mass(
+        // Attached payload hardware (fairing) counts as shed structure, so it
+        // belongs to the dry mass of the active stack until jettison.
+        let dry_mass = active_vehicle_mass_with_payload(
             &self.propulsion.vehicle.stages,
             &self.propulsion.propellant_remaining_kg,
             self.propulsion.active_stage,
+            self.propulsion.attached_payload_kg,
         ) - self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64;
 
         let total_propellant_initial: f64 = self

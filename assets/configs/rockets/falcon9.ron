@@ -1,0 +1,126 @@
+// Falcon 9 (Block 5) - two-stage kerolox medium-lift vehicle.
+//
+// Numbers are chosen to EXACTLY match the hardcoded domain model
+// (`domain/entities/rocket.rs :: Rocket::falcon9()`), which pins the original
+// simulator aggregates: 22.2 t dry (18.0 t stage 1 + 4.2 t stage 2),
+// 120.0 t propellant (90.0 t + 30.0 t), 7 607 kN liftoff thrust across nine
+// Merlin 1D engines, ISP 282 s (SL) / 311 s (vac), 5 deg TVC gimbal, 3.7 m
+// core diameter over a 70 m stack; nine engines on a 1.2 m octaweb ring at
+// body-frame y = -32 m; second stage: one Merlin Vacuum, 934 kN at y = +12 m,
+// ISP 311 s (SL) / 348 s (vac).
+//
+// Sources (rough public figures): SpaceX Falcon 9 User Guide (2018-2021),
+// SpaceX press materials; per-engine thrust derived from the 7 607 kN
+// aggregate retained by the simulator.
+
+(
+    vehicles: [
+        (
+            name: "Falcon 9",
+            diameter_m: 3.7,
+            height_m: 70.0,
+            stages: [
+                (
+                    // Nine Merlin 1D engines on the octaweb ring (radius
+                    // 1.2 m at y = -32 m); per-engine thrust = 7 607 kN / 9.
+                    name: "Falcon 9 Stage 1",
+                    dry_mass_kg: 18_000.0,
+                    propellant_mass_kg: 90_000.0,
+                    engines: [
+                        (
+                            position: (1.2, -32.0, 0.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (0.9192533, -32.0, 0.7713451),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (0.2083778, -32.0, 1.1817693),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (-0.6, -32.0, 1.0392305),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (-1.1276311, -32.0, 0.4104242),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (-1.1276311, -32.0, -0.4104242),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (-0.6, -32.0, -1.0392305),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (0.2083778, -32.0, -1.1817693),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                        (
+                            position: (0.9192533, -32.0, -0.7713451),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 282.0,
+                            isp_vac: 311.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 845_222.2,
+                        ),
+                    ],
+                ),
+                (
+                    name: "Falcon 9 Stage 2",
+                    dry_mass_kg: 4_200.0,
+                    propellant_mass_kg: 30_000.0,
+                    engines: [
+                        // Single Merlin Vacuum above the interstage.
+                        (
+                            position: (0.0, 12.0, 0.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 311.0,
+                            isp_vac: 348.0,
+                            gimbal_range_deg: 5.0,
+                            max_thrust_n: 934_000.0,
+                        ),
+                    ],
+                ),
+            ],
+            fairing: (
+                dry_mass_kg: 1_750.0,
+            ),
+        ),
+    ],
+)

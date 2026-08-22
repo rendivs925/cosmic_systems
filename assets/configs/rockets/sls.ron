@@ -1,0 +1,92 @@
+// Space Launch System (Block 1) - staged-core simplification.
+//
+// Simplification: the two solid rocket boosters that burn alongside the core
+// are NOT modeled as separate hardware; stage 1 is the core stage with its
+// four RS-25 engines and stage 2 is the Interim Cryogenic Propulsion Stage.
+// This keeps the simulator's sequential staging model coherent; a parallel-
+// burn booster model would need dedicated infrastructure.
+//
+// Sources (rough public figures): NASA SLS Block 1 factsheets - core 8.4 m
+// diameter x ~98 m stack; core ~85 t dry / ~979 t LOX+LH2 propellant;
+// 4 x RS-25, ISP ~366 s (SL) / ~452 s (vac), ~2.2 MN vac each at rated
+// power, gimbal ~10.5 deg, throttle to ~67%; RS-25 cannot restart in flight.
+// ICPS ~3.5 t dry / ~27 t propellant, one RL10-class engine ~110 kN,
+// ISP ~450 s vac, fixed thrust.
+
+(
+    vehicles: [
+        (
+            name: "SLS Block 1",
+            diameter_m: 8.4,
+            height_m: 98.0,
+            stages: [
+                (
+                    name: "Core Stage",
+                    dry_mass_kg: 85_000.0,
+                    propellant_mass_kg: 979_000.0,
+                    engines: [
+                        // Four RS-25s in a square cluster under the core.
+                        // SSMEs cannot restart after separation.
+                        (
+                            position: (2.0, -40.0, 2.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 366.0,
+                            isp_vac: 452.0,
+                            gimbal_range_deg: 10.5,
+                            max_thrust_n: 2_210_000.0,
+                            throttle_min: 0.67,
+                            restartable: false,
+                        ),
+                        (
+                            position: (-2.0, -40.0, 2.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 366.0,
+                            isp_vac: 452.0,
+                            gimbal_range_deg: 10.5,
+                            max_thrust_n: 2_210_000.0,
+                            throttle_min: 0.67,
+                            restartable: false,
+                        ),
+                        (
+                            position: (2.0, -40.0, -2.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 366.0,
+                            isp_vac: 452.0,
+                            gimbal_range_deg: 10.5,
+                            max_thrust_n: 2_210_000.0,
+                            throttle_min: 0.67,
+                            restartable: false,
+                        ),
+                        (
+                            position: (-2.0, -40.0, -2.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 366.0,
+                            isp_vac: 452.0,
+                            gimbal_range_deg: 10.5,
+                            max_thrust_n: 2_210_000.0,
+                            throttle_min: 0.67,
+                            restartable: false,
+                        ),
+                    ],
+                ),
+                (
+                    name: "ICPS",
+                    dry_mass_kg: 3_500.0,
+                    propellant_mass_kg: 27_200.0,
+                    engines: [
+                        // Single RL10-class cryogenic engine, fixed thrust.
+                        (
+                            position: (0.0, 15.0, 0.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 400.0,
+                            isp_vac: 450.0,
+                            gimbal_range_deg: 2.0,
+                            max_thrust_n: 110_000.0,
+                            throttle_min: 1.0,
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ],
+)

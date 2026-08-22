@@ -12,6 +12,7 @@ use crate::application::craft_startup::spawn_craft;
 use crate::application::craft_startup::spawn_craft_model;
 use crate::application::craft_startup::spawn_craft_ui;
 use crate::application::gyro_startup::setup_gyro;
+use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
 use crate::domain::events::{
@@ -256,8 +257,16 @@ fn spawn_rockets_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    catalog: Res<RocketCatalog>,
+    selection: Res<VehicleSelection>,
 ) {
-    spawn_rockets(&mut commands, &mut meshes, &mut materials);
+    spawn_rockets(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &catalog,
+        selection.0.as_deref(),
+    );
 }
 
 /// Rocket flight mode: composes the shared solar-system world and registers
@@ -266,6 +275,19 @@ pub struct RocketModePlugin;
 
 impl Plugin for RocketModePlugin {
     fn build(&self, app: &mut App) {
+        // Vehicle catalog: data-driven definitions from assets/configs/rockets
+        // (AGENTS.md section 65: fail fast on invalid configuration).
+        #[cfg(not(target_arch = "wasm32"))]
+        match RocketCatalog::from_dir() {
+            Ok(catalog) => {
+                app.insert_resource(catalog);
+            }
+            Err(e) => panic!("Rocket vehicle configuration failed to load: {e}"),
+        }
+        #[cfg(target_arch = "wasm32")]
+        app.init_resource::<RocketCatalog>();
+        app.init_resource::<VehicleSelection>();
+
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, spawn_rockets_system);
 

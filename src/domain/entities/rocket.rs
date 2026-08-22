@@ -30,6 +30,14 @@ pub struct RocketEngine {
     pub isp_vacuum: f32,
     pub gimbal_range_deg: f32,
     pub max_thrust_kn: f32,
+    /// Lowest commanded throttle the engine can hold (0..1).
+    pub throttle_min: f32,
+    /// Highest commanded throttle the engine can produce (0..1).
+    pub throttle_max: f32,
+    /// Whether the engine can ignite again after a stage separation
+    /// (air-start capability). Non-restartable engines cannot light a new
+    /// stage once separated (e.g. solid motors).
+    pub restartable: bool,
     pub state: EngineState,
 }
 
@@ -79,6 +87,9 @@ impl Rocket {
                     isp_vacuum: 311.0,
                     gimbal_range_deg: 5.0,
                     max_thrust_kn: 7607.0 / 9.0,
+                    throttle_min: 0.0,
+                    throttle_max: 1.0,
+                    restartable: true,
                     state: EngineState::Running,
                 }
             })
@@ -106,6 +117,9 @@ impl Rocket {
                         isp_vacuum: 348.0,
                         gimbal_range_deg: 5.0,
                         max_thrust_kn: 934.0,
+                        throttle_min: 0.0,
+                        throttle_max: 1.0,
+                        restartable: true,
                         state: EngineState::Running,
                     }],
                 },
