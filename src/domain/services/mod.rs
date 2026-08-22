@@ -4,6 +4,7 @@ pub mod atmosphere;
 pub mod control;
 pub mod craft_physics;
 pub mod cube_sphere;
+pub mod dem_terrain_source;
 pub mod gravity;
 pub mod guidance;
 pub mod gyroscope;

@@ -245,11 +245,11 @@ impl TerrainSite {
     }
 }
 
-/// Detailed launch-site patches overlaid on a procedural base source. Sites
+/// Detailed launch-site patches overlaid on a base terrain source. Sites
 /// stay flat (localized objects) while the rest of the planet uses the base.
 #[derive(Debug, Clone)]
 pub struct SiteAwareTerrainSource {
-    pub base: ProceduralTerrainSource,
+    pub base: std::sync::Arc<dyn TerrainSource>,
     pub sites: Vec<TerrainSite>,
 }
 
@@ -315,12 +315,8 @@ impl TerrainSource for PlanetaryDemSource {
 /// The shared terrain source for a planet by name: Earth gets flat detailed
 /// launch sites over a procedural base; the Moon gets a cratered procedural
 /// surface with a landing site. Other bodies use a plain procedural base.
+/// When the `dem` feature is enabled, Earth uses SRTM DEM data with procedural fallback.
 pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
-    let base = match name {
-        "Earth" => ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0),
-        "Moon" => ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14),
-        _ => ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0),
-    };
     let sites = match name {
         "Earth" => vec![
             TerrainSite {
@@ -354,10 +350,32 @@ pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
         }],
         _ => vec![],
     };
+
+    #[cfg(feature = "dem")]
+    {
+        use crate::domain::services::dem_terrain_source::DemTerrainSource;
+        if name == "Earth" {
+            let dem = DemTerrainSource::new(
+                crate::domain::services::dem_terrain_source::DemTerrainConfig::default()
+            );
+            let dem_arc = std::sync::Arc::new(dem);
+            if !sites.is_empty() {
+                return std::sync::Arc::new(SiteAwareTerrainSource { base: dem_arc, sites });
+            }
+            return dem_arc;
+        }
+    }
+
+    let base = match name {
+        "Earth" => ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0),
+        "Moon" => ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14),
+        _ => ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0),
+    };
+    let base_arc = std::sync::Arc::new(base);
     if sites.is_empty() {
-        std::sync::Arc::new(base)
+        base_arc
     } else {
-        std::sync::Arc::new(SiteAwareTerrainSource { base, sites })
+        std::sync::Arc::new(SiteAwareTerrainSource { base: base_arc, sites })
     }
 }
 
