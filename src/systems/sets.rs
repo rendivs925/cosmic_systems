@@ -12,6 +12,9 @@ pub enum RocketSet {
     OrbitalElements,
     TerrainInteraction,
     Atmosphere,
+    /// Jettisoned hardware (spent stages, fairing halves): drag-only flight
+    /// and lifecycle despawn.
+    SpentStage,
     EntryPhysics,
     AeroForces,
     AeroTorque,

@@ -5,8 +5,15 @@ use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial, geodetic_to_body_fixed,
 };
 use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
+use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 use crate::infrastructure::bevy_adapters::components::Selectable;
+use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
+
+/// Flight-recorder ring capacity (entries).
+const RECORDER_MAX_ENTRIES: usize = 2_048;
+/// Flight-recorder sampling interval (s): ~10 physics ticks at 60 Hz.
+const RECORDER_INTERVAL_S: f64 = 1.0 / 6.0;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -82,6 +89,9 @@ pub fn spawn_rockets(
                 throttle: 0.0,
                 gimbal_pitch_rad: 0.0,
                 gimbal_yaw_rad: 0.0,
+                // Gate starts open: the first (pad) ignition needs no ullage.
+                time_since_separation_s: DEFAULT_ULLAGE_SETTLE_TIME_S,
+                ullage_settle_time_s: DEFAULT_ULLAGE_SETTLE_TIME_S,
             },
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
@@ -111,6 +121,7 @@ pub fn spawn_rockets(
     commands.entity(entity).insert((
         CommsState::default(),
         RetroPropulsionEffect::default(),
+        FlightRecorder::new(RECORDER_MAX_ENTRIES, RECORDER_INTERVAL_S),
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
         Transform::default(),

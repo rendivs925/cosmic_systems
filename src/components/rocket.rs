@@ -78,6 +78,13 @@ pub struct RocketPropulsion {
     pub throttle: f32,
     pub gimbal_pitch_rad: f32,
     pub gimbal_yaw_rad: f32,
+    /// Seconds since the last stage separation; reset to zero on staging and
+    /// advanced by the ullage system. Gates engine restarts when
+    /// `ullage_settle_time_s` is configured.
+    pub time_since_separation_s: f32,
+    /// Required settle time after staging before engines may ignite (ullage).
+    /// Zero disables the gate.
+    pub ullage_settle_time_s: f32,
 }
 
 /// Flight computer command interface between guidance, control, actuation, physics.
@@ -206,6 +213,31 @@ impl Default for RetroPropulsionEffect {
             thrust_multiplier: 1.0,
         }
     }
+}
+
+/// What kind of jettisoned hardware a debris entity is.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpentStageKind {
+    /// A separated booster / lower stage.
+    Booster,
+    /// One half of a jettisoned payload fairing.
+    FairingHalf,
+}
+
+/// A jettisoned stage or fairing flying as uncontrolled debris. Carries its
+/// own simplified physics (gravity + drag only) and despawns on ground
+/// contact or below the lifecycle altitude threshold.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct SpentStage {
+    pub parent_rocket: Entity,
+    pub kind: SpentStageKind,
+}
+
+/// Payload fairing attached to the vehicle. Presence of the component means
+/// the fairing is still attached; jettison removes it and drops its mass.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PayloadFairing {
+    pub dry_mass_kg: f32,
 }
 
 /// Parachute deployment state. Wraps the pure domain state machine

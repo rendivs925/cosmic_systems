@@ -25,3 +25,22 @@ pub struct SplashdownDetectedEvent {
     /// Vertical speed at touchdown [m/s] (negative = descending).
     pub touchdown_vertical_speed_mps: f64,
 }
+
+/// A stage separated from a vehicle and became its own debris entity.
+#[derive(Debug, Clone, Copy, PartialEq, Message)]
+pub struct StageSeparatedEvent {
+    /// The remaining (upper-stage) vehicle.
+    pub rocket: Entity,
+    /// The newly spawned spent-stage debris entity.
+    pub spent_stage: Entity,
+    /// Total mass shed with the stage (dry + residual propellant) [kg].
+    pub shed_mass_kg: f64,
+}
+
+/// A payload fairing was jettisoned.
+#[derive(Debug, Clone, Copy, PartialEq, Message)]
+pub struct FairingSeparatedEvent {
+    pub rocket: Entity,
+    /// Mass dropped with the fairing halves [kg].
+    pub fairing_mass_kg: f64,
+}

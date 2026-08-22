@@ -14,7 +14,9 @@ use crate::application::craft_startup::spawn_craft_ui;
 use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
-use crate::domain::events::{CommsBlackoutEvent, SplashdownDetectedEvent};
+use crate::domain::events::{
+    CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+};
 use crate::domain::services::simulation_time::{
     advance_simulation_time, sync_fixed_timestep, SimulationTime,
 };
@@ -43,6 +45,9 @@ use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
+use crate::infrastructure::bevy_adapters::rocket_separation::{
+    check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
+};
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
@@ -52,7 +57,8 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     update_rocket_terrain_interaction,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
-    compute_rocket_telemetry_system, handle_flight_recorder_input_system, record_flight_data_system,
+    compute_rocket_telemetry_system, handle_flight_recorder_input_system,
+    record_flight_data_system, rocket_event_feed_system, RocketEventFeed,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
@@ -265,6 +271,7 @@ impl Plugin for RocketModePlugin {
 
         // Rocket telemetry resource for HUD and flight log.
         app.init_resource::<RocketTelemetry>();
+        app.init_resource::<RocketEventFeed>();
 
         // Terrain rendering configuration.
         app.init_resource::<TerrainRenderConfig>();
@@ -272,9 +279,11 @@ impl Plugin for RocketModePlugin {
         // Entry physics configuration.
         app.init_resource::<EntryPhysicsConfig>();
 
-        // Rocket domain messages (blackout edges, splashdown, later staging).
+        // Rocket domain messages (blackout edges, splashdown, staging).
         app.add_message::<CommsBlackoutEvent>();
         app.add_message::<SplashdownDetectedEvent>();
+        app.add_message::<StageSeparatedEvent>();
+        app.add_message::<FairingSeparatedEvent>();
 
         // Rocket camera resources.
         app.init_resource::<RocketCameraMode>();
@@ -311,29 +320,40 @@ impl Plugin for RocketModePlugin {
         // Flight recorder input (runs in Update).
         app.add_systems(Update, handle_flight_recorder_input_system);
 
+        // Event feed: domain messages → HUD line + flight-log entries (Update).
+        app.add_systems(Update, rocket_event_feed_system);
+
         // Sync Bevy's fixed timestep with SimulationTime (runs in FixedUpdate).
         app.add_systems(FixedUpdate, sync_fixed_timestep);
 
+        // Total execution order for the fixed-step flight loop (AGENTS.md
+        // sections 9 and 47). `.chain()` gives real pairwise ordering — the
+        // previous chained-`.before()` form only ordered Guidance against
+        // each set, leaving force writers ambiguous against accumulation.
         app.configure_sets(
             FixedUpdate,
-            (RocketSet::Guidance
-                .before(RocketSet::Control)
-                .before(RocketSet::Actuation)
-                .before(RocketSet::Gravity)
-                .before(RocketSet::OrbitalElements)
-                .before(RocketSet::TerrainInteraction)
-                .before(RocketSet::Atmosphere)
-                .before(RocketSet::EntryPhysics)
-                .before(RocketSet::AeroForces)
-                .before(RocketSet::AeroTorque)
-                .before(RocketSet::PropulsionThrust)
-                .before(RocketSet::PropulsionGimbal)
-                .before(RocketSet::PropulsionConsumption)
-                .before(RocketSet::PropulsionStaging)
-                .before(RocketSet::AccumulateForces)
-                .before(RocketSet::Integrate)
-                .before(RocketSet::SyncRender)
-                .before(RocketSet::Telemetry),),
+            (
+                RocketSet::Guidance,
+                RocketSet::Control,
+                RocketSet::Actuation,
+                RocketSet::Gravity,
+                RocketSet::OrbitalElements,
+                RocketSet::TerrainInteraction,
+                RocketSet::Atmosphere,
+                RocketSet::SpentStage,
+                RocketSet::EntryPhysics,
+                RocketSet::AeroForces,
+                RocketSet::AeroTorque,
+                RocketSet::PropulsionThrust,
+                RocketSet::PropulsionGimbal,
+                RocketSet::PropulsionConsumption,
+                RocketSet::PropulsionStaging,
+                RocketSet::AccumulateForces,
+                RocketSet::Integrate,
+                RocketSet::SyncRender,
+                RocketSet::Telemetry,
+            )
+                .chain(),
         );
 
         app.add_systems(
@@ -346,6 +366,9 @@ impl Plugin for RocketModePlugin {
                 update_orbital_elements.in_set(RocketSet::OrbitalElements),
                 update_rocket_terrain_interaction.in_set(RocketSet::TerrainInteraction),
                 atmosphere_properties.in_set(RocketSet::Atmosphere),
+                spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
+                update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
+                check_fairing_separation.in_set(RocketSet::SpentStage),
                 compute_heating.in_set(RocketSet::EntryPhysics),
                 compute_ablation.in_set(RocketSet::EntryPhysics),
                 compute_plasma_blackout.in_set(RocketSet::EntryPhysics),

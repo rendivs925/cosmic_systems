@@ -1,5 +1,5 @@
 use crate::components::rocket::*;
-use crate::domain::events::{CommsBlackoutEvent, SplashdownDetectedEvent};
+use crate::domain::events::{CommsBlackoutEvent, SplashdownDetectedEvent, StageSeparatedEvent};
 use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
 use crate::domain::services::aerodynamics::{
     aerodynamic_coefficients_with_nose_bluntness, aerodynamic_torque_body, angle_of_attack,
@@ -14,7 +14,7 @@ use crate::domain::services::gravity::{
     circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
 };
 use crate::domain::services::guidance::{
-    advance_ascent_phase, advance_descent_phase, attitude_from_direction,
+    advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
     gravity_turn_direction_combined, hover_slam_guidance, pitch_axis_from_reference,
     powered_descent_guidance_convex, prograde_attitude, reentry_bank_angle,
     reentry_bank_angle_enhanced, suicide_burn_guidance, AutopilotMode, DescentGuidanceConfig,
@@ -22,7 +22,9 @@ use crate::domain::services::guidance::{
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
-    consume_propellant, gimbal_torque_body, shed_stage, stage_thrust_body,
+    consume_propellant, gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse,
+    shed_stage, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M, SEPARATION_UPPER_DV_MPS,
+    SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
@@ -33,6 +35,7 @@ use crate::infrastructure::bevy_adapters::components::{
     AerodynamicForces, AtmosphereState, EntryPhysicsConfig, MaxQTracker, PlanetAtmosphere,
     PlanetComponent, PlanetTerrain, RocketAutopilot, RocketCommands, TerrainCollisionState,
 };
+use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -107,9 +110,12 @@ pub fn update_orbital_elements(
     }
 }
 
-/// Accumulate the gravitational force acting on each rocket. Forces are in the
-/// planet-centered inertial meter frame. Thrust is added by the propulsion
-/// thrust system.
+/// Accumulate the gravitational force acting on each rocket ON TOP of the
+/// forces written by earlier systems (aero, parachutes, thrust). Forces are
+/// in the planet-centered inertial meter frame. This must ADD, not overwrite:
+/// integration clears the accumulators at the end of every step
+/// (`integrate_6dof`), so an overwrite here would silently discard every
+/// non-gravity force (regression-tested in `rocket_separation::tests`).
 pub fn accumulate_forces(
     mut rocket_query: Query<(
         &RocketPhysicsState,
@@ -120,7 +126,7 @@ pub fn accumulate_forces(
 ) {
     for (rocket, mass, gravity, mut force_accum) in rocket_query.iter_mut() {
         let gravity_force = gravity.value * mass.0;
-        force_accum.0 = gravity_force;
+        force_accum.0 += gravity_force;
     }
 }
 
@@ -278,6 +284,13 @@ pub fn propulsion_thrust(
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
+        // Ullage gate: no ignition until propellant has settled post-staging.
+        if !ignition_allowed_during_ullage(
+            propulsion.time_since_separation_s,
+            propulsion.ullage_settle_time_s,
+        ) {
+            continue;
+        }
         let remaining = propulsion
             .propellant_remaining_kg
             .get(propulsion.active_stage)
@@ -312,6 +325,14 @@ pub fn propulsion_consumption(
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
+        // Ullage gate: consumption follows the same ignition authority as
+        // thrust so mass bookkeeping can never diverge from applied force.
+        if !ignition_allowed_during_ullage(
+            propulsion.time_since_separation_s,
+            propulsion.ullage_settle_time_s,
+        ) {
+            continue;
+        }
         let remaining = propulsion
             .propellant_remaining_kg
             .get(propulsion.active_stage)
@@ -345,18 +366,36 @@ pub fn propulsion_consumption(
     }
 }
 
-/// Separate the spent stage when its propellant is exhausted and the vehicle is
-/// still thrusting. The shed stage's dry and residual mass is removed and the
-/// vehicle mass/inertia are recomputed.
+/// Separate the spent stage when its propellant is exhausted and the vehicle
+/// is still thrusting:
+/// - applies the domain separation impulse to the vehicle (upper stage),
+/// - respawns the spent stage as its own debris entity (`SpentStage`) carrying
+///   the pre-separation dynamics plus the retro impulse,
+/// - restarts the ullage settle timer for the upper stage's next ignition,
+/// - emits [`StageSeparatedEvent`].
+///
+/// Vehicle mass/inertia are recomputed from the active stage afterwards.
 pub fn propulsion_staging(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    sim_time: Res<SimulationTime>,
+    mut separated_writer: MessageWriter<StageSeparatedEvent>,
     mut rocket_query: Query<(
-        &mut RocketPhysicsState,
+        Entity,
+        &RocketPlanetBinding,
         &RocketGeometry,
+        &mut RocketPhysicsState,
         &mut RocketMass,
         &mut RocketPropulsion,
     )>,
 ) {
-    for (mut rocket, geometry, mut mass, mut propulsion) in rocket_query.iter_mut() {
+    let dt = sim_time.fixed_timestep() as f32;
+    for (entity, binding, geometry, mut rocket, mut mass, mut propulsion) in rocket_query.iter_mut()
+    {
+        // Advance the post-separation timer every tick; reset on staging.
+        propulsion.time_since_separation_s += dt;
+
         let remaining = propulsion
             .propellant_remaining_kg
             .get(propulsion.active_stage)
@@ -366,14 +405,29 @@ pub fn propulsion_staging(
         if remaining > 0.0 || !thrusting {
             continue;
         }
-        let Some((next, _shed)) = shed_stage(
+        let Some((next, shed)) = shed_stage(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
         ) else {
             continue;
         };
+
+        // Pre-separation dynamics become the spent stage's initial state.
+        let pre_separation = rocket.dynamics;
+
         propulsion.active_stage = next;
+
+        // Separation impulses: pusher Δv to the upper stage, optional retro
+        // Δv to the spent stage (pure domain function).
+        let outcome = separation_impulse(
+            pre_separation.velocity_mps,
+            pre_separation.orientation,
+            DVec3::Y,
+            SEPARATION_UPPER_DV_MPS,
+            SPENT_STAGE_RETRO_DV_MPS,
+        );
+        rocket.dynamics.velocity_mps = outcome.upper_velocity_mps;
 
         let new_mass = active_vehicle_mass(
             &propulsion.vehicle.stages,
@@ -391,6 +445,52 @@ pub fn propulsion_staging(
         );
         rocket.dynamics.inertia_body = inertia;
         rocket.dynamics.center_of_mass_m = com;
+
+        // Spent-stage debris: pre-separation dynamics + retro impulse, shed
+        // dry + residual mass, height estimated from the stage count
+        // (documented approximation until per-stage lengths exist).
+        let mut spent_dynamics = pre_separation;
+        spent_dynamics.velocity_mps = outcome.spent_velocity_mps;
+        spent_dynamics.mass_kg = shed;
+        let estimated_height_m = geometry.height_m / propulsion.vehicle.stages.len() as f32;
+
+        // Interstage collision avoidance: the impulse model guarantees
+        // growing clearance over time; defensively log a spawn that would
+        // start inside the minimum clearance band (limitation documented in
+        // AGENTS.md section 71 notes — no continuous collision shape).
+        if MIN_SEPARATION_CLEARANCE_M > estimated_height_m as f64 {
+            bevy::log::warn!(
+                "Separation clearance {MIN_SEPARATION_CLEARANCE_M} m exceeds estimated stage length {estimated_height_m} m"
+            );
+        }
+
+        let spent_entity = spawn_spent_stage(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            SpentStageSpec {
+                parent_rocket: entity,
+                planet_name: binding.planet_name.clone(),
+                dynamics: spent_dynamics,
+                radius_m: geometry.radius_m,
+                height_m: estimated_height_m,
+                kind: SpentStageKind::Booster,
+            },
+        );
+
+        // Ullage: the next ignition must wait for propellant to settle.
+        propulsion.time_since_separation_s = 0.0;
+
+        separated_writer.write(StageSeparatedEvent {
+            rocket: entity,
+            spent_stage: spent_entity,
+            shed_mass_kg: shed,
+        });
+        bevy::log::info!(
+            "Stage {} separated: shed {shed:.0} kg, upper stage {:.0} kg",
+            propulsion.active_stage - 1,
+            new_mass
+        );
     }
 }
 
@@ -762,6 +862,34 @@ pub fn guidance_system(
                     *mission_state = RocketMissionState::Landed;
                     autopilot.mode = AutopilotMode::Off;
                     commands.throttle_cmd = 0.0;
+                }
+            }
+            AutopilotMode::Boostback => {
+                // Booster flyback (RTLS): downrange-zeroing retrograde burn.
+                // The landing target doubles as the launch-site pad position;
+                // default to the sub-vehicle surface point when unset.
+                if autopilot.target_landing_position_m.length() < 1.0 {
+                    autopilot.target_landing_position_m = up_dir * radius_m;
+                }
+                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
+                    .engines
+                    .iter()
+                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
+                    .sum::<f64>();
+
+                let boostback = boostback_guidance(
+                    position_m,
+                    velocity,
+                    autopilot.target_landing_position_m,
+                    mass.0,
+                    max_thrust,
+                );
+                commands.target_attitude = boostback.attitude;
+                commands.throttle_cmd = boostback.throttle as f32;
+
+                // Hand off to the landing leg once the pad is roughly below.
+                if boostback.complete {
+                    autopilot.mode = AutopilotMode::Landing;
                 }
             }
             AutopilotMode::StationKeep => {

@@ -2,6 +2,7 @@
 
 use crate::components::rocket::*;
 use crate::infrastructure::bevy_adapters::components::RocketCameraMode;
+use crate::infrastructure::bevy_adapters::rocket_telemetry::RocketEventFeed;
 use bevy::prelude::*;
 
 /// HUD panel types for different display regions.
@@ -53,6 +54,7 @@ pub enum HudField {
     SurfaceType,
     // Meta
     TimeAndCamera,
+    EventLog,
     Warnings,
 }
 
@@ -265,6 +267,9 @@ fn spawn_left_panel(commands: &mut Commands, builder: &HudBuilder) {
             p.spawn(builder.section_header("--- ---"));
             spawn_field(p, builder, HudField::TimeAndCamera, "T+: --- s  CAM: ---");
 
+            // Event feed (latest staging/fairing/splashdown/blackout event)
+            spawn_field(p, builder, HudField::EventLog, "");
+
             // Warnings
             spawn_field(p, builder, HudField::Warnings, "");
         });
@@ -422,6 +427,7 @@ impl FieldFormatters {
         telemetry: &RocketTelemetry,
         camera_mode: &RocketCameraMode,
         flash_on: bool,
+        event_feed: &RocketEventFeed,
     ) -> (String, Color) {
         match field {
             HudField::AltitudeAgl => (
@@ -634,6 +640,18 @@ impl FieldFormatters {
                     )
                 }
             }
+            HudField::EventLog => {
+                // Event-driven display fed by domain messages; empty while no
+                // event is recent.
+                if event_feed.latest.is_empty() {
+                    (String::new(), Color::WHITE)
+                } else {
+                    (
+                        format!("» {}", event_feed.latest),
+                        HudColors::default().warning,
+                    )
+                }
+            }
             HudField::AngleOfAttack => (
                 format!("AoA: {:.1} deg", telemetry.angle_of_attack_deg),
                 Color::WHITE,
@@ -688,13 +706,19 @@ pub fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
     time: Res<Time>,
+    event_feed: Res<RocketEventFeed>,
     mut hud_query: Query<(&RocketHudMarker, &mut Text, &mut TextColor)>,
 ) {
     // Presentation-only flash phase for the blackout banner.
     let flash_on = ((time.elapsed_secs() * BLACKOUT_FLASH_HZ) as usize).is_multiple_of(2);
     for (marker, mut text, mut text_color) in hud_query.iter_mut() {
-        let (formatted, color) =
-            FieldFormatters::format_field(marker.field, &telemetry, &camera_mode, flash_on);
+        let (formatted, color) = FieldFormatters::format_field(
+            marker.field,
+            &telemetry,
+            &camera_mode,
+            flash_on,
+            &event_feed,
+        );
         text.0 = formatted;
         text_color.0 = color;
     }

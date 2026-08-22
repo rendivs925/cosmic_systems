@@ -40,6 +40,10 @@ pub enum AutopilotMode {
     Reentry,
     /// Powered descent with convex optimization (suicide burn / hover-slam).
     PoweredDescent,
+    /// Booster flyback skeleton: retrograde pitch-over burn targeting
+    /// return-to-launch-site downrange zeroing; hands off to
+    /// [`AutopilotMode::Landing`] (suicide burn / hover-slam) for touchdown.
+    Boostback,
     /// Terminal landing guidance.
     Landing,
     /// Station keeping / orbital maintenance.
@@ -721,6 +725,71 @@ pub fn powered_descent_guidance_convex(
     (thrust_dir * thrust_mag, attitude)
 }
 
+/// Horizontal distance to the pad below which boostback hands off to the
+/// landing leg (m).
+pub const BOOSTBACK_COMPLETE_DISTANCE_M: f64 = 5_000.0;
+/// Horizontal speed below which boostback hands off (m/s).
+pub const BOOSTBACK_COMPLETE_SPEED_MPS: f64 = 50.0;
+/// Proportional gain on horizontal position error [1/s²]: at 50 km error this
+/// commands ~2.5 m/s² of horizontal acceleration.
+pub const BOOSTBACK_POSITION_GAIN_INV_S2: f64 = 5e-5;
+/// Damping gain on horizontal velocity error [1/s].
+pub const BOOSTBACK_VELOCITY_GAIN_INV_S: f64 = 0.02;
+
+/// Command output of the boostback skeleton: target attitude and throttle
+/// only — actuation and physics remain downstream (AGENTS.md section 18).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoostbackCommand {
+    pub attitude: DQuat,
+    /// Throttle fraction in [0, 1]; zero = coast.
+    pub throttle: f64,
+    /// True when the pad is roughly below and the landing leg should take
+    /// over ([`AutopilotMode::Landing`]).
+    pub complete: bool,
+}
+
+/// Booster flyback (RTLS) boostback targeting: a PD law on the horizontal
+/// state relative to the launch site drives downrange-to-site toward zero.
+/// Vertical dynamics are deliberately ignored here — the burn shapes the
+/// downrange; the existing suicide-burn/hover-slam leg handles touchdown.
+/// Pure function; testable without Bevy.
+pub fn boostback_guidance(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    launch_site_position_m: DVec3,
+    mass_kg: f64,
+    max_thrust_n: f64,
+) -> BoostbackCommand {
+    let up = position_m.normalize_or_zero();
+    let rel_site = launch_site_position_m - position_m;
+    let horizontal_error = rel_site - up * rel_site.dot(up);
+    let horizontal_velocity = velocity_mps - up * velocity_mps.dot(up);
+
+    let complete = horizontal_error.length() < BOOSTBACK_COMPLETE_DISTANCE_M
+        && horizontal_velocity.length() < BOOSTBACK_COMPLETE_SPEED_MPS;
+
+    // PD command on the horizontal state, saturated by available thrust.
+    let accel_cmd = horizontal_error * BOOSTBACK_POSITION_GAIN_INV_S2
+        - horizontal_velocity * BOOSTBACK_VELOCITY_GAIN_INV_S;
+
+    let accel_mag = accel_cmd.length();
+    if accel_mag < 1e-6 || !accel_mag.is_finite() {
+        return BoostbackCommand {
+            attitude: attitude_from_direction(up),
+            throttle: 0.0,
+            complete,
+        };
+    }
+
+    let available_accel_mps2 = max_thrust_n / mass_kg.max(1e-6);
+    let throttle = (accel_mag / available_accel_mps2).clamp(0.05, 1.0);
+    BoostbackCommand {
+        attitude: attitude_from_direction(accel_cmd / accel_mag),
+        throttle,
+        complete,
+    }
+}
+
 /// Enhanced reentry bank-angle guidance with predictor-corrector.
 /// Uses reference trajectory tracking for precise corridor management.
 pub fn reentry_bank_angle_enhanced(
@@ -938,6 +1007,58 @@ mod tests {
         let body_y = att * DVec3::Y;
         let retrograde = -vel.normalize();
         assert!((body_y - retrograde).length() < 1e-6);
+    }
+
+    #[test]
+    fn boostback_burns_opposing_downrange_velocity() {
+        // Vehicle ~100 km downrange of the pad, flying further away.
+        let radius = 6_371_000.0;
+        let site = DVec3::new(radius, 0.0, 0.0);
+        let theta = 100_000.0 / radius; // central angle for ~100 km arc
+        let position = DVec3::new(
+            radius * theta.cos() * (radius + 200_000.0) / radius,
+            radius * theta.sin() * (radius + 200_000.0) / radius,
+            0.0,
+        )
+        .normalize()
+            * (radius + 200_000.0);
+        // Tangential unit vector at the vehicle (direction of increasing θ).
+        let tangent = DVec3::new(-position.y, position.x, 0.0).normalize();
+        let velocity = tangent * 300.0;
+
+        let cmd = boostback_guidance(position, velocity, site, 25_000.0, 1_000_000.0);
+
+        assert!(!cmd.complete, "far and fast must not be complete");
+        assert!(cmd.throttle > 0.0, "must command a burn");
+        // Thrust direction opposes the receding horizontal velocity.
+        let thrust_dir = cmd.attitude * DVec3::Y;
+        assert!(
+            thrust_dir.dot(tangent) < 0.0,
+            "must burn back toward pad (against tangent)"
+        );
+    }
+
+    #[test]
+    fn boostback_completes_over_the_pad_when_slow() {
+        let radius = 6_371_000.0;
+        let site = DVec3::new(radius, 0.0, 0.0);
+        // Radially above the pad at 200 km with a ~100 m tangential offset.
+        let position = site + DVec3::X * 200_000.0 + DVec3::Y * 100.0;
+        let velocity = DVec3::new(-5.0, 0.0, 0.0); // nearly null horizontally
+        let cmd = boostback_guidance(position, velocity, site, 25_000.0, 1_000_000.0);
+        assert!(cmd.complete);
+    }
+
+    #[test]
+    fn boostback_zero_horizontal_error_gives_no_burn() {
+        let site = DVec3::new(6_371_000.0, 0.0, 0.0);
+        // Vehicle radially above the pad: no horizontal error.
+        let up = site.normalize();
+        let pos = site + up * 200_000.0;
+        let cmd = boostback_guidance(pos, DVec3::ZERO, site, 25_000.0, 1_000_000.0);
+        assert_eq!(cmd.throttle, 0.0, "no horizontal state error → coast");
+        // Pad is directly below: boostback hands off to the landing leg.
+        assert!(cmd.complete);
     }
 
     #[test]

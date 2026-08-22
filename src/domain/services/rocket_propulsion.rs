@@ -14,6 +14,62 @@ use bevy::math::{DMat3, DQuat, DVec3};
 /// Standard gravity, m/s².
 pub const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
 
+/// Δv imparted to the upper stage by the separation system along the vehicle
+/// longitudinal axis (pusher springs / pneumatic pushers), m/s.
+pub const SEPARATION_UPPER_DV_MPS: f64 = 1.0;
+
+/// Retro-Δv applied to the spent stage opposite the separation axis (helps
+/// back it out of the interstage), m/s. Zero disables the retro impulse.
+pub const SPENT_STAGE_RETRO_DV_MPS: f64 = 0.5;
+
+/// Minimum guaranteed distance between the separated bodies at separation,
+/// m (interstage collision avoidance; see AGENTS.md section 71 scope note).
+pub const MIN_SEPARATION_CLEARANCE_M: f64 = 2.0;
+
+/// Default settle time after staging before the next stage's engines may
+/// ignite (ullage: propellant must settle to the tank outlet in the new
+/// acceleration environment before an air-start is safe), s.
+pub const DEFAULT_ULLAGE_SETTLE_TIME_S: f32 = 2.0;
+
+/// Ullage gate for engine ignition: blocked while the post-separation settle
+/// time has not elapsed.
+pub fn ignition_allowed_during_ullage(time_since_separation_s: f32, settle_time_s: f32) -> bool {
+    if settle_time_s <= 0.0 {
+        return true;
+    }
+    time_since_separation_s >= settle_time_s
+}
+
+/// Result of a stage separation impulse applied to both bodies.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeparationOutcome {
+    pub upper_velocity_mps: DVec3,
+    pub spent_velocity_mps: DVec3,
+}
+
+/// Apply a stage-separation impulse: a relative Δv to the upper stage along
+/// `separation_axis_body` (unit vector, body frame) and an optional retro-Δv
+/// to the spent stage along the opposite direction. Pure function returning
+/// updated velocities; positions are untouched (the caller guarantees
+/// clearance via [`MIN_SEPARATION_CLEARANCE_M`]).
+///
+/// The two impulses are independent actuator effects (spring + retro motor),
+/// so linear momentum is not exactly conserved when both fire — documented
+/// idealization, consistent with prescribed-impulse separation models.
+pub fn separation_impulse(
+    shared_velocity_mps: DVec3,
+    orientation: DQuat,
+    separation_axis_body: DVec3,
+    upper_dv_mps: f64,
+    spent_retro_dv_mps: f64,
+) -> SeparationOutcome {
+    let axis_world = (orientation * separation_axis_body).normalize_or_zero();
+    SeparationOutcome {
+        upper_velocity_mps: shared_velocity_mps + axis_world * upper_dv_mps,
+        spent_velocity_mps: shared_velocity_mps - axis_world * spent_retro_dv_mps,
+    }
+}
+
 /// Thrust from mass flow and specific impulse: `T = m_dot · Isp · g0`.
 pub fn thrust_from_isp(mass_flow_kg_s: f64, isp_s: f32) -> f64 {
     mass_flow_kg_s * isp_s as f64 * STANDARD_GRAVITY_MPS2
@@ -312,6 +368,63 @@ mod tests {
         let (thrust_off, flow_off) = stage_thrust_body(&[all_off], 1.0, 0.0);
         assert_eq!(thrust_off, DVec3::ZERO);
         assert_eq!(flow_off, 0.0);
+    }
+
+    #[test]
+    fn separation_applies_impulses_along_axis() {
+        let velocity = DVec3::new(100.0, 2_000.0, 0.0);
+        // Body +Y axis tilted 45° about Z.
+        let orientation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_4);
+        let outcome = separation_impulse(
+            velocity,
+            orientation,
+            DVec3::Y,
+            SEPARATION_UPPER_DV_MPS,
+            SPENT_STAGE_RETRO_DV_MPS,
+        );
+        let axis_world = (orientation * DVec3::Y).normalize();
+        let expected_upper = velocity + axis_world * SEPARATION_UPPER_DV_MPS;
+        let expected_spent = velocity - axis_world * SPENT_STAGE_RETRO_DV_MPS;
+        assert!((outcome.upper_velocity_mps - expected_upper).length() < 1e-12);
+        assert!((outcome.spent_velocity_mps - expected_spent).length() < 1e-12);
+        // The bodies move apart: relative velocity along the axis is positive.
+        let relative = outcome.upper_velocity_mps - outcome.spent_velocity_mps;
+        assert!(relative.dot(axis_world) > 0.0);
+    }
+
+    #[test]
+    fn separation_with_zero_impulses_is_a_no_op() {
+        let velocity = DVec3::new(1.0, 2.0, 3.0);
+        let outcome = separation_impulse(velocity, DQuat::IDENTITY, DVec3::Y, 0.0, 0.0);
+        assert_eq!(outcome.upper_velocity_mps, velocity);
+        assert_eq!(outcome.spent_velocity_mps, velocity);
+    }
+
+    #[test]
+    fn retro_dv_can_be_disabled_independently() {
+        let velocity = DVec3::ZERO;
+        let outcome = separation_impulse(velocity, DQuat::IDENTITY, DVec3::Y, 1.5, 0.0);
+        assert_eq!(outcome.spent_velocity_mps, velocity);
+        assert_eq!(outcome.upper_velocity_mps, DVec3::new(0.0, 1.5, 0.0));
+    }
+
+    #[test]
+    fn ullage_gate_blocks_ignition_until_settled() {
+        // Configured ullage: blocked before the settle time, allowed after.
+        assert!(!ignition_allowed_during_ullage(
+            0.0,
+            DEFAULT_ULLAGE_SETTLE_TIME_S
+        ));
+        assert!(!ignition_allowed_during_ullage(
+            DEFAULT_ULLAGE_SETTLE_TIME_S - 0.1,
+            DEFAULT_ULLAGE_SETTLE_TIME_S
+        ));
+        assert!(ignition_allowed_during_ullage(
+            DEFAULT_ULLAGE_SETTLE_TIME_S,
+            DEFAULT_ULLAGE_SETTLE_TIME_S
+        ));
+        // Disabled (settle time zero): always allowed.
+        assert!(ignition_allowed_during_ullage(0.0, 0.0));
     }
 
     #[test]

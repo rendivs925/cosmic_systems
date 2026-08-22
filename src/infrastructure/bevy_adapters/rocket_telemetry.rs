@@ -1,6 +1,9 @@
 // Rocket telemetry computation - encapsulated, trait-based design.
 
 use crate::components::rocket::*;
+use crate::domain::events::{
+    CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+};
 use crate::domain::services::aerodynamics::{
     angle_of_attack, angle_of_sideslip, dynamic_pressure_q,
 };
@@ -317,10 +320,18 @@ pub trait FlightRecorderStrategy {
     fn record(&mut self, entry: FlightLogEntry, current_time: f64);
 }
 
+/// A notable flight event captured by the flight recorder.
+#[derive(Debug, Clone)]
+pub struct FlightEventRecord {
+    pub time_s: f64,
+    pub label: String,
+}
+
 /// Ring buffer flight recorder.
 #[derive(Component, Debug)]
 pub struct FlightRecorder {
     entries: Vec<FlightLogEntry>,
+    events: Vec<FlightEventRecord>,
     max_entries: usize,
     record_interval_s: f64,
     last_record_time_s: f64,
@@ -331,6 +342,7 @@ impl FlightRecorder {
     pub fn new(max_entries: usize, record_interval_s: f64) -> Self {
         Self {
             entries: Vec::with_capacity(max_entries),
+            events: Vec::new(),
             max_entries,
             record_interval_s,
             last_record_time_s: 0.0,
@@ -340,6 +352,19 @@ impl FlightRecorder {
 
     pub fn entries(&self) -> &[FlightLogEntry] {
         &self.entries
+    }
+
+    /// Record a notable flight event (staging, fairing, splashdown, blackout).
+    /// Capped at [`MAX_RECORDED_EVENTS`] entries.
+    pub fn note_event(&mut self, time_s: f64, label: String) {
+        if self.events.len() >= MAX_RECORDED_EVENTS {
+            self.events.remove(0);
+        }
+        self.events.push(FlightEventRecord { time_s, label });
+    }
+
+    pub fn events(&self) -> &[FlightEventRecord] {
+        &self.events
     }
 
     pub fn is_recording(&self) -> bool {
@@ -352,9 +377,13 @@ impl FlightRecorder {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.events.clear();
         self.last_record_time_s = 0.0;
     }
 }
+
+/// Maximum number of notable events kept in the flight log.
+pub const MAX_RECORDED_EVENTS: usize = 100;
 
 impl FlightRecorderStrategy for FlightRecorder {
     fn should_record(&self, current_time: f64) -> bool {
@@ -581,6 +610,84 @@ pub fn record_flight_data_system(
 pub enum FlightRecorderAction {
     ToggleRecording,
     ClearLog,
+}
+
+/// How long the latest event stays visible on the HUD (s).
+pub const EVENT_FEED_VISIBLE_S: f32 = 5.0;
+
+/// Latest notable flight event for HUD display (empty = none recent).
+#[derive(Resource, Debug, Clone, Default)]
+pub struct RocketEventFeed {
+    pub latest: String,
+    pub visible_for_s: f32,
+}
+
+impl RocketEventFeed {
+    fn push(&mut self, label: String) {
+        self.latest = label;
+        self.visible_for_s = EVENT_FEED_VISIBLE_S;
+    }
+
+    fn tick(&mut self, dt: f32) {
+        if self.visible_for_s > 0.0 {
+            self.visible_for_s -= dt;
+            if self.visible_for_s <= 0.0 {
+                self.latest.clear();
+            }
+        }
+    }
+}
+
+/// Consume rocket domain events (staging, fairing, splashdown, blackout):
+/// update the HUD feed and append entries to each vehicle's flight recorder.
+/// Runs in Update; physics systems are untouched (AGENTS.md section 29).
+#[allow(clippy::too_many_arguments)]
+pub fn rocket_event_feed_system(
+    time: Res<Time>,
+    sim_time: Res<SimulationTime>,
+    mut staging_reader: MessageReader<StageSeparatedEvent>,
+    mut fairing_reader: MessageReader<FairingSeparatedEvent>,
+    mut splashdown_reader: MessageReader<SplashdownDetectedEvent>,
+    mut blackout_reader: MessageReader<CommsBlackoutEvent>,
+    mut feed: ResMut<RocketEventFeed>,
+    mut recorders: Query<&mut FlightRecorder>,
+) {
+    let now = sim_time.sim_time_s;
+
+    for event in staging_reader.read() {
+        let label = format!("STAGE SEPARATED (-{:.0} kg)", event.shed_mass_kg);
+        feed.push(label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in fairing_reader.read() {
+        let label = format!("FAIRING JETTISONED (-{:.0} kg)", event.fairing_mass_kg);
+        feed.push(label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in splashdown_reader.read() {
+        let label = "SPLASHDOWN".to_string();
+        feed.push(label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in blackout_reader.read() {
+        let label = if event.blackout_active {
+            "COMMS BLACKOUT STARTED".to_string()
+        } else {
+            "COMMS REACQUIRED".to_string()
+        };
+        feed.push(label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+
+    feed.tick(time.delta_secs());
 }
 
 /// System: handle flight recorder input.
