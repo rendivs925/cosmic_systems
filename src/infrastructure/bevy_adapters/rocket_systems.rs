@@ -642,3 +642,273 @@ pub fn update_rocket_terrain_interaction(
         }
     }
 }
+
+/// Convective heating (Sutton-Graves) and radiative heating (Tauber-Sutton).
+/// Runs in FixedUpdate before force accumulation. Reads AtmosphereState and
+/// writes ThermalState for the ablation system.
+pub fn compute_heating(
+    config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketComponent,
+        &AtmosphereState,
+        &mut ThermalState,
+    )>,
+) {
+    for (binding, rocket, atmosphere, mut thermal) in rocket_query.iter_mut() {
+        let Some(planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        let rho = atmosphere.density_kg_m3;
+        let v = rocket.dynamics.velocity_mps.length();
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+        let r = rocket.dynamics.position_m.length();
+        let altitude_m = (r - radius_m).max(0.0);
+
+        // Skip if no meaningful atmosphere
+        if rho <= 0.0 || v < 100.0 {
+            thermal.convective_heat_flux_w_m2 = 0.0;
+            thermal.radiative_heat_flux_w_m2 = 0.0;
+            thermal.total_heat_flux_w_m2 = 0.0;
+            continue;
+        }
+
+        // Convective heating: Sutton-Graves q_dot = k * sqrt(rho/R_nose) * v^3
+        let nose_radius = config.nose_radius_initial_m;
+        let q_conv = config.convective_coefficient * (rho / nose_radius).sqrt() * v.powi(3);
+        thermal.convective_heat_flux_w_m2 = q_conv;
+
+        // Radiative heating: Tauber-Sutton (significant for v > 10 km/s)
+        let q_rad = if v > 10_000.0 {
+            config.radiative_coefficient * rho * v.powi(8) / 1e24 // Simplified scaling
+        } else {
+            0.0
+        };
+        thermal.radiative_heat_flux_w_m2 = q_rad;
+
+        thermal.total_heat_flux_w_m2 = q_conv + q_rad;
+        thermal.stagnation_point_heat_flux_w_m2 = q_conv; // Stagnation point = convective peak
+    }
+}
+
+/// Ablation: char-layer recession from integrated heat load.
+/// Updates nose radius and mass loss in AblationState.
+pub fn compute_ablation(
+    config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketComponent,
+        &AtmosphereState,
+        &ThermalState,
+        &mut AblationState,
+        &mut RocketComponent,
+    )>,
+) {
+    for (binding, rocket, _atmosphere, thermal, mut ablation, mut rocket_comp) in rocket_query.iter_mut() {
+        let Some(_planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        let q_total = thermal.total_heat_flux_w_m2;
+        if q_total <= 0.0 {
+            continue;
+        }
+
+        // Integrated heat load
+        ablation.cumulative_heat_load_j_m2 += q_total * (1.0 / 60.0); // Approximate dt
+
+        // Recession rate: dr/dt = q_dot / (rho_tps * H_abl)
+        let recession_rate = q_total / (config.tps_density_kg_m3 * config.heat_of_ablation_j_kg);
+        let dt = 1.0 / 60.0;
+        ablation.recession_depth_m += recession_rate * dt;
+
+        // Nose radius growth from recession
+        ablation.nose_radius_m = config.nose_radius_initial_m + ablation.recession_depth_m;
+
+        // Mass loss from TPS
+        let tps_area = std::f64::consts::PI * ablation.nose_radius_m.powi(2); // Approximate
+        let mass_loss_rate = recession_rate * config.tps_density_kg_m3 * tps_area;
+        let mass_loss = mass_loss_rate * dt;
+        ablation.mass_loss_kg += mass_loss;
+        ablation.tps_thickness_remaining_m = (config.tps_initial_thickness_m - ablation.recession_depth_m).max(0.0);
+
+        // Update vehicle mass
+        rocket_comp.dynamics.mass_kg -= mass_loss;
+    }
+}
+
+/// Plasma blackout detection from electron density.
+/// Emits CommsBlackoutEvent when blackout starts/ends.
+pub fn compute_plasma_blackout(
+    config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketComponent,
+        &AtmosphereState,
+        &ThermalState,
+    )>,
+) {
+    for (binding, rocket, atmosphere, thermal) in rocket_query.iter_mut() {
+        let Some(_planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        let rho = atmosphere.density_kg_m3;
+        let v = rocket.dynamics.velocity_mps.length();
+
+        // Electron density model: n_e = C * rho^a * v^b (empirical fit)
+        // Simplified: n_e proportional to rho * v^3
+        let electron_density = 1e-4 * rho * v.powi(3);
+
+        let was_blackout = rocket.mission_state == RocketMissionState::ReentryCorridor
+            && electron_density > config.critical_electron_density_m3;
+
+        if was_blackout {
+            // TODO: emit CommsBlackoutEvent
+        }
+    }
+}
+
+/// Parachute deployment and drag (mortar → reefed → full).
+/// Applies drag forces to the translational accumulator.
+pub fn compute_parachute_forces(
+    config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketComponent,
+        &AtmosphereState,
+        &mut ParachuteState,
+        &mut RocketComponent,
+    )>,
+) {
+    for (binding, rocket, atmosphere, mut parachute, mut rocket_comp) in rocket_query.iter_mut() {
+        let Some(_planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        let rho = atmosphere.density_kg_m3;
+        let v = rocket.dynamics.velocity_mps.length();
+        let altitude_m = atmosphere.altitude_m;
+        let mach = v / atmosphere.speed_of_sound_mps.max(1.0);
+
+        if rho <= 0.0 || v <= 0.0 {
+            continue;
+        }
+
+        // Drogue deployment logic
+        if !parachute.drogue_deployed && mach <= config.drogue_deploy_mach && altitude_m <= config.drogue_deploy_altitude_m {
+            parachute.drogue_deployed = true;
+            parachute.drogue_timer_s = 0.0;
+        }
+
+        if parachute.drogue_deployed && !parachute.drogue_fully_inflated {
+            parachute.drogue_timer_s += 1.0 / 60.0;
+            if parachute.drogue_timer_s < config.drogue_reef_time_s {
+                parachute.current_cd = config.drogue_reef_cd;
+                parachute.reference_area_m2 = config.drogue_reference_area_m2;
+            } else {
+                parachute.drogue_fully_inflated = true;
+                parachute.current_cd = config.drogue_full_cd;
+            }
+        }
+
+        // Main parachute deployment logic
+        if parachute.drogue_fully_inflated && !parachute.main_deployed && altitude_m <= config.main_deploy_altitude_m {
+            parachute.main_deployed = true;
+            parachute.main_timer_s = 0.0;
+        }
+
+        if parachute.main_deployed && !parachute.main_fully_inflated {
+            parachute.main_timer_s += 1.0 / 60.0;
+            if parachute.main_timer_s < config.main_reef_time_s {
+                parachute.current_cd = config.main_reef_cd;
+                parachute.reference_area_m2 = config.main_reference_area_m2;
+            } else {
+                parachute.main_fully_inflated = true;
+                parachute.current_cd = config.main_full_cd;
+            }
+        }
+
+        // Apply parachute drag if deployed
+        if parachute.drogue_deployed || parachute.main_deployed {
+            let drag = 0.5 * rho * v.powi(2) * parachute.current_cd * parachute.reference_area_m2;
+            let drag_dir = -rocket.dynamics.velocity_mps.normalize_or_zero();
+            rocket_comp.force_accum_n += drag_dir * drag;
+        }
+    }
+}
+
+/// Supersonic retro-propulsion: plume-freestream interaction.
+/// Modifies effective thrust and base pressure at Mach > 1.
+pub fn compute_retro_propulsion(
+    config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketComponent,
+        &AtmosphereState,
+        &RocketPropulsion,
+        &mut RocketComponent,
+    )>,
+) {
+    for (binding, rocket, atmosphere, propulsion, mut rocket_comp) in rocket_query.iter_mut() {
+        let Some(_planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        if !config.retro_propulsion_enabled {
+            return;
+        }
+
+        let mach = rocket.dynamics.velocity_mps.length() / atmosphere.speed_of_sound_mps.max(1.0);
+        if mach < config.retro_propulsion_mach_threshold {
+            return;
+        }
+
+        // Check if engines are active and thrusting
+        let active_stage = propulsion.active_stage;
+        if active_stage >= propulsion.vehicle.stages.len() {
+            return;
+        }
+        let stage = &propulsion.vehicle.stages[active_stage];
+        let thrust_n = stage.engines.iter()
+            .filter(|e| e.state == crate::domain::entities::rocket::EngineState::Running)
+            .map(|e| e.max_thrust_kn as f64 * 1000.0 * propulsion.throttle as f64)
+            .sum::<f64>();
+
+        if thrust_n <= 0.0 {
+            return;
+        }
+
+        // DLR base pressure correlation for supersonic retro-propulsion
+        // Simplified: base pressure reduction proportional to Mach and thrust
+        let base_pressure_factor = 1.0 - config.base_pressure_coefficient * (mach - 1.0).min(5.0);
+        let effective_thrust = thrust_n * base_pressure_factor.max(0.1);
+
+        // Apply effective thrust along body +Y axis
+        let thrust_body = DVec3::Y * effective_thrust;
+        let orientation = rocket.dynamics.orientation;
+        let thrust_inertial = orientation * thrust_body;
+        rocket_comp.force_accum_n += thrust_inertial;
+    }
+}

@@ -33,9 +33,11 @@ use crate::infrastructure::bevy_adapters::gyroscope_systems::{
 };
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
-    atmosphere_properties, control_system, guidance_system, integrate_6dof, propulsion_consumption,
-    propulsion_gimbal, propulsion_staging, propulsion_thrust, sync_render_transform,
-    update_rocket_gravity, update_rocket_terrain_interaction,
+    atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
+    compute_plasma_blackout, compute_retro_propulsion, control_system, guidance_system,
+    integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
+    propulsion_thrust, sync_render_transform, update_rocket_gravity,
+    update_rocket_terrain_interaction,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{TerrainRenderPlugin, TerrainRenderConfig};
@@ -246,6 +248,9 @@ impl Plugin for RocketModePlugin {
         // Terrain rendering configuration.
         app.init_resource::<TerrainRenderConfig>();
 
+        // Entry physics configuration.
+        app.init_resource::<EntryPhysicsConfig>();
+
         // Cube-sphere terrain streaming around the rocket.
         app.insert_resource(TerrainStreamingResource::default());
         app.add_systems(Update, stream_terrain_patches);
@@ -264,6 +269,13 @@ impl Plugin for RocketModePlugin {
                 actuation_system,
                 update_rocket_terrain_interaction,
                 atmosphere_properties,
+                // Entry physics: heating → ablation → plasma → parachutes → retro-propulsion
+                compute_heating,
+                compute_ablation,
+                compute_plasma_blackout,
+                compute_parachute_forces,
+                compute_retro_propulsion,
+                // Force/torque accumulation and integration
                 accumulate_forces,
                 aerodynamic_forces,
                 aerodynamic_torque,

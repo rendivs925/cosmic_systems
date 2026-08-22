@@ -324,3 +324,153 @@ pub struct LaunchSiteComponent {
     pub position: Vec3, // Local position on terrain
     pub launch_pad_model: Option<Handle<Scene>>,
 }
+
+/// Cached thermal state at the vehicle's current trajectory point, computed by
+/// the `compute_heating` system for ablation and telemetry.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct ThermalState {
+    pub convective_heat_flux_w_m2: f64,
+    pub radiative_heat_flux_w_m2: f64,
+    pub total_heat_flux_w_m2: f64,
+    pub wall_temperature_k: f64,
+    pub stagnation_point_heat_flux_w_m2: f64,
+}
+
+/// Ablation state tracking TPS recession and mass loss from aerothermal heating.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct AblationState {
+    pub cumulative_heat_load_j_m2: f64,
+    pub recession_depth_m: f64,
+    pub nose_radius_m: f64,
+    pub mass_loss_kg: f64,
+    pub tps_thickness_remaining_m: f64,
+}
+
+/// Parachute deployment state for drogue and main parachutes.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct ParachuteState {
+    pub drogue_deployed: bool,
+    pub drogue_reefed: bool,
+    pub drogue_fully_inflated: bool,
+    pub drogue_timer_s: f64,
+    pub main_deployed: bool,
+    pub main_reefed: bool,
+    pub main_fully_inflated: bool,
+    pub main_timer_s: f64,
+    pub canopy_attach_point_body: DVec3,
+    pub current_cd: f64,
+    pub reference_area_m2: f64,
+}
+
+/// Configuration for entry physics per celestial body.
+#[derive(Resource, Debug, Clone)]
+pub struct EntryPhysicsConfig {
+    pub convective_coefficient: f64,
+    pub radiative_coefficient: f64,
+    pub nose_radius_initial_m: f64,
+    pub tps_density_kg_m3: f64,
+    pub heat_of_ablation_j_kg: f64,
+    pub tps_initial_thickness_m: f64,
+    pub comms_frequency_hz: f64,
+    pub critical_electron_density_m3: f64,
+    pub drogue_deploy_mach: f64,
+    pub drogue_deploy_altitude_m: f64,
+    pub drogue_reef_time_s: f64,
+    pub drogue_reef_cd: f64,
+    pub drogue_full_cd: f64,
+    pub drogue_reference_area_m2: f64,
+    pub main_deploy_altitude_m: f64,
+    pub main_reef_time_s: f64,
+    pub main_reef_cd: f64,
+    pub main_full_cd: f64,
+    pub main_reference_area_m2: f64,
+    pub retro_propulsion_enabled: bool,
+    pub retro_propulsion_mach_threshold: f64,
+    pub base_pressure_coefficient: f64,
+}
+
+impl Default for EntryPhysicsConfig {
+    fn default() -> Self {
+        Self::for_body("Earth")
+    }
+}
+
+impl EntryPhysicsConfig {
+    pub fn for_body(name: &str) -> Self {
+        match name {
+            "Earth" => Self {
+                convective_coefficient: 1.83e-4, // Sutton-Graves k for Earth
+                radiative_coefficient: 1.0e-10,  // Tauber-Sutton
+                nose_radius_initial_m: 2.5,
+                tps_density_kg_m3: 1500.0,
+                heat_of_ablation_j_kg: 1.5e7,
+                tps_initial_thickness_m: 0.05,
+                comms_frequency_hz: 2.3e9,
+                critical_electron_density_m3: 6.6e16,
+                drogue_deploy_mach: 2.5,
+                drogue_deploy_altitude_m: 15_000.0,
+                drogue_reef_time_s: 5.0,
+                drogue_reef_cd: 0.5,
+                drogue_full_cd: 1.2,
+                drogue_reference_area_m2: 20.0,
+                main_deploy_altitude_m: 3_000.0,
+                main_reef_time_s: 3.0,
+                main_reef_cd: 0.8,
+                main_full_cd: 2.2,
+                main_reference_area_m2: 150.0,
+                retro_propulsion_enabled: true,
+                retro_propulsion_mach_threshold: 1.2,
+                base_pressure_coefficient: 0.1,
+            },
+            "Mars" => Self {
+                convective_coefficient: 1.5e-4,
+                radiative_coefficient: 5.0e-11,
+                nose_radius_initial_m: 2.5,
+                tps_density_kg_m3: 1500.0,
+                heat_of_ablation_j_kg: 1.5e7,
+                tps_initial_thickness_m: 0.05,
+                comms_frequency_hz: 2.3e9,
+                critical_electron_density_m3: 6.6e16,
+                drogue_deploy_mach: 2.0,
+                drogue_deploy_altitude_m: 10_000.0,
+                drogue_reef_time_s: 3.0,
+                drogue_reef_cd: 0.5,
+                drogue_full_cd: 1.2,
+                drogue_reference_area_m2: 25.0,
+                main_deploy_altitude_m: 2_000.0,
+                main_reef_time_s: 2.0,
+                main_reef_cd: 0.8,
+                main_full_cd: 2.2,
+                main_reference_area_m2: 200.0,
+                retro_propulsion_enabled: true,
+                retro_propulsion_mach_threshold: 1.5,
+                base_pressure_coefficient: 0.08,
+            },
+            "Moon" => Self {
+                convective_coefficient: 1.0e-4,
+                radiative_coefficient: 1.0e-11,
+                nose_radius_initial_m: 2.5,
+                tps_density_kg_m3: 1500.0,
+                heat_of_ablation_j_kg: 1.5e7,
+                tps_initial_thickness_m: 0.05,
+                comms_frequency_hz: 2.3e9,
+                critical_electron_density_m3: 6.6e16,
+                drogue_deploy_mach: 0.0, // No atmosphere
+                drogue_deploy_altitude_m: 0.0,
+                drogue_reef_time_s: 0.0,
+                drogue_reef_cd: 0.0,
+                drogue_full_cd: 0.0,
+                drogue_reference_area_m2: 0.0,
+                main_deploy_altitude_m: 0.0,
+                main_reef_time_s: 0.0,
+                main_reef_cd: 0.0,
+                main_full_cd: 0.0,
+                main_reference_area_m2: 0.0,
+                retro_propulsion_enabled: true,
+                retro_propulsion_mach_threshold: 0.0,
+                base_pressure_coefficient: 0.0,
+            },
+            _ => Self::for_body("Earth"),
+        }
+    }
+}
