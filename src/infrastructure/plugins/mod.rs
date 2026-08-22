@@ -14,6 +14,7 @@ use crate::application::craft_startup::spawn_craft_ui;
 use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
+use crate::domain::events::{CommsBlackoutEvent, SplashdownDetectedEvent};
 use crate::domain::services::simulation_time::{
     advance_simulation_time, sync_fixed_timestep, SimulationTime,
 };
@@ -270,6 +271,10 @@ impl Plugin for RocketModePlugin {
 
         // Entry physics configuration.
         app.init_resource::<EntryPhysicsConfig>();
+
+        // Rocket domain messages (blackout edges, splashdown, later staging).
+        app.add_message::<CommsBlackoutEvent>();
+        app.add_message::<SplashdownDetectedEvent>();
 
         // Rocket camera resources.
         app.init_resource::<RocketCameraMode>();

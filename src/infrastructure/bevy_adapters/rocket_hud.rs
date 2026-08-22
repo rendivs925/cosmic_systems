@@ -50,6 +50,7 @@ pub enum HudField {
     PlasmaBlackout,
     // Recovery group
     Parachute,
+    SurfaceType,
     // Meta
     TimeAndCamera,
     Warnings,
@@ -258,6 +259,7 @@ fn spawn_left_panel(commands: &mut Commands, builder: &HudBuilder) {
             // Recovery group
             p.spawn(builder.section_header("--- RECOVERY ---"));
             spawn_field(p, builder, HudField::Parachute, "Drogue: NO  Main: NO");
+            spawn_field(p, builder, HudField::SurfaceType, "Surface: ---");
 
             // Time & camera
             p.spawn(builder.section_header("--- ---"));
@@ -419,6 +421,7 @@ impl FieldFormatters {
         field: HudField,
         telemetry: &RocketTelemetry,
         camera_mode: &RocketCameraMode,
+        flash_on: bool,
     ) -> (String, Color) {
         match field {
             HudField::AltitudeAgl => (
@@ -574,7 +577,15 @@ impl FieldFormatters {
             ),
             HudField::PlasmaBlackout => {
                 if telemetry.plasma_blackout {
-                    ("Blackout: YES".to_string(), HudColors::default().danger)
+                    // Flash between alarm red and dim while the link is down
+                    // (driven by the event-backed CommsState, presentation
+                    // only).
+                    let color = if flash_on {
+                        HudColors::default().danger
+                    } else {
+                        HudColors::default().dim
+                    };
+                    ("Blackout: YES".to_string(), color)
                 } else {
                     ("Blackout: NO".to_string(), Color::WHITE)
                 }
@@ -587,6 +598,14 @@ impl FieldFormatters {
                 };
                 let main = if telemetry.main_deployed { "YES" } else { "NO" };
                 (format!("Drogue: {}  Main: {}", drogue, main), Color::WHITE)
+            }
+            HudField::SurfaceType => {
+                // Water is inferred from terrain at mean sea level on Earth.
+                if telemetry.over_water {
+                    ("Surface: WATER".to_string(), HudColors::default().caution)
+                } else {
+                    ("Surface: LAND".to_string(), Color::WHITE)
+                }
             }
             HudField::TimeAndCamera => {
                 let cam_name = match *camera_mode {
@@ -631,6 +650,9 @@ impl FieldFormatters {
         if telemetry.plasma_blackout {
             warnings.push("COMMS BLACKOUT");
         }
+        if telemetry.mission_phase == RocketMissionState::Landed && telemetry.over_water {
+            warnings.push("SPLASHDOWN");
+        }
         if telemetry.g_load > 6.0 {
             warnings.push("HIGH G-LOAD");
         }
@@ -658,15 +680,21 @@ impl FieldFormatters {
     }
 }
 
+/// Flash rate of the blackout banner while the link is down (Hz).
+const BLACKOUT_FLASH_HZ: f32 = 2.0;
+
 /// System to update all HUD fields from telemetry.
 pub fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
+    time: Res<Time>,
     mut hud_query: Query<(&RocketHudMarker, &mut Text, &mut TextColor)>,
 ) {
+    // Presentation-only flash phase for the blackout banner.
+    let flash_on = ((time.elapsed_secs() * BLACKOUT_FLASH_HZ) as usize).is_multiple_of(2);
     for (marker, mut text, mut text_color) in hud_query.iter_mut() {
         let (formatted, color) =
-            FieldFormatters::format_field(marker.field, &telemetry, &camera_mode);
+            FieldFormatters::format_field(marker.field, &telemetry, &camera_mode, flash_on);
         text.0 = formatted;
         text_color.0 = color;
     }

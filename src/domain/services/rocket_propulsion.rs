@@ -6,7 +6,7 @@
 //! selection, and gimbal torque. Systems feed thrust and torque into the 6-DOF
 //! accumulator and never write the transform directly (AGENTS.md section 17).
 
-use crate::domain::entities::rocket::{RocketEngine, RocketStage};
+use crate::domain::entities::rocket::{EngineState, RocketEngine, RocketStage};
 use crate::domain::services::atmosphere::SEA_LEVEL_DENSITY_KG_M3;
 use crate::domain::services::rocket_dynamics::rocket_inertia_tensor;
 use bevy::math::{DMat3, DQuat, DVec3};
@@ -173,7 +173,9 @@ pub fn shed_stage(
 }
 
 /// Total running-engine thrust (body frame) for the active stage at a throttle,
-/// honoring per-engine ISP selection by ambient density.
+/// honoring per-engine ISP selection by ambient density. Only engines in
+/// [`EngineState::Running`] contribute — every thrust consumer routes through
+/// here so shutdown state is respected consistently everywhere.
 pub fn stage_thrust_body(
     engines: &[RocketEngine],
     throttle: f32,
@@ -183,6 +185,9 @@ pub fn stage_thrust_body(
     let mut force = DVec3::ZERO;
     let mut mass_flow = 0.0;
     for engine in engines {
+        if engine.state != EngineState::Running {
+            continue;
+        }
         let isp = selected_isp(engine.isp_sea_level, engine.isp_vacuum, density_kg_m3);
         let thrust = engine.max_thrust_kn as f64 * 1000.0 * throttle as f64;
         force += engine.thrust_axis.as_dvec3() * thrust;
@@ -278,6 +283,35 @@ mod tests {
         assert_eq!(selected_isp(282.0, 311.0, 0.0), 311.0); // vacuum
         let mid = selected_isp(282.0, 311.0, 0.6);
         assert!(mid > 282.0 && mid < 311.0);
+    }
+
+    #[test]
+    fn stage_thrust_ignores_shutdown_engines() {
+        use crate::domain::entities::rocket::EngineState;
+        let running = RocketEngine {
+            position_m: bevy::math::Vec3::ZERO,
+            thrust_axis: bevy::math::Vec3::Y,
+            isp_sea_level: 282.0,
+            isp_vacuum: 311.0,
+            gimbal_range_deg: 5.0,
+            max_thrust_kn: 1000.0,
+            state: EngineState::Running,
+        };
+        let mut shutdown = running.clone();
+        shutdown.state = EngineState::Off;
+
+        let (thrust_on, flow_on) = stage_thrust_body(&[running.clone(), shutdown], 1.0, 0.0);
+        assert!(
+            (thrust_on.y - 1_000_000.0).abs() < 1e-6,
+            "only Running engines thrust"
+        );
+        assert_eq!(thrust_on.x, 0.0);
+
+        let mut all_off = running;
+        all_off.state = EngineState::Off;
+        let (thrust_off, flow_off) = stage_thrust_body(&[all_off], 1.0, 0.0);
+        assert_eq!(thrust_off, DVec3::ZERO);
+        assert_eq!(flow_off, 0.0);
     }
 
     #[test]

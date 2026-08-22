@@ -40,6 +40,7 @@ pub struct TelemetryContext<'a> {
     pub autopilot: &'a RocketAutopilot,
     pub orbital: &'a OrbitalElements,
     pub atmosphere: &'a AtmosphereState,
+    pub comms: &'a CommsState,
     pub aero_forces: &'a AerodynamicForces,
     pub thermal: &'a ThermalState,
     pub ablation: &'a AblationState,
@@ -100,9 +101,9 @@ impl<'a> TelemetryContext<'a> {
 
         let delta_v = Self::compute_delta_v(self.mass_kg, dry_mass, isp_vac);
 
-        let electron_density = 1e-4 * rho * speed.powi(3);
-        let plasma_blackout = matches!(*self.mission_state, RocketMissionState::ReentryCorridor)
-            && electron_density > 6.6e16;
+        // Blackout authority is the CommsState component written by
+        // compute_plasma_blackout; telemetry only mirrors it here.
+        let plasma_blackout = self.comms.in_blackout;
 
         DerivedTelemetry {
             up_dir,
@@ -126,7 +127,6 @@ impl<'a> TelemetryContext<'a> {
             pitch_rate,
             yaw_rate,
             bank,
-            electron_density,
             plasma_blackout,
         }
     }
@@ -214,7 +214,6 @@ struct DerivedTelemetry {
     pitch_rate: f64,
     yaw_rate: f64,
     bank: f64,
-    electron_density: f64,
     plasma_blackout: bool,
 }
 
@@ -275,8 +274,9 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
         nose_radius_m: ctx.ablation.nose_radius_m,
         tps_thickness_remaining_m: ctx.ablation.tps_thickness_remaining_m,
         plasma_blackout: d.plasma_blackout,
-        drogue_deployed: ctx.parachute.drogue_deployed,
-        main_deployed: ctx.parachute.main_deployed,
+        drogue_deployed: ctx.parachute.deployment.drogue_deployed,
+        main_deployed: ctx.parachute.deployment.main_deployed,
+        over_water: ctx.collision.over_water,
         time_since_liftoff_s: ctx.autopilot.time_since_liftoff_s,
         downrange_m: 0.0,
         crossrange_m: 0.0,
@@ -396,8 +396,8 @@ fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> 
         periapsis_altitude_m: ctx.orbital.periapsis_m - ctx.planet_radius_m,
         convective_heat_flux_w_m2: ctx.thermal.convective_heat_flux_w_m2,
         plasma_blackout: d.plasma_blackout,
-        drogue_deployed: ctx.parachute.drogue_deployed,
-        main_deployed: ctx.parachute.main_deployed,
+        drogue_deployed: ctx.parachute.deployment.drogue_deployed,
+        main_deployed: ctx.parachute.deployment.main_deployed,
     }
 }
 
@@ -416,6 +416,7 @@ pub fn compute_rocket_telemetry_system(
         &RocketAutopilot,
         &OrbitalElements,
         &AtmosphereState,
+        &CommsState,
         &AerodynamicForces,
         &ThermalState,
         &AblationState,
@@ -436,6 +437,7 @@ pub fn compute_rocket_telemetry_system(
         autopilot,
         orbital,
         atmosphere,
+        comms,
         aero,
         thermal,
         ablation,
@@ -467,6 +469,7 @@ pub fn compute_rocket_telemetry_system(
             autopilot,
             orbital,
             atmosphere,
+            comms,
             aero_forces: aero,
             thermal,
             ablation,
@@ -479,10 +482,13 @@ pub fn compute_rocket_telemetry_system(
 }
 
 /// System: record flight data at intervals.
+/// The rocket state is split across two read-only queries because Bevy query
+/// tuples cap at 15 items; joining on Entity keeps it one logical record.
 pub fn record_flight_data_system(
     sim_time: Res<SimulationTime>,
     planet_query: Query<(&PlanetComponent, &PlanetAtmosphere)>,
     mut rocket_query: Query<(
+        Entity,
         &RocketPlanetBinding,
         &RocketPhysicsState,
         &RocketGeometry,
@@ -492,18 +498,19 @@ pub fn record_flight_data_system(
         &RocketAutopilot,
         &OrbitalElements,
         &AtmosphereState,
+        &CommsState,
         &AerodynamicForces,
         &ThermalState,
         &AblationState,
-        &ParachuteState,
-        &TerrainCollisionState,
-        &mut FlightRecorder,
     )>,
+    recovery_query: Query<(&ParachuteState, &TerrainCollisionState)>,
+    mut recorder_query: Query<&mut FlightRecorder>,
 ) {
     let current_time = sim_time.sim_time_s;
     let dt = sim_time.fixed_timestep();
 
     for (
+        entity,
         binding,
         rocket,
         geometry,
@@ -513,17 +520,22 @@ pub fn record_flight_data_system(
         autopilot,
         orbital,
         atmosphere,
+        comms,
         aero,
         thermal,
         ablation,
-        parachute,
-        collision,
-        mut recorder,
     ) in rocket_query.iter_mut()
     {
-        if !recorder.should_record(current_time) {
+        if !recorder_query
+            .get_mut(entity)
+            .map(|mut r| r.should_record(current_time))
+            .unwrap_or(false)
+        {
             continue;
         }
+        let Ok((parachute, collision)) = recovery_query.get(entity) else {
+            continue;
+        };
 
         let Some((planet, _)) = planet_query
             .iter()
@@ -549,6 +561,7 @@ pub fn record_flight_data_system(
             autopilot,
             orbital,
             atmosphere,
+            comms,
             aero_forces: aero,
             thermal,
             ablation,
@@ -557,7 +570,9 @@ pub fn record_flight_data_system(
         };
 
         let entry = build_flight_log_entry(&ctx, current_time);
-        recorder.record(entry, current_time);
+        if let Ok(mut recorder) = recorder_query.get_mut(entity) {
+            recorder.record(entry, current_time);
+        }
     }
 }
 

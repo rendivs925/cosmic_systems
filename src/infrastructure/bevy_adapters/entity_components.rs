@@ -242,6 +242,31 @@ impl Default for EntryPhysicsConfig {
 }
 
 impl EntryPhysicsConfig {
+    /// Map the per-body entry config into the pure-domain parachute
+    /// configuration. Values live here once; the domain state machine
+    /// consumes this struct so no constants are duplicated.
+    pub fn parachute_config(&self) -> crate::domain::services::entry_physics::ParachuteConfig {
+        use crate::domain::services::entry_physics::{CanopyConfig, ParachuteConfig};
+        ParachuteConfig {
+            drogue: CanopyConfig {
+                deploy_mach: self.drogue_deploy_mach,
+                deploy_altitude_m: self.drogue_deploy_altitude_m,
+                reef_time_s: self.drogue_reef_time_s,
+                reef_cd: self.drogue_reef_cd,
+                full_cd: self.drogue_full_cd,
+                reference_area_m2: self.drogue_reference_area_m2,
+            },
+            main: CanopyConfig {
+                deploy_mach: 0.0,
+                deploy_altitude_m: self.main_deploy_altitude_m,
+                reef_time_s: self.main_reef_time_s,
+                reef_cd: self.main_reef_cd,
+                full_cd: self.main_full_cd,
+                reference_area_m2: self.main_reference_area_m2,
+            },
+        }
+    }
+
     pub fn for_body(name: &str) -> Self {
         match name {
             "Earth" => Self {

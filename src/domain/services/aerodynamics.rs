@@ -62,6 +62,31 @@ pub fn aerodynamic_coefficients(alpha_rad: f64, beta_rad: f64) -> (f64, f64, f64
     (cd, cl, cy)
 }
 
+/// How strongly relative nose bluntness raises base drag. An ablated (blunter)
+/// nose increases the wave-drag contribution; the ratio is current/initial
+/// nose radius, so an unablated vehicle (ratio 1) keeps the baseline Cd.
+pub const NOSE_BLUNTNNESS_DRAG_FACTOR: f64 = 0.5;
+
+/// Nose-bluntness-aware variant of [`aerodynamic_coefficients`]:
+/// `nose_radius_ratio = nose_radius_current / nose_radius_initial ≥ 1`.
+/// Ablation blunts the nose, raising Cd (and its base component); lift and
+/// side force are unchanged. A ratio of exactly 1 reproduces
+/// [`aerodynamic_coefficients`] bit-for-bit (regression-tested).
+pub fn aerodynamic_coefficients_with_nose_bluntness(
+    alpha_rad: f64,
+    beta_rad: f64,
+    nose_radius_ratio: f64,
+) -> (f64, f64, f64) {
+    let (base_cd, cl, cy) = aerodynamic_coefficients(alpha_rad, beta_rad);
+    let bluntness_growth = (nose_radius_ratio.max(1.0) - 1.0).min(MAX_BLUNTNNESS_GROWTH);
+    let cd = base_cd * (1.0 + NOSE_BLUNTNNESS_DRAG_FACTOR * bluntness_growth);
+    (cd, cl, cy)
+}
+
+/// Cap on the modeled bluntness growth so extreme recession cannot produce
+/// unphysical drag (Cd ≤ 2× baseline).
+pub const MAX_BLUNTNNESS_GROWTH: f64 = 2.0;
+
 /// Drag force in the body frame: opposes the velocity, magnitude `q·Cd·A`.
 pub fn drag_force_body(
     dynamic_pressure_pa: f64,
@@ -256,5 +281,32 @@ mod tests {
         assert_eq!(update_max_q(10.0, 5.0), 10.0);
         assert_eq!(update_max_q(3.0, 5.0), 5.0);
         assert_eq!(update_max_q(8.0, 8.0), 8.0);
+    }
+
+    #[test]
+    fn zero_ablation_reproduces_baseline_coefficients_exactly() {
+        // Old-vs-new comparison: an unablated nose (ratio 1) must give the
+        // identical coefficients the pre-ablation model produced.
+        for (alpha, beta) in [(0.0, 0.0), (0.1, -0.05), (-0.35, 0.2)] {
+            let (cd_old, cl_old, cy_old) = aerodynamic_coefficients(alpha, beta);
+            let (cd_new, cl_new, cy_new) =
+                aerodynamic_coefficients_with_nose_bluntness(alpha, beta, 1.0);
+            assert_eq!((cd_old, cl_old, cy_old), (cd_new, cl_new, cy_new));
+        }
+    }
+
+    #[test]
+    fn ablation_grows_only_base_drag() {
+        let alpha = 0.15;
+        let beta = -0.03;
+        let (_, cl, cy) = aerodynamic_coefficients(alpha, beta);
+        let mut previous_cd = aerodynamic_coefficients(alpha, beta).0;
+        for ratio in [1.5_f64, 2.0, 3.0] {
+            let (cd, cl_r, cy_r) = aerodynamic_coefficients_with_nose_bluntness(alpha, beta, ratio);
+            assert!(cd > previous_cd, "Cd must grow with bluntness ({ratio})");
+            assert_eq!((cl_r, cy_r), (cl, cy), "lift/side coefficients unchanged");
+            assert!(cd <= 0.6 + 1e-12, "Cd capped at 2x baseline");
+            previous_cd = cd;
+        }
     }
 }

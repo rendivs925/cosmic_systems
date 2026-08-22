@@ -92,7 +92,8 @@ pub fn spawn_rockets(
         ))
         .id();
 
-    // Phase 2: Facade + render + other components (insert separately)
+    // Phase 2: Facade + render components.
+    // Two inserts because Bevy bundle tuples cap at 15 items.
     commands.entity(entity).insert((
         RocketFacade::default(),
         AtmosphereState::default(),
@@ -104,6 +105,12 @@ pub fn spawn_rockets(
         ThermalState::default(),
         AblationState::default(),
         ParachuteState::default(),
+    ));
+
+    // Phase 3: Entry/comms state + render primitives.
+    commands.entity(entity).insert((
+        CommsState::default(),
+        RetroPropulsionEffect::default(),
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
         Transform::default(),

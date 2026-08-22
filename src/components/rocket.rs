@@ -184,20 +184,45 @@ pub struct AblationState {
     pub tps_thickness_remaining_m: f64,
 }
 
-/// Parachute deployment state.
+/// Comms link state driven by plasma blackout edge detection.
+/// Written by compute_plasma_blackout; read by telemetry/HUD.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct CommsState {
+    pub in_blackout: bool,
+}
+
+/// Thrust effectiveness multiplier from supersonic retro-propulsion
+/// (DLR base-pressure correlation). Computed in EntryPhysics, consumed by
+/// propulsion_thrust so there is exactly one thrust writer.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct RetroPropulsionEffect {
+    pub thrust_multiplier: f64,
+}
+
+impl Default for RetroPropulsionEffect {
+    fn default() -> Self {
+        // No retro effect until computed: full effectiveness.
+        Self {
+            thrust_multiplier: 1.0,
+        }
+    }
+}
+
+/// Parachute deployment state. Wraps the pure domain state machine
+/// (`domain::services::entry_physics::ParachuteDeploymentState`) so the
+/// transition logic stays Bevy-free and unit-testable.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ParachuteState {
-    pub drogue_deployed: bool,
-    pub drogue_reefed: bool,
-    pub drogue_fully_inflated: bool,
-    pub drogue_timer_s: f64,
-    pub main_deployed: bool,
-    pub main_reefed: bool,
-    pub main_fully_inflated: bool,
-    pub main_timer_s: f64,
+    pub deployment: crate::domain::services::entry_physics::ParachuteDeploymentState,
     pub canopy_attach_point_body: DVec3,
-    pub current_cd: f64,
-    pub reference_area_m2: f64,
+}
+
+impl std::ops::Deref for ParachuteState {
+    type Target = crate::domain::services::entry_physics::ParachuteDeploymentState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.deployment
+    }
 }
 
 /// Cached terrain collision state.
@@ -206,6 +231,9 @@ pub struct TerrainCollisionState {
     pub radar_altitude_m: f64,
     pub slope_deg: f64,
     pub ground_contact: crate::domain::services::terrain_collision::GroundContact,
+    /// True when the surface below is inferred to be water (Earth only;
+    /// no ocean mask exists — water ≈ terrain at mean sea level).
+    pub over_water: bool,
 }
 
 /// Orbital elements computed from rocket state vectors (planet-centered inertial frame).
@@ -305,6 +333,8 @@ pub struct RocketTelemetry {
     pub drogue_deployed: bool,
     /// Main parachute deployed.
     pub main_deployed: bool,
+    /// True when the surface below is inferred to be water.
+    pub over_water: bool,
     /// Time since liftoff in seconds.
     pub time_since_liftoff_s: f64,
     /// Downrange distance in meters.
