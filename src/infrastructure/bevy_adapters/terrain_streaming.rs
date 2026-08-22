@@ -11,9 +11,11 @@
 use crate::domain::services::cube_sphere::{
     build_patch_geometry, lod_for_distance, patch_world_size_m, PatchGeometry, TerrainPatch,
 };
-use crate::domain::services::terrain_patch_manager::{TerrainPatchManager, PatchState};
+use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::infrastructure::bevy_adapters::components::*;
-use crate::infrastructure::bevy_adapters::terrain_render::{TerrainPatchReady, TerrainPatchEvicted};
+use crate::infrastructure::bevy_adapters::terrain_render::{
+    TerrainPatchEvicted, TerrainPatchReady,
+};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -55,7 +57,7 @@ impl Default for TerrainStreamingResource {
 pub fn stream_terrain_patches(
     mut streaming: ResMut<TerrainStreamingResource>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
-    rocket_query: Query<(&RocketPlanetBinding, &RocketComponent)>,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut ready_events: MessageWriter<TerrainPatchReady>,
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
 ) {
@@ -107,11 +109,8 @@ pub fn stream_terrain_patches(
     let focus = TerrainPatch::for_direction(dir, level);
 
     // Track patches that were already visible to detect newly ready ones.
-    let previously_visible: Vec<TerrainPatch> = streaming
-        .manager
-        .visible_patches()
-        .copied()
-        .collect();
+    let previously_visible: Vec<TerrainPatch> =
+        streaming.manager.visible_patches().copied().collect();
 
     // Drive lifecycle for the focus window and generate geometry.
     let window = surrounding_patches(&focus);

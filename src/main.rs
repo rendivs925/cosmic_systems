@@ -4,9 +4,11 @@ use bevy::prelude::*;
 use std::env;
 
 pub mod application;
+pub mod components;
 pub mod domain;
 pub mod infrastructure;
 pub mod presentation;
+pub mod systems;
 
 use application::modes::Mode;
 use application::solar_system_startup::SolarCameraEnabled;

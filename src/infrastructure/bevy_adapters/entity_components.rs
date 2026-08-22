@@ -1,3 +1,4 @@
+use crate::components::rocket::*;
 use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::entities::rocket::Rocket;
@@ -10,6 +11,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::sync::Arc;
 
+pub use crate::components::rocket::*;
 pub use crate::domain::entities::rocket::RocketMissionState;
 
 /// Types of launch sites with different terrain characteristics
@@ -168,78 +170,6 @@ pub struct TerrainComponent {
     pub launch_site_type: LaunchSiteType, // Type of launch site for terrain generation
 }
 
-// Component for rocket entities
-#[derive(Component)]
-pub struct RocketComponent {
-    /// Authoritative 6-DOF physical state (f64, planet-centered inertial meters).
-    pub dynamics: RocketDynamicsState,
-    /// Net force accumulator (world/planet-inertial frame), consumed by integration.
-    pub force_accum_n: DVec3,
-    /// Net torque accumulator (body frame), consumed by integration.
-    pub torque_accum_nm: DVec3,
-    /// Vehicle geometry (radius/height in meters) for the inertia model.
-    pub radius_m: f32,
-    pub height_m: f32,
-    // ------------------------------------------------------------------
-    // Compatible facade fields synced from the f64 dynamics state each tick.
-    // Existing consumers that have not yet migrated to the f64 state read
-    // these; they are never the source of truth for motion.
-    // ------------------------------------------------------------------
-    pub position: Vec3,
-    pub velocity: Vec3,
-    pub orientation: Quat,
-    pub angular_velocity: Vec3,
-    pub mass: f32,
-    pub dry_mass_kg: f32,
-    pub fuel_mass: f32,
-    pub thrust: Vec3,
-    pub mission_state: RocketMissionState,
-}
-
-/// Runtime propulsion state: the vehicle definition plus throttle, gimbal
-/// commands, active stage, and per-stage remaining propellant. Propulsion
-/// systems consume this and feed the 6-DOF accumulators.
-#[derive(Component, Debug, Clone)]
-pub struct RocketPropulsion {
-    pub vehicle: Rocket,
-    pub active_stage: usize,
-    pub propellant_remaining_kg: Vec<f32>,
-    pub throttle: f32,
-    pub gimbal_pitch_rad: f32,
-    pub gimbal_yaw_rad: f32,
-}
-
-/// Binds a rocket to its dominant-body frame parent. Gravity is computed from
-/// the planet with this name (resolved against `PlanetComponent`), per the
-/// dominant-body selection rule in the gravity design.
-#[derive(Component, Debug, Clone)]
-pub struct RocketPlanetBinding {
-    pub planet_name: String,
-}
-
-/// Authoritative gravitational acceleration (m/s², f64) acting on a vehicle.
-/// Computed each tick by the gravity system and stored for the 6-DOF
-/// integration to consume.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct GravityAcceleration {
-    pub value: DVec3,
-}
-
-/// Per-planet atmosphere source (AGENTS.md section 19). Attached to planet
-/// entities; the shared single implementation for all atmosphere consumers.
-#[derive(Component, Debug, Clone)]
-pub struct PlanetAtmosphere {
-    pub source: Arc<dyn AtmosphereSource>,
-}
-
-impl PlanetAtmosphere {
-    pub fn default_for(name: &str) -> Self {
-        Self {
-            source: atmosphere_for(name),
-        }
-    }
-}
-
 /// Per-planet terrain height source (AGENTS.md sections 20-21). Attached to
 /// planet entities; render mesh and collision query the same source.
 #[derive(Component, Debug, Clone)]
@@ -255,65 +185,18 @@ impl PlanetTerrain {
     }
 }
 
-/// Cached terrain collision state for a vehicle, computed each tick by the
-/// rocket interaction system for telemetry/debug.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct TerrainCollisionState {
-    pub radar_altitude_m: f64,
-    pub slope_deg: f64,
-    pub ground_contact: crate::domain::services::terrain_collision::GroundContact,
+/// Per-planet atmosphere model. Attached to planet entities.
+#[derive(Component, Debug, Clone)]
+pub struct PlanetAtmosphere {
+    pub source: Arc<dyn AtmosphereSource>,
 }
 
-/// Cached atmosphere state at the vehicle's current altitude, computed by the
-/// `atmosphere_properties` system before aero and propulsion consume it.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct AtmosphereState {
-    pub altitude_m: f64,
-    pub temperature_k: f64,
-    pub pressure_pa: f64,
-    pub density_kg_m3: f64,
-    pub speed_of_sound_mps: f64,
-}
-
-/// Aerodynamic force computed by `aerodynamic_forces`, consumed by
-/// `aerodynamic_torque`. Body frame; fed to the 6-DOF accumulators.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct AerodynamicForces {
-    pub force_body: DVec3,
-    pub center_of_pressure_body: DVec3,
-}
-
-/// Running maximum dynamic pressure (Max Q) reached during flight, Pa.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct MaxQTracker {
-    pub max_q_pa: f64,
-}
-
-/// The flight-computer command interface between the guidance, control,
-/// actuation, and physics layers (AGENTS.md section 18). Each layer writes its
-/// outputs here; no layer writes the rocket's motion directly.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct RocketCommands {
-    /// Guidance output: the target body→world attitude.
-    pub target_attitude: DQuat,
-    /// Control output: commanded throttle (0..1).
-    pub throttle_cmd: f32,
-    /// Control output: commanded gimbal pitch deflection, radians.
-    pub gimbal_pitch_cmd_rad: f32,
-    /// Control output: commanded gimbal yaw deflection, radians.
-    pub gimbal_yaw_cmd_rad: f32,
-    /// Control output: commanded RCS torque, body frame, N·m.
-    pub rcs_torque_cmd_body: DVec3,
-}
-
-/// Autopilot configuration and state for the rocket: PID gains, integral
-/// accumulation, the ascent guidance profile, and actuator limits.
-#[derive(Component, Debug, Clone, Default)]
-pub struct RocketAutopilot {
-    pub gains: crate::domain::services::control::PidGains,
-    pub integral: DVec3,
-    pub ascent_profile: crate::domain::services::guidance::AscentGuidanceProfile,
-    pub actuation: crate::domain::services::actuation::ActuationLimits,
+impl PlanetAtmosphere {
+    pub fn default_for(name: &str) -> Self {
+        Self {
+            source: atmosphere_for(name),
+        }
+    }
 }
 
 // Component for launch sites (terrain markers)
@@ -323,43 +206,6 @@ pub struct LaunchSiteComponent {
     pub planet_entity: Entity,
     pub position: Vec3, // Local position on terrain
     pub launch_pad_model: Option<Handle<Scene>>,
-}
-
-/// Cached thermal state at the vehicle's current trajectory point, computed by
-/// the `compute_heating` system for ablation and telemetry.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct ThermalState {
-    pub convective_heat_flux_w_m2: f64,
-    pub radiative_heat_flux_w_m2: f64,
-    pub total_heat_flux_w_m2: f64,
-    pub wall_temperature_k: f64,
-    pub stagnation_point_heat_flux_w_m2: f64,
-}
-
-/// Ablation state tracking TPS recession and mass loss from aerothermal heating.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct AblationState {
-    pub cumulative_heat_load_j_m2: f64,
-    pub recession_depth_m: f64,
-    pub nose_radius_m: f64,
-    pub mass_loss_kg: f64,
-    pub tps_thickness_remaining_m: f64,
-}
-
-/// Parachute deployment state for drogue and main parachutes.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct ParachuteState {
-    pub drogue_deployed: bool,
-    pub drogue_reefed: bool,
-    pub drogue_fully_inflated: bool,
-    pub drogue_timer_s: f64,
-    pub main_deployed: bool,
-    pub main_reefed: bool,
-    pub main_fully_inflated: bool,
-    pub main_timer_s: f64,
-    pub canopy_attach_point_body: DVec3,
-    pub current_cd: f64,
-    pub reference_area_m2: f64,
 }
 
 /// Configuration for entry physics per celestial body.

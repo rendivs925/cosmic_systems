@@ -186,11 +186,7 @@ impl DescentGuidanceConfig {
 /// from a circular orbit at `orbit_radius_m` around a body with `mu_m3_s2`.
 /// Uses the vis-viva equation for a Hohmann transfer to an elliptical orbit
 /// with the target periapsis.
-pub fn deorbit_burn_dv(
-    orbit_radius_m: f64,
-    target_periapsis_m: f64,
-    mu_m3_s2: f64,
-) -> f64 {
+pub fn deorbit_burn_dv(orbit_radius_m: f64, target_periapsis_m: f64, mu_m3_s2: f64) -> f64 {
     let r1 = orbit_radius_m;
     let r2 = target_periapsis_m;
     let a = (r1 + r2) / 2.0; // semi-major axis of transfer ellipse
@@ -249,7 +245,11 @@ pub fn reentry_bank_angle(
 
     // Crossrange steering: modulate bank sign to steer toward target.
     // Simplified: if crossrange > 0, use negative bank (left turn), else positive (right turn).
-    let crossrange_sign = if crossrange_remaining_m > 0.0 { -1.0 } else { 1.0 };
+    let crossrange_sign = if crossrange_remaining_m > 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
 
     // Blend: use full bank magnitude for constraint management, sign for crossrange.
     if constraint_margin <= 0.0 {
@@ -280,7 +280,8 @@ pub fn powered_descent_guidance(
         (altitude - config.terminal_descent_altitude_m) / (-vertical_vel)
     } else {
         10.0
-    }.max(1.0);
+    }
+    .max(1.0);
 
     // Required acceleration to reach target with zero terminal velocity.
     let r_tgo = position_m + velocity_mps * t_go;
@@ -329,7 +330,8 @@ pub fn unpowered_descent_guidance(
         altitude / downrange_vel
     } else {
         1.0
-    }.max(1.0);
+    }
+    .max(1.0);
 
     let predicted_impact = position_m + velocity_mps * t_go;
     let miss_distance = (target_position_m - predicted_impact).length();
@@ -471,9 +473,7 @@ pub fn target_attitude_for_phase(
             // Vertical descent; parafoil handles lateral.
             attitude_from_direction(up_dir)
         }
-        RocketMissionState::Landing => {
-            attitude_from_direction(up_dir)
-        }
+        RocketMissionState::Landing => attitude_from_direction(up_dir),
         _ => attitude_from_direction(up_dir),
     }
 }
@@ -643,43 +643,74 @@ mod tests {
     #[test]
     fn reentry_bank_angle_zero_when_within_corridor() {
         let config = DescentGuidanceConfig::default();
-        let bank = reentry_bank_angle(
-            80_000.0, 3000.0, 10_000.0, 100_000.0, 2.0, &config, 0.0,
-        );
+        let bank = reentry_bank_angle(80_000.0, 3000.0, 10_000.0, 100_000.0, 2.0, &config, 0.0);
         assert!((bank - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn reentry_bank_angle_90_deg_when_violating_constraints() {
         let config = DescentGuidanceConfig::default();
-        let bank = reentry_bank_angle(
-            50_000.0, 5000.0, 100_000.0, 2_000_000.0, 6.0, &config, 0.0,
-        );
+        let bank = reentry_bank_angle(50_000.0, 5000.0, 100_000.0, 2_000_000.0, 6.0, &config, 0.0);
         assert!((bank.abs() - 90.0_f64.to_radians()).abs() < 1e-6);
     }
 
     #[test]
     fn descent_phase_transitions() {
         let config = DescentGuidanceConfig::default();
-        
+
         // Orbit -> DeorbitBurn (external)
-        let p = advance_descent_phase(RocketMissionState::Orbit, 400_000.0, 7600.0, 0.0, true, &config);
+        let p = advance_descent_phase(
+            RocketMissionState::Orbit,
+            400_000.0,
+            7600.0,
+            0.0,
+            true,
+            &config,
+        );
         assert_eq!(p, RocketMissionState::Orbit); // External command needed
-        
+
         // DeorbitBurn -> ReentryCorridor
-        let p = advance_descent_phase(RocketMissionState::DeorbitBurn, 100_000.0, 7000.0, 1000.0, true, &config);
+        let p = advance_descent_phase(
+            RocketMissionState::DeorbitBurn,
+            100_000.0,
+            7000.0,
+            1000.0,
+            true,
+            &config,
+        );
         assert_eq!(p, RocketMissionState::ReentryCorridor);
-        
+
         // ReentryCorridor -> PoweredDescent
-        let p = advance_descent_phase(RocketMissionState::ReentryCorridor, 5_000.0, 200.0, 1000.0, true, &config);
+        let p = advance_descent_phase(
+            RocketMissionState::ReentryCorridor,
+            5_000.0,
+            200.0,
+            1000.0,
+            true,
+            &config,
+        );
         assert_eq!(p, RocketMissionState::PoweredDescent);
-        
+
         // PoweredDescent -> Landing
-        let p = advance_descent_phase(RocketMissionState::PoweredDescent, 50.0, 1.0, 100.0, true, &config);
+        let p = advance_descent_phase(
+            RocketMissionState::PoweredDescent,
+            50.0,
+            1.0,
+            100.0,
+            true,
+            &config,
+        );
         assert_eq!(p, RocketMissionState::Landing);
-        
+
         // ReentryCorridor -> UnpoweredDescent (no engines)
-        let p = advance_descent_phase(RocketMissionState::ReentryCorridor, 5_000.0, 200.0, 1000.0, false, &config);
+        let p = advance_descent_phase(
+            RocketMissionState::ReentryCorridor,
+            5_000.0,
+            200.0,
+            1000.0,
+            false,
+            &config,
+        );
         assert_eq!(p, RocketMissionState::UnpoweredDescent);
     }
 }

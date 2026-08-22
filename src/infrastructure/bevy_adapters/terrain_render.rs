@@ -4,7 +4,9 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
-use crate::domain::services::cube_sphere::{face_uv_to_direction, direction_to_lat_lon, TerrainPatch, PatchGeometry};
+use crate::domain::services::cube_sphere::{
+    direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
+};
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
@@ -138,7 +140,10 @@ fn spawn_patch_mesh_system(
                     material_handle: material_handle.clone(),
                     entity: Entity::PLACEHOLDER,
                 },
-                Name::new(format!("TerrainPatch_{:?}_{}_{}_{}", patch.face, patch.level, patch.tile_x, patch.tile_y)),
+                Name::new(format!(
+                    "TerrainPatch_{:?}_{}_{}_{}",
+                    patch.face, patch.level, patch.tile_x, patch.tile_y
+                )),
             ))
             .id();
 
@@ -202,18 +207,17 @@ fn update_render_origin_system(
                 transform.translation.z as f64,
             );
             let new_pos = current - delta;
-            transform.translation = Vec3::new(
-                new_pos.x as f32,
-                new_pos.y as f32,
-                new_pos.z as f32,
-            );
+            transform.translation = Vec3::new(new_pos.x as f32, new_pos.y as f32, new_pos.z as f32);
         }
     }
 }
 
 /// Convert domain PatchGeometry to Bevy Mesh.
 fn patch_geometry_to_mesh(geometry: &PatchGeometry, config: &TerrainRenderConfig) -> Mesh {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
 
     // Positions (f32 for GPU).
     let positions: Vec<[f32; 3]> = geometry
@@ -254,7 +258,11 @@ fn patch_geometry_to_mesh(geometry: &PatchGeometry, config: &TerrainRenderConfig
 }
 
 /// Create a material for a terrain patch based on biome/altitude.
-fn patch_material(patch: &TerrainPatch, source: &dyn TerrainSource, config: &TerrainRenderConfig) -> StandardMaterial {
+fn patch_material(
+    patch: &TerrainPatch,
+    source: &dyn TerrainSource,
+    config: &TerrainRenderConfig,
+) -> StandardMaterial {
     // Sample height at patch center for biome/altitude classification.
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let u_mid = (u0 + u1) * 0.5;

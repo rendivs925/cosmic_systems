@@ -1,3 +1,4 @@
+use crate::components::rocket::*;
 use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
@@ -5,7 +6,7 @@ use crate::domain::services::reference_frames::{
 };
 use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
-use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::components::Selectable;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -64,31 +65,45 @@ pub fn spawn_rockets(
         .map(|stage| stage.propellant_mass_kg)
         .collect();
 
-    commands.spawn((
-        RocketComponent {
-            dynamics,
-            force_accum_n: DVec3::ZERO,
-            torque_accum_nm: DVec3::ZERO,
-            radius_m: radius_m as f32,
-            height_m: rocket.height_m,
-            position: Vec3::ZERO,
-            velocity: Vec3::ZERO,
-            orientation: Quat::IDENTITY,
-            angular_velocity: Vec3::ZERO,
-            mass: total_mass_kg as f32,
-            dry_mass_kg: rocket.total_dry_mass_kg(),
-            fuel_mass: rocket.total_propellant_mass_kg(),
-            thrust: Vec3::ZERO,
-            mission_state: RocketMissionState::PreLaunch,
-        },
-        RocketPropulsion {
-            vehicle: rocket,
-            active_stage: 0,
-            propellant_remaining_kg,
-            throttle: 0.0,
-            gimbal_pitch_rad: 0.0,
-            gimbal_yaw_rad: 0.0,
-        },
+    // Phase 1: Core physics components (fits in bundle limit)
+    let entity = commands
+        .spawn((
+            RocketPhysicsState { dynamics },
+            RocketGeometry {
+                radius_m: radius_m as f32,
+                height_m: rocket.height_m,
+            },
+            RocketMass(total_mass_kg),
+            RocketMissionState::PreLaunch,
+            RocketPropulsion {
+                vehicle: rocket,
+                active_stage: 0,
+                propellant_remaining_kg,
+                throttle: 0.0,
+                gimbal_pitch_rad: 0.0,
+                gimbal_yaw_rad: 0.0,
+            },
+            ForceAccumulator::default(),
+            TorqueAccumulator::default(),
+            GravityAcceleration::default(),
+            RocketPlanetBinding {
+                planet_name: "Earth".to_string(),
+            },
+        ))
+        .id();
+
+    // Phase 2: Facade + render + other components (insert separately)
+    commands.entity(entity).insert((
+        RocketFacade::default(),
+        AtmosphereState::default(),
+        AerodynamicForces::default(),
+        MaxQTracker::default(),
+        RocketCommands::default(),
+        RocketAutopilot::default(),
+        TerrainCollisionState::default(),
+        ThermalState::default(),
+        AblationState::default(),
+        ParachuteState::default(),
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
         Transform::default(),
@@ -96,15 +111,5 @@ pub fn spawn_rockets(
             name: "Falcon 9".to_string(),
             selected: false,
         },
-        RocketPlanetBinding {
-            planet_name: "Earth".to_string(),
-        },
-        GravityAcceleration::default(),
-        AtmosphereState::default(),
-        AerodynamicForces::default(),
-        MaxQTracker::default(),
-        RocketCommands::default(),
-        RocketAutopilot::default(),
-        TerrainCollisionState::default(),
     ));
 }

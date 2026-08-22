@@ -10,7 +10,7 @@
 //! regions without DEM coverage.
 
 #[cfg(feature = "dem")]
-use crate::domain::services::terrain_source::{TerrainSource, ProceduralTerrainSource};
+use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSource};
 #[cfg(feature = "dem")]
 use std::collections::HashMap;
 #[cfg(feature = "dem")]
@@ -45,7 +45,7 @@ pub struct DemTileKey {
 #[derive(Debug, Clone)]
 pub struct DemTile {
     pub key: DemTileKey,
-    pub data: Vec<f32>,      // Row-major height data in meters.
+    pub data: Vec<f32>, // Row-major height data in meters.
     pub width: u32,
     pub height: u32,
     pub lat_min: f64,
@@ -95,7 +95,8 @@ impl DemTileCache {
     }
 
     fn evict_lru(&mut self) {
-        if let Some(lru_key) = self.tiles
+        if let Some(lru_key) = self
+            .tiles
             .iter()
             .min_by_key(|(_, t)| t.last_access_frame)
             .map(|(k, _)| *k)
@@ -152,8 +153,12 @@ impl DemTerrainSource {
     /// Get or load a DEM tile for the given lat/lon.
     fn get_tile(&mut self, dataset: DemDataset, lat: f64, lon: f64) -> Option<&DemTile> {
         let (tile_x, tile_y) = self.lat_lon_to_tile_xy(dataset, lat, lon);
-        let key = DemTileKey { dataset, tile_x, tile_y };
-        
+        let key = DemTileKey {
+            dataset,
+            tile_x,
+            tile_y,
+        };
+
         // Check cache first.
         if self.cache.get(key).is_some() {
             // Need to re-borrow to return the reference.
@@ -173,7 +178,11 @@ impl DemTerrainSource {
     fn lat_lon_to_tile_xy(&self, dataset: DemDataset, lat: f64, lon: f64) -> (i32, i32) {
         match dataset {
             DemDataset::Srtm1 | DemDataset::Srtm3 => {
-                let tile_size = if dataset == DemDataset::Srtm1 { 1.0 / 3600.0 } else { 1.0 };
+                let tile_size = if dataset == DemDataset::Srtm1 {
+                    1.0 / 3600.0
+                } else {
+                    1.0
+                };
                 let tile_x = (lon / tile_size).floor() as i32;
                 let tile_y = (lat / tile_size).floor() as i32;
                 (tile_x, tile_y)
@@ -198,7 +207,7 @@ impl DemTerrainSource {
         // 2. Download from tile server if not present
         // 3. Parse using srtm_reader, geotiff, etc.
         // 4. Return DemTile with height data
-        
+
         None
     }
 }
@@ -209,9 +218,10 @@ impl TerrainSource for DemTerrainSource {
         // Cannot mutably borrow self in a &self method, so we use a different approach.
         // In a real implementation, we'd use interior mutability (RefCell/Mutex) for the cache.
         // For now, fall back to procedural.
-        
+
         if self.config.fallback_to_procedural {
-            self.procedural_fallback.height_m(latitude_deg, longitude_deg)
+            self.procedural_fallback
+                .height_m(latitude_deg, longitude_deg)
         } else {
             0.0
         }
@@ -247,11 +257,23 @@ mod tests {
     fn dem_tile_cache_lru_eviction() {
         let mut cache = DemTileCache::new(2);
         cache.tick();
-        
-        let key1 = DemTileKey { dataset: DemDataset::Srtm3, tile_x: 0, tile_y: 0 };
-        let key2 = DemTileKey { dataset: DemDataset::Srtm3, tile_x: 1, tile_y: 0 };
-        let key3 = DemTileKey { dataset: DemDataset::Srtm3, tile_x: 2, tile_y: 0 };
-        
+
+        let key1 = DemTileKey {
+            dataset: DemDataset::Srtm3,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let key2 = DemTileKey {
+            dataset: DemDataset::Srtm3,
+            tile_x: 1,
+            tile_y: 0,
+        };
+        let key3 = DemTileKey {
+            dataset: DemDataset::Srtm3,
+            tile_x: 2,
+            tile_y: 0,
+        };
+
         cache.insert(DemTile {
             key: key1,
             data: vec![],
@@ -274,9 +296,9 @@ mod tests {
             lon_max: 1.0,
             last_access_frame: cache.frame,
         });
-        
+
         assert_eq!(cache.len(), 2);
-        
+
         // Add third tile - should evict LRU (one of key1 or key2).
         cache.tick();
         cache.insert(DemTile {
@@ -290,14 +312,20 @@ mod tests {
             lon_max: 1.0,
             last_access_frame: cache.frame,
         });
-        
+
         assert_eq!(cache.len(), 2);
         // One of key1 or key2 should be evicted (LRU), but not key3.
         let key1_exists = cache.get(key1).is_some();
         let key2_exists = cache.get(key2).is_some();
         let key3_exists = cache.get(key3).is_some();
         assert!(key3_exists, "key3 should exist after insertion");
-        assert!(!(key1_exists && key2_exists), "one of key1 or key2 should be evicted");
-        assert!(key1_exists || key2_exists, "at least one of key1 or key2 should remain");
+        assert!(
+            !(key1_exists && key2_exists),
+            "one of key1 or key2 should be evicted"
+        );
+        assert!(
+            key1_exists || key2_exists,
+            "at least one of key1 or key2 should remain"
+        );
     }
 }

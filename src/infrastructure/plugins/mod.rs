@@ -40,7 +40,9 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     update_rocket_terrain_interaction,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
-use crate::infrastructure::bevy_adapters::terrain_render::{TerrainRenderPlugin, TerrainRenderConfig};
+use crate::infrastructure::bevy_adapters::terrain_render::{
+    TerrainRenderConfig, TerrainRenderPlugin,
+};
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
@@ -52,6 +54,7 @@ use crate::infrastructure::bevy_adapters::terrain_systems::{
 use crate::infrastructure::bevy_adapters::webgpu_systems::init_vulkan_solver;
 use crate::presentation::ui::*;
 use crate::presentation::ui_setup::setup_ui;
+use crate::systems::sets::RocketSet;
 
 /// Run condition for visual updates (every 3 frames).
 fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
@@ -258,33 +261,49 @@ impl Plugin for RocketModePlugin {
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
 
-        app.add_systems(Update, update_rocket_gravity);
-        // Ordered flight loop: guidance → control → actuation → forces →
-        // torques → mass/staging → integration → presentation.
+        app.configure_sets(
+            Update,
+            (RocketSet::Guidance
+                .before(RocketSet::Control)
+                .before(RocketSet::Actuation)
+                .before(RocketSet::Gravity)
+                .before(RocketSet::TerrainInteraction)
+                .before(RocketSet::Atmosphere)
+                .before(RocketSet::EntryPhysics)
+                .before(RocketSet::AeroForces)
+                .before(RocketSet::AeroTorque)
+                .before(RocketSet::PropulsionThrust)
+                .before(RocketSet::PropulsionGimbal)
+                .before(RocketSet::PropulsionConsumption)
+                .before(RocketSet::PropulsionStaging)
+                .before(RocketSet::AccumulateForces)
+                .before(RocketSet::Integrate)
+                .before(RocketSet::SyncRender),),
+        );
+
         app.add_systems(
             Update,
             (
-                guidance_system,
-                control_system,
-                actuation_system,
-                update_rocket_terrain_interaction,
-                atmosphere_properties,
-                // Entry physics: heating → ablation → plasma → parachutes → retro-propulsion
-                compute_heating,
-                compute_ablation,
-                compute_plasma_blackout,
-                compute_parachute_forces,
-                compute_retro_propulsion,
-                // Force/torque accumulation and integration
-                accumulate_forces,
-                aerodynamic_forces,
-                aerodynamic_torque,
-                propulsion_thrust,
-                propulsion_gimbal,
-                propulsion_consumption,
-                propulsion_staging,
-                integrate_6dof,
-                sync_render_transform,
+                guidance_system.in_set(RocketSet::Guidance),
+                control_system.in_set(RocketSet::Control),
+                actuation_system.in_set(RocketSet::Actuation),
+                update_rocket_gravity.in_set(RocketSet::Gravity),
+                update_rocket_terrain_interaction.in_set(RocketSet::TerrainInteraction),
+                atmosphere_properties.in_set(RocketSet::Atmosphere),
+                compute_heating.in_set(RocketSet::EntryPhysics),
+                compute_ablation.in_set(RocketSet::EntryPhysics),
+                compute_plasma_blackout.in_set(RocketSet::EntryPhysics),
+                compute_parachute_forces.in_set(RocketSet::EntryPhysics),
+                compute_retro_propulsion.in_set(RocketSet::EntryPhysics),
+                aerodynamic_forces.in_set(RocketSet::AeroForces),
+                aerodynamic_torque.in_set(RocketSet::AeroTorque),
+                propulsion_thrust.in_set(RocketSet::PropulsionThrust),
+                propulsion_gimbal.in_set(RocketSet::PropulsionGimbal),
+                propulsion_consumption.in_set(RocketSet::PropulsionConsumption),
+                propulsion_staging.in_set(RocketSet::PropulsionStaging),
+                accumulate_forces.in_set(RocketSet::AccumulateForces),
+                integrate_6dof.in_set(RocketSet::Integrate),
+                sync_render_transform.in_set(RocketSet::SyncRender),
             )
                 .chain(),
         );

@@ -356,11 +356,14 @@ pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
         use crate::domain::services::dem_terrain_source::DemTerrainSource;
         if name == "Earth" {
             let dem = DemTerrainSource::new(
-                crate::domain::services::dem_terrain_source::DemTerrainConfig::default()
+                crate::domain::services::dem_terrain_source::DemTerrainConfig::default(),
             );
             let dem_arc = std::sync::Arc::new(dem);
             if !sites.is_empty() {
-                return std::sync::Arc::new(SiteAwareTerrainSource { base: dem_arc, sites });
+                return std::sync::Arc::new(SiteAwareTerrainSource {
+                    base: dem_arc,
+                    sites,
+                });
             }
             return dem_arc;
         }
@@ -375,7 +378,10 @@ pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
     if sites.is_empty() {
         base_arc
     } else {
-        std::sync::Arc::new(SiteAwareTerrainSource { base: base_arc, sites })
+        std::sync::Arc::new(SiteAwareTerrainSource {
+            base: base_arc,
+            sites,
+        })
     }
 }
 

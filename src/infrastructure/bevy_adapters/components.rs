@@ -18,3 +18,9 @@ pub use super::quality_components::*;
 
 // Compute backend components
 pub use super::compute_components::*;
+
+// Craft/UFO components
+pub use super::craft_components::*;
+
+// Rocket components
+pub use crate::components::rocket::*;

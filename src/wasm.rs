@@ -1,12 +1,12 @@
-use bevy::asset::{AssetMetaCheck, AssetPlugin};
-use bevy::prelude::*;
-use bevy::time::Fixed;
 use crate::infrastructure::bevy_adapters::components::{
     ChromeOptimizations, PerformanceStats, WebGpuKeplerState,
 };
-use crate::infrastructure::web_workers::physics_worker::{adapt_worker_pool, PhysicsWorkerPool};
 use crate::infrastructure::web_workers::orbit_mesh_worker::OrbitMeshWorkerPool;
+use crate::infrastructure::web_workers::physics_worker::{adapt_worker_pool, PhysicsWorkerPool};
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
+use bevy::asset::{AssetMetaCheck, AssetPlugin};
+use bevy::prelude::*;
+use bevy::time::Fixed;
 use js_sys::Reflect;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -53,14 +53,12 @@ pub fn main() {
         ..default()
     };
 
-    let plugins = DefaultPlugins
-        .set(window_plugin)
-        .set(AssetPlugin {
-            file_path: "assets".to_string(),
-            watch_for_changes_override: Some(false),
-            meta_check: AssetMetaCheck::Never,
-            ..default()
-        });
+    let plugins = DefaultPlugins.set(window_plugin).set(AssetPlugin {
+        file_path: "assets".to_string(),
+        watch_for_changes_override: Some(false),
+        meta_check: AssetMetaCheck::Never,
+        ..default()
+    });
 
     let mut app = App::new();
     app.add_plugins(plugins);
@@ -85,7 +83,9 @@ pub fn main() {
     perf_stats.target_fps = if is_chrome { 90.0 } else { 60.0 };
     app.insert_resource(perf_stats);
     #[cfg(target_arch = "wasm32")]
-    app.insert_resource(crate::infrastructure::bevy_adapters::components::WasmMemoryStats::default());
+    app.insert_resource(
+        crate::infrastructure::bevy_adapters::components::WasmMemoryStats::default(),
+    );
     let worker_pool = PhysicsWorkerPool::new_dynamic();
     let worker_target = worker_pool.worker_count();
     app.insert_resource(ChromeOptimizations {
@@ -97,7 +97,9 @@ pub fn main() {
     app.insert_non_send_resource(worker_pool);
     app.insert_non_send_resource(TextureDecodeWorker::new());
     app.insert_non_send_resource(OrbitMeshWorkerPool::new());
-    app.insert_non_send_resource(crate::infrastructure::bevy_adapters::components::WebGpuKeplerState::default());
+    app.insert_non_send_resource(
+        crate::infrastructure::bevy_adapters::components::WebGpuKeplerState::default(),
+    );
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     let fixed_hz = if is_chrome { 120.0 } else { 60.0 };
@@ -141,7 +143,10 @@ pub fn main() {
     app.add_systems(Update, cap_fixed_overstep);
     app.add_systems(Update, update_info_card);
     app.add_systems(Update, update_notifications_ui);
-    app.add_systems(Update, update_ui_hover_state.before(update_camera_controller));
+    app.add_systems(
+        Update,
+        update_ui_hover_state.before(update_camera_controller),
+    );
     app.add_systems(Update, take_pending_screenshot);
     app.add_systems(Update, update_camera_controller);
     app.add_systems(Update, apply_camera_transform);
