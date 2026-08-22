@@ -22,4 +22,5 @@ pub enum RocketSet {
     AccumulateForces,
     Integrate,
     SyncRender,
+    Telemetry,
 }

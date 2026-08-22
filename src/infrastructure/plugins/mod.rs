@@ -38,6 +38,9 @@ use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overste
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_rocket_camera_input, update_rocket_camera, update_rocket_camera_projection,
 };
+use crate::infrastructure::bevy_adapters::rocket_hud::{
+    spawn_rocket_hud_system, update_rocket_hud_system,
+};
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
@@ -45,6 +48,9 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
     propulsion_thrust, sync_render_transform, update_orbital_elements, update_rocket_gravity,
     update_rocket_terrain_interaction,
+};
+use crate::infrastructure::bevy_adapters::rocket_telemetry::{
+    compute_rocket_telemetry_system, handle_flight_recorder_input_system, record_flight_data_system,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
@@ -255,6 +261,9 @@ impl Plugin for RocketModePlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, spawn_rockets_system);
 
+        // Rocket telemetry resource for HUD and flight log.
+        app.init_resource::<RocketTelemetry>();
+
         // Terrain rendering configuration.
         app.init_resource::<TerrainRenderConfig>();
 
@@ -286,6 +295,13 @@ impl Plugin for RocketModePlugin {
         app.add_systems(Update, update_rocket_camera);
         app.add_systems(Update, update_rocket_camera_projection);
 
+        // Rocket HUD UI (runs in Update).
+        app.add_systems(Startup, spawn_rocket_hud_system);
+        app.add_systems(Update, update_rocket_hud_system);
+
+        // Flight recorder input (runs in Update).
+        app.add_systems(Update, handle_flight_recorder_input_system);
+
         // Sync Bevy's fixed timestep with SimulationTime (runs in FixedUpdate).
         app.add_systems(FixedUpdate, sync_fixed_timestep);
 
@@ -307,7 +323,8 @@ impl Plugin for RocketModePlugin {
                 .before(RocketSet::PropulsionStaging)
                 .before(RocketSet::AccumulateForces)
                 .before(RocketSet::Integrate)
-                .before(RocketSet::SyncRender),),
+                .before(RocketSet::SyncRender)
+                .before(RocketSet::Telemetry),),
         );
 
         app.add_systems(
@@ -339,6 +356,13 @@ impl Plugin for RocketModePlugin {
                 accumulate_forces.in_set(RocketSet::AccumulateForces),
                 integrate_6dof.in_set(RocketSet::Integrate),
                 sync_render_transform.in_set(RocketSet::SyncRender),
+            ),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                compute_rocket_telemetry_system.in_set(RocketSet::Telemetry),
+                record_flight_data_system.in_set(RocketSet::Telemetry),
             ),
         );
     }

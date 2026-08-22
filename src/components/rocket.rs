@@ -1,10 +1,12 @@
 // Granular rocket components for ECS query isolation.
 // Each component has a single responsibility, enabling parallel system execution.
 
-use crate::domain::entities::rocket::Rocket;
+use crate::domain::entities::rocket::{Rocket, RocketMissionState as DomainRocketMissionState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+use crate::domain::services::terrain_collision::GroundContact;
 use bevy::math::{DQuat, DVec3, Quat, Vec3};
 use bevy::prelude::*;
+use std::ops::Deref;
 
 /// Authoritative 6-DOF physics state in planet-centered inertial frame (f64).
 /// Single source of truth for rocket motion. Only `integrate_6dof` writes this.
@@ -26,63 +28,43 @@ pub struct RocketGeometry {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct RocketMass(pub f64);
 
-/// Mission phase state machine. Updated by guidance_system, terrain_interaction.
+/// Mission phase state machine component wrapping the domain enum.
+/// Updated by guidance_system, terrain_interaction.
 /// Read by control, actuation, propulsion, guidance systems.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RocketMissionState {
-    #[default]
-    PreLaunch,
-    Launch,
-    Ascent,
-    Orbit,
-    DeorbitBurn,
-    ReentryCorridor,
-    PoweredDescent,
-    UnpoweredDescent,
-    Landing,
-    Landed,
-    Crashed,
+pub struct RocketMissionState(pub DomainRocketMissionState);
+
+impl RocketMissionState {
+    pub const PreLaunch: Self = Self(DomainRocketMissionState::PreLaunch);
+    pub const Launch: Self = Self(DomainRocketMissionState::Launch);
+    pub const Ascent: Self = Self(DomainRocketMissionState::Ascent);
+    pub const Orbit: Self = Self(DomainRocketMissionState::Orbit);
+    pub const DeorbitBurn: Self = Self(DomainRocketMissionState::DeorbitBurn);
+    pub const ReentryCorridor: Self = Self(DomainRocketMissionState::ReentryCorridor);
+    pub const PoweredDescent: Self = Self(DomainRocketMissionState::PoweredDescent);
+    pub const UnpoweredDescent: Self = Self(DomainRocketMissionState::UnpoweredDescent);
+    pub const Landing: Self = Self(DomainRocketMissionState::Landing);
+    pub const Landed: Self = Self(DomainRocketMissionState::Landed);
+    pub const Crashed: Self = Self(DomainRocketMissionState::Crashed);
 }
 
-impl From<crate::domain::entities::rocket::RocketMissionState> for RocketMissionState {
-    fn from(state: crate::domain::entities::rocket::RocketMissionState) -> Self {
-        match state {
-            crate::domain::entities::rocket::RocketMissionState::PreLaunch => Self::PreLaunch,
-            crate::domain::entities::rocket::RocketMissionState::Launch => Self::Launch,
-            crate::domain::entities::rocket::RocketMissionState::Ascent => Self::Ascent,
-            crate::domain::entities::rocket::RocketMissionState::Orbit => Self::Orbit,
-            crate::domain::entities::rocket::RocketMissionState::DeorbitBurn => Self::DeorbitBurn,
-            crate::domain::entities::rocket::RocketMissionState::ReentryCorridor => {
-                Self::ReentryCorridor
-            }
-            crate::domain::entities::rocket::RocketMissionState::PoweredDescent => {
-                Self::PoweredDescent
-            }
-            crate::domain::entities::rocket::RocketMissionState::UnpoweredDescent => {
-                Self::UnpoweredDescent
-            }
-            crate::domain::entities::rocket::RocketMissionState::Landing => Self::Landing,
-            crate::domain::entities::rocket::RocketMissionState::Landed => Self::Landed,
-            crate::domain::entities::rocket::RocketMissionState::Crashed => Self::Crashed,
-        }
+impl From<DomainRocketMissionState> for RocketMissionState {
+    fn from(state: DomainRocketMissionState) -> Self {
+        Self(state)
     }
 }
 
-impl From<RocketMissionState> for crate::domain::entities::rocket::RocketMissionState {
+impl From<RocketMissionState> for DomainRocketMissionState {
     fn from(state: RocketMissionState) -> Self {
-        match state {
-            RocketMissionState::PreLaunch => Self::PreLaunch,
-            RocketMissionState::Launch => Self::Launch,
-            RocketMissionState::Ascent => Self::Ascent,
-            RocketMissionState::Orbit => Self::Orbit,
-            RocketMissionState::DeorbitBurn => Self::DeorbitBurn,
-            RocketMissionState::ReentryCorridor => Self::ReentryCorridor,
-            RocketMissionState::PoweredDescent => Self::PoweredDescent,
-            RocketMissionState::UnpoweredDescent => Self::UnpoweredDescent,
-            RocketMissionState::Landing => Self::Landing,
-            RocketMissionState::Landed => Self::Landed,
-            RocketMissionState::Crashed => Self::Crashed,
-        }
+        state.0
+    }
+}
+
+impl Deref for RocketMissionState {
+    type Target = DomainRocketMissionState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -240,6 +222,95 @@ pub struct OrbitalElements {
     pub orbital_period_s: f64,
     pub apoapsis_m: f64,
     pub periapsis_m: f64,
+}
+
+/// Aggregated rocket telemetry for HUD, flight log, and external consumers.
+/// Computed from authoritative state in `compute_rocket_telemetry` (FixedUpdate).
+/// All units are explicit per AGENTS.md section 15.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct RocketTelemetry {
+    /// Altitude above ground level (AGL) in meters.
+    pub altitude_agl_m: f64,
+    /// Altitude above mean sea level (MSL) in meters.
+    pub altitude_msl_m: f64,
+    /// Total velocity magnitude in m/s.
+    pub velocity_total_mps: f64,
+    /// Vertical velocity component (positive up) in m/s.
+    pub velocity_vertical_mps: f64,
+    /// Horizontal velocity magnitude in m/s.
+    pub velocity_horizontal_mps: f64,
+    /// Mach number (velocity / local speed of sound).
+    pub mach_number: f64,
+    /// Dynamic pressure Q = 0.5 * rho * v^2 in Pascals.
+    pub dynamic_pressure_pa: f64,
+    /// G-load (total acceleration / 9.81).
+    pub g_load: f64,
+    /// Apoapsis altitude above body surface in meters.
+    pub apoapsis_altitude_m: f64,
+    /// Periapsis altitude above body surface in meters.
+    pub periapsis_altitude_m: f64,
+    /// Thrust-to-weight ratio (total thrust / weight).
+    pub tw_ratio: f64,
+    /// Remaining delta-v in m/s (ideal rocket equation).
+    pub delta_v_remaining_mps: f64,
+    /// Propellant remaining as fraction of initial (0.0-1.0).
+    pub propellant_fraction: f64,
+    /// Current active stage index.
+    pub active_stage: usize,
+    /// Current mission phase.
+    pub mission_phase: RocketMissionState,
+    /// Total thrust in Newtons.
+    pub total_thrust_n: f64,
+    /// Current mass in kg.
+    pub mass_kg: f64,
+    /// Specific impulse of active engines (vacuum) in seconds.
+    pub isp_vacuum_s: f64,
+    /// Angle of attack in degrees.
+    pub angle_of_attack_deg: f64,
+    /// Sideslip angle in degrees.
+    pub sideslip_angle_deg: f64,
+    /// Bank angle in degrees (roll relative to horizon).
+    pub bank_angle_deg: f64,
+    /// Roll rate in deg/s.
+    pub roll_rate_dps: f64,
+    /// Pitch rate in deg/s.
+    pub pitch_rate_dps: f64,
+    /// Yaw rate in deg/s.
+    pub yaw_rate_dps: f64,
+    /// Throttle setting (0.0-1.0).
+    pub throttle: f32,
+    /// Gimbal pitch deflection in degrees.
+    pub gimbal_pitch_deg: f32,
+    /// Gimbal yaw deflection in degrees.
+    pub gimbal_yaw_deg: f32,
+    /// Radar altitude from terrain collision in meters.
+    pub radar_altitude_m: f64,
+    /// Terrain slope in degrees.
+    pub terrain_slope_deg: f64,
+    /// Ground contact state.
+    pub ground_contact: GroundContact,
+    /// Convective heat flux in W/m².
+    pub convective_heat_flux_w_m2: f64,
+    /// Radiative heat flux in W/m².
+    pub radiative_heat_flux_w_m2: f64,
+    /// Total heat flux in W/m².
+    pub total_heat_flux_w_m2: f64,
+    /// Ablation nose radius in meters.
+    pub nose_radius_m: f64,
+    /// TPS thickness remaining in meters.
+    pub tps_thickness_remaining_m: f64,
+    /// Plasma blackout active.
+    pub plasma_blackout: bool,
+    /// Drogue parachute deployed.
+    pub drogue_deployed: bool,
+    /// Main parachute deployed.
+    pub main_deployed: bool,
+    /// Time since liftoff in seconds.
+    pub time_since_liftoff_s: f64,
+    /// Downrange distance in meters.
+    pub downrange_m: f64,
+    /// Crossrange distance in meters.
+    pub crossrange_m: f64,
 }
 
 /// Rocket camera mode for different viewing perspectives.
