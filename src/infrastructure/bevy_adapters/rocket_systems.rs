@@ -15,6 +15,7 @@ use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
     consume_propellant, gimbal_torque_body, shed_stage, stage_thrust_body,
 };
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
     detect_ground_contact, lat_lon_from_direction, radar_altitude_m, sample_surface, GroundContact,
 };
@@ -79,8 +80,9 @@ pub fn accumulate_forces(
 /// Integrate the authoritative 6-DOF dynamics (semi-implicit Euler in f64)
 /// from the accumulated force/torque, then reset the accumulators. Propellant
 /// depletion and staging are handled by the propulsion systems.
+/// Uses SimulationTime fixed timestep for deterministic physics.
 pub fn integrate_6dof(
-    time: Res<Time>,
+    sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &mut RocketPhysicsState,
         &mut RocketMass,
@@ -88,7 +90,7 @@ pub fn integrate_6dof(
         &mut TorqueAccumulator,
     )>,
 ) {
-    let dt = time.delta_secs() as f64;
+    let dt = sim_time.fixed_timestep();
 
     for (mut rocket, mut mass, mut force_accum, mut torque_accum) in rocket_query.iter_mut() {
         let force = force_accum.0;
@@ -233,9 +235,9 @@ pub fn propulsion_thrust(
 
 /// Deplete the active stage's propellant at the engine mass flow and update the
 /// vehicle mass, inertia tensor, and center of mass. Mass always derives from
-/// the vehicle state (single source).
+/// the vehicle state (single source). Uses SimulationTime fixed timestep.
 pub fn propulsion_consumption(
-    time: Res<Time>,
+    sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &mut RocketPhysicsState,
         &RocketGeometry,
@@ -244,7 +246,7 @@ pub fn propulsion_consumption(
         &mut RocketMass,
     )>,
 ) {
-    let dt = time.delta_secs() as f64;
+    let dt = sim_time.fixed_timestep();
     for (mut rocket, geometry, atmosphere, mut propulsion, mut mass) in rocket_query.iter_mut() {
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
@@ -556,8 +558,9 @@ pub fn guidance_system(
 /// Attitude control: converts the guidance target and current state into
 /// commanded throttle, gimbal deflections, and RCS torque using the PID with
 /// anti-windup. Writes only the command interface; never the vehicle's motion.
+/// Uses SimulationTime fixed timestep.
 pub fn control_system(
-    time: Res<Time>,
+    sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &mut RocketCommands,
         &RocketPhysicsState,
@@ -568,7 +571,7 @@ pub fn control_system(
         &mut RocketAutopilot,
     )>,
 ) {
-    let dt = time.delta_secs() as f64;
+    let dt = sim_time.fixed_timestep();
     for (mut commands, rocket, geometry, mass, mission_state, propulsion, mut autopilot) in
         rocket_query.iter_mut()
     {
@@ -617,8 +620,9 @@ pub fn control_system(
 /// RCS torque) to the control commands and deliver the bounded outputs to the
 /// propulsion systems and the torque accumulator. The last layer before
 /// physics; it never writes the vehicle's motion directly.
+/// Uses SimulationTime fixed timestep.
 pub fn actuation_system(
-    time: Res<Time>,
+    sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &RocketCommands,
         &mut RocketPropulsion,
@@ -628,7 +632,7 @@ pub fn actuation_system(
         &RocketAutopilot,
     )>,
 ) {
-    let dt = time.delta_secs() as f32;
+    let dt = sim_time.fixed_timestep_f32();
     for (commands, mut propulsion, rocket, geometry, mut torque_accum, autopilot) in
         rocket_query.iter_mut()
     {
@@ -780,7 +784,9 @@ pub fn compute_heating(
 
 /// Ablation: char-layer recession from integrated heat load.
 /// Updates nose radius and mass loss in AblationState.
+/// Uses SimulationTime fixed timestep.
 pub fn compute_ablation(
+    sim_time: Res<SimulationTime>,
     config: Res<EntryPhysicsConfig>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
@@ -793,6 +799,7 @@ pub fn compute_ablation(
         &mut RocketMass,
     )>,
 ) {
+    let dt = sim_time.fixed_timestep();
     for (binding, mut rocket, geometry, _atmosphere, thermal, mut ablation, mut mass) in
         rocket_query.iter_mut()
     {
@@ -809,11 +816,10 @@ pub fn compute_ablation(
         }
 
         // Integrated heat load
-        ablation.cumulative_heat_load_j_m2 += q_total * (1.0 / 60.0); // Approximate dt
+        ablation.cumulative_heat_load_j_m2 += q_total * dt;
 
         // Recession rate: dr/dt = q_dot / (rho_tps * H_abl)
         let recession_rate = q_total / (config.tps_density_kg_m3 * config.heat_of_ablation_j_kg);
-        let dt = 1.0 / 60.0;
         ablation.recession_depth_m += recession_rate * dt;
 
         // Nose radius growth from recession
@@ -873,7 +879,9 @@ pub fn compute_plasma_blackout(
 
 /// Parachute deployment and drag (mortar → reefed → full).
 /// Applies drag forces to the translational accumulator.
+/// Uses SimulationTime fixed timestep.
 pub fn compute_parachute_forces(
+    sim_time: Res<SimulationTime>,
     config: Res<EntryPhysicsConfig>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
@@ -886,6 +894,7 @@ pub fn compute_parachute_forces(
         &mut RocketMissionState,
     )>,
 ) {
+    let dt = sim_time.fixed_timestep();
     for (
         binding,
         rocket,
@@ -922,7 +931,7 @@ pub fn compute_parachute_forces(
         }
 
         if parachute.drogue_deployed && !parachute.drogue_fully_inflated {
-            parachute.drogue_timer_s += 1.0 / 60.0;
+            parachute.drogue_timer_s += dt;
             if parachute.drogue_timer_s < config.drogue_reef_time_s {
                 parachute.current_cd = config.drogue_reef_cd;
                 parachute.reference_area_m2 = config.drogue_reference_area_m2;
@@ -942,7 +951,7 @@ pub fn compute_parachute_forces(
         }
 
         if parachute.main_deployed && !parachute.main_fully_inflated {
-            parachute.main_timer_s += 1.0 / 60.0;
+            parachute.main_timer_s += dt;
             if parachute.main_timer_s < config.main_reef_time_s {
                 parachute.current_cd = config.main_reef_cd;
                 parachute.reference_area_m2 = config.main_reference_area_m2;

@@ -14,6 +14,9 @@ use crate::application::craft_startup::spawn_craft_ui;
 use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
+use crate::domain::services::simulation_time::{
+    advance_simulation_time, sync_fixed_timestep, SimulationTime,
+};
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, PerformanceStats, ScreenshotState,
@@ -31,6 +34,7 @@ use crate::infrastructure::bevy_adapters::education_systems::register_education_
 use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
+use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overstep;
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
@@ -254,6 +258,9 @@ impl Plugin for RocketModePlugin {
         // Entry physics configuration.
         app.init_resource::<EntryPhysicsConfig>();
 
+        // Simulation time resource for fixed-timestep physics and time acceleration.
+        app.insert_resource(SimulationTime::default());
+
         // Cube-sphere terrain streaming around the rocket.
         app.insert_resource(TerrainStreamingResource::default());
         app.add_systems(Update, stream_terrain_patches);
@@ -261,8 +268,17 @@ impl Plugin for RocketModePlugin {
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
 
+        // Advance simulation time from real time (runs in Update).
+        app.add_systems(Update, advance_simulation_time);
+
+        // Cap fixed timestep overstep (runs in Update).
+        app.add_systems(Update, cap_fixed_overstep);
+
+        // Sync Bevy's fixed timestep with SimulationTime (runs in FixedUpdate).
+        app.add_systems(FixedUpdate, sync_fixed_timestep);
+
         app.configure_sets(
-            Update,
+            FixedUpdate,
             (RocketSet::Guidance
                 .before(RocketSet::Control)
                 .before(RocketSet::Actuation)
@@ -282,7 +298,7 @@ impl Plugin for RocketModePlugin {
         );
 
         app.add_systems(
-            Update,
+            FixedUpdate,
             (
                 guidance_system.in_set(RocketSet::Guidance),
                 control_system.in_set(RocketSet::Control),

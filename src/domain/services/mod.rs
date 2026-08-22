@@ -18,6 +18,7 @@ pub mod reference_frames;
 pub mod rocket_dynamics;
 pub mod rocket_propulsion;
 pub mod simd_processor;
+pub mod simulation_time;
 pub mod terrain_collision;
 pub mod terrain_patch_manager;
 pub mod terrain_source;
