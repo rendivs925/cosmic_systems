@@ -109,13 +109,16 @@ pub struct RocketCommands {
     pub rcs_torque_cmd_body: DVec3,
 }
 
-/// Autopilot configuration: PID gains, ascent profile, actuator limits.
+/// Autopilot configuration: PID gains, ascent profile, actuator limits, and mode.
 #[derive(Component, Debug, Clone, Default)]
 pub struct RocketAutopilot {
     pub gains: crate::domain::services::control::PidGains,
     pub integral: DVec3,
     pub ascent_profile: crate::domain::services::guidance::AscentGuidanceProfile,
     pub actuation: crate::domain::services::actuation::ActuationLimits,
+    pub mode: crate::domain::services::guidance::AutopilotMode,
+    pub time_since_liftoff_s: f64,
+    pub target_landing_position_m: DVec3,
 }
 
 /// Net force accumulator (world/planet-inertial frame), cleared each frame by integrate_6dof.

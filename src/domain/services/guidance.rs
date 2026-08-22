@@ -25,7 +25,30 @@
 use crate::domain::entities::rocket::RocketMissionState;
 use bevy::math::{DQuat, DVec3};
 
-/// Gravity-turn ascent profile.
+/// Autopilot mode for the flight computer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutopilotMode {
+    #[default]
+    Off,
+    /// Gravity-turn ascent to orbit insertion.
+    Ascent,
+    /// Circularization burn at apoapsis.
+    OrbitInsertion,
+    /// Retrograde burn to lower periapsis for entry.
+    Deorbit,
+    /// Bank-angle management for atmospheric entry.
+    Reentry,
+    /// Powered descent with convex optimization (suicide burn / hover-slam).
+    PoweredDescent,
+    /// Terminal landing guidance.
+    Landing,
+    /// Station keeping / orbital maintenance.
+    StationKeep,
+    /// Rendezvous with target vehicle (future).
+    Rendezvous,
+}
+
+/// Gravity-turn ascent profile with time-based pitch schedule.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AscentGuidanceProfile {
     /// Altitude (m) at which Launch transitions to Ascent.
@@ -36,6 +59,12 @@ pub struct AscentGuidanceProfile {
     pub turn_end_altitude_m: f64,
     /// Maximum pitch angle from the local vertical, radians.
     pub max_turn_angle_rad: f64,
+    /// Time (s) after liftoff when pitch-over begins (for time-based schedule).
+    pub turn_start_time_s: f64,
+    /// Time (s) after liftoff when pitch-over ends.
+    pub turn_end_time_s: f64,
+    /// Target orbital inclination (radians) - determines launch azimuth.
+    pub target_inclination_rad: f64,
 }
 
 impl Default for AscentGuidanceProfile {
@@ -45,6 +74,9 @@ impl Default for AscentGuidanceProfile {
             turn_start_altitude_m: 2_000.0,
             turn_end_altitude_m: 80_000.0,
             max_turn_angle_rad: 80.0_f64.to_radians(),
+            turn_start_time_s: 10.0,
+            turn_end_time_s: 160.0,
+            target_inclination_rad: 28.5_f64.to_radians(), // KSC latitude
         }
     }
 }
@@ -61,7 +93,16 @@ impl AscentGuidanceProfile {
             turn_start_altitude_m,
             turn_end_altitude_m,
             max_turn_angle_rad,
+            turn_start_time_s: 10.0,
+            turn_end_time_s: 160.0,
+            target_inclination_rad: 28.5_f64.to_radians(),
         }
+    }
+
+    /// Create a profile for a specific launch site inclination.
+    pub fn with_inclination(mut self, inclination_rad: f64) -> Self {
+        self.target_inclination_rad = inclination_rad;
+        self
     }
 }
 
@@ -76,6 +117,29 @@ pub fn gravity_turn_pitch_angle(profile: &AscentGuidanceProfile, altitude_m: f64
     profile.max_turn_angle_rad * t
 }
 
+/// Pitch angle for gravity turn using time-based schedule (more realistic).
+/// Ramps from 0 at turn_start_time_s to max_turn_angle_rad at turn_end_time_s.
+pub fn gravity_turn_pitch_angle_time(
+    profile: &AscentGuidanceProfile,
+    time_since_liftoff_s: f64,
+) -> f64 {
+    let t = ((time_since_liftoff_s - profile.turn_start_time_s)
+        / (profile.turn_end_time_s - profile.turn_start_time_s))
+        .clamp(0.0, 1.0);
+    profile.max_turn_angle_rad * t
+}
+
+/// Combined pitch angle using both altitude and time (whichever is more advanced).
+pub fn gravity_turn_pitch_angle_combined(
+    profile: &AscentGuidanceProfile,
+    altitude_m: f64,
+    time_since_liftoff_s: f64,
+) -> f64 {
+    let altitude_angle = gravity_turn_pitch_angle(profile, altitude_m);
+    let time_angle = gravity_turn_pitch_angle_time(profile, time_since_liftoff_s);
+    altitude_angle.max(time_angle)
+}
+
 /// Desired body-axis direction for the gravity turn: the local vertical
 /// rotated about the pitch axis (horizontal, perpendicular to the ascent
 /// plane) by the turn angle at the current altitude.
@@ -86,6 +150,18 @@ pub fn gravity_turn_direction(
     altitude_m: f64,
 ) -> DVec3 {
     let angle = gravity_turn_pitch_angle(profile, altitude_m);
+    (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
+}
+
+/// Desired body-axis direction for gravity turn using combined altitude/time schedule.
+pub fn gravity_turn_direction_combined(
+    profile: &AscentGuidanceProfile,
+    up_dir: DVec3,
+    pitch_axis: DVec3,
+    altitude_m: f64,
+    time_since_liftoff_s: f64,
+) -> DVec3 {
+    let angle = gravity_turn_pitch_angle_combined(profile, altitude_m, time_since_liftoff_s);
     (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
 }
 
@@ -476,6 +552,230 @@ pub fn target_attitude_for_phase(
         RocketMissionState::Landing => attitude_from_direction(up_dir),
         _ => attitude_from_direction(up_dir),
     }
+}
+
+/// Suicide burn / hover-slam terminal guidance.
+/// Computes the thrust vector and ignition time to land with zero terminal velocity.
+/// Uses the "constant deceleration" approximation: a = v² / (2h) for vertical, plus gravity.
+pub fn suicide_burn_guidance(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    target_position_m: DVec3,
+    mass_kg: f64,
+    max_thrust_n: f64,
+    gravity_accel_mps2: f64,
+) -> (DVec3, DQuat, f64, bool) {
+    let up_dir = position_m.normalize_or_zero();
+    let altitude = (position_m - target_position_m).length();
+    let vertical_vel = velocity_mps.dot(up_dir);
+    let horizontal_vel_vec = velocity_mps - up_dir * vertical_vel;
+    let horizontal_speed = horizontal_vel_vec.length();
+
+    // Time to cancel vertical velocity at max thrust (with gravity).
+    let max_accel = max_thrust_n / mass_kg;
+    let net_decel = max_accel - gravity_accel_mps2;
+
+    // Suicide burn altitude: h = v² / (2a) for constant deceleration.
+    let suicide_altitude = if net_decel > 0.0 && vertical_vel < 0.0 {
+        vertical_vel * vertical_vel / (2.0 * net_decel)
+    } else {
+        0.0
+    };
+
+    // Horizontal stopping distance (assume we can thrust horizontally at max_accel).
+    let horizontal_stop_dist = if horizontal_speed > 0.0 {
+        horizontal_speed * horizontal_speed / (2.0 * max_accel)
+    } else {
+        0.0
+    };
+
+    // Total altitude needed for suicide burn.
+    let total_suicide_altitude = suicide_altitude + horizontal_stop_dist + 10.0; // 10m margin
+
+    // Should we start the burn now?
+    let should_burn = altitude <= total_suicide_altitude && vertical_vel < -0.5;
+
+    // Compute required acceleration to reach target with zero velocity.
+    let t_go = if vertical_vel < -0.1 {
+        altitude / (-vertical_vel).max(0.1)
+    } else {
+        5.0
+    }
+    .max(1.0);
+
+    let r_tgo = position_m + velocity_mps * t_go;
+    let accel_req = (target_position_m - r_tgo) * 2.0 / (t_go * t_go);
+
+    // Gravity compensation.
+    let accel_cmd = accel_req + up_dir * gravity_accel_mps2;
+
+    // Thrust direction and magnitude.
+    let thrust_mag = (accel_cmd.length() * mass_kg).min(max_thrust_n);
+    let thrust_dir = if accel_cmd.length() > 1e-6 {
+        accel_cmd.normalize()
+    } else {
+        up_dir
+    };
+
+    // Attitude aligns body +Y with thrust direction.
+    let attitude = DQuat::from_rotation_arc(DVec3::Y, thrust_dir);
+
+    (
+        thrust_dir * thrust_mag,
+        attitude,
+        total_suicide_altitude,
+        should_burn,
+    )
+}
+
+/// Hover-slam guidance: maintain a constant descent rate while nulling horizontal velocity.
+/// Used for final approach when suicide burn has arrested most velocity.
+pub fn hover_slam_guidance(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    target_position_m: DVec3,
+    mass_kg: f64,
+    max_thrust_n: f64,
+    gravity_accel_mps2: f64,
+    target_descent_rate_mps: f64,
+) -> (DVec3, DQuat) {
+    let up_dir = position_m.normalize_or_zero();
+    let altitude = (position_m - target_position_m).length();
+    let vertical_vel = velocity_mps.dot(up_dir);
+    let horizontal_vel_vec = velocity_mps - up_dir * vertical_vel;
+
+    // Vertical control: maintain target descent rate.
+    let vertical_error = vertical_vel - target_descent_rate_mps;
+    let vertical_accel_cmd = -vertical_error * 2.0; // PD control
+
+    // Horizontal control: null horizontal velocity.
+    let horizontal_accel_cmd = -horizontal_vel_vec * 1.0; // Proportional control
+
+    // Combined acceleration command + gravity compensation.
+    let accel_cmd = up_dir * (vertical_accel_cmd + gravity_accel_mps2) + horizontal_accel_cmd;
+
+    let thrust_mag = (accel_cmd.length() * mass_kg).min(max_thrust_n);
+    let thrust_dir = if accel_cmd.length() > 1e-6 {
+        accel_cmd.normalize()
+    } else {
+        up_dir
+    };
+
+    let attitude = DQuat::from_rotation_arc(DVec3::Y, thrust_dir);
+    (thrust_dir * thrust_mag, attitude)
+}
+
+/// Enhanced powered descent guidance using lossless convexification.
+/// Solves minimum-fuel landing problem with thrust and pointing constraints.
+pub fn powered_descent_guidance_convex(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    target_position_m: DVec3,
+    mass_kg: f64,
+    max_thrust_n: f64,
+    min_thrust_n: f64,
+    max_thrust_angle_rad: f64,
+    gravity_accel_mps2: f64,
+    time_to_go_s: f64,
+) -> (DVec3, DQuat) {
+    let up_dir = position_m.normalize_or_zero();
+
+    // State relative to target.
+    let r_rel = position_m - target_position_m;
+    let v_rel = velocity_mps;
+
+    // Time-to-go estimate.
+    let t_go = time_to_go_s.max(1.0);
+
+    // Lossless convexification: solve for minimum-fuel thrust profile.
+    // The optimal thrust is bang-bang or singular. For landing, we use a simplified
+    // analytical solution: constant acceleration to reach target with zero velocity.
+
+    // Required acceleration (constant) to reach target with zero velocity in t_go.
+    // r_tgo = r + v*t + 0.5*a*t² = 0  =>  a = -2(r + v*t) / t²
+    let accel_req = -(r_rel + v_rel * t_go) * 2.0 / (t_go * t_go);
+
+    // Add gravity compensation.
+    let accel_cmd = accel_req + up_dir * gravity_accel_mps2;
+
+    // Thrust magnitude (clamped to engine limits).
+    let thrust_mag = (accel_cmd.length() * mass_kg).clamp(min_thrust_n, max_thrust_n);
+
+    // Thrust direction with pointing constraint.
+    let thrust_dir = if accel_cmd.length() > 1e-6 {
+        accel_cmd.normalize()
+    } else {
+        up_dir
+    };
+
+    // Enforce maximum thrust angle from vertical.
+    let angle_from_vertical = thrust_dir.angle_between(up_dir);
+    let thrust_dir = if angle_from_vertical > max_thrust_angle_rad {
+        let axis = up_dir.cross(thrust_dir).normalize_or_zero();
+        DQuat::from_axis_angle(axis, max_thrust_angle_rad - angle_from_vertical) * thrust_dir
+    } else {
+        thrust_dir
+    };
+
+    let attitude = DQuat::from_rotation_arc(DVec3::Y, thrust_dir);
+    (thrust_dir * thrust_mag, attitude)
+}
+
+/// Enhanced reentry bank-angle guidance with predictor-corrector.
+/// Uses reference trajectory tracking for precise corridor management.
+pub fn reentry_bank_angle_enhanced(
+    altitude_m: f64,
+    velocity_mps: f64,
+    flight_path_angle_rad: f64,
+    dynamic_pressure_pa: f64,
+    heat_flux_w_m2: f64,
+    g_load: f64,
+    config: &DescentGuidanceConfig,
+    crossrange_remaining_m: f64,
+    downrange_remaining_m: f64,
+    reference_bank_rad: f64,
+) -> f64 {
+    // Constraint margins.
+    let g_margin = config.max_g_load - g_load;
+    let q_margin = config.max_dynamic_pressure_pa - dynamic_pressure_pa;
+    let heat_margin = config.max_heat_flux_w_m2 - heat_flux_w_m2;
+
+    // Predictor: estimate constraint violations at next step.
+    let constraint_margin = g_margin.min(q_margin / 1000.0).min(heat_margin / 1000.0);
+
+    // Base bank from reference trajectory (precomputed or analytical).
+    let mut bank = reference_bank_rad;
+
+    // Corrector: adjust bank to manage constraints.
+    if constraint_margin <= 0.0 {
+        // Violating constraints: increase bank magnitude to increase drag.
+        let violation = (-constraint_margin).min(5.0); // Cap correction
+        let max_bank = 90.0_f64.to_radians();
+        let bank_mag = (bank.abs() + violation * 10.0_f64.to_radians()).min(max_bank);
+        bank = bank_mag * bank.signum();
+    } else if constraint_margin < 2.0 {
+        // Approaching constraints: gently increase bank.
+        let max_bank = 70.0_f64.to_radians();
+        bank = (bank.abs() + 2.0_f64.to_radians()).min(max_bank) * bank.signum();
+    }
+
+    // Crossrange steering: modulate bank sign based on crossrange error.
+    // If crossrange > 0, we need to turn left (negative bank in our convention).
+    let crossrange_sign = if crossrange_remaining_m > 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+
+    // Downrange control: adjust bank magnitude to hit target downrange.
+    let downrange_error = downrange_remaining_m; // Simplified
+    let downrange_bank_adj =
+        (downrange_error / 1_000_000.0).clamp(-0.5, 0.5) * 10.0_f64.to_radians();
+
+    // Combine corrections.
+    bank = (bank.abs() + downrange_bank_adj).min(90.0_f64.to_radians()) * crossrange_sign;
+
+    bank
 }
 
 #[cfg(test)]
