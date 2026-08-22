@@ -35,6 +35,9 @@ use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
 use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overstep;
+use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
+    handle_rocket_camera_input, update_rocket_camera, update_rocket_camera_projection,
+};
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
@@ -258,6 +261,10 @@ impl Plugin for RocketModePlugin {
         // Entry physics configuration.
         app.init_resource::<EntryPhysicsConfig>();
 
+        // Rocket camera resources.
+        app.init_resource::<RocketCameraMode>();
+        app.init_resource::<RocketCameraConfig>();
+
         // Simulation time resource for fixed-timestep physics and time acceleration.
         app.insert_resource(SimulationTime::default());
 
@@ -273,6 +280,11 @@ impl Plugin for RocketModePlugin {
 
         // Cap fixed timestep overstep (runs in Update).
         app.add_systems(Update, cap_fixed_overstep);
+
+        // Rocket camera systems (run in Update for smooth rendering).
+        app.add_systems(Update, handle_rocket_camera_input);
+        app.add_systems(Update, update_rocket_camera);
+        app.add_systems(Update, update_rocket_camera_projection);
 
         // Sync Bevy's fixed timestep with SimulationTime (runs in FixedUpdate).
         app.add_systems(FixedUpdate, sync_fixed_timestep);

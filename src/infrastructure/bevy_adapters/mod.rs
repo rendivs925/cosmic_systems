@@ -16,6 +16,7 @@ pub mod performance_components;
 pub mod performance_systems;
 pub mod planet_systems;
 pub mod quality_components;
+pub mod rocket_camera_systems;
 pub mod rocket_systems;
 pub mod simd_kepler;
 pub mod systems;

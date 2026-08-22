@@ -241,3 +241,65 @@ pub struct OrbitalElements {
     pub apoapsis_m: f64,
     pub periapsis_m: f64,
 }
+
+/// Rocket camera mode for different viewing perspectives.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RocketCameraMode {
+    #[default]
+    Chase, // Third-person chase camera behind the rocket
+    Cockpit, // First-person from rocket body
+    Orbital, // Inertial frame showing orbital trajectory
+    Surface, // Planet-relative for landing
+    Free,    // Free camera (debug)
+}
+
+/// Configuration for rocket camera modes.
+#[derive(Resource, Debug, Clone)]
+pub struct RocketCameraConfig {
+    /// Chase camera distance behind rocket
+    pub chase_distance: f32,
+    /// Chase camera height offset
+    pub chase_height: f32,
+    /// Chase camera pitch angle (down from horizontal)
+    pub chase_pitch: f32,
+    /// Cockpit camera offset from rocket center
+    pub cockpit_offset: Vec3,
+    /// Orbital camera distance from rocket
+    pub orbital_distance: f32,
+    /// Orbital camera elevation angle
+    pub orbital_elevation: f32,
+    /// Surface camera distance from landing target
+    pub surface_distance: f32,
+    /// Surface camera height above terrain
+    pub surface_height: f32,
+    /// Transition speed between modes
+    pub transition_speed: f32,
+    /// Smoothing factor for camera movement
+    pub smooth_factor: f32,
+}
+
+impl Default for RocketCameraConfig {
+    fn default() -> Self {
+        Self {
+            chase_distance: 100.0,
+            chase_height: 20.0,
+            chase_pitch: -0.3,
+            cockpit_offset: Vec3::new(0.0, 5.0, 0.0),
+            orbital_distance: 500.0,
+            orbital_elevation: 0.5,
+            surface_distance: 200.0,
+            surface_height: 50.0,
+            transition_speed: 2.0,
+            smooth_factor: 0.1,
+        }
+    }
+}
+
+/// Rocket camera controller for managing camera state and transitions.
+#[derive(Component, Debug, Clone, Default)]
+pub struct RocketCameraController {
+    pub current_mode: RocketCameraMode,
+    pub target_mode: RocketCameraMode,
+    pub transition_progress: f32,
+    pub last_rocket_transform: Option<Transform>,
+}
