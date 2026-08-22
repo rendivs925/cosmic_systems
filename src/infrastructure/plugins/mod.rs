@@ -38,6 +38,7 @@ use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overste
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_rocket_camera_input, update_rocket_camera, update_rocket_camera_projection,
 };
+use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
@@ -283,6 +284,9 @@ impl Plugin for RocketModePlugin {
 
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
+
+        // Rocket debug visualization plugin.
+        app.add_plugins(RocketDebugPlugin);
 
         // Advance simulation time from real time (runs in Update).
         app.add_systems(Update, advance_simulation_time);

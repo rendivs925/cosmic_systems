@@ -35,6 +35,8 @@ fn main() {
     });
 
     let mut app = App::new();
+    // GizmoPlugin ships inside DefaultPlugins (bevy_gizmos feature); no
+    // explicit registration needed here.
     app.add_plugins(plugins);
 
     match mode {

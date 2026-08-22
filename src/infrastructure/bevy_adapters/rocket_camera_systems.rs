@@ -46,15 +46,20 @@ pub fn update_rocket_camera(
     camera_mode: Res<RocketCameraMode>,
     config: Res<RocketCameraConfig>,
     physical_scale: Res<PhysicalScale>,
-    planet_query: Query<(&PlanetComponent, &Transform)>,
-    rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &RocketFacade,
-        &Transform,
-        &RocketMissionState,
-    )>,
+    // `Without<Camera>` proves disjointness from the mutable camera query
+    // below (B0001): planets/rockets never carry a Camera component.
+    planet_query: Query<(&PlanetComponent, &Transform), Without<Camera>>,
+    rocket_query: Query<
+        (
+            &RocketPlanetBinding,
+            &RocketPhysicsState,
+            &RocketGeometry,
+            &RocketFacade,
+            &Transform,
+            &RocketMissionState,
+        ),
+        Without<Camera>,
+    >,
     mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera>>,
     mut controller_query: Query<&mut RocketCameraController>,
 ) {
