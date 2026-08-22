@@ -40,7 +40,7 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
     compute_plasma_blackout, compute_retro_propulsion, control_system, guidance_system,
     integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
-    propulsion_thrust, sync_render_transform, update_rocket_gravity,
+    propulsion_thrust, sync_render_transform, update_orbital_elements, update_rocket_gravity,
     update_rocket_terrain_interaction,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
@@ -283,6 +283,7 @@ impl Plugin for RocketModePlugin {
                 .before(RocketSet::Control)
                 .before(RocketSet::Actuation)
                 .before(RocketSet::Gravity)
+                .before(RocketSet::OrbitalElements)
                 .before(RocketSet::TerrainInteraction)
                 .before(RocketSet::Atmosphere)
                 .before(RocketSet::EntryPhysics)
@@ -304,6 +305,7 @@ impl Plugin for RocketModePlugin {
                 control_system.in_set(RocketSet::Control),
                 actuation_system.in_set(RocketSet::Actuation),
                 update_rocket_gravity.in_set(RocketSet::Gravity),
+                update_orbital_elements.in_set(RocketSet::OrbitalElements),
                 update_rocket_terrain_interaction.in_set(RocketSet::TerrainInteraction),
                 atmosphere_properties.in_set(RocketSet::Atmosphere),
                 compute_heating.in_set(RocketSet::EntryPhysics),
@@ -311,6 +313,11 @@ impl Plugin for RocketModePlugin {
                 compute_plasma_blackout.in_set(RocketSet::EntryPhysics),
                 compute_parachute_forces.in_set(RocketSet::EntryPhysics),
                 compute_retro_propulsion.in_set(RocketSet::EntryPhysics),
+            ),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
                 aerodynamic_forces.in_set(RocketSet::AeroForces),
                 aerodynamic_torque.in_set(RocketSet::AeroTorque),
                 propulsion_thrust.in_set(RocketSet::PropulsionThrust),
@@ -320,8 +327,7 @@ impl Plugin for RocketModePlugin {
                 accumulate_forces.in_set(RocketSet::AccumulateForces),
                 integrate_6dof.in_set(RocketSet::Integrate),
                 sync_render_transform.in_set(RocketSet::SyncRender),
-            )
-                .chain(),
+            ),
         );
     }
 }

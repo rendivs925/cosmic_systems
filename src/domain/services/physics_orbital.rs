@@ -1,7 +1,7 @@
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics_kepler::solve_kepler_adaptive;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use bevy::math::{Quat, Vec3};
+use bevy::math::{DVec3, Quat, Vec3};
 
 pub const MOON_ORBIT_SCALE: f32 = 60.0;
 
@@ -470,4 +470,286 @@ pub fn calculate_terrain_orbital_position(
 
     // Add to planet's orbital position
     planet_position + rotated_position
+}
+
+/// Orbital elements computed from state vectors in planet-centered inertial frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StateVectorOrbitalElements {
+    pub semi_major_axis_m: f64,
+    pub eccentricity: f64,
+    pub inclination_rad: f64,
+    pub longitude_ascending_node_rad: f64,
+    pub argument_of_periapsis_rad: f64,
+    pub true_anomaly_rad: f64,
+    pub mean_anomaly_rad: f64,
+    pub orbital_period_s: f64,
+    pub apoapsis_m: f64,
+    pub periapsis_m: f64,
+}
+
+/// Compute orbital elements from position and velocity vectors in a planet-centered
+/// inertial frame. Uses the standard gravitational parameter μ = G·M.
+pub fn orbital_elements_from_state(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    mu: f64,
+) -> StateVectorOrbitalElements {
+    let r = position_m;
+    let v = velocity_mps;
+
+    // Specific angular momentum: h = r × v
+    let h = r.cross(v);
+    let h_mag = h.length();
+
+    // Node vector: n = k × h (k = [0, 0, 1] for equatorial plane reference)
+    let n = DVec3::new(-h.y, h.x, 0.0);
+    let n_mag = n.length();
+
+    // Specific orbital energy: ε = v²/2 - μ/r
+    let r_mag = r.length();
+    let v_sq = v.length_squared();
+    let energy = v_sq / 2.0 - mu / r_mag;
+
+    // Semi-major axis: a = -μ / (2ε)
+    let semi_major_axis = if energy.abs() > 1e-12 {
+        -mu / (2.0 * energy)
+    } else {
+        f64::INFINITY // Parabolic orbit
+    };
+
+    // Eccentricity vector: e = (v × h)/μ - r/|r|
+    let e_vec = v.cross(h) / mu - r / r_mag;
+    let eccentricity = e_vec.length();
+
+    // Inclination: i = acos(h_z / |h|)
+    let inclination = if h_mag > 1e-12 {
+        (h.z / h_mag).acos()
+    } else {
+        0.0
+    };
+
+    // Longitude of ascending node: Ω = atan2(n_x, -n_y) or acos(n_x/|n|) with quadrant check
+    let longitude_ascending_node = if n_mag > 1e-12 {
+        let cos_omega = n.x / n_mag;
+        let omega = cos_omega.clamp(-1.0, 1.0).acos();
+        if n.y >= 0.0 {
+            omega
+        } else {
+            2.0 * std::f64::consts::PI - omega
+        }
+    } else {
+        0.0
+    };
+
+    // Argument of periapsis: ω = acos(n·e / (|n||e|)) with quadrant check
+    let argument_of_periapsis = if n_mag > 1e-12 && eccentricity > 1e-12 {
+        let cos_w = n.dot(e_vec) / (n_mag * eccentricity);
+        let w = cos_w.clamp(-1.0, 1.0).acos();
+        if e_vec.z >= 0.0 {
+            w
+        } else {
+            2.0 * std::f64::consts::PI - w
+        }
+    } else {
+        0.0
+    };
+
+    // True anomaly: ν = acos(e·r / (|e||r|)) with quadrant check
+    let true_anomaly = if eccentricity > 1e-12 {
+        let cos_nu = e_vec.dot(r) / (eccentricity * r_mag);
+        let nu = cos_nu.clamp(-1.0, 1.0).acos();
+        if r.dot(v) >= 0.0 {
+            nu
+        } else {
+            2.0 * std::f64::consts::PI - nu
+        }
+    } else {
+        // Circular orbit: use angle from ascending node
+        if n_mag > 1e-12 {
+            let cos_lat = r.dot(n) / (r_mag * n_mag);
+            let lat = cos_lat.clamp(-1.0, 1.0).acos();
+            if r.z >= 0.0 {
+                lat
+            } else {
+                2.0 * std::f64::consts::PI - lat
+            }
+        } else {
+            0.0
+        }
+    };
+
+    // Mean anomaly via eccentric anomaly
+    let mean_anomaly = if eccentricity < 1.0 {
+        let cos_e = (eccentricity + true_anomaly.cos()) / (1.0 + eccentricity * true_anomaly.cos());
+        let eccentric_anomaly = cos_e.clamp(-1.0, 1.0).acos();
+        if true_anomaly > std::f64::consts::PI {
+            2.0 * std::f64::consts::PI
+                - (eccentric_anomaly - eccentricity * eccentric_anomaly.sin())
+        } else {
+            eccentric_anomaly - eccentricity * eccentric_anomaly.sin()
+        }
+    } else {
+        // For parabolic/hyperbolic, use true anomaly directly
+        true_anomaly
+    };
+
+    // Orbital period: T = 2π√(a³/μ)
+    let orbital_period = if semi_major_axis.is_finite() && semi_major_axis > 0.0 {
+        2.0 * std::f64::consts::PI * (semi_major_axis.powi(3) / mu).sqrt()
+    } else {
+        f64::INFINITY
+    };
+
+    // Apoapsis and periapsis
+    let apoapsis = if semi_major_axis.is_finite() && semi_major_axis > 0.0 {
+        semi_major_axis * (1.0 + eccentricity)
+    } else {
+        f64::INFINITY
+    };
+
+    let periapsis = if semi_major_axis.is_finite() && semi_major_axis > 0.0 {
+        (semi_major_axis * (1.0 - eccentricity)).max(0.0)
+    } else {
+        r_mag
+    };
+
+    StateVectorOrbitalElements {
+        semi_major_axis_m: semi_major_axis,
+        eccentricity,
+        inclination_rad: inclination,
+        longitude_ascending_node_rad: longitude_ascending_node,
+        argument_of_periapsis_rad: argument_of_periapsis,
+        true_anomaly_rad: true_anomaly,
+        mean_anomaly_rad: mean_anomaly,
+        orbital_period_s: orbital_period,
+        apoapsis_m: apoapsis,
+        periapsis_m: periapsis,
+    }
+}
+
+/// Circularize burn delta-v at current altitude to achieve circular orbit.
+/// Returns the prograde delta-v required and the target circular orbit radius.
+pub fn circularize_burn_dv(position_m: DVec3, velocity_mps: DVec3, mu: f64) -> (f64, f64) {
+    let r = position_m.length();
+    let v = velocity_mps.length();
+    let v_circular = (mu / r).sqrt();
+    let dv = (v_circular - v).max(0.0);
+    (dv, r)
+}
+
+/// Hohmann transfer delta-v from current circular orbit at r1 to target circular orbit at r2.
+/// Returns (delta_v1, delta_v2) for the two burns.
+pub fn hohmann_transfer_dv(r1: f64, r2: f64, mu: f64) -> (f64, f64) {
+    let a_transfer = (r1 + r2) / 2.0;
+    let v1_circular = (mu / r1).sqrt();
+    let v2_circular = (mu / r2).sqrt();
+    let v1_transfer = (mu * (2.0 / r1 - 1.0 / a_transfer)).sqrt();
+    let v2_transfer = (mu * (2.0 / r2 - 1.0 / a_transfer)).sqrt();
+    let dv1 = (v1_transfer - v1_circular).abs();
+    let dv2 = (v2_circular - v2_transfer).abs();
+    (dv1, dv2)
+}
+
+/// Plane change delta-v given current velocity and desired inclination change.
+pub fn plane_change_dv(velocity_mps: f64, inclination_change_rad: f64) -> f64 {
+    2.0 * velocity_mps * (inclination_change_rad / 2.0).sin()
+}
+
+/// Combined circularize + plane change delta-v (more efficient than separate burns).
+pub fn circularize_and_plane_change_dv(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    target_inclination_rad: f64,
+    mu: f64,
+) -> f64 {
+    let elements = orbital_elements_from_state(position_m, velocity_mps, mu);
+    let v = velocity_mps.length();
+    let circular_dv = circularize_burn_dv(position_m, velocity_mps, mu).0;
+    let plane_dv = plane_change_dv(v, (target_inclination_rad - elements.inclination_rad).abs());
+    circular_dv + plane_dv
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::math::DVec3;
+
+    const EARTH_MU: f64 = 3.986004418e14; // m^3/s^2
+
+    #[test]
+    fn circular_orbit_elements() {
+        let r = 6_771_000.0; // 400 km altitude
+        let v_circular = (EARTH_MU / r).sqrt();
+        let pos = DVec3::new(r, 0.0, 0.0);
+        let vel = DVec3::new(0.0, v_circular, 0.0);
+
+        let elements = orbital_elements_from_state(pos, vel, EARTH_MU);
+
+        assert!((elements.eccentricity - 0.0).abs() < 1e-6);
+        assert!((elements.semi_major_axis_m - r).abs() < 1.0);
+        assert!((elements.inclination_rad - 0.0).abs() < 1e-6);
+        assert!((elements.apoapsis_m - r).abs() < 1.0);
+        assert!((elements.periapsis_m - r).abs() < 1.0);
+    }
+
+    #[test]
+    fn elliptical_orbit_elements() {
+        let r_p = 6_671_000.0; // 300 km periapsis
+        let r_a = 7_071_000.0; // 700 km apoapsis
+        let a = (r_p + r_a) / 2.0;
+        let v_p = (EARTH_MU * (2.0 / r_p - 1.0 / a)).sqrt(); // Periapsis velocity
+
+        let pos = DVec3::new(r_p, 0.0, 0.0);
+        let vel = DVec3::new(0.0, v_p, 0.0);
+
+        let elements = orbital_elements_from_state(pos, vel, EARTH_MU);
+
+        assert!((elements.eccentricity - (r_a - r_p) / (r_a + r_p)).abs() < 1e-4);
+        assert!((elements.semi_major_axis_m - a).abs() < 10.0);
+        assert!((elements.periapsis_m - r_p).abs() < 10.0);
+        assert!((elements.apoapsis_m - r_a).abs() < 10.0);
+    }
+
+    #[test]
+    fn inclined_orbit_elements() {
+        let r = 6_771_000.0;
+        let v_circular = (EARTH_MU / r).sqrt();
+        let inclination = 28.5_f64.to_radians(); // KSC inclination
+
+        let pos = DVec3::new(r, 0.0, 0.0);
+        let vel = DVec3::new(
+            0.0,
+            v_circular * inclination.cos(),
+            v_circular * inclination.sin(),
+        );
+
+        let elements = orbital_elements_from_state(pos, vel, EARTH_MU);
+
+        assert!((elements.inclination_rad - inclination).abs() < 1e-4);
+    }
+
+    #[test]
+    fn circularize_burn_positive_for_suborbital() {
+        let r = 6_771_000.0;
+        let v_suborbital = (EARTH_MU / r).sqrt() * 0.8; // 80% of circular
+        let pos = DVec3::new(r, 0.0, 0.0);
+        let vel = DVec3::new(0.0, v_suborbital, 0.0);
+
+        let (dv, target_r) = circularize_burn_dv(pos, vel, EARTH_MU);
+
+        assert!(dv > 0.0);
+        assert!((target_r - r).abs() < 1.0);
+    }
+
+    #[test]
+    fn hohmann_transfer_to_higher_orbit() {
+        let r1 = 6_771_000.0; // 400 km
+        let r2 = 42_164_000.0; // GEO
+        let (dv1, dv2) = hohmann_transfer_dv(r1, r2, EARTH_MU);
+
+        assert!(dv1 > 0.0);
+        assert!(dv2 > 0.0);
+        // Total ~3.9 km/s for LEO to GEO
+        assert!((dv1 + dv2 - 3900.0).abs() < 100.0);
+    }
 }

@@ -222,3 +222,19 @@ pub struct TerrainCollisionState {
     pub slope_deg: f64,
     pub ground_contact: crate::domain::services::terrain_collision::GroundContact,
 }
+
+/// Orbital elements computed from rocket state vectors (planet-centered inertial frame).
+/// Updated by orbital_elements_system for telemetry and guidance.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OrbitalElements {
+    pub semi_major_axis_m: f64,
+    pub eccentricity: f64,
+    pub inclination_rad: f64,
+    pub longitude_ascending_node_rad: f64,
+    pub argument_of_periapsis_rad: f64,
+    pub true_anomaly_rad: f64,
+    pub mean_anomaly_rad: f64,
+    pub orbital_period_s: f64,
+    pub apoapsis_m: f64,
+    pub periapsis_m: f64,
+}

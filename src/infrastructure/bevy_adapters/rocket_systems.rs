@@ -6,11 +6,14 @@ use crate::domain::services::aerodynamics::{
     update_max_q,
 };
 use crate::domain::services::control::control_torque_body;
-use crate::domain::services::gravity::{circular_orbit_speed_mps, gravitational_acceleration};
+use crate::domain::services::gravity::{
+    circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
+};
 use crate::domain::services::guidance::{
-    advance_ascent_phase, advance_descent_phase, deorbit_burn_targeting, pitch_axis_from_reference,
+    advance_ascent_phase, advance_descent_phase, pitch_axis_from_reference,
     powered_descent_guidance, reentry_bank_angle, target_attitude_for_phase, DescentGuidanceConfig,
 };
+use crate::domain::services::physics_orbital::orbital_elements_from_state;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
     consume_propellant, gimbal_torque_body, shed_stage, stage_thrust_body,
@@ -57,6 +60,44 @@ pub fn update_rocket_gravity(
             rocket.dynamics.position_m,
             DVec3::ZERO,
         );
+    }
+}
+
+/// Compute orbital elements from rocket state vectors for telemetry and guidance.
+/// Runs in FixedUpdate after gravity to use the current planet-centered inertial state.
+pub fn update_orbital_elements(
+    planet_query: Query<&PlanetComponent>,
+    mut rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketPhysicsState,
+        &mut OrbitalElements,
+    )>,
+) {
+    for (binding, rocket, mut elements) in rocket_query.iter_mut() {
+        let Some(planet) = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+        else {
+            continue;
+        };
+
+        let mu = gravitational_parameter(planet.domain_planet.mass_kg);
+        let state_elements = orbital_elements_from_state(
+            rocket.dynamics.position_m,
+            rocket.dynamics.velocity_mps,
+            mu,
+        );
+
+        elements.semi_major_axis_m = state_elements.semi_major_axis_m;
+        elements.eccentricity = state_elements.eccentricity;
+        elements.inclination_rad = state_elements.inclination_rad;
+        elements.longitude_ascending_node_rad = state_elements.longitude_ascending_node_rad;
+        elements.argument_of_periapsis_rad = state_elements.argument_of_periapsis_rad;
+        elements.true_anomaly_rad = state_elements.true_anomaly_rad;
+        elements.mean_anomaly_rad = state_elements.mean_anomaly_rad;
+        elements.orbital_period_s = state_elements.orbital_period_s;
+        elements.apoapsis_m = state_elements.apoapsis_m;
+        elements.periapsis_m = state_elements.periapsis_m;
     }
 }
 

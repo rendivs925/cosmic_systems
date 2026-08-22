@@ -9,6 +9,7 @@ pub enum RocketSet {
     Control,
     Actuation,
     Gravity,
+    OrbitalElements,
     TerrainInteraction,
     Atmosphere,
     EntryPhysics,
