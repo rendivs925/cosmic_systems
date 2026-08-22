@@ -752,4 +752,26 @@ mod tests {
         // Total ~3.9 km/s for LEO to GEO
         assert!((dv1 + dv2 - 3900.0).abs() < 100.0);
     }
+
+    /// Regression pin: the period derived from state vectors must equal the
+    /// analytic two-body result T = 2π√(a³/μ) for a circular orbit.
+    #[test]
+    fn circular_orbit_period_matches_analytic() {
+        let r = 6_971_000.0; // 600 km altitude
+        let v_circular = (EARTH_MU / r).sqrt();
+        let pos = DVec3::new(r, 0.0, 0.0);
+        let vel = DVec3::new(0.0, v_circular, 0.0);
+
+        let elements = orbital_elements_from_state(pos, vel, EARTH_MU);
+        let analytic_period = 2.0 * std::f64::consts::PI * (r.powi(3) / EARTH_MU).sqrt();
+
+        assert!(
+            (elements.orbital_period_s - analytic_period).abs() < analytic_period * 1e-6,
+            "period from state {} s vs analytic {} s",
+            elements.orbital_period_s,
+            analytic_period
+        );
+        // Sanity: a 600 km LEO orbit is ~96.5 minutes (analytic value).
+        assert!((analytic_period / 60.0 - 96.5).abs() < 0.5);
+    }
 }

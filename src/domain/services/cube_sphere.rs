@@ -432,4 +432,33 @@ mod tests {
         let l1 = patch_world_size_m(1, r);
         assert!((l0 / l1 - 2.0).abs() < 1e-9);
     }
+
+    /// Determinism: two independent builds of the same patch must produce
+    /// byte-identical position arrays (AGENTS.md section 44). Compared via
+    /// raw bit patterns so even -0.0 vs 0.0 or NaN payloads would fail.
+    #[test]
+    fn rebuild_same_patch_produces_byte_identical_positions() {
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 3);
+        let build_geometry = || {
+            let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+            build_patch_geometry(&patch, &source, 6_371_000.0, 8, 40.0)
+        };
+
+        let a = build_geometry();
+        let b = build_geometry();
+
+        assert_eq!(a.positions.len(), b.positions.len());
+        for (pa, pb) in a.positions.iter().zip(b.positions.iter()) {
+            // Byte-level comparison of the f64 coordinates.
+            for c in 0..3 {
+                assert_eq!(
+                    pa[c].to_bits(),
+                    pb[c].to_bits(),
+                    "patch geometry is not deterministic"
+                );
+            }
+        }
+        assert_eq!(a.indices, b.indices);
+        assert_eq!(a.normals, b.normals);
+    }
 }

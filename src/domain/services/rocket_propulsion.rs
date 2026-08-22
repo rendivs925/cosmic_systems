@@ -333,6 +333,117 @@ mod tests {
         );
     }
 
+    /// Regression pin: pad thrust-to-weight of the stock Falcon 9 must stay at
+    /// ≈ 5.45 so ascent guidance assumptions remain valid.
+    #[test]
+    fn falcon9_pad_thrust_to_weight_ratio() {
+        let rocket = Rocket::falcon9();
+        let thrust_n = rocket.max_thrust_kn() as f64 * 1000.0;
+        let weight_n = rocket.total_mass_kg() as f64 * STANDARD_GRAVITY_MPS2;
+        let tw_ratio = thrust_n / weight_n;
+        assert!(
+            (tw_ratio - 5.45).abs() < 0.05,
+            "pad T/W {tw_ratio} drifted from 5.45"
+        );
+    }
+
+    /// Regression pin: the two-stage Δv budget via the Tsiolkovsky equation
+    /// (vacuum ISPs) stays near 10 km/s, and step integration reproduces the
+    /// closed form (same harness as the single-stage analog above).
+    #[test]
+    fn falcon9_two_stage_delta_v_budget_matches_closed_form() {
+        let rocket = Rocket::falcon9();
+        let stage1 = &rocket.stages[0];
+        let stage2 = &rocket.stages[1];
+        let g0 = STANDARD_GRAVITY_MPS2;
+
+        // Closed form, one Tsiolkovsky term per stage (vacuum ISP).
+        let isp1 = stage1.engines[0].isp_vacuum as f64;
+        let isp2 = stage2.engines[0].isp_vacuum as f64;
+        let m_full = rocket.total_mass_kg() as f64;
+        let m_after_stage1_burn = m_full - stage1.propellant_mass_kg as f64;
+        let dv1 = isp1 * g0 * (m_full / m_after_stage1_burn).ln();
+        let m_stage2_start = stage2.total_mass_kg() as f64;
+        let dv2 = isp2 * g0 * (m_stage2_start / stage2.dry_mass_kg as f64).ln();
+        let closed_form_dv = dv1 + dv2;
+        assert!(
+            (closed_form_dv - 10_000.0).abs() < 600.0,
+            "two-stage budget {closed_form_dv} m/s is not ≈ 10 km/s"
+        );
+
+        // Step integration: burn stage 1, shed its dry structure, burn stage 2.
+        let dt = 0.01;
+        let mut mass = m_full;
+        let mut velocity = 0.0_f64;
+        for (stage, next_stage) in [(stage1, Some(stage2)), (stage2, None)] {
+            let engine = &stage.engines[0];
+            let thrust_n = stage
+                .engines
+                .iter()
+                .map(|e| e.max_thrust_kn as f64 * 1000.0)
+                .sum::<f64>();
+            let mdot = mass_flow_from_thrust(thrust_n, engine.isp_vacuum);
+            let burn_time = stage.propellant_mass_kg as f64 / mdot;
+            let steps = (burn_time / dt).ceil() as u32;
+            // Mass floor during this burn: everything still attached after
+            // the propellant is gone (this stage dry + upper stages).
+            let mass_floor = match next_stage {
+                Some(next) => stage.dry_mass_kg as f64 + next.total_mass_kg() as f64,
+                None => stage.dry_mass_kg as f64,
+            };
+            for _ in 0..steps {
+                velocity += (thrust_n / mass) * dt;
+                mass = (mass - mdot * dt).max(mass_floor);
+            }
+            // Separation drops this stage's dry structure before the next burn.
+            mass -= stage.dry_mass_kg as f64;
+        }
+        assert!(
+            (velocity - closed_form_dv).abs() < closed_form_dv * 0.01,
+            "integrated Δv {velocity} vs closed form {closed_form_dv}"
+        );
+    }
+
+    /// Staging bookkeeping invariant across the full shed sequence: at every
+    /// step, burned + accumulated shed + remaining vehicle mass equals the
+    /// initial total, with partial residual propellant at separation.
+    #[test]
+    fn staging_bookkeeping_conserves_total_across_full_sequence() {
+        let rocket = Rocket::falcon9();
+        let initial_total = rocket.total_mass_kg() as f64;
+        let mut propellant = rocket
+            .stages
+            .iter()
+            .map(|s| s.propellant_mass_kg)
+            .collect::<Vec<_>>();
+
+        // Burn partway into the active stage so a residual exists at
+        // separation (realistic depletion).
+        let mut burned_total = 0.0_f64;
+        let (remaining, consumed) = consume_propellant(
+            propellant[0],
+            mass_flow_from_thrust(7_607_000.0, 282.0),
+            30.0,
+        );
+        propellant[0] = remaining;
+        burned_total += consumed as f64;
+
+        let mut shed_total = 0.0_f64;
+        let mut active_stage = 0_usize;
+        while let Some((next, shed)) = shed_stage(&rocket.stages, &propellant, active_stage) {
+            shed_total += shed;
+            active_stage = next;
+            let vehicle_mass = active_vehicle_mass(&rocket.stages, &propellant, active_stage);
+            assert!(
+                (burned_total + shed_total + vehicle_mass - initial_total).abs() < 1e-6,
+                "mass not conserved after shedding up to stage {active_stage}"
+            );
+        }
+        // The full sequence must end on the last stage with nothing left.
+        assert_eq!(active_stage, rocket.stages.len() - 1);
+        assert!(shed_stage(&rocket.stages, &propellant, active_stage).is_none());
+    }
+
     #[test]
     fn isp_selection_blends_with_density() {
         assert_eq!(selected_isp(282.0, 311.0, 1.225), 282.0); // sea level
