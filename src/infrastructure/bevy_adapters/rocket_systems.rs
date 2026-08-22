@@ -7,7 +7,9 @@ use crate::domain::services::aerodynamics::{
 use crate::domain::services::control::control_torque_body;
 use crate::domain::services::gravity::{circular_orbit_speed_mps, gravitational_acceleration};
 use crate::domain::services::guidance::{
-    advance_ascent_phase, pitch_axis_from_reference, target_attitude_for_phase,
+    advance_ascent_phase, advance_descent_phase, deorbit_burn_targeting, pitch_axis_from_reference,
+    powered_descent_guidance, reentry_bank_angle, target_attitude_for_phase,
+    DescentGuidanceConfig,
 };
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass, allocate_gimbal_deflections, clamp_gimbal,
@@ -355,19 +357,21 @@ pub fn sync_render_transform(
 }
 
 /// Mission guidance: computes the target attitude from the mission phase and
-/// current state, and advances the ascent phase (Launch → Ascent → Orbit).
-/// Writes only the command interface; never the vehicle's motion (AGENTS.md
-/// section 18).
+/// current state, and advances the ascent/descent phase (Launch → Ascent →
+/// Orbit → DeorbitBurn → ReentryCorridor → PoweredDescent/UnpoweredDescent →
+/// Landing). Writes only the command interface; never the vehicle's motion
+/// (AGENTS.md section 18).
 pub fn guidance_system(
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         &RocketPlanetBinding,
         &mut RocketComponent,
         &RocketAutopilot,
+        &RocketPropulsion,
         &mut RocketCommands,
     )>,
 ) {
-    for (binding, mut rocket, autopilot, mut commands) in rocket_query.iter_mut() {
+    for (binding, mut rocket, autopilot, propulsion, mut commands) in rocket_query.iter_mut() {
         let Some(planet) = planet_query
             .iter()
             .find(|planet| planet.domain_planet.name == binding.planet_name)
@@ -383,21 +387,45 @@ pub fn guidance_system(
         let up_dir = position_m / radius;
         let altitude_m = (radius - radius_m).max(0.0);
         let velocity = rocket.dynamics.velocity_mps;
+        let speed = velocity.length();
 
         // Auto-launch: begin the ascent flight on the first guidance pass.
         if rocket.mission_state == RocketMissionState::PreLaunch {
             rocket.mission_state = RocketMissionState::Launch;
         }
 
-        // Advance the ascent phase from the current state.
+        // Get descent guidance config for this body.
+        let descent_config = DescentGuidanceConfig::for_body(&planet.domain_planet.name);
+
+        // Check if engines are active for descent phase logic.
+        let has_active_engines = propulsion.active_stage < propulsion.vehicle.stages.len()
+            && propulsion.propellant_remaining_kg.get(propulsion.active_stage)
+                .map(|m| *m > 0.0)
+                .unwrap_or(false);
+
+        // Dynamic pressure from atmosphere state (cached earlier in the frame).
+        // For now, approximate from density and speed if not available.
+        // In a real implementation, we'd read from AtmosphereState component.
+        let dynamic_pressure_pa = 0.0; // TODO: read from AtmosphereState
+
+        // Advance the mission phase (ascent + descent).
         let circular_speed = circular_orbit_speed_mps(planet.domain_planet.mass_kg, radius);
         rocket.mission_state = advance_ascent_phase(
             rocket.mission_state,
             altitude_m,
-            velocity.length(),
+            speed,
             circular_speed,
             autopilot.ascent_profile.ascent_start_altitude_m,
             ORBIT_SPEED_FRACTION,
+        );
+        // Also advance descent phases.
+        rocket.mission_state = advance_descent_phase(
+            rocket.mission_state,
+            altitude_m,
+            speed,
+            dynamic_pressure_pa,
+            has_active_engines,
+            &descent_config,
         );
 
         // The ascent plane is fixed in the planet-inertial frame; the pitch
@@ -406,6 +434,7 @@ pub fn guidance_system(
             .or_else(|| pitch_axis_from_reference(up_dir, DVec3::X))
             .unwrap_or(DVec3::X);
 
+        // Compute target attitude based on phase.
         commands.target_attitude = target_attitude_for_phase(
             rocket.mission_state,
             &autopilot.ascent_profile,
@@ -414,6 +443,43 @@ pub fn guidance_system(
             altitude_m,
             velocity,
         );
+
+        // For powered descent, compute thrust vector and attitude.
+        if rocket.mission_state == RocketMissionState::PoweredDescent {
+            let target_pos = position_m * (altitude_m / radius); // Simplified: target is below current position
+            let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
+                .engines.iter().map(|e| e.max_thrust_kn as f64 * 1000.0).sum::<f64>();
+            let (thrust_vec, thrust_att) = powered_descent_guidance(
+                position_m,
+                velocity,
+                target_pos,
+                rocket.dynamics.mass_kg,
+                max_thrust,
+                15.0_f64.to_radians(),
+                1.0 / 60.0, // Approximate dt
+                &descent_config,
+            );
+            commands.target_attitude = thrust_att;
+        }
+
+        // For reentry corridor, compute bank angle command.
+        if rocket.mission_state == RocketMissionState::ReentryCorridor {
+            // Approximate g-load and heat flux for bank angle calculation.
+            let g_load = 1.0; // TODO: compute from acceleration
+            let heat_flux = 0.0; // TODO: compute from entry physics
+            let crossrange = 0.0; // TODO: compute crossrange to target
+            let bank_angle = reentry_bank_angle(
+                altitude_m,
+                speed,
+                dynamic_pressure_pa,
+                heat_flux,
+                g_load,
+                &descent_config,
+                crossrange,
+            );
+            // Store bank angle in RCS torque command for control system to use.
+            commands.rcs_torque_cmd_body = DVec3::new(0.0, 0.0, bank_angle);
+        }
     }
 }
 
@@ -434,11 +500,13 @@ pub fn control_system(
         // Throttle schedule from the mission phase.
         commands.throttle_cmd = match rocket.mission_state {
             RocketMissionState::Launch | RocketMissionState::Ascent => 1.0,
+            RocketMissionState::PoweredDescent => 0.7, // Hover throttle
+            RocketMissionState::Landing => 0.5, // Terminal descent
             RocketMissionState::PreLaunch
             | RocketMissionState::Orbit
-            | RocketMissionState::Deorbit
-            | RocketMissionState::Descent
-            | RocketMissionState::Landing
+            | RocketMissionState::DeorbitBurn
+            | RocketMissionState::ReentryCorridor
+            | RocketMissionState::UnpoweredDescent
             | RocketMissionState::Landed
             | RocketMissionState::Crashed => 0.0,
         };
@@ -557,7 +625,9 @@ pub fn update_rocket_terrain_interaction(
             GroundContact::Landed => {
                 if matches!(
                     rocket.mission_state,
-                    RocketMissionState::Descent | RocketMissionState::Landing
+                    RocketMissionState::PoweredDescent
+                        | RocketMissionState::UnpoweredDescent
+                        | RocketMissionState::Landing
                 ) {
                     rocket.mission_state = RocketMissionState::Landed;
                 }
