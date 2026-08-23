@@ -1,6 +1,7 @@
 // Rocket telemetry computation - encapsulated, trait-based design.
 
 use crate::components::rocket::*;
+use crate::domain::entities::rocket::EngineState;
 use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
 };
@@ -78,12 +79,20 @@ impl<'a> TelemetryContext<'a> {
         let gravity_accel = mu / (radius * radius);
         let weight = self.mass_kg * gravity_accel;
 
-        let (total_thrust_n, isp_vac) = self.compute_thrust(rho);
+        let (thrust_body, isp_vac) = self.compute_thrust(rho);
+        let total_thrust_n = thrust_body.length();
         let tw_ratio = if weight > 0.0 {
             total_thrust_n / weight
         } else {
             0.0
         };
+
+        // Sensed load factor: magnitude of the non-gravitational specific
+        // force (thrust + aerodynamics), divided by standard gravity. An
+        // accelerometer reads exactly this; a coasting vehicle in vacuum
+        // reads 0 regardless of orbital speed.
+        let sensed_force_world = self.orientation * (thrust_body + self.aero_forces.force_body);
+        let g_load = sensed_force_world.length() / (self.mass_kg * STANDARD_GRAVITY_MPS2);
 
         let body_velocity = self.orientation.inverse() * self.velocity_mps;
         let aoa = angle_of_attack(body_velocity).to_degrees();
@@ -123,6 +132,7 @@ impl<'a> TelemetryContext<'a> {
             total_thrust_n,
             isp_vac,
             tw_ratio,
+            g_load,
             dry_mass,
             propellant_fraction,
             delta_v,
@@ -136,9 +146,9 @@ impl<'a> TelemetryContext<'a> {
         }
     }
 
-    fn compute_thrust(&self, rho: f64) -> (f64, f64) {
+    fn compute_thrust(&self, rho: f64) -> (DVec3, f64) {
         if self.propulsion.active_stage >= self.propulsion.vehicle.stages.len() {
-            return (0.0, 0.0);
+            return (DVec3::ZERO, 0.0);
         }
         let stage = &self.propulsion.vehicle.stages[self.propulsion.active_stage];
         let throttle = self.propulsion.throttle.clamp(0.0, 1.0);
@@ -149,17 +159,16 @@ impl<'a> TelemetryContext<'a> {
             .copied()
             .unwrap_or(0.0);
         if throttle <= 0.0 || remaining <= 0.0 {
-            return (0.0, 0.0);
+            return (DVec3::ZERO, 0.0);
         }
         let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, rho);
-        let total_thrust_n = thrust_body.length();
         let isp_vac = stage
             .engines
             .iter()
-            .find(|e| e.state == crate::domain::entities::rocket::EngineState::Running)
+            .find(|e| e.state == EngineState::Running)
             .map(|e| e.isp_vacuum as f64)
             .unwrap_or(0.0);
-        (total_thrust_n, isp_vac)
+        (thrust_body, isp_vac)
     }
 
     fn compute_mass_properties(&self) -> (f64, f64) {
@@ -213,6 +222,7 @@ struct DerivedTelemetry {
     total_thrust_n: f64,
     isp_vac: f64,
     tw_ratio: f64,
+    g_load: f64,
     dry_mass: f64,
     propellant_fraction: f64,
     delta_v: f64,
@@ -253,7 +263,7 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
         velocity_horizontal_mps: d.horizontal_speed,
         mach_number: d.mach,
         dynamic_pressure_pa: d.q,
-        g_load: d.speed / STANDARD_GRAVITY_MPS2,
+        g_load: d.g_load,
         apoapsis_altitude_m: ctx.orbital.apoapsis_m - ctx.planet_radius_m,
         periapsis_altitude_m: ctx.orbital.periapsis_m - ctx.planet_radius_m,
         tw_ratio: d.tw_ratio,
@@ -428,7 +438,7 @@ fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> 
         velocity_total_mps: d.speed,
         mach_number: d.mach,
         dynamic_pressure_pa: d.q,
-        g_load: d.speed / STANDARD_GRAVITY_MPS2,
+        g_load: d.g_load,
         total_thrust_n: d.total_thrust_n,
         throttle: ctx.propulsion.throttle,
         mission_phase: *ctx.mission_state,
@@ -907,5 +917,189 @@ mod export_tests {
         assert!(lines[1].starts_with("Test Rocket,0,"), "{}", lines[1]);
         assert!(lines[2].starts_with("Test Rocket,1,"));
         assert!(lines[3].starts_with("#event,0.75,Test Rocket,STAGE SEPARATED"));
+    }
+}
+
+#[cfg(test)]
+mod g_load_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{Rocket, RocketEngine, RocketStage};
+
+    const MASS_KG: f64 = 1_000.0;
+    const EARTH_MASS_KG: f64 = 5.97237e24;
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+    /// One-engine vehicle whose thrust axis is body +Y.
+    fn single_engine_vehicle(max_thrust_kn: f32) -> Rocket {
+        Rocket {
+            name: "G-Load Test".into(),
+            diameter_m: 1.0,
+            height_m: 10.0,
+            stages: vec![RocketStage {
+                name: "S1".into(),
+                dry_mass_kg: 400.0,
+                propellant_mass_kg: 600.0,
+                engines: vec![RocketEngine {
+                    position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
+                    thrust_axis: bevy::math::Vec3::Y,
+                    isp_sea_level: 250.0,
+                    isp_vacuum: 300.0,
+                    gimbal_range_deg: 0.0,
+                    max_thrust_kn,
+                    throttle_min: 0.0,
+                    throttle_max: 1.0,
+                    restartable: true,
+                    state: EngineState::Running,
+                }],
+            }],
+        }
+    }
+
+    fn telemetry(ctx: &TelemetryContext) -> RocketTelemetry {
+        compute_telemetry_from_context(ctx)
+    }
+
+    /// Regression (Phase 17): g_load must be the sensed load factor
+    /// |thrust + aero| / (m·g0), NOT speed/g0 — the old formula had units of
+    /// seconds and read ~785 "g" during an orbital coast.
+    #[test]
+    fn hover_at_one_g_reads_one_g() {
+        // 9.807 kN on 1000 kg with identity orientation: exactly 1 g.
+        let vehicle = single_engine_vehicle(STANDARD_GRAVITY_MPS2 as f32);
+        // Old formula would report ~713 "g" here while hovering.
+        let speed_mps = 7_000.0;
+        let mass = RocketMass(MASS_KG);
+        let geometry = RocketGeometry {
+            radius_m: 1.0,
+            height_m: 10.0,
+        };
+        let propulsion = RocketPropulsion {
+            vehicle: vehicle.clone(),
+            active_stage: 0,
+            propellant_remaining_kg: vec![600.0],
+            throttle: 1.0,
+            gimbal_pitch_rad: 0.0,
+            gimbal_yaw_rad: 0.0,
+            time_since_separation_s: 0.0,
+            ullage_settle_time_s: 0.0,
+            separations_count: 0,
+            attached_payload_kg: 0.0,
+        };
+        let mission_state = RocketMissionState::default();
+        let autopilot = RocketAutopilot::default();
+        let orbital = OrbitalElements::default();
+        let atmosphere = AtmosphereState::default();
+        let comms = CommsState::default();
+        let aero_forces = AerodynamicForces {
+            force_body: DVec3::ZERO,
+            center_of_pressure_body: DVec3::ZERO,
+        };
+        let thermal = ThermalState::default();
+        let ablation = AblationState::default();
+        let parachute = ParachuteState::default();
+        let collision = TerrainCollisionState::default();
+
+        // Hovering just above the equator at low altitude.
+        let position = DVec3::new(EARTH_RADIUS_M + 1_000.0, 0.0, 0.0);
+        // Velocity purely horizontal so it does not contribute to sensed force.
+        let velocity = DVec3::new(0.0, 0.0, speed_mps);
+
+        let t = telemetry(&TelemetryContext {
+            sim_time: 0.0,
+            dt: 1.0 / 60.0,
+            planet_mass: EARTH_MASS_KG,
+            planet_radius_m: EARTH_RADIUS_M,
+            position_m: position,
+            velocity_mps: velocity,
+            orientation: DQuat::IDENTITY,
+            angular_velocity_radps: DVec3::ZERO,
+            mass_kg: MASS_KG,
+            rocket_mass: &mass,
+            geometry: &geometry,
+            propulsion: &propulsion,
+            mission_state: &mission_state,
+            autopilot: &autopilot,
+            orbital: &orbital,
+            atmosphere: &atmosphere,
+            comms: &comms,
+            aero_forces: &aero_forces,
+            thermal: &thermal,
+            ablation: &ablation,
+            parachute: &parachute,
+            collision: &collision,
+        });
+
+        assert!(
+            (t.g_load - 1.0).abs() < 1e-6,
+            "hovering at weight must read 1 g, got {}",
+            t.g_load
+        );
+    }
+
+    #[test]
+    fn orbital_coast_in_vacuum_reads_zero_g() {
+        let vehicle = single_engine_vehicle(9.807);
+        let speed_mps = 7_790.0;
+        let mass = RocketMass(MASS_KG);
+        let geometry = RocketGeometry {
+            radius_m: 1.0,
+            height_m: 10.0,
+        };
+        let propulsion = RocketPropulsion {
+            vehicle: vehicle.clone(),
+            active_stage: 0,
+            propellant_remaining_kg: vec![600.0],
+            throttle: 0.0,
+            gimbal_pitch_rad: 0.0,
+            gimbal_yaw_rad: 0.0,
+            time_since_separation_s: 0.0,
+            ullage_settle_time_s: 0.0,
+            separations_count: 0,
+            attached_payload_kg: 0.0,
+        };
+        let mission_state = RocketMissionState::default();
+        let autopilot = RocketAutopilot::default();
+        let orbital = OrbitalElements::default();
+        let atmosphere = AtmosphereState::default();
+        let comms = CommsState::default();
+        let aero_forces = AerodynamicForces {
+            force_body: DVec3::ZERO,
+            center_of_pressure_body: DVec3::ZERO,
+        };
+        let thermal = ThermalState::default();
+        let ablation = AblationState::default();
+        let parachute = ParachuteState::default();
+        let collision = TerrainCollisionState::default();
+
+        let t = telemetry(&TelemetryContext {
+            sim_time: 0.0,
+            dt: 1.0 / 60.0,
+            planet_mass: EARTH_MASS_KG,
+            planet_radius_m: EARTH_RADIUS_M,
+            position_m: DVec3::new(EARTH_RADIUS_M + 400_000.0, 0.0, 0.0),
+            velocity_mps: DVec3::new(0.0, 0.0, speed_mps),
+            orientation: DQuat::IDENTITY,
+            angular_velocity_radps: DVec3::ZERO,
+            mass_kg: MASS_KG,
+            rocket_mass: &mass,
+            geometry: &geometry,
+            propulsion: &propulsion,
+            mission_state: &mission_state,
+            autopilot: &autopilot,
+            orbital: &orbital,
+            atmosphere: &atmosphere,
+            comms: &comms,
+            aero_forces: &aero_forces,
+            thermal: &thermal,
+            ablation: &ablation,
+            parachute: &parachute,
+            collision: &collision,
+        });
+
+        assert!(
+            t.g_load.abs() < 1e-12,
+            "coasting in vacuum must read 0 g, got {}",
+            t.g_load
+        );
     }
 }

@@ -1092,7 +1092,9 @@ pub fn reentry_bank_angle_enhanced(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::gravity::circular_orbit_speed_mps;
+    use crate::domain::services::gravity::{
+        circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
+    };
     use bevy::math::DVec3;
 
     fn profile() -> AscentGuidanceProfile {
@@ -1366,6 +1368,62 @@ mod tests {
         );
         // Zero angle between identical vectors cancels completely.
         assert_eq!(combined_maneuver_dv(v, v, 0.0), 0.0);
+    }
+
+    /// Scenario `hohmann_simulated` (Phase 17): apply both solver burns to a
+    /// real two-body integration (authoritative gravity + the production
+    /// semi-implicit Euler, dt = 1 s) and verify the vehicle actually arrives
+    /// on the target circle. Tolerances: arrival radius 0.1 % of r2 (bounded
+    /// integration error at 1 s steps), final speed 0.1 %.
+    #[test]
+    fn hohmann_burns_simulate_to_a_circular_arrival() {
+        let earth_mass_kg = 5.97237e24;
+        let mu = gravitational_parameter(earth_mass_kg);
+        let (r1, r2) = (6_678_000.0_f64, 42_164_000.0_f64);
+        let t = hohmann_transfer(r1, r2, mu);
+
+        let dt = 1.0;
+        let mut pos = DVec3::new(r1, 0.0, 0.0);
+        let mut vel = DVec3::new(0.0, 0.0, (mu / r1).sqrt());
+
+        // Departure burn: prograde (tangential +Z here).
+        vel += DVec3::new(0.0, 0.0, t.departure_dv_mps);
+
+        // Coast half an ellipse.
+        let coast_steps = (t.transfer_time_s / dt).round() as u32;
+        for _ in 0..coast_steps {
+            vel += gravitational_acceleration(earth_mass_kg, pos, DVec3::ZERO) * dt;
+            pos += vel * dt;
+        }
+        assert!(
+            ((pos.length() - r2) / r2).abs() < 1e-3,
+            "transfer did not arrive at apoapsis r2: {}",
+            pos.length()
+        );
+
+        // Arrival burn: prograde along the local tangential direction.
+        let radial = pos.normalize();
+        let tangential = DVec3::new(-radial.z, 0.0, radial.x);
+        vel += tangential * t.arrival_dv_mps;
+
+        // One full revolution later the orbit must still be the target circle.
+        let period2 = std::f64::consts::PI * 2.0 * (r2 * r2 * r2 / mu).sqrt();
+        let mut worst = 0.0_f64;
+        for _ in 0..((period2 / dt) as u32) {
+            vel += gravitational_acceleration(earth_mass_kg, pos, DVec3::ZERO) * dt;
+            pos += vel * dt;
+            worst = worst.max(((pos.length() - r2) / r2).abs());
+        }
+        assert!(
+            worst < 1e-3,
+            "arrival orbit not circular: worst drift {worst}"
+        );
+        assert!(
+            ((vel.length() - (mu / r2).sqrt()) / (mu / r2).sqrt()).abs() < 1e-3,
+            "arrival speed {} vs circular {}",
+            vel.length(),
+            (mu / r2).sqrt()
+        );
     }
 
     #[test]

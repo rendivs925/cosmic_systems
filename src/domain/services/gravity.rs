@@ -146,4 +146,99 @@ mod tests {
         // 400 km LEO ≈ 7.67 km/s.
         assert!((v - 7_670.0).abs() < 60.0);
     }
+
+    /// Scenario `circular_orbit_drift` (Phase 17): a circular orbit integrated
+    /// with the authoritative gravity must stay circular. Semi-implicit Euler
+    /// bounds the radial error rather than accumulating it, so the repo-wide
+    /// 1e-3 relative bound applies over multiple revolutions (dt = 1 s).
+    #[test]
+    fn circular_orbit_holds_radius_and_energy_over_three_revolutions() {
+        let mu = gravitational_parameter(EARTH_MASS_KG);
+        let r0 = 6_778_000.0;
+        let v0 = (mu / r0).sqrt();
+        let period = 2.0 * PI * (r0 * r0 * r0 / mu).sqrt();
+        let dt = 1.0;
+        let steps = (3.0 * period / dt) as u32;
+
+        let mut pos = DVec3::new(r0, 0.0, 0.0);
+        let mut vel = DVec3::new(0.0, 0.0, v0);
+        let specific_energy =
+            |pos: DVec3, vel: DVec3| vel.length_squared() / 2.0 - mu / pos.length();
+        let e0 = specific_energy(pos, vel);
+
+        let mut worst_radius_err = 0.0f64;
+        for _ in 0..steps {
+            vel += gravitational_acceleration(EARTH_MASS_KG, pos, DVec3::ZERO) * dt;
+            pos += vel * dt;
+            worst_radius_err = worst_radius_err.max((pos.length() - r0).abs());
+        }
+
+        assert!(
+            worst_radius_err < r0 * 1e-3,
+            "circular orbit drifted radially by {} m",
+            worst_radius_err
+        );
+        let e_final = specific_energy(pos, vel);
+        assert!(
+            ((e_final - e0) / e0.abs()).abs() < 1e-4,
+            "specific energy drifted from {e0} to {e_final}"
+        );
+    }
+
+    /// Scenario `escape_velocity` (Phase 17): departing with exactly the
+    /// analytic escape speed `v_esc = √(2μ/r)` must be marginally unbound
+    /// (specific energy ≈ 0), slightly more must genuinely escape, and
+    /// distinctly less must fall back inward.
+    #[test]
+    fn escape_velocity_boundary_behaves_analytically() {
+        let mu = gravitational_parameter(EARTH_MASS_KG);
+        let r0 = 6_778_000.0;
+        let v_esc = (2.0 * mu / r0).sqrt();
+
+        // Exact boundary: ε = 0 up to floating-point roundoff.
+        let eps = v_esc * v_esc / 2.0 - mu / r0;
+        assert!(eps.abs() < 1e-6, "escape-speed energy residual {eps}");
+
+        // Slightly hyperbolic: must depart and conserve its positive energy.
+        let delta: f64 = 0.01; // (v/v_esc)² − 1
+        let v_start = v_esc * (1.0 + delta).sqrt();
+        let e_expected = v_start * v_start / 2.0 - mu / r0;
+
+        let dt = 1.0;
+        let steps = 20_000; // 20_000 s
+        let mut pos = DVec3::new(r0, 0.0, 0.0);
+        let mut vel = DVec3::new(0.0, 0.0, v_start);
+        for _ in 0..steps {
+            vel += gravitational_acceleration(EARTH_MASS_KG, pos, DVec3::ZERO) * dt;
+            pos += vel * dt;
+        }
+        assert!(
+            pos.length() > 5.0 * r0,
+            "hyperbolic trajectory failed to escape (r = {})",
+            pos.length()
+        );
+        let energy_final = vel.length_squared() / 2.0 - mu / pos.length();
+        assert!(
+            ((energy_final - e_expected) / e_expected).abs() < 5e-4,
+            "escape energy drifted from {e_expected} to {energy_final}"
+        );
+
+        // Sub-escape: half the escape speed cannot depart; the vehicle falls
+        // inward (bound ellipse with apoapsis at the start point).
+        let v_sub = 0.5 * v_esc;
+        let mut pos = DVec3::new(r0, 0.0, 0.0);
+        let mut vel = DVec3::new(0.0, 0.0, v_sub);
+        let mut min_r = r0;
+        for _ in 0..steps {
+            vel += gravitational_acceleration(EARTH_MASS_KG, pos, DVec3::ZERO) * dt;
+            pos += vel * dt;
+            min_r = min_r.min(pos.length());
+        }
+        assert!(
+            pos.length() < r0 * 0.95 || min_r < r0 * 0.95,
+            "sub-escape trajectory should fall inward (r_end = {}, r_min = {})",
+            pos.length(),
+            min_r
+        );
+    }
 }
