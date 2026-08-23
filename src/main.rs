@@ -11,15 +11,50 @@ pub mod presentation;
 pub mod systems;
 
 use application::modes::{parse_launch_options, Mode};
-use application::rocket_config::VehicleSelection;
+use application::rocket_config::{RocketCatalog, VehicleSelection};
 use application::solar_system_startup::SolarCameraEnabled;
 use infrastructure::plugins::{
     CraftModePlugin, GyroModePlugin, RocketModePlugin, SharedSimulationPlugin,
     SolarSystemModePlugin,
 };
 
+/// Validate the requested vehicle BEFORE any window/renderer exists. The
+/// previous behavior validated inside `app.run()`'s Startup schedule, so an
+/// unknown key booted the full GPU stack and then panicked mid-teardown —
+/// surfacing as alternating SIGABRT/SIGSEGV exit codes instead of a clean
+/// error (Phase 17).
+fn validate_vehicle_selection(selection: &Option<String>) {
+    let Some(requested) = selection else {
+        return; // None = catalog default; always valid.
+    };
+    match RocketCatalog::from_dir() {
+        Ok(catalog) => {
+            if catalog.get(requested).is_none() {
+                let mut available: Vec<&String> = catalog.keys().collect();
+                available.sort();
+                eprintln!(
+                    "Unknown vehicle '{requested}'. Available vehicles: {}",
+                    available
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                std::process::exit(2);
+            }
+        }
+        // Catalog IO/parse failures are still handled by the plugin's
+        // fail-fast path (AGENTS.md section 65); do not duplicate them here.
+        Err(_) => {}
+    }
+}
+
 fn main() {
     let options = parse_launch_options(env::args());
+
+    if matches!(options.mode, Mode::Rocket) {
+        validate_vehicle_selection(&options.vehicle);
+    }
 
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
