@@ -239,6 +239,60 @@ mod tests {
         );
     }
 
+    /// Phase 17: with zero external torque the WORLD-frame angular momentum
+    /// `L = R·(Iω)` is conserved even while the body rates tumble through the
+    /// gyroscopic coupling `α = I⁻¹(τ − ω×(Iω))`. A principal-axis-only spin
+    /// test would never exercise that term's sign or magnitude.
+    #[test]
+    fn world_angular_momentum_conserved_torque_free_tumbling() {
+        let mut state = test_state();
+        // Tumbling: significant rates on all three body axes of an
+        // asymmetric-inertia vehicle.
+        state.angular_velocity_radps = DVec3::new(0.21, 0.35, -0.13);
+
+        let world_momentum =
+            |s: &RocketDynamicsState| s.orientation * (s.inertia_body * s.angular_velocity_radps);
+        let l0 = world_momentum(&state);
+        let l0_mag = l0.length();
+
+        let mut worst_rel_err = 0.0_f64;
+        for _ in 0..10_000 {
+            state.integrate_rotation(DVec3::ZERO, 0.001);
+            let err = (world_momentum(&state) - l0).length() / l0_mag;
+            worst_rel_err = worst_rel_err.max(err);
+        }
+        // Semi-implicit Euler is first order in rotation: the body rotates by
+        // ≈|ω|·dt within one step, bounding the relative L error per step.
+        // Measured worst drift 6.8e-4 over this arc (dt = 1 ms, |ω| ≈ 0.44);
+        // pinned at 2e-3 with the same dt scaling implied.
+        assert!(
+            worst_rel_err < 2e-3,
+            "world angular momentum drifted by {worst_rel_err:.3e} relative"
+        );
+    }
+
+    /// Phase 17: the first-step angular acceleration must equal
+    /// `α = I⁻¹(τ − ω×(Iω))` exactly as documented — validating the recorded
+    /// `angular_acceleration_radps2` against the closed form including the
+    /// gyroscopic term.
+    #[test]
+    fn angular_acceleration_matches_gyroscopic_equation() {
+        let mut state = test_state();
+        state.angular_velocity_radps = DVec3::new(0.2, 0.4, -0.1);
+        let torque = DVec3::new(3_000.0, -1_500.0, 800.0);
+
+        let momentum = state.inertia_body * state.angular_velocity_radps;
+        let gyroscopic = state.angular_velocity_radps.cross(momentum);
+        let expected_alpha = state.inertia_body.inverse() * (torque - gyroscopic);
+
+        state.integrate_rotation(torque, 0.001);
+        assert!(
+            (state.angular_acceleration_radps2 - expected_alpha).length() < 1e-9,
+            "recorded alpha {} vs expected {expected_alpha}",
+            state.angular_acceleration_radps2
+        );
+    }
+
     #[test]
     fn inertia_and_com_update_with_fuel() {
         let (full_i, full_com) = rocket_inertia_tensor(DRY, FUEL, RADIUS, HEIGHT);
