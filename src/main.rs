@@ -27,25 +27,22 @@ fn validate_vehicle_selection(selection: &Option<String>) {
     let Some(requested) = selection else {
         return; // None = catalog default; always valid.
     };
-    match RocketCatalog::from_dir() {
-        Ok(catalog) => {
-            if catalog.get(requested).is_none() {
-                let mut available: Vec<&String> = catalog.keys().collect();
-                available.sort();
-                eprintln!(
-                    "Unknown vehicle '{requested}'. Available vehicles: {}",
-                    available
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                std::process::exit(2);
-            }
+    if let Ok(catalog) = RocketCatalog::from_dir() {
+        if catalog.get(requested).is_none() {
+            let mut available: Vec<&String> = catalog.keys().collect();
+            available.sort();
+            eprintln!(
+                "Unknown vehicle '{requested}'. Available vehicles: {}",
+                available
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            std::process::exit(2);
         }
         // Catalog IO/parse failures are still handled by the plugin's
         // fail-fast path (AGENTS.md section 65); do not duplicate them here.
-        Err(_) => {}
     }
 }
 
