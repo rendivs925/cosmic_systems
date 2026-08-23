@@ -1352,6 +1352,36 @@ pub fn resolve_ground_contact(
                 }
             }
             collision.ground_contact = GroundContact::Landed;
+
+            // Sustained-lean monitor while grounded (Phase 14): a resting
+            // vehicle that keeps leaning past its critical angle topples
+            // under gravity. Lives INSIDE the rest branch: the branch
+            // continues past every later statement, so a monitor placed
+            // after it could never accumulate its sustain time.
+            if !tip_over.is_toppling() {
+                let critical_rad = topple_critical_angle_rad(
+                    legs.as_deref()
+                        .filter(|l| l.deployed())
+                        .map(|l| l.gear.spec.base_radius_m)
+                        .unwrap_or(geometry.radius_m as f64),
+                    com_height_on_ground(legs.as_deref(), geometry),
+                );
+                let lean_rad = tilt_deg.to_radians();
+                if lean_rad > critical_rad && critical_rad > 0.0 {
+                    tip_over.exceeded_for_s += dt;
+                    if tip_over.exceeded_for_s >= TIP_OVER_SUSTAINED_S {
+                        tip_over.com_height_m = com_height_on_ground(legs.as_deref(), geometry);
+                        tip_over.fall = Some(ToppleFall::from_tilt(lean_rad));
+                        bevy::log::info!(
+                            "Vehicle leaning {:.1} deg beyond the {:.1} deg critical angle — toppling",
+                            tilt_deg,
+                            critical_rad.to_degrees()
+                        );
+                    }
+                } else {
+                    tip_over.exceeded_for_s = 0.0;
+                }
+            }
             continue;
         }
 
@@ -1478,33 +1508,6 @@ pub fn resolve_ground_contact(
                 }
             }
             GroundContact::None => {}
-        }
-
-        // Sustained-lean monitor while grounded (Phase 14): a landed vehicle
-        // that keeps leaning past its critical angle topples under gravity.
-        if rest.active && !tip_over.is_toppling() {
-            let critical_rad = topple_critical_angle_rad(
-                legs.as_deref()
-                    .filter(|l| l.deployed())
-                    .map(|l| l.gear.spec.base_radius_m)
-                    .unwrap_or(geometry.radius_m as f64),
-                com_height_on_ground(legs.as_deref(), geometry),
-            );
-            let lean_rad = tilt_deg.to_radians();
-            if lean_rad > critical_rad && critical_rad > 0.0 {
-                tip_over.exceeded_for_s += dt;
-                if tip_over.exceeded_for_s >= TIP_OVER_SUSTAINED_S {
-                    tip_over.com_height_m = com_height_on_ground(legs.as_deref(), geometry);
-                    tip_over.fall = Some(ToppleFall::from_tilt(lean_rad));
-                    bevy::log::info!(
-                        "Vehicle leaning {:.1} deg beyond the {:.1} deg critical angle — toppling",
-                        tilt_deg,
-                        critical_rad.to_degrees()
-                    );
-                }
-            } else {
-                tip_over.exceeded_for_s = 0.0;
-            }
         }
     }
 }
@@ -2470,6 +2473,154 @@ mod ground_contact_tests {
             (mass.0 - rocket.dynamics.mass_kg).abs() < 1e-6,
             "RocketMass must match the refueled dynamics mass"
         );
+    }
+
+    /// Phase 17 scenario `tip_over` (app-level wiring): a resting vehicle
+    /// tilted beyond its critical angle must arm the topple model inside
+    /// GroundContact, fall under gravity, and end Crashed exactly once.
+    /// The domain pendulum is covered by landing_gear tests; this pins the
+    /// arm → advance → mission-lost pipeline ordering.
+    #[test]
+    fn leaning_past_critical_angle_topples_to_crashed() {
+        let mut app = pad_app(0.0, 20.0);
+        // Production order: contact first, topple advance after it.
+        app.add_systems(FixedUpdate, advance_topple.after(resolve_ground_contact));
+
+        let rocket_entity = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            q.single(world).unwrap()
+        };
+        {
+            // Tilt 30 deg about Z: well past the gear-less critical angle
+            // (atan(0.6 m base / ~5 m com height) ≈ 7 deg for this vehicle).
+            let world = app.world_mut();
+            let up = world
+                .get::<RocketPhysicsState>(rocket_entity)
+                .unwrap()
+                .dynamics
+                .position_m
+                .normalize();
+            let upright = DQuat::from_rotation_arc(DVec3::Y, up);
+            let leaned = upright * DQuat::from_rotation_z(30.0_f64.to_radians());
+            let mut state = world.get_mut::<RocketPhysicsState>(rocket_entity).unwrap();
+            state.dynamics.orientation = leaned;
+            state.dynamics.angular_velocity_radps = DVec3::ZERO;
+        }
+
+        // The fall from 30 deg to 90 deg at g=9.81, l≈5 m takes a few
+        // seconds; run well past that.
+        for _ in 0..1_500 {
+            app.update();
+        }
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&TipOverState, &RocketMissionState)>();
+        let (tip_over, mission) = q.single(world).unwrap();
+        assert!(
+            tip_over.fall.is_some() || *mission == RocketMissionState::Crashed,
+            "topple never armed"
+        );
+        assert_eq!(*mission, RocketMissionState::Crashed);
+        drop(q);
+        drop(world);
+        // Once crashed it stays crashed (one-way transition).
+        for _ in 0..64 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let mut q = world.query::<&RocketMissionState>();
+        assert_eq!(*q.single(world).unwrap(), RocketMissionState::Crashed);
+    }
+
+    /// Phase 17 scenario `gear_deployment_gate` (app-level wiring): an
+    /// undeployed descending vehicle must latch its legs when passing the
+    /// radar-altitude gate with negative vertical speed — and only then.
+    #[test]
+    fn descending_through_gate_deploys_landing_legs() {
+        use crate::domain::services::landing_gear::LandingGearSpec;
+
+        let mut app = pad_app(0.0, 20.0);
+        app.add_systems(
+            FixedUpdate,
+            (deploy_landing_legs, resolve_ground_contact).chain(),
+        );
+
+        let surface_r = {
+            let world = app.world_mut();
+            let mut q = world.query::<&RocketPhysicsState>();
+            let rocket = q.single(world).unwrap();
+            rocket.dynamics.position_m.length()
+        };
+
+        let rocket_entity = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            q.single(world).unwrap()
+        };
+        {
+            // Airborne 150 m above the pad, descending slowly; legs present
+            // but NOT deployed, gate at 100 m. TerrainCollisionState is
+            // initialized consistently (radar 150 m) because in production
+            // GroundContact has already sampled the surface before the
+            // descent begins.
+            let world = app.world_mut();
+            let up = world
+                .get::<RocketPhysicsState>(rocket_entity)
+                .unwrap()
+                .dynamics
+                .position_m
+                .normalize();
+            world.entity_mut(rocket_entity).insert(RocketPhysicsState {
+                dynamics: RocketDynamicsState::new(
+                    up * (surface_r + 150.0),
+                    -up * 5.0,
+                    DQuat::from_rotation_arc(DVec3::Y, up),
+                    1_000.0,
+                    bevy::math::DMat3::from_diagonal(DVec3::splat(1e4)),
+                    DVec3::ZERO,
+                ),
+            });
+            world
+                .entity_mut(rocket_entity)
+                .insert(TerrainCollisionState {
+                    radar_altitude_m: 150.0,
+                    ..TerrainCollisionState::default()
+                });
+            // Release the pad hold so the vehicle actually descends.
+            world.get_mut::<GroundRest>(rocket_entity).unwrap().active = false;
+            let gear = LandingGear::new(
+                LandingGearSpec {
+                    count: 4,
+                    base_radius_m: 4.5,
+                    stroke_m: 3.0,
+                    max_landing_mass_kg: Some(2_000.0),
+                    deploy_altitude_m: 100.0,
+                },
+                1_000.0,
+            );
+            world
+                .entity_mut(rocket_entity)
+                .insert(LandingLegs::new(gear));
+        }
+
+        // Above the gate nothing may deploy.
+        for _ in 0..32 {
+            app.update();
+        }
+        {
+            let world = app.world_mut();
+            let legs = world.get::<LandingLegs>(rocket_entity).unwrap();
+            assert!(!legs.deployment.deployed, "deployed above the gate");
+        }
+
+        // Fall through the gate (150 m at 5 m/s ≈ 10 s); latch must trip.
+        for _ in 0..800 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let legs = world.get::<LandingLegs>(rocket_entity).unwrap();
+        assert!(legs.deployment.deployed, "gate crossing must deploy legs");
     }
 }
 
