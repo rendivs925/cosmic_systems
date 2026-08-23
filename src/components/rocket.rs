@@ -317,6 +317,57 @@ impl LandingLegs {
     }
 }
 
+/// Tip-over lifecycle for a grounded vehicle (Phase 14): a sustained-tilt
+/// monitor arms the pure domain fall model
+/// (`landing_gear::ToppleFall`), which the GroundContact set then advances —
+/// rigid rotation about the foot-plane edge under gravity torque. Terminal.
+#[derive(Component, Debug, Clone, Default)]
+pub struct TipOverState {
+    /// Seconds the tilt has continuously exceeded the critical angle while
+    /// resting (reset when the lean recovers).
+    pub exceeded_for_s: f64,
+    /// `Some` once the fall is armed; advancing it is terminal.
+    pub fall: Option<crate::domain::services::landing_gear::ToppleFall>,
+    /// Center-of-mass height above the pivot, captured at arm time, m.
+    pub com_height_m: f64,
+}
+
+impl TipOverState {
+    /// Fully reset (fresh flight).
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// True once the fall is armed or complete.
+    pub fn is_toppling(&self) -> bool {
+        self.fall.is_some()
+    }
+}
+
+/// One-shot record of how a touchdown went (Phase 14). Filled by the
+/// GroundContact authority at the verdict tick and extended with the strut
+/// compression peak while resting; HUD/telemetry only read it.
+#[derive(Component, Debug, Clone, Default)]
+pub struct LandingScorecard {
+    /// Into-ground normal speed at the verdict, m/s (≥ 0).
+    pub touchdown_vertical_speed_mps: f64,
+    /// Tangent-plane speed at the verdict, m/s.
+    pub touchdown_lateral_speed_mps: f64,
+    /// Longitudinal-axis tilt from the surface normal at the verdict, deg.
+    pub touchdown_tilt_deg: f64,
+    /// Local terrain slope under the vehicle at the verdict, deg.
+    pub touchdown_slope_deg: f64,
+    /// Surface distance between the touchdown point and the autopilot's
+    /// landing target, m.
+    pub distance_to_target_m: f64,
+    /// Deepest strut compression observed after touchdown, m.
+    pub leg_compression_peak_m: f64,
+    /// True when the surface below was water.
+    pub over_water: bool,
+    /// True once filled by the contact authority.
+    pub recorded: bool,
+}
+
 /// Orbital elements computed from rocket state vectors (planet-centered inertial frame).
 /// Updated by orbital_elements_system for telemetry and guidance.
 #[derive(Component, Debug, Clone, Copy, Default)]
@@ -422,6 +473,22 @@ pub struct RocketTelemetry {
     pub downrange_m: f64,
     /// Crossrange distance in meters.
     pub crossrange_m: f64,
+    /// True when a touchdown has been recorded (Phase 14 scorecard).
+    pub touchdown_recorded: bool,
+    /// Into-ground speed at the recorded touchdown, m/s.
+    pub touchdown_vertical_speed_mps: f64,
+    /// Tangent-plane speed at the recorded touchdown, m/s.
+    pub touchdown_lateral_speed_mps: f64,
+    /// Tilt at the recorded touchdown, degrees.
+    pub touchdown_tilt_deg: f64,
+    /// Terrain slope at the recorded touchdown, degrees.
+    pub touchdown_slope_deg: f64,
+    /// Surface distance to the configured landing target, m.
+    pub touchdown_distance_to_target_m: f64,
+    /// Deepest strut compression after touchdown, m.
+    pub leg_compression_peak_m: f64,
+    /// True while a gravity-driven topple is in progress or complete.
+    pub toppling: bool,
 }
 
 /// Rocket camera mode for different viewing perspectives.

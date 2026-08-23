@@ -72,11 +72,58 @@ impl LandingGearSpec {
     /// still stable (the CoM projection sits exactly above the foot line).
     /// Degenerate geometry (no radius or no CoM height) cannot stand at all.
     pub fn tips_over(&self, tilt_deg: f64, com_height_m: f64) -> bool {
-        if self.base_radius_m <= 0.0 || com_height_m <= 0.0 {
+        tilt_deg.to_radians() > topple_critical_angle_rad(self.base_radius_m, com_height_m)
+    }
+}
+
+/// Critical lean angle (radians) at which a vehicle standing on feet spread
+/// out to `base_radius_m` with its center of mass `com_height_m` above the
+/// foot plane can no longer right itself. Shared authority for gear-aware
+/// (`LandingGearSpec::tips_over`) and bare-hull checks alike.
+pub fn topple_critical_angle_rad(base_radius_m: f64, com_height_m: f64) -> f64 {
+    if base_radius_m <= 0.0 || com_height_m <= 0.0 {
+        return 0.0; // degenerate geometry cannot stand at any tilt
+    }
+    base_radius_m.atan2(com_height_m)
+}
+
+/// Rigid topple of a landed vehicle about a foot-plane edge, driven by
+/// gravity alone. Modeled as an inverted pendulum with the vehicle mass
+/// concentrated at the center of mass (height `com_height_m` above the
+/// pivot): `α = g·sin(φ)/h`. Pure kinematics in tilt space; the caller maps
+/// the tilt onto the body orientation. The fall ends when the longitudinal
+/// axis reaches the horizontal (φ = 90°).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ToppleFall {
+    /// Tilt away from the surface normal, radians (0 = upright).
+    pub tilt_rad: f64,
+    /// Tilt rate, rad/s (always non-negative once falling).
+    pub angular_velocity_radps: f64,
+}
+
+impl ToppleFall {
+    /// Start a fall from the current (beyond-critical) tilt.
+    pub fn from_tilt(tilt_rad: f64) -> Self {
+        Self {
+            tilt_rad: tilt_rad.clamp(0.0, std::f64::consts::FRAC_PI_2),
+            angular_velocity_radps: 0.0,
+        }
+    }
+
+    /// Advance the fall by one fixed step. Returns true when the vehicle has
+    /// reached the horizontal (the fall is complete and the model is
+    /// terminal). Degenerate CoM height completes immediately.
+    pub fn advance(&mut self, gravity_mps2: f64, com_height_m: f64, dt_s: f64) -> bool {
+        if self.tilt_rad >= std::f64::consts::FRAC_PI_2 || com_height_m <= 0.0 {
+            self.tilt_rad = std::f64::consts::FRAC_PI_2;
             return true;
         }
-        let critical_rad = self.base_radius_m.atan2(com_height_m);
-        tilt_deg.to_radians() > critical_rad
+        // Gravity torque about the pivot drives the lean further over.
+        let alpha = gravity_mps2 * self.tilt_rad.sin() / com_height_m.max(1e-6);
+        self.angular_velocity_radps += alpha * dt_s;
+        self.tilt_rad =
+            (self.tilt_rad + self.angular_velocity_radps * dt_s).min(std::f64::consts::FRAC_PI_2);
+        self.tilt_rad >= std::f64::consts::FRAC_PI_2
     }
 }
 
@@ -488,5 +535,61 @@ mod tests {
         // Latched: further updates are no-ops.
         assert!(!state.update(100.0, 50.0, -20.0));
         assert!(!state.update(100.0, 10_000.0, -200.0));
+    }
+
+    #[test]
+    fn critical_angle_matches_tips_over_boundary() {
+        let spec = gear().spec;
+        let com_h = 38.0_f64;
+        let critical = topple_critical_angle_rad(spec.base_radius_m, com_h).to_degrees();
+        assert!(!spec.tips_over(critical, com_h));
+        assert!(spec.tips_over(critical + 1e-6, com_h));
+        // Degenerate geometry: zero critical angle, any tilt topples.
+        assert_eq!(
+            topple_critical_angle_rad(0.0, com_h),
+            0.0,
+            "no base → cannot stand"
+        );
+        assert_eq!(
+            topple_critical_angle_rad(spec.base_radius_m, 0.0),
+            0.0,
+            "no CoM height → cannot stand"
+        );
+    }
+
+    #[test]
+    fn topple_fall_accelerates_under_gravity_and_completes() {
+        let mut fall = ToppleFall::from_tilt(5.0_f64.to_radians());
+        let dt = DT;
+        let (g, h) = (9.80665_f64, 35.0_f64);
+        let mut previous_rate = fall.angular_velocity_radps;
+        let mut ticks = 0;
+        loop {
+            if fall.advance(g, h, dt) {
+                break;
+            }
+            assert!(
+                fall.angular_velocity_radps >= previous_rate,
+                "gravity must keep accelerating the lean"
+            );
+            assert!(fall.tilt_rad > 0.0 && fall.tilt_rad <= std::f64::consts::FRAC_PI_2);
+            previous_rate = fall.angular_velocity_radps;
+            ticks += 1;
+            assert!(ticks < 100_000, "fall never completed");
+        }
+        assert_eq!(fall.tilt_rad, std::f64::consts::FRAC_PI_2);
+        assert!(
+            ticks > 10,
+            "a 5°-lean tall vehicle must take a physical amount of time to fall"
+        );
+        // Terminal: advancing again stays complete.
+        assert!(fall.advance(g, h, dt));
+    }
+
+    #[test]
+    fn topple_degenerate_geometry_completes_immediately() {
+        let mut fall = ToppleFall::from_tilt(1.0_f64.to_radians());
+        assert!(fall.advance(9.80665, 0.0, DT));
+        assert_eq!(fall.tilt_rad, std::f64::consts::FRAC_PI_2);
     }
 }

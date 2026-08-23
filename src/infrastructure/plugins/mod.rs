@@ -16,7 +16,8 @@ use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
 use crate::domain::events::{
-    CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+    CommsBlackoutEvent, FairingSeparatedEvent, RelaunchRequested, SplashdownDetectedEvent,
+    StageSeparatedEvent,
 };
 use crate::domain::services::simulation_time::{
     advance_simulation_time, sync_fixed_timestep, SimulationTime,
@@ -50,12 +51,12 @@ use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_systems::{
-    accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
-    atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
-    compute_plasma_blackout, compute_retro_propulsion, control_system, deploy_landing_legs,
-    guidance_system, integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
-    propulsion_thrust, resolve_ground_contact, sync_render_transform, update_orbital_elements,
-    update_rocket_gravity,
+    accumulate_forces, actuation_system, advance_topple, aerodynamic_forces, aerodynamic_torque,
+    apply_relaunch_requests, atmosphere_properties, compute_ablation, compute_heating,
+    compute_parachute_forces, compute_plasma_blackout, compute_retro_propulsion, control_system,
+    deploy_landing_legs, guidance_system, handle_relaunch_input_system, integrate_6dof,
+    propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
+    resolve_ground_contact, sync_render_transform, update_orbital_elements, update_rocket_gravity,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_input_system,
@@ -301,11 +302,12 @@ impl Plugin for RocketModePlugin {
         // Entry physics configuration.
         app.init_resource::<EntryPhysicsConfig>();
 
-        // Rocket domain messages (blackout edges, splashdown, staging).
+        // Rocket domain messages (blackout edges, splashdown, staging, relaunch).
         app.add_message::<CommsBlackoutEvent>();
         app.add_message::<SplashdownDetectedEvent>();
         app.add_message::<StageSeparatedEvent>();
         app.add_message::<FairingSeparatedEvent>();
+        app.add_message::<RelaunchRequested>();
 
         // Rocket camera resources.
         app.init_resource::<RocketCameraMode>();
@@ -341,6 +343,9 @@ impl Plugin for RocketModePlugin {
 
         // Flight recorder input (runs in Update).
         app.add_systems(Update, handle_flight_recorder_input_system);
+
+        // Relaunch input (runs in Update; mutation happens in FixedUpdate).
+        app.add_systems(Update, handle_relaunch_input_system);
 
         // Event feed: domain messages → HUD line + flight-log entries (Update).
         app.add_systems(Update, rocket_event_feed_system);
@@ -383,6 +388,9 @@ impl Plugin for RocketModePlugin {
             FixedUpdate,
             (
                 guidance_system.in_set(RocketSet::Guidance),
+                apply_relaunch_requests
+                    .in_set(RocketSet::Guidance)
+                    .before(guidance_system),
                 control_system.in_set(RocketSet::Control),
                 actuation_system.in_set(RocketSet::Actuation),
                 update_rocket_gravity.in_set(RocketSet::Gravity),
@@ -411,6 +419,9 @@ impl Plugin for RocketModePlugin {
                 accumulate_forces.in_set(RocketSet::AccumulateForces),
                 integrate_6dof.in_set(RocketSet::Integrate),
                 resolve_ground_contact.in_set(RocketSet::GroundContact),
+                advance_topple
+                    .in_set(RocketSet::GroundContact)
+                    .after(resolve_ground_contact),
                 sync_render_transform.in_set(RocketSet::SyncRender),
             ),
         );

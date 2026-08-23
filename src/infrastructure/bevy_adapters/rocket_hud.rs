@@ -52,6 +52,7 @@ pub enum HudField {
     // Recovery group
     Parachute,
     SurfaceType,
+    TouchdownScorecard,
     // Meta
     TimeAndCamera,
     EventLog,
@@ -262,6 +263,7 @@ fn spawn_left_panel(commands: &mut Commands, builder: &HudBuilder) {
             p.spawn(builder.section_header("--- RECOVERY ---"));
             spawn_field(p, builder, HudField::Parachute, "Drogue: NO  Main: NO");
             spawn_field(p, builder, HudField::SurfaceType, "Surface: ---");
+            spawn_field(p, builder, HudField::TouchdownScorecard, "TD: ---");
 
             // Time & camera
             p.spawn(builder.section_header("--- ---"));
@@ -611,6 +613,31 @@ impl FieldFormatters {
                     ("Surface: WATER".to_string(), HudColors::default().caution)
                 } else {
                     ("Surface: LAND".to_string(), Color::WHITE)
+                }
+            }
+            HudField::TouchdownScorecard => {
+                if !telemetry.touchdown_recorded {
+                    ("TD: ---".to_string(), Color::WHITE)
+                } else {
+                    let color = if telemetry.toppling {
+                        HudColors::default().danger
+                    } else if telemetry.touchdown_tilt_deg > 10.0 {
+                        HudColors::default().warning
+                    } else {
+                        HudColors::default().success
+                    };
+                    (
+                        format!(
+                            "TD: v{:.1} lat{:.1} tilt{:.0}° slope{:.0}° tgt{:.0}m strut{:.1}m",
+                            telemetry.touchdown_vertical_speed_mps,
+                            telemetry.touchdown_lateral_speed_mps,
+                            telemetry.touchdown_tilt_deg,
+                            telemetry.touchdown_slope_deg,
+                            telemetry.touchdown_distance_to_target_m,
+                            telemetry.leg_compression_peak_m,
+                        ),
+                        color,
+                    )
                 }
             }
             HudField::TimeAndCamera => {

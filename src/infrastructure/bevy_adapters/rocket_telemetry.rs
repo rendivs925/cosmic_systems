@@ -286,6 +286,14 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
         time_since_liftoff_s: ctx.autopilot.time_since_liftoff_s,
         downrange_m: 0.0,
         crossrange_m: 0.0,
+        touchdown_recorded: false,
+        touchdown_vertical_speed_mps: 0.0,
+        touchdown_lateral_speed_mps: 0.0,
+        touchdown_tilt_deg: 0.0,
+        touchdown_slope_deg: 0.0,
+        touchdown_distance_to_target_m: 0.0,
+        leg_compression_peak_m: 0.0,
+        toppling: false,
     }
 }
 
@@ -455,6 +463,8 @@ pub fn compute_rocket_telemetry_system(
         &ParachuteState,
         &TerrainCollisionState,
     )>,
+    // Phase 14 extras, read-only and disjoint from the tuple above.
+    lifecycle_query: Query<(&LandingScorecard, &TipOverState)>,
 ) {
     let dt = sim_time.fixed_timestep();
     let current_time = sim_time.sim_time_s;
@@ -510,6 +520,24 @@ pub fn compute_rocket_telemetry_system(
         };
 
         *telemetry = compute_telemetry_from_context(&ctx);
+    }
+
+    // Overlay the Phase 14 lifecycle extras (scorecard + tip-over). The
+    // primary telemetry tuple is already at the query-size cap, so these
+    // read-only components ride in a second query; with a single primary
+    // vehicle the merge is exact.
+    for (scorecard, tip_over) in lifecycle_query.iter() {
+        if !scorecard.recorded {
+            continue;
+        }
+        telemetry.touchdown_recorded = true;
+        telemetry.touchdown_vertical_speed_mps = scorecard.touchdown_vertical_speed_mps;
+        telemetry.touchdown_lateral_speed_mps = scorecard.touchdown_lateral_speed_mps;
+        telemetry.touchdown_tilt_deg = scorecard.touchdown_tilt_deg;
+        telemetry.touchdown_slope_deg = scorecard.touchdown_slope_deg;
+        telemetry.touchdown_distance_to_target_m = scorecard.distance_to_target_m;
+        telemetry.leg_compression_peak_m = scorecard.leg_compression_peak_m;
+        telemetry.toppling = tip_over.is_toppling();
     }
 }
 
