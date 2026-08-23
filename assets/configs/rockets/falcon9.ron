@@ -121,6 +121,16 @@
             fairing: (
                 dry_mass_kg: 1_750.0,
             ),
+            // Landing gear (Phase 13): four carbon-fiber legs on a 4.5 m
+            // base radius, 3 m strut stroke, rated for the ~25-30 t booster
+            // landing mass; auto-deploy at 100 m AGL during descent.
+            landing_legs: (
+                count: 4,
+                base_radius_m: 4.5,
+                stroke_m: 3.0,
+                max_landing_mass_kg: 30_000.0,
+                deploy_altitude_m: 100.0,
+            ),
         ),
     ],
 )

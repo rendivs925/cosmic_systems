@@ -2,6 +2,7 @@
 // Each component has a single responsibility, enabling parallel system execution.
 
 use crate::domain::entities::rocket::{Rocket, RocketMissionState as DomainRocketMissionState};
+use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::terrain_collision::GroundContact;
 use bevy::math::{DQuat, DVec3, Quat, Vec3};
@@ -283,6 +284,37 @@ pub struct TerrainCollisionState {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GroundRest {
     pub active: bool,
+}
+
+/// Deployable landing gear. Composes the pure domain assembly
+/// (`LandingGear`: spec + sized struts) with the one-way deployment latch;
+/// the compression state is advanced only by the GroundContact authority
+/// while the vehicle rests on deployed legs.
+#[derive(Component, Debug, Clone)]
+pub struct LandingLegs {
+    pub gear: LandingGear,
+    pub deployment: LegDeploymentState,
+    /// Current strut compression, meters (0 = fully extended).
+    pub compression_m: f64,
+}
+
+impl LandingLegs {
+    pub fn new(gear: LandingGear) -> Self {
+        Self {
+            gear,
+            deployment: LegDeploymentState::default(),
+            compression_m: 0.0,
+        }
+    }
+
+    pub fn deployed(&self) -> bool {
+        self.deployment.deployed
+    }
+
+    /// Deploy-gate altitude from the assembly spec.
+    pub fn deploy_gate_altitude_m(&self) -> f64 {
+        self.gear.spec.deploy_altitude_m
+    }
 }
 
 /// Orbital elements computed from rocket state vectors (planet-centered inertial frame).

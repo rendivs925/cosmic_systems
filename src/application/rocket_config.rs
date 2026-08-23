@@ -7,6 +7,7 @@
 //! configuration (AGENTS.md section 65).
 
 use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+use crate::domain::services::landing_gear::LandingGearSpec;
 use bevy::math::Vec3;
 use bevy::prelude::*;
 use ron::error::SpannedError;
@@ -44,6 +45,26 @@ pub struct VehicleDef {
     pub stages: Vec<StageDef>,
     #[serde(default)]
     pub fairing: Option<FairingDef>,
+    /// Optional deployable landing gear. Vehicles without this field land
+    /// gear-less via the point-contact model.
+    #[serde(default)]
+    pub landing_legs: Option<LandingLegsDef>,
+}
+
+/// Per-vehicle landing-gear definition. Additive schema: existing files
+/// without a `landing_legs` block stay valid.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandingLegsDef {
+    pub count: u32,
+    pub base_radius_m: f32,
+    pub stroke_m: f32,
+    /// Maximum mass the gear can land; defaults to the whole vehicle when
+    /// omitted.
+    #[serde(default)]
+    pub max_landing_mass_kg: Option<f32>,
+    /// Radar altitude at which the legs auto-deploy during descent, meters.
+    pub deploy_altitude_m: f32,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -152,11 +173,12 @@ impl std::error::Error for RocketConfigError {
 // ---------------------------------------------------------------------------
 
 /// One vehicle ready for ECS spawning: the domain model plus whether a
-/// payload fairing rides on top.
+/// payload fairing rides on top and optional landing-gear configuration.
 #[derive(Debug, Clone)]
 pub struct LoadedVehicle {
     pub rocket: Rocket,
     pub fairing_dry_mass_kg: Option<f32>,
+    pub landing_legs: Option<LandingGearSpec>,
 }
 
 impl VehicleDef {
@@ -194,6 +216,23 @@ impl VehicleDef {
         if let Some(fairing) = &self.fairing {
             if fairing.dry_mass_kg <= 0.0 {
                 return Err(self.invalid("fairing dry_mass_kg must be > 0"));
+            }
+        }
+        if let Some(legs) = &self.landing_legs {
+            if legs.count < 3 {
+                return Err(self.invalid("landing_legs count must be >= 3 for a stable stance"));
+            }
+            if legs.base_radius_m <= 0.0 {
+                return Err(self.invalid("landing_legs base_radius_m must be > 0"));
+            }
+            if legs.stroke_m <= 0.0 {
+                return Err(self.invalid("landing_legs stroke_m must be > 0"));
+            }
+            if legs.deploy_altitude_m <= 0.0 {
+                return Err(self.invalid("landing_legs deploy_altitude_m must be > 0"));
+            }
+            if legs.max_landing_mass_kg.is_some_and(|m| m <= 0.0) {
+                return Err(self.invalid("landing_legs max_landing_mass_kg must be > 0"));
             }
         }
         Ok(())
@@ -282,6 +321,13 @@ impl VehicleDef {
                 stages,
             },
             fairing_dry_mass_kg: self.fairing.as_ref().map(|f| f.dry_mass_kg),
+            landing_legs: self.landing_legs.as_ref().map(|legs| LandingGearSpec {
+                count: legs.count,
+                base_radius_m: legs.base_radius_m as f64,
+                stroke_m: legs.stroke_m as f64,
+                max_landing_mass_kg: legs.max_landing_mass_kg.map(|m| m as f64),
+                deploy_altitude_m: legs.deploy_altitude_m as f64,
+            }),
         }
     }
 }
@@ -490,6 +536,17 @@ mod tests {
         }
         assert_eq!(loaded.stages[1].engines.len(), 1);
         assert!((loaded.stages[1].engines[0].position_m.y - 12.0).abs() < 1e-4);
+
+        // Landing gear pin (Phase 13): four legs on a 4.5 m base radius with
+        // a 3.0 m stroke deploying at 100 m AGL, rated for 30 t.
+        let legs = load_shipped(FALCON9_RON)
+            .landing_legs
+            .expect("falcon9 must declare landing_legs");
+        assert_eq!(legs.count, 4);
+        assert!((legs.base_radius_m - 4.5).abs() < 1e-6);
+        assert!((legs.stroke_m - 3.0).abs() < 1e-6);
+        assert_eq!(legs.max_landing_mass_kg, Some(30_000.0));
+        assert!((legs.deploy_altitude_m - 100.0).abs() < 1e-6);
     }
 
     #[test]
@@ -497,6 +554,26 @@ mod tests {
         let loaded = load_shipped(FALCON9_RON);
         assert!(loaded.fairing_dry_mass_kg.is_some());
         assert!(loaded.fairing_dry_mass_kg.unwrap() > 0.0);
+    }
+
+    /// Both gear paths must be exercised by the shipped catalog: falcon9 and
+    /// starship carry landing legs, electron and sls deliberately stay
+    /// leg-less so the point-contact fallback keeps working.
+    #[test]
+    fn shipped_catalog_exercises_both_gear_paths() {
+        for (file, expect_legs) in [
+            ("falcon9.ron", true),
+            ("starship.ron", true),
+            ("electron.ron", false),
+            ("sls.ron", false),
+        ] {
+            let loaded = load_shipped(file);
+            assert_eq!(
+                loaded.landing_legs.is_some(),
+                expect_legs,
+                "{file} landing_legs mismatch"
+            );
+        }
     }
 
     /// Every file shipped in assets/configs/rockets must parse and validate;
@@ -563,6 +640,53 @@ mod tests {
         assert_eq!(engine.throttle_max, 1.0);
         assert!(engine.restartable);
         assert!(loaded.fairing_dry_mass_kg.is_none());
+        assert!(loaded.landing_legs.is_none(), "no legs declared → none");
+    }
+
+    #[test]
+    fn landing_legs_load_with_explicit_values() {
+        let text = r#"
+            (
+                vehicles: [(
+                    name: "Legged",
+                    diameter_m: 3.7,
+                    height_m: 70.0,
+                    landing_legs: (
+                        count: 4,
+                        base_radius_m: 4.5,
+                        stroke_m: 3.0,
+                        max_landing_mass_kg: 30_000.0,
+                        deploy_altitude_m: 100.0,
+                    ),
+                    stages: [(
+                        name: "S1",
+                        dry_mass_kg: 500.0,
+                        propellant_mass_kg: 1_000.0,
+                        engines: [(
+                            position: (0.0, -5.0, 0.0),
+                            thrust_axis: (0.0, 1.0, 0.0),
+                            isp_sl: 250.0,
+                            isp_vac: 300.0,
+                            gimbal_range_deg: 6.0,
+                            max_thrust_n: 200_000.0,
+                        )],
+                    )],
+                )]
+            )
+        "#;
+        let vehicles = RocketConfigFile::parse(text).expect("legged definition");
+        let legs = vehicles[0].landing_legs.expect("legs must load");
+        assert_eq!(legs.count, 4);
+        assert!((legs.base_radius_m - 4.5).abs() < 1e-9);
+
+        // Omitted max_landing_mass_kg stays None (= whole vehicle).
+        let without_limit =
+            RocketConfigFile::parse(&text.replace("max_landing_mass_kg: 30_000.0,", ""))
+                .expect("definition without mass limit");
+        assert_eq!(
+            without_limit[0].landing_legs.unwrap().max_landing_mass_kg,
+            None
+        );
     }
 
     #[test]
@@ -620,6 +744,26 @@ mod tests {
             "( vehicles: [( nam: \"Typo\", diameter_m: 3.0, height_m: 30.0, stages: [] )] )",
         );
         assert!(err.contains("RON parse error"), "{err}");
+
+        // Landing legs: too few for a stable stance.
+        let err = parse_err(
+            r#"( vehicles: [( name: "Bad", diameter_m: 3.7, height_m: 70.0,
+                landing_legs: ( count: 2, base_radius_m: 4.5, stroke_m: 3.0, deploy_altitude_m: 100.0 ),
+                stages: [( name: "S1", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [(
+                    position: (0.0, -5.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0,
+                    isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )] )] )"#,
+        );
+        assert!(err.contains("count"), "{err}");
+
+        // Unknown field inside landing_legs is rejected (schema typo guard).
+        let err = parse_err(
+            r#"( vehicles: [( name: "Bad", diameter_m: 3.7, height_m: 70.0,
+                landing_legs: ( count: 4, base_radius_m: -1.0, stroke_m: 3.0, deploy_altitude_m: 100.0 ),
+                stages: [( name: "S1", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [(
+                    position: (0.0, -5.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0,
+                    isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )] )] )"#,
+        );
+        assert!(err.contains("base_radius_m"), "{err}");
     }
 
     #[test]
@@ -635,6 +779,7 @@ mod tests {
                     stages: vec![],
                 },
                 fairing_dry_mass_kg: None,
+                landing_legs: None,
             },
         );
         catalog.insert(
@@ -647,6 +792,7 @@ mod tests {
                     stages: vec![],
                 },
                 fairing_dry_mass_kg: None,
+                landing_legs: None,
             },
         );
         catalog.insert(
@@ -659,6 +805,7 @@ mod tests {
                     stages: vec![],
                 },
                 fairing_dry_mass_kg: None,
+                landing_legs: None,
             },
         );
         let keys: Vec<&String> = catalog.keys().collect();

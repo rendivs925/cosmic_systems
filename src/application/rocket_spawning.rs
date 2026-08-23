@@ -1,5 +1,6 @@
 use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
 use crate::components::rocket::*;
+use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial, geodetic_to_body_fixed,
@@ -147,16 +148,79 @@ pub fn spawn_rockets(
         RetroPropulsionEffect::default(),
         FlightRecorder::new(RECORDER_MAX_ENTRIES, RECORDER_INTERVAL_S),
         Mesh3d(mesh_handle),
-        MeshMaterial3d(material_handle),
+        MeshMaterial3d(material_handle.clone()),
         Transform::default(),
         Selectable {
             name: rocket.name.clone(),
             selected: false,
         },
     ));
-    if vehicle.fairing_dry_mass_kg.is_some() {
+    if let Some(fairing_dry_mass_kg) = vehicle.fairing_dry_mass_kg {
         commands.entity(entity).insert(PayloadFairing {
-            dry_mass_kg: attached_payload_kg,
+            dry_mass_kg: fairing_dry_mass_kg,
+        });
+    }
+
+    // Landing gear: domain assembly from the catalog spec (struts sized
+    // against the gross vehicle mass unless the config sets a limit), plus a
+    // simple fixed-pose leg strut per configured leg (presentation only —
+    // never authoritative for contact).
+    if let Some(spec) = vehicle.landing_legs {
+        spawn_landing_leg_meshes(
+            commands,
+            meshes,
+            &material_handle,
+            entity,
+            rocket.height_m,
+            rocket.diameter_m / 2.0,
+            &spec,
+        );
+        commands
+            .entity(entity)
+            .insert(LandingLegs::new(LandingGear::new(spec, total_mass_kg)));
+    }
+}
+
+/// Spawn one visual strut per configured landing leg as a child of the
+/// rocket, angled from the lower hull out to the foot radius. The pose is
+/// static (always shown deployed); collision/physics never read these
+/// entities.
+fn spawn_landing_leg_meshes(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    material: &Handle<StandardMaterial>,
+    parent: Entity,
+    height_m: f32,
+    hull_radius_m: f32,
+    spec: &LandingGearSpec,
+) {
+    let count = spec.count.max(1);
+    let stroke_m = spec.stroke_m as f32;
+    let base_radius_m = spec.base_radius_m as f32;
+    let bottom_y = -height_m / 2.0;
+    let root_y = bottom_y + stroke_m * 0.25;
+    let foot_y = bottom_y - stroke_m * 0.6;
+
+    for i in 0..count {
+        let azimuth = i as f32 * std::f32::consts::TAU / count as f32;
+        let (cos_a, sin_a) = (azimuth.cos(), azimuth.sin());
+        let root = Vec3::new(hull_radius_m * cos_a, root_y, hull_radius_m * sin_a);
+        let foot = Vec3::new(base_radius_m * cos_a, foot_y, base_radius_m * sin_a);
+        let direction = (foot - root).normalize_or_zero();
+        if !direction.is_finite() || direction == Vec3::ZERO {
+            continue;
+        }
+        let length = root.distance(foot);
+        commands.entity(parent).with_children(|p| {
+            p.spawn((
+                Mesh3d(meshes.add(Cylinder::new(0.15, length))),
+                MeshMaterial3d(material.clone()),
+                Transform {
+                    translation: (root + foot) / 2.0,
+                    rotation: Quat::from_rotation_arc(Vec3::Y, direction),
+                    ..default()
+                },
+            ));
         });
     }
 }

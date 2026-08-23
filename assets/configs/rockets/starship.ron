@@ -384,6 +384,14 @@
                     ],
                 ),
             ],
+            // Landing gear (Phase 13): wide four-leg stance for the full
+            // stack; sized via the whole-vehicle default mass limit.
+            landing_legs: (
+                count: 4,
+                base_radius_m: 9.0,
+                stroke_m: 4.5,
+                deploy_altitude_m: 150.0,
+            ),
         ),
     ],
 )

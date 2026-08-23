@@ -52,8 +52,8 @@ use crate::infrastructure::bevy_adapters::rocket_separation::{
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, aerodynamic_forces, aerodynamic_torque,
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
-    compute_plasma_blackout, compute_retro_propulsion, control_system, guidance_system,
-    integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
+    compute_plasma_blackout, compute_retro_propulsion, control_system, deploy_landing_legs,
+    guidance_system, integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
     propulsion_thrust, resolve_ground_contact, sync_render_transform, update_orbital_elements,
     update_rocket_gravity,
 };
@@ -396,6 +396,7 @@ impl Plugin for RocketModePlugin {
                 compute_plasma_blackout.in_set(RocketSet::EntryPhysics),
                 compute_parachute_forces.in_set(RocketSet::EntryPhysics),
                 compute_retro_propulsion.in_set(RocketSet::EntryPhysics),
+                deploy_landing_legs.in_set(RocketSet::EntryPhysics),
             ),
         );
         app.add_systems(

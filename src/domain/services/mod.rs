@@ -9,6 +9,7 @@ pub mod entry_physics;
 pub mod gravity;
 pub mod guidance;
 pub mod gyroscope;
+pub mod landing_gear;
 pub mod physics;
 pub mod physics_gyroscope;
 pub mod physics_kepler;
