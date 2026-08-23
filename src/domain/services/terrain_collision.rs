@@ -103,27 +103,139 @@ pub enum GroundContact {
     Crash,
 }
 
-/// Detect ground contact from radar altitude and vertical speed.
-/// - Low altitude + low speed → Landed.
-/// - Low altitude + excessive speed → Crash.
-pub fn detect_ground_contact(
-    radar_altitude_m: f64,
-    vertical_speed_mps: f64,
-    contact_altitude_m: f64,
-    touch_down_speed_mps: f64,
-    crash_speed_mps: f64,
+// ---------------------------------------------------------------------------
+// Multi-criteria touchdown evaluation
+// ---------------------------------------------------------------------------
+
+/// Radar-altitude band within which a touchdown verdict is evaluated.
+pub const TOUCHDOWN_BAND_M: f64 = 3.0;
+
+/// Exponential tangential damping rate while resting (1/s). Applied as
+/// `v_t *= exp(-rate*dt)`, so it is deterministic and frame-rate independent.
+pub const REST_TANGENTIAL_DAMPING_PER_S: f64 = 12.0;
+
+/// Acceptance limits for a touchdown. All four must pass for a landing; any
+/// violated limit is a crash.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TouchdownCriteria {
+    /// Maximum into-ground normal speed at contact (m/s).
+    pub max_vertical_speed_mps: f64,
+    /// Maximum speed along the tangent plane at contact (m/s).
+    pub max_lateral_speed_mps: f64,
+    /// Maximum local terrain slope under the vehicle (degrees).
+    pub max_slope_deg: f64,
+    /// Maximum tilt of the vehicle's longitudinal axis from the surface
+    /// normal (degrees).
+    pub max_tilt_deg: f64,
+}
+
+impl Default for TouchdownCriteria {
+    fn default() -> Self {
+        Self {
+            // Preserves the historical vertical-speed boundary (5 m/s).
+            max_vertical_speed_mps: 5.0,
+            // No gear is modeled: nothing absorbs lateral drift.
+            max_lateral_speed_mps: 3.0,
+            max_slope_deg: 10.0,
+            max_tilt_deg: 15.0,
+        }
+    }
+}
+
+/// Surface-relative velocity components against the local ground plane.
+///
+/// The dynamics integrate in a planet-centered non-rotating frame and the
+/// atmosphere model carries no wind, so inertial velocity *is*
+/// surface-relative; vertical/lateral mean decomposition against the local
+/// surface normal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocityComponents {
+    /// Component along the surface normal (+ = moving away from the ground).
+    pub normal_mps: f64,
+    /// Magnitude of the component within the tangent plane.
+    pub lateral_mps: f64,
+}
+
+/// Decompose a velocity into surface-normal and tangent-plane parts.
+pub fn decompose_velocity(velocity_mps: DVec3, surface_normal: DVec3) -> VelocityComponents {
+    let n = surface_normal.normalize_or_zero();
+    let normal_mps = velocity_mps.dot(n);
+    let lateral = velocity_mps - n * normal_mps;
+    VelocityComponents {
+        normal_mps,
+        lateral_mps: lateral.length(),
+    }
+}
+
+/// Evaluate a touchdown against [`TouchdownCriteria`]. `descent_speed_mps`
+/// is the into-ground normal speed (>= 0).
+pub fn evaluate_touchdown(
+    descent_speed_mps: f64,
+    lateral_speed_mps: f64,
+    slope_deg: f64,
+    tilt_deg: f64,
+    criteria: &TouchdownCriteria,
 ) -> GroundContact {
-    if radar_altitude_m > contact_altitude_m {
-        return GroundContact::None;
+    if descent_speed_mps > criteria.max_vertical_speed_mps
+        || lateral_speed_mps > criteria.max_lateral_speed_mps
+        || slope_deg > criteria.max_slope_deg
+        || tilt_deg > criteria.max_tilt_deg
+    {
+        return GroundContact::Crash;
     }
-    if vertical_speed_mps.abs() <= touch_down_speed_mps {
-        GroundContact::Landed
-    } else if vertical_speed_mps.abs() >= crash_speed_mps {
-        GroundContact::Crash
+    GroundContact::Landed
+}
+
+// ---------------------------------------------------------------------------
+// Resting-contact resolution
+// ---------------------------------------------------------------------------
+
+/// State after enforcing the resting-contact constraint for one step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContactResolution {
+    pub position_m: DVec3,
+    pub velocity_mps: DVec3,
+}
+
+/// Enforce rest on terrain for one fixed step:
+///
+/// - penetration is prevented by clamping the radial position out to the
+///   sampled surface (`surface_radius_m` = mean planet radius + terrain
+///   height at the sub-vehicle point),
+/// - normal velocity is removed entirely — the ground absorbs motion into
+///   *and* numerical drift away from the surface; leaving rest happens only
+///   through [`liftoff_from_rest`],
+/// - tangential velocity decays exponentially (simple damping, deliberately
+///   not a Coulomb friction model — AGENTS.md section 10 scope).
+///
+/// `surface_normal` must point away from the ground.
+pub fn resolve_resting_contact(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    surface_radius_m: f64,
+    surface_normal: DVec3,
+    dt_s: f64,
+) -> ContactResolution {
+    let radial_dir = position_m.normalize_or_zero();
+    let position_m = if position_m.length() < surface_radius_m {
+        radial_dir * surface_radius_m
     } else {
-        // Between touch-down and crash speed: still descending on contact.
-        GroundContact::Crash
+        position_m
+    };
+    let n = surface_normal.normalize_or_zero();
+    let normal_mps = velocity_mps.dot(n);
+    let mut tangential = velocity_mps - n * normal_mps;
+    tangential *= (-REST_TANGENTIAL_DAMPING_PER_S * dt_s).exp();
+    ContactResolution {
+        position_m,
+        velocity_mps: tangential,
     }
+}
+
+/// A grounded vehicle breaks rest only when available thrust exceeds its
+/// weight (strict TWR > 1); anything less cannot overcome the contact.
+pub fn liftoff_from_rest(thrust_n: f64, weight_n: f64) -> bool {
+    thrust_n > weight_n
 }
 
 /// Direction → latitude/longitude in degrees.
@@ -183,19 +295,108 @@ mod tests {
     }
 
     #[test]
-    fn ground_contact_detection() {
+    fn valid_vertical_touchdown_is_a_landing() {
+        let criteria = TouchdownCriteria::default();
         assert_eq!(
-            detect_ground_contact(0.5, 1.0, 2.0, 2.0, 10.0),
+            evaluate_touchdown(2.0, 1.0, 4.0, 5.0, &criteria),
             GroundContact::Landed
         );
+    }
+
+    #[test]
+    fn excessive_lateral_speed_crashes() {
+        let criteria = TouchdownCriteria::default();
         assert_eq!(
-            detect_ground_contact(0.5, 50.0, 2.0, 2.0, 10.0),
+            evaluate_touchdown(0.5, 30.0, 2.0, 3.0, &criteria),
             GroundContact::Crash
         );
+    }
+
+    #[test]
+    fn excessive_descent_speed_crashes() {
+        let criteria = TouchdownCriteria::default();
+        // Preserves the old hard-impact boundary.
         assert_eq!(
-            detect_ground_contact(50.0, 50.0, 2.0, 2.0, 10.0),
-            GroundContact::None
+            evaluate_touchdown(50.0, 0.5, 2.0, 3.0, &criteria),
+            GroundContact::Crash
         );
+        // The old 5–15 m/s "between" band was already a crash.
+        assert_eq!(
+            evaluate_touchdown(10.0, 0.5, 2.0, 3.0, &criteria),
+            GroundContact::Crash
+        );
+    }
+
+    #[test]
+    fn excessive_slope_crashes() {
+        let criteria = TouchdownCriteria::default();
+        assert_eq!(
+            evaluate_touchdown(1.0, 1.0, 45.0, 3.0, &criteria),
+            GroundContact::Crash
+        );
+    }
+
+    #[test]
+    fn excessive_tilt_crashes() {
+        let criteria = TouchdownCriteria::default();
+        assert_eq!(
+            evaluate_touchdown(1.0, 1.0, 3.0, 60.0, &criteria),
+            GroundContact::Crash
+        );
+    }
+
+    #[test]
+    fn valid_slope_landing_within_limits() {
+        let criteria = TouchdownCriteria::default();
+        // Slope and tilt inside limits, speeds gentle: a legal hillside landing.
+        assert_eq!(
+            evaluate_touchdown(2.0, 2.0, 8.0, 12.0, &criteria),
+            GroundContact::Landed
+        );
+    }
+
+    #[test]
+    fn resting_contact_removes_normal_velocity_and_damps_slide() {
+        let dt = 1.0 / 64.0;
+        let surface_radius_m = 100.0;
+        let normal = DVec3::Y;
+        // Slightly above surface, sinking at 1 m/s, sliding sideways at 2 m/s.
+        let position = DVec3::new(0.0, surface_radius_m + 0.05, 0.0);
+        let velocity = DVec3::new(2.0, -1.0, 0.0);
+
+        let res = resolve_resting_contact(position, velocity, surface_radius_m, normal, dt);
+
+        // Normal motion fully absorbed; tangential decayed, not zeroed.
+        assert!(res.velocity_mps.dot(normal).abs() < 1e-12);
+        let expected_tangential = 2.0 * (-REST_TANGENTIAL_DAMPING_PER_S * dt).exp();
+        assert!((res.velocity_mps.x - expected_tangential).abs() < 1e-9);
+        assert_eq!(res.velocity_mps.z, 0.0);
+        // No penetration clamp needed when above the surface.
+        assert!((res.position_m.y - position.y).abs() < 1e-12);
+    }
+
+    #[test]
+    fn liftoff_requires_thrust_above_weight() {
+        assert!(liftoff_from_rest(120_000.0, 100_000.0));
+        assert!(!liftoff_from_rest(99_000.0, 100_000.0));
+        // Exactly balanced cannot break the contact (strict inequality).
+        assert!(!liftoff_from_rest(100_000.0, 100_000.0));
+    }
+
+    #[test]
+    fn penetration_is_clamped_to_surface() {
+        let surface_radius_m = 100.0;
+        let normal = DVec3::Y;
+        // Deep under the surface along a tilted radial direction.
+        let position = DVec3::new(30.0, 30.0, 40.0);
+        let velocity = DVec3::ZERO;
+
+        let res = resolve_resting_contact(position, velocity, surface_radius_m, normal, 1.0 / 64.0);
+
+        let expected = position.normalize_or_zero() * surface_radius_m;
+        assert!((res.position_m - expected).length() < 1e-9);
+        assert!((res.position_m.length() - surface_radius_m).abs() < 1e-9);
+        assert!(res.velocity_mps == DVec3::ZERO);
     }
 
     #[test]

@@ -54,8 +54,8 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     atmosphere_properties, compute_ablation, compute_heating, compute_parachute_forces,
     compute_plasma_blackout, compute_retro_propulsion, control_system, guidance_system,
     integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
-    propulsion_thrust, sync_render_transform, update_orbital_elements, update_rocket_gravity,
-    update_rocket_terrain_interaction,
+    propulsion_thrust, resolve_ground_contact, sync_render_transform, update_orbital_elements,
+    update_rocket_gravity,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_input_system,
@@ -372,6 +372,7 @@ impl Plugin for RocketModePlugin {
                 RocketSet::PropulsionStaging,
                 RocketSet::AccumulateForces,
                 RocketSet::Integrate,
+                RocketSet::GroundContact,
                 RocketSet::SyncRender,
                 RocketSet::Telemetry,
             )
@@ -386,7 +387,6 @@ impl Plugin for RocketModePlugin {
                 actuation_system.in_set(RocketSet::Actuation),
                 update_rocket_gravity.in_set(RocketSet::Gravity),
                 update_orbital_elements.in_set(RocketSet::OrbitalElements),
-                update_rocket_terrain_interaction.in_set(RocketSet::TerrainInteraction),
                 atmosphere_properties.in_set(RocketSet::Atmosphere),
                 spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
                 update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
@@ -409,6 +409,7 @@ impl Plugin for RocketModePlugin {
                 propulsion_staging.in_set(RocketSet::PropulsionStaging),
                 accumulate_forces.in_set(RocketSet::AccumulateForces),
                 integrate_6dof.in_set(RocketSet::Integrate),
+                resolve_ground_contact.in_set(RocketSet::GroundContact),
                 sync_render_transform.in_set(RocketSet::SyncRender),
             ),
         );

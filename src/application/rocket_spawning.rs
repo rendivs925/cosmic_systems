@@ -128,6 +128,13 @@ pub fn spawn_rockets(
         RocketCommands::default(),
         RocketAutopilot::default(),
         TerrainCollisionState::default(),
+        // The vehicle spawns standing on the pad: the resting-contact
+        // constraint holds it there until thrust exceeds weight (real
+        // physics instead of the old crash-exemption hack).
+        GroundRest { active: true },
+        // Required by update_orbital_elements and guidance_system; without
+        // it neither system ever matches the entity.
+        OrbitalElements::default(),
         ThermalState::default(),
         AblationState::default(),
         ParachuteState::default(),

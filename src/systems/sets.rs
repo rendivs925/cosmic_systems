@@ -24,6 +24,10 @@ pub enum RocketSet {
     PropulsionStaging,
     AccumulateForces,
     Integrate,
+    /// Post-integration terrain contact: touchdown verdict, resting-contact
+    /// constraint (penetration clamp / normal-velocity removal), liftoff
+    /// release. Acts on the just-integrated authoritative state.
+    GroundContact,
     SyncRender,
     Telemetry,
 }

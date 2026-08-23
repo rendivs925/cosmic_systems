@@ -277,6 +277,14 @@ pub struct TerrainCollisionState {
     pub over_water: bool,
 }
 
+/// Persistent ground-contact state: true while the vehicle rests on terrain
+/// and the post-integration contact constraint holds it there (pad hold and
+/// landings alike). Released when available thrust exceeds weight.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct GroundRest {
+    pub active: bool,
+}
+
 /// Orbital elements computed from rocket state vectors (planet-centered inertial frame).
 /// Updated by orbital_elements_system for telemetry and guidance.
 #[derive(Component, Debug, Clone, Copy, Default)]

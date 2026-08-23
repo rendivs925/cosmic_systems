@@ -29,7 +29,8 @@ use crate::domain::services::rocket_propulsion::{
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
-    detect_ground_contact, lat_lon_from_direction, radar_altitude_m, sample_surface, GroundContact,
+    decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
+    resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
 };
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::{
@@ -1045,7 +1046,14 @@ pub fn actuation_system(
             .get(propulsion.active_stage)
             .map(|stage| stage_throttle_envelope(&stage.engines))
             .unwrap_or((0.0, 1.0));
-        propulsion.throttle = clamp_throttle_range(slewed, envelope.0, envelope.1);
+        // Commanded-off must bypass the envelope floor: raising the slewed
+        // value back to throttle_min would make shutdown impossible (the
+        // engine can never reach zero once lit).
+        propulsion.throttle = if commands.throttle_cmd <= 0.0 {
+            slewed
+        } else {
+            clamp_throttle_range(slewed, envelope.0, envelope.1)
+        };
         propulsion.gimbal_pitch_rad = clamp_deflection(
             commands.gimbal_pitch_cmd_rad,
             limits.max_gimbal_deflection_rad,
@@ -1059,31 +1067,43 @@ pub fn actuation_system(
     }
 }
 
-/// Rocket–terrain interaction: sample the authoritative collision terrain
-/// (radar altitude, surface normal, slope, ground contact) from the rocket's
-/// f64 planet-centered inertial position and the shared per-planet
-/// `TerrainSource`. Detects landing, crash, and water splashdown (event).
-/// Never writes the transform; the 6-DOF dynamics remain authoritative.
-pub fn update_rocket_terrain_interaction(
+/// Authoritative rocket–terrain contact. Runs POST-integration in
+/// [`RocketSet::GroundContact`], so verdicts and constraints act on the
+/// just-integrated state: samples collision terrain, refreshes the
+/// [`TerrainCollisionState`] sensors, evaluates multi-criteria touchdown,
+/// enforces the resting-contact constraint (`resolve_resting_contact`:
+/// penetration clamp + normal-velocity removal + tangential damping),
+/// releases rest when thrust exceeds weight, and emits splashdown on water
+/// touchdowns exactly as before.
+pub fn resolve_ground_contact(
+    sim_time: Res<SimulationTime>,
     mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
     planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
     mut rocket_query: Query<(
         Entity,
         &RocketPlanetBinding,
-        &RocketPhysicsState,
+        &mut RocketPhysicsState,
+        &RocketPropulsion,
         &mut TerrainCollisionState,
+        &mut GroundRest,
         &mut RocketMissionState,
     )>,
 ) {
-    const CONTACT_ALTITUDE_M: f64 = 3.0;
-    const TOUCH_DOWN_SPEED_MPS: f64 = 5.0;
-    const CRASH_SPEED_MPS: f64 = 15.0;
+    let dt = sim_time.fixed_timestep();
     /// Terrain heights within this band of mean sea level are treated as
     /// water on bodies with oceans.
     const SEA_LEVEL_TOLERANCE_M: f64 = 10.0;
+    let criteria = TouchdownCriteria::default();
 
-    for (rocket_entity, binding, rocket, mut collision, mut mission_state) in
-        rocket_query.iter_mut()
+    for (
+        rocket_entity,
+        binding,
+        mut rocket,
+        propulsion,
+        mut collision,
+        mut rest,
+        mut mission_state,
+    ) in rocket_query.iter_mut()
     {
         let Some((planet, planet_terrain)) = planet_query
             .iter()
@@ -1094,15 +1114,17 @@ pub fn update_rocket_terrain_interaction(
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
         let position_m = rocket.dynamics.position_m;
-        let altitude_m = radar_altitude_m(&*planet_terrain.source, position_m, radius_m);
         let dir = position_m.normalize_or_zero();
         if dir.length_squared() < 1e-12 {
             continue;
         }
         let (lat, lon) = lat_lon_from_direction(dir);
         let sample = sample_surface(&*planet_terrain.source, lat, lon, radius_m);
+        // Signed altitude: negative means penetrating the sampled surface.
+        let surface_radius_m = radius_m + sample.height_m;
+        let signed_altitude_m = position_m.length() - surface_radius_m;
 
-        collision.radar_altitude_m = altitude_m;
+        collision.radar_altitude_m = signed_altitude_m.max(0.0);
         collision.slope_deg = sample.slope_deg;
 
         // Water inference: no ocean mask data exists yet, so water is where
@@ -1111,18 +1133,105 @@ pub fn update_rocket_terrain_interaction(
         let has_ocean = planet.domain_planet.name == "Earth";
         collision.over_water = has_ocean && sample.height_m.abs() <= SEA_LEVEL_TOLERANCE_M;
 
-        let vertical_speed = rocket.dynamics.velocity_mps.dot(dir);
-        let contact = detect_ground_contact(
-            altitude_m,
-            vertical_speed,
-            CONTACT_ALTITUDE_M,
-            TOUCH_DOWN_SPEED_MPS,
-            CRASH_SPEED_MPS,
-        );
-        collision.ground_contact = contact;
+        let normal = if sample.normal.length_squared() > 1e-12 {
+            sample.normal
+        } else {
+            dir
+        };
+        // Tilt of the longitudinal body axis (+Y nose-up convention at spawn)
+        // away from the local surface normal.
+        let tilt_deg = (rocket.dynamics.orientation * DVec3::Y)
+            .angle_between(normal)
+            .to_degrees();
+        let velocity = rocket.dynamics.velocity_mps;
+        let components = decompose_velocity(velocity, normal);
 
-        match contact {
+        // Release first: a resting vehicle leaves the ground as soon as the
+        // active stage's available thrust exceeds its weight (guidance ramps
+        // throttle up → constraint lets go → normal integration takes over).
+        if rest.active {
+            let gravity_mps2 =
+                gravitational_parameter(planet.domain_planet.mass_kg) / position_m.length().powi(2);
+            let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
+            let thrust_n = propulsion
+                .vehicle
+                .stages
+                .get(propulsion.active_stage)
+                .map(|stage| {
+                    // Thrust magnitude does not depend on the density-driven
+                    // Isp selection; pass vacuum-ish 0.0.
+                    stage_thrust_body(&stage.engines, propulsion.throttle, 0.0)
+                        .0
+                        .length()
+                })
+                .unwrap_or(0.0);
+            if liftoff_from_rest(thrust_n, weight_n) {
+                rest.active = false;
+                collision.ground_contact = GroundContact::None;
+                bevy::log::info!(
+                    "Liftoff: thrust {:.0} N exceeds weight {:.0} N, released from surface",
+                    thrust_n,
+                    weight_n
+                );
+                continue;
+            }
+        }
+
+        if rest.active {
+            // Hold the vehicle on the surface: clamp penetration, absorb all
+            // normal motion, decay residual slide.
+            let res = resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
+            rocket.dynamics.position_m = res.position_m;
+            rocket.dynamics.velocity_mps = res.velocity_mps;
+            collision.ground_contact = GroundContact::Landed;
+            continue;
+        }
+
+        // Not resting: penetration is still forbidden for any airborne or
+        // crashed vehicle — push back to the surface and kill the
+        // into-ground normal component so it cannot tunnel.
+        if signed_altitude_m < 0.0 {
+            let radial_dir = dir;
+            rocket.dynamics.position_m = radial_dir * surface_radius_m;
+            let into_ground = velocity.dot(normal).min(0.0);
+            rocket.dynamics.velocity_mps = velocity - normal * into_ground;
+        }
+
+        // Airborne: a touchdown verdict exists only inside the contact band
+        // while actually approaching the ground (receding fly-throughs are
+        // not touchdowns).
+        if signed_altitude_m > TOUCHDOWN_BAND_M || components.normal_mps > 0.0 {
+            collision.ground_contact = GroundContact::None;
+            continue;
+        }
+
+        let verdict = evaluate_touchdown(
+            -components.normal_mps,
+            components.lateral_mps,
+            sample.slope_deg,
+            tilt_deg,
+            &criteria,
+        );
+        collision.ground_contact = verdict;
+
+        match verdict {
             GroundContact::Landed => {
+                // Engage rest immediately so this step already ends pinned to
+                // the surface (gear-less point contact).
+                rest.active = true;
+                bevy::log::info!(
+                    "Touchdown at ({lat:.2}, {lon:.2}): descent {:.2} m/s, lateral {:.2} m/s, slope {:.1} deg, tilt {:.1} deg{}",
+                    -components.normal_mps,
+                    components.lateral_mps,
+                    sample.slope_deg,
+                    tilt_deg,
+                    if collision.over_water { " (water)" } else { "" }
+                );
+                let res =
+                    resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
+                rocket.dynamics.position_m = res.position_m;
+                rocket.dynamics.velocity_mps = res.velocity_mps;
+
                 if matches!(
                     *mission_state,
                     RocketMissionState::PoweredDescent
@@ -1135,10 +1244,11 @@ pub fn update_rocket_terrain_interaction(
                         splashdown_writer.write(SplashdownDetectedEvent {
                             rocket: rocket_entity,
                             position_m,
-                            touchdown_vertical_speed_mps: vertical_speed,
+                            touchdown_vertical_speed_mps: -components.normal_mps,
                         });
                         bevy::log::info!(
-                            "Splashdown detected at ({lat:.2}, {lon:.2}), vertical speed {vertical_speed:.1} m/s"
+                            "Splashdown detected at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s",
+                            -components.normal_mps
                         );
                     }
                 }
@@ -1410,5 +1520,225 @@ pub fn compute_retro_propulsion(
         }
 
         retro.thrust_multiplier = multiplier;
+    }
+}
+
+#[cfg(test)]
+mod ground_contact_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::terrain_collision::{radial_direction, sample_surface};
+    use bevy::math::{DMat3, DQuat};
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    const DT: f64 = 1.0 / 64.0;
+    const G0: f64 = 9.80665;
+
+    /// One-engine test vehicle: 20 kN vacuum thrust, +Y body axis.
+    fn test_vehicle(max_thrust_kn: f32) -> Rocket {
+        Rocket {
+            name: "Test".into(),
+            diameter_m: 1.0,
+            height_m: 10.0,
+            stages: vec![RocketStage {
+                name: "S1".into(),
+                dry_mass_kg: 400.0,
+                propellant_mass_kg: 600.0,
+                engines: vec![RocketEngine {
+                    position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
+                    thrust_axis: bevy::math::Vec3::Y,
+                    isp_sea_level: 250.0,
+                    isp_vacuum: 300.0,
+                    gimbal_range_deg: 0.0,
+                    max_thrust_kn: max_thrust_kn,
+                    throttle_min: 0.0,
+                    throttle_max: 1.0,
+                    restartable: true,
+                    state: EngineState::Running,
+                }],
+            }],
+        }
+    }
+
+    /// Spawn a rocket standing exactly on the terrain at (lat, lon), plus the
+    /// Earth planet entity, and run only the tail of the fixed pipeline:
+    /// force writer → accumulate → integrate → ground contact.
+    fn pad_app(throttle: f32, max_thrust_kn: f32) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<SplashdownDetectedEvent>();
+        app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )));
+
+        let planet =
+            crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
+                .expect("Earth exists");
+        app.world_mut().spawn((
+            PlanetComponent {
+                domain_planet: planet,
+                material: Handle::default(),
+                has_texture: false,
+                base_reflectance: 1.0,
+                base_roughness: 1.0,
+            },
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth"),
+        ));
+
+        let source =
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
+                .source;
+        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let h = source.height_m(lat, lon);
+        let up = radial_direction(lat, lon);
+        let surface_radius = EARTH_RADIUS_M + h;
+
+        let vehicle = test_vehicle(max_thrust_kn);
+        let propellant = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let (inertia, com) =
+            crate::domain::services::rocket_dynamics::rocket_inertia_tensor(1000.0, 0.0, 0.5, 10.0);
+        app.world_mut().spawn((
+            RocketPhysicsState {
+                dynamics: RocketDynamicsState::new(
+                    up * surface_radius,
+                    DVec3::ZERO,
+                    DQuat::from_rotation_arc(DVec3::Y, up),
+                    1000.0,
+                    inertia,
+                    com,
+                ),
+            },
+            RocketPropulsion {
+                vehicle,
+                active_stage: 0,
+                propellant_remaining_kg: propellant,
+                throttle,
+                gimbal_pitch_rad: 0.0,
+                gimbal_yaw_rad: 0.0,
+                time_since_separation_s: 10.0,
+                ullage_settle_time_s: 2.0,
+                separations_count: 0,
+                attached_payload_kg: 0.0,
+            },
+            TerrainCollisionState::default(),
+            GroundRest { active: true },
+            RocketMissionState::PreLaunch,
+            RocketMass(1000.0),
+            GravityAcceleration { value: -up * G0 },
+            ForceAccumulator::default(),
+            TorqueAccumulator::default(),
+            RocketPlanetBinding {
+                planet_name: "Earth".to_string(),
+            },
+        ));
+
+        // Mirror production forces: gravity plus whatever thrust the
+        // propulsion component commands (the release check reads it from
+        // there, so the integrator must feel it too).
+        fn write_flight_forces(
+            mut query: Query<(
+                &RocketPhysicsState,
+                &GravityAcceleration,
+                &RocketPropulsion,
+                &mut ForceAccumulator,
+            )>,
+        ) {
+            for (rocket, gravity, propulsion, mut force) in query.iter_mut() {
+                let mut total = gravity.value * rocket.dynamics.mass_kg;
+                if let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) {
+                    let (body_thrust, _) =
+                        stage_thrust_body(&stage.engines, propulsion.throttle, 0.0);
+                    total += rocket.dynamics.orientation * body_thrust;
+                }
+                force.0 = total;
+            }
+        }
+        app.add_systems(
+            FixedUpdate,
+            (
+                write_flight_forces,
+                accumulate_forces,
+                integrate_6dof,
+                resolve_ground_contact,
+            )
+                .chain(),
+        );
+        app
+    }
+
+    /// Pad hold is real physics now: a throttled-down vehicle must stay pinned
+    /// to the pad instead of sinking under accumulated gravity.
+    #[test]
+    fn pad_hold_survives_gravity_without_sinking() {
+        let mut app = pad_app(0.0, 20.0);
+
+        for _ in 0..96 {
+            app.update();
+        }
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&RocketPhysicsState, &GroundRest, &TerrainCollisionState)>();
+        let (rocket, rest, collision) = q.single(world).unwrap();
+
+        assert!(rest.active, "vehicle must still be resting on the pad");
+        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let h =
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
+                .source
+                .height_m(lat, lon);
+        let expected_r = EARTH_RADIUS_M + h;
+        assert!(
+            (rocket.dynamics.position_m.length() - expected_r).abs() < 0.05,
+            "position drifted off the pad: |r|={}",
+            rocket.dynamics.position_m.length()
+        );
+        assert!(
+            rocket.dynamics.velocity_mps.length() < 0.5,
+            "residual velocity too large: {}",
+            rocket.dynamics.velocity_mps.length()
+        );
+        assert_eq!(collision.ground_contact, GroundContact::Landed);
+    }
+
+    /// Takeoff from resting contact: throttle above TWR 1 releases the
+    /// constraint and the vehicle climbs.
+    #[test]
+    fn takeoff_releases_rest_and_climbs() {
+        let mut app = pad_app(1.0, 200.0);
+        let start_r;
+
+        {
+            let world = app.world_mut();
+            let mut q = world.query::<&RocketPhysicsState>();
+            start_r = q.single(world).unwrap().dynamics.position_m.length();
+        }
+
+        for _ in 0..128 {
+            app.update();
+        }
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&RocketPhysicsState, &GroundRest, &RocketMissionState)>();
+        let (rocket, rest, mission) = q.single(world).unwrap();
+
+        assert!(!rest.active, "constraint must release above TWR 1");
+        assert!(
+            rocket.dynamics.position_m.length() > start_r + 1.0,
+            "vehicle did not climb: Δr={}",
+            rocket.dynamics.position_m.length() - start_r
+        );
+        assert_ne!(
+            *mission,
+            RocketMissionState::Crashed,
+            "liftoff must not be judged a crash"
+        );
     }
 }
