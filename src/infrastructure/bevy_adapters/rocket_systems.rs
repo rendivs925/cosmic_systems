@@ -19,7 +19,8 @@ use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
     gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
     powered_descent_guidance_convex, prograde_attitude, reentry_bank_angle,
-    reentry_bank_angle_enhanced, suicide_burn_guidance, AutopilotMode, DescentGuidanceConfig,
+    reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
+    DescentGuidanceConfig, TransferBurnPhase,
 };
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
@@ -761,6 +762,41 @@ pub fn guidance_system(
                     autopilot.mode = AutopilotMode::OrbitInsertion;
                 }
             }
+            AutopilotMode::Transfer => {
+                // Two-impulse transfer (Phase 15): this branch executes the
+                // departure burn only — once the transfer apoapsis reaches
+                // the target, OrbitInsertion machinery owns the coast and
+                // circularization burn (burn-coast-burn composition).
+                let target_radius_m = autopilot.transfer_target_radius_m;
+                if target_radius_m <= radius_m {
+                    // No target configured: hold and hand back.
+                    autopilot.mode = AutopilotMode::OrbitInsertion;
+                    commands.target_attitude = prograde_attitude(velocity);
+                    commands.throttle_cmd = 0.0;
+                    continue;
+                }
+                match transfer_burn_phase(
+                    radius,
+                    target_radius_m,
+                    orbital.apoapsis_m,
+                    orbital.eccentricity,
+                ) {
+                    TransferBurnPhase::Departure => {
+                        // Burn along the velocity vector when raising,
+                        // against it when lowering.
+                        let raising = target_radius_m > radius;
+                        commands.throttle_cmd = 1.0;
+                        commands.target_attitude = if raising {
+                            prograde_attitude(velocity)
+                        } else {
+                            attitude_from_direction(-velocity / speed.max(1e-6))
+                        };
+                    }
+                    // Coast and arrival circularization belong to the
+                    // existing insertion mode.
+                    _ => autopilot.mode = AutopilotMode::OrbitInsertion,
+                }
+            }
             AutopilotMode::OrbitInsertion => {
                 // Prograde burn to circularize at apoapsis.
                 if orbital.apoapsis_m > radius_m + 100_000.0 {
@@ -1206,11 +1242,12 @@ pub fn resolve_ground_contact(
         collision.radar_altitude_m = signed_altitude_m.max(0.0);
         collision.slope_deg = sample.slope_deg;
 
-        // Water inference: no ocean mask data exists yet, so water is where
-        // the terrain elevation sits at mean sea level (Earth only — the
-        // Moon/Mars have no seas). Documented approximation.
-        let has_ocean = planet.domain_planet.name == "Earth";
-        collision.over_water = has_ocean && sample.height_m.abs() <= SEA_LEVEL_TOLERANCE_M;
+        // Water inference (Phase 15): driven solely by the body's explicit
+        // `has_ocean` config flag — no body-name guessing. Heights within the
+        // sea-level band are water on ocean bodies; coastline polygons do
+        // not exist yet (documented limitation).
+        collision.over_water =
+            planet.domain_planet.has_ocean && sample.height_m.abs() <= SEA_LEVEL_TOLERANCE_M;
 
         let normal = if sample.normal.length_squared() > 1e-12 {
             sample.normal
@@ -2688,20 +2725,22 @@ mod ascent_pipeline_tests {
         for _ in 0..320 {
             app.update();
         }
-        let world = app.world_mut();
-        let mut q = world.query::<(&RocketCommands, &RocketPhysicsState)>();
-        let (commands, rocket) = q.single(world).unwrap();
-        let up = rocket.dynamics.position_m.normalize();
-        let body_y_world = commands.target_attitude * DVec3::Y;
-        assert!(
-            (body_y_world.dot(up) - 1.0).abs() < 1e-9,
-            "target attitude left vertical before the gate cleared: dot={}",
-            body_y_world.dot(up)
-        );
+        {
+            let world = app.world_mut();
+            let mut q = world.query::<(&RocketCommands, &RocketPhysicsState)>();
+            let (commands, rocket) = q.single(world).unwrap();
+            let up = rocket.dynamics.position_m.normalize();
+            let body_y_world = commands.target_attitude * DVec3::Y;
+            assert!(
+                (body_y_world.dot(up) - 1.0).abs() < 1e-9,
+                "target attitude left vertical before the gate cleared: dot={}",
+                body_y_world.dot(up)
+            );
+        }
 
         // Run well past the time-schedule start (t = 10 s): with the vehicle
-        // high and fast the gate is clear and the combined schedule must
-        // have produced a real pitch-over by t ≈ 20 s.
+        // high and fast the gate is clear and the combined schedule must have
+        // produced a real pitch-over by t ≈ 20 s.
         for _ in 0..960 {
             app.update();
         }
@@ -2741,5 +2780,122 @@ mod ascent_pipeline_tests {
             collision.ground_contact,
             collision.radar_altitude_m,
         );
+    }
+
+    /// Phase 15 regression: with time acceleration at 100× (dt = 100/64 s),
+    /// the consumption/staging MACHINERY must stay stable — one clean
+    /// separation, drained first stage, conserved mass, finite dynamics.
+    /// A minimal burn rig drives the throttle directly so guidance policy
+    /// (which legitimately coasts into insertion under coarse steps) cannot
+    /// mask the machinery being tested.
+    #[test]
+    fn staging_and_consumption_stable_at_100x_acceleration() {
+        use bevy::asset::{AssetApp, AssetPlugin};
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>();
+        app.init_asset::<StandardMaterial>();
+        app.add_message::<StageSeparatedEvent>();
+        let mut sim_time = SimulationTime::new(DT);
+        sim_time.set_time_acceleration(100.0);
+        app.insert_resource(sim_time);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )));
+
+        let vehicle = electron_like();
+        let propellant = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let total_mass_kg = vehicle.total_mass_kg() as f64;
+        let (inertia, com) = crate::domain::services::rocket_dynamics::rocket_inertia_tensor(
+            1_250.0, 11_300.0, 0.6, 18.0,
+        );
+        app.world_mut().spawn((
+            RocketPhysicsState {
+                dynamics: RocketDynamicsState::new(
+                    DVec3::new(EARTH_RADIUS_M + 100.0, 0.0, 0.0),
+                    DVec3::new(0.0, 2_000.0, 0.0),
+                    DQuat::IDENTITY,
+                    total_mass_kg,
+                    inertia,
+                    com,
+                ),
+            },
+            RocketGeometry {
+                radius_m: 0.6,
+                height_m: 18.0,
+            },
+            RocketMass(total_mass_kg),
+            AtmosphereState::default(),
+            RocketPropulsion {
+                vehicle,
+                active_stage: 0,
+                propellant_remaining_kg: propellant,
+                throttle: 0.0,
+                gimbal_pitch_rad: 0.0,
+                gimbal_yaw_rad: 0.0,
+                time_since_separation_s: 10.0,
+                ullage_settle_time_s: 2.0,
+                separations_count: 0,
+                attached_payload_kg: 50.0,
+            },
+            RocketPlanetBinding {
+                planet_name: "Earth".to_string(),
+            },
+        ));
+
+        // Burn rig: hold full commanded throttle, consume, stage.
+        fn force_full_throttle(mut q: Query<&mut RocketPropulsion>) {
+            for mut p in q.iter_mut() {
+                p.throttle = 1.0;
+            }
+        }
+        app.add_systems(
+            FixedUpdate,
+            (
+                force_full_throttle,
+                propulsion_consumption,
+                propulsion_staging,
+            )
+                .chain(),
+        );
+
+        // Stage 1 drains in ~119 s ≈ 76 big steps; run well past that.
+        for _ in 0..200 {
+            app.update();
+        }
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&RocketPhysicsState, &RocketPropulsion, &RocketMass)>();
+        let (rocket, propulsion, mass) = q.single(world).unwrap();
+
+        assert_eq!(
+            propulsion.separations_count, 1,
+            "stage 1 must separate exactly once at 100×"
+        );
+        assert_eq!(propulsion.active_stage, 1);
+        assert_eq!(propulsion.propellant_remaining_kg[0], 0.0);
+        assert!(propulsion.propellant_remaining_kg[1] > 0.0);
+        // Active-vehicle mass must equal its live components exactly:
+        // upper-stage structure + whatever stage-2 propellant remains +
+        // attached payload. (The rig keeps burning stage 2 after
+        // separation, so absolute amounts are policy-free.)
+        let expected_mass = propulsion.vehicle.stages[1].dry_mass_kg as f64
+            + propulsion.propellant_remaining_kg[1] as f64
+            + propulsion.attached_payload_kg as f64;
+        assert!(
+            (mass.0 - expected_mass).abs() < 1.0,
+            "mass {} inconsistent with stage bookkeeping {expected_mass}",
+            mass.0
+        );
+        assert!(
+            propulsion.propellant_remaining_kg[1] < propulsion.vehicle.stages[1].propellant_mass_kg,
+            "stage 2 must also have consumed propellant post-staging"
+        );
+        assert!(rocket.dynamics.mass_kg.is_finite() && rocket.dynamics.mass_kg > 0.0);
     }
 }

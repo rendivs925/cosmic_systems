@@ -71,6 +71,45 @@ impl SimulationTime {
     pub const ACCEL_10000X: f64 = 10000.0;
 }
 
+/// Lower bound of the usable acceleration range (slower than real time by at
+/// most 10×; below this the fixed step degenerates).
+pub const TIME_ACCELERATION_MIN: f64 = 0.1;
+
+/// Step the acceleration one decade up (+1) or down (−1), clamped to
+/// [`TIME_ACCELERATION_MIN`..=`SimulationTime::ACCEL_10000X`]. Pure function;
+/// the key-binding system consumes it.
+pub fn stepped_time_acceleration(current: f64, direction: i32) -> f64 {
+    match direction.signum() {
+        1 => (current * 10.0).clamp(TIME_ACCELERATION_MIN, SimulationTime::ACCEL_10000X),
+        -1 => (current / 10.0).clamp(TIME_ACCELERATION_MIN, SimulationTime::ACCEL_10000X),
+        _ => current.clamp(TIME_ACCELERATION_MIN, SimulationTime::ACCEL_10000X),
+    }
+}
+
+/// Time-acceleration keys for rocket mode (Phase 15): `.` speeds up a decade,
+/// `,` slows down a decade, `0` resets to real time. Centralized here —
+/// physics systems keep consuming the scaled fixed timestep unchanged.
+pub fn handle_time_acceleration_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut sim_time: ResMut<SimulationTime>,
+) {
+    let target = if keyboard.just_pressed(KeyCode::Period) {
+        Some(stepped_time_acceleration(sim_time.time_acceleration, 1))
+    } else if keyboard.just_pressed(KeyCode::Comma) {
+        Some(stepped_time_acceleration(sim_time.time_acceleration, -1))
+    } else if keyboard.just_pressed(KeyCode::Digit0) {
+        Some(SimulationTime::REALTIME)
+    } else {
+        None
+    };
+
+    let Some(target) = target else { return };
+    if (target - sim_time.time_acceleration).abs() > f64::EPSILON {
+        bevy::log::info!("Time acceleration set to ×{}", target);
+    }
+    sim_time.set_time_acceleration(target);
+}
+
 impl Default for SimulationTime {
     fn default() -> Self {
         Self::new(1.0 / 60.0) // 60 Hz physics
@@ -120,5 +159,19 @@ mod tests {
         assert_eq!(sim.time_acceleration, 0.0);
         sim.set_time_acceleration(20000.0);
         assert_eq!(sim.time_acceleration, 10000.0);
+    }
+
+    #[test]
+    fn stepped_acceleration_stays_within_usable_range() {
+        let up = stepped_time_acceleration(SimulationTime::REALTIME, 1);
+        assert_eq!(up, SimulationTime::ACCEL_10X);
+        // Decade down from real time stops at the 0.1 floor.
+        let down = stepped_time_acceleration(SimulationTime::REALTIME, -1);
+        assert_eq!(down, TIME_ACCELERATION_MIN);
+        // Ceiling: cannot exceed 10000×.
+        let maxed = stepped_time_acceleration(SimulationTime::ACCEL_10000X, 1);
+        assert_eq!(maxed, SimulationTime::ACCEL_10000X);
+        // Direction 0 clamps the current value without stepping.
+        assert_eq!(stepped_time_acceleration(0.05, 0), TIME_ACCELERATION_MIN);
     }
 }

@@ -14,6 +14,10 @@ pub struct PlanetConfig {
     pub rotation_period_hours: f32,
     pub axial_tilt_deg: f32,
     pub parent_entity: Option<&'static str>,
+    /// Explicit ocean mask (Phase 15): true only for bodies with open liquid
+    /// seas at mean sea level. Replaces the old "terrain ≈ sea level on
+    /// Earth" inference. No coastline polygons — documented limitation.
+    pub has_ocean: bool,
 }
 
 /// All planet and moon configurations
@@ -30,6 +34,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 601.2,
         axial_tilt_deg: 7.25,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Mercury",
@@ -42,6 +47,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 1407.504,
         axial_tilt_deg: 0.034,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Venus",
@@ -54,6 +60,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: -5832.6,
         axial_tilt_deg: 177.36,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Earth",
@@ -66,6 +73,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 23.934,
         axial_tilt_deg: 23.439,
         parent_entity: None,
+        has_ocean: true,
     },
     PlanetConfig {
         name: "Mars",
@@ -78,6 +86,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 24.623,
         axial_tilt_deg: 25.19,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Jupiter",
@@ -90,6 +99,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 9.925,
         axial_tilt_deg: 3.13,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Saturn",
@@ -102,6 +112,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 10.7,
         axial_tilt_deg: 26.73,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Uranus",
@@ -114,6 +125,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: -17.24,
         axial_tilt_deg: 97.77,
         parent_entity: None,
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Neptune",
@@ -126,6 +138,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 16.11,
         axial_tilt_deg: 28.32,
         parent_entity: None,
+        has_ocean: false,
     },
     // Moons
     PlanetConfig {
@@ -139,6 +152,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 655.722,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Earth"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Phobos",
@@ -151,6 +165,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 7.68,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Mars"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Deimos",
@@ -163,6 +178,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 30.24,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Mars"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Io",
@@ -175,6 +191,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 42.48,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Jupiter"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Europa",
@@ -187,6 +204,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 85.2,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Jupiter"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Ganymede",
@@ -199,6 +217,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 171.6,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Jupiter"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Callisto",
@@ -211,6 +230,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 400.56,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Jupiter"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Mimas",
@@ -223,6 +243,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 22.56,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Enceladus",
@@ -235,6 +256,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 32.88,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Tethys",
@@ -247,6 +269,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 45.36,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Dione",
@@ -259,6 +282,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 65.76,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Rhea",
@@ -271,6 +295,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 108.48,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Titan",
@@ -283,6 +308,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 382.8,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Hyperion",
@@ -295,6 +321,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 510.72,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Iapetus",
@@ -307,6 +334,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 1903.68,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Saturn"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Miranda",
@@ -319,6 +347,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 33.84,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Uranus"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Ariel",
@@ -331,6 +360,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 60.48,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Uranus"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Umbriel",
@@ -343,6 +373,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 99.36,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Uranus"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Titania",
@@ -355,6 +386,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 209.04,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Uranus"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Oberon",
@@ -367,6 +399,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 323.04,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Uranus"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Triton",
@@ -379,6 +412,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 141.12,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Neptune"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Proteus",
@@ -391,6 +425,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 26.88,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Neptune"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Nereid",
@@ -403,6 +438,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 8643.12,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Neptune"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Larissa",
@@ -415,6 +451,7 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 13.2,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Neptune"),
+        has_ocean: false,
     },
     PlanetConfig {
         name: "Charon",
@@ -427,5 +464,6 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         rotation_period_hours: 153.36,
         axial_tilt_deg: 0.0,
         parent_entity: Some("Pluto"),
+        has_ocean: false,
     },
 ];

@@ -1,4 +1,4 @@
-use crate::domain::entities::planet::Planet;
+use crate::domain::entities::planet::{Planet, PlanetBuilder};
 use crate::domain::value_objects::planet_configs::{PlanetConfig, PLANET_CONFIGS};
 use bevy::prelude::*;
 
@@ -46,20 +46,22 @@ impl PlanetFactory {
             .collect()
     }
 
-    /// Create planet from configuration
+    /// Create planet from configuration — every field, including the ocean
+    /// mask, comes from the config table; nothing is inferred here.
     fn create_from_config(config: &PlanetConfig) -> Planet {
-        Planet::new(
-            config.name.to_string(),
-            config.radius_km,
-            config.mass_kg,
-            config.color,
-            config.body_class,
-            config.orbital_distance_au,
-            config.orbital_period_days,
-            config.rotation_period_hours,
-            config.axial_tilt_deg,
-            config.parent_entity.map(|s| s.to_string()),
-        )
+        PlanetBuilder::new()
+            .name(config.name.to_string())
+            .radius_km(config.radius_km)
+            .mass_kg(config.mass_kg)
+            .color(config.color)
+            .body_class(config.body_class)
+            .orbital_distance_au(config.orbital_distance_au)
+            .orbital_period_days(config.orbital_period_days)
+            .rotation_period_hours(config.rotation_period_hours)
+            .axial_tilt_deg(config.axial_tilt_deg)
+            .parent_entity(config.parent_entity.map(|s| s.to_string()))
+            .has_ocean(config.has_ocean)
+            .build()
     }
 }
 

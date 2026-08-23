@@ -20,7 +20,7 @@ use crate::domain::events::{
     StageSeparatedEvent,
 };
 use crate::domain::services::simulation_time::{
-    advance_simulation_time, sync_fixed_timestep, SimulationTime,
+    advance_simulation_time, handle_time_acceleration_input, sync_fixed_timestep, SimulationTime,
 };
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::infrastructure::bevy_adapters::components::{
@@ -59,8 +59,9 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     resolve_ground_contact, sync_render_transform, update_orbital_elements, update_rocket_gravity,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
-    compute_rocket_telemetry_system, handle_flight_recorder_input_system,
-    record_flight_data_system, rocket_event_feed_system, RocketEventFeed,
+    compute_rocket_telemetry_system, handle_flight_recorder_export_system,
+    handle_flight_recorder_input_system, record_flight_data_system, rocket_event_feed_system,
+    RocketEventFeed,
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
@@ -344,8 +345,15 @@ impl Plugin for RocketModePlugin {
         // Flight recorder input (runs in Update).
         app.add_systems(Update, handle_flight_recorder_input_system);
 
+        // Flight-recorder CSV export (F11, runs in Update).
+        app.add_systems(Update, handle_flight_recorder_export_system);
+
         // Relaunch input (runs in Update; mutation happens in FixedUpdate).
         app.add_systems(Update, handle_relaunch_input_system);
+
+        // Time acceleration keys (runs in Update; physics reads the scaled
+        // fixed timestep from SimulationTime).
+        app.add_systems(Update, handle_time_acceleration_input);
 
         // Event feed: domain messages → HUD line + flight-log entries (Update).
         app.add_systems(Update, rocket_event_feed_system);

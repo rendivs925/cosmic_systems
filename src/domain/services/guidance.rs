@@ -46,6 +46,11 @@ pub enum AutopilotMode {
     Boostback,
     /// Terminal landing guidance.
     Landing,
+    /// Two-impulse orbit transfer (Hohmann, or bi-elliptic when favorable):
+    /// departure burn → coast to apsis → arrival burn. Target radius comes
+    /// from [`crate::components::rocket::RocketAutopilot::
+    /// transfer_target_radius_m`].
+    Transfer,
     /// Station keeping / orbital maintenance.
     StationKeep,
     /// Rendezvous with target vehicle (future).
@@ -336,6 +341,172 @@ pub fn deorbit_burn_dv(orbit_radius_m: f64, target_periapsis_m: f64, mu_m3_s2: f
     (v_circular - v_transfer).max(0.0)
 }
 
+// ---------------------------------------------------------------------------
+// Orbital transfers (Phase 15)
+// ---------------------------------------------------------------------------
+
+/// Orbit-radius ratio above which a sufficiently tall bi-elliptic transfer
+/// beats the equivalent Hohmann (classical 11.94 boundary).
+pub const BIELLIPTIC_FAVORABLE_RATIO: f64 = 11.94;
+
+/// Result of a two-impulse Hohmann computation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransferSolution {
+    /// Prograde Δv at the departure orbit, m/s.
+    pub departure_dv_mps: f64,
+    /// Prograde/retrograde Δv at arrival for circularization, m/s.
+    pub arrival_dv_mps: f64,
+    /// Half-period of the transfer ellipse — coast duration, s.
+    pub transfer_time_s: f64,
+}
+
+impl TransferSolution {
+    /// Total Δv budget of the two impulses, m/s.
+    pub fn total_dv_mps(&self) -> f64 {
+        self.departure_dv_mps + self.arrival_dv_mps
+    }
+}
+
+/// Result of a three-impulse bi-elliptic computation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BiellipticSolution {
+    /// Δv raising apoapsis from r1 to rb, m/s.
+    pub departure_dv_mps: f64,
+    /// Δv at rb raising periapsis to r2, m/s.
+    pub mid_dv_mps: f64,
+    /// Δv at r2 circularizing, m/s.
+    pub arrival_dv_mps: f64,
+    /// Full transfer duration (two half-ellipses), s.
+    pub transfer_time_s: f64,
+}
+
+impl BiellipticSolution {
+    /// Total Δv budget of the three impulses, m/s.
+    pub fn total_dv_mps(&self) -> f64 {
+        self.departure_dv_mps + self.mid_dv_mps + self.arrival_dv_mps
+    }
+}
+
+/// Vis-viva orbital speed on an ellipse with semi-major axis `a_m` at radius
+/// `r_m`, m/s. The single authority for all transfer speed math here.
+fn vis_viva_speed_mps(mu_m3_s2: f64, r_m: f64, a_m: f64) -> f64 {
+    (mu_m3_s2 * (2.0 / r_m - 1.0 / a_m)).sqrt()
+}
+
+/// Circular-orbit speed at radius r, m/s.
+fn circular_speed_mps(mu_m3_s2: f64, r_m: f64) -> f64 {
+    (mu_m3_s2 / r_m).sqrt()
+}
+
+/// Two-impulse Hohmann transfer between coplanar circular orbits at `r1_m`
+/// and `r2_m` around a body with gravitational parameter `mu_m3_s2`.
+/// Works in both directions (raising or lowering); Δvs are magnitudes.
+pub fn hohmann_transfer(r1_m: f64, r2_m: f64, mu_m3_s2: f64) -> TransferSolution {
+    let a_transfer = (r1_m + r2_m) / 2.0;
+    let departure_dv =
+        (vis_viva_speed_mps(mu_m3_s2, r1_m, a_transfer) - circular_speed_mps(mu_m3_s2, r1_m)).abs();
+    let arrival_dv =
+        (circular_speed_mps(mu_m3_s2, r2_m) - vis_viva_speed_mps(mu_m3_s2, r2_m, a_transfer)).abs();
+    let transfer_time =
+        std::f64::consts::PI * (a_transfer * a_transfer * a_transfer / mu_m3_s2).sqrt();
+    TransferSolution {
+        departure_dv_mps: departure_dv,
+        arrival_dv_mps: arrival_dv,
+        transfer_time_s: transfer_time,
+    }
+}
+
+/// Three-impulse bi-elliptic transfer via an intermediate apoapsis `rb_m`
+/// (rb > max(r1, r2)). Beats the Hohmann only for large radius ratios and a
+/// sufficiently high rb ([`BIELLIPTIC_FAVORABLE_RATIO`]).
+pub fn bielliptic_transfer(r1_m: f64, r2_m: f64, rb_m: f64, mu_m3_s2: f64) -> BiellipticSolution {
+    let a1 = (r1_m + rb_m) / 2.0; // first ellipse: r1 → rb
+    let a2 = (r2_m + rb_m) / 2.0; // second ellipse: rb → r2
+    let dv1 = (vis_viva_speed_mps(mu_m3_s2, r1_m, a1) - circular_speed_mps(mu_m3_s2, r1_m)).abs();
+    let dv_mid =
+        (vis_viva_speed_mps(mu_m3_s2, rb_m, a2) - vis_viva_speed_mps(mu_m3_s2, rb_m, a1)).abs();
+    let dv2 = (circular_speed_mps(mu_m3_s2, r2_m) - vis_viva_speed_mps(mu_m3_s2, r2_m, a2)).abs();
+    let time = std::f64::consts::PI * ((a1.powi(3) + a2.powi(3)) / mu_m3_s2).sqrt();
+    BiellipticSolution {
+        departure_dv_mps: dv1,
+        mid_dv_mps: dv_mid,
+        arrival_dv_mps: dv2,
+        transfer_time_s: time,
+    }
+}
+
+/// True when the target/current radius ratio is large enough that a tall
+/// bi-elliptic transfer can beat the Hohmann (verify per case with rb).
+pub fn bielliptic_potentially_favorable(r1_m: f64, r2_m: f64) -> bool {
+    let ratio = r1_m.max(r2_m) / r1_m.min(r2_m);
+    ratio > BIELLIPTIC_FAVORABLE_RATIO
+}
+
+/// Plane-change Δv for rotating the orbital plane by `inclination_change_rad`
+/// at constant speed `speed_mps`: `Δv = 2·v·sin(i/2)` (vector difference of
+/// two equal-speed velocities separated by i).
+pub fn plane_change_dv(speed_mps: f64, inclination_change_rad: f64) -> f64 {
+    2.0 * speed_mps * (inclination_change_rad / 2.0).sin()
+}
+
+/// Combined-maneuver identity: performing a tangential burn `dv1_mps` and a
+/// plane rotation whose pure cost would be `dv2_mps` **simultaneously** costs
+/// the vector sum
+/// `√(dv1² + dv2² − 2·dv1·dv2·cos(i))`,
+/// strictly less than burning sequentially whenever both are positive.
+/// `angle_between_rad` is the angle between the two Δv vectors (for a plane
+/// change paired with a prograde burn this is π − i; callers pass the angle
+/// they mean).
+pub fn combined_maneuver_dv(dv1_mps: f64, dv2_mps: f64, angle_between_rad: f64) -> f64 {
+    (dv1_mps * dv1_mps + dv2_mps * dv2_mps - 2.0 * dv1_mps * dv2_mps * angle_between_rad.cos())
+        .sqrt()
+}
+
+/// Which leg of the two-impulse transfer the autopilot is executing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransferBurnPhase {
+    /// Prograde burn until the orbit reaches the target radius as apoapsis
+    /// (or periapsis, when lowering).
+    #[default]
+    Departure,
+    /// Ballistic coast along the transfer ellipse to the arrival apsis.
+    Coast,
+    /// Circularization burn at the arrival apsis (hands off to
+    /// [`AutopilotMode::OrbitInsertion`] machinery once eccentricity is low).
+    Arrival,
+    /// Target reached: transfer complete.
+    Done,
+}
+
+/// Classify the current state into a [`TransferBurnPhase`] for a transfer
+/// between the current circular radius and `target_radius_m`. Pure function;
+/// the system maps phases onto throttle/attitude commands.
+pub fn transfer_burn_phase(
+    current_radius_m: f64,
+    target_radius_m: f64,
+    apoapsis_m: f64,
+    eccentricity: f64,
+) -> TransferBurnPhase {
+    if (current_radius_m - target_radius_m).abs() < 1.0 && eccentricity < 0.01 {
+        return TransferBurnPhase::Done;
+    }
+    let raising = target_radius_m > current_radius_m;
+    let apsis_at_target = if raising {
+        apoapsis_m >= target_radius_m * 0.999
+    } else {
+        apoapsis_m <= target_radius_m * 1.001 || (current_radius_m - target_radius_m).abs() < 1.0
+    };
+    if !apsis_at_target {
+        return TransferBurnPhase::Departure;
+    }
+    if eccentricity > 0.01 {
+        // On the transfer ellipse heading to (or sitting near) the apsis.
+        TransferBurnPhase::Coast
+    } else {
+        TransferBurnPhase::Arrival
+    }
+}
+
 /// Deorbit burn targeting: computes the retrograde delta-v, burn attitude
 /// (retrograde), and ignition time to achieve a target periapsis.
 pub fn deorbit_burn_targeting(
@@ -495,7 +666,9 @@ pub fn unpowered_descent_guidance(
 /// Advance the ascent mission phase from the current state:
 /// - Launch → Ascent once above `ascent_start_altitude_m`.
 /// - Ascent → Orbit once the speed reaches `circular_speed_mps` (within
-///   `orbit_speed_fraction`).
+///   `orbit_speed_fraction`) AND the vehicle is above the atmosphere
+///   ([`MIN_ORBIT_ALTITUDE_M`]) — raw speed alone misclassifies boosted
+///   trajectories near perigee, especially under large fixed steps.
 pub fn advance_ascent_phase(
     phase: RocketMissionState,
     altitude_m: f64,
@@ -508,12 +681,20 @@ pub fn advance_ascent_phase(
         RocketMissionState::Launch if altitude_m >= ascent_start_altitude_m => {
             RocketMissionState::Ascent
         }
-        RocketMissionState::Ascent if speed_mps >= circular_speed_mps * orbit_speed_fraction => {
+        RocketMissionState::Ascent
+            if speed_mps >= circular_speed_mps * orbit_speed_fraction
+                && altitude_m >= MIN_ORBIT_ALTITUDE_M =>
+        {
             RocketMissionState::Orbit
         }
         _ => phase,
     }
 }
+
+/// Lowest altitude (m) at which the ascent phase may declare orbit: above
+/// the sensible-atmosphere band, so "orbital" speed inside the atmosphere
+/// still counts as ascent.
+pub const MIN_ORBIT_ALTITUDE_M: f64 = 120_000.0;
 
 /// Advance the descent mission phase based on altitude, velocity, and propulsion state.
 pub fn advance_descent_phase(
@@ -1101,6 +1282,112 @@ mod tests {
         let dv = deorbit_burn_dv(orbit_r, target_peri, mu);
         assert!(dv > 0.0);
         assert!(dv < 200.0); // Reasonable deorbit burn
+    }
+
+    #[test]
+    fn hohmann_matches_reference_values() {
+        let mu = 3.986e14; // Earth
+        let leo = 6_678_000.0; // ~300 km altitude
+        let geo = 42_164_000.0;
+        let t = hohmann_transfer(leo, geo, mu);
+        // Classical LEO→GEO figures: Δv ≈ 2.43 + 1.47 km/s over ≈ 5.27 h.
+        assert!(
+            (t.departure_dv_mps - 2_430.0).abs() < 60.0,
+            "departure dv {}",
+            t.departure_dv_mps
+        );
+        assert!(
+            (t.arrival_dv_mps - 1_470.0).abs() < 60.0,
+            "arrival dv {}",
+            t.arrival_dv_mps
+        );
+        assert!(
+            (t.transfer_time_s - 18_930.0).abs() < 300.0,
+            "transfer time {}",
+            t.transfer_time_s
+        );
+
+        // Direction-symmetric: lowering costs the same impulses.
+        let back = hohmann_transfer(geo, leo, mu);
+        assert!((back.total_dv_mps() - t.total_dv_mps()).abs() < 1e-9);
+        assert!((back.transfer_time_s - t.transfer_time_s).abs() < 1e-6);
+
+        // Degenerate: same orbit → zero cost.
+        let none = hohmann_transfer(leo, leo, mu);
+        assert!(none.total_dv_mps() < 1e-9);
+    }
+
+    #[test]
+    fn bielliptic_ratio_boundary_and_budget() {
+        // Below the classical ratio the Hohmann wins (or ties) by rule.
+        assert!(!bielliptic_potentially_favorable(7_000_000.0, 80_000_000.0));
+        assert!(bielliptic_potentially_favorable(7_000_000.0, 90_000_000.0));
+
+        // A tall bi-elliptic for a >11.94 ratio must be a valid maneuver:
+        // positive finite impulses and a longer coast than the Hohmann.
+        let mu = 3.986e14;
+        let r1 = 7_000_000.0;
+        let r2 = 100_000_000.0;
+        let rb = 500_000_000.0;
+        let b = bielliptic_transfer(r1, r2, rb, mu);
+        assert!(b.departure_dv_mps > 0.0 && b.mid_dv_mps.is_finite());
+        assert!(b.arrival_dv_mps > 0.0 && b.arrival_dv_mps < 1_000.0);
+        let h = hohmann_transfer(r1, r2, mu);
+        assert!(
+            b.transfer_time_s > h.transfer_time_s * 5.0,
+            "bi-elliptic via {} m must take far longer",
+            rb
+        );
+    }
+
+    #[test]
+    fn plane_change_and_combined_identity() {
+        // Pure rotation: Δv = 2 v sin(i/2).
+        let speed = 7_600.0;
+        let i = 30.0_f64.to_radians();
+        let expected = 2.0 * speed * (i / 2.0).sin();
+        assert!((plane_change_dv(speed, i) - expected).abs() < 1e-9);
+        // Zero change costs nothing.
+        assert_eq!(plane_change_dv(speed, 0.0), 0.0);
+
+        // The combined-maneuver identity is the law of cosines: at a right
+        // angle it degenerates to the hypotenuse; with equal magnitudes and
+        // a nearly-opposed angle it stays below the sequential sum.
+        let (a, b) = (300.0_f64, 400.0_f64);
+        let right_angle = std::f64::consts::FRAC_PI_2;
+        assert!((combined_maneuver_dv(a, b, right_angle) - 500.0).abs() < 1e-9);
+
+        let v = 1_000.0_f64;
+        let almost_opposed = 170.0_f64.to_radians();
+        let combined = combined_maneuver_dv(v, v, almost_opposed);
+        assert!(
+            combined < 2.0 * v && combined > std::f64::consts::SQRT_2 * v * 0.99,
+            "combined {combined} outside the geometric expectation"
+        );
+        // Zero angle between identical vectors cancels completely.
+        assert_eq!(combined_maneuver_dv(v, v, 0.0), 0.0);
+    }
+
+    #[test]
+    fn transfer_phase_classification_walks_burn_coast_burn() {
+        let r_now = 7_000_000.0_f64;
+        let target = 10_000_000.0_f64;
+
+        // Still in the parking orbit: apoapsis not yet raised.
+        assert_eq!(
+            transfer_burn_phase(r_now, target, r_now + 50_000.0, 0.007),
+            TransferBurnPhase::Departure
+        );
+        // Apoapsis at the target but still elliptical: coasting.
+        assert_eq!(
+            transfer_burn_phase(r_now, target, target, 0.15),
+            TransferBurnPhase::Coast
+        );
+        // Circularized at the target: done.
+        assert_eq!(
+            transfer_burn_phase(target, target, target, 0.001),
+            TransferBurnPhase::Done
+        );
     }
 
     #[test]

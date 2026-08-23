@@ -12,7 +12,9 @@ use crate::domain::services::rocket_propulsion::{
     active_vehicle_mass_with_payload, stage_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::infrastructure::bevy_adapters::components::{PlanetAtmosphere, PlanetComponent};
+use crate::infrastructure::bevy_adapters::components::{
+    PlanetAtmosphere, PlanetComponent, Selectable,
+};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -753,5 +755,157 @@ pub fn handle_flight_recorder_input_system(
                 bevy::log::info!("Flight log cleared");
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Flight-recorder CSV export (Phase 15)
+// ---------------------------------------------------------------------------
+
+/// Directory receiving exported flight recordings, relative to the working
+/// directory. Created on demand.
+pub const FLIGHT_EXPORT_DIR: &str = "exports";
+
+/// One vehicle's recording serialized as CSV: a header row per recorded
+/// field plus a `#`-prefixed notable-events section. Pure function so the
+/// format is testable without touching the filesystem.
+pub fn flight_recorder_csv(name: &str, recorder: &FlightRecorder) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "vehicle,time_s,alt_agl_m,alt_msl_m,speed_mps,mach,q_pa,g_load,thrust_n,throttle,phase,stage,propellant_fraction,apoapsis_m,periapsis_m,blackout,drogue,main"
+    );
+    for e in recorder.entries() {
+        let _ = writeln!(
+            out,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{}",
+            name,
+            e.time_s,
+            e.altitude_agl_m,
+            e.altitude_msl_m,
+            e.velocity_total_mps,
+            e.mach_number,
+            e.dynamic_pressure_pa,
+            e.g_load,
+            e.total_thrust_n,
+            e.throttle,
+            format!("{:?}", e.mission_phase).as_str(),
+            e.active_stage,
+            e.propellant_fraction,
+            e.apoapsis_altitude_m,
+            e.periapsis_altitude_m,
+            e.plasma_blackout,
+            e.drogue_deployed,
+            e.main_deployed,
+        );
+    }
+    for ev in recorder.events() {
+        let _ = writeln!(out, "#event,{},{},{}", ev.time_s, name, ev.label);
+    }
+    out
+}
+
+/// Make a vehicle name safe for a filename component.
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// F11 dumps every vehicle's ring-buffer contents and notable events to
+/// `exports/flight_<stamp>_<vehicle>.csv`. IO problems are logged, never
+/// fatal (AGENTS.md section 38): the recording itself is untouched.
+pub fn handle_flight_recorder_export_system(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut rocket_query: Query<(Entity, &Selectable, &mut FlightRecorder)>,
+) {
+    if !keyboard.just_pressed(KeyCode::F11) {
+        return;
+    }
+
+    // Guard: an unwritable export directory disables the feature cleanly.
+    if let Err(e) = std::fs::create_dir_all(FLIGHT_EXPORT_DIR) {
+        bevy::log::warn!(
+            "Flight export disabled: cannot create {}: {e}",
+            FLIGHT_EXPORT_DIR
+        );
+        return;
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    for (entity, selectable, recorder) in rocket_query.iter_mut() {
+        let path = std::path::Path::new(FLIGHT_EXPORT_DIR).join(format!(
+            "flight_{stamp}_{}_{}.csv",
+            sanitize_filename(&selectable.name),
+            entity.index()
+        ));
+        let csv = flight_recorder_csv(&selectable.name, &recorder);
+        match std::fs::write(&path, csv) {
+            Ok(()) => bevy::log::info!(
+                "Flight recording exported: {} ({} entries, {} events)",
+                path.display(),
+                recorder.entries().len(),
+                recorder.events().len()
+            ),
+            Err(e) => bevy::log::warn!("Flight export failed ({}): {e}", path.display()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use crate::domain::entities::rocket::RocketMissionState;
+
+    /// A minimal recorder entry at t=0 and t=1 s.
+    fn sample_entry(time_s: f64) -> FlightLogEntry {
+        FlightLogEntry {
+            time_s,
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+            orientation: DQuat::IDENTITY,
+            angular_velocity_radps: DVec3::ZERO,
+            mass_kg: 1_000.0,
+            altitude_agl_m: 100.0 * time_s,
+            altitude_msl_m: 100.0 * time_s,
+            velocity_total_mps: 50.0,
+            mach_number: 0.15,
+            dynamic_pressure_pa: 700.0,
+            g_load: 1.2,
+            total_thrust_n: 20_000.0,
+            throttle: 0.8,
+            mission_phase: RocketMissionState::Ascent.into(),
+            active_stage: 0,
+            propellant_fraction: 0.5,
+            apoapsis_altitude_m: 200_000.0,
+            periapsis_altitude_m: -6_370_000.0,
+            convective_heat_flux_w_m2: 0.0,
+            plasma_blackout: false,
+            drogue_deployed: false,
+            main_deployed: false,
+        }
+    }
+
+    #[test]
+    fn csv_contains_header_rows_and_events() {
+        let mut recorder = FlightRecorder::new(16, 0.5);
+        recorder.record(sample_entry(0.0), 0.0);
+        recorder.record(sample_entry(1.0), 1.0);
+        recorder.note_event(0.75, "STAGE SEPARATED (-500 kg)".into());
+
+        let csv = flight_recorder_csv("Test Rocket", &recorder);
+        let lines: Vec<&str> = csv.lines().collect();
+
+        // Header + two entries + one event line.
+        assert_eq!(lines.len(), 4, "unexpected line count: {csv:?}");
+        assert!(lines[0].starts_with("vehicle,time_s"));
+        assert!(lines[1].starts_with("Test Rocket,0,"), "{}", lines[1]);
+        assert!(lines[2].starts_with("Test Rocket,1,"));
+        assert!(lines[3].starts_with("#event,0.75,Test Rocket,STAGE SEPARATED"));
     }
 }

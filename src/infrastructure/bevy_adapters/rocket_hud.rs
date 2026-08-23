@@ -1,6 +1,7 @@
 // Rocket HUD UI - encapsulated, type-driven design.
 
 use crate::components::rocket::*;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::RocketCameraMode;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::RocketEventFeed;
 use bevy::prelude::*;
@@ -430,6 +431,7 @@ impl FieldFormatters {
         camera_mode: &RocketCameraMode,
         flash_on: bool,
         event_feed: &RocketEventFeed,
+        time_acceleration: f64,
     ) -> (String, Color) {
         match field {
             HudField::AltitudeAgl => (
@@ -650,8 +652,8 @@ impl FieldFormatters {
                 };
                 (
                     format!(
-                        "T+: {:.1} s  CAM: {}",
-                        telemetry.time_since_liftoff_s, cam_name
+                        "T+: {:.1} s  CAM: {}  TIME ×{}",
+                        telemetry.time_since_liftoff_s, cam_name, time_acceleration
                     ),
                     Color::WHITE,
                 )
@@ -733,6 +735,7 @@ pub fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
     time: Res<Time>,
+    sim_time: Res<SimulationTime>,
     event_feed: Res<RocketEventFeed>,
     mut hud_query: Query<(&RocketHudMarker, &mut Text, &mut TextColor)>,
 ) {
@@ -745,6 +748,7 @@ pub fn update_rocket_hud_system(
             &camera_mode,
             flash_on,
             &event_feed,
+            sim_time.time_acceleration,
         );
         text.0 = formatted;
         text_color.0 = color;

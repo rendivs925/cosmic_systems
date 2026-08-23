@@ -118,6 +118,10 @@ pub struct RocketAutopilot {
     pub mode: crate::domain::services::guidance::AutopilotMode,
     pub time_since_liftoff_s: f64,
     pub target_landing_position_m: DVec3,
+    /// Target circular-orbit radius for [`crate::domain::services::guidance::
+    /// AutopilotMode::Transfer`] (planet-centered, meters). Zero disables the
+    /// mode (no configured target).
+    pub transfer_target_radius_m: f64,
 }
 
 /// Net force accumulator (world/planet-inertial frame), cleared each frame by integrate_6dof.
@@ -273,8 +277,10 @@ pub struct TerrainCollisionState {
     pub radar_altitude_m: f64,
     pub slope_deg: f64,
     pub ground_contact: crate::domain::services::terrain_collision::GroundContact,
-    /// True when the surface below is inferred to be water (Earth only;
-    /// no ocean mask exists — water ≈ terrain at mean sea level).
+    /// True when the surface below is water. Authority: the body's explicit
+    /// `has_ocean` config flag combined with terrain height at mean sea
+    /// level (LIMITATION, Phase 15: no coastline polygons — a coastal strip
+    /// within ±10 m of sea level reads as water anywhere on an ocean body).
     pub over_water: bool,
 }
 
