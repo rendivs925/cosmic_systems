@@ -15,7 +15,7 @@ use crate::domain::services::gravity::{
 };
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
-    gravity_turn_direction_combined, hover_slam_guidance, pitch_axis_from_reference,
+    gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
     powered_descent_guidance_convex, prograde_attitude, reentry_bank_angle,
     reentry_bank_angle_enhanced, suicide_burn_guidance, AutopilotMode, DescentGuidanceConfig,
 };
@@ -703,15 +703,20 @@ pub fn guidance_system(
         // Compute target attitude based on autopilot mode.
         match autopilot.mode {
             AutopilotMode::Ascent => {
-                // Use combined altitude/time pitch schedule for gravity turn.
-                commands.target_attitude =
-                    attitude_from_direction(gravity_turn_direction_combined(
-                        &autopilot.ascent_profile,
-                        up_dir,
-                        pitch_axis,
-                        altitude_m,
-                        autopilot.time_since_liftoff_s,
-                    ));
+                // Gated combined schedule: hold the local vertical until the
+                // vehicle clears the pad/tower (altitude AND vertical speed),
+                // then follow the altitude/time pitch ramp. Low-thrust
+                // vehicles must never start the turn while still near the
+                // ground just because the wall clock says so.
+                let vertical_speed_mps = velocity.dot(up_dir);
+                commands.target_attitude = attitude_from_direction(gravity_turn_direction_gated(
+                    &autopilot.ascent_profile,
+                    up_dir,
+                    pitch_axis,
+                    altitude_m,
+                    autopilot.time_since_liftoff_s,
+                    vertical_speed_mps,
+                ));
 
                 // Auto-transition to OrbitInsertion when near orbital speed.
                 if speed >= circular_speed * 0.95 && altitude_m > 150_000.0 {
@@ -984,10 +989,18 @@ pub fn control_system(
         };
 
         let gains = autopilot.gains;
+        // The dynamics model carries a diagonal body-frame inertia; pass its
+        // diagonal so the normalized gains produce vehicle-scaled torque.
+        let inertia_diag = DVec3::new(
+            rocket.dynamics.inertia_body.x_axis.x,
+            rocket.dynamics.inertia_body.y_axis.y,
+            rocket.dynamics.inertia_body.z_axis.z,
+        );
         let torque = control_torque_body(
             commands.target_attitude,
             rocket.dynamics.orientation,
             rocket.dynamics.angular_velocity_radps,
+            inertia_diag,
             &gains,
             &mut autopilot.integral,
             dt,
@@ -1739,6 +1752,306 @@ mod ground_contact_tests {
             *mission,
             RocketMissionState::Crashed,
             "liftoff must not be judged a crash"
+        );
+    }
+}
+
+/// Ascent-pipeline regression tests: the real Guidance → Control → Actuation
+/// → Gravity → Forces → Integrate → GroundContact chain driving a low-thrust
+/// (electron-class) vehicle off the pad. Pins two Phase 12 behaviors: the
+/// throttle slew must reach the commanded maximum shortly after launch (no
+/// hidden writer may cap it at the envelope floor), and the pitch-over must
+/// stay gated until the vehicle clears the tower.
+#[cfg(test)]
+mod ascent_pipeline_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::terrain_collision::radial_direction;
+    use bevy::math::{DQuat, DVec3};
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    const DT: f64 = 1.0 / 64.0;
+
+    /// Electron-class vehicle: nine 25.8 kN engines with a 0.6 throttle
+    /// floor (stage envelope [0.6, 1.0]), ~13 t gross.
+    fn electron_like() -> Rocket {
+        let engines = (0..9)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 9.0;
+                RocketEngine {
+                    position_m: bevy::math::Vec3::new(0.45 * angle.cos(), -8.0, 0.45 * angle.sin()),
+                    thrust_axis: bevy::math::Vec3::Y,
+                    isp_sea_level: 303.0,
+                    isp_vacuum: 311.0,
+                    gimbal_range_deg: 4.0,
+                    max_thrust_kn: 25.8,
+                    throttle_min: 0.6,
+                    throttle_max: 1.0,
+                    restartable: true,
+                    state: EngineState::Running,
+                }
+            })
+            .collect();
+        Rocket {
+            name: "Electron".into(),
+            diameter_m: 1.2,
+            height_m: 18.0,
+            stages: vec![
+                RocketStage {
+                    name: "S1".into(),
+                    dry_mass_kg: 950.0,
+                    propellant_mass_kg: 9_250.0,
+                    engines,
+                },
+                RocketStage {
+                    name: "S2".into(),
+                    dry_mass_kg: 250.0,
+                    propellant_mass_kg: 2_050.0,
+                    engines: vec![RocketEngine {
+                        position_m: bevy::math::Vec3::new(0.0, 6.0, 0.0),
+                        thrust_axis: bevy::math::Vec3::Y,
+                        isp_sea_level: 311.0,
+                        isp_vacuum: 343.0,
+                        gimbal_range_deg: 4.0,
+                        max_thrust_kn: 25.8,
+                        throttle_min: 0.6,
+                        throttle_max: 1.0,
+                        restartable: true,
+                        state: EngineState::Running,
+                    }],
+                },
+            ],
+        }
+    }
+
+    fn ascent_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<SplashdownDetectedEvent>();
+        app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )));
+
+        let planet =
+            crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
+                .expect("Earth exists");
+        app.world_mut().spawn((
+            PlanetComponent {
+                domain_planet: planet,
+                material: Handle::default(),
+                has_texture: false,
+                base_reflectance: 1.0,
+                base_roughness: 1.0,
+            },
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth"),
+        ));
+
+        let vehicle = electron_like();
+        let propellant = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let total_mass_kg = vehicle.total_mass_kg() as f64;
+        let (inertia, com) = crate::domain::services::rocket_dynamics::rocket_inertia_tensor(
+            1_250.0, 11_300.0, 0.6, 18.0,
+        );
+
+        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let h =
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
+                .source
+                .height_m(lat, lon);
+        let up = radial_direction(lat, lon);
+        let surface_radius = EARTH_RADIUS_M + h;
+
+        app.world_mut().spawn((
+            RocketPhysicsState {
+                dynamics: RocketDynamicsState::new(
+                    up * surface_radius,
+                    DVec3::ZERO,
+                    DQuat::from_rotation_arc(DVec3::Y, up),
+                    total_mass_kg,
+                    inertia,
+                    com,
+                ),
+            },
+            RocketGeometry {
+                radius_m: 0.6,
+                height_m: 18.0,
+            },
+            RocketMass(total_mass_kg),
+            RocketMissionState::PreLaunch,
+            RocketPropulsion {
+                vehicle,
+                active_stage: 0,
+                propellant_remaining_kg: propellant,
+                throttle: 0.0,
+                gimbal_pitch_rad: 0.0,
+                gimbal_yaw_rad: 0.0,
+                time_since_separation_s: 10.0,
+                ullage_settle_time_s: 2.0,
+                separations_count: 0,
+                attached_payload_kg: 50.0,
+            },
+            RocketCommands::default(),
+            RocketAutopilot::default(),
+            OrbitalElements::default(),
+            TerrainCollisionState::default(),
+            GroundRest { active: true },
+            RocketPlanetBinding {
+                planet_name: "Earth".to_string(),
+            },
+            GravityAcceleration { value: -up * 9.81 },
+            ForceAccumulator::default(),
+            TorqueAccumulator::default(),
+        ));
+
+        // Mirror the production force writers: non-gravity forces only —
+        // accumulate_forces owns the single gravity contribution.
+        fn write_flight_forces(
+            mut query: Query<(
+                &RocketPhysicsState,
+                &RocketPropulsion,
+                &mut ForceAccumulator,
+            )>,
+        ) {
+            for (rocket, propulsion, mut force) in query.iter_mut() {
+                if let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) {
+                    let (body_thrust, _) =
+                        stage_thrust_body(&stage.engines, propulsion.throttle, 0.0);
+                    force.0 += rocket.dynamics.orientation * body_thrust;
+                }
+            }
+        }
+
+        app.add_systems(
+            FixedUpdate,
+            (
+                guidance_system,
+                control_system,
+                actuation_system,
+                update_rocket_gravity,
+                write_flight_forces,
+                accumulate_forces,
+                integrate_6dof,
+                resolve_ground_contact,
+            )
+                .chain(),
+        );
+        app
+    }
+
+    #[test]
+    fn throttle_slew_reaches_full_command_shortly_after_launch() {
+        let mut app = ascent_app();
+
+        // Sweep tick-by-tick and find the first tick where the effective
+        // throttle reaches the commanded maximum (1.0). The slew limiter is
+        // 2.0/s, so from the 0.6 envelope floor this must complete well
+        // inside 1 s of the Launch transition.
+        let mut ticks_to_full = None;
+        for tick in 1..=64 {
+            app.update();
+            let world = app.world_mut();
+            let mut q = world.query::<&RocketPropulsion>();
+            let propulsion = q.single(world).unwrap();
+            if propulsion.throttle >= 0.999 {
+                ticks_to_full = Some(tick);
+                break;
+            }
+        }
+
+        let ticks = ticks_to_full.expect("throttle must reach full command");
+        assert!(
+            ticks <= 32,
+            "slew reached full throttle at tick {ticks} ({:.2} s), expected within 0.5 s",
+            ticks as f64 * DT
+        );
+
+        // Steady-state thrust must be the FULL 232 kN (nine engines at 100%),
+        // not the 139 kN envelope-floor value: nothing downstream may cap the
+        // command once the slew has caught up.
+        let world = app.world_mut();
+        let mut q = world.query::<(&RocketPropulsion, &GroundRest)>();
+        let (propulsion, _rest) = q.single(world).unwrap();
+        let Some(stage) = propulsion.vehicle.stages.first() else {
+            panic!("stage 1 missing");
+        };
+        let (thrust_body, _) = stage_thrust_body(&stage.engines, propulsion.throttle, 0.0);
+        assert!(
+            (thrust_body.length() - 232_200.0).abs() < 500.0,
+            "steady-state thrust {} N is not the expected ~232 kN",
+            thrust_body.length()
+        );
+    }
+
+    #[test]
+    fn ascent_holds_vertical_through_gate_then_pitches_over() {
+        let mut app = ascent_app();
+
+        // First 5 s of simulated flight: below the gate the whole way
+        // (altitude crosses 150 m around t≈5.5 s), so the guidance TARGET
+        // must stay exactly on the local vertical.
+        for _ in 0..320 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let mut q = world.query::<(&RocketCommands, &RocketPhysicsState)>();
+        let (commands, rocket) = q.single(world).unwrap();
+        let up = rocket.dynamics.position_m.normalize();
+        let body_y_world = commands.target_attitude * DVec3::Y;
+        assert!(
+            (body_y_world.dot(up) - 1.0).abs() < 1e-9,
+            "target attitude left vertical before the gate cleared: dot={}",
+            body_y_world.dot(up)
+        );
+
+        // Run well past the time-schedule start (t = 10 s): with the vehicle
+        // high and fast the gate is clear and the combined schedule must
+        // have produced a real pitch-over by t ≈ 20 s.
+        for _ in 0..960 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let mut q = world.query::<(
+            &RocketCommands,
+            &RocketPhysicsState,
+            &GroundRest,
+            &RocketPropulsion,
+            &RocketMissionState,
+            &TerrainCollisionState,
+            &RocketAutopilot,
+        )>();
+        let (commands, rocket, rest, propulsion, mission, collision, autopilot) =
+            q.single(world).unwrap();
+        assert!(!rest.active, "vehicle must have lifted off");
+        assert!(
+            (propulsion.throttle - 1.0).abs() < 1e-3,
+            "throttle must remain fully commanded in ascent: {}",
+            propulsion.throttle
+        );
+        let radius = rocket.dynamics.position_m.length();
+        let altitude = radius - EARTH_RADIUS_M;
+        let vertical_speed = rocket
+            .dynamics
+            .velocity_mps
+            .dot(rocket.dynamics.position_m / radius);
+        let up = rocket.dynamics.position_m.normalize();
+        let body_y_world = commands.target_attitude * DVec3::Y;
+        assert!(
+            body_y_world.dot(up) < 1.0 - 1e-4,
+            "gravity turn never engaged after the gate cleared: dot={} \
+             alt={altitude:.1} m, vs={vertical_speed:.1} m/s, t={:.2} s, \
+             mission={mission:?}, contact={:?}, radar={:.1} m",
+            body_y_world.dot(up),
+            autopilot.time_since_liftoff_s,
+            collision.ground_contact,
+            collision.radar_altitude_m,
         );
     }
 }

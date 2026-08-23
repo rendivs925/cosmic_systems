@@ -69,6 +69,14 @@ pub struct AscentGuidanceProfile {
     pub turn_end_time_s: f64,
     /// Target orbital inclination (radians) - determines launch azimuth.
     pub target_inclination_rad: f64,
+    /// Pitch-gate: minimum altitude (m) the vehicle must reach before any
+    /// pitch-over begins, so low-thrust vehicles clear the pad/tower first
+    /// regardless of what the time schedule says.
+    pub pitch_gate_min_altitude_m: f64,
+    /// Pitch-gate: minimum vertical speed (m/s) required before pitch-over
+    /// begins. Together with [`Self::pitch_gate_min_altitude_m`] this keeps
+    /// the ascent vertical until the vehicle is genuinely flying.
+    pub pitch_gate_min_vertical_speed_mps: f64,
 }
 
 impl Default for AscentGuidanceProfile {
@@ -81,6 +89,10 @@ impl Default for AscentGuidanceProfile {
             turn_start_time_s: 10.0,
             turn_end_time_s: 160.0,
             target_inclination_rad: 28.5_f64.to_radians(), // KSC latitude
+            // Tower-clearance gates: ~8 vehicle heights up and climbing
+            // decisively before the gravity turn may start.
+            pitch_gate_min_altitude_m: 150.0,
+            pitch_gate_min_vertical_speed_mps: 30.0,
         }
     }
 }
@@ -100,6 +112,8 @@ impl AscentGuidanceProfile {
             turn_start_time_s: 10.0,
             turn_end_time_s: 160.0,
             target_inclination_rad: 28.5_f64.to_radians(),
+            pitch_gate_min_altitude_m: 150.0,
+            pitch_gate_min_vertical_speed_mps: 30.0,
         }
     }
 
@@ -144,6 +158,32 @@ pub fn gravity_turn_pitch_angle_combined(
     altitude_angle.max(time_angle)
 }
 
+/// True when the vehicle has cleared the pad/tower enough for the gravity
+/// turn to begin: at or beyond the gate altitude AND vertical speed. Both
+/// conditions use inclusive thresholds so a gate exactly met engages the turn.
+pub fn ascent_pitch_gate_clear(
+    profile: &AscentGuidanceProfile,
+    altitude_m: f64,
+    vertical_speed_mps: f64,
+) -> bool {
+    altitude_m >= profile.pitch_gate_min_altitude_m
+        && vertical_speed_mps >= profile.pitch_gate_min_vertical_speed_mps
+}
+
+/// Pitch angle of the gated ascent schedule: strictly vertical until the
+/// tower-clearance gate passes, then the combined altitude/time schedule.
+pub fn gravity_turn_pitch_angle_gated(
+    profile: &AscentGuidanceProfile,
+    altitude_m: f64,
+    time_since_liftoff_s: f64,
+    vertical_speed_mps: f64,
+) -> f64 {
+    if !ascent_pitch_gate_clear(profile, altitude_m, vertical_speed_mps) {
+        return 0.0;
+    }
+    gravity_turn_pitch_angle_combined(profile, altitude_m, time_since_liftoff_s)
+}
+
 /// Desired body-axis direction for the gravity turn: the local vertical
 /// rotated about the pitch axis (horizontal, perpendicular to the ascent
 /// plane) by the turn angle at the current altitude.
@@ -166,6 +206,27 @@ pub fn gravity_turn_direction_combined(
     time_since_liftoff_s: f64,
 ) -> DVec3 {
     let angle = gravity_turn_pitch_angle_combined(profile, altitude_m, time_since_liftoff_s);
+    (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
+}
+
+/// Desired body-axis direction for the gated ascent schedule: local vertical
+/// until the tower-clearance gate passes (`altitude_m` and
+/// `vertical_speed_mps` at or beyond the profile's gate), then the combined
+/// altitude/time pitch schedule.
+pub fn gravity_turn_direction_gated(
+    profile: &AscentGuidanceProfile,
+    up_dir: DVec3,
+    pitch_axis: DVec3,
+    altitude_m: f64,
+    time_since_liftoff_s: f64,
+    vertical_speed_mps: f64,
+) -> DVec3 {
+    let angle = gravity_turn_pitch_angle_gated(
+        profile,
+        altitude_m,
+        time_since_liftoff_s,
+        vertical_speed_mps,
+    );
     (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
 }
 
@@ -892,6 +953,52 @@ mod tests {
         assert!((axis.length() - 1.0).abs() < 1e-12);
         assert!(axis.dot(up_dir()).abs() < 1e-12);
         assert!(pitch_axis_from_reference(DVec3::Z, DVec3::Z).is_none());
+    }
+
+    #[test]
+    fn gated_pitch_holds_vertical_until_gate_passes() {
+        let p = profile();
+        // Well past the time schedule start (10 s) but low and slow: the
+        // gate must keep the vehicle exactly vertical (electron tower-tip
+        // regression).
+        assert!((gravity_turn_pitch_angle_gated(&p, 65.0, 30.0, 13.0)).abs() < 1e-12);
+        assert!((gravity_turn_pitch_angle_gated(&p, 0.0, 60.0, 0.0)).abs() < 1e-12);
+        // High enough but still slow: altitude condition alone is not enough.
+        assert!((gravity_turn_pitch_angle_gated(&p, 500.0, 30.0, 10.0)).abs() < 1e-12);
+        // Fast but too low: vertical-speed condition alone is not enough.
+        assert!((gravity_turn_pitch_angle_gated(&p, 100.0, 30.0, 80.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gated_pitch_engages_combined_schedule_once_gate_clears() {
+        let p = profile();
+        let alt = 2_000.0;
+        let t = 20.0;
+        let vs = 100.0;
+        assert!(ascent_pitch_gate_clear(&p, alt, vs));
+        let gated = gravity_turn_pitch_angle_gated(&p, alt, t, vs);
+        let combined = gravity_turn_pitch_angle_combined(&p, alt, t);
+        assert!((gated - combined).abs() < 1e-12);
+
+        // Inclusive thresholds: a gate met exactly engages the turn.
+        assert!(ascent_pitch_gate_clear(
+            &p,
+            p.pitch_gate_min_altitude_m,
+            p.pitch_gate_min_vertical_speed_mps
+        ));
+    }
+
+    #[test]
+    fn gated_direction_matches_gated_pitch() {
+        let p = profile();
+        let axis = pitch_axis_from_reference(up_dir(), DVec3::Z).unwrap();
+        // Below the gate: direction is exactly the local vertical.
+        let dir = gravity_turn_direction_gated(&p, up_dir(), axis, 50.0, 30.0, 5.0);
+        assert!((dir - up_dir()).length() < 1e-9);
+        // Above the gate: tilted away from vertical by the schedule angle.
+        let angle = gravity_turn_pitch_angle_gated(&p, 40_000.0, 90.0, 300.0);
+        let dir = gravity_turn_direction_gated(&p, up_dir(), axis, 40_000.0, 90.0, 300.0);
+        assert!((dir.dot(up_dir()) - angle.cos()).abs() < 1e-9);
     }
 
     #[test]

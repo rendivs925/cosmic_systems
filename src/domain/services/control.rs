@@ -7,29 +7,44 @@
 //! commands (gimbal deflection, RCS).
 //!
 //! The controller works on the body-frame attitude error (rotation vector) and
-//! damps angular rate, producing a commanded torque `τ = kp·e + ki·∫e·dt − kd·ω`.
+//! damps angular rate. The gains are **normalized**: they express desired
+//! angular acceleration (rad/s² per rad of error, etc.), and the commanded
+//! torque is that acceleration times the body-frame inertia,
+//! `τ = I ∘ (kp·e + ki·∫e·dt − kd·ω)`. This keeps the loop gain
+//! vehicle-independent: the per-step damping factor is `kd·dt`, stable at any
+//! vehicle scale, whereas absolute-torque gains tuned on a heavy vehicle are
+//! numerically unstable (bang-bang against actuator clamps) on light ones.
 
 use bevy::math::{DQuat, DVec3};
 
 /// PID gains for the attitude controller, plus anti-windup and output clamps.
+/// Gains are normalized (acceleration-space); see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PidGains {
+    /// Proportional gain, rad/s² per rad of attitude error.
     pub kp: f64,
+    /// Integral gain, rad/s² per rad·s of accumulated error.
     pub ki: f64,
+    /// Derivative (rate damping) gain, 1/s. Stability of the discrete loop
+    /// requires `kd < 2/dt`; at the 64 Hz fixed step that means kd < 128.
     pub kd: f64,
-    /// Integral clamp magnitude (anti-windup), N·m·s.
+    /// Integral clamp magnitude (anti-windup), rad·s.
     pub integral_clamp: f64,
-    /// Output torque clamp magnitude, N·m.
+    /// Output torque clamp magnitude, N·m (applied after inertia weighting).
     pub output_clamp: f64,
 }
 
 impl Default for PidGains {
     fn default() -> Self {
         Self {
-            kp: 2.0e8,
-            ki: 5.0e6,
-            kd: 1.5e8,
-            integral_clamp: 1.0e8,
+            // Effective accelerations previously produced by the absolute
+            // gains on the Falcon-9-class reference vehicle (~2e8 N·m on
+            // ~1.9e7 kg·m² transverse inertia); kept so existing tuned
+            // behavior is preserved.
+            kp: 10.0,
+            ki: 0.25,
+            kd: 8.0,
+            integral_clamp: 5.0,
             output_clamp: 1.0e8,
         }
     }
@@ -83,20 +98,24 @@ pub fn clamp_torque(torque: DVec3, max_torque_nm: f64) -> DVec3 {
 }
 
 /// Compute the commanded body-frame torque from the attitude error, angular
-/// velocity, PID gains, and integral state. Returns the torque and the updated
+/// velocity, the body-frame inertia diagonal (the dynamics model is a
+/// diagonal tensor), PID gains, and integral state. The gains are normalized
+/// (acceleration-space), so the same values are stable for any vehicle mass:
+/// `τ = I ∘ (kp·e + ki·∫e·dt − kd·ω)`. Returns the torque and the updated
 /// integral (with anti-windup).
 pub fn control_torque_body(
     target: DQuat,
     current: DQuat,
     angular_velocity_body: DVec3,
+    inertia_diag: DVec3,
     gains: &PidGains,
     integral: &mut DVec3,
     dt: f64,
 ) -> DVec3 {
     let error = attitude_error_body(target, current);
     *integral = integral_with_anti_windup(*integral, error, dt, gains.integral_clamp);
-    let torque = gains.kp * error + gains.ki * *integral - gains.kd * angular_velocity_body;
-    clamp_torque(torque, gains.output_clamp)
+    let angular_accel = gains.kp * error + gains.ki * *integral - gains.kd * angular_velocity_body;
+    clamp_torque(inertia_diag * angular_accel, gains.output_clamp)
 }
 
 #[cfg(test)]
@@ -104,13 +123,18 @@ mod tests {
     use super::*;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 
+    /// Falcon-9-class reference vehicle.
+    const HEAVY_INERTIA: DVec3 = DVec3::splat(5.8e7);
+    /// Electron-class small launcher: ~1.3e5 transverse, ~2.3e3 roll.
+    const LIGHT_INERTIA: DVec3 = DVec3::new(1.34e5, 2.26e3, 1.34e5);
+
     fn state() -> RocketDynamicsState {
         RocketDynamicsState::new(
             DVec3::new(6_371_000.0, 0.0, 0.0),
             DVec3::ZERO,
             DQuat::IDENTITY,
             142_200.0,
-            bevy::math::DMat3::from_diagonal(DVec3::new(5.8e7, 5.8e7, 5.8e7)),
+            bevy::math::DMat3::from_diagonal(HEAVY_INERTIA),
             DVec3::ZERO,
         )
     }
@@ -145,6 +169,7 @@ mod tests {
                 target,
                 dyn_state.orientation,
                 dyn_state.angular_velocity_radps,
+                HEAVY_INERTIA,
                 &gains,
                 &mut integral,
                 dt,
@@ -172,6 +197,7 @@ mod tests {
                 target,
                 s.orientation,
                 s.angular_velocity_radps,
+                HEAVY_INERTIA,
                 &gains,
                 &mut i,
                 dt,
@@ -183,6 +209,49 @@ mod tests {
         assert!(
             peak < initial_error * 1.5,
             "overshoot too large: {peak} vs initial {initial_error}"
+        );
+    }
+
+    /// Regression (Phase 12 electron tower-tip): the same normalized gains
+    /// must hold a LIGHT vehicle stable at the 64 Hz fixed step. Absolute-
+    /// torque gains tuned on a heavy vehicle bang-banged the light vehicle's
+    /// roll axis against the actuator clamp and tumbled it.
+    #[test]
+    fn normalized_gains_stable_on_light_vehicle_at_64hz() {
+        let gains = PidGains::default();
+        let target = DQuat::from_rotation_z(10.0_f64.to_radians());
+        let mut orientation = DQuat::IDENTITY;
+        let mut angular_velocity = DVec3::ZERO;
+        let mut integral = DVec3::ZERO;
+        let dt = 1.0 / 64.0;
+
+        for _ in 0..640 {
+            let torque = control_torque_body(
+                target,
+                orientation,
+                angular_velocity,
+                LIGHT_INERTIA,
+                &gains,
+                &mut integral,
+                dt,
+            );
+            // Integrate with the light vehicle's diagonal inertia.
+            let alpha = DVec3::new(
+                torque.x / LIGHT_INERTIA.x,
+                torque.y / LIGHT_INERTIA.y,
+                torque.z / LIGHT_INERTIA.z,
+            );
+            angular_velocity += alpha * dt;
+            orientation =
+                (orientation * DQuat::from_scaled_axis(angular_velocity * dt)).normalize();
+        }
+
+        let error = attitude_error_angle(target, orientation);
+        assert!(error < 0.05, "light vehicle did not converge: {error} rad");
+        assert!(
+            angular_velocity.length() < 0.5,
+            "light vehicle rate not damped: {} rad/s",
+            angular_velocity.length()
         );
     }
 
