@@ -111,24 +111,21 @@ pub mod approximations {
 
     /// Fast square root using Newton's method
     pub fn sqrt_approx(x: f64) -> f64 {
-        if x < 0.0 {
-            return 0.0;
-        }
-        if x == 0.0 {
+        if x <= 0.0 {
             return 0.0;
         }
 
-        // Initial guess using floating point representation manipulation
-        let mut y = x;
-        let mut i = y.to_bits();
-        i = 0x5fe6eb50c7b537a9 - (i >> 1); // Magic constant for sqrt
-        y = f64::from_bits(i);
-
-        // Two Newton iterations for high accuracy
-        y = 0.5 * (y + x / y);
-        y = 0.5 * (y + x / y);
-
-        y
+        // Quake-style f64 inverse-sqrt seed, refined by three inverse-root
+        // Newton steps (r ← r·(3 − x·r²)/2), then one reciprocal step lands
+        // on √x = x·(1/√x). Relative error ≲ 1e-10 across the tested range.
+        let mut i = x.to_bits();
+        i = 0x5fe6eb50c7b537a9 - (i >> 1); // seed for 1/sqrt(x)
+        let mut r = f64::from_bits(i);
+        for _ in 0..3 {
+            let rx = r * x;
+            r *= 1.5 - 0.5 * rx * r;
+        }
+        x * r
     }
 }
 
@@ -450,6 +447,9 @@ mod tests {
         assert!((cos_0 - 1.0).abs() < 0.001);
 
         let sqrt_4 = sqrt_approx(4.0);
-        assert!((sqrt_4 - 2.0).abs() < 0.01);
+        assert!(
+            (sqrt_4 - 4.0f64.sqrt()).abs() < 1e-6,
+            "sqrt_approx(4) = {sqrt_4}"
+        );
     }
 }

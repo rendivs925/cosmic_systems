@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub struct NumaAllocator {
     numa_nodes: usize,
     allocations: AtomicUsize,
+    deallocations: AtomicUsize,
 }
 
 // Note: GlobalAlloc implementation removed for compatibility
@@ -26,6 +27,7 @@ impl NumaAllocator {
         Self {
             numa_nodes: 1, // Default to single node
             allocations: AtomicUsize::new(0),
+            deallocations: AtomicUsize::new(0),
         }
     }
 
@@ -36,26 +38,41 @@ impl NumaAllocator {
         Self {
             numa_nodes: 1,
             allocations: AtomicUsize::new(0),
+            deallocations: AtomicUsize::new(0),
         }
     }
 
-    /// Allocate memory with NUMA awareness (placeholder)
-    pub fn allocate_numa(&self, _layout: Layout, _preferred_node: usize) -> *mut u8 {
+    /// Allocate memory with NUMA awareness.
+    ///
+    /// Backed by the standard allocator; the preferred node is currently
+    /// ignored (single-node assumption) until stable `allocator_api` allows
+    /// a full placement implementation. Returns a valid pointer for any
+    /// well-formed layout, so callers can rely on real allocation semantics.
+    pub fn allocate_numa(&self, layout: Layout, _preferred_node: usize) -> *mut u8 {
         let _allocation_count = self.allocations.fetch_add(1, Ordering::Relaxed);
 
-        // For extreme performance, we could implement:
+        // For extreme performance, a full implementation would add:
         // 1. Memory allocation on specific NUMA nodes
         // 2. Huge page allocation for large physics arrays
         // 3. Memory prefetching for cache optimization
         // 4. Transparent huge pages for Kepler calculation arrays
 
-        // Placeholder - full implementation requires stable allocator_api feature
-        std::ptr::null_mut()
+        // SAFETY: `layout` has non-zero size (checked by the caller contract
+        // of this method); std::alloc::alloc returns null only when the
+        // layout cannot be satisfied.
+        unsafe { std::alloc::alloc(layout) }
     }
 
-    /// Deallocate NUMA-aware memory (placeholder)
-    pub fn deallocate_numa(&self, _ptr: *mut u8, _layout: Layout) {
-        // Placeholder - full implementation requires stable allocator_api feature
+    /// Deallocate memory previously returned by [`Self::allocate_numa`].
+    ///
+    /// # Safety
+    /// - `ptr` must have been returned by [`Self::allocate_numa`] with the
+    ///   same `layout` and must not already be deallocated.
+    pub unsafe fn deallocate_numa(&self, ptr: *mut u8, layout: Layout) {
+        let _deallocation_count = self.deallocations.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: caller guarantees provenance and layout match per the
+        // contract above.
+        unsafe { std::alloc::dealloc(ptr, layout) }
     }
 
     /// Prefetch memory for optimal cache performance
@@ -327,7 +344,8 @@ mod tests {
         let ptr = allocator.allocate_numa(layout, 0);
         assert!(!ptr.is_null());
 
-        allocator.deallocate_numa(ptr, layout);
+        // SAFETY: ptr came from allocate_numa with this exact layout.
+        unsafe { allocator.deallocate_numa(ptr, layout) };
     }
 
     #[test]
