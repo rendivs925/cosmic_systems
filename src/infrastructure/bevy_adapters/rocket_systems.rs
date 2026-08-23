@@ -2782,14 +2782,12 @@ mod ascent_pipeline_tests {
         );
     }
 
-    /// Phase 15 regression: with time acceleration at 100× (dt = 100/64 s),
-    /// the consumption/staging MACHINERY must stay stable — one clean
-    /// separation, drained first stage, conserved mass, finite dynamics.
-    /// A minimal burn rig drives the throttle directly so guidance policy
-    /// (which legitimately coasts into insertion under coarse steps) cannot
-    /// mask the machinery being tested.
-    #[test]
-    fn staging_and_consumption_stable_at_100x_acceleration() {
+    /// Shared minimal burn rig (Phase 15/17): electron-class vehicle in
+    /// vacuum, throttle forced fully open, only consumption/staging systems
+    /// running so guidance policy cannot mask machinery behavior. Each
+    /// `app.update()` executes exactly one fixed step of length
+    /// `DT * acceleration`.
+    fn burn_rig_app(acceleration: f64) -> App {
         use bevy::asset::{AssetApp, AssetPlugin};
 
         let mut app = App::new();
@@ -2798,7 +2796,7 @@ mod ascent_pipeline_tests {
         app.init_asset::<StandardMaterial>();
         app.add_message::<StageSeparatedEvent>();
         let mut sim_time = SimulationTime::new(DT);
-        sim_time.set_time_acceleration(100.0);
+        sim_time.set_time_acceleration(acceleration);
         app.insert_resource(sim_time);
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             DT,
@@ -2863,6 +2861,18 @@ mod ascent_pipeline_tests {
             )
                 .chain(),
         );
+        app
+    }
+
+    /// Phase 15 regression: with time acceleration at 100× (dt = 100/64 s),
+    /// the consumption/staging MACHINERY must stay stable — one clean
+    /// separation, drained first stage, conserved mass, finite dynamics.
+    /// A minimal burn rig drives the throttle directly so guidance policy
+    /// (which legitimately coasts into insertion under coarse steps) cannot
+    /// mask the machinery being tested.
+    #[test]
+    fn staging_and_consumption_stable_at_100x_acceleration() {
+        let mut app = burn_rig_app(100.0);
 
         // Stage 1 drains in ~119 s ≈ 76 big steps; run well past that.
         for _ in 0..200 {
@@ -2897,5 +2907,115 @@ mod ascent_pipeline_tests {
             "stage 2 must also have consumed propellant post-staging"
         );
         assert!(rocket.dynamics.mass_kg.is_finite() && rocket.dynamics.mass_kg > 0.0);
+    }
+
+    /// Phase 17 scenario `time_warp_burn`: the SAME burn executed at 1×, 10×
+    /// and 100× must produce identical staging decisions and consistent mass
+    /// bookkeeping at equal SIMULATED time. Consumption is linear in sim
+    /// seconds, so only the quantization of the staging boundary (up to one
+    /// coarse step, DT*100 ≈ 1.56 s of stage-2 flow) may differ.
+    #[test]
+    fn burn_rig_invariants_hold_across_time_warp_factors() {
+        for acceleration in [1.0, 10.0, 100.0] {
+            let mut app = burn_rig_app(acceleration);
+
+            // Same simulated duration for every factor: T = 140 s > the
+            // ~119 s first-stage drain. Each update advances exactly one
+            // fixed step of DT * acceleration.
+            let steps = ((140.0 / (DT * acceleration)).ceil()) as usize;
+            for _ in 0..steps {
+                app.update();
+            }
+
+            let world = app.world_mut();
+            let mut q = world.query::<(&RocketPhysicsState, &RocketPropulsion, &RocketMass)>();
+            let (rocket, propulsion, mass) = q.single(world).unwrap();
+
+            assert_eq!(
+                propulsion.separations_count, 1,
+                "staging decision must not depend on time-warp factor"
+            );
+            assert_eq!(propulsion.active_stage, 1);
+            assert_eq!(propulsion.propellant_remaining_kg[0], 0.0);
+            assert!(propulsion.propellant_remaining_kg[1] > 0.0);
+            let expected_mass = propulsion.vehicle.stages[1].dry_mass_kg as f64
+                + propulsion.propellant_remaining_kg[1] as f64
+                + propulsion.attached_payload_kg as f64;
+            assert!(
+                (mass.0 - expected_mass).abs() < 1.0,
+                "mass bookkeeping diverged at {acceleration}x: {} vs {expected_mass}",
+                mass.0
+            );
+            assert!(rocket.dynamics.mass_kg.is_finite());
+        }
+    }
+
+    /// Phase 17 determinism: two identical full-pipeline ascent runs (same
+    /// initial state, same step count) must produce bitwise-identical
+    /// authoritative state. The architecture supports this: f64 math, fixed
+    /// steps, single-vehicle iteration, chained systems — so exact equality
+    /// is required rather than a tolerance.
+    #[test]
+    fn identical_ascent_runs_are_bitwise_deterministic() {
+        let mut run_a = ascent_app();
+        let mut run_b = ascent_app();
+
+        // ~6.25 s of simulated flight: liftoff, throttle slew, gate region.
+        for _ in 0..400 {
+            run_a.update();
+            run_b.update();
+        }
+
+        let snapshot = |app: &mut App| {
+            let world = app.world_mut();
+            let mut q = world.query::<(
+                &RocketPhysicsState,
+                &RocketMass,
+                &RocketPropulsion,
+                &RocketMissionState,
+                &RocketCommands,
+                &GravityAcceleration,
+            )>();
+            let (rocket, mass, propulsion, mission, commands, gravity) = q.single(world).unwrap();
+            (
+                rocket.dynamics.position_m,
+                rocket.dynamics.velocity_mps,
+                rocket.dynamics.orientation,
+                rocket.dynamics.angular_velocity_radps,
+                rocket.dynamics.mass_kg,
+                mass.0,
+                propulsion.active_stage,
+                propulsion.throttle,
+                propulsion.separations_count,
+                propulsion.propellant_remaining_kg.clone(),
+                *mission,
+                commands.target_attitude,
+                gravity.value,
+            )
+        };
+
+        let a = snapshot(&mut run_a);
+        let b = snapshot(&mut run_b);
+
+        let bits = |q: &DQuat| [q.x.to_bits(), q.y.to_bits(), q.z.to_bits(), q.w.to_bits()];
+        let vec3 = |v: &DVec3| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()];
+
+        assert_eq!(vec3(&a.0), vec3(&b.0), "position diverged");
+        assert_eq!(vec3(&a.1), vec3(&b.1), "velocity diverged");
+        assert_eq!(bits(&a.2), bits(&b.2), "orientation diverged");
+        assert_eq!(vec3(&a.3), vec3(&b.3), "angular velocity diverged");
+        assert_eq!(a.4.to_bits(), b.4.to_bits(), "dynamics mass diverged");
+        assert_eq!(a.5.to_bits(), b.5.to_bits(), "component mass diverged");
+        assert_eq!(a.6, b.6, "active stage diverged");
+        assert_eq!(a.7.to_bits(), b.7.to_bits(), "throttle diverged");
+        assert_eq!(a.8, b.8, "separations count diverged");
+        assert_eq!(a.9, b.9, "propellant vector diverged");
+        assert_eq!(a.10, b.10, "mission state diverged");
+        assert_eq!(
+            bits(&a.11),
+            bits(&b.11),
+            "guidance target attitude diverged"
+        );
+        assert_eq!(vec3(&a.12), vec3(&b.12), "gravity diverged");
     }
 }
