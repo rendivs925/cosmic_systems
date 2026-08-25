@@ -218,41 +218,104 @@ fn build_rocket_mesh(
     let stage2_height = 12.0;
     let fairing_height = total_height - stage1_height - interstage_height - stage2_height;
 
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    );
+    // Build mesh manually with all required attributes to avoid merge issues
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
 
-    // Helper to add a cylinder section
-    let add_cylinder = |mesh: &mut Mesh, base_y: f32, height: f32, radius: f32| {
-        let cylinder = Cylinder::new(radius, height);
-        let mut cyl_mesh = Mesh::from(cylinder).translated_by(Vec3::new(0.0, base_y + height / 2.0, 0.0));
-        mesh.merge(&cyl_mesh);
+    // Helper: add a cylinder section at base_y with given height and radius
+    let mut add_cylinder = |base_y: f32, height: f32, radius: f32,
+                            positions: &mut Vec<[f32; 3]>,
+                            normals: &mut Vec<[f32; 3]>,
+                            uvs: &mut Vec<[f32; 2]>,
+                            indices: &mut Vec<u32>,
+                            index_offset: &mut u32| {
+        let rings = 16;
+        let segments = 32;
+        for ring in 0..=rings {
+            let y = base_y + height * (ring as f32 / rings as f32);
+            let v = ring as f32 / rings as f32;
+            for seg in 0..segments {
+                let angle = seg as f32 * std::f32::consts::TAU / segments as f32;
+                let x = radius * angle.cos();
+                let z = radius * angle.sin();
+                positions.push([x, y, z]);
+                let nr = (x * x + z * z).sqrt();
+                normals.push([x / nr, 0.0, z / nr]);
+                uvs.push([seg as f32 / segments as f32, v]);
+            }
+        }
+        for ring in 0..rings {
+            for seg in 0..segments {
+                let next_seg = (seg + 1) % segments;
+                let a = *index_offset + ring * segments + seg;
+                let b = *index_offset + ring * segments + next_seg;
+                let c = *index_offset + (ring + 1) * segments + seg;
+                let d = *index_offset + (ring + 1) * segments + next_seg;
+                indices.extend_from_slice(&[a, c, b, b, c, d]);
+            }
+        }
+        *index_offset += (rings + 1) * segments;
     };
 
-    // Helper to add a cone (nose)
-    let add_cone = |mesh: &mut Mesh, base_y: f32, height: f32, radius: f32| {
-        let cone = Cone::new(radius, height);
-        let mut cone_mesh = Mesh::from(cone).translated_by(Vec3::new(0.0, base_y + height, 0.0));
-        mesh.merge(&cone_mesh);
+    // Helper: add a cone at (center_x, center_z) with base at base_y, apex at base_y + height
+    let mut add_cone = |center_x: f32, center_z: f32, base_y: f32, height: f32, radius: f32,
+                        positions: &mut Vec<[f32; 3]>,
+                        normals: &mut Vec<[f32; 3]>,
+                        uvs: &mut Vec<[f32; 2]>,
+                        indices: &mut Vec<u32>,
+                        index_offset: &mut u32| {
+        let segments = 32;
+        // Apex
+        positions.push([center_x, base_y + height, center_z]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([0.5, 1.0]);
+        let apex_idx = *index_offset;
+        *index_offset += 1;
+        // Base ring
+        for seg in 0..segments {
+            let angle = seg as f32 * std::f32::consts::TAU / segments as f32;
+            let x = center_x + radius * angle.cos();
+            let z = center_z + radius * angle.sin();
+            let nx = angle.cos();
+            let nz = angle.sin();
+            positions.push([x, base_y, z]);
+            let normal_len = (nx * nx + nz * nz + 0.25).sqrt();
+            normals.push([nx / normal_len, -0.5 / normal_len, nz / normal_len]);
+            uvs.push([seg as f32 / segments as f32, 0.0]);
+        }
+        for seg in 0..segments {
+            let next_seg = (seg + 1) % segments;
+            let a = apex_idx;
+            let b = *index_offset + seg;
+            let c = *index_offset + next_seg;
+            indices.extend_from_slice(&[a, b, c]);
+        }
+        *index_offset += segments;
     };
+
+    let mut idx_offset = 0u32;
 
     // Stage 1 (white)
-    add_cylinder(&mut mesh, 0.0, stage1_height, hull_radius);
+    add_cylinder(0.0, stage1_height, hull_radius,
+        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
 
     // Interstage (dark band)
-    add_cylinder(&mut mesh, stage1_height, interstage_height, hull_radius);
+    add_cylinder(stage1_height, interstage_height, hull_radius,
+        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
 
     // Stage 2 (white)
-    add_cylinder(&mut mesh, stage1_height + interstage_height, stage2_height, hull_radius);
+    add_cylinder(stage1_height + interstage_height, stage2_height, hull_radius,
+        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
 
     // Fairing / nose cone
-    add_cone(&mut mesh, stage1_height + interstage_height + stage2_height, fairing_height, hull_radius);
+    add_cone(0.0, 0.0, stage1_height + interstage_height + stage2_height, fairing_height, hull_radius,
+        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
 
     // Engine bells at the base (9 Merlin 1D engines on octaweb ring, radius 1.2m)
-    // Engine positions in body frame (center at 0): y=-32m → visual frame y=3m
     let engine_y = 3.0;
-    let engine_radius = 0.65; // approximate Merlin 1D nozzle exit radius
+    let engine_radius = 0.65;
     let engine_height = 2.0;
     let engine_ring_radius = 1.2;
 
@@ -260,21 +323,26 @@ fn build_rocket_mesh(
         let angle = i as f32 * std::f32::consts::TAU / rocket.stages[0].engines.len() as f32;
         let x = engine_ring_radius * angle.cos();
         let z = engine_ring_radius * angle.sin();
-        let cone = Cone::new(engine_radius, engine_height);
-        let mut engine_mesh = Mesh::from(cone)
-            .translated_by(Vec3::new(x, engine_y - engine_height / 2.0, z));
-        mesh.merge(&engine_mesh);
+        // Cone base at engine_y - engine_height, apex at engine_y
+        add_cone(x, z, engine_y - engine_height, engine_height, engine_radius,
+            &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
     }
 
     // Stage 2 engine (Merlin Vacuum) at y=12m body frame → y=47m visual
-    // Only one engine at center
     let stage2_engine_y = 47.0;
     let stage2_engine_radius = 0.8;
     let stage2_engine_height = 2.5;
-    let cone = Cone::new(stage2_engine_radius, stage2_engine_height);
-    let mut s2_engine_mesh = Mesh::from(cone)
-        .translated_by(Vec3::new(0.0, stage2_engine_y - stage2_engine_height / 2.0, 0.0));
-    mesh.merge(&s2_engine_mesh);
+    add_cone(0.0, 0.0, stage2_engine_y - stage2_engine_height, stage2_engine_height, stage2_engine_radius,
+        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
 
     meshes.add(mesh)
 }
