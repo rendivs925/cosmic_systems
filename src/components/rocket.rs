@@ -536,8 +536,10 @@ pub struct RocketCameraConfig {
 impl Default for RocketCameraConfig {
     fn default() -> Self {
         Self {
-            chase_distance: 100.0,
-            chase_height: 20.0,
+            // For 70m tall rocket: distance ~3x height, height ~0.7x height
+            // so the whole rocket from engines to nose is framed.
+            chase_distance: 220.0,
+            chase_height: 50.0,
             chase_pitch: -0.3,
             cockpit_offset: Vec3::new(0.0, 5.0, 0.0),
             orbital_distance: 500.0,

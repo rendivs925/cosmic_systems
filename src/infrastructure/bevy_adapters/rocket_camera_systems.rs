@@ -195,12 +195,16 @@ fn compute_chase_camera(
         -forward * config.chase_distance + up * config.chase_height
     };
     let target_pos = rocket_pos + offset;
+    // Look at the rocket's center (half height up) so the entire vehicle is
+    // framed, including engines at the base and nose at the top. The rocket
+    // geometry is 70m tall; center is at ~35m in the flight frame.
+    let rocket_center = rocket_pos + up * 35.0;
     // Frame the rocket upright against the terrain: `looking_at` keeps the
     // camera's up on the radial direction so the ground sits at the bottom of
     // the view. `from_rotation_arc` (previously used) rolls the view
     // arbitrarily, which put the terrain on the left/right of the screen.
     let target_rot = Transform::from_translation(target_pos)
-        .looking_at(rocket_pos, up)
+        .looking_at(rocket_center, up)
         .rotation;
     (target_pos, target_rot)
 }
@@ -311,9 +315,9 @@ pub fn update_rocket_camera_projection(
                     (0.1, (height_above_surface + 5000.0) as f32)
                 }
                 RocketCameraMode::Chase => {
-                    // Launch-pad view: far plane large enough to show surrounding
-                    // terrain and the horizon (rocket camera is ~100 m from pad).
-                    (0.5, 5_000.0)
+                    // Launch-pad view: far plane large enough to show Earth curvature
+                    // and horizon. From 100m altitude, horizon is ~36km away.
+                    (0.5, 100_000.0)
                 }
                 RocketCameraMode::Orbital => {
                     // Far for orbital view

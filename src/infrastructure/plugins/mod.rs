@@ -457,7 +457,9 @@ impl Plugin for RocketModePlugin {
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
                 setup_rocket_sun_light,
-                // TEMP: disabled to test sphere occlusion.
+                // Earth sphere disabled: 6371km radius sphere doesn't work in
+                // flight frame where camera is at rocket position (origin).
+                // Terrain patches provide the local spherical terrain.
                 // setup_rocket_earth_sphere,
                 setup_rocket_sky_color,
             )

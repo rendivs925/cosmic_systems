@@ -1244,12 +1244,11 @@ pub fn resolve_ground_contact(
         collision.radar_altitude_m = signed_altitude_m.max(0.0);
         collision.slope_deg = sample.slope_deg;
 
-        // Water inference (Phase 15): driven solely by the body's explicit
-        // `has_ocean` config flag — no body-name guessing. Heights within the
-        // sea-level band are water on ocean bodies; coastline polygons do
-        // not exist yet (documented limitation).
+        // Water inference: water is strictly below sea level (negative height).
+        // The 10m sea-level tolerance was incorrectly classifying coastal land
+        // (like KSC at ~2m) as water. Only negative heights are water.
         collision.over_water =
-            planet.domain_planet.has_ocean && sample.height_m.abs() <= SEA_LEVEL_TOLERANCE_M;
+            planet.domain_planet.has_ocean && sample.height_m < 0.0;
 
         let normal = if sample.normal.length_squared() > 1e-12 {
             sample.normal
@@ -2123,8 +2122,9 @@ pub fn setup_rocket_camera_and_origin(
     // At spawn, rocket body +Y aligns with radial up. The chase camera
     // detects this vertical alignment and uses a side offset (right vector)
     // instead of a rear offset. We replicate that logic here.
-    let chase_distance = 100.0; // meters
-    let chase_height = 20.0; // meters
+    // Use RocketCameraConfig defaults for consistency.
+    let chase_distance = 220.0; // meters
+    let chase_height = 50.0; // meters
 
     // Up direction (radial from planet center to rocket)
     let up_dir = rocket_pos_m.normalize().as_vec3();
@@ -2139,9 +2139,11 @@ pub fn setup_rocket_camera_and_origin(
     // For vertical rocket, chase camera uses side offset (right) + up
     let camera_pos_flight = right_dir * chase_distance + up_dir * chase_height;
 
-    // Camera looks at rocket (at origin in flight frame)
+    // Camera looks at rocket center (half height up in flight frame).
+    // The Falcon 9 is 70m tall; center is at ~35m in the flight frame.
+    let rocket_center = Vec3::new(0.0, 35.0, 0.0);
     let camera_transform =
-        Transform::from_translation(camera_pos_flight).looking_at(Vec3::ZERO, up_dir);
+        Transform::from_translation(camera_pos_flight).looking_at(rocket_center, up_dir);
 
     // Update camera and projection. Far plane kept small enough to exclude the
     // solar-system's giant spheres (the Sun shell at ~22,835 units sits just

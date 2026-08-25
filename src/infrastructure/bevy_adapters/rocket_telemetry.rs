@@ -103,10 +103,33 @@ impl<'a> TelemetryContext<'a> {
         let pitch_rate = ang_vel.x.to_degrees();
         let yaw_rate = ang_vel.z.to_degrees();
 
+        // Bank angle: roll relative to the local horizontal frame (north-up-east).
+        // In the local frame: up = radial, north = perpendicular to up and velocity,
+        // east = up × north. Bank is the angle of body X axis projected onto
+        // the horizontal plane, relative to north.
         let body_x = self.orientation * DVec3::X;
         let body_x_horizontal = body_x - body_x.dot(up_dir) * up_dir;
-        let bank = if body_x_horizontal.length_squared() > 1e-6 {
-            body_x_horizontal.angle_between(DVec3::Z).to_degrees()
+        // Compute local north: perpendicular to up and velocity (or arbitrary if speed ~0).
+        let north = if body_velocity.length_squared() > 1e-6 {
+            up_dir.cross(body_velocity).normalize_or_zero()
+        } else {
+            // At rest on pad, use an arbitrary but consistent north (perpendicular to up).
+            if up_dir.z.abs() < 0.9 {
+                up_dir.cross(DVec3::Z).normalize_or_zero()
+            } else {
+                up_dir.cross(DVec3::X).normalize_or_zero()
+            }
+        };
+        let bank = if body_x_horizontal.length_squared() > 1e-6 && north.length_squared() > 1e-6 {
+            // Angle between body X horizontal and local north, signed by east component.
+            let angle = body_x_horizontal.angle_between(north).to_degrees();
+            // Sign: positive = right wing down (body X east of north).
+            let east = up_dir.cross(north);
+            if body_x_horizontal.dot(east) < 0.0 {
+                -angle
+            } else {
+                angle
+            }
         } else {
             0.0
         };

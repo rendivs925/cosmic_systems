@@ -8,8 +8,10 @@ use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 use crate::infrastructure::bevy_adapters::components::Selectable;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
+use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use bevy_mesh::{Indices, PrimitiveTopology};
 
 /// Flight-recorder ring capacity (entries).
 const RECORDER_MAX_ENTRIES: usize = 2_048;
@@ -33,11 +35,8 @@ pub fn spawn_rockets(
     // jettison; one authority shared by consumption/staging/jettison.
     let attached_payload_kg = vehicle.fairing_dry_mass_kg.unwrap_or(0.0);
 
-    // Render mesh from the vehicle's own dimensions (presentation only).
-    let mesh_handle = meshes.add(Mesh::from(Cylinder::new(
-        rocket.diameter_m / 2.0,
-        rocket.height_m,
-    )));
+    // Create a proper multi-part rocket mesh from the vehicle configuration.
+    let mesh_handle = build_rocket_mesh(meshes, &rocket);
 
     // Create rocket material: white painted hull, lit by the sun so the body
     // shades correctly (cylinder silhouette reads as a rocket, not a ghost).
@@ -199,6 +198,87 @@ pub fn spawn_rockets(
     }
 }
 
+/// Build a proper multi-part rocket mesh from the vehicle configuration.
+/// The visual frame has y=0 at the base (pad), y=height at the nose.
+fn build_rocket_mesh(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    rocket: &crate::domain::entities::rocket::Rocket,
+) -> Handle<Mesh> {
+
+    let hull_radius = rocket.diameter_m / 2.0;
+    let total_height = rocket.height_m;
+
+    // Falcon 9 proportions (approximate from config):
+    // Stage 1: ~47m (engines at y=3m, top at y~50m)
+    // Interstage: ~3m (y=50-53m)
+    // Stage 2: ~12m (y=53-65m)
+    // Fairing/nose: ~5m (y=65-70m)
+    let stage1_height = 47.0;
+    let interstage_height = 3.0;
+    let stage2_height = 12.0;
+    let fairing_height = total_height - stage1_height - interstage_height - stage2_height;
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    // Helper to add a cylinder section
+    let add_cylinder = |mesh: &mut Mesh, base_y: f32, height: f32, radius: f32| {
+        let cylinder = Cylinder::new(radius, height);
+        let mut cyl_mesh = Mesh::from(cylinder).translated_by(Vec3::new(0.0, base_y + height / 2.0, 0.0));
+        mesh.merge(&cyl_mesh);
+    };
+
+    // Helper to add a cone (nose)
+    let add_cone = |mesh: &mut Mesh, base_y: f32, height: f32, radius: f32| {
+        let cone = Cone::new(radius, height);
+        let mut cone_mesh = Mesh::from(cone).translated_by(Vec3::new(0.0, base_y + height, 0.0));
+        mesh.merge(&cone_mesh);
+    };
+
+    // Stage 1 (white)
+    add_cylinder(&mut mesh, 0.0, stage1_height, hull_radius);
+
+    // Interstage (dark band)
+    add_cylinder(&mut mesh, stage1_height, interstage_height, hull_radius);
+
+    // Stage 2 (white)
+    add_cylinder(&mut mesh, stage1_height + interstage_height, stage2_height, hull_radius);
+
+    // Fairing / nose cone
+    add_cone(&mut mesh, stage1_height + interstage_height + stage2_height, fairing_height, hull_radius);
+
+    // Engine bells at the base (9 Merlin 1D engines on octaweb ring, radius 1.2m)
+    // Engine positions in body frame (center at 0): y=-32m → visual frame y=3m
+    let engine_y = 3.0;
+    let engine_radius = 0.65; // approximate Merlin 1D nozzle exit radius
+    let engine_height = 2.0;
+    let engine_ring_radius = 1.2;
+
+    for i in 0..rocket.stages[0].engines.len() {
+        let angle = i as f32 * std::f32::consts::TAU / rocket.stages[0].engines.len() as f32;
+        let x = engine_ring_radius * angle.cos();
+        let z = engine_ring_radius * angle.sin();
+        let cone = Cone::new(engine_radius, engine_height);
+        let mut engine_mesh = Mesh::from(cone)
+            .translated_by(Vec3::new(x, engine_y - engine_height / 2.0, z));
+        mesh.merge(&engine_mesh);
+    }
+
+    // Stage 2 engine (Merlin Vacuum) at y=12m body frame → y=47m visual
+    // Only one engine at center
+    let stage2_engine_y = 47.0;
+    let stage2_engine_radius = 0.8;
+    let stage2_engine_height = 2.5;
+    let cone = Cone::new(stage2_engine_radius, stage2_engine_height);
+    let mut s2_engine_mesh = Mesh::from(cone)
+        .translated_by(Vec3::new(0.0, stage2_engine_y - stage2_engine_height / 2.0, 0.0));
+    mesh.merge(&s2_engine_mesh);
+
+    meshes.add(mesh)
+}
+
 /// Spawn one visual strut per configured landing leg as a child of the
 /// rocket, angled from the lower hull out to the foot radius. The pose is
 /// static (always shown deployed); collision/physics never read these
@@ -215,9 +295,10 @@ fn spawn_landing_leg_meshes(
     let count = spec.count.max(1);
     let stroke_m = spec.stroke_m as f32;
     let base_radius_m = spec.base_radius_m as f32;
-    let bottom_y = -height_m / 2.0;
-    let root_y = bottom_y + stroke_m * 0.25;
-    let foot_y = bottom_y - stroke_m * 0.6;
+    // Rocket mesh is offset so base is at y=0, top at y=height_m.
+    // Legs attach at the base (y=0) and extend downward.
+    let root_y = stroke_m * 0.25;
+    let foot_y = -stroke_m * 0.6;
 
     for i in 0..count {
         let azimuth = i as f32 * std::f32::consts::TAU / count as f32;
