@@ -231,7 +231,12 @@ pub fn build_patch_geometry(
             let left = DVec3::from_array(grid[j * res + i.saturating_sub(1)]);
             let up = DVec3::from_array(grid[((j + 1).min(res - 1)) * res + i]);
             let down = DVec3::from_array(grid[(j.saturating_sub(1)) * res + i]);
+            // (right - left) ~ du, (up - down) ~ dv. Their cross may point
+            // inward or outward depending on the cube face's UV handedness.
+            // Force the normal to point away from the planet center so the
+            // ground receives light correctly on every face.
             let n = (right - left).cross(up - down).normalize_or_zero();
+            let n = if n.dot(p) < 0.0 { -n } else { n };
             normals[idx] = n.to_array();
         }
     }
@@ -256,6 +261,14 @@ pub fn build_patch_geometry(
     }
 
     // Grid triangles (the original res×res vertices are indices 0..res*res).
+    // The UV axes are right-handed about the outward normal on some cube faces
+    // (NegX, PosY, NegZ) and left-handed on the others (PosX, NegY, PosZ).
+    // Emit indices so the front face always points outward (CCW viewed from outside).
+    let reversed = matches!(
+        patch.face,
+        CubeFace::PosX | CubeFace::NegY | CubeFace::PosZ
+    );
+
     let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6 + res * 4 * 6);
     for j in 0..res - 1 {
         for i in 0..res - 1 {
@@ -263,13 +276,23 @@ pub fn build_patch_geometry(
             let tr = (j * res + i + 1) as u32;
             let bl = ((j + 1) * res + i) as u32;
             let br = ((j + 1) * res + i + 1) as u32;
-            indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
+            if reversed {
+                // Flip the winding so front faces outward on left-handed faces.
+                indices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
+            } else {
+                indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
+            }
         }
     }
 
     // Skirt quads: one quad per boundary segment (grid vertex → skirt vertex).
+    // Same winding rule: flip on reversed faces so the skirts face outward.
     let push_quad = |indices: &mut Vec<u32>, a: u32, b: u32, c: u32, d: u32| {
-        indices.extend_from_slice(&[a, b, c, c, b, d]);
+        if reversed {
+            indices.extend_from_slice(&[a, c, b, c, d, b]);
+        } else {
+            indices.extend_from_slice(&[a, b, c, c, b, d]);
+        }
     };
     let skirt = |i: usize| skirt_index[i].expect("boundary vertex must have a skirt");
     // Bottom edge (j = 0), left→right.

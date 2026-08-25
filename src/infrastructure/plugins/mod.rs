@@ -44,7 +44,6 @@ use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_rocket_camera_input, update_rocket_camera, update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
-use crate::infrastructure::bevy_adapters::rocket_diagnose::diagnose_rocket_scene;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
@@ -478,8 +477,5 @@ impl Plugin for RocketModePlugin {
 
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);
-
-        // TEMPORARY diagnostics (remove before finishing).
-        app.add_systems(Update, diagnose_rocket_scene);
     }
 }

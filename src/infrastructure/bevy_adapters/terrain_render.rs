@@ -262,19 +262,22 @@ fn patch_material(
 /// Biome properties from height (placeholder - will be enhanced with actual biome system).
 fn biome_properties(height_m: f64) -> ((f32, f32, f32), f32, f32) {
     if height_m > 3000.0 {
-        // High mountains: rocky, rough.
-        ((0.4, 0.35, 0.3), 0.9, 0.0)
+        // High mountains: rocky grey.
+        ((0.45, 0.42, 0.4), 0.9, 0.0)
     } else if height_m > 1000.0 {
-        // Mountains/hills.
-        ((0.45, 0.4, 0.35), 0.85, 0.0)
+        // Mountains/hills: dark green slopes.
+        ((0.28, 0.38, 0.22), 0.85, 0.0)
     } else if height_m > 100.0 {
-        // Lowlands: grass/dirt.
-        ((0.35, 0.4, 0.25), 0.8, 0.0)
-    } else if height_m > -100.0 {
-        // Near sea level: sand/coastal.
-        ((0.5, 0.45, 0.3), 0.7, 0.0)
+        // Lowlands: grass.
+        ((0.3, 0.45, 0.2), 0.8, 0.0)
+    } else if height_m > 2.0 {
+        // Plains / launch-site elevation: grassland green.
+        ((0.32, 0.5, 0.22), 0.8, 0.0)
+    } else if height_m > -2.0 {
+        // Shoreline band: sand.
+        ((0.76, 0.7, 0.5), 0.7, 0.0)
     } else {
-        // Ocean: water.
-        ((0.1, 0.2, 0.4), 0.1, 0.0)
+        // Ocean: blue water.
+        ((0.1, 0.25, 0.45), 0.15, 0.0)
     }
 }

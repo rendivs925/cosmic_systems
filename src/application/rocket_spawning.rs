@@ -39,12 +39,14 @@ pub fn spawn_rockets(
         rocket.height_m,
     )));
 
-    // Create rocket material
+    // Create rocket material: white painted hull, lit by the sun so the body
+    // shades correctly (cylinder silhouette reads as a rocket, not a ghost).
+    // Slightly lower base value + higher roughness to prevent blowout under
+    // 100 klx sun + sky ambient.
     let material = StandardMaterial {
-        base_color: Color::srgb(0.8, 0.8, 0.8),
-        metallic: 0.9,
-        perceptual_roughness: 0.2,
-        unlit: true,
+        base_color: Color::srgb(0.78, 0.78, 0.8),
+        metallic: 0.05,
+        perceptual_roughness: 0.6,
         ..default()
     };
     let material_handle = materials.add(material);

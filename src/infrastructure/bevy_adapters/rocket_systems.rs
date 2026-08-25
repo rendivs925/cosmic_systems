@@ -1159,6 +1159,15 @@ pub fn deploy_landing_legs(
     )>,
 ) {
     for (collision, rocket, mut legs) in rocket_query.iter_mut() {
+        // Never deploy while resting on the surface: the pad vehicle is
+        // carried by the resting-contact constraint (the launch mount), not
+        // the landing struts — a real vehicle lifts off with the legs stowed.
+        // This also keeps the micro-sinking residual of the rigid rest clamp
+        // (v·up < 0 from the tangential leftover on a sloped normal) from
+        // tripping the descent gate while sitting on the pad.
+        if collision.ground_contact == GroundContact::Landed {
+            continue;
+        }
         let radius = rocket.dynamics.position_m.length();
         if radius < 1.0 {
             continue;
@@ -2149,17 +2158,18 @@ pub fn setup_rocket_camera_and_origin(
         // keeps every visible mesh on screen.
         commands.entity(entity).insert(bevy::render::view::NoIndirectDrawing);
 
-        // Atmospheric fog: matches the Bevy grassland example aesthetic.
-        // At ground level the fog is dense (grassland morning mist), fading
-        // with distance. inscattering = warm sunlight, extinction = cool shadow.
+        // Atmospheric fog tuned for a clear day at the launch site: visibility
+        // ~10 km so the pad and nearby terrain stay crisp while the horizon
+        // softens into a light haze. inscattering = warm sunlight near the sun,
+        // extinction = cool blue-grey away from it.
         commands.entity(entity).insert(DistanceFog {
-            color: Color::srgba(0.35, 0.48, 0.66, 1.0),
+            color: Color::srgba(0.55, 0.65, 0.8, 1.0),
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
             directional_light_exponent: 30.0,
             falloff: FogFalloff::from_visibility_colors(
-                150.0, // visibility distance in meters — objects fade beyond ~150 m
-                Color::srgb(0.35, 0.5, 0.66), // extinction: cool blue-grey haze
-                Color::srgb(0.8, 0.844, 1.0), // inscattering: warm sky glow
+                10_000.0, // clear-day visibility in meters
+                Color::srgb(0.55, 0.6, 0.7), // extinction: pale blue-grey haze
+                Color::srgb(0.9, 0.92, 1.0), // inscattering: bright sky glow
             ),
         });
     }
@@ -2188,12 +2198,21 @@ pub fn setup_rocket_sun_light(
     } else {
         up.cross(Vec3::X).normalize()
     };
-    // Sun ~35 deg above the local horizon, offset to the east side.
-    let sun_dir = (up * 0.82 + east * 0.57).normalize();
+    // Sun ~20 deg above the local horizon (morning golden hour): long shadows
+    // and warm light like the launch-pad reference footage.
+    let sun_dir = (up * 0.342 + east * 0.94).normalize();
+
+    // Sky-blue ambient fill so shadowed faces read as sky-lit instead of black.
+    commands.insert_resource(bevy::light::AmbientLight {
+        color: Color::srgb(0.5, 0.6, 0.75),
+        brightness: 400.0,
+        ..default()
+    });
+
     commands.spawn((
         bevy::light::DirectionalLight {
-            illuminance: 120_000.0,             // bright daylight (lux)
-            color: Color::srgb(1.0, 0.95, 0.9), // warm sunlight
+            illuminance: 100_000.0,              // bright daylight (lux)
+            color: Color::srgb(1.0, 0.9, 0.75), // warm low-sun light
             shadows_enabled: true,
             ..default()
         },

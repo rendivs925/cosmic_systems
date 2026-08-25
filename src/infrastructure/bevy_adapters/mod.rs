@@ -18,7 +18,6 @@ pub mod planet_systems;
 pub mod quality_components;
 pub mod rocket_camera_systems;
 pub mod rocket_debug;
-pub mod rocket_diagnose;
 pub mod rocket_hud;
 pub mod rocket_separation;
 pub mod rocket_systems;
