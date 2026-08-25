@@ -5,6 +5,8 @@ use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::RocketCameraMode;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::RocketEventFeed;
 use bevy::prelude::*;
+use bevy::camera::CameraOutputMode;
+use bevy::render::render_resource::BlendState;
 
 /// HUD panel types for different display regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,12 +165,23 @@ pub struct RocketHudMarker {
 pub fn spawn_rocket_hud(mut commands: Commands) {
     let builder = HudBuilder::new();
 
-    // Main 2D camera for HUD
+    // Main 2D camera for HUD.
+    //
+    // `output_mode` + clear-color workaround for Bevy 0.17 multi-camera + MSAA:
+    // the 3D flight camera uses Msaa::Sample4, and a later 2D camera with
+    // `ClearColorConfig::None` alone discards the previous camera's output
+    // (bevyengine/bevy#18901, #18903, #23844) -> the whole scene renders black.
+    // Writing with ALPHA_BLENDING over a transparent clear preserves the 3D
+    // pass underneath.
     commands.spawn((
         Camera2d,
         Camera {
             order: 11,
-            clear_color: ClearColorConfig::None,
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            output_mode: CameraOutputMode::Write {
+                blend_state: Some(BlendState::ALPHA_BLENDING),
+                clear_color: ClearColorConfig::None,
+            },
             ..default()
         },
     ));

@@ -44,6 +44,7 @@ use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_rocket_camera_input, update_rocket_camera, update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
+use crate::infrastructure::bevy_adapters::rocket_diagnose::diagnose_rocket_scene;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
@@ -54,9 +55,13 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, advance_topple, aerodynamic_forces, aerodynamic_torque,
     apply_relaunch_requests, atmosphere_properties, compute_ablation, compute_heating,
     compute_parachute_forces, compute_plasma_blackout, compute_retro_propulsion, control_system,
-    deploy_landing_legs, guidance_system, handle_relaunch_input_system, integrate_6dof,
-    propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
-    resolve_ground_contact, sync_render_transform, update_orbital_elements, update_rocket_gravity,
+    deploy_landing_legs, guidance_system, handle_relaunch_input_system, handle_rocket_launch_input,
+    integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
+    propulsion_thrust, resolve_ground_contact, setup_rocket_camera_and_origin,
+    setup_rocket_camera_controller, setup_rocket_earth_sphere, setup_rocket_sky_color,
+    setup_rocket_sun_light, sync_render_transform, update_orbital_elements,
+    update_rocket_earth_sphere, update_rocket_gravity, update_rocket_sky_color,
+    update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,
@@ -74,6 +79,7 @@ use crate::infrastructure::bevy_adapters::terrain_systems::{
     generate_terrain_mesh, initialize_terrain_lod, update_terrain_lod,
     update_terrain_synchronization, update_terrain_visibility,
 };
+use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 use crate::infrastructure::bevy_adapters::webgpu_systems::init_vulkan_solver;
 use crate::presentation::ui::*;
@@ -117,6 +123,7 @@ impl Plugin for SharedSimulationPlugin {
         app.insert_resource(CameraInputState::default());
         app.insert_resource(ZenMode::default());
         app.insert_resource(UiIdleState::default());
+        app.insert_resource(VideoRecordingState::default());
         app.insert_resource(
             crate::infrastructure::bevy_adapters::systems::QualityAdaptationResource::default(),
         );
@@ -440,5 +447,39 @@ impl Plugin for RocketModePlugin {
                 record_flight_data_system.in_set(RocketSet::Telemetry),
             ),
         );
+
+        // Rocket-specific startup: camera controller, sun light, Earth sphere, sky color.
+        // Must run AFTER setup_space (spawns camera + planets) and spawn_rockets_system
+        // (spawns rocket) so the render origin is set to the rocket's physical position
+        // and the camera is framed on the already-spawned camera entity.
+        app.add_systems(
+            Startup,
+            (
+                setup_rocket_camera_and_origin,
+                setup_rocket_camera_controller,
+                setup_rocket_sun_light,
+                // TEMP: disabled to test sphere occlusion.
+                // setup_rocket_earth_sphere,
+                setup_rocket_sky_color,
+            )
+                .chain()
+                .after(setup_space)
+                .after(spawn_rockets_system),
+        );
+
+        // Pre-launch hold: Space to launch.
+        app.add_systems(Update, handle_rocket_launch_input);
+
+        // Altitude-dependent sky color (blue at low altitude -> black in space).
+        app.add_systems(Update, update_rocket_sky_color);
+
+        // True-scale Earth sphere follows render origin.
+        app.add_systems(Update, update_rocket_earth_sphere);
+
+        // Day/night cycle: rotates the sun around the planet as simulation time advances.
+        app.add_systems(Update, update_sun_day_night_cycle);
+
+        // TEMPORARY diagnostics (remove before finishing).
+        app.add_systems(Update, diagnose_rocket_scene);
     }
 }

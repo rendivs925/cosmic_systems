@@ -47,7 +47,7 @@ pub struct RocketDebugConfig {
 impl Default for RocketDebugConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             gravity_scale: 2.0,
             // Velocity magnitudes are 0-8000 m/s; ~0.05 gives a useful arrow.
             velocity_scale: 0.05,

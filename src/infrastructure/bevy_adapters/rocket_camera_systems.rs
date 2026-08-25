@@ -1,9 +1,9 @@
 // Rocket camera mode systems for different viewing perspectives.
 
 use crate::components::rocket::*;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
-use bevy::math::{DVec3, Quat, Vec3};
+use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use bevy::math::{Quat, Vec3};
 use bevy::prelude::*;
 
 /// System to handle rocket camera mode input and transitions.
@@ -12,7 +12,9 @@ pub fn handle_rocket_camera_input(
     mut camera_mode: ResMut<RocketCameraMode>,
     mut controller_query: Query<&mut RocketCameraController>,
 ) {
-    // Cycle camera modes with number keys or C key
+    // Cycle camera modes with number keys or C key.
+    // Free mode is deliberately NOT offered: Rocket Mode keeps the camera
+    // locked to the vehicle (no free spectator flight).
     if keyboard.just_pressed(KeyCode::Digit1) {
         *camera_mode = RocketCameraMode::Chase;
     } else if keyboard.just_pressed(KeyCode::Digit2) {
@@ -21,15 +23,13 @@ pub fn handle_rocket_camera_input(
         *camera_mode = RocketCameraMode::Orbital;
     } else if keyboard.just_pressed(KeyCode::Digit4) {
         *camera_mode = RocketCameraMode::Surface;
-    } else if keyboard.just_pressed(KeyCode::Digit5) {
-        *camera_mode = RocketCameraMode::Free;
     } else if keyboard.just_pressed(KeyCode::KeyC) {
-        // Cycle through modes
+        // Cycle through modes (Free excluded)
         *camera_mode = match *camera_mode {
             RocketCameraMode::Chase => RocketCameraMode::Cockpit,
             RocketCameraMode::Cockpit => RocketCameraMode::Orbital,
             RocketCameraMode::Orbital => RocketCameraMode::Surface,
-            RocketCameraMode::Surface => RocketCameraMode::Free,
+            RocketCameraMode::Surface => RocketCameraMode::Chase,
             RocketCameraMode::Free => RocketCameraMode::Chase,
         };
     }
@@ -41,14 +41,14 @@ pub fn handle_rocket_camera_input(
 }
 
 /// System to update rocket camera based on current mode.
+/// Operates in flight units (1 unit = 1 meter) using the rocket's Transform
+/// which is already in flight units via sync_render_transform.
 pub fn update_rocket_camera(
     time: Res<Time>,
     camera_mode: Res<RocketCameraMode>,
     config: Res<RocketCameraConfig>,
-    physical_scale: Res<PhysicalScale>,
-    // `Without<Camera>` proves disjointness from the mutable camera query
-    // below (B0001): planets/rockets never carry a Camera component.
-    planet_query: Query<(&PlanetComponent, &Transform), Without<Camera>>,
+    render_origin: Res<RenderOrigin>,
+    planet_query: Query<(&PlanetComponent, &Transform), Without<Camera3d>>,
     rocket_query: Query<
         (
             &RocketPlanetBinding,
@@ -58,50 +58,57 @@ pub fn update_rocket_camera(
             &Transform,
             &RocketMissionState,
         ),
-        Without<Camera>,
+        Without<Camera3d>,
     >,
-    mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera>>,
+    mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
     mut controller_query: Query<&mut RocketCameraController>,
 ) {
     let dt = time.delta_secs();
 
     // Get the rocket entity (assume single rocket for now)
-    let Some((binding, rocket_physics, _geometry, _facade, rocket_transform, mission_state)) =
+    let Some((binding, rocket_physics, _geometry, _facade, rocket_transform, _mission_state)) =
         rocket_query.iter().next()
     else {
         return;
     };
 
-    let Some((planet, planet_transform)) = planet_query
+    let Some((_planet, _planet_transform)) = planet_query
         .iter()
         .find(|(p, _)| p.domain_planet.name == binding.planet_name)
     else {
         return;
     };
 
-    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-    let position_m = rocket_physics.dynamics.position_m;
-    let rocket_pos_solar = planet_transform.translation.as_dvec3()
-        + DVec3::new(
-            physical_scale.solar_meters_to_units(position_m.x),
-            physical_scale.solar_meters_to_units(position_m.y),
-            physical_scale.solar_meters_to_units(position_m.z),
-        );
+    // Rocket position in flight units (meters) from its Transform.
+    let rocket_pos_flight = rocket_transform.translation;
+
+    // Planet center in flight units: -render_origin.origin converted to flight units
+    let planet_center_flight = -render_origin.origin.as_vec3();
+
+    // Up direction in flight frame: radial from planet center to rocket.
+    let up_dir = (rocket_pos_flight - planet_center_flight).normalize_or_zero();
+
+    // Rocket orientation in flight frame (already correct from sync_render_transform)
     let rocket_rot = rocket_transform.rotation;
 
-    let planet_radius_solar = physical_scale.solar_meters_to_units(radius_m);
-    let planet_pos_solar = planet_transform.translation.as_dvec3();
-
-    // Compute up direction (from planet center to rocket)
-    let up_dir = (rocket_pos_solar - planet_pos_solar)
-        .normalize_or_zero()
-        .as_vec3();
-
-    // Compute forward direction (rocket's forward in solar frame)
+    // Compute forward direction (rocket's forward in flight frame)
     let forward_dir = (rocket_rot * Vec3::Y).normalize();
 
-    // Compute right direction
-    let right_dir = forward_dir.cross(up_dir).normalize();
+    // Compute right direction: cross of forward and up.
+    // At spawn, forward (body +Y) aligns with up (radial), so cross is zero.
+    // Fall back to a horizontal reference (e.g., planet north or arbitrary perpendicular).
+    let right_dir = forward_dir.cross(up_dir);
+    let right_dir = if right_dir.length_squared() < 1e-6 {
+        // Forward and up are parallel; use an arbitrary perpendicular vector.
+        // Choose a vector perpendicular to up_dir.
+        if up_dir.z.abs() < 0.9 {
+            up_dir.cross(Vec3::Z).normalize()
+        } else {
+            up_dir.cross(Vec3::X).normalize()
+        }
+    } else {
+        right_dir.normalize()
+    };
 
     for mut controller in controller_query.iter_mut() {
         let smooth = config.smooth_factor * dt * 60.0; // Frame-rate independent
@@ -117,27 +124,20 @@ pub fn update_rocket_camera(
             controller.transition_progress = 0.0;
         }
 
-        // Compute target camera transform based on mode
+        // Compute target camera transform in flight units (meters)
         let (target_pos, target_rot) = match controller.current_mode {
-            RocketCameraMode::Chase => compute_chase_camera(
-                rocket_pos_solar.as_vec3(),
-                forward_dir,
-                up_dir,
-                right_dir,
-                &config,
-            ),
-            RocketCameraMode::Cockpit => {
-                compute_cockpit_camera(rocket_pos_solar.as_vec3(), rocket_rot, &config)
+            RocketCameraMode::Chase => {
+                compute_chase_camera(rocket_pos_flight, forward_dir, up_dir, right_dir, &config)
             }
-            RocketCameraMode::Orbital => compute_orbital_camera(
-                rocket_pos_solar.as_vec3(),
-                planet_pos_solar,
-                up_dir,
-                &config,
-            ),
+            RocketCameraMode::Cockpit => {
+                compute_cockpit_camera(rocket_pos_flight, rocket_rot, &config)
+            }
+            RocketCameraMode::Orbital => {
+                compute_orbital_camera(rocket_pos_flight, planet_center_flight, up_dir, &config)
+            }
             RocketCameraMode::Surface => compute_surface_camera(
-                rocket_pos_solar.as_vec3(),
-                planet_pos_solar,
+                rocket_pos_flight,
+                planet_center_flight,
                 up_dir,
                 rocket_physics.dynamics.velocity_mps.length() as f32,
                 &config,
@@ -149,7 +149,7 @@ pub fn update_rocket_camera(
         };
 
         // Smooth interpolation
-        for (mut cam_transform, mut projection) in camera_query.iter_mut() {
+        for (mut cam_transform, _projection) in camera_query.iter_mut() {
             if controller.transition_progress > 0.0 {
                 // Interpolate during transition
                 let prev_pos = controller
@@ -184,9 +184,24 @@ fn compute_chase_camera(
     right: Vec3,
     config: &RocketCameraConfig,
 ) -> (Vec3, Quat) {
-    let offset = -forward * config.chase_distance + up * config.chase_height;
+    // If rocket is nearly vertical (forward ≈ up), "behind" would be underground.
+    // Instead, position camera to the side and above for a clear pad view.
+    let vertical_alignment = forward.dot(up).abs();
+    let offset = if vertical_alignment > 0.95 {
+        // Rocket is vertical: use side offset (right vector) + up offset
+        right * config.chase_distance + up * config.chase_height
+    } else {
+        // Rocket is tilted: traditional chase behind and above
+        -forward * config.chase_distance + up * config.chase_height
+    };
     let target_pos = rocket_pos + offset;
-    let target_rot = Quat::from_rotation_arc(-Vec3::Z, -offset.normalize());
+    // Frame the rocket upright against the terrain: `looking_at` keeps the
+    // camera's up on the radial direction so the ground sits at the bottom of
+    // the view. `from_rotation_arc` (previously used) rolls the view
+    // arbitrarily, which put the terrain on the left/right of the screen.
+    let target_rot = Transform::from_translation(target_pos)
+        .looking_at(rocket_pos, up)
+        .rotation;
     (target_pos, target_rot)
 }
 
@@ -204,7 +219,7 @@ fn compute_cockpit_camera(
 /// Orbital camera: inertial frame showing orbital trajectory.
 fn compute_orbital_camera(
     rocket_pos: Vec3,
-    planet_pos: DVec3,
+    planet_pos: Vec3,
     up_dir: Vec3,
     config: &RocketCameraConfig,
 ) -> (Vec3, Quat) {
@@ -213,7 +228,7 @@ fn compute_orbital_camera(
     let elevation = config.orbital_elevation;
 
     // Compute a position that shows the orbit from an inclined perspective
-    let forward = (rocket_pos - planet_pos.as_vec3()).normalize();
+    let forward = (rocket_pos - planet_pos).normalize();
     let right = up_dir.cross(forward).normalize();
 
     // Orbital camera position: offset from rocket in orbital plane
@@ -221,7 +236,7 @@ fn compute_orbital_camera(
     let target_pos = rocket_pos + offset;
 
     // Look toward the planet/rocket
-    let look_dir = (planet_pos.as_vec3() - target_pos).normalize();
+    let look_dir = (planet_pos - target_pos).normalize();
     let target_rot = Quat::from_rotation_arc(-Vec3::Z, look_dir);
 
     (target_pos, target_rot)
@@ -230,7 +245,7 @@ fn compute_orbital_camera(
 /// Surface camera: planet-relative for landing.
 fn compute_surface_camera(
     rocket_pos: Vec3,
-    planet_pos: DVec3,
+    planet_pos: Vec3,
     up_dir: Vec3,
     speed: f32,
     config: &RocketCameraConfig,
@@ -258,8 +273,9 @@ pub fn update_rocket_camera_projection(
     camera_mode: Res<RocketCameraMode>,
     config: Res<RocketCameraConfig>,
     rocket_query: Query<&RocketPhysicsState>,
+    rocket_binding_query: Query<&RocketPlanetBinding>,
     planet_query: Query<&PlanetComponent>,
-    mut camera_query: Query<&mut Projection, With<Camera>>,
+    mut camera_query: Query<&mut Projection, With<Camera3d>>,
 ) {
     if *camera_mode == RocketCameraMode::Free {
         return;
@@ -268,18 +284,23 @@ pub fn update_rocket_camera_projection(
     let Some(rocket) = rocket_query.iter().next() else {
         return;
     };
+    let Some(binding) = rocket_binding_query.iter().next() else {
+        return;
+    };
 
     let altitude = rocket.dynamics.position_m.length();
     let planet_radius = planet_query
         .iter()
-        .next()
+        .find(|p| p.domain_planet.name == binding.planet_name)
         .map(|p| p.domain_planet.radius_km as f64 * 1000.0)
         .unwrap_or(6_371_000.0);
     let height_above_surface = (altitude - planet_radius).max(0.0);
 
-    for mut projection in camera_query.iter_mut() {
+    for projection in camera_query.iter_mut() {
         if let Projection::Perspective(proj) = projection.into_inner() {
-            // Adjust near/far planes based on altitude and mode
+            // Adjust near/far planes based on altitude and mode.
+            // Far stays small enough to exclude the solar-system's giant
+            // spheres (Sun shell at ~22,835 units) from the flight frame.
             let (near, far) = match *camera_mode {
                 RocketCameraMode::Cockpit => {
                     // Very close near plane for cockpit view
@@ -290,8 +311,9 @@ pub fn update_rocket_camera_projection(
                     (0.1, (height_above_surface + 5000.0) as f32)
                 }
                 RocketCameraMode::Chase => {
-                    // Medium range
-                    (1.0, (config.chase_distance * 3.0) as f32)
+                    // Launch-pad view: far plane large enough to show surrounding
+                    // terrain and the horizon (rocket camera is ~100 m from pad).
+                    (0.5, 5_000.0)
                 }
                 RocketCameraMode::Orbital => {
                     // Far for orbital view

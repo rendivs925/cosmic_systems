@@ -41,10 +41,15 @@ use crate::infrastructure::bevy_adapters::components::{
     AerodynamicForces, AtmosphereState, EntryPhysicsConfig, MaxQTracker, PlanetAtmosphere,
     PlanetComponent, PlanetTerrain, RocketAutopilot, RocketCommands, TerrainCollisionState,
 };
+use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use bevy::light::CascadeShadowConfigBuilder;
+use bevy::pbr::DistanceFog;
+use bevy::pbr::FogFalloff;
+
 use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::ecs::query::QueryData;
-use bevy::math::{DMat3, DQuat, DVec3};
+use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 use bevy::prelude::*;
 
 /// Fraction of the circular orbital speed at which ascent guidance declares
@@ -605,35 +610,17 @@ pub fn propulsion_gimbal(
 /// authoritative f64 dynamics state. This is the only system that writes the
 /// rocket's `Transform`.
 pub fn sync_render_transform(
-    planet_query: Query<(&PlanetComponent, &Transform)>,
+    render_origin: Res<RenderOrigin>,
     physical_scale: Res<PhysicalScale>,
-    mut rocket_query: Query<
-        (
-            &RocketPlanetBinding,
-            &RocketPhysicsState,
-            &mut RocketFacade,
-            &mut Transform,
-        ),
-        Without<PlanetComponent>,
-    >,
+    mut rocket_query: Query<(&RocketPhysicsState, &mut RocketFacade, &mut Transform)>,
 ) {
-    for (binding, rocket, mut facade, mut transform) in rocket_query.iter_mut() {
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-
-        let solar_display = planet_transform.translation.as_dvec3()
-            + DVec3::new(
-                physical_scale.solar_meters_to_units(rocket.dynamics.position_m.x),
-                physical_scale.solar_meters_to_units(rocket.dynamics.position_m.y),
-                physical_scale.solar_meters_to_units(rocket.dynamics.position_m.z),
-            );
-
-        transform.translation = solar_display.as_vec3();
-        transform.rotation = rocket.dynamics.orientation.as_quat();
+    for (rocket, mut facade, mut transform) in rocket_query.iter_mut() {
+        // Use flight-scale transform relative to render origin (AGENTS.md #13).
+        // This places the rocket at flight scale (1 unit = 1 meter) near the
+        // render origin, avoiding f32 precision loss at planetary distances.
+        *transform = rocket
+            .dynamics
+            .render_transform(render_origin.origin, &physical_scale);
 
         // Refresh the compatible facade fields from the authoritative state.
         facade.position = transform.translation;
@@ -690,10 +677,16 @@ pub fn guidance_system(
             autopilot.time_since_liftoff_s += dt;
         }
 
-        // Auto-launch: begin the ascent flight on the first guidance pass.
-        if *mission_state == RocketMissionState::PreLaunch {
-            *mission_state = RocketMissionState::Launch;
-            autopilot.mode = AutopilotMode::Ascent;
+        // Pre-launch hold: wait for user input (Space) via handle_rocket_launch_input.
+        // Do NOT auto-transition to Launch; physics keeps the vehicle on the pad
+        // via GroundRest until thrust exceeds weight.
+
+        // If mission state is Launch but autopilot is still Off (e.g., test setup
+        // or user just pressed Space), arm the ascent autopilot.
+        if *mission_state == RocketMissionState::Launch
+            && autopilot.mode == crate::domain::services::guidance::AutopilotMode::Off
+        {
+            autopilot.mode = crate::domain::services::guidance::AutopilotMode::Ascent;
         }
 
         // Get descent guidance config for this body.
@@ -1955,13 +1948,37 @@ pub fn compute_parachute_forces(
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &AtmosphereState,
+        &TerrainCollisionState,
+        &GroundRest,
+        &RocketMissionState,
         &mut ParachuteState,
         &mut ForceAccumulator,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
     let parachute_config = config.parachute_config();
-    for (rocket, atmosphere, mut parachute, mut force_accum) in rocket_query.iter_mut() {
+    for (
+        rocket,
+        atmosphere,
+        collision,
+        ground_rest,
+        mission_state,
+        mut parachute,
+        mut force_accum,
+    ) in rocket_query.iter_mut()
+    {
+        // Parachutes only deploy during descent/landing phases, not on the pad.
+        if *mission_state == RocketMissionState::PreLaunch
+            || *mission_state == RocketMissionState::Launch
+            || *mission_state == RocketMissionState::Ascent
+            || *mission_state == RocketMissionState::Orbit
+            || ground_rest.active
+            || collision.ground_contact
+                == crate::domain::services::terrain_collision::GroundContact::Landed
+        {
+            continue;
+        }
+
         let rho = atmosphere.density_kg_m3;
         let velocity = rocket.dynamics.velocity_mps;
         let speed = velocity.length();
@@ -2050,6 +2067,316 @@ pub fn compute_retro_propulsion(
         }
 
         retro.thrust_multiplier = multiplier;
+    }
+}
+
+/// Adds RocketCameraController to the existing camera entity so the rocket
+/// camera systems can drive it. The camera is spawned by setup_space with a
+/// solar CameraController. We keep the solar CameraController marker so shared
+/// systems (e.g. update_planet_positions) can still locate the camera via
+/// `.single()`, but since SolarSystemModePlugin is not composed into Rocket
+/// Mode, its free-flight camera system never runs — Rocket Mode owns the camera.
+pub fn setup_rocket_camera_controller(
+    mut commands: Commands,
+    camera_query: Query<Entity, With<Camera3d>>,
+) {
+    for entity in camera_query.iter() {
+        commands
+            .entity(entity)
+            .insert(RocketCameraController::default());
+    }
+}
+
+/// Initializes the camera position and render origin for rocket mode.
+/// The camera starts at the solar system position; this system repositions it
+/// to the rocket's location on the launch pad and sets the render origin to
+/// the rocket's physics position so the rocket renders near the origin.
+pub fn setup_rocket_camera_and_origin(
+    mut commands: Commands,
+    mut camera_query: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
+    mut render_origin: ResMut<crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin>,
+    rocket_query: Query<&RocketPhysicsState>,
+) {
+    let Some(rocket) = rocket_query.iter().next() else {
+        bevy::log::warn!("setup_rocket_camera_and_origin: no rocket entity found");
+        return;
+    };
+
+    // Rocket physics position in planet-centered inertial frame (meters)
+    let rocket_pos_m = rocket.dynamics.position_m;
+
+    // Set render origin to the rocket's physics position so the rocket
+    // renders near the origin (flight units = meters, 1:1 scale).
+    render_origin.origin = rocket_pos_m;
+    render_origin.last_camera_pos = rocket_pos_m;
+
+    // Compute initial camera position matching the chase camera logic.
+    // At spawn, rocket body +Y aligns with radial up. The chase camera
+    // detects this vertical alignment and uses a side offset (right vector)
+    // instead of a rear offset. We replicate that logic here.
+    let chase_distance = 100.0; // meters
+    let chase_height = 20.0; // meters
+
+    // Up direction (radial from planet center to rocket)
+    let up_dir = rocket_pos_m.normalize().as_vec3();
+
+    // Right direction: perpendicular to up_dir
+    let right_dir = if up_dir.z.abs() < 0.9 {
+        up_dir.cross(Vec3::Z).normalize()
+    } else {
+        up_dir.cross(Vec3::X).normalize()
+    };
+
+    // For vertical rocket, chase camera uses side offset (right) + up
+    let camera_pos_flight = right_dir * chase_distance + up_dir * chase_height;
+
+    // Camera looks at rocket (at origin in flight frame)
+    let camera_transform =
+        Transform::from_translation(camera_pos_flight).looking_at(Vec3::ZERO, up_dir);
+
+    // Update camera and projection. Far plane kept small enough to exclude the
+    // solar-system's giant spheres (the Sun shell at ~22,835 units sits just
+    // outside it), so the flight frame stays clean.
+    for (entity, mut cam_transform, projection) in camera_query.iter_mut() {
+        *cam_transform = camera_transform;
+        if let Projection::Perspective(proj) = projection.into_inner() {
+            proj.near = 0.5;
+            proj.far = 5_000.0;
+        }
+        // Workaround for bevyengine/bevy#18904: with GPU preprocessing on,
+        // meshes that pass CPU visibility (rocket, pad primitives) silently
+        // drop out of the indirect-draw path on this driver. Drawing directly
+        // keeps every visible mesh on screen.
+        commands.entity(entity).insert(bevy::render::view::NoIndirectDrawing);
+
+        // Atmospheric fog: matches the Bevy grassland example aesthetic.
+        // At ground level the fog is dense (grassland morning mist), fading
+        // with distance. inscattering = warm sunlight, extinction = cool shadow.
+        commands.entity(entity).insert(DistanceFog {
+            color: Color::srgba(0.35, 0.48, 0.66, 1.0),
+            directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
+            directional_light_exponent: 30.0,
+            falloff: FogFalloff::from_visibility_colors(
+                150.0, // visibility distance in meters — objects fade beyond ~150 m
+                Color::srgb(0.35, 0.5, 0.66), // extinction: cool blue-grey haze
+                Color::srgb(0.8, 0.844, 1.0), // inscattering: warm sky glow
+            ),
+        });
+    }
+}
+
+/// Spawns a directional sun light for rocket mode. The solar simulation uses
+/// a PointLight at the origin, but in the flight frame the sun should be a
+/// directional light at infinity. The sun is placed well above the LOCAL horizon
+/// (the rocket's radial up direction) so the pad and terrain are brightly lit:
+/// a fixed world-space direction would sit only a few degrees above the KSC
+/// horizon because the flight frame's axes are not the planet's local frame.
+pub fn setup_rocket_sun_light(
+    mut commands: Commands,
+    rocket_query: Query<&RocketPhysicsState>,
+) {
+    // Radial up at the pad (the rocket's body +Y at spawn).
+    let up = rocket_query
+        .iter()
+        .next()
+        .map(|r| r.dynamics.position_m.normalize_or_zero().as_vec3())
+        .filter(|v| v.length_squared() > 0.5)
+        .unwrap_or(Vec3::Y);
+    // A fixed horizontal reference perpendicular to the local up.
+    let east = if up.z.abs() < 0.9 {
+        up.cross(Vec3::Z).normalize()
+    } else {
+        up.cross(Vec3::X).normalize()
+    };
+    // Sun ~35 deg above the local horizon, offset to the east side.
+    let sun_dir = (up * 0.82 + east * 0.57).normalize();
+    commands.spawn((
+        bevy::light::DirectionalLight {
+            illuminance: 120_000.0,             // bright daylight (lux)
+            color: Color::srgb(1.0, 0.95, 0.9), // warm sunlight
+            shadows_enabled: true,
+            ..default()
+        },
+        // Cascade shadow config tuned for the rocket flight scale (1 unit = 1 m).
+        // The first cascade covers the immediate pad area; later cascades extend
+        // to the horizon so distant terrain still casts visible shadows.
+        CascadeShadowConfigBuilder {
+            first_cascade_far_bound: 30.0,
+            maximum_distance: 800.0,
+            ..default()
+        }
+        .build(),
+        // Light travels along the light's -Z toward the scene; orient it so the
+        // sun appears in the `sun_dir` direction.
+        Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_dir, Vec3::Y),
+        // Tag component so the day/night system can find and rotate this light.
+        SunLight,
+        // Store the computed sun direction so the day/night rotation starts from
+        // the correct horizon angle (not a generic default).
+        SunLightState {
+            initial_direction: sun_dir,
+        },
+    ));
+}
+
+/// Tag component marking the sun directional light for day/night rotation.
+#[derive(Component, Debug)]
+pub struct SunLight;
+
+/// Component storing the sun's initial direction so the day/night system can
+/// rotate it around the planet's north pole each frame.
+#[derive(Component, Debug)]
+pub struct SunLightState {
+    pub initial_direction: Vec3,
+}
+
+impl Default for SunLightState {
+    fn default() -> Self {
+        Self {
+            initial_direction: Vec3::new(0.0, 0.26, 0.97).normalize(), // ~15 deg above horizon
+        }
+    }
+}
+
+/// Sets a pleasant sky-blue clear color for the launch pad view.
+pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
+    *clear_color = ClearColor(Color::srgb(0.4, 0.6, 0.9)); // Sky blue
+}
+
+/// Spawns a true-scale Earth sphere for the rocket mode. The Earth radius is
+/// ~6,371 km; in flight units (1 unit = 1 meter) this is 6,371,000 units.
+/// The sphere is positioned each frame relative to the render origin so it
+/// provides a correct horizon and planet body from any altitude.
+pub fn setup_rocket_earth_sphere(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let earth_radius_m = 6_371_000.0; // True Earth radius in meters
+    let earth_radius_units = earth_radius_m as f32; // Flight units = meters
+
+    // Use true radius (not 0.999) so the sphere surface matches terrain height.
+    let mesh_handle = meshes.add(Sphere::new(earth_radius_units));
+    let material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.2, 0.4, 0.7), // Earth blue-green
+        perceptual_roughness: 0.9,
+        metallic: 0.0,
+        cull_mode: None, // Render both sides for horizon visibility
+        ..default()
+    });
+
+    commands.spawn((
+        Mesh3d(mesh_handle),
+        MeshMaterial3d(material),
+        Transform::default(),
+        RocketEarthSphere,
+    ));
+}
+
+/// Component marking the true-scale Earth sphere entity for updates.
+#[derive(Component, Debug, Default)]
+pub struct RocketEarthSphere;
+
+/// Updates the ClearColor based on altitude: sky blue at low altitude,
+/// fading to black in space. Transition occurs over ~20-80 km.
+pub fn update_rocket_sky_color(
+    rocket_query: Query<(&RocketPhysicsState, &RocketPlanetBinding)>,
+    planet_query: Query<&PlanetComponent>,
+    mut clear_color: ResMut<ClearColor>,
+) {
+    let Some((rocket, binding)) = rocket_query.iter().next() else {
+        return;
+    };
+    // Use the rocket's bound body, NOT the first planet in query order: the
+    // ECS iteration order is not insertion order, so `iter().next()` can return
+    // a moon/small body and compute a huge altitude (space-black sky on the pad).
+    let Some(planet) = planet_query
+        .iter()
+        .find(|planet| planet.domain_planet.name == binding.planet_name)
+    else {
+        return;
+    };
+
+    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+    let altitude_m = (rocket.dynamics.position_m.length() - radius_m).max(0.0);
+
+    // Fade from sky blue (0-20 km) to space black (80+ km)
+    let t = ((altitude_m - 20_000.0) / 60_000.0).clamp(0.0, 1.0);
+    let sky = Color::srgb(0.4, 0.6, 0.9);
+    let space = Color::srgb(0.005, 0.005, 0.01);
+    *clear_color = ClearColor(space.mix(&sky, (1.0 - t) as f32));
+}
+
+/// Updates the true-scale Earth sphere position to stay centered on the planet
+/// center relative to the render origin.
+pub fn update_rocket_earth_sphere(
+    render_origin: Res<RenderOrigin>,
+    mut sphere_query: Query<&mut Transform, With<RocketEarthSphere>>,
+) {
+    // Planet center in flight units: -render_origin.origin (scaled to meters).
+    // render_origin is in physics meters; flight units = meters.
+    let center = -(render_origin.origin.as_vec3());
+    for mut transform in sphere_query.iter_mut() {
+        transform.translation = center;
+    }
+}
+
+/// Day/night cycle: rotates the sun light direction around the planet's rotation
+/// axis (Y in the flight frame) as simulation time advances. The planet's angular
+/// velocity comes from the Earth planet definition. The sun makes one full
+/// revolution per planet rotation period (~24 hours for Earth).
+pub fn update_sun_day_night_cycle(
+    sim_time: Res<SimulationTime>,
+    planet_query: Query<&PlanetComponent>,
+    mut sun_query: Query<(&mut Transform, &SunLightState), With<SunLight>>,
+) {
+    // Find Earth planet for its rotation period, then compute angular velocity.
+    // omega = 2π / period_seconds.
+    let earth_rotation_rad_s = planet_query
+        .iter()
+        .find(|p| p.domain_planet.name == "Earth")
+        .map(|p| {
+            let period_s = p.domain_planet.rotation_period_hours as f64 * 3600.0;
+            if period_s > 0.0 {
+                std::f64::consts::TAU / period_s
+            } else {
+                7.2921159e-5 // Earth sidereal rotation rate rad/s
+            }
+        })
+        .unwrap_or(7.2921159e-5_f64);
+
+    let total_time_s = sim_time.sim_time_s;
+    let rotation_angle = (total_time_s * earth_rotation_rad_s) as f32;
+
+    for (mut light_transform, sun_state) in sun_query.iter_mut() {
+        // Rotate initial sun direction around the Y axis (planet rotation axis).
+        // The planet's north pole points along +Y in the flight frame.
+        let cos_a = rotation_angle.cos();
+        let sin_a = rotation_angle.sin();
+        let dir = sun_state.initial_direction;
+        let rotated = Vec3::new(
+            cos_a * dir.x - sin_a * dir.z,
+            dir.y,
+            sin_a * dir.x + cos_a * dir.z,
+        )
+        .normalize();
+
+        // Update the light's look-direction so the sun travels across the sky.
+        *light_transform = Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-rotated, Vec3::Y);
+    }
+}
+
+/// Handles the pre-launch hold: Space key arms the launch.
+pub fn handle_rocket_launch_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut mission_query: Query<&mut RocketMissionState>,
+) {
+    if keyboard.just_pressed(KeyCode::Space) {
+        for mut mission in mission_query.iter_mut() {
+            if *mission == RocketMissionState::PreLaunch {
+                *mission = RocketMissionState::Launch;
+            }
+        }
     }
 }
 
@@ -2755,7 +3082,7 @@ mod ascent_pipeline_tests {
                     height_m: 18.0,
                 },
                 RocketMass(total_mass_kg),
-                RocketMissionState::PreLaunch,
+                RocketMissionState::Launch,
                 RocketPropulsion {
                     vehicle,
                     active_stage: 0,

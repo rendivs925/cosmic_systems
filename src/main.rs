@@ -86,11 +86,11 @@ fn main() {
         }
         Mode::Rocket => {
             app.insert_resource(VehicleSelection(options.vehicle));
-            app.add_plugins((
-                SharedSimulationPlugin,
-                SolarSystemModePlugin,
-                RocketModePlugin,
-            ));
+            // Rocket Mode owns its own camera/HUD/input context. It does NOT
+            // add SolarSystemModePlugin, whose solar camera controller (free
+            // WASD flight), solar navigation input, and Explore/Orbits UI would
+            // otherwise fight the rocket camera and leak into the launch view.
+            app.add_plugins((SharedSimulationPlugin, RocketModePlugin));
         }
         Mode::Gyro => {
             app.add_plugins(GyroModePlugin);

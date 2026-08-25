@@ -12,7 +12,7 @@ use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
-use bevy::math::{DVec3, Vec3};
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 
@@ -70,6 +70,14 @@ pub struct TerrainPatchEvicted {
 }
 
 /// Plugin that registers terrain rendering systems for the rocket mode.
+///
+/// The render origin is fixed once at startup (`setup_rocket_camera_and_origin`)
+/// to the rocket's physical position, and the streaming system keeps patches
+/// generated around the rocket's current sub-point. The camera remains near the
+/// rocket in flight units, so no auto-recentering is needed in rocket mode.
+/// The legacy `update_render_origin_system` (solar-system camera frame) is not
+/// registered here because it misinterprets the rocket-mode flight-unit camera
+/// as physics meters and scatters the patches far from the vehicle.
 pub struct TerrainRenderPlugin;
 
 impl Plugin for TerrainRenderPlugin {
@@ -80,12 +88,7 @@ impl Plugin for TerrainRenderPlugin {
             .add_message::<TerrainPatchEvicted>()
             .add_systems(
                 Update,
-                (
-                    spawn_patch_mesh_system,
-                    despawn_patch_mesh_system,
-                    update_render_origin_system,
-                )
-                    .chain(),
+                (spawn_patch_mesh_system, despawn_patch_mesh_system).chain(),
             );
     }
 }
@@ -99,6 +102,7 @@ fn spawn_patch_mesh_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
     streaming: Res<TerrainStreamingResource>,
     config: Res<TerrainRenderConfig>,
+    render_origin: Res<RenderOrigin>,
     planet_query: Query<&PlanetTerrain>,
     planet_entities: Query<Entity, With<PlanetComponent>>,
 ) {
@@ -115,19 +119,20 @@ fn spawn_patch_mesh_system(
             continue;
         };
 
-        // Build Bevy mesh from PatchGeometry.
-        let mesh = patch_geometry_to_mesh(geometry, &config);
+        // Build Bevy mesh from PatchGeometry, rebasing the planet-centered
+        // geometry into the rocket-local flight frame so f32 mesh vertices stay
+        // small near the camera (avoids precision loss at ~6371 km magnitudes
+        // that degrades the sphere into a flat plane with broken triangles).
+        let mesh = patch_geometry_to_mesh(geometry, &config, &render_origin.origin);
         let mesh_handle = meshes.add(mesh);
 
         // Create material with biome-appropriate properties.
         let material = patch_material(&patch, planet_terrain.source.as_ref(), &config);
         let material_handle = materials.add(material);
 
-        // Compute patch transform relative to planet center.
-        // The patch geometry is already in planet-centered coordinates,
-        // so we just need to position it at the planet center (origin).
-        // The floating origin will adjust all patch transforms.
-        let transform = Transform::from_translation(Vec3::ZERO);
+        // Geometry is already in the rocket-local flight frame; the entity sits
+        // at the origin (the rocket's render position).
+        let transform = Transform::IDENTITY;
 
         let entity = commands
             .spawn((
@@ -173,57 +178,28 @@ fn despawn_patch_mesh_system(
     }
 }
 
-/// System that updates the floating render origin when the camera moves
-/// beyond the threshold, and adjusts all patch transforms accordingly.
-fn update_render_origin_system(
-    mut render_origin: ResMut<RenderOrigin>,
-    config: Res<TerrainRenderConfig>,
-    camera_query: Query<&GlobalTransform, With<Camera3d>>,
-    mut patch_query: Query<&mut Transform, With<TerrainPatchRenderState>>,
-) {
-    let Ok(camera_transform) = camera_query.single() else {
-        return;
-    };
-    let camera_pos = DVec3::new(
-        camera_transform.translation().x as f64,
-        camera_transform.translation().y as f64,
-        camera_transform.translation().z as f64,
-    );
-
-    let offset = camera_pos - render_origin.origin;
-    let distance = offset.length();
-
-    if distance > config.recenter_threshold_m {
-        // Re-center the origin to the camera position.
-        let delta = offset;
-        render_origin.origin = camera_pos;
-        render_origin.last_camera_pos = camera_pos;
-
-        // Shift all patch transforms by -delta.
-        for mut transform in patch_query.iter_mut() {
-            let current = DVec3::new(
-                transform.translation.x as f64,
-                transform.translation.y as f64,
-                transform.translation.z as f64,
-            );
-            let new_pos = current - delta;
-            transform.translation = Vec3::new(new_pos.x as f32, new_pos.y as f32, new_pos.z as f32);
-        }
-    }
-}
-
-/// Convert domain PatchGeometry to Bevy Mesh.
-fn patch_geometry_to_mesh(geometry: &PatchGeometry, config: &TerrainRenderConfig) -> Mesh {
+/// Convert domain PatchGeometry to Bevy Mesh, rebasing planet-centered positions
+/// into the rocket-local flight frame (`positions - render_origin`). This keeps
+/// f32 vertex magnitudes small near the camera, preserving the spherical surface
+/// instead of collapsing it into a flat plane at ~6371 km magnitudes.
+fn patch_geometry_to_mesh(
+    geometry: &PatchGeometry,
+    config: &TerrainRenderConfig,
+    render_origin: &DVec3,
+) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
     );
 
-    // Positions (f32 for GPU).
+    // Positions rebased to flight frame (f32 for GPU).
     let positions: Vec<[f32; 3]> = geometry
         .positions
         .iter()
-        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        .map(|p| {
+            let v = DVec3::from_array(*p) - *render_origin;
+            [v.x as f32, v.y as f32, v.z as f32]
+        })
         .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
 
@@ -240,9 +216,9 @@ fn patch_geometry_to_mesh(geometry: &PatchGeometry, config: &TerrainRenderConfig
         .positions
         .iter()
         .map(|p| {
-            let x = p[0] as f64;
-            let y = p[1] as f64;
-            let z = p[2] as f64;
+            let x = p[0];
+            let y = p[1];
+            let z = p[2];
             // Spherical UV mapping.
             let u = (z.atan2(x) + std::f64::consts::PI) / (2.0 * std::f64::consts::PI);
             let v = (y / (x * x + y * y + z * z).sqrt()).asin() / std::f64::consts::PI + 0.5;
@@ -278,6 +254,7 @@ fn patch_material(
         base_color: Color::srgb(albedo.0, albedo.1, albedo.2),
         perceptual_roughness: roughness,
         metallic,
+        unlit: false,
         ..default()
     }
 }

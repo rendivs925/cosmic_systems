@@ -550,6 +550,10 @@ impl Default for RocketCameraConfig {
     }
 }
 
+/// Component marking the true-scale Earth sphere entity for updates.
+#[derive(Component, Debug, Default)]
+pub struct RocketEarthSphere;
+
 /// Rocket camera controller for managing camera state and transitions.
 #[derive(Component, Debug, Clone, Default)]
 pub struct RocketCameraController {

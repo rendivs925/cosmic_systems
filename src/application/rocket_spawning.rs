@@ -2,9 +2,7 @@ use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
 use crate::components::rocket::*;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::{
-    body_fixed_to_planet_inertial, geodetic_to_body_fixed,
-};
+use crate::domain::services::reference_frames::geodetic_to_body_fixed;
 use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
 use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
@@ -46,16 +44,29 @@ pub fn spawn_rockets(
         base_color: Color::srgb(0.8, 0.8, 0.8),
         metallic: 0.9,
         perceptual_roughness: 0.2,
+        unlit: true,
         ..default()
     };
     let material_handle = materials.add(material);
 
-    // Place the rocket on the Kennedy Space Center pad in planet-centered
-    // inertial meters (authoritative 6-DOF frame).
+    // Place the rocket on the Kennedy Space Center pad.
+    //
+    // We use the geodetic/body-fixed position DIRECTLY (not the spin/tilt-
+    // rotated planet-centered inertial form). The terrain source is keyed by
+    // geodetic lat/lon, and ground contact / streaming sample it from the
+    // rocket's `position_m` direction via `direction_to_lat_lon`. If we applied
+    // `body_fixed_to_planet_inertial` here, the axial-tilt/spin rotation would
+    // move the rocket's direction ~23 deg away from KSC, so the terrain source
+    // would return a distant procedural height (~400 m) instead of KSC's 2 m —
+    // burying the rocket and placing the camera inside the terrain.
+    //
+    // Gravity, terrain collision, and guidance only use `position_m.normalize()`
+    // (radial up) and `.length()` (altitude), both rotation-invariant, so this
+    // keeps the rocket consistent with the geodetic terrain without affecting
+    // the solar-system simulation.
     let earth = PlanetFactory::create_by_name("Earth").unwrap();
     let ksc = predefined_sites::kennedy_space_center();
-    let body_fixed = geodetic_to_body_fixed(&ksc, &earth);
-    let position_m = body_fixed_to_planet_inertial(body_fixed, &earth, 0.0);
+    let position_m = geodetic_to_body_fixed(&ksc, &earth);
 
     // Stand vertical on the pad: body +Y aligned with the local up direction
     // (radial). Guidance's launch target is the same attitude, so the
@@ -139,6 +150,11 @@ pub fn spawn_rockets(
         ThermalState::default(),
         AblationState::default(),
         ParachuteState::default(),
+        // Required by GroundContactAccess (resolve_ground_contact). Without
+        // these, the contact query never matches the vehicle, GroundRest never
+        // holds it, and the rocket falls freely through the terrain.
+        TipOverState::default(),
+        LandingScorecard::default(),
     ));
 
     // Phase 3: Entry/comms state + render primitives. Vehicles that define a

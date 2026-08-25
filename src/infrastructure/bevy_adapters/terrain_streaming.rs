@@ -20,7 +20,10 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 /// Camera/LOD constants.
-const MAX_PATCH_LEVEL: u32 = 10;
+/// MAX_PATCH_LEVEL=15 gives ~305 m patches; the 3×3 streaming window covers
+/// ~915 m around the launch pad — enough surrounding terrain to show a natural
+/// horizon while keeping the pad near the rocket reasonably detailed.
+const MAX_PATCH_LEVEL: u32 = 15;
 const FOV_RAD: f64 = 1.0;
 const SCREEN_HEIGHT_PX: f64 = 1080.0;
 const SCREEN_ERROR_PX: f64 = 4.0;
@@ -28,7 +31,13 @@ const SCREEN_ERROR_PX: f64 = 4.0;
 const BYTES_PER_VERTEX: u64 = 48;
 /// Patch resolution (vertices per side).
 const PATCH_RESOLUTION: u32 = 8;
-const DEFAULT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Minimum distance for LOD calculation when on the ground.
+/// Uses estimated camera-to-terrain distance (~150m) instead of orbital heuristic.
+const SURFACE_LOD_DISTANCE_M: f64 = 150.0;
+/// Altitude threshold below which surface LOD distance is used.
+const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 
 /// Bevy resource wrapping the domain streaming manager plus the generated
 /// patch geometry cache.
@@ -97,9 +106,18 @@ pub fn stream_terrain_patches(
     let altitude_m = (r - radius_m).max(0.0);
 
     // Request the ring of patches around the focus direction at the LOD
-    // appropriate for the current altitude (distance to the surface).
+    // appropriate for the current altitude.
+    // Near the surface, use camera-to-terrain distance instead of orbital heuristic.
+    let lod_distance_m = if altitude_m < SURFACE_LOD_ALTITUDE_THRESHOLD_M {
+        // On or near the ground: camera is ~100-200m above terrain.
+        SURFACE_LOD_DISTANCE_M
+    } else {
+        // Orbital/space: use orbital heuristic.
+        (altitude_m + radius_m * 0.05).max(10_000.0)
+    };
+
     let level = lod_for_distance(
-        (altitude_m + radius_m * 0.05).max(10_000.0),
+        lod_distance_m,
         radius_m,
         FOV_RAD,
         SCREEN_HEIGHT_PX,
