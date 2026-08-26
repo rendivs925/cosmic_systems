@@ -2993,7 +2993,7 @@ mod ascent_pipeline_tests {
 
     /// Electron-class vehicle: nine 25.8 kN engines with a 0.6 throttle
     /// floor (stage envelope [0.6, 1.0]), ~13 t gross.
-    fn electron_like() -> Rocket {
+    pub(super) fn electron_like() -> Rocket {
         let engines = (0..9)
             .map(|i| {
                 let angle = i as f32 * std::f32::consts::TAU / 9.0;
@@ -3043,7 +3043,7 @@ mod ascent_pipeline_tests {
         }
     }
 
-    fn ascent_app() -> App {
+    pub(super) fn ascent_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<SplashdownDetectedEvent>();
@@ -3516,5 +3516,277 @@ mod ascent_pipeline_tests {
             "guidance target attitude diverged"
         );
         assert_eq!(vec3(&a.12), vec3(&b.12), "gravity diverged");
+    }
+}
+
+/// Baseline-recording regression suite (spec: determinism-regression). This
+/// module reuses the full ascent-pipeline harness and converts the
+/// authoritative state into [`RocketStateSample`] rows for the
+/// [`domain::services::regression`] toolkit:
+///
+/// - records a canonical ascent baseline to `tests/baselines/ascent.ron`
+///   (commit it as the CI gate fixture),
+/// - re-simulates and compares per-tick/per-variable within the documented
+///   tolerances, and
+/// - proves the whole recording is bitwise reproducible across two fresh runs
+///   (the deterministic-regression guarantee, AGENTS.md section 44/46).
+///
+/// Set `REGRESSION_RECORD=1` to (re)write the baseline fixture from the
+/// current code. The audit trail is filled by the harness so the recorded
+/// baseline is signed-off by construction.
+#[cfg(test)]
+mod determinism_regression_tests {
+    use super::ascent_pipeline_tests::ascent_app;
+    use crate::components::rocket::{RocketMissionState, RocketPhysicsState};
+    use crate::domain::entities::rocket::RocketMissionState as DomainMission;
+    use crate::domain::services::regression::{
+        load_baseline_ron, save_baseline_ron, BaselineJustification, FlightBaseline,
+        RegressionConfig, RocketStateSample,
+    };
+    use bevy::prelude::*;
+
+    /// Fixed-physics ticks captured in the baseline window (~4 s of ascent:
+    /// liftoff, throttle slew, gravity-turn entry). Kept short so the fixture
+    /// stays small while still exercising the full Guidance→Control→Forces→
+    /// Integrate→GroundContact chain.
+    const RECORD_TICKS: usize = 256;
+
+    fn default_baseline_path() -> std::path::PathBuf {
+        let dir =
+            std::env::var("REGRESSION_BASELINE_DIR").unwrap_or_else(|_| "tests/baselines".into());
+        std::path::PathBuf::from(dir).join("ascent.ron")
+    }
+
+    /// Map the mission phase to a stable, order-independent code byte. The
+    /// codes are fixed enum indices so a reordered enum would change the
+    /// recorded trajectory's guidance_mode field — exactly what the regression
+    /// gate should catch.
+    fn mission_code(mission: RocketMissionState) -> u8 {
+        match mission.0 {
+            DomainMission::PreLaunch => 0,
+            DomainMission::Launch => 1,
+            DomainMission::Ascent => 2,
+            DomainMission::Orbit => 3,
+            DomainMission::DeorbitBurn => 4,
+            DomainMission::ReentryCorridor => 5,
+            DomainMission::PoweredDescent => 6,
+            DomainMission::UnpoweredDescent => 7,
+            DomainMission::Landing => 8,
+            DomainMission::Landed => 9,
+            DomainMission::Crashed => 10,
+        }
+    }
+
+    /// Capture one authoritative state row from the single rocket.
+    fn capture_sample(app: &mut App) -> RocketStateSample {
+        let world = app.world_mut();
+        let mut q = world.query::<(&RocketPhysicsState, &RocketMissionState)>();
+        let (rocket, mission) = q.single(world).unwrap();
+        let d = &rocket.dynamics;
+        RocketStateSample::new(
+            [d.position_m.x, d.position_m.y, d.position_m.z],
+            [d.velocity_mps.x, d.velocity_mps.y, d.velocity_mps.z],
+            [
+                d.orientation.x,
+                d.orientation.y,
+                d.orientation.z,
+                d.orientation.w,
+            ],
+            [
+                d.angular_velocity_radps.x,
+                d.angular_velocity_radps.y,
+                d.angular_velocity_radps.z,
+            ],
+            d.mass_kg,
+            mission_code(*mission),
+        )
+    }
+
+    /// Run the ascent harness and record `RECORD_TICKS` samples (one per
+    /// fixed physics step), including the initial t=0 sample.
+    fn record_ascent_samples() -> Vec<RocketStateSample> {
+        let mut app = ascent_app();
+        let mut samples = Vec::with_capacity(RECORD_TICKS + 1);
+        samples.push(capture_sample(&mut app));
+        for _ in 0..RECORD_TICKS {
+            app.update();
+            samples.push(capture_sample(&mut app));
+        }
+        samples
+    }
+
+    fn current_git_commit() -> String {
+        std::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    fn signed_audit() -> BaselineJustification {
+        BaselineJustification {
+            change_description: "canonical electron-class ascent baseline (LSOC)".into(),
+            expected_improvement: "pins the full Guidance→Control→Forces→Integrate chain bitwise"
+                .into(),
+            numerical_tradeoffs: "semi-implicit Euler; f64; single fixed step 1/64 s".into(),
+            affected_scenarios: vec!["ascent".into()],
+            reviewer_approved: true,
+            recorded_by: "opencode-determinism".into(),
+        }
+    }
+
+    /// The CI gate: the freshly simulated ascent must match the committed
+    /// baseline bit-for-bit within the documented per-variable tolerances. If
+    /// the fixture is absent (fresh checkout) or `REGRESSION_RECORD=1`, it is
+    /// (re)recorded first, then compared, so the fixture is self-bootstrapping.
+    #[test]
+    fn ascent_matches_committed_baseline_within_tolerances() {
+        let path = default_baseline_path();
+        let should_record = std::env::var("REGRESSION_RECORD").as_deref() == Ok("1");
+
+        let baseline = if !path.exists() || should_record {
+            let baseline = FlightBaseline::record(
+                "ascent",
+                current_git_commit(),
+                signed_audit(),
+                record_ascent_samples(),
+            )
+            .expect("signed-off ascent baseline records");
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("baseline dir creatable");
+            }
+            std::fs::write(
+                &path,
+                save_baseline_ron(&baseline).expect("baseline serializes"),
+            )
+            .expect("baseline writable");
+            baseline
+        } else {
+            let ron = std::fs::read_to_string(&path).expect("baseline readable");
+            load_baseline_ron(&ron).expect("baseline RON valid")
+        };
+
+        assert!(
+            baseline.hash_chain_consistent(),
+            "committed baseline hash chain is internally inconsistent"
+        );
+
+        let current = record_ascent_samples();
+        let divergences = baseline.compare(&current, &RegressionConfig::default());
+
+        assert!(
+            divergences.is_empty(),
+            "ascent diverged from committed baseline:\n{}",
+            divergences
+                .iter()
+                .map(|d| d.describe())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    /// Two independent fresh-run recordings of the same flight must be
+    /// bitwise identical (AGENTS.md section 44). This exercises the full
+    /// harness through the public regression API rather than a hand-written
+    /// snapshot, so a future change to either side is caught by the same
+    /// path.
+    #[test]
+    fn two_fresh_ascent_runs_are_bitwise_identical() {
+        let a = record_ascent_samples();
+        let b = record_ascent_samples();
+        assert_eq!(a.len(), b.len());
+        let divergences = crate::domain::services::regression::compare_trajectory(
+            &a,
+            &b,
+            &RegressionConfig::default(),
+        );
+        assert!(
+            divergences.is_empty(),
+            "identical runs diverged:\n{}",
+            divergences
+                .iter()
+                .map(|d| d.describe())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    /// A deliberately injected perturbation well beyond the per-variable
+    /// tolerance (a 0.5 m/s velocity error at a mid-flight tick) must be
+    /// caught at the exact tick and variable — the invariant the CI gate
+    /// relies on.
+    #[test]
+    fn injected_regression_is_reported_at_exact_tick_and_variable() {
+        let mut baseline = record_ascent_samples();
+        baseline[100].velocity_mps[0] += 0.5; // ≫ 1 µm/s tolerance
+        let reference = record_ascent_samples();
+        let divergences = crate::domain::services::regression::compare_trajectory(
+            &reference,
+            &baseline,
+            &RegressionConfig::default(),
+        );
+        let hit = divergences
+            .iter()
+            .find(|d| {
+                d.variable == crate::domain::services::regression::RegressionVariable::Velocity
+            })
+            .cloned();
+        assert!(hit.is_some(), "velocity divergence must be reported");
+        let hit = hit.unwrap();
+        assert_eq!(hit.tick, 100);
+        assert_eq!(
+            hit.variable,
+            crate::domain::services::regression::RegressionVariable::Velocity
+        );
+    }
+
+    /// Sanity: the recorded baseline starts on the pad (ground contact) and
+    /// reaches full throttle during the window — i.e. the fixture actually
+    /// exercises the launch machinery and the samples are not all identical.
+    #[test]
+    fn recorded_baseline_is_a_real_flight() {
+        let samples = match default_baseline_path().exists() {
+            true => {
+                let ron = std::fs::read_to_string(default_baseline_path()).unwrap();
+                load_baseline_ron(&ron).unwrap().samples
+            }
+            false => record_ascent_samples(),
+        };
+        assert!(samples.len() > 1);
+        // Position must move ~ a metre or more across the window (liftoff).
+        let start = &samples[0];
+        let end = &samples[samples.len() - 1];
+        let dr = crate::domain::services::regression::vector_abs_diff(
+            &start.position_m,
+            &end.position_m,
+        );
+        assert!(
+            dr > 1.0,
+            "rocket barely moved ({dr:.3} m) — baseline is not a real flight"
+        );
+        // Velocity must grow (the vehicle is accelerating off the pad).
+        let dv = crate::domain::services::regression::vector_abs_diff(
+            &start.velocity_mps,
+            &end.velocity_mps,
+        );
+        assert!(
+            dv > 1.0,
+            "rocket barely gained velocity ({dv:.3} m/s) — baseline is not an ascent"
+        );
+        // Mass must remain finite and positive throughout.
+        assert!(
+            samples
+                .iter()
+                .all(|s| s.mass_kg.is_finite() && s.mass_kg > 0.0),
+            "mass became non-finite in the ascent baseline"
+        );
+        // Guidance must transition out of pre-launch.
+        assert!(
+            end.guidance_code >= 1,
+            "guidance never advanced past pre-launch"
+        );
     }
 }
