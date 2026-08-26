@@ -7,6 +7,8 @@
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
+use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
@@ -26,6 +28,7 @@ pub struct TerrainPatchRenderState {
     pub mesh_handle: Handle<Mesh>,
     pub material_handle: Handle<StandardMaterial>,
     pub entity: Entity,
+    pub planet_entity: Entity,
 }
 
 /// Resource for the floating render origin (AGENTS.md section 13).
@@ -74,13 +77,8 @@ pub struct TerrainPatchEvicted {
 
 /// Plugin that registers terrain rendering systems for the rocket mode.
 ///
-/// The render origin is fixed once at startup (`setup_rocket_camera_and_origin`)
-/// to the rocket's physical position, and the streaming system keeps patches
-/// generated around the rocket's current sub-point. The camera remains near the
-/// rocket in flight units, so no auto-recentering is needed in rocket mode.
-/// The legacy `update_render_origin_system` (solar-system camera frame) is not
-/// registered here because it misinterprets the rocket-mode flight-unit camera
-/// as physics meters and scatters the patches far from the vehicle.
+/// The render origin follows the rocket's inertial physical position. Resident
+/// patch roots are rebased when it moves, while physical coordinates remain f64.
 pub struct TerrainRenderPlugin;
 
 impl Plugin for TerrainRenderPlugin {
@@ -91,7 +89,12 @@ impl Plugin for TerrainRenderPlugin {
             .add_message::<TerrainPatchEvicted>()
             .add_systems(
                 Update,
-                (spawn_patch_mesh_system, despawn_patch_mesh_system).chain(),
+                (
+                    recenter_render_origin,
+                    spawn_patch_mesh_system,
+                    despawn_patch_mesh_system,
+                )
+                    .chain(),
             );
     }
 }
@@ -107,6 +110,7 @@ fn spawn_patch_mesh_system(
     streaming: Res<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
+    sim_time: Res<SimulationTime>,
     planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
     planet_entities: Query<Entity, With<PlanetComponent>>,
 ) {
@@ -129,7 +133,11 @@ fn spawn_patch_mesh_system(
         // geometry into the rocket-local flight frame so f32 mesh vertices stay
         // small near the camera (avoids precision loss at ~6371 km magnitudes
         // that degrades the sphere into a flat plane with broken triangles).
-        let mesh = patch_geometry_to_mesh(geometry, &render_origin.origin);
+        let body_to_inertial = body_fixed_to_inertial_rotation(
+            &planet.domain_planet,
+            (sim_time.sim_time_s / 86_400.0) as f32,
+        );
+        let mesh = patch_geometry_to_mesh(geometry, &render_origin.origin, body_to_inertial);
         let mesh_handle = meshes.add(mesh);
 
         // Procedural surface maps (albedo + tangent-space normal) from the
@@ -158,6 +166,7 @@ fn spawn_patch_mesh_system(
                     mesh_handle: mesh_handle.clone(),
                     material_handle: material_handle.clone(),
                     entity: Entity::PLACEHOLDER,
+                    planet_entity,
                 },
                 Name::new(format!(
                     "TerrainPatch_{:?}_{}_{}_{}",
@@ -168,8 +177,13 @@ fn spawn_patch_mesh_system(
 
         // Merged vegetation + scatter (trees, rocks) as a single child mesh so
         // it costs one draw call and despawns with the patch.
-        if let Some(veg_mesh) = build_vegetation_mesh(source, &patch, radius_m, &render_origin.origin)
-        {
+        if let Some(veg_mesh) = build_vegetation_mesh(
+            source,
+            &patch,
+            radius_m,
+            &render_origin.origin,
+            body_to_inertial,
+        ) {
             let veg_material = StandardMaterial {
                 base_color: Color::WHITE,
                 perceptual_roughness: 0.9,
@@ -195,6 +209,7 @@ fn spawn_patch_mesh_system(
             mesh_handle,
             material_handle,
             entity,
+            planet_entity,
         });
     }
 }
@@ -207,7 +222,7 @@ fn despawn_patch_mesh_system(
 ) {
     for event in events.read() {
         for (entity, state) in render_query.iter() {
-            if state.patch == event.patch {
+            if state.patch == event.patch && state.planet_entity == event.planet_entity {
                 commands.entity(entity).despawn();
                 break;
             }
@@ -219,7 +234,11 @@ fn despawn_patch_mesh_system(
 /// into the rocket-local flight frame (`positions - render_origin`). This keeps
 /// f32 vertex magnitudes small near the camera, preserving the spherical surface
 /// instead of collapsing it into a flat plane at ~6371 km magnitudes.
-fn patch_geometry_to_mesh(geometry: &PatchGeometry, render_origin: &DVec3) -> Mesh {
+fn patch_geometry_to_mesh(
+    geometry: &PatchGeometry,
+    render_origin: &DVec3,
+    body_to_inertial: bevy::math::DQuat,
+) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
@@ -230,7 +249,7 @@ fn patch_geometry_to_mesh(geometry: &PatchGeometry, render_origin: &DVec3) -> Me
         .positions
         .iter()
         .map(|p| {
-            let v = DVec3::from_array(*p) - *render_origin;
+            let v = body_to_inertial * DVec3::from_array(*p) - *render_origin;
             [v.x as f32, v.y as f32, v.z as f32]
         })
         .collect();
@@ -240,7 +259,10 @@ fn patch_geometry_to_mesh(geometry: &PatchGeometry, render_origin: &DVec3) -> Me
     let normals: Vec<[f32; 3]> = geometry
         .normals
         .iter()
-        .map(|n| [n[0] as f32, n[1] as f32, n[2] as f32])
+        .map(|n| {
+            let n = body_to_inertial * DVec3::from_array(*n);
+            [n.x as f32, n.y as f32, n.z as f32]
+        })
         .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 
@@ -261,6 +283,30 @@ fn patch_geometry_to_mesh(geometry: &PatchGeometry, render_origin: &DVec3) -> Me
     let _ = mesh.generate_tangents();
 
     mesh
+}
+
+/// Shift only presentation coordinates when the rocket has moved far enough
+/// from the current local origin. Existing terrain mesh vertices stay valid;
+/// their root transforms preserve world placement until regenerated.
+pub fn recenter_render_origin(
+    config: Res<TerrainRenderConfig>,
+    rocket_query: Query<&RocketPhysicsState>,
+    mut render_origin: ResMut<RenderOrigin>,
+    mut patch_query: Query<&mut Transform, With<TerrainPatchRenderState>>,
+) {
+    let Some(rocket) = rocket_query.iter().next() else {
+        return;
+    };
+    let new_origin = rocket.dynamics.position_m;
+    if (new_origin - render_origin.origin).length() < config.recenter_threshold_m {
+        return;
+    }
+    let shift = (render_origin.origin - new_origin).as_vec3();
+    for mut transform in patch_query.iter_mut() {
+        transform.translation += shift;
+    }
+    render_origin.origin = new_origin;
+    render_origin.last_camera_pos = new_origin;
 }
 
 /// Create the base terrain material. The albedo and normal map are supplied per

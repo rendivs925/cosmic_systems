@@ -8,7 +8,7 @@
 //! unit-testable without a renderer; the Bevy system only converts the
 //! planet-centred points to the flight frame and draws them.
 
-use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
+use crate::components::rocket::{RocketMissionState, RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::trajectory::{predict_patched_conics, GravityBody};
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
@@ -114,13 +114,20 @@ impl Plugin for RocketOrbitPlugin {
 /// physics position in planet-centred inertial frame.
 fn draw_orbit_prediction(
     planet_query: Query<&PlanetComponent>,
-    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    rocket_query: Query<(
+        &RocketPlanetBinding,
+        &RocketPhysicsState,
+        &RocketMissionState,
+    )>,
     render_origin: Res<RenderOrigin>,
     mut gizmos: Gizmos<OrbitLineGizmos>,
 ) {
-    let Some((binding, rocket)) = rocket_query.iter().next() else {
+    let Some((binding, rocket, mission)) = rocket_query.iter().next() else {
         return;
     };
+    if *mission == RocketMissionState::PreLaunch {
+        return;
+    }
     let Some(planet) = planet_query
         .iter()
         .find(|p| p.domain_planet.name == binding.planet_name)

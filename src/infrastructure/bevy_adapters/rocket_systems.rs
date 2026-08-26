@@ -25,6 +25,10 @@ use crate::domain::services::guidance::{
 };
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
+use crate::domain::services::reference_frames::{
+    body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
+    surface_velocity_in_planet_inertial,
+};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed,
@@ -38,6 +42,7 @@ use crate::domain::services::terrain_collision::{
     decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
     resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
 };
+use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::{
     AerodynamicForces, AtmosphereState, EntryPhysicsConfig, MaxQTracker, PlanetAtmosphere,
@@ -86,6 +91,10 @@ pub struct GuidanceAccess {
 pub struct GroundContactAccess {
     pub entity: Entity,
     pub binding: &'static RocketPlanetBinding,
+    /// Production launch vehicles carry their geographic source location and
+    /// therefore use the rotating-body contact path. Synthetic test/debris
+    /// bodies without one retain their explicitly configured frame.
+    pub launch_site: Option<&'static LaunchSiteCoordinates>,
     pub dynamics: &'static mut RocketPhysicsState,
     pub propulsion: &'static RocketPropulsion,
     pub geometry: &'static RocketGeometry,
@@ -137,10 +146,15 @@ pub fn update_orbital_elements(
     mut rocket_query: Query<(
         &RocketPlanetBinding,
         &RocketPhysicsState,
+        &RocketMissionState,
         &mut OrbitalElements,
     )>,
 ) {
-    for (binding, rocket, mut elements) in rocket_query.iter_mut() {
+    for (binding, rocket, mission, mut elements) in rocket_query.iter_mut() {
+        if *mission == RocketMissionState::PreLaunch {
+            *elements = OrbitalElements::default();
+            continue;
+        }
         let Some(planet) = planet_query
             .iter()
             .find(|planet| planet.domain_planet.name == binding.planet_name)
@@ -252,7 +266,9 @@ pub fn atmosphere_properties(
 /// via `aerodynamic_coefficients_with_nose_bluntness`.
 pub fn aerodynamic_forces(
     config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
+        &RocketPlanetBinding,
         &RocketPhysicsState,
         &RocketGeometry,
         &AtmosphereState,
@@ -262,10 +278,20 @@ pub fn aerodynamic_forces(
         &mut ForceAccumulator,
     )>,
 ) {
-    for (rocket, geometry, atmosphere, ablation, mut aero, mut max_q, mut force_accum) in
+    for (binding, rocket, geometry, atmosphere, ablation, mut aero, mut max_q, mut force_accum) in
         rocket_query.iter_mut()
     {
-        let velocity = rocket.dynamics.velocity_mps;
+        let surface_velocity = planet_query
+            .iter()
+            .find(|planet| planet.domain_planet.name == binding.planet_name)
+            .map(|planet| {
+                surface_velocity_in_planet_inertial(
+                    rocket.dynamics.position_m,
+                    &planet.domain_planet,
+                )
+            })
+            .unwrap_or(DVec3::ZERO);
+        let velocity = rocket.dynamics.velocity_mps - surface_velocity;
         let speed = velocity.length();
         aero.center_of_pressure_body = center_of_pressure_m(geometry.height_m as f64);
         if speed < 1.0 || atmosphere.density_kg_m3 <= 0.0 {
@@ -1273,11 +1299,18 @@ pub fn resolve_ground_contact(
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
         let position_m = rocket.dynamics.position_m;
-        let dir = position_m.normalize_or_zero();
-        if dir.length_squared() < 1e-12 {
+        let time_days = (sim_time.sim_time_s / 86_400.0) as f32;
+        let rotating_surface = access.launch_site.is_some();
+        let position_bf = if rotating_surface {
+            planet_inertial_to_body_fixed(position_m, &planet.domain_planet, time_days)
+        } else {
+            position_m
+        };
+        let dir_bf = position_bf.normalize_or_zero();
+        if dir_bf.length_squared() < 1e-12 {
             continue;
         }
-        let (lat, lon) = lat_lon_from_direction(dir);
+        let (lat, lon) = lat_lon_from_direction(dir_bf);
         let sample = sample_surface(&*planet_terrain.source, lat, lon, radius_m);
         // Signed altitude: negative means penetrating the sampled surface.
         let surface_radius_m = radius_m + sample.height_m;
@@ -1289,20 +1322,29 @@ pub fn resolve_ground_contact(
         // Water inference: water is strictly below sea level (negative height).
         // The 10m sea-level tolerance was incorrectly classifying coastal land
         // (like KSC at ~2m) as water. Only negative heights are water.
-        collision.over_water =
-            planet.domain_planet.has_ocean && sample.height_m < 0.0;
+        collision.over_water = planet.domain_planet.has_ocean && sample.height_m < 0.0;
 
-        let normal = if sample.normal.length_squared() > 1e-12 {
-            sample.normal
+        let body_to_inertial = if rotating_surface {
+            body_fixed_to_inertial_rotation(&planet.domain_planet, time_days)
         } else {
-            dir
+            DQuat::IDENTITY
+        };
+        let normal = if sample.normal.length_squared() > 1e-12 {
+            body_to_inertial * sample.normal
+        } else {
+            body_to_inertial * dir_bf
         };
         // Tilt of the longitudinal body axis (+Y nose-up convention at spawn)
         // away from the local surface normal.
         let tilt_deg = (rocket.dynamics.orientation * DVec3::Y)
             .angle_between(normal)
             .to_degrees();
-        let velocity = rocket.dynamics.velocity_mps;
+        let surface_velocity = if rotating_surface {
+            surface_velocity_in_planet_inertial(position_m, &planet.domain_planet)
+        } else {
+            DVec3::ZERO
+        };
+        let velocity = rocket.dynamics.velocity_mps - surface_velocity;
         let components = decompose_velocity(velocity, normal);
 
         // Touchdown criteria, gear-aware when the legs are deployed: the
@@ -1376,13 +1418,13 @@ pub fn resolve_ground_contact(
                     let res =
                         resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
                     rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
                     legs.compression_m = legs.gear.spec.stroke_m;
                 }
                 Some((outcome, legs)) => {
                     // Soft contact: position rides the struts; only the
                     // velocity changes this step (impulse form).
-                    rocket.dynamics.velocity_mps = outcome.velocity_mps;
+                    rocket.dynamics.velocity_mps = outcome.velocity_mps + surface_velocity;
                     legs.compression_m = outcome.compression_m;
                     scorecard.leg_compression_peak_m =
                         scorecard.leg_compression_peak_m.max(outcome.compression_m);
@@ -1391,7 +1433,7 @@ pub fn resolve_ground_contact(
                     let res =
                         resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
                     rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
                 }
             }
             collision.ground_contact = GroundContact::Landed;
@@ -1432,10 +1474,10 @@ pub fn resolve_ground_contact(
         // crashed vehicle — push back to the surface and kill the
         // into-ground normal component so it cannot tunnel.
         if signed_altitude_m < 0.0 {
-            let radial_dir = dir;
+            let radial_dir = position_m.normalize_or_zero();
             rocket.dynamics.position_m = radial_dir * surface_radius_m;
             let into_ground = velocity.dot(normal).min(0.0);
-            rocket.dynamics.velocity_mps = velocity - normal * into_ground;
+            rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity;
         }
 
         // Airborne: a touchdown verdict exists only inside the contact band
@@ -1505,7 +1547,7 @@ pub fn resolve_ground_contact(
                             dt,
                         );
                         rocket.dynamics.position_m = res.position_m;
-                        rocket.dynamics.velocity_mps = res.velocity_mps;
+                        rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
                     }
                 }
 
@@ -1876,17 +1918,11 @@ pub fn compute_heating(
         // Convective heating: Sutton-Graves q_dot = k * sqrt(rho/R_nose) * v^3
         // (single authority: domain::services::entry_physics, AGENTS.md 50).
         let nose_radius = config.nose_radius_initial_m;
-        let q_conv = convective_heat_flux_w_m2(
-            config.convective_coefficient,
-            rho,
-            nose_radius,
-            v,
-        );
+        let q_conv = convective_heat_flux_w_m2(config.convective_coefficient, rho, nose_radius, v);
         thermal.convective_heat_flux_w_m2 = q_conv;
 
         // Radiative heating: Tauber-Sutton (significant for v > 10 km/s).
-        let q_rad =
-            radiative_heat_flux_w_m2(config.radiative_coefficient, rho, v);
+        let q_rad = radiative_heat_flux_w_m2(config.radiative_coefficient, rho, v);
         thermal.radiative_heat_flux_w_m2 = q_rad;
 
         thermal.total_heat_flux_w_m2 = q_conv + q_rad;
@@ -2207,7 +2243,9 @@ pub fn setup_rocket_camera_and_origin(
         // meshes that pass CPU visibility (rocket, pad primitives) silently
         // drop out of the indirect-draw path on this driver. Drawing directly
         // keeps every visible mesh on screen.
-        commands.entity(entity).insert(bevy::render::view::NoIndirectDrawing);
+        commands
+            .entity(entity)
+            .insert(bevy::render::view::NoIndirectDrawing);
 
         // Atmospheric fog tuned for a clear day at the launch site: visibility
         // ~10 km so the pad and nearby terrain stay crisp while the horizon
@@ -2218,7 +2256,7 @@ pub fn setup_rocket_camera_and_origin(
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
             directional_light_exponent: 30.0,
             falloff: FogFalloff::from_visibility_colors(
-                10_000.0, // clear-day visibility in meters
+                10_000.0,                    // clear-day visibility in meters
                 Color::srgb(0.55, 0.6, 0.7), // extinction: pale blue-grey haze
                 Color::srgb(0.9, 0.92, 1.0), // inscattering: bright sky glow
             ),
@@ -2232,10 +2270,7 @@ pub fn setup_rocket_camera_and_origin(
 /// (the rocket's radial up direction) so the pad and terrain are brightly lit:
 /// a fixed world-space direction would sit only a few degrees above the KSC
 /// horizon because the flight frame's axes are not the planet's local frame.
-pub fn setup_rocket_sun_light(
-    mut commands: Commands,
-    rocket_query: Query<&RocketPhysicsState>,
-) {
+pub fn setup_rocket_sun_light(mut commands: Commands, rocket_query: Query<&RocketPhysicsState>) {
     // Radial up at the pad (the rocket's body +Y at spawn).
     let up = rocket_query
         .iter()
@@ -2262,7 +2297,7 @@ pub fn setup_rocket_sun_light(
 
     commands.spawn((
         bevy::light::DirectionalLight {
-            illuminance: 100_000.0,              // bright daylight (lux)
+            illuminance: 100_000.0,             // bright daylight (lux)
             color: Color::srgb(1.0, 0.9, 0.75), // warm low-sun light
             shadows_enabled: true,
             ..default()
@@ -2308,9 +2343,10 @@ impl Default for SunLightState {
     }
 }
 
-/// Sets a pleasant sky-blue clear color for the launch pad view.
+/// Space is the clear color. Atmospheric haze is applied only to local geometry
+/// through the camera fog; it must never turn the entire universe blue.
 pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
-    *clear_color = ClearColor(Color::srgb(0.4, 0.6, 0.9)); // Sky blue
+    *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
 }
 
 /// Spawns a true-scale Earth sphere for the rocket mode. The Earth radius is
@@ -2347,34 +2383,10 @@ pub fn setup_rocket_earth_sphere(
 #[derive(Component, Debug, Default)]
 pub struct RocketEarthSphere;
 
-/// Updates the ClearColor based on altitude: sky blue at low altitude,
-/// fading to black in space. Transition occurs over ~20-80 km.
-pub fn update_rocket_sky_color(
-    rocket_query: Query<(&RocketPhysicsState, &RocketPlanetBinding)>,
-    planet_query: Query<&PlanetComponent>,
-    mut clear_color: ResMut<ClearColor>,
-) {
-    let Some((rocket, binding)) = rocket_query.iter().next() else {
-        return;
-    };
-    // Use the rocket's bound body, NOT the first planet in query order: the
-    // ECS iteration order is not insertion order, so `iter().next()` can return
-    // a moon/small body and compute a huge altitude (space-black sky on the pad).
-    let Some(planet) = planet_query
-        .iter()
-        .find(|planet| planet.domain_planet.name == binding.planet_name)
-    else {
-        return;
-    };
-
-    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-    let altitude_m = (rocket.dynamics.position_m.length() - radius_m).max(0.0);
-
-    // Fade from sky blue (0-20 km) to space black (80+ km)
-    let t = ((altitude_m - 20_000.0) / 60_000.0).clamp(0.0, 1.0);
-    let sky = Color::srgb(0.4, 0.6, 0.9);
-    let space = Color::srgb(0.005, 0.005, 0.01);
-    *clear_color = ClearColor(space.mix(&sky, (1.0 - t) as f32));
+/// Kept as an update hook so future atmospheric scattering can drive a local
+/// sky pass. ClearColor deliberately remains space-black at every altitude.
+pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
+    *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
 }
 
 /// Updates the true-scale Earth sphere position to stay centered on the planet

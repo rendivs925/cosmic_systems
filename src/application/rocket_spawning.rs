@@ -2,10 +2,14 @@ use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
 use crate::components::rocket::*;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::geodetic_to_body_fixed;
+use crate::domain::services::reference_frames::{
+    body_fixed_to_planet_inertial, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
+};
 use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
 use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
+use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
+use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::Selectable;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::asset::{Assets, RenderAssetUsages};
@@ -24,6 +28,7 @@ pub fn spawn_rockets(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     catalog: &RocketCatalog,
     selected_key: Option<&str>,
+    terrain_source: Option<&dyn TerrainSource>,
 ) {
     let requested_key = selected_key.unwrap_or(DEFAULT_VEHICLE_KEY);
     let Some(vehicle) = catalog.get(requested_key) else {
@@ -50,29 +55,28 @@ pub fn spawn_rockets(
     };
     let material_handle = materials.add(material);
 
-    // Place the rocket on the Kennedy Space Center pad.
-    //
-    // We use the geodetic/body-fixed position DIRECTLY (not the spin/tilt-
-    // rotated planet-centered inertial form). The terrain source is keyed by
-    // geodetic lat/lon, and ground contact / streaming sample it from the
-    // rocket's `position_m` direction via `direction_to_lat_lon`. If we applied
-    // `body_fixed_to_planet_inertial` here, the axial-tilt/spin rotation would
-    // move the rocket's direction ~23 deg away from KSC, so the terrain source
-    // would return a distant procedural height (~400 m) instead of KSC's 2 m —
-    // burying the rocket and placing the camera inside the terrain.
-    //
-    // Gravity, terrain collision, and guidance only use `position_m.normalize()`
-    // (radial up) and `.length()` (altitude), both rotation-invariant, so this
-    // keeps the rocket consistent with the geodetic terrain without affecting
-    // the solar-system simulation.
+    // The launch site is defined in Earth body-fixed geodetic coordinates, then
+    // converted once into the authoritative planet-centered inertial frame.
+    // Collision and terrain convert back through the same reference-frame API.
     let earth = PlanetFactory::create_by_name("Earth").unwrap();
     let ksc = predefined_sites::kennedy_space_center();
-    let position_m = geodetic_to_body_fixed(&ksc, &earth);
+    let terrain_elevation_m = terrain_source
+        .map(|source| source.height_m(ksc.latitude_deg as f64, ksc.longitude_deg as f64) as f32)
+        .unwrap_or(ksc.altitude_m);
+    let launch_site = LaunchSiteCoordinates::new(
+        ksc.planet_name.clone(),
+        ksc.latitude_deg,
+        ksc.longitude_deg,
+        terrain_elevation_m,
+    );
+    let position_bf = geodetic_to_body_fixed(&launch_site, &earth);
+    let position_m = body_fixed_to_planet_inertial(position_bf, &earth, 0.0);
 
     // Stand vertical on the pad: body +Y aligned with the local up direction
     // (radial). Guidance's launch target is the same attitude, so the
     // closed-loop ascent starts from zero attitude error.
     let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, position_m.normalize());
+    let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, &earth);
 
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
@@ -86,7 +90,7 @@ pub fn spawn_rockets(
     );
     let dynamics = RocketDynamicsState::new(
         position_m,
-        DVec3::ZERO,
+        surface_velocity_mps,
         launch_attitude,
         total_mass_kg,
         inertia,
@@ -128,6 +132,7 @@ pub fn spawn_rockets(
             RocketPlanetBinding {
                 planet_name: "Earth".to_string(),
             },
+            launch_site,
         ))
         .id();
 
@@ -205,7 +210,6 @@ fn build_rocket_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     rocket: &crate::domain::entities::rocket::Rocket,
 ) -> Handle<Mesh> {
-
     let hull_radius = rocket.diameter_m / 2.0;
     let total_height = rocket.height_m;
 
@@ -226,7 +230,9 @@ fn build_rocket_mesh(
     let mut indices: Vec<u32> = Vec::new();
 
     // Helper: add a cylinder section at base_y with given height and radius
-    let mut add_cylinder = |base_y: f32, height: f32, radius: f32,
+    let mut add_cylinder = |base_y: f32,
+                            height: f32,
+                            radius: f32,
                             positions: &mut Vec<[f32; 3]>,
                             normals: &mut Vec<[f32; 3]>,
                             uvs: &mut Vec<[f32; 2]>,
@@ -261,7 +267,11 @@ fn build_rocket_mesh(
     };
 
     // Helper: add a cone at (center_x, center_z) with base at base_y, apex at base_y + height
-    let mut add_cone = |center_x: f32, center_z: f32, base_y: f32, height: f32, radius: f32,
+    let mut add_cone = |center_x: f32,
+                        center_z: f32,
+                        base_y: f32,
+                        height: f32,
+                        radius: f32,
                         positions: &mut Vec<[f32; 3]>,
                         normals: &mut Vec<[f32; 3]>,
                         uvs: &mut Vec<[f32; 2]>,
@@ -299,20 +309,54 @@ fn build_rocket_mesh(
     let mut idx_offset = 0u32;
 
     // Stage 1 (white)
-    add_cylinder(0.0, stage1_height, hull_radius,
-        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+    add_cylinder(
+        0.0,
+        stage1_height,
+        hull_radius,
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &mut idx_offset,
+    );
 
     // Interstage (dark band)
-    add_cylinder(stage1_height, interstage_height, hull_radius,
-        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+    add_cylinder(
+        stage1_height,
+        interstage_height,
+        hull_radius,
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &mut idx_offset,
+    );
 
     // Stage 2 (white)
-    add_cylinder(stage1_height + interstage_height, stage2_height, hull_radius,
-        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+    add_cylinder(
+        stage1_height + interstage_height,
+        stage2_height,
+        hull_radius,
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &mut idx_offset,
+    );
 
     // Fairing / nose cone
-    add_cone(0.0, 0.0, stage1_height + interstage_height + stage2_height, fairing_height, hull_radius,
-        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+    add_cone(
+        0.0,
+        0.0,
+        stage1_height + interstage_height + stage2_height,
+        fairing_height,
+        hull_radius,
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &mut idx_offset,
+    );
 
     // Engine bells at the base (9 Merlin 1D engines on octaweb ring, radius 1.2m)
     let engine_y = 3.0;
@@ -325,16 +369,36 @@ fn build_rocket_mesh(
         let x = engine_ring_radius * angle.cos();
         let z = engine_ring_radius * angle.sin();
         // Cone base at engine_y - engine_height, apex at engine_y
-        add_cone(x, z, engine_y - engine_height, engine_height, engine_radius,
-            &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+        add_cone(
+            x,
+            z,
+            engine_y - engine_height,
+            engine_height,
+            engine_radius,
+            &mut positions,
+            &mut normals,
+            &mut uvs,
+            &mut indices,
+            &mut idx_offset,
+        );
     }
 
     // Stage 2 engine (Merlin Vacuum) at y=12m body frame → y=47m visual
     let stage2_engine_y = 47.0;
     let stage2_engine_radius = 0.8;
     let stage2_engine_height = 2.5;
-    add_cone(0.0, 0.0, stage2_engine_y - stage2_engine_height, stage2_engine_height, stage2_engine_radius,
-        &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx_offset);
+    add_cone(
+        0.0,
+        0.0,
+        stage2_engine_y - stage2_engine_height,
+        stage2_engine_height,
+        stage2_engine_radius,
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &mut idx_offset,
+    );
 
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,

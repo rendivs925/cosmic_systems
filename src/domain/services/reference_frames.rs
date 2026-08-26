@@ -99,10 +99,27 @@ pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, planet: &Planet, time_days:
 }
 
 /// The single authoritative body-fixed → inertial rotation for a planet.
-fn body_fixed_to_inertial_rotation(planet: &Planet, time_days: f32) -> DQuat {
+/// Rotation that maps body-fixed vectors into the planet-centered inertial
+/// frame at the supplied simulation epoch.
+pub fn body_fixed_to_inertial_rotation(planet: &Planet, time_days: f32) -> DQuat {
     let spin_rad = calculate_planet_rotation(planet, time_days) as f64;
     let tilt_rad = planet.axial_tilt_deg as f64;
     DQuat::from_rotation_z(tilt_rad.to_radians()) * DQuat::from_rotation_y(spin_rad)
+}
+
+/// Velocity of a point fixed to the rotating planetary surface, expressed in
+/// the planet-centered inertial frame. The spin axis includes the planet's
+/// axial tilt, so this can be used directly for launch state, ground contact,
+/// and atmosphere-relative velocity.
+pub fn surface_velocity_in_planet_inertial(pos_pci: DVec3, planet: &Planet) -> DVec3 {
+    let period_s = planet.rotation_period_hours as f64 * 3600.0;
+    if !period_s.is_finite() || period_s <= 0.0 {
+        return DVec3::ZERO;
+    }
+    let spin_axis_pci =
+        DQuat::from_rotation_z((planet.axial_tilt_deg as f64).to_radians()) * DVec3::Y;
+    let angular_velocity_rad_s = spin_axis_pci * (std::f64::consts::TAU / period_s);
+    angular_velocity_rad_s.cross(pos_pci)
 }
 
 // ---------------------------------------------------------------------------
@@ -430,5 +447,18 @@ mod tests {
         for v in [east, north, up] {
             assert!((v.length() - 1.0).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn earth_surface_velocity_matches_omega_cross_r() {
+        let planet = earth();
+        let pos_pci =
+            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&ksc(), &planet), &planet, 0.0);
+        let velocity = surface_velocity_in_planet_inertial(pos_pci, &planet);
+        let expected = std::f64::consts::TAU / (planet.rotation_period_hours as f64 * 3600.0)
+            * planet_radius_m(&planet)
+            * (ksc().latitude_deg as f64).to_radians().cos();
+        assert!((velocity.length() - expected).abs() < 1.0);
+        assert!(velocity.dot(pos_pci).abs() < 1e-5 * pos_pci.length());
     }
 }

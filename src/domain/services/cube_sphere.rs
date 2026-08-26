@@ -271,10 +271,7 @@ pub fn build_patch_geometry(
     // The UV axes are right-handed about the outward normal on some cube faces
     // (NegX, PosY, NegZ) and left-handed on the others (PosX, NegY, PosZ).
     // Emit indices so the front face always points outward (CCW viewed from outside).
-    let reversed = matches!(
-        patch.face,
-        CubeFace::PosX | CubeFace::NegY | CubeFace::PosZ
-    );
+    let reversed = matches!(patch.face, CubeFace::PosX | CubeFace::NegY | CubeFace::PosZ);
 
     let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6 + res * 4 * 6);
     for j in 0..res - 1 {

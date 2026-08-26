@@ -165,9 +165,13 @@ pub fn update_rocket_camera(
             RocketCameraMode::Cockpit => {
                 compute_cockpit_camera(rocket_pos_flight, rocket_rot, &config)
             }
-            RocketCameraMode::Orbital => {
-                compute_orbital_camera(rocket_pos_flight, planet_center_flight, up_dir, &config)
-            }
+            RocketCameraMode::Orbital => compute_orbital_camera(
+                rocket_pos_flight,
+                planet_center_flight,
+                up_dir,
+                rocket_physics.dynamics.velocity_mps.as_vec3(),
+                &config,
+            ),
             RocketCameraMode::Surface => compute_surface_camera(
                 rocket_pos_flight,
                 planet_center_flight,
@@ -287,6 +291,7 @@ fn compute_orbital_camera(
     rocket_pos: Vec3,
     planet_pos: Vec3,
     up_dir: Vec3,
+    velocity_mps: Vec3,
     config: &RocketCameraConfig,
 ) -> (Vec3, Quat) {
     // Position camera at an angle to show the orbital plane
@@ -294,16 +299,23 @@ fn compute_orbital_camera(
     let elevation = config.orbital_elevation;
 
     // Compute a position that shows the orbit from an inclined perspective
-    let forward = (rocket_pos - planet_pos).normalize();
-    let right = up_dir.cross(forward).normalize();
+    let mut tangent = velocity_mps - up_dir * velocity_mps.dot(up_dir);
+    if tangent.length_squared() < 1.0e-4 {
+        tangent = if up_dir.z.abs() < 0.9 {
+            up_dir.cross(Vec3::Z)
+        } else {
+            up_dir.cross(Vec3::X)
+        };
+    }
+    let tangent = tangent.normalize_or_zero();
+    let right = up_dir.cross(tangent).normalize_or_zero();
 
     // Orbital camera position: offset from rocket in orbital plane
     let offset = right * orbit_radius * 0.5 + up_dir * orbit_radius * elevation;
     let target_pos = rocket_pos + offset;
 
     // Look toward the planet/rocket
-    let look_dir = (planet_pos - target_pos).normalize();
-    let target_rot = Quat::from_rotation_arc(-Vec3::Z, look_dir);
+    let target_rot = safe_look_rotation(target_pos, planet_pos, &[up_dir, tangent, right]);
 
     (target_pos, target_rot)
 }
@@ -406,8 +418,10 @@ pub fn update_rocket_camera_projection(
                     (0.5, 100_000.0)
                 }
                 RocketCameraMode::Orbital => {
-                    // Far for orbital view
-                    (10.0, (config.orbital_distance * 5.0) as f32)
+                    // Earth and the predicted trajectory are centered roughly a
+                    // planet radius away in the flight frame. Keep the range
+                    // tied to physical altitude, not an arbitrary camera zoom.
+                    (10.0, ((planet_radius + height_above_surface) * 3.0) as f32)
                 }
                 RocketCameraMode::Free => {
                     // Free-fly space view: wide range to frame the rocket and a

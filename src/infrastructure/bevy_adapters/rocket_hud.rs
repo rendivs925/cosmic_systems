@@ -4,8 +4,8 @@ use crate::components::rocket::*;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::RocketCameraMode;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::RocketEventFeed;
-use bevy::prelude::*;
 use bevy::camera::CameraOutputMode;
+use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
 
 /// HUD panel types for different display regions.
@@ -498,11 +498,16 @@ impl FieldFormatters {
                 (format!("G-Load: {:.2}", telemetry.g_load), color)
             }
             HudField::Apoapsis => (
-                format!("Apoapsis: {:.0} km", telemetry.apoapsis_altitude_m / 1000.0),
+                if telemetry.apoapsis_altitude_m.is_finite() {
+                    format!("Apoapsis: {:.0} km", telemetry.apoapsis_altitude_m / 1000.0)
+                } else {
+                    "Apoapsis: N/A".to_string()
+                },
                 Color::WHITE,
             ),
             HudField::Periapsis => {
-                let color = if telemetry.periapsis_altitude_m < 100_000.0
+                let color = if telemetry.periapsis_altitude_m.is_finite()
+                    && telemetry.periapsis_altitude_m < 100_000.0
                     && telemetry.mission_phase != RocketMissionState::Orbit
                 {
                     HudColors::default().danger
@@ -510,10 +515,14 @@ impl FieldFormatters {
                     Color::WHITE
                 };
                 (
-                    format!(
-                        "Periapsis: {:.0} km",
-                        telemetry.periapsis_altitude_m / 1000.0
-                    ),
+                    if telemetry.periapsis_altitude_m.is_finite() {
+                        format!(
+                            "Periapsis: {:.0} km",
+                            telemetry.periapsis_altitude_m / 1000.0
+                        )
+                    } else {
+                        "Periapsis: N/A".to_string()
+                    },
                     color,
                 )
             }

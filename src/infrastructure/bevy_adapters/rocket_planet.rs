@@ -7,18 +7,27 @@
 //!
 //! Conversion: solar system display units -> meters using PhysicalScale.
 
-use crate::application::material_factory::{create_planet_material, create_cloud_material, PlanetMaterialConfig};
-use crate::application::texture_config::{get_cloud_layer_config, get_planet_textures, load_texture};
-use crate::components::rocket::{RocketPlanetBinding, RocketMode};
+use crate::application::material_factory::{
+    create_cloud_material, create_planet_material, PlanetMaterialConfig,
+};
+use crate::application::texture_config::{
+    get_cloud_layer_config, get_planet_textures, load_texture,
+};
+use crate::components::rocket::{RocketMode, RocketPlanetBinding};
+use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
+use crate::domain::services::physics_utils::{
+    calculate_sun_visual_radius, calculate_visual_radius,
+};
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::physics_utils::{calculate_sun_visual_radius, calculate_visual_radius};
+use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
-use bevy::ecs::system::ParamSet;
 
 /// Component marking a planet entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -48,6 +57,21 @@ pub struct RocketCloudOf(pub Entity);
 /// Resource storing the bound planet name for quick lookup.
 #[derive(Resource, Debug, Default)]
 pub struct RocketBoundPlanet(pub Option<String>);
+
+/// Rocket Mode keeps shared celestial entities as the simulation authority, but
+/// hides their solar-scale presentation. Flight-frame proxy meshes are the only
+/// celestial visuals seen by the rocket camera.
+pub fn isolate_rocket_presentation(
+    mut planets: Query<&mut Visibility, With<PlanetComponent>>,
+    mut solar_lights: Query<&mut PointLight>,
+) {
+    for mut visibility in planets.iter_mut() {
+        *visibility = Visibility::Hidden;
+    }
+    for mut light in solar_lights.iter_mut() {
+        light.intensity = 0.0;
+    }
+}
 
 /// Startup system: spawn the bound planet, its moons, and the Sun in flight units.
 pub fn setup_rocket_planets(
@@ -106,32 +130,26 @@ pub fn setup_rocket_planets(
         });
 
         let material_handle = materials.add(material);
-        let material_handle_pc = material_handle.clone();
-
-        let planet_entity = commands.spawn((
-            Mesh3d(mesh_handle),
-            MeshMaterial3d(material_handle),
-            Transform::default(),
-            RocketPlanet {
-                name: planet_name.clone(),
-                is_bound_planet: true,
-                is_sun: false,
-            },
-            PlanetComponent {
-                domain_planet: planet.clone(),
-                material: material_handle_pc,
-                has_texture: textures.albedo.is_some(),
-                base_reflectance: reflectance,
-                base_roughness: perceptual_roughness,
-            },
-        )).id();
+        let planet_entity = commands
+            .spawn((
+                Mesh3d(mesh_handle),
+                MeshMaterial3d(material_handle),
+                Transform::default(),
+                RocketPlanet {
+                    name: planet_name.clone(),
+                    is_bound_planet: true,
+                    is_sun: false,
+                },
+            ))
+            .id();
 
         // Cloud layer for Earth
         if let Some(clouds) = get_cloud_layer_config(&planet_name) {
             let cloud_texture = load_texture(&asset_server, Some(clouds.texture_path));
             if let Some(cloud_handle) = cloud_texture {
                 let cloud_mesh = meshes.add(Sphere::new(radius_m as f32 * clouds.scale));
-                let cloud_material = materials.add(create_cloud_material(Some(cloud_handle), clouds.alpha));
+                let cloud_material =
+                    materials.add(create_cloud_material(Some(cloud_handle), clouds.alpha));
                 commands.spawn((
                     Mesh3d(cloud_mesh),
                     MeshMaterial3d(cloud_material),
@@ -158,7 +176,14 @@ pub fn setup_rocket_planets(
     }
 
     // Spawn the Sun
-    spawn_rocket_sun(&mut commands, &mut meshes, &mut materials, &asset_server, &solar_params, &physical_scale);
+    spawn_rocket_sun(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &asset_server,
+        &solar_params,
+        &physical_scale,
+    );
 }
 
 /// Spawn a moon in flight units.
@@ -204,8 +229,6 @@ fn spawn_rocket_moon(
     });
 
     let material_handle = materials.add(material);
-    let material_handle_pc = material_handle.clone();
-
     commands.spawn((
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
@@ -213,13 +236,6 @@ fn spawn_rocket_moon(
         RocketMoon {
             name: moon.name.clone(),
             parent_planet: moon.parent_entity.as_ref().unwrap().clone(),
-        },
-        PlanetComponent {
-            domain_planet: moon.clone(),
-            material: material_handle_pc,
-            has_texture: textures.albedo.is_some(),
-            base_reflectance: reflectance,
-            base_roughness: perceptual_roughness,
         },
     ));
 }
@@ -253,8 +269,6 @@ fn spawn_rocket_sun(
     });
 
     let material_handle = materials.add(material);
-    let material_handle_pc = material_handle.clone();
-
     commands.spawn((
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
@@ -263,13 +277,6 @@ fn spawn_rocket_sun(
             name: "Sun".to_string(),
             is_bound_planet: false,
             is_sun: true,
-        },
-        PlanetComponent {
-            domain_planet: PlanetFactory::create_by_name("Sun").unwrap(),
-            material: material_handle_pc,
-            has_texture: textures.albedo.is_some(),
-            base_reflectance: 0.0,
-            base_roughness: 0.0,
         },
     ));
 }
@@ -280,10 +287,14 @@ pub fn update_rocket_planets(
     solar_params: Res<SolarSystemParameters>,
     physical_scale: Res<PhysicalScale>,
     render_origin: Res<RenderOrigin>,
-    planet_query: Query<(&PlanetComponent, &Transform), Without<RocketPlanet>>,
+    sim_time: Res<SimulationTime>,
+    planet_query: Query<
+        (&PlanetComponent, &Transform),
+        (Without<RocketPlanet>, Without<RocketMoon>),
+    >,
     mut query_set: ParamSet<(
-        Query<(&RocketPlanet, &mut Transform), Without<PlanetComponent>>,
-        Query<(&RocketMoon, &mut Transform), Without<PlanetComponent>>,
+        Query<(&RocketPlanet, &mut Transform)>,
+        Query<(&RocketMoon, &mut Transform)>,
     )>,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
@@ -310,6 +321,16 @@ pub fn update_rocket_planets(
     for (rocket_planet, mut transform) in query_set.p0().iter_mut() {
         if rocket_planet.is_bound_planet {
             transform.translation = planet_center_flight;
+            if let Some((planet, _)) = planet_query
+                .iter()
+                .find(|(planet, _)| planet.domain_planet.name == rocket_planet.name)
+            {
+                transform.rotation = body_fixed_to_inertial_rotation(
+                    &planet.domain_planet,
+                    (sim_time.sim_time_s / 86_400.0) as f32,
+                )
+                .as_quat();
+            }
         } else if rocket_planet.is_sun {
             // Sun position: solar_pos - bound_planet_pos (relative), converted to meters
             let sun_solar = planet_query
@@ -333,7 +354,10 @@ pub fn update_rocket_planets(
                 .map(|(_, t)| t.translation);
 
             if let Some(moon_pos) = moon_solar {
-                let rel = (moon_pos - bound_planet_pos).as_dvec3() * display_to_meters;
+                // Shared solar presentation intentionally exaggerates moon
+                // orbits. Flight proxies must undo that visual-only scale.
+                let rel = (moon_pos - bound_planet_pos).as_dvec3()
+                    * (display_to_meters / MOON_ORBIT_SCALE as f64);
                 transform.translation = (planet_center_flight.as_dvec3() + rel).as_vec3();
             }
         }
@@ -342,11 +366,14 @@ pub fn update_rocket_planets(
 
 /// Update cloud layer rotation for the bound planet.
 pub fn update_rocket_clouds(
-    time: Res<Time>,
-    mut cloud_query: Query<(&RocketCloudLayer, &RocketCloudOf, &mut Transform), Without<RocketPlanet>>,
+    sim_time: Res<SimulationTime>,
+    mut cloud_query: Query<
+        (&RocketCloudLayer, &RocketCloudOf, &mut Transform),
+        Without<RocketPlanet>,
+    >,
     planet_query: Query<&Transform, With<RocketPlanet>>,
 ) {
-    let elapsed_hours = time.elapsed_secs() / 3600.0;
+    let elapsed_hours = sim_time.sim_time_s as f32 / 3600.0;
     for (cloud, cloud_of, mut transform) in cloud_query.iter_mut() {
         let rotation = (elapsed_hours / cloud.rotation_period_hours) * std::f32::consts::TAU;
         transform.rotation = Quat::from_rotation_y(rotation);
@@ -360,8 +387,8 @@ pub fn update_rocket_clouds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
+    use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 
     #[test]
     fn test_physical_scale_conversion() {

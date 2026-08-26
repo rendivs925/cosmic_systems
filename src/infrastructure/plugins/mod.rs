@@ -50,7 +50,8 @@ use crate::infrastructure::bevy_adapters::rocket_hud::{
 };
 use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
-    RocketBoundPlanet, setup_rocket_planets, update_rocket_clouds, update_rocket_planets,
+    isolate_rocket_presentation, setup_rocket_planets, update_rocket_clouds, update_rocket_planets,
+    RocketBoundPlanet,
 };
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
@@ -260,13 +261,22 @@ fn spawn_rockets_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
     catalog: Res<RocketCatalog>,
     selection: Res<VehicleSelection>,
+    terrain_query: Query<(
+        &crate::infrastructure::bevy_adapters::components::PlanetComponent,
+        &crate::infrastructure::bevy_adapters::components::PlanetTerrain,
+    )>,
 ) {
+    let terrain_source = terrain_query
+        .iter()
+        .find(|(planet, _)| planet.domain_planet.name == "Earth")
+        .map(|(_, terrain)| terrain.source.as_ref());
     spawn_rockets(
         &mut commands,
         &mut meshes,
         &mut materials,
         &catalog,
         selection.0.as_deref(),
+        terrain_source,
     );
 }
 
@@ -290,7 +300,7 @@ impl Plugin for RocketModePlugin {
         app.init_resource::<VehicleSelection>();
 
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, spawn_rockets_system);
+        app.add_systems(Startup, spawn_rockets_system.after(setup_space));
 
         // Rocket telemetry resource for HUD and flight log.
         app.init_resource::<RocketTelemetry>();
@@ -459,6 +469,7 @@ impl Plugin for RocketModePlugin {
         app.add_systems(
             Startup,
             (
+                isolate_rocket_presentation,
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
                 setup_rocket_sun_light,
@@ -485,8 +496,8 @@ impl Plugin for RocketModePlugin {
 
         // Rocket-mode planets (bound planet, moons, Sun) in flight units with real textures.
         // Runs after solar system planet positions are updated.
-        app.add_systems(Update, update_rocket_planets);
-        app.add_systems(Update, update_rocket_clouds);
+        app.add_systems(Update, update_rocket_planets.after(update_planet_positions));
+        app.add_systems(Update, update_rocket_clouds.after(update_rocket_planets));
 
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);

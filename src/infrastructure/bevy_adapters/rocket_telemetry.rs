@@ -287,8 +287,16 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
         mach_number: d.mach,
         dynamic_pressure_pa: d.q,
         g_load: d.g_load,
-        apoapsis_altitude_m: ctx.orbital.apoapsis_m - ctx.planet_radius_m,
-        periapsis_altitude_m: ctx.orbital.periapsis_m - ctx.planet_radius_m,
+        apoapsis_altitude_m: if *ctx.mission_state == RocketMissionState::PreLaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.apoapsis_m - ctx.planet_radius_m
+        },
+        periapsis_altitude_m: if *ctx.mission_state == RocketMissionState::PreLaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.periapsis_m - ctx.planet_radius_m
+        },
         tw_ratio: d.tw_ratio,
         delta_v_remaining_mps: d.delta_v,
         propellant_fraction: d.propellant_fraction,

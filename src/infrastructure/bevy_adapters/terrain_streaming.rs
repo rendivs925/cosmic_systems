@@ -11,26 +11,26 @@
 use crate::domain::services::cube_sphere::{
     build_patch_geometry, lod_for_distance, patch_world_size_m, PatchGeometry, TerrainPatch,
 };
+use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
-    TerrainPatchEvicted, TerrainPatchReady,
+    TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
 
 /// Camera/LOD constants.
-/// MAX_PATCH_LEVEL=15 gives ~305 m patches; the 3×3 streaming window covers
-/// ~915 m around the launch pad — enough surrounding terrain to show a natural
-/// horizon while keeping the pad near the rocket reasonably detailed.
+/// MAX_PATCH_LEVEL=15 gives ~305 m patches near the launch site. The coarse
+/// Earth presentation proxy supplies the continuous globe beyond this local
+/// high-detail window.
 const MAX_PATCH_LEVEL: u32 = 15;
 const FOV_RAD: f64 = 1.0;
 const SCREEN_HEIGHT_PX: f64 = 1080.0;
 const SCREEN_ERROR_PX: f64 = 4.0;
 /// Approximate bytes per generated patch vertex (f64 position + normal).
 const BYTES_PER_VERTEX: u64 = 48;
-/// Patch resolution (vertices per side).
-const PATCH_RESOLUTION: u32 = 8;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Minimum distance for LOD calculation when on the ground.
@@ -76,6 +76,8 @@ pub fn stream_terrain_patches(
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut ready_events: MessageWriter<TerrainPatchReady>,
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
+    config: Res<TerrainRenderConfig>,
+    sim_time: Res<SimulationTime>,
 ) {
     streaming.manager.tick();
 
@@ -109,7 +111,14 @@ pub fn stream_terrain_patches(
     if r < 1e-6 {
         return;
     }
-    let dir = position_m / r;
+    // Terrain source coordinates are planet body-fixed geographic coordinates;
+    // the rocket state remains planet-centered inertial everywhere else.
+    let position_bf = planet_inertial_to_body_fixed(
+        position_m,
+        &_planet.domain_planet,
+        (sim_time.sim_time_s / 86_400.0) as f32,
+    );
+    let dir = position_bf.normalize_or_zero();
     let altitude_m = (r - radius_m).max(0.0);
 
     // Request the ring of patches around the focus direction at the LOD
@@ -145,8 +154,7 @@ pub fn stream_terrain_patches(
     // Drive lifecycle for the focus window and generate geometry.
     let window = surrounding_patches(&focus);
     for patch in window.iter() {
-        let patch_size = patch_world_size_m(patch.level, radius_m);
-        let resolution = PATCH_RESOLUTION as u64;
+        let resolution = config.patch_resolution as u64;
         let size_bytes = BYTES_PER_VERTEX * resolution * resolution;
         streaming.manager.request(*patch, size_bytes);
 
@@ -160,8 +168,8 @@ pub fn stream_terrain_patches(
             patch,
             planet_terrain.source.as_ref(),
             radius_m,
-            PATCH_RESOLUTION,
-            30.0,
+            config.patch_resolution,
+            config.skirt_depth_m,
         );
         streaming.generated.insert(*patch, geometry);
         streaming.manager.mark_ready(patch);
@@ -176,14 +184,18 @@ pub fn stream_terrain_patches(
         }
     }
 
-    // Drop geometry for patches no longer in the visible window.
-    streaming
-        .generated
-        .retain(|patch, _| window.contains(patch));
+    // Move departed patches to the cache. They remain renderable and can be
+    // reused until the manager evicts them under the configured memory budget.
+    for patch in previously_visible {
+        if !window.contains(&patch) {
+            streaming.manager.mark_cached(&patch);
+        }
+    }
 
     let budget = streaming.budget_bytes;
     let evicted = streaming.manager.enforce_memory_budget(budget);
     for patch in evicted {
+        streaming.generated.remove(&patch);
         evicted_events.write(TerrainPatchEvicted {
             patch,
             planet_entity,

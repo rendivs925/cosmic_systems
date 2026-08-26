@@ -18,10 +18,10 @@ use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, patch_world_size_m, TerrainPatch,
 };
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
-use bevy::math::DVec3;
+use bevy::asset::RenderAssetUsages;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::asset::RenderAssetUsages;
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
 /// Texture resolution (texels per side) for the per-patch surface maps.
@@ -176,11 +176,7 @@ impl MeshAccum {
         color: [f32; 3],
     ) {
         // Orthonormal tangent basis around `up`.
-        let ref_axis = if up.y.abs() < 0.9 {
-            DVec3::Y
-        } else {
-            DVec3::X
-        };
+        let ref_axis = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
         let tangent = up.cross(ref_axis).normalize();
         let bitangent = up.cross(tangent).normalize();
 
@@ -197,8 +193,10 @@ impl MeshAccum {
             // Side normal points outward (radial) for a cylinder/cone.
             self.positions.push([p0.x as f32, p0.y as f32, p0.z as f32]);
             self.positions.push([p1.x as f32, p1.y as f32, p1.z as f32]);
-            self.normals.push([radial.x as f32, radial.y as f32, radial.z as f32]);
-            self.normals.push([radial.x as f32, radial.y as f32, radial.z as f32]);
+            self.normals
+                .push([radial.x as f32, radial.y as f32, radial.z as f32]);
+            self.normals
+                .push([radial.x as f32, radial.y as f32, radial.z as f32]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
         }
@@ -214,11 +212,7 @@ impl MeshAccum {
 
     /// Push a low-poly boulder: a lumpy lump (random radial jitter per vertex).
     fn push_boulder(&mut self, center: DVec3, up: DVec3, radius: f64, seed: u64) {
-        let ref_axis = if up.y.abs() < 0.9 {
-            DVec3::Y
-        } else {
-            DVec3::X
-        };
+        let ref_axis = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
         let tangent = up.cross(ref_axis).normalize();
         let bitangent = up.cross(tangent).normalize();
         let segments = 6usize;
@@ -270,7 +264,8 @@ impl MeshAccum {
 /// Deterministically hash patch coordinates + index `k` to a stable pseudo-random
 /// [0,1) value (used for scatter placement so it never depends on frame order).
 fn hash01(a: u64, b: u64, c: u64) -> f64 {
-    let mut h = a ^ (b.wrapping_mul(0x9E37_79B9_7F4A_7C15)) ^ (c.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+    let mut h =
+        a ^ (b.wrapping_mul(0x9E37_79B9_7F4A_7C15)) ^ (c.wrapping_mul(0xBF58_476D_1CE4_E5B9));
     h ^= h >> 30;
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h ^= h >> 27;
@@ -288,6 +283,7 @@ pub fn build_vegetation_mesh(
     patch: &TerrainPatch,
     radius_m: f64,
     render_origin: &DVec3,
+    body_to_inertial: DQuat,
 ) -> Option<Mesh> {
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
@@ -340,10 +336,10 @@ pub fn build_vegetation_mesh(
         if local_slope > 34.0 {
             continue;
         }
-        let planet_pos = dir * (radius_m + h);
+        let planet_pos = body_to_inertial * (dir * (radius_m + h));
         let flight = planet_pos - *render_origin;
-        let up = dir; // radial up (terrain normal ~ radial for gentle slopes)
-        // Vary tree size a little.
+        let up = body_to_inertial * dir; // radial up (terrain normal ~ radial for gentle slopes)
+                                         // Vary tree size a little.
         let scale = 0.7 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.9;
         let trunk_h = 2.2 * scale;
         let trunk_r = 0.18 * scale;
@@ -354,7 +350,15 @@ pub fn build_vegetation_mesh(
         let foliage_color = [0.18f32, 0.38f32, 0.13f32];
         accum.push_prism(base, up, trunk_r, trunk_r * 0.8, trunk_h, 6, trunk_color);
         let foliage_base = base + up * trunk_h;
-        accum.push_prism(foliage_base, up, foliage_r, 0.0, foliage_h, 7, foliage_color);
+        accum.push_prism(
+            foliage_base,
+            up,
+            foliage_r,
+            0.0,
+            foliage_h,
+            7,
+            foliage_color,
+        );
     }
 
     for k in 0..rock_count {
@@ -376,10 +380,15 @@ pub fn build_vegetation_mesh(
         if h < 0.5 {
             continue;
         }
-        let planet_pos = dir * (radius_m + h);
+        let planet_pos = body_to_inertial * (dir * (radius_m + h));
         let flight = planet_pos - *render_origin;
         let radius = 0.4 + hash01(k as u64, patch.tile_x as u64, 3) * 0.9;
-        accum.push_boulder(flight, dir, radius, 0x1234_5678 ^ (k as u64 * 2_654_355_561));
+        accum.push_boulder(
+            flight,
+            body_to_inertial * dir,
+            radius,
+            0x1234_5678 ^ (k as u64 * 2_654_355_561),
+        );
     }
 
     if accum.positions.is_empty() {
@@ -413,8 +422,8 @@ mod tests {
     fn vegetation_respects_source_and_is_deterministic() {
         let src = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
-        let a = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO);
-        let b = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO);
+        let a = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO, DQuat::IDENTITY);
+        let b = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO, DQuat::IDENTITY);
         assert_eq!(a.is_some(), b.is_some());
 
         // Some patch on this planet must be vegetated (green land exists), and
@@ -434,7 +443,9 @@ mod tests {
             for t in 0..8u32 {
                 let dir = face_uv_to_direction(face, t as f64 / 8.0, 0.5);
                 let p = TerrainPatch::for_direction(dir, 2);
-                if let Some(mesh) = build_vegetation_mesh(&src, &p, 6_371_000.0, &DVec3::ZERO) {
+                if let Some(mesh) =
+                    build_vegetation_mesh(&src, &p, 6_371_000.0, &DVec3::ZERO, DQuat::IDENTITY)
+                {
                     assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
                     found_veg = true;
                     break;
