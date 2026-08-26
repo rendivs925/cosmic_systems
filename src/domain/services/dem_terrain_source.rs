@@ -14,9 +14,9 @@ use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSo
 #[cfg(feature = "dem")]
 use std::collections::HashMap;
 #[cfg(feature = "dem")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "dem")]
-use std::sync::Arc;
+use std::sync::Mutex;
 
 /// DEM dataset type.
 #[cfg(feature = "dem")]
@@ -116,6 +116,11 @@ impl DemTileCache {
 pub struct DemTerrainConfig {
     pub cache_max_tiles: usize,
     pub fallback_to_procedural: bool,
+    /// Directory of local DEM tiles (SRTM `.hgt` etc.). `None` disables
+    /// on-disk loading and falls back to procedural generation.
+    pub data_dir: Option<PathBuf>,
+    /// Which dataset serves `height_m` queries (Earth defaults to SRTM3).
+    pub dataset: DemDataset,
 }
 
 #[cfg(feature = "dem")]
@@ -124,16 +129,23 @@ impl Default for DemTerrainConfig {
         Self {
             cache_max_tiles: 256,
             fallback_to_procedural: true,
+            data_dir: None,
+            dataset: DemDataset::Srtm3,
         }
     }
 }
 
 /// Real planetary DEM terrain source implementing the TerrainSource trait.
 #[cfg(feature = "dem")]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DemTerrainSource {
     config: DemTerrainConfig,
-    cache: DemTileCache,
+    /// Interior mutability so `height_m(&self)` can load and cache tiles on
+    /// demand (the trait only hands out `&self`; see design.md). A `Mutex`
+    /// keeps the source `Send + Sync` for `Arc` sharing with the ECS; tile
+    /// access is intentionally coarse-grained (loading is rare, reads amortize
+    /// against the LRU cache).
+    cache: Mutex<DemTileCache>,
     procedural_fallback: ProceduralTerrainSource,
 }
 
@@ -145,46 +157,31 @@ impl DemTerrainSource {
 
         Self {
             config,
-            cache: DemTileCache::new(cache_max_tiles),
+            cache: Mutex::new(DemTileCache::new(cache_max_tiles)),
             procedural_fallback,
         }
     }
 
-    /// Get or load a DEM tile for the given lat/lon.
-    fn get_tile(&mut self, dataset: DemDataset, lat: f64, lon: f64) -> Option<&DemTile> {
-        let (tile_x, tile_y) = self.lat_lon_to_tile_xy(dataset, lat, lon);
-        let key = DemTileKey {
-            dataset,
-            tile_x,
-            tile_y,
-        };
-
-        // Check cache first.
-        if self.cache.get(key).is_some() {
-            // Need to re-borrow to return the reference.
-            return self.cache.get(key);
-        }
-
-        // Try to load the tile (placeholder - returns None to trigger fallback).
-        if let Some(tile) = self.load_tile(dataset, tile_x, tile_y) {
-            self.cache.insert(tile);
-            return self.cache.get(key);
-        }
-
-        None
+    /// The tile coordinates (`dataset`, `tile_x`, `tile_y`) covering a lat/lon.
+    fn cover_tile(&self, lat: f64, lon: f64) -> (DemDataset, i32, i32) {
+        let (tile_x, tile_y) = self.lat_lon_to_tile_xy(self.config.dataset, lat, lon);
+        (self.config.dataset, tile_x, tile_y)
     }
 
     /// Convert lat/lon to tile coordinates for the given dataset.
     fn lat_lon_to_tile_xy(&self, dataset: DemDataset, lat: f64, lon: f64) -> (i32, i32) {
         match dataset {
-            DemDataset::Srtm1 | DemDataset::Srtm3 => {
-                let tile_size = if dataset == DemDataset::Srtm1 {
-                    1.0 / 3600.0
-                } else {
-                    1.0
-                };
-                let tile_x = (lon / tile_size).floor() as i32;
-                let tile_y = (lat / tile_size).floor() as i32;
+            DemDataset::Srtm1 => {
+                // 1-arc-second tiles: 1/3600° tiles would be absurdly many, so
+                // SRTM1 is addressed by its post spacing within a 1° HGT grid.
+                let tile_x = (lon / 1.0).floor() as i32;
+                let tile_y = (lat / 1.0).floor() as i32;
+                (tile_x, tile_y)
+            }
+            DemDataset::Srtm3 => {
+                // 3-arc-second (1°) tiles.
+                let tile_x = (lon / 1.0).floor() as i32;
+                let tile_y = (lat / 1.0).floor() as i32;
                 (tile_x, tile_y)
             }
             DemDataset::LroLola => {
@@ -200,30 +197,172 @@ impl DemTerrainSource {
         }
     }
 
-    /// Load a DEM tile from disk or network.
-    fn load_tile(&self, _dataset: DemDataset, _tile_x: i32, _tile_y: i32) -> Option<DemTile> {
-        // Placeholder: in a real implementation, this would:
-        // 1. Check local data directory for .hgt/.tif files
-        // 2. Download from tile server if not present
-        // 3. Parse using srtm_reader, geotiff, etc.
-        // 4. Return DemTile with height data
-
-        None
+    /// Bilinear height of a loaded tile at a lat/lon, if the point is inside
+    /// its geographic bounds (deterministic: pure integer plus a few f64
+    /// multiply-adds, so identical inputs yield identical outputs).
+    fn height_from_tile(tile: &DemTile, lat: f64, lon: f64) -> Option<f64> {
+        let in_bounds = lat >= tile.lat_min
+            && lat <= tile.lat_max
+            && lon >= tile.lon_min
+            && lon <= tile.lon_max;
+        in_bounds.then(|| bilinear_height(tile, lat, lon))
     }
+
+    /// Load a DEM tile from disk using the configured data directory. SRTM
+    /// tiles are 1°×1° `.hgt` grids (`N28W081.hgt`, big-endian i16 posts at
+    /// 3″ or 1″ spacing). Returns `None` when no data directory/coverage.
+    fn load_tile(&self, dataset: DemDataset, tile_x: i32, tile_y: i32) -> Option<DemTile> {
+        let dir = self.config.data_dir.as_ref()?;
+        let path = match dataset {
+            DemDataset::Srtm3 | DemDataset::Srtm1 => {
+                let grid = if dataset == DemDataset::Srtm1 {
+                    3601
+                } else {
+                    1201
+                };
+                let tile = self.srtm_tile_path(dir, grid, tile_x, tile_y);
+                load_hgt_tile(tile, tile_x, tile_y, dataset, grid).ok()?
+            }
+            // LOLA / MOLA tile loading is not yet wired to a local data source;
+            // the fallback chain covers those bodies' procedural source.
+            DemDataset::LroLola | DemDataset::Mola => return None,
+        };
+        Some(path)
+    }
+
+    /// SRTM `.hgt` filename for a tile index, e.g. `(x=-81, y=28) → N28W081.hgt`.
+    fn srtm_tile_path(&self, dir: &Path, _grid: u32, tile_x: i32, tile_y: i32) -> PathBuf {
+        let lat = tile_y;
+        let lon = tile_x;
+        let ns = if lat >= 0 { 'N' } else { 'S' };
+        let ew = if lon >= 0 { 'E' } else { 'W' };
+        dir.join(format!("{ns}{:02}{ew}{:03}.hgt", lat.abs(), lon.abs()))
+    }
+
+    /// Insert a tile directly into the cache. Used by tests and by the data
+    /// pipeline to warm the cache without an on-disk read.
+    pub fn insert_tile(&self, tile: DemTile) {
+        self.cache.lock().expect("dem cache lock").insert(tile);
+    }
+}
+
+/// Bilinear interpolation of a DEM tile's row-major height grid at a lat/lon.
+/// The grid covers `[lat_min, lat_max] × [lon_min, lon_max]` with `width`
+/// columns (lon) and `height` rows (lat). Fully deterministic and pure.
+#[cfg(feature = "dem")]
+pub fn bilinear_height(tile: &DemTile, lat: f64, lon: f64) -> f64 {
+    if tile.width < 2 || tile.height < 2 {
+        return tile.data.first().copied().unwrap_or(0.0) as f64;
+    }
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let span_lon = tile.lon_max - tile.lon_min;
+    let span_lat = tile.lat_max - tile.lat_min;
+    let fx = if span_lon.abs() > 1e-12 {
+        (lon - tile.lon_min) / span_lon * (width - 1) as f64
+    } else {
+        0.0
+    };
+    let fy = if span_lat.abs() > 1e-12 {
+        (lat - tile.lat_min) / span_lat * (height - 1) as f64
+    } else {
+        0.0
+    };
+    let x0 = (fx.floor() as usize).min(width - 1);
+    let y0 = (fy.floor() as usize).min(height - 1);
+    let x1 = (x0 + 1).min(width - 1);
+    let y1 = (y0 + 1).min(height - 1);
+    let dx = (fx - x0 as f64).clamp(0.0, 1.0);
+    let dy = (fy - y0 as f64).clamp(0.0, 1.0);
+
+    let h00 = tile.data[y0 * width + x0] as f64;
+    let h10 = tile.data[y0 * width + x1] as f64;
+    let h01 = tile.data[y1 * width + x0] as f64;
+    let h11 = tile.data[y1 * width + x1] as f64;
+
+    let top = h00 * (1.0 - dx) + h10 * dx;
+    let bottom = h01 * (1.0 - dx) + h11 * dx;
+    top * (1.0 - dy) + bottom * dy
+}
+
+/// Parse an SRTM `.hgt` tile (big-endian signed 16-bit posts, `grid × grid`
+/// rows, no header) into a [`DemTile`] covering a 1°×1° cell whose south-west
+/// corner is `(tile_y, tile_x)`. Deterministic byte-for-byte.
+#[cfg(feature = "dem")]
+pub fn load_hgt_tile(
+    path: PathBuf,
+    tile_x: i32,
+    tile_y: i32,
+    dataset: DemDataset,
+    grid: u32,
+) -> Result<DemTile, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("hgt read {}: {e}", path.display()))?;
+    let posts = (grid as usize).checked_pow(2).ok_or("hgt grid overflow")?;
+    if bytes.len() != posts * 2 {
+        return Err(format!(
+            "hgt {}: expected {posts}*2 bytes, got {}",
+            path.display(),
+            bytes.len()
+        ));
+    }
+    let mut data = Vec::with_capacity(posts);
+    for chunk in bytes.chunks_exact(2) {
+        let h = i16::from_be_bytes([chunk[0], chunk[1]]) as f32;
+        data.push(h);
+    }
+    Ok(DemTile {
+        key: DemTileKey {
+            dataset,
+            tile_x,
+            tile_y,
+        },
+        data,
+        width: grid,
+        height: grid,
+        lat_min: tile_y as f64,
+        lat_max: tile_y as f64 + 1.0,
+        lon_min: tile_x as f64,
+        lon_max: tile_x as f64 + 1.0,
+        last_access_frame: 0,
+    })
 }
 
 #[cfg(feature = "dem")]
 impl TerrainSource for DemTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        // Cannot mutably borrow self in a &self method, so we use a different approach.
-        // In a real implementation, we'd use interior mutability (RefCell/Mutex) for the cache.
-        // For now, fall back to procedural.
+        let (dataset, tile_x, tile_y) = self.cover_tile(latitude_deg, longitude_deg);
+        let key = DemTileKey {
+            dataset,
+            tile_x,
+            tile_y,
+        };
+        // Parse outside the cache borrow so `load_tile` (a `&self` method)
+        // never contends with the cache's mutable borrow.
+        let parsed = self.load_tile(dataset, tile_x, tile_y);
 
-        if self.config.fallback_to_procedural {
-            self.procedural_fallback
-                .height_m(latitude_deg, longitude_deg)
-        } else {
-            0.0
+        let height = {
+            let mut cache = self.cache.lock().expect("dem cache lock");
+            cache.tick();
+            if cache.get(key).is_none() {
+                if let Some(tile) = parsed {
+                    cache.insert(tile);
+                }
+            }
+            cache
+                .get(key)
+                .and_then(|t| Self::height_from_tile(t, latitude_deg, longitude_deg))
+        };
+
+        match height {
+            Some(h) => h,
+            None => {
+                if self.config.fallback_to_procedural {
+                    self.procedural_fallback
+                        .height_m(latitude_deg, longitude_deg)
+                } else {
+                    0.0
+                }
+            }
         }
     }
 }
@@ -327,5 +466,151 @@ mod tests {
             key1_exists || key2_exists,
             "at least one of key1 or key2 should remain"
         );
+    }
+
+    /// Build a small synthetic tile covering a known 1°×1° cell.
+    #[cfg(feature = "dem")]
+    fn sample_tile(tile_x: i32, tile_y: i32, width: u32, height: u32) -> DemTile {
+        let data = (0..width * height).map(|i| i as f32 * 10.0).collect();
+        DemTile {
+            key: DemTileKey {
+                dataset: DemDataset::Srtm3,
+                tile_x,
+                tile_y,
+            },
+            data,
+            width,
+            height,
+            lat_min: tile_y as f64,
+            lat_max: tile_y as f64 + 1.0,
+            lon_min: tile_x as f64,
+            lon_max: tile_x as f64 + 1.0,
+            last_access_frame: 0,
+        }
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn bilinear_interpolates_between_grid_posts() {
+        // 3×3 tile, row-major (data = row*width + col).
+        let tile = sample_tile(0, 0, 3, 3);
+        // The four corners are 0, 20 (row 0: 0,10,20), 40,60 (row 2: 40,50,60).
+        // The centre grid post (1,1) = 40.
+        let centre = bilinear_height(&tile, 0.5, 0.5);
+        assert!((centre - 40.0).abs() < 1e-9);
+        // Query the top-left post (0,2) exactly → 20.
+        let post = bilinear_height(&tile, 0.0, 1.0);
+        assert!((post - 20.0).abs() < 1e-9);
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn injected_tile_drives_deterministic_height_queries() {
+        // Spec "deterministic height queries": inject an SRTM3 tile covering
+        // KSC (lat 28..29, lon -81..-80) and query an arbitrary point inside;
+        // the result must be stable across calls and differ between two
+        // distinct points.
+        let source = DemTerrainSource::new(DemTerrainConfig {
+            cache_max_tiles: 4,
+            fallback_to_procedural: true,
+            data_dir: None,
+            dataset: DemDataset::Srtm3,
+        });
+        source.insert_tile(sample_tile(-81, 28, 4, 4));
+
+        // KSC is at (28.57, -80.65): inside tile (-81..-80, 28..29).
+        let a = source.height_m(28.57, -80.65);
+        let b = source.height_m(28.57, -80.65);
+        assert_eq!(a, b, "same lat/lon must be bitwise identical");
+        // Distinct points sample distinct heights.
+        let c = source.height_m(28.58, -80.66);
+        assert_ne!(a, c, "different points must differ on a smooth gradient");
+        assert!(a.is_finite() && c.is_finite());
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn height_outside_coverage_falls_back_to_procedural() {
+        // Spec "DEM + procedural fallback": a query far outside the injected
+        // tile falls back to the procedural source (deterministic, finite).
+        let source = DemTerrainSource::new(DemTerrainConfig::default());
+        source.insert_tile(sample_tile(-81, 28, 4, 4));
+        let outside = source.height_m(-33.9, 151.2); // Sydney — far from tile
+        assert!(outside.is_finite());
+        // Procedural generation is seeded → deterministic.
+        assert_eq!(outside, source.height_m(-33.9, 151.2));
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn hgt_tile_parses_big_endian_posts() {
+        // Write a 2×2 .hgt (8 bytes big-endian) and load it: posts 1,2,3,4.
+        let dir = std::env::temp_dir().join("dem_hgt_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.hgt");
+        let bytes: Vec<u8> = [1i16, 2, 3, 4]
+            .into_iter()
+            .flat_map(|h| h.to_be_bytes())
+            .collect();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let tile = load_hgt_tile(path, -81, 28, DemDataset::Srtm3, 2).unwrap();
+        assert_eq!(tile.width, 2);
+        assert_eq!(tile.height, 2);
+        assert_eq!(tile.data, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(tile.lat_min, 28.0);
+        assert_eq!(tile.lat_max, 29.0);
+        assert_eq!(tile.lon_min, -81.0);
+        assert_eq!(tile.lon_max, -80.0);
+
+        // Deterministic: parsing the same bytes twice yields the same tile.
+        assert_eq!(
+            load_hgt_tile(
+                std::env::temp_dir().join("dem_hgt_test/sample.hgt"),
+                -81,
+                28,
+                DemDataset::Srtm3,
+                2
+            )
+            .unwrap()
+            .data,
+            tile.data
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn height_m_loads_hgt_tile_from_data_dir() {
+        // Real SRTM-processed flow: data_dir + a full 1201×1201 .hgt for the
+        // tile covering KSC; the query serves the DEM-pinned height (all posts
+        // at 1500 m ⇒ any query returns ~1500) rather than procedural.
+        let dir = std::env::temp_dir().join("dem_hgt_flow");
+        std::fs::create_dir_all(&dir).unwrap();
+        // SRTM3 tile (-81, 28) is named N28W081.hgt.
+        let path = dir.join("N28W081.hgt");
+        let grid = 1201usize;
+        let posts = grid * grid;
+        let mut bytes = Vec::with_capacity(posts * 2);
+        for _ in 0..posts {
+            bytes.extend_from_slice(&1500i16.to_be_bytes());
+        }
+        std::fs::write(&path, &bytes).unwrap();
+
+        let source = DemTerrainSource::new(DemTerrainConfig {
+            cache_max_tiles: 4,
+            fallback_to_procedural: true,
+            data_dir: Some(dir.clone()),
+            dataset: DemDataset::Srtm3,
+        });
+        // Query inside tile (-81..-80, 28..29).
+        let h = source.height_m(28.5, -80.5);
+        assert!(
+            (h - 1500.0).abs() < 1.0,
+            "expected DEM-backed height ~1500, got {h}"
+        );
+        // Deterministic across queries.
+        assert_eq!(h, source.height_m(28.5, -80.5));
+        std::fs::remove_dir_all(dir).ok();
     }
 }

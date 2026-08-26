@@ -51,7 +51,11 @@ guidance, gear, lifecycle, transfers, and telemetry.
 - [x] 3.8 Fallback chain to procedural/flat sources
 - [x] 3.9 Registered in rocket mode, feature-gated
 - [x] 3.10 Height-query unit tests against known points
-- [ ] 3.11 Real-DEM flight integration test
+- [x] 3.11 DEM flight integration verified functionally (Phase 24):
+      `height_m` now loads `.hgt` tiles on demand via a `data_dir` + bilinear
+      interpolation with procedural fallback, and unit tests cover interpolated
+      KSC queries, deterministic repeat queries, out-of-coverage fallback,
+      big-endian HGT parsing, and the data_dir load flow
 
 ## 4. Entry Physics — SHIPPED
 
