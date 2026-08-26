@@ -557,10 +557,29 @@ impl Default for RocketCameraConfig {
 pub struct RocketEarthSphere;
 
 /// Rocket camera controller for managing camera state and transitions.
-#[derive(Component, Debug, Clone, Default)]
+#[derive(Component, Debug, Clone)]
 pub struct RocketCameraController {
     pub current_mode: RocketCameraMode,
     pub target_mode: RocketCameraMode,
     pub transition_progress: f32,
     pub last_rocket_transform: Option<Transform>,
+    /// Free-fly (space) camera orbit angles, radians, and distance from the
+    /// rocket. Adjusted by mouse drag / scroll while in `Free` mode.
+    pub free_orbit_yaw: f32,
+    pub free_orbit_pitch: f32,
+    pub free_orbit_distance: f32,
+}
+
+impl Default for RocketCameraController {
+    fn default() -> Self {
+        Self {
+            current_mode: RocketCameraMode::default(),
+            target_mode: RocketCameraMode::default(),
+            transition_progress: 0.0,
+            last_rocket_transform: None,
+            free_orbit_yaw: 0.0,
+            free_orbit_pitch: 0.35,
+            free_orbit_distance: 600.0,
+        }
+    }
 }

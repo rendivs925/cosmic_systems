@@ -41,12 +41,14 @@ use crate::infrastructure::bevy_adapters::gyroscope_systems::{
 };
 use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overstep;
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
-    handle_rocket_camera_input, update_rocket_camera, update_rocket_camera_projection,
+    handle_free_camera_input, handle_rocket_camera_input, update_rocket_camera,
+    update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
+use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
@@ -333,6 +335,9 @@ impl Plugin for RocketModePlugin {
         // Rocket debug visualization plugin.
         app.add_plugins(RocketDebugPlugin);
 
+        // Always-on orbit prediction line (patched-conics, all camera modes).
+        app.add_plugins(RocketOrbitPlugin);
+
         // Advance simulation time from real time (runs in Update).
         app.add_systems(Update, advance_simulation_time);
 
@@ -341,6 +346,7 @@ impl Plugin for RocketModePlugin {
 
         // Rocket camera systems (run in Update for smooth rendering).
         app.add_systems(Update, handle_rocket_camera_input);
+        app.add_systems(Update, handle_free_camera_input);
         app.add_systems(Update, update_rocket_camera);
         app.add_systems(Update, update_rocket_camera_projection);
 

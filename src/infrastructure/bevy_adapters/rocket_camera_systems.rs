@@ -3,6 +3,7 @@
 use crate::components::rocket::*;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::{Quat, Vec3};
 use bevy::prelude::*;
 
@@ -13,8 +14,6 @@ pub fn handle_rocket_camera_input(
     mut controller_query: Query<&mut RocketCameraController>,
 ) {
     // Cycle camera modes with number keys or C key.
-    // Free mode is deliberately NOT offered: Rocket Mode keeps the camera
-    // locked to the vehicle (no free spectator flight).
     if keyboard.just_pressed(KeyCode::Digit1) {
         *camera_mode = RocketCameraMode::Chase;
     } else if keyboard.just_pressed(KeyCode::Digit2) {
@@ -23,13 +22,15 @@ pub fn handle_rocket_camera_input(
         *camera_mode = RocketCameraMode::Orbital;
     } else if keyboard.just_pressed(KeyCode::Digit4) {
         *camera_mode = RocketCameraMode::Surface;
+    } else if keyboard.just_pressed(KeyCode::Digit5) {
+        *camera_mode = RocketCameraMode::Free;
     } else if keyboard.just_pressed(KeyCode::KeyC) {
-        // Cycle through modes (Free excluded)
+        // Cycle through modes (Free now included).
         *camera_mode = match *camera_mode {
             RocketCameraMode::Chase => RocketCameraMode::Cockpit,
             RocketCameraMode::Cockpit => RocketCameraMode::Orbital,
             RocketCameraMode::Orbital => RocketCameraMode::Surface,
-            RocketCameraMode::Surface => RocketCameraMode::Chase,
+            RocketCameraMode::Surface => RocketCameraMode::Free,
             RocketCameraMode::Free => RocketCameraMode::Chase,
         };
     }
@@ -37,6 +38,51 @@ pub fn handle_rocket_camera_input(
     // Update controller target mode
     for mut controller in controller_query.iter_mut() {
         controller.target_mode = *camera_mode;
+    }
+}
+
+/// Free-fly (space) camera input: left-drag orbits the rocket, scroll zooms.
+/// Stores orbit angles/distance on each controller so `update_rocket_camera`
+/// can position the camera deterministically from the current rocket state.
+pub fn handle_free_camera_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut scroll: EventReader<MouseWheel>,
+    mut motion: EventReader<MouseMotion>,
+    mut controller_query: Query<&mut RocketCameraController>,
+) {
+    let mut dragging = false;
+    let mut dx = 0.0f32;
+    let mut dy = 0.0f32;
+    let mut scroll_y = 0.0f32;
+
+    if mouse.pressed(MouseButton::Left) {
+        dragging = true;
+    }
+    for e in motion.read() {
+        dx += e.delta.x;
+        dy += e.delta.y;
+    }
+    for e in scroll.read() {
+        scroll_y += e.y;
+    }
+
+    if !dragging && scroll_y.abs() < 1e-6 {
+        return;
+    }
+
+    for mut controller in controller_query.iter_mut() {
+        if controller.current_mode != RocketCameraMode::Free {
+            continue;
+        }
+        if dragging {
+            controller.free_orbit_yaw -= dx * 0.005;
+            controller.free_orbit_pitch =
+                (controller.free_orbit_pitch + dy * 0.005).clamp(0.05, 1.45);
+        }
+        if scroll_y.abs() > 1e-6 {
+            controller.free_orbit_distance =
+                (controller.free_orbit_distance * (1.0 - scroll_y * 0.15)).clamp(20.0, 40_000.0);
+        }
     }
 }
 
@@ -142,10 +188,7 @@ pub fn update_rocket_camera(
                 rocket_physics.dynamics.velocity_mps.length() as f32,
                 &config,
             ),
-            RocketCameraMode::Free => {
-                // Free camera - don't auto-update position
-                continue;
-            }
+            RocketCameraMode::Free => compute_free_camera(rocket_pos_flight, up_dir, &controller),
         };
 
         // Smooth interpolation
@@ -278,6 +321,34 @@ fn compute_surface_camera(
     (target_pos, target_rot)
 }
 
+/// Free-fly space camera: orbits the rocket at a user-controlled yaw/pitch and
+/// distance (see [`handle_free_camera_input`]). The horizon is kept upright by
+/// `looking_at` with the radial up, so the space view stays readable.
+fn compute_free_camera(
+    rocket_pos: Vec3,
+    up: Vec3,
+    controller: &RocketCameraController,
+) -> (Vec3, Quat) {
+    let yaw = controller.free_orbit_yaw;
+    let pitch = controller.free_orbit_pitch.clamp(0.05, 1.45); // above horizon
+    let distance = controller.free_orbit_distance.max(5.0);
+
+    // Horizon-stable basis around the rocket.
+    let mut forward = up.cross(Vec3::Z).normalize_or_zero();
+    if forward.length_squared() < 1e-6 {
+        forward = up.cross(Vec3::X).normalize_or_zero();
+    }
+    let right = forward.cross(up).normalize_or_zero();
+
+    let horizontal = (forward * yaw.cos() + right * yaw.sin()) * pitch.cos();
+    let dir = horizontal + up * pitch.sin();
+    let target_pos = rocket_pos + dir * distance;
+    let target_rot = Transform::from_translation(target_pos)
+        .looking_at(rocket_pos, up)
+        .rotation;
+    (target_pos, target_rot)
+}
+
 /// System to update the camera near/far planes for rocket mode.
 pub fn update_rocket_camera_projection(
     camera_mode: Res<RocketCameraMode>,
@@ -287,10 +358,6 @@ pub fn update_rocket_camera_projection(
     planet_query: Query<&PlanetComponent>,
     mut camera_query: Query<&mut Projection, With<Camera3d>>,
 ) {
-    if *camera_mode == RocketCameraMode::Free {
-        return;
-    }
-
     let Some(rocket) = rocket_query.iter().next() else {
         return;
     };
@@ -329,7 +396,11 @@ pub fn update_rocket_camera_projection(
                     // Far for orbital view
                     (10.0, (config.orbital_distance * 5.0) as f32)
                 }
-                RocketCameraMode::Free => continue,
+                RocketCameraMode::Free => {
+                    // Free-fly space view: wide range to frame the rocket and a
+                    // long orbit line, but capped to exclude the solar shell.
+                    (0.5, 300_000.0)
+                }
             };
 
             let lerp = 1.0 - (-2.0_f32 * 0.016).exp(); // ~60Hz
