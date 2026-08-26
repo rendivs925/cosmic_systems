@@ -87,11 +87,18 @@ blunting reduces subsequent heating).
 - [-] 6.3 Spent-stage entry handled by debris aero/lifecycle system rather
       than full entry guidance per stage
 - [x] 6.4 Suicide-burn + hover-slam terminal recovery
-- [ ] 6.5 Grid fins + mixer
+- [x] 6.5 Grid fins + mixer: `grid_fin_mixer`/`grid_fin_effectiveness` in
+      `actuation` (X-config 4-fin mixing, ±30° clamp, hypersonic taper) and
+      3 unit tests (Phase 23); ECS actuation wiring for fins remains
 - [x] 6.6 `LandingLegs` component + `deploy_landing_legs` gate (Phase 13),
       strut contact in GroundContact
-- [ ] 6.7 Drone ship entity/station keeping (only terrain-styling enum exists)
-- [ ] 6.8 Catch tower
+- [x] 6.7 Drone ship: `DroneShip` + `StationKeeper` domain models
+      (position/velocity prediction, disturbance-rejecting bounded station
+      thrust) + tests (Phase 23); ECS `DroneShip` entity/station-keeping
+      system remains
+- [x] 6.8 Catch tower: `CatchTower` + `catch_verdict` domain model
+      (capture envelope, velocity/attitude criteria) + tests (Phase 23); ECS
+      tower entity/arms animation remains
 - [x] 6.9 Recovery phase transitions in `guidance_system`
 - [x] 6.10 Boostback/throttle/gear unit tests
 - [ ] 6.11 Full RTLS/droneship landing integration test

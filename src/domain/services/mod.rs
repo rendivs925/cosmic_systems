@@ -17,6 +17,7 @@ pub mod physics_orbital;
 pub mod physics_utils;
 pub mod planet_factory;
 pub mod reference_frames;
+pub mod recovery;
 pub mod regression;
 pub mod rocket_dynamics;
 pub mod rocket_propulsion;
