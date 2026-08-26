@@ -17,6 +17,22 @@ pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> 
     meshes.add(mesh)
 }
 
+/// Create the continuous globe used outside the local terrain streaming window.
+/// The resolution keeps the Earth horizon smooth at orbital altitudes while the
+/// local cube-sphere terrain supplies close-range surface detail.
+pub fn create_flight_globe_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
+    let (sectors, stacks) = flight_globe_resolution();
+
+    meshes.add(Sphere::new(radius).mesh().uv(sectors, stacks))
+}
+
+fn flight_globe_resolution() -> (u32, u32) {
+    #[cfg(target_arch = "wasm32")]
+    return (128, 64);
+    #[cfg(not(target_arch = "wasm32"))]
+    (256, 128)
+}
+
 pub fn create_orbit_mesh_ellipse(
     meshes: &mut ResMut<Assets<Mesh>>,
     orbit_shape: &physics::OrbitShape,
@@ -281,4 +297,16 @@ pub fn create_ring_mesh(
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
     meshes.add(mesh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flight_globe_has_orbital_horizon_detail() {
+        let (sectors, stacks) = flight_globe_resolution();
+        assert!(sectors >= 128);
+        assert!(stacks >= 64);
+    }
 }

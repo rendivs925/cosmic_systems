@@ -8,12 +8,10 @@
 //! Conversion: solar system display units -> meters using PhysicalScale.
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
+use crate::application::mesh_factory::create_flight_globe_mesh;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
-use crate::domain::services::physics_utils::{
-    calculate_sun_visual_radius, calculate_visual_radius,
-};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -81,7 +79,7 @@ pub fn setup_rocket_planets(
         let radius_m = planet.radius_km as f64 * 1000.0;
         let show_planet_proxy =
             !local_terrain_is_required((rocket.dynamics.position_m.length() - radius_m).max(0.0));
-        let mesh_handle = meshes.add(Sphere::new(radius_m as f32));
+        let mesh_handle = create_flight_globe_mesh(&mut meshes, radius_m as f32);
 
         let textures = get_planet_textures(&planet_name);
         let albedo_handle = load_texture(&asset_server, textures.albedo);

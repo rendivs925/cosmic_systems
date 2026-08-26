@@ -74,7 +74,7 @@ use crate::infrastructure::bevy_adapters::rocket_telemetry::{
 };
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
-    TerrainRenderConfig, TerrainRenderPlugin,
+    recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
 };
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
     stream_terrain_patches, TerrainStreamingResource,
@@ -351,7 +351,9 @@ impl Plugin for RocketModePlugin {
         // Rocket camera systems (run in Update for smooth rendering).
         app.add_systems(
             Update,
-            interpolate_render_transform.before(update_rocket_camera),
+            interpolate_render_transform
+                .after(recenter_render_origin)
+                .before(update_rocket_camera),
         );
         app.add_systems(Update, handle_rocket_camera_input);
         app.add_systems(Update, handle_free_camera_input);
@@ -508,7 +510,12 @@ impl Plugin for RocketModePlugin {
 
         // Rocket-mode planets (bound planet, moons, Sun) in flight units with real textures.
         // Runs after solar system planet positions are updated.
-        app.add_systems(Update, update_rocket_planets.after(update_planet_positions));
+        app.add_systems(
+            Update,
+            update_rocket_planets
+                .after(update_planet_positions)
+                .after(recenter_render_origin),
+        );
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);
     }

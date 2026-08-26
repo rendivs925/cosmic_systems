@@ -8,11 +8,13 @@
 //! unit-testable without a renderer; the Bevy system only converts the
 //! planet-centred points to the flight frame and draws them.
 
-use crate::components::rocket::{RocketMissionState, RocketPhysicsState, RocketPlanetBinding};
+use crate::components::rocket::{RocketMissionState, RocketPlanetBinding, RocketRenderState};
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::trajectory::{predict_patched_conics, GravityBody};
+use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
-use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use crate::infrastructure::bevy_adapters::rocket_systems::interpolate_render_transform;
+use crate::infrastructure::bevy_adapters::terrain_render::{recenter_render_origin, RenderOrigin};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -46,9 +48,14 @@ pub fn predicted_orbit(
     position_m: DVec3,
     velocity_mps: DVec3,
     planet_mass_kg: f64,
+    surface_radius_m: f64,
 ) -> OrbitPrediction {
     let speed = velocity_mps.length();
-    if !position_m.length().is_finite() || !speed.is_finite() || speed < 1.0 {
+    if !position_m.length().is_finite()
+        || !speed.is_finite()
+        || speed < 1.0
+        || position_m.length() <= surface_radius_m
+    {
         return OrbitPrediction::empty();
     }
 
@@ -72,11 +79,24 @@ pub fn predicted_orbit(
     let body = GravityBody::new("central", DVec3::ZERO, planet_mass_kg);
     let pred = predict_patched_conics(&[body], position_m, velocity_mps, horizon, step);
 
-    let mut apoapsis: Option<(DVec3, f64)> = None;
-    let mut periapsis: Option<(DVec3, f64)> = None;
+    let mut apoapsis: Option<(DVec3, f64)> = Some((position_m, r));
+    let mut periapsis: Option<(DVec3, f64)> = Some((position_m, r));
     let mut points = Vec::with_capacity(pred.points.len());
-    for p in &pred.points {
+    points.push(position_m);
+    let mut previous_position = position_m;
+    for p in pred.points.iter().skip(1) {
         let rad = p.position_m.length();
+        if rad <= surface_radius_m {
+            // Point-mass propagation does not model terrain impact. Stop at the
+            // spherical surface so a sub-orbital prediction cannot continue
+            // through Earth and reappear as a detached chord.
+            points.push(surface_intersection(
+                previous_position,
+                p.position_m,
+                surface_radius_m,
+            ));
+            break;
+        }
         points.push(p.position_m);
         match apoapsis {
             Some((_, d)) if d >= rad => {}
@@ -86,6 +106,7 @@ pub fn predicted_orbit(
             Some((_, d)) if d <= rad => {}
             _ => periapsis = Some((p.position_m, rad)),
         }
+        previous_position = p.position_m;
     }
 
     OrbitPrediction {
@@ -93,6 +114,35 @@ pub fn predicted_orbit(
         apoapsis: apoapsis.map(|(p, _)| p),
         periapsis: periapsis.map(|(p, _)| p),
     }
+}
+
+/// Find the first intersection between an outside-to-inside trajectory segment
+/// and the planet's spherical visual surface.
+fn surface_intersection(start: DVec3, end: DVec3, radius_m: f64) -> DVec3 {
+    let direction = end - start;
+    let a = direction.length_squared();
+    if a <= f64::EPSILON {
+        return start.normalize_or_zero() * radius_m;
+    }
+    let b = 2.0 * start.dot(direction);
+    let c = start.length_squared() - radius_m * radius_m;
+    let discriminant = (b * b - 4.0 * a * c).max(0.0);
+    let sqrt_discriminant = discriminant.sqrt();
+    let near = (-b - sqrt_discriminant) / (2.0 * a);
+    let far = (-b + sqrt_discriminant) / (2.0 * a);
+    let fraction = [near, far]
+        .into_iter()
+        .find(|fraction| (0.0..=1.0).contains(fraction))
+        .unwrap_or(1.0);
+    start.lerp(end, fraction)
+}
+
+fn planet_frame_to_flight(
+    point_m: DVec3,
+    render_origin: DVec3,
+    physical_scale: &PhysicalScale,
+) -> Vec3 {
+    ((point_m - render_origin) * physical_scale.flight_display_units_per_meter as f64).as_vec3()
 }
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -103,8 +153,12 @@ pub struct RocketOrbitPlugin;
 
 impl Plugin for RocketOrbitPlugin {
     fn build(&self, app: &mut App) {
-        app.init_gizmo_group::<OrbitLineGizmos>()
-            .add_systems(Update, draw_orbit_prediction);
+        app.init_gizmo_group::<OrbitLineGizmos>().add_systems(
+            Update,
+            draw_orbit_prediction
+                .after(interpolate_render_transform)
+                .after(recenter_render_origin),
+        );
     }
 }
 
@@ -116,13 +170,15 @@ fn draw_orbit_prediction(
     planet_query: Query<&PlanetComponent>,
     rocket_query: Query<(
         &RocketPlanetBinding,
-        &RocketPhysicsState,
+        &RocketRenderState,
         &RocketMissionState,
     )>,
     render_origin: Res<RenderOrigin>,
+    physical_scale: Res<PhysicalScale>,
+    time: Res<Time<Fixed>>,
     mut gizmos: Gizmos<OrbitLineGizmos>,
 ) {
-    let Some((binding, rocket, mission)) = rocket_query.iter().next() else {
+    let Some((binding, render, mission)) = rocket_query.iter().next() else {
         return;
     };
     if *mission == RocketMissionState::PreLaunch {
@@ -135,19 +191,26 @@ fn draw_orbit_prediction(
         return;
     };
 
+    let alpha = time.overstep_fraction() as f64;
+    let position_m = render
+        .prev
+        .position_m
+        .lerp(render.current.position_m, alpha);
+    let velocity_mps = render
+        .prev
+        .velocity_mps
+        .lerp(render.current.velocity_mps, alpha);
     let pred = predicted_orbit(
-        rocket.dynamics.position_m,
-        rocket.dynamics.velocity_mps,
+        position_m,
+        velocity_mps,
         planet.domain_planet.mass_kg,
+        planet.domain_planet.radius_km as f64 * 1000.0,
     );
     if pred.planet_frame_points.len() < 2 {
         return;
     }
 
-    // Planet centre in flight units (meters): render_origin tracks the rocket's
-    // physics position, so planet centre = -origin.
-    let planet_pos = -render_origin.origin;
-    let to_world = |p: DVec3| (planet_pos + p).as_vec3();
+    let to_world = |p: DVec3| planet_frame_to_flight(p, render_origin.origin, &physical_scale);
 
     gizmos.linestrip(
         pred.planet_frame_points.iter().copied().map(to_world),
@@ -179,6 +242,7 @@ mod tests {
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
             EARTH_MASS_KG,
+            EARTH_RADIUS_M,
         );
         assert!(pred.planet_frame_points.len() > 20);
         for p in &pred.planet_frame_points {
@@ -205,6 +269,7 @@ mod tests {
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
             EARTH_MASS_KG,
+            EARTH_RADIUS_M,
         );
         let ap = pred.apoapsis.expect("apoapsis").length();
         let pe = pred.periapsis.expect("periapsis").length();
@@ -222,6 +287,7 @@ mod tests {
             DVec3::new(EARTH_RADIUS_M + 2.0, 0.0, 0.0),
             DVec3::ZERO,
             EARTH_MASS_KG,
+            EARTH_RADIUS_M,
         );
         assert!(pred.planet_frame_points.is_empty());
         assert!(pred.apoapsis.is_none());
@@ -235,12 +301,47 @@ mod tests {
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
             EARTH_MASS_KG,
+            EARTH_RADIUS_M,
         );
         let b = predicted_orbit(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
             EARTH_MASS_KG,
+            EARTH_RADIUS_M,
         );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn suborbital_prediction_stops_at_the_surface() {
+        let pred = predicted_orbit(
+            DVec3::new(EARTH_RADIUS_M + 100_000.0, 0.0, 0.0),
+            DVec3::new(-2_000.0, 0.0, 0.0),
+            EARTH_MASS_KG,
+            EARTH_RADIUS_M,
+        );
+
+        assert!(pred.planet_frame_points.len() > 1);
+        assert!(pred
+            .planet_frame_points
+            .iter()
+            .all(|point| point.length() >= EARTH_RADIUS_M - 1e-3));
+        let impact = pred.planet_frame_points.last().unwrap();
+        assert!((impact.length() - EARTH_RADIUS_M).abs() < 1e-3);
+    }
+
+    #[test]
+    fn flight_conversion_rebases_and_scales_prediction_points() {
+        let scale = PhysicalScale {
+            flight_display_units_per_meter: 0.5,
+            flight_meters_per_display_unit: 2.0,
+            ..PhysicalScale::default()
+        };
+        let point = planet_frame_to_flight(
+            DVec3::new(6_371_100.0, 20.0, -10.0),
+            DVec3::new(6_371_000.0, 0.0, 0.0),
+            &scale,
+        );
+        assert_eq!(point, Vec3::new(50.0, 10.0, -5.0));
     }
 }

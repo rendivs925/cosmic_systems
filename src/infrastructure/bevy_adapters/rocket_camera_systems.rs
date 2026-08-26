@@ -409,8 +409,10 @@ pub fn update_rocket_camera_projection(
             // spheres (Sun shell at ~22,835 units) from the flight frame.
             let (near, far) = match *camera_mode {
                 RocketCameraMode::Cockpit => {
-                    // Very close near plane for cockpit view
-                    (0.01, (height_above_surface + 1000.0) as f32)
+                    // Retain the curved Earth horizon at altitude. Limiting the
+                    // cockpit view to altitude + 1 km slices the globe at the
+                    // far plane and makes it appear flat.
+                    (0.01, (horizon_distance_m + 50_000.0).max(5_000.0) as f32)
                 }
                 RocketCameraMode::Surface => {
                     (0.1, (horizon_distance_m + 50_000.0).max(5_000.0) as f32)
