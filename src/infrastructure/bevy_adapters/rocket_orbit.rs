@@ -10,6 +10,7 @@
 
 use crate::components::rocket::{RocketMissionState, RocketPlanetBinding, RocketRenderState};
 use crate::domain::services::gravity::gravitational_parameter;
+use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
 use crate::domain::services::trajectory::{predict_patched_conics, GravityBody};
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
@@ -73,17 +74,16 @@ pub fn predicted_orbit(
         // but bounded.
         4.0 * 3600.0
     }
-    .clamp(60.0, 36_000.0);
+    .max(60.0);
     let step = (horizon / 160.0).max(1.0);
 
     let body = GravityBody::new("central", DVec3::ZERO, planet_mass_kg);
     let pred = predict_patched_conics(&[body], position_m, velocity_mps, horizon, step);
 
-    let mut apoapsis: Option<(DVec3, f64)> = Some((position_m, r));
-    let mut periapsis: Option<(DVec3, f64)> = Some((position_m, r));
     let mut points = Vec::with_capacity(pred.points.len());
     points.push(position_m);
     let mut previous_position = position_m;
+    let mut intersects_surface = false;
     for p in pred.points.iter().skip(1) {
         let rad = p.position_m.length();
         if rad <= surface_radius_m {
@@ -95,24 +95,21 @@ pub fn predicted_orbit(
                 p.position_m,
                 surface_radius_m,
             ));
+            intersects_surface = true;
             break;
         }
         points.push(p.position_m);
-        match apoapsis {
-            Some((_, d)) if d >= rad => {}
-            _ => apoapsis = Some((p.position_m, rad)),
-        }
-        match periapsis {
-            Some((_, d)) if d <= rad => {}
-            _ => periapsis = Some((p.position_m, rad)),
-        }
         previous_position = p.position_m;
     }
 
+    let apsides = (!intersects_surface)
+        .then(|| apsis_endpoints_from_state(position_m, velocity_mps, mu))
+        .flatten();
+
     OrbitPrediction {
         planet_frame_points: points,
-        apoapsis: apoapsis.map(|(p, _)| p),
-        periapsis: periapsis.map(|(p, _)| p),
+        apoapsis: apsides.map(|apsides| apsides.apoapsis_position_m),
+        periapsis: apsides.map(|apsides| apsides.periapsis_position_m),
     }
 }
 
@@ -252,10 +249,8 @@ mod tests {
                 p.length()
             );
         }
-        let ap = pred.apoapsis.expect("circular orbit has an apoapsis");
-        let pe = pred.periapsis.expect("circular orbit has a periapsis");
-        assert!((ap.length() - r).abs() < r * 0.01);
-        assert!((pe.length() - r).abs() < r * 0.01);
+        assert!(pred.apoapsis.is_none());
+        assert!(pred.periapsis.is_none());
     }
 
     #[test]
@@ -328,6 +323,8 @@ mod tests {
             .all(|point| point.length() >= EARTH_RADIUS_M - 1e-3));
         let impact = pred.planet_frame_points.last().unwrap();
         assert!((impact.length() - EARTH_RADIUS_M).abs() < 1e-3);
+        assert!(pred.apoapsis.is_none());
+        assert!(pred.periapsis.is_none());
     }
 
     #[test]

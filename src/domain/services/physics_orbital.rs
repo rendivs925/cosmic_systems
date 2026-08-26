@@ -487,6 +487,60 @@ pub struct StateVectorOrbitalElements {
     pub periapsis_m: f64,
 }
 
+/// Below this eccentricity, an ellipse has no useful unique apsis direction.
+pub const APSIS_ECCENTRICITY_EPSILON: f64 = 1e-6;
+
+/// Exact f64 positions of the apsides of a bound two-body orbit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ApsisEndpoints {
+    pub apoapsis_position_m: DVec3,
+    pub periapsis_position_m: DVec3,
+}
+
+/// Derive the exact apsis positions of a bound, non-circular osculating orbit.
+/// The returned vectors remain in the caller's planet-centered inertial frame.
+pub fn apsis_endpoints_from_state(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    mu: f64,
+) -> Option<ApsisEndpoints> {
+    let radius_m = position_m.length();
+    if !radius_m.is_finite() || !velocity_mps.is_finite() || !mu.is_finite() || mu <= 0.0 {
+        return None;
+    }
+
+    let angular_momentum = position_m.cross(velocity_mps);
+    if angular_momentum.length_squared() <= f64::EPSILON {
+        return None;
+    }
+    let specific_energy = velocity_mps.length_squared() * 0.5 - mu / radius_m;
+    if !specific_energy.is_finite() || specific_energy >= 0.0 {
+        return None;
+    }
+
+    let eccentricity_vector = velocity_mps.cross(angular_momentum) / mu - position_m / radius_m;
+    let eccentricity = eccentricity_vector.length();
+    if !eccentricity.is_finite() || eccentricity <= APSIS_ECCENTRICITY_EPSILON {
+        return None;
+    }
+
+    let semi_major_axis_m = -mu / (2.0 * specific_energy);
+    if !semi_major_axis_m.is_finite() || semi_major_axis_m <= 0.0 {
+        return None;
+    }
+    let periapsis_radius_m = semi_major_axis_m * (1.0 - eccentricity);
+    let apoapsis_radius_m = semi_major_axis_m * (1.0 + eccentricity);
+    if periapsis_radius_m <= 0.0 || !apoapsis_radius_m.is_finite() {
+        return None;
+    }
+
+    let periapsis_direction = eccentricity_vector / eccentricity;
+    Some(ApsisEndpoints {
+        apoapsis_position_m: -periapsis_direction * apoapsis_radius_m,
+        periapsis_position_m: periapsis_direction * periapsis_radius_m,
+    })
+}
+
 /// Compute orbital elements from position and velocity vectors in a planet-centered
 /// inertial frame. Uses the standard gravitational parameter μ = G·M.
 pub fn orbital_elements_from_state(
@@ -708,6 +762,56 @@ mod tests {
         assert!((elements.semi_major_axis_m - a).abs() < 10.0);
         assert!((elements.periapsis_m - r_p).abs() < 10.0);
         assert!((elements.apoapsis_m - r_a).abs() < 10.0);
+    }
+
+    #[test]
+    fn analytic_apsides_match_the_eccentricity_vector() {
+        let periapsis_m = 6_671_000.0;
+        let apoapsis_m = 7_071_000.0;
+        let semi_major_axis_m = (periapsis_m + apoapsis_m) * 0.5;
+        let velocity_mps = (EARTH_MU * (2.0 / periapsis_m - 1.0 / semi_major_axis_m)).sqrt();
+        let apsides = apsis_endpoints_from_state(
+            DVec3::new(periapsis_m, 0.0, 0.0),
+            DVec3::new(0.0, velocity_mps, 0.0),
+            EARTH_MU,
+        )
+        .expect("elliptical orbit has unique apsides");
+
+        assert!((apsides.periapsis_position_m.length() - periapsis_m).abs() < 1e-6);
+        assert!((apsides.apoapsis_position_m.length() - apoapsis_m).abs() < 1e-6);
+        assert!(apsides.periapsis_position_m.x > 0.0);
+        assert!(apsides.apoapsis_position_m.x < 0.0);
+    }
+
+    #[test]
+    fn analytic_apsides_preserve_an_arbitrary_orbital_orientation() {
+        let periapsis_m = 6_671_000.0;
+        let apoapsis_m = 7_071_000.0;
+        let semi_major_axis_m = (periapsis_m + apoapsis_m) * 0.5;
+        let velocity_mps = (EARTH_MU * (2.0 / periapsis_m - 1.0 / semi_major_axis_m)).sqrt();
+        let rotation =
+            bevy::math::DQuat::from_rotation_arc(DVec3::Y, DVec3::new(0.3, 0.8, 0.5).normalize());
+        let apsides = apsis_endpoints_from_state(
+            rotation * DVec3::new(periapsis_m, 0.0, 0.0),
+            rotation * DVec3::new(0.0, velocity_mps, 0.0),
+            EARTH_MU,
+        )
+        .expect("rotated ellipse has unique apsides");
+
+        assert!((apsides.periapsis_position_m - rotation * DVec3::X * periapsis_m).length() < 1e-6);
+        assert!((apsides.apoapsis_position_m + rotation * DVec3::X * apoapsis_m).length() < 1e-6);
+    }
+
+    #[test]
+    fn circular_orbit_has_no_unique_analytic_apsides() {
+        let radius_m = 6_771_000.0;
+        let velocity_mps = (EARTH_MU / radius_m).sqrt();
+        assert!(apsis_endpoints_from_state(
+            DVec3::new(radius_m, 0.0, 0.0),
+            DVec3::new(0.0, velocity_mps, 0.0),
+            EARTH_MU,
+        )
+        .is_none());
     }
 
     #[test]
