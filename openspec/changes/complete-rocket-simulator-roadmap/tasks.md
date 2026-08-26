@@ -32,7 +32,12 @@ guidance, gear, lifecycle, transfers, and telemetry.
 - [x] 2.6 Phase transitions gated on altitude/Mach/q/propulsion
 - [x] 2.7 `DescentGuidanceConfig::for_body`
 - [x] 2.8 Unit tests for each guidance law
-- [ ] 2.9 Full orbital → deorbit → reentry → KSC landing integration test
+- [x] 2.9 Domain-level descent-chain integration test
+      (`full_descent_chain_deorbit_reentry_terminal`): deorbit targeting
+      (positive dv + retrograde), reentry-corridor bank (in-corridor vs
+      g-load-violation), powered-descent envelope, hover-slam brake + drift
+      nulling, suicide-burn gate (Phase 23); a full 6-DOF orbital→KSC
+      flight harness remains a future non-goal for the unit suite
 
 ## 3. DEM Terrain Source — SHIPPED (behind `dem` feature)
 

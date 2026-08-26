@@ -1586,4 +1586,117 @@ mod tests {
         );
         assert_eq!(p, RocketMissionState::UnpoweredDescent);
     }
+
+    /// Item 2.9: a domain-level integration of the whole descent chain —
+    /// deorbit targeting → reentry-corridor bank management → powered descent →
+    /// terminal hover-slam/suicide-burn. Not a full 6-DOF flight, but it drives
+    /// one representative state through every guidance phase and checks the
+    /// physical ordering the phase logic depends on.
+    #[test]
+    fn full_descent_chain_deorbit_reentry_terminal() {
+        const EARTH_MASS_KG: f64 = 5.97237e24;
+        const EARTH_RADIUS_M: f64 = 6_371_000.0;
+        let mu = gravitational_parameter(EARTH_MASS_KG);
+        let config = DescentGuidanceConfig::default();
+        let pad = DVec3::new(EARTH_RADIUS_M, 0.0, 0.0);
+        let up = pad.normalize();
+
+        // 1) Deorbit: circular LEO at 200 km. Burn must be positive delta-v and
+        // retrograde (body +Y opposite the velocity vector).
+        let r_orbit = EARTH_RADIUS_M + 200_000.0;
+        let v_orbit = circular_orbit_speed_mps(EARTH_MASS_KG, r_orbit);
+        let pos = DVec3::new(r_orbit, 0.0, 0.0);
+        let vel = DVec3::new(0.0, 0.0, v_orbit);
+        let target_periapsis = EARTH_RADIUS_M + config.entry_interface_altitude_m;
+        let (dv, attitude) = deorbit_burn_targeting(pos, vel, target_periapsis, mu);
+        assert!(dv > 0.0, "deorbit burn delta-v must be positive");
+        let body_y = attitude * DVec3::Y;
+        assert!(body_y.dot(vel) < 0.0, "deorbit burn must be retrograde");
+
+        // 2) Reentry corridor: nominal state in the corridor ⇒ small crossrange
+        // bank; violating g-load ⇒ bank to ~90° with the crossrange sign.
+        let nominal = reentry_bank_angle(
+            80_000.0, 7_000.0, 20_000.0, 300_000.0, 2.0, &config, 10_000.0,
+        );
+        assert!(nominal.abs() <= 30.0_f64.to_radians());
+
+        let violating_g = reentry_bank_angle(
+            80_000.0,
+            7_000.0,
+            20_000.0,
+            300_000.0,
+            config.max_g_load + 1.0,
+            &config,
+            10_000.0,
+        );
+        assert!(
+            (violating_g.abs() - 90.0_f64.to_radians()).abs() < 1e-9,
+            "violating g-load must bank to 90°, got {}°",
+            violating_g.to_degrees()
+        );
+        assert!(
+            violating_g < 0.0,
+            "positive crossrange ⇒ left (negative) bank"
+        );
+
+        // 3) Powered descent (convex): a plausible initiation state — subsonic,
+        // descending fast enough that braking is required. The command must be
+        // bounded to the engine envelope and finite.
+        let descent_pos = DVec3::new(EARTH_RADIUS_M + 1_500.0, 0.0, 0.0);
+        let descent_vel = -up * 80.0; // falling at 80 m/s
+        let (thrust, _) = powered_descent_guidance_convex(
+            descent_pos,
+            descent_vel,
+            pad,
+            40_000.0,
+            8.0e5,
+            3.0e5,
+            20.0_f64.to_radians(),
+            9.81,
+            12.0,
+        );
+        assert!(thrust.length().is_finite());
+        assert!(
+            thrust.length() >= 3.0e5 - 1.0 && thrust.length() <= 8.0e5 + 1.0,
+            "thrust {} outside engine envelope",
+            thrust.length()
+        );
+
+        // 4) Terminal hover-slam brake: descending well below the target rate,
+        // the commanded thrust must point up (brake the fall) and contain a
+        // component opposing any horizontal drift (nulls it).
+        let (h_thrust, _) = hover_slam_guidance(
+            descent_pos,
+            -up * 30.0 + DVec3::new(0.0, 0.0, 25.0), // descend + drift +Z
+            pad,
+            40_000.0,
+            8.0e5,
+            9.81,
+            -1.0, // target descent rate
+        );
+        assert!(h_thrust.dot(up) > 0.0, "hover-slam must brake the fall");
+        let horizontal_thrust = h_thrust - up * h_thrust.dot(up);
+        assert!(
+            horizontal_thrust.dot(DVec3::Z) < 0.0,
+            "hover-slam must oppose the horizontal drift"
+        );
+
+        // 5) Suicide burn: gates on the computed arrest altitude — too high, no
+        // burn; within it, burn. `up` is the radial (+X) direction at the pad.
+        let (_, _, _, should_burn_high) =
+            suicide_burn_guidance(pad + up * 60_000.0, -up * 100.0, pad, 40_000.0, 8.0e5, 9.81);
+        assert!(
+            !should_burn_high,
+            "must not burn while far above the suicide altitude"
+        );
+
+        // ~100 m up at 50 m/s: 50²/(2·(20−9.81)) ≈ 123 m arrest altitude, so a
+        // 100 m start is inside it and the burn must ignite.
+        let (_, _, _, should_burn_near) =
+            suicide_burn_guidance(pad + up * 100.0, -up * 50.0, pad, 40_000.0, 8.0e5, 9.81);
+        assert!(
+            should_burn_near,
+            "must ignite once inside the suicide burn altitude"
+        );
+    }
 }
