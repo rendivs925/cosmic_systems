@@ -103,16 +103,17 @@ fn spawn_patch_mesh_system(
     streaming: Res<TerrainStreamingResource>,
     config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
-    planet_query: Query<&PlanetTerrain>,
+    planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
     planet_entities: Query<Entity, With<PlanetComponent>>,
 ) {
     for event in events.read() {
         let Some(planet_entity) = planet_entities.iter().find(|e| *e == event.planet_entity) else {
             continue;
         };
-        let Ok(planet_terrain) = planet_query.get(planet_entity) else {
+        let Ok((planet_terrain, planet)) = planet_query.get(planet_entity) else {
             continue;
         };
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
         let patch = event.patch;
         let Some(geometry) = streaming.generated.get(&patch) else {
@@ -123,7 +124,16 @@ fn spawn_patch_mesh_system(
         // geometry into the rocket-local flight frame so f32 mesh vertices stay
         // small near the camera (avoids precision loss at ~6371 km magnitudes
         // that degrades the sphere into a flat plane with broken triangles).
-        let mesh = patch_geometry_to_mesh(geometry, &config, &render_origin.origin);
+        // Per-vertex biome coloring is computed from the shared terrain source
+        // so elevation/moisture/latitude produce continuous green→rock→snow
+        // transitions instead of one flat color per 305 m patch.
+        let mesh = patch_geometry_to_mesh(
+            geometry,
+            &config,
+            &render_origin.origin,
+            planet_terrain.source.as_ref(),
+            radius_m,
+        );
         let mesh_handle = meshes.add(mesh);
 
         // Create material with biome-appropriate properties.
@@ -182,10 +192,17 @@ fn despawn_patch_mesh_system(
 /// into the rocket-local flight frame (`positions - render_origin`). This keeps
 /// f32 vertex magnitudes small near the camera, preserving the spherical surface
 /// instead of collapsing it into a flat plane at ~6371 km magnitudes.
+///
+/// Per-vertex colors are sampled from the shared `TerrainSource` so the surface
+/// shows continuous biome transitions (grass → forest → rock → snow) and a sandy
+/// shoreline rather than a single flat color per patch (AGENTS.md 50: one
+/// authoritative appearance law).
 fn patch_geometry_to_mesh(
     geometry: &PatchGeometry,
     config: &TerrainRenderConfig,
     render_origin: &DVec3,
+    source: &dyn TerrainSource,
+    radius_m: f64,
 ) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -227,6 +244,30 @@ fn patch_geometry_to_mesh(
         .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
 
+    // Per-vertex biome color from the shared source (continuous appearance).
+    let colors: Vec<[f32; 3]> = geometry
+        .positions
+        .iter()
+        .map(|p| {
+            let planet_pos = DVec3::from_array(*p);
+            let dir = planet_pos.normalize();
+            let (lat, lon) = direction_to_lat_lon(dir);
+            let height = planet_pos.length() - radius_m;
+            let moisture = source.moisture(lat, lon);
+            let zone = source.zone_lat(lat);
+            let slope = slope_deg_at(source, lat, lon);
+            let appearance = surface_appearance(height, moisture, zone, slope);
+            let c = Color::srgb(
+                appearance.albedo[0],
+                appearance.albedo[1],
+                appearance.albedo[2],
+            )
+            .to_linear();
+            [c.red, c.green, c.blue]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+
     // Indices.
     mesh.insert_indices(Indices::U32(geometry.indices.clone()));
 
@@ -242,6 +283,9 @@ fn patch_material(
     // Sample the patch-centre environment: elevation, soil moisture, latitude
     // zone and local slope. These drive a continuous appearance (soft ecotones)
     // via the shared domain `surface_appearance` (single authority, AGENTS.md 50).
+    // Per-vertex colors come from the same law in `patch_geometry_to_mesh`, so the
+    // material only needs to enable vertex colors and supply a representative
+    // roughness; the albedo is carried per vertex.
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let u_mid = (u0 + u1) * 0.5;
     let v_mid = (v0 + v1) * 0.5;
@@ -254,11 +298,9 @@ fn patch_material(
     let appearance = surface_appearance(height, moisture, zone, slope);
 
     StandardMaterial {
-        base_color: Color::srgb(
-            appearance.albedo[0],
-            appearance.albedo[1],
-            appearance.albedo[2],
-        ),
+        // White base: the actual albedo is provided per-vertex (Bevy applies
+        // the mesh COLOR attribute automatically in StandardMaterial).
+        base_color: Color::WHITE,
         perceptual_roughness: appearance.roughness,
         metallic: appearance.metallic,
         unlit: false,

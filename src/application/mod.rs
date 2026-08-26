@@ -9,5 +9,4 @@ pub mod simulation_service;
 pub mod solar_system_startup;
 pub mod starfield;
 pub mod startup;
-pub mod terrain_spawning;
 pub mod texture_config;

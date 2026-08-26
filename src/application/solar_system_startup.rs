@@ -1,6 +1,5 @@
 // Re-export functionality from split modules
 pub use super::rocket_spawning::*;
-pub use super::terrain_spawning::*;
 pub use super::texture_config::*;
 
 use crate::application::material_factory::*;
@@ -157,16 +156,6 @@ pub fn setup_space(
             &axial_tilts,
         );
     }
-
-    // Spawn terrain patches
-    spawn_terrain_patches(
-        &mut commands,
-        &asset_server,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-        &entity_map,
-    );
 }
 
 #[cfg(target_arch = "wasm32")]

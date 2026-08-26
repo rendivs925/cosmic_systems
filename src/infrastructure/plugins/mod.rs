@@ -79,10 +79,6 @@ use crate::infrastructure::bevy_adapters::terrain_render::{
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
-use crate::infrastructure::bevy_adapters::terrain_systems::{
-    generate_terrain_mesh, initialize_terrain_lod, update_terrain_lod,
-    update_terrain_synchronization, update_terrain_visibility,
-};
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 use crate::infrastructure::bevy_adapters::webgpu_systems::init_vulkan_solver;
@@ -171,14 +167,6 @@ impl Plugin for SharedSimulationPlugin {
         app.add_systems(Update, take_pending_screenshot);
         app.add_systems(Update, toggle_video_recording);
         app.add_systems(Update, handle_video_recording);
-
-        // Terrain systems
-        app.add_systems(Update, update_terrain_visibility);
-        app.add_systems(Update, generate_terrain_mesh);
-        app.add_systems(Update, initialize_terrain_lod);
-        app.add_systems(Update, update_terrain_lod);
-        // Terrain orbital synchronization - high priority
-        app.add_systems(Update, update_terrain_synchronization);
 
         app.add_systems(Update, update_starfield_position);
     }
