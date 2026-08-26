@@ -7,7 +7,7 @@
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
-use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
 use bevy::asset::{Assets, RenderAssetUsages};
@@ -239,54 +239,30 @@ fn patch_material(
     source: &dyn TerrainSource,
     config: &TerrainRenderConfig,
 ) -> StandardMaterial {
-    // Sample height at patch center for biome/altitude classification.
+    // Sample the patch-centre environment: elevation, soil moisture, latitude
+    // zone and local slope. These drive a continuous appearance (soft ecotones)
+    // via the shared domain `surface_appearance` (single authority, AGENTS.md 50).
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let u_mid = (u0 + u1) * 0.5;
     let v_mid = (v0 + v1) * 0.5;
     let dir = face_uv_to_direction(patch.face, u_mid, v_mid);
     let (lat, lon) = direction_to_lat_lon(dir);
     let height = source.height_m(lat, lon);
-
-    // Biome classification based on height (simple for now).
-    let (albedo, roughness, metallic) = biome_properties(height);
+    let moisture = source.moisture(lat, lon);
+    let zone = source.zone_lat(lat);
+    let slope = slope_deg_at(source, lat, lon);
+    let appearance = surface_appearance(height, moisture, zone, slope);
 
     StandardMaterial {
-        base_color: Color::srgb(albedo.0, albedo.1, albedo.2),
-        perceptual_roughness: roughness,
-        metallic,
+        base_color: Color::srgb(
+            appearance.albedo[0],
+            appearance.albedo[1],
+            appearance.albedo[2],
+        ),
+        perceptual_roughness: appearance.roughness,
+        metallic: appearance.metallic,
         unlit: false,
         ..default()
-    }
-}
-
-/// Biome properties from height. Pure function of altitude so the biome
-/// classification is directly unit-testable (AGENTS.md section 45).
-/// Bands, lower→higher: ocean, shoreline, plains, lowlands, hills/mountains,
-/// rocky high mountains, and a snow line (spec "material variation by
-/// altitude": above the snow line the albedo shifts toward white and roughness
-/// decreases).
-fn biome_properties(height_m: f64) -> ((f32, f32, f32), f32, f32) {
-    if height_m > 4_500.0 {
-        // Snow line: bright white with lower roughness (spec).
-        ((0.92, 0.94, 0.97), 0.45, 0.0)
-    } else if height_m > 3_000.0 {
-        // High mountains: rocky grey.
-        ((0.45, 0.42, 0.4), 0.9, 0.0)
-    } else if height_m > 1_000.0 {
-        // Mountains/hills: dark green slopes.
-        ((0.28, 0.38, 0.22), 0.85, 0.0)
-    } else if height_m > 100.0 {
-        // Lowlands: grass.
-        ((0.3, 0.45, 0.2), 0.8, 0.0)
-    } else if height_m > 2.0 {
-        // Plains / launch-site elevation: grassland green.
-        ((0.32, 0.5, 0.22), 0.8, 0.0)
-    } else if height_m > -2.0 {
-        // Shoreline band: sand.
-        ((0.76, 0.7, 0.5), 0.7, 0.0)
-    } else {
-        // Ocean: blue water.
-        ((0.1, 0.25, 0.45), 0.15, 0.0)
     }
 }
 
@@ -294,38 +270,6 @@ fn biome_properties(height_m: f64) -> ((f32, f32, f32), f32, f32) {
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
-
-    #[test]
-    fn ocean_plains_and_mountain_biomes_are_distinct() {
-        // Spec: a patch in a mountain biome must use albedo distinct from
-        // plains/ocean biomes (scenario "material variation by biome").
-        let ocean = biome_properties(-1000.0);
-        let plains = biome_properties(50.0);
-        let mountains = biome_properties(2_000.0);
-        assert_ne!(ocean.0, plains.0, "ocean and plains must differ");
-        assert_ne!(plains.0, mountains.0, "plains and mountains must differ");
-        // Plains are largely green; ocean largely blue.
-        assert!(plains.0 .1 > plains.0 .2, "plains should be green-dominant");
-        assert!(ocean.0 .2 > ocean.0 .0, "ocean should be blue-dominant");
-    }
-
-    #[test]
-    fn snow_line_shifts_albedo_white_and_lowers_roughness() {
-        // Spec scenario "material variation by altitude": above the snow line
-        // albedo shifts toward white and roughness decreases.
-        let rock = biome_properties(4_000.0);
-        let snow = biome_properties(5_000.0);
-        assert!(
-            snow.0 .0 > 0.9 && snow.0 .1 > 0.9 && snow.0 .2 > 0.9,
-            "snow must be near-white"
-        );
-        assert!(
-            snow.1 < rock.1,
-            "snow roughness {} must be below rocky {}",
-            snow.1,
-            rock.1
-        );
-    }
 
     #[test]
     fn patch_geometry_emits_skirt_ring_for_crack_free_lod() {
@@ -357,7 +301,7 @@ mod tests {
         for pos in geom.positions.iter().skip(non_skirt) {
             let r = DVec3::from_array(*pos).length();
             assert!(
-                r < 6_371_000.0 + 2_500.0,
+                r < 6_371_000.0 + 2_900.0,
                 "skirt vertex at radius {r} not extruded inward"
             );
         }

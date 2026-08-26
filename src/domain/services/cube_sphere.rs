@@ -410,9 +410,11 @@ mod tests {
         assert!(geom.positions.len() >= 25);
         for p in &geom.positions {
             let r = DVec3::from_array(*p).length();
-            // Radius stays near planet radius ± terrain amplitude.
+            // Radius stays near planet radius ± (rolling amplitude + mountain
+            // amplitude). source() uses amplitude 2000 + mountain 800, so the
+            // envelope is ±2800 m; +100 m margin for domain-warp peaks.
             assert!(
-                (r - 6_371_000.0).abs() < 2_500.0,
+                (r - 6_371_000.0).abs() < 2_900.0,
                 "vertex radius {r} off the sphere"
             );
         }

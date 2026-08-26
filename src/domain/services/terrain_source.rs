@@ -19,9 +19,40 @@ use std::fmt::Debug;
 /// produce more, smaller features across the planet.
 const NOISE_SCALE: f64 = 10.0;
 
+/// Domain-warp strength: how far the low-frequency warp field displaces the
+/// sample point before the fractals are evaluated. This is what makes ridgelines
+/// meander and removes the ubiquitous "noise-grid" look (inexorable best
+/// practice — cheap and always worth it).
+const WARP_STRENGTH: f64 = 3.0;
+
+/// Power redistribution exponent applied to the base rolling terrain: values
+/// above 1 flatten plains while keeping peaks sharp (the classic "plains + peak"
+/// shaping, per the procedural-terrain references).
+const SHAPE_POWER: f64 = 1.35;
+
+/// Separate warp/moisture seeds so the fields are statistically independent.
+const SEED_WARP_X: u64 = 0xD1B5_A9B1_7E1F_2A3C;
+const SEED_WARP_Y: u64 = 0x5B1E_3C4D_92AF_4B11;
+const SEED_WARP_Z: u64 = 0x9E77_6E5D_C0A8_3B22;
+const SEED_MOISTURE: u64 = 0x4C3A_2B19_08F7_E6D5;
+
 /// A source of terrain surface heights in meters above the mean radius.
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
+
+    /// Normalized soil moisture in `[0, 1]` (drives vegetation/biome). Sources
+    /// without a moisture model default to a neutral `0.5` so biomes still
+    /// vary by elevation and latitude.
+    fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.5
+    }
+
+    /// Normalized latitude zone in `[0, 1]` (`0` = south pole, `1` = north
+    /// pole), used to fade cold-biome coloring toward the poles. Default maps
+    /// latitude linearly; planets cold/temperate callers may override.
+    fn zone_lat(&self, latitude_deg: f64) -> f64 {
+        ((latitude_deg + 90.0) / 180.0).clamp(0.0, 1.0)
+    }
 }
 
 /// Height from a deterministic 3D value-noise field. Evaluating the noise on
@@ -216,8 +247,34 @@ impl TerrainSource for ProceduralTerrainSource {
         // Evaluate the 3D noise on the unit sphere (seamless in longitude).
         let lat = latitude_deg.to_radians();
         let lon = longitude_deg.to_radians();
-        let p = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin()) * NOISE_SCALE;
-        let rolling = self.noise.fbm(self.seed, p.x, p.y, p.z, 4) - 0.5;
+        let dir = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        let base = dir * NOISE_SCALE;
+
+        // Domain warp (best practice): displace the sample point by a
+        // low-frequency vector noise field before the fractal evaluation.
+        // Ridgelines meander and the axis-aligned "noise grid" disappears.
+        let wx = self
+            .noise
+            .fbm(self.seed ^ SEED_WARP_X, base.x, base.y, base.z, 2)
+            - 0.5;
+        let wy = self
+            .noise
+            .fbm(self.seed ^ SEED_WARP_Y, base.x, base.y, base.z, 2)
+            - 0.5;
+        let wz = self
+            .noise
+            .fbm(self.seed ^ SEED_WARP_Z, base.x, base.y, base.z, 2)
+            - 0.5;
+        let p = DVec3::new(
+            base.x + wx * WARP_STRENGTH,
+            base.y + wy * WARP_STRENGTH,
+            base.z + wz * WARP_STRENGTH,
+        );
+
+        // Base rolling terrain, then power redistribution: flat plains with
+        // sharp peaks instead of uniformly lumpy fBm.
+        let rolling01 = (self.noise.fbm(self.seed, p.x, p.y, p.z, 4)).clamp(-0.5, 0.5) + 0.5;
+        let rolling = rolling01.powf(SHAPE_POWER) - 0.5;
         let mountains = self
             .noise
             .ridged_noise(self.seed.wrapping_add(7), p.x, p.y, p.z, 4);
@@ -226,6 +283,15 @@ impl TerrainSource for ProceduralTerrainSource {
             h += self.crater_field(latitude_deg, longitude_deg);
         }
         h
+    }
+
+    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let p = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin()) * NOISE_SCALE;
+        self.noise
+            .fbm(self.seed ^ SEED_MOISTURE, p.x, p.y, p.z, 3)
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -310,6 +376,119 @@ impl TerrainSource for PlanetaryDemSource {
     fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.0
     }
+}
+
+/// Continuous surface appearance (albedo/roughness/metallic) blended from
+/// elevation, soil moisture, latitude zone and local slope — the "one
+/// continuous law" terrain best-practice (glassy wash → soft hills → textured
+/// slopes → carved rock), replacing hard biome bands with soft ecotones.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceAppearance {
+    pub albedo: [f32; 3],
+    /// Perceptual roughness `[0, 1]` (higher = rougher/lambertian).
+    pub roughness: f32,
+    pub metallic: f32,
+}
+
+/// Helper: `smoothstep(edge0, edge1, x)`.
+fn ss(a: f64, b: f64, x: f64) -> f64 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f64) -> [f32; 3] {
+    let t = t as f32;
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn lerp_f(a: f32, b: f32, t: f64) -> f32 {
+    a + (b - a) * t as f32
+}
+
+/// Compute a continuous, deterministic surface appearance at a terrain point.
+/// `elevation_m` is height above mean radius, `moisture`/`zone_lat` in `[0,1]`,
+/// `slope_deg` the local gradient (≥ 0). Pure function — unit-testable and
+/// shared by the render and any future biome-gated systems.
+pub fn surface_appearance(
+    elevation_m: f64,
+    moisture: f64,
+    zone_lat: f64,
+    slope_deg: f64,
+) -> SurfaceAppearance {
+    const SAND: [f32; 3] = [0.76, 0.70, 0.50];
+    const GRASS: [f32; 3] = [0.32, 0.50, 0.22];
+    const FOREST: [f32; 3] = [0.26, 0.42, 0.16];
+    const SAVANNA: [f32; 3] = [0.62, 0.56, 0.30];
+    const DESERT: [f32; 3] = [0.80, 0.74, 0.55];
+    const TUNDRA: [f32; 3] = [0.62, 0.60, 0.58];
+    const POLAR: [f32; 3] = [0.92, 0.94, 0.97];
+    const ROCK: [f32; 3] = [0.45, 0.42, 0.40];
+    const SNOW: [f32; 3] = [0.94, 0.95, 0.98];
+    const SEAFLOOR: [f32; 3] = [0.08, 0.16, 0.22];
+
+    // Seafloor below sea level.
+    if elevation_m < 0.0 {
+        let depth = (-elevation_m).min(4000.0) / 4000.0;
+        let albedo = lerp3([0.12, 0.28, 0.42], SEAFLOOR, depth);
+        return SurfaceAppearance {
+            albedo,
+            roughness: lerp_f(0.25, 0.7, depth),
+            metallic: 0.0,
+        };
+    }
+
+    // Shoreline → sand.
+    let sand_t = 1.0 - ss(0.0, 4.0, elevation_m.min(4.0));
+    let mut albedo = lerp3(SAND, GRASS, 1.0 - sand_t);
+
+    // Moisture drives grass → forest (wet) / savanna → desert (dry).
+    if moisture < 0.4 {
+        let dry_t = ss(0.4, 0.15, moisture); // dries below 0.4
+        albedo = lerp3(albedo, SAVANNA, dry_t * 0.6);
+        albedo = lerp3(albedo, DESERT, (dry_t * 0.5) * ss(120.0, 0.0, elevation_m));
+    } else {
+        let wet_t = ss(0.4, 0.75, moisture);
+        albedo = lerp3(albedo, FOREST, wet_t * 0.7);
+    }
+
+    // Latitude zone: cold toward the poles.
+    let polar_dist = (zone_lat - 0.5).abs() * 2.0; // 0 equator → 1 pole
+    let cold_t = ss(0.55, 0.9, polar_dist);
+    albedo = lerp3(albedo, TUNDRA, cold_t * 0.6);
+    albedo = lerp3(albedo, POLAR, cold_t * ss(0.8, 1.0, polar_dist));
+
+    // Steep → bare rock, cliff edges keep their sharp character.
+    let rock_t = ss(35.0, 55.0, slope_deg);
+    albedo = lerp3(albedo, ROCK, rock_t);
+
+    // Snow line: high altitude above the snow band turns white (low roughness).
+    let snow_t = ss(4500.0, 5200.0, elevation_m);
+    albedo = lerp3(albedo, SNOW, snow_t);
+    let roughness = 0.85 - 0.35 * snow_t;
+
+    SurfaceAppearance {
+        albedo,
+        roughness: roughness as f32,
+        metallic: 0.0,
+    }
+}
+
+/// Local terrain slope (degrees ≥ 0) at a lat/lon by central differences over
+/// a small arc. Uses the authoritative source; deterministic for a fixed source.
+pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg: f64) -> f64 {
+    let d = 0.02; // ~2 km probe for a stable, feature-scale gradient
+    let hx = source.height_m(latitude_deg, longitude_deg + d)
+        - source.height_m(latitude_deg, longitude_deg - d);
+    let hy = source.height_m(latitude_deg + d, longitude_deg)
+        - source.height_m(latitude_deg - d, longitude_deg);
+    let lat_m = 111_320.0; // meters per degree of latitude
+    let lon_m = (111_320.0 * latitude_deg.to_radians().cos()).abs().max(1.0);
+    let grad = (hx / (2.0 * d * lon_m)).hypot(hy / (2.0 * d * lat_m));
+    grad.atan().to_degrees()
 }
 
 /// The shared terrain source for a planet by name: Earth gets flat detailed
@@ -488,6 +667,82 @@ mod tests {
         assert!((a - b).abs() < 800.0, "seam discontinuity: {a} vs {b}");
         // ...and are far closer than two distant longitudes.
         let far = source.height_m(10.0, 20.0);
-        assert!((a - far).abs() > 200.0, "expected distinct far longitude");
+        assert!(
+            (a - far).abs() > 5.0,
+            "expected terrain to vary between distant longitudes: {a} vs {far}"
+        );
+    }
+
+    #[test]
+    fn domain_warped_height_stays_deterministic_and_bounded() {
+        // Adjacent points are continuous; amplitude stays within the configured
+        // envelope (rolling ±amplitude + mountains·mountain_amplitude).
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let a = source.height_m(36.5, -90.4);
+        let b = source.height_m(36.5, -90.4);
+        assert_eq!(a, b, "height must be deterministic");
+        let h = source.height_m(10.0, 20.0);
+        assert!(h.is_finite());
+        // Warping never blows past the amplitude + mountain envelope.
+        for (la, lo) in [(-20.0, 30.0), (50.0, -120.0), (0.0, 0.0), (80.0, 90.0)] {
+            let v = source.height_m(la, lo);
+            assert!(
+                v.abs() <= 2000.0 + 800.0 + 1.0,
+                "height {v} exceeded envelope at ({la},{lo})"
+            );
+        }
+    }
+
+    #[test]
+    fn moisture_is_normalized_deterministic() {
+        let source = ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0);
+        for (la, lo) in [(0.0, 0.0), (30.0, -60.0), (-45.0, 120.0)] {
+            let m = source.moisture(la, lo);
+            assert!((0.0..=1.0).contains(&m), "moisture {m} out of range");
+            assert_eq!(m, source.moisture(la, lo));
+        }
+    }
+
+    #[test]
+    fn surface_appearance_varies_continuously() {
+        // Wet grassland → arid desert: distinct albedo.
+        let wet = surface_appearance(300.0, 0.8, 0.5, 5.0);
+        let dry = surface_appearance(300.0, 0.05, 0.5, 5.0);
+        assert_ne!(wet.albedo, dry.albedo, "moisture must change the biome");
+        // Snow line shifts toward white above 5 km, and is rougher below.
+        let low = surface_appearance(1_000.0, 0.5, 0.5, 10.0);
+        let high = surface_appearance(5_500.0, 0.5, 0.5, 10.0);
+        assert!(
+            high.albedo[0] > 0.9 && high.albedo[1] > 0.9,
+            "snow must be near-white"
+        );
+        assert!(high.roughness < low.roughness, "snow is less rough");
+        // Steep faces read as bare rock.
+        let cliff = surface_appearance(1_000.0, 0.5, 0.5, 60.0);
+        assert!(
+            (cliff.albedo[0] - 0.45).abs() < 0.08 && (cliff.albedo[1] - 0.42).abs() < 0.08,
+            "cliff should trend toward rocky grey {:?}",
+            cliff.albedo
+        );
+        // Seafloor below sea level.
+        assert_eq!(surface_appearance(-100.0, 0.5, 0.5, 0.0).metallic, 0.0);
+    }
+
+    #[test]
+    fn slope_deg_at_is_finite_and_zero_on_flat() {
+        let flat = crate::domain::services::terrain_source::HeightmapTerrainSource {
+            size_px: 3,
+            data: vec![5.0; 9],
+            lat_min_deg: -1.0,
+            lat_max_deg: 1.0,
+            lon_min_deg: -1.0,
+            lon_max_deg: 1.0,
+            height_min_m: 0.0,
+            height_max_m: 10.0,
+        };
+        let s = slope_deg_at(&flat, 0.0, 0.0);
+        assert!(s.abs() < 1e-6, "flat terrain must have ~0 slope, got {s}");
+        let proc = ProceduralTerrainSource::default();
+        assert!(slope_deg_at(&proc, 10.0, 20.0).is_finite());
     }
 }

@@ -39,6 +39,13 @@ const SURFACE_LOD_DISTANCE_M: f64 = 150.0;
 /// Altitude threshold below which surface LOD distance is used.
 const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 
+/// Smooth `[0,1]` ramp used to blend the on-ground and orbital LOD distances so
+/// the terrain LOD level steps gradually rather than jumping several at once.
+fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Bevy resource wrapping the domain streaming manager plus the generated
 /// patch geometry cache.
 #[derive(Resource)]
@@ -106,15 +113,20 @@ pub fn stream_terrain_patches(
     let altitude_m = (r - radius_m).max(0.0);
 
     // Request the ring of patches around the focus direction at the LOD
-    // appropriate for the current altitude.
-    // Near the surface, use camera-to-terrain distance instead of orbital heuristic.
-    let lod_distance_m = if altitude_m < SURFACE_LOD_ALTITUDE_THRESHOLD_M {
-        // On or near the ground: camera is ~100-200m above terrain.
-        SURFACE_LOD_DISTANCE_M
-    } else {
-        // Orbital/space: use orbital heuristic.
-        (altitude_m + radius_m * 0.05).max(10_000.0)
-    };
+    // appropriate for the current altitude. The LOD distance is blended
+    // continuously between the "on the ground" camera-to-terrain estimate and
+    // the orbital heuristic over a band around the threshold, so the LOD level
+    // steps one level at a time instead of jumping several at once when the
+    // rocket passes 10 km (avoids the visible full-window pop flicker).
+    let ground_distance_m = SURFACE_LOD_DISTANCE_M;
+    let orbital_distance_m = (altitude_m + radius_m * 0.05).max(10_000.0);
+    let blend = smoothstep(
+        SURFACE_LOD_ALTITUDE_THRESHOLD_M * 0.5,
+        SURFACE_LOD_ALTITUDE_THRESHOLD_M,
+        altitude_m,
+    );
+    let lod_distance_m =
+        ground_distance_m + (orbital_distance_m.max(ground_distance_m) - ground_distance_m) * blend;
 
     let level = lod_for_distance(
         lod_distance_m,
@@ -234,5 +246,20 @@ mod tests {
         let window = surrounding_patches(&focus);
         // Corner tile: 2 of the 8 neighbors are outside the face.
         assert_eq!(window.len(), 4);
+    }
+
+    #[test]
+    fn smoothstep_ramps_monotonically_and_clips() {
+        // Below a: 0; above b: 1; monotonic in between (the LOD-distance blend
+        // depends on this so the terrain LOD never jumps backward).
+        assert_eq!(smoothstep(0.0, 10.0, -5.0), 0.0);
+        assert_eq!(smoothstep(0.0, 10.0, 15.0), 1.0);
+        assert!((smoothstep(0.0, 10.0, 5.0) - 0.5).abs() < 1e-9);
+        let mut last = 0.0;
+        for i in 0..=10 {
+            let s = smoothstep(0.0, 10.0, i as f64);
+            assert!(s >= last - 1e-12, "must be non-decreasing");
+            last = s;
+        }
     }
 }

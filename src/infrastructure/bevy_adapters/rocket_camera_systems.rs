@@ -184,16 +184,22 @@ fn compute_chase_camera(
     right: Vec3,
     config: &RocketCameraConfig,
 ) -> (Vec3, Quat) {
-    // If rocket is nearly vertical (forward ≈ up), "behind" would be underground.
-    // Instead, position camera to the side and above for a clear pad view.
+    // Near-vertical flight (launch) has "behind" pointing into the ground, so a
+    // side offset is used. A hard `if` on `forward·up` flips the offset
+    // per-frame as the value crosses the threshold (a visible launch jitter),
+    // so the two candidate offsets are blended continuously over a band instead
+    // (hysteresis/lerp, AGENTS.md §48).
     let vertical_alignment = forward.dot(up).abs();
-    let offset = if vertical_alignment > 0.95 {
-        // Rocket is vertical: use side offset (right vector) + up offset
-        right * config.chase_distance + up * config.chase_height
-    } else {
-        // Rocket is tilted: traditional chase behind and above
-        -forward * config.chase_distance + up * config.chase_height
-    };
+    let threshold_lo = 0.90;
+    let threshold_hi = 0.99;
+    let vert_t =
+        ((vertical_alignment - threshold_lo) / (threshold_hi - threshold_lo)).clamp(0.0, 1.0);
+    let vert_t = vert_t * vert_t * (3.0 - 2.0 * vert_t); // smoothstep
+
+    let side_offset = right * config.chase_distance + up * config.chase_height;
+    let behind_offset = -forward * config.chase_distance + up * config.chase_height;
+    let offset = behind_offset.lerp(side_offset, vert_t);
+
     let target_pos = rocket_pos + offset;
     // Look at the rocket's center (half height up) so the entire vehicle is
     // framed, including engines at the base and nose at the top. The rocket
