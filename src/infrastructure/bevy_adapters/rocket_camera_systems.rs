@@ -397,6 +397,10 @@ pub fn update_rocket_camera_projection(
         .map(|p| p.domain_planet.radius_km as f64 * 1000.0)
         .unwrap_or(6_371_000.0);
     let height_above_surface = (altitude - planet_radius).max(0.0);
+    // A planet fills the view out to its geometric horizon. Clipping before
+    // that intersection turns the curved globe into a flat far-plane slice.
+    let horizon_distance_m =
+        (height_above_surface * (2.0 * planet_radius + height_above_surface)).sqrt();
 
     for projection in camera_query.iter_mut() {
         if let Projection::Perspective(proj) = projection.into_inner() {
@@ -409,13 +413,10 @@ pub fn update_rocket_camera_projection(
                     (0.01, (height_above_surface + 1000.0) as f32)
                 }
                 RocketCameraMode::Surface => {
-                    // Close for landing
-                    (0.1, (height_above_surface + 5000.0) as f32)
+                    (0.1, (horizon_distance_m + 50_000.0).max(5_000.0) as f32)
                 }
                 RocketCameraMode::Chase => {
-                    // Launch-pad view: far plane large enough to show Earth curvature
-                    // and horizon. From 100m altitude, horizon is ~36km away.
-                    (0.5, 100_000.0)
+                    (0.5, (horizon_distance_m + 100_000.0).max(100_000.0) as f32)
                 }
                 RocketCameraMode::Orbital => {
                     // Earth and the predicted trajectory are centered roughly a
@@ -424,9 +425,9 @@ pub fn update_rocket_camera_projection(
                     (10.0, ((planet_radius + height_above_surface) * 3.0) as f32)
                 }
                 RocketCameraMode::Free => {
-                    // Free-fly space view: wide range to frame the rocket and a
-                    // long orbit line, but capped to exclude the solar shell.
-                    (0.5, 300_000.0)
+                    // Frame the whole visible Earth disk at altitude while
+                    // retaining enough range for the local orbit prediction.
+                    (0.5, (horizon_distance_m + 200_000.0).max(300_000.0) as f32)
                 }
             };
 

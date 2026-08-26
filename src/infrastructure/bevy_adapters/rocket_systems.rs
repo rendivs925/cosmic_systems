@@ -53,6 +53,7 @@ use bevy::light::CascadeShadowConfigBuilder;
 use bevy::pbr::DistanceFog;
 use bevy::pbr::FogFalloff;
 
+use crate::infrastructure::bevy_adapters::rocket_planet::is_inside_visual_atmosphere;
 use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::ecs::query::QueryData;
@@ -2297,20 +2298,55 @@ pub fn setup_rocket_camera_and_origin(
             .entity(entity)
             .insert(bevy::render::view::NoIndirectDrawing);
 
-        // Atmospheric fog tuned for a clear day at the launch site: visibility
-        // ~10 km so the pad and nearby terrain stay crisp while the horizon
-        // softens into a light haze. inscattering = warm sunlight near the sun,
-        // extinction = cool blue-grey away from it.
-        commands.entity(entity).insert(DistanceFog {
-            color: Color::srgba(0.55, 0.65, 0.8, 1.0),
-            directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
-            directional_light_exponent: 30.0,
-            falloff: FogFalloff::from_visibility_colors(
-                10_000.0,                    // clear-day visibility in meters
-                Color::srgb(0.55, 0.6, 0.7), // extinction: pale blue-grey haze
-                Color::srgb(0.9, 0.92, 1.0), // inscattering: bright sky glow
-            ),
-        });
+        commands.entity(entity).insert(rocket_distance_fog());
+    }
+}
+
+/// Local atmospheric haze for a camera inside the visual atmosphere shell.
+fn rocket_distance_fog() -> DistanceFog {
+    DistanceFog {
+        color: Color::srgba(0.55, 0.65, 0.8, 1.0),
+        directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
+        directional_light_exponent: 30.0,
+        falloff: FogFalloff::from_visibility_colors(
+            10_000.0,
+            Color::srgb(0.55, 0.6, 0.7),
+            Color::srgb(0.9, 0.92, 1.0),
+        ),
+    }
+}
+
+/// Fog is a local atmosphere effect. Remove it above the planet's atmosphere
+/// so interplanetary space retains a black background and unattenuated stars.
+pub fn update_rocket_atmosphere_fog(
+    mut commands: Commands,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    planet_query: Query<&PlanetComponent>,
+    camera_query: Query<(Entity, Option<&DistanceFog>), With<Camera3d>>,
+) {
+    let Some((binding, rocket)) = rocket_query.iter().next() else {
+        return;
+    };
+    let Some(planet) = planet_query
+        .iter()
+        .find(|planet| planet.domain_planet.name == binding.planet_name)
+    else {
+        return;
+    };
+    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+    let inside_atmosphere =
+        is_inside_visual_atmosphere(rocket.dynamics.position_m.length() - radius_m);
+
+    for (entity, fog) in camera_query.iter() {
+        match (inside_atmosphere, fog.is_some()) {
+            (true, false) => {
+                commands.entity(entity).insert(rocket_distance_fog());
+            }
+            (false, true) => {
+                commands.entity(entity).remove::<DistanceFog>();
+            }
+            _ => {}
+        }
     }
 }
 

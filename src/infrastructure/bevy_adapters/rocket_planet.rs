@@ -13,7 +13,7 @@ use crate::application::material_factory::{
 use crate::application::texture_config::{
     get_cloud_layer_config, get_planet_textures, load_texture,
 };
-use crate::components::rocket::{RocketMode, RocketPlanetBinding};
+use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::physics_utils::{
     calculate_sun_visual_radius, calculate_visual_radius,
@@ -25,6 +25,7 @@ use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use crate::infrastructure::bevy_adapters::terrain_streaming::local_terrain_is_required;
 use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
@@ -54,6 +55,22 @@ pub struct RocketCloudLayer {
 #[derive(Component, Debug, Clone)]
 pub struct RocketCloudOf(pub Entity);
 
+/// Visual atmosphere height above the mean planetary radius. This presentation
+/// boundary is deliberately separate from the physical atmosphere model.
+pub const ROCKET_ATMOSPHERE_VISUAL_TOP_M: f64 = 100_000.0;
+
+pub(crate) fn is_inside_visual_atmosphere(altitude_m: f64) -> bool {
+    altitude_m < ROCKET_ATMOSPHERE_VISUAL_TOP_M
+}
+
+/// Transparent planetary atmosphere visible only when the flight camera is
+/// outside it. Cameras inside the shell use local distance fog instead.
+#[derive(Component, Debug, Clone)]
+pub struct RocketAtmosphereShell {
+    pub planet_name: String,
+    pub radius_m: f64,
+}
+
 /// Resource storing the bound planet name for quick lookup.
 #[derive(Resource, Debug, Default)]
 pub struct RocketBoundPlanet(pub Option<String>);
@@ -81,10 +98,10 @@ pub fn setup_rocket_planets(
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
     physical_scale: Res<PhysicalScale>,
-    rocket_query: Query<&RocketPlanetBinding>,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
-    let Some(binding) = rocket_query.iter().next() else {
+    let Some((binding, rocket)) = rocket_query.iter().next() else {
         return;
     };
     let planet_name = binding.planet_name.clone();
@@ -92,7 +109,9 @@ pub fn setup_rocket_planets(
 
     // Create the bound planet (Earth) with true-scale radius in meters
     if let Some(planet) = PlanetFactory::create_by_name(&planet_name) {
-        let radius_m = planet.radius_km * 1000.0;
+        let radius_m = planet.radius_km as f64 * 1000.0;
+        let show_planet_proxy =
+            !local_terrain_is_required((rocket.dynamics.position_m.length() - radius_m).max(0.0));
         let mesh_handle = meshes.add(Sphere::new(radius_m as f32));
 
         let textures = get_planet_textures(&planet_name);
@@ -140,6 +159,11 @@ pub fn setup_rocket_planets(
                     is_bound_planet: true,
                     is_sun: false,
                 },
+                if show_planet_proxy {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                },
             ))
             .id();
 
@@ -150,6 +174,30 @@ pub fn setup_rocket_planets(
         commands
             .entity(planet_entity)
             .insert(bevy::camera::visibility::NoFrustumCulling);
+
+        if planet_name == "Earth" {
+            let atmosphere_mesh = meshes.add(Sphere::new(
+                (radius_m + ROCKET_ATMOSPHERE_VISUAL_TOP_M) as f32,
+            ));
+            let atmosphere_material = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.18, 0.48, 1.0, 0.14),
+                emissive: LinearRgba::new(0.02, 0.06, 0.16, 1.0),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                cull_mode: None,
+                ..default()
+            });
+            commands.spawn((
+                Mesh3d(atmosphere_mesh),
+                MeshMaterial3d(atmosphere_material),
+                Transform::default(),
+                bevy::camera::visibility::NoFrustumCulling,
+                RocketAtmosphereShell {
+                    planet_name: planet_name.clone(),
+                    radius_m,
+                },
+            ));
+        }
 
         // Cloud layer for Earth
         if let Some(clouds) = get_cloud_layer_config(&planet_name) {
@@ -166,6 +214,11 @@ pub fn setup_rocket_planets(
                         rotation_period_hours: clouds.rotation_period_hours,
                     },
                     RocketCloudOf(planet_entity),
+                    if show_planet_proxy {
+                        Visibility::Visible
+                    } else {
+                        Visibility::Hidden
+                    },
                 ));
             }
         }
@@ -296,17 +349,21 @@ pub fn update_rocket_planets(
     physical_scale: Res<PhysicalScale>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     planet_query: Query<
         (&PlanetComponent, &Transform),
         (Without<RocketPlanet>, Without<RocketMoon>),
     >,
     mut query_set: ParamSet<(
-        Query<(&RocketPlanet, &mut Transform)>,
+        Query<(&RocketPlanet, &mut Transform, &mut Visibility)>,
         Query<(&RocketMoon, &mut Transform)>,
     )>,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
     let Some(bound_planet_name) = &bound_planet_res.0 else {
+        return;
+    };
+    let Some((binding, rocket)) = rocket_query.iter().next() else {
         return;
     };
 
@@ -319,6 +376,14 @@ pub fn update_rocket_planets(
     let Some(bound_planet_pos) = bound_planet_transform else {
         return;
     };
+    let bound_planet_radius_m = planet_query
+        .iter()
+        .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        .map(|(planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
+        .unwrap_or(6_371_000.0);
+    let show_bound_planet_proxy = !local_terrain_is_required(
+        (rocket.dynamics.position_m.length() - bound_planet_radius_m).max(0.0),
+    );
 
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit as f64;
@@ -326,9 +391,14 @@ pub fn update_rocket_planets(
     // Bound planet and Sun: always at origin in flight frame (render_origin tracks rocket)
     // The planet center is at -render_origin.origin
     let planet_center_flight = -render_origin.origin.as_vec3();
-    for (rocket_planet, mut transform) in query_set.p0().iter_mut() {
+    for (rocket_planet, mut transform, mut visibility) in query_set.p0().iter_mut() {
         if rocket_planet.is_bound_planet {
             transform.translation = planet_center_flight;
+            *visibility = if show_bound_planet_proxy {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
             if let Some((planet, _)) = planet_query
                 .iter()
                 .find(|(planet, _)| planet.domain_planet.name == rocket_planet.name)
@@ -376,19 +446,51 @@ pub fn update_rocket_planets(
 pub fn update_rocket_clouds(
     sim_time: Res<SimulationTime>,
     mut cloud_query: Query<
-        (&RocketCloudLayer, &RocketCloudOf, &mut Transform),
+        (
+            &RocketCloudLayer,
+            &RocketCloudOf,
+            &mut Transform,
+            &mut Visibility,
+        ),
         Without<RocketPlanet>,
     >,
-    planet_query: Query<&Transform, With<RocketPlanet>>,
+    planet_query: Query<(&Transform, &Visibility), With<RocketPlanet>>,
 ) {
     let elapsed_hours = sim_time.sim_time_s as f32 / 3600.0;
-    for (cloud, cloud_of, mut transform) in cloud_query.iter_mut() {
+    for (cloud, cloud_of, mut transform, mut visibility) in cloud_query.iter_mut() {
         let rotation = (elapsed_hours / cloud.rotation_period_hours) * std::f32::consts::TAU;
         transform.rotation = Quat::from_rotation_y(rotation);
         // Also sync translation with parent planet
-        if let Ok(planet_transform) = planet_query.get(cloud_of.0) {
+        if let Ok((planet_transform, planet_visibility)) = planet_query.get(cloud_of.0) {
             transform.translation = planet_transform.translation;
+            *visibility = *planet_visibility;
         }
+    }
+}
+
+/// Position atmospheric shells in the flight frame and prevent the transparent
+/// outer shell from tinting the full screen while the camera is inside it.
+pub fn update_rocket_atmosphere_shells(
+    render_origin: Res<RenderOrigin>,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    mut shell_query: Query<(&RocketAtmosphereShell, &mut Transform, &mut Visibility)>,
+) {
+    let Some((binding, rocket)) = rocket_query.iter().next() else {
+        return;
+    };
+    let altitude_m = (rocket.dynamics.position_m.length()).max(0.0);
+
+    for (shell, mut transform, mut visibility) in shell_query.iter_mut() {
+        if shell.planet_name != binding.planet_name {
+            continue;
+        }
+        transform.translation = -render_origin.origin.as_vec3();
+        let camera_altitude_m = altitude_m - shell.radius_m;
+        *visibility = if is_inside_visual_atmosphere(camera_altitude_m) {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
     }
 }
 
@@ -397,6 +499,15 @@ mod tests {
     use super::*;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+
+    #[test]
+    fn visual_atmosphere_boundary_is_consistent() {
+        assert!(is_inside_visual_atmosphere(0.0));
+        assert!(is_inside_visual_atmosphere(
+            ROCKET_ATMOSPHERE_VISUAL_TOP_M - 1.0
+        ));
+        assert!(!is_inside_visual_atmosphere(ROCKET_ATMOSPHERE_VISUAL_TOP_M));
+    }
 
     #[test]
     fn test_physical_scale_conversion() {

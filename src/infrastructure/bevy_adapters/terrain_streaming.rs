@@ -38,6 +38,14 @@ const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 const SURFACE_LOD_DISTANCE_M: f64 = 150.0;
 /// Altitude threshold below which surface LOD distance is used.
 const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
+/// Above this altitude the coarse planet proxy is the continuous visual
+/// surface. Rendering a 3x3 local patch window here produces a visibly flat
+/// slab and obscures the actual planetary horizon.
+pub(crate) const LOCAL_TERRAIN_MAX_ALTITUDE_M: f64 = 20_000.0;
+
+pub(crate) fn local_terrain_is_required(altitude_m: f64) -> bool {
+    altitude_m <= LOCAL_TERRAIN_MAX_ALTITUDE_M
+}
 
 /// Smooth `[0,1]` ramp used to blend the on-ground and orbital LOD distances so
 /// the terrain LOD level steps gradually rather than jumping several at once.
@@ -111,6 +119,26 @@ pub fn stream_terrain_patches(
     if r < 1e-6 {
         return;
     }
+    let altitude_m = (r - radius_m).max(0.0);
+
+    if !local_terrain_is_required(altitude_m) {
+        // Local terrain is presentation detail, not the planetary base mesh.
+        // Release all resident patches when the vehicle enters a planetary
+        // view so only the true-scale globe defines the horizon.
+        let visible: Vec<TerrainPatch> = streaming.manager.visible_patches().copied().collect();
+        for patch in visible {
+            streaming.manager.mark_cached(&patch);
+        }
+        for patch in streaming.manager.enforce_memory_budget(0) {
+            streaming.generated.remove(&patch);
+            evicted_events.write(TerrainPatchEvicted {
+                patch,
+                planet_entity,
+            });
+        }
+        return;
+    }
+
     // Terrain source coordinates are planet body-fixed geographic coordinates;
     // the rocket state remains planet-centered inertial everywhere else.
     let position_bf = planet_inertial_to_body_fixed(
@@ -119,7 +147,6 @@ pub fn stream_terrain_patches(
         (sim_time.sim_time_s / 86_400.0) as f32,
     );
     let dir = position_bf.normalize_or_zero();
-    let altitude_m = (r - radius_m).max(0.0);
 
     // Request the ring of patches around the focus direction at the LOD
     // appropriate for the current altitude. The LOD distance is blended
@@ -232,6 +259,15 @@ fn surrounding_patches(focus: &TerrainPatch) -> Vec<TerrainPatch> {
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::CubeFace;
+
+    #[test]
+    fn local_terrain_is_limited_to_near_surface_views() {
+        assert!(local_terrain_is_required(0.0));
+        assert!(local_terrain_is_required(LOCAL_TERRAIN_MAX_ALTITUDE_M));
+        assert!(!local_terrain_is_required(
+            LOCAL_TERRAIN_MAX_ALTITUDE_M + 1.0
+        ));
+    }
 
     #[test]
     fn focus_window_has_neighbors_within_face() {

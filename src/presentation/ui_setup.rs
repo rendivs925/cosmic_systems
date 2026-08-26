@@ -3,15 +3,19 @@ use bevy::prelude::*;
 use crate::presentation::ui_components::*;
 use crate::presentation::ui_helpers::*;
 
-pub fn setup_ui(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        Camera {
-            order: 10,
-            clear_color: ClearColorConfig::None,
-            ..default()
-        },
-    ));
+pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
+    // Rocket mode provides an alpha-blended HUD camera. Reusing it avoids a
+    // second UI camera replacing the already-rendered 3D scene.
+    if ui_cameras.is_empty() {
+        commands.spawn((
+            Camera2d,
+            Camera {
+                order: 10,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+        ));
+    }
 
     commands.insert_resource(UiMenuState::default());
     commands.insert_resource(
