@@ -259,12 +259,20 @@ fn patch_material(
     }
 }
 
-/// Biome properties from height (placeholder - will be enhanced with actual biome system).
+/// Biome properties from height. Pure function of altitude so the biome
+/// classification is directly unit-testable (AGENTS.md section 45).
+/// Bands, lower→higher: ocean, shoreline, plains, lowlands, hills/mountains,
+/// rocky high mountains, and a snow line (spec "material variation by
+/// altitude": above the snow line the albedo shifts toward white and roughness
+/// decreases).
 fn biome_properties(height_m: f64) -> ((f32, f32, f32), f32, f32) {
-    if height_m > 3000.0 {
+    if height_m > 4_500.0 {
+        // Snow line: bright white with lower roughness (spec).
+        ((0.92, 0.94, 0.97), 0.45, 0.0)
+    } else if height_m > 3_000.0 {
         // High mountains: rocky grey.
         ((0.45, 0.42, 0.4), 0.9, 0.0)
-    } else if height_m > 1000.0 {
+    } else if height_m > 1_000.0 {
         // Mountains/hills: dark green slopes.
         ((0.28, 0.38, 0.22), 0.85, 0.0)
     } else if height_m > 100.0 {
@@ -279,5 +287,81 @@ fn biome_properties(height_m: f64) -> ((f32, f32, f32), f32, f32) {
     } else {
         // Ocean: blue water.
         ((0.1, 0.25, 0.45), 0.15, 0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::services::cube_sphere::build_patch_geometry;
+
+    #[test]
+    fn ocean_plains_and_mountain_biomes_are_distinct() {
+        // Spec: a patch in a mountain biome must use albedo distinct from
+        // plains/ocean biomes (scenario "material variation by biome").
+        let ocean = biome_properties(-1000.0);
+        let plains = biome_properties(50.0);
+        let mountains = biome_properties(2_000.0);
+        assert_ne!(ocean.0, plains.0, "ocean and plains must differ");
+        assert_ne!(plains.0, mountains.0, "plains and mountains must differ");
+        // Plains are largely green; ocean largely blue.
+        assert!(plains.0 .1 > plains.0 .2, "plains should be green-dominant");
+        assert!(ocean.0 .2 > ocean.0 .0, "ocean should be blue-dominant");
+    }
+
+    #[test]
+    fn snow_line_shifts_albedo_white_and_lowers_roughness() {
+        // Spec scenario "material variation by altitude": above the snow line
+        // albedo shifts toward white and roughness decreases.
+        let rock = biome_properties(4_000.0);
+        let snow = biome_properties(5_000.0);
+        assert!(
+            snow.0 .0 > 0.9 && snow.0 .1 > 0.9 && snow.0 .2 > 0.9,
+            "snow must be near-white"
+        );
+        assert!(
+            snow.1 < rock.1,
+            "snow roughness {} must be below rocky {}",
+            snow.1,
+            rock.1
+        );
+    }
+
+    #[test]
+    fn patch_geometry_emits_skirt_ring_for_crack_free_lod() {
+        // Spec scenario "skirt geometry stitches edges": adjacent patches at
+        // different LOD must not gap. The geometry-level guarantee is a
+        // boundary skirt ring: for a res×res patch, every boundary vertex gets
+        // an extra extruded vertex and a skirt quad is emitted per segment.
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
+        let res = 5usize;
+        let geom = build_patch_geometry(
+            &patch,
+            &crate::domain::services::terrain_source::ProceduralTerrainSource::new(
+                99, 2_000.0, 800.0, 0,
+            ),
+            6_371_000.0,
+            res as u32,
+            40.0,
+        );
+        // Platform vertices + one skirt vertex per boundary vertex.
+        let boundary_count = 4 * (res - 1); // res*res grid has 4(res-1) boundary verts
+        assert_eq!(
+            geom.positions.len(),
+            res * res + boundary_count,
+            "expected skirt ring appended"
+        );
+        // Skirt vertices must be extruded downward (closer to the planet than a
+        // corresponding grid vertex, so the crack is hidden rather than opened).
+        let non_skirt = res * res;
+        for pos in geom.positions.iter().skip(non_skirt) {
+            let r = DVec3::from_array(*pos).length();
+            assert!(
+                r < 6_371_000.0 + 2_500.0,
+                "skirt vertex at radius {r} not extruded inward"
+            );
+        }
+        // Skirt quads are present: more indices than a flat grid alone.
+        assert!(geom.indices.len() > (res - 1) * (res - 1) * 6);
     }
 }

@@ -12,9 +12,14 @@ guidance, gear, lifecycle, transfers, and telemetry.
       delivered via `TerrainRenderPlugin` + `TerrainStreamingResource`
       (event names differ from this proposal)
 - [-] 1.7–1.8 Material/texture pipeline delivered as biome/altitude-driven
-      material selection (`terrain_textures.rs`); no custom shader asset
+      material selection (`terrain_textures.rs`); no custom shader asset.
+      Phase 19 adds the snow-line band (albedo→white, roughness↓) and a
+      biome/altitude unit test
 - [x] 1.9 Wired only in rocket mode
-- [-] 1.10 Covered indirectly by runtime sweeps (no dedicated z-fighting test)
+- [x] 1.10 Skirt-ring + biome/snow-line unit tests added (Phase 19):
+      `patch_geometry_emits_skirt_ring_for_crack_free_lod`,
+      `ocean_plains_and_mountain_biomes_are_distinct`,
+      `snow_line_shifts_albedo_white_and_lowers_roughness`
 
 ## 2. Descent Guidance — SHIPPED
 
@@ -89,9 +94,15 @@ retro-propulsion, wiring, tests).
       modules (Tsiolkovsky closed-form vs integration, staging bookkeeping,
       pad T/W, gate/pitch pipeline tests, 100× burn-rig bookkeeping) instead
       of a baseline-RON harness
-- [ ] 7.3–7.8 Baseline recording/comparison tooling, CI job, bisect script,
-      update command
-- [ ] 7.9 Per-variable tolerance config
+- [x] 7.3–7.8 Baseline recording/comparison tooling, CI job, bisect script,
+      update command: `domain/services/regression.rs` (bitwise FNV-1a hash
+      chain, per-tick/per-variable divergence reporting, `FlightBaseline` RON
+      fixtures), `determinism_regression_tests` reusing the ascent harness,
+      committed `tests/baselines/ascent.ron` CI fixture, and
+      `scripts/regression/{save_baseline,bisect}.sh` (Phase 19)
+- [x] 7.9 Per-variable tolerance config: `RegressionConfig` (position 1 mm,
+      velocity 1 µm/s, attitude 1 µrad, mass 1 mg; guidance mode exact) —
+      Phase 19
 - [-] 7.10 Rationale documented inline in module docs (AGENTS #58)
 
 ## 8. Cross-Cutting / Polish
