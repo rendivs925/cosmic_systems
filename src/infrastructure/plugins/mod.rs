@@ -48,7 +48,6 @@ use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
-use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
     isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets, RocketBoundPlanet,
 };
@@ -338,9 +337,6 @@ impl Plugin for RocketModePlugin {
 
         // Rocket debug visualization plugin.
         app.add_plugins(RocketDebugPlugin);
-
-        // Always-on orbit prediction line (patched-conics, all camera modes).
-        app.add_plugins(RocketOrbitPlugin);
 
         // Advance simulation time from real time (runs in Update).
         app.add_systems(Update, advance_simulation_time);
