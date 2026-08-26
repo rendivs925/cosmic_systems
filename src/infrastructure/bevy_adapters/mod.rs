@@ -28,5 +28,6 @@ pub mod simd_kepler;
 pub mod systems;
 pub mod terrain_render;
 pub mod terrain_streaming;
+pub mod terrain_surface;
 pub mod ui_components;
 pub mod webgpu_systems;

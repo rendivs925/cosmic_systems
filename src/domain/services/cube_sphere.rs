@@ -194,6 +194,10 @@ pub fn lod_for_distance(
 pub struct PatchGeometry {
     pub positions: Vec<[f64; 3]>,
     pub normals: Vec<[f64; 3]>,
+    /// Per-vertex UV in the patch's own [0,1]×[0,1] parameterization. Used by
+    /// the renderer to map a per-patch procedural surface texture without
+    /// seams (the texture is generated in the same parameterization).
+    pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -211,6 +215,7 @@ pub fn build_patch_geometry(
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
     let mut grid = vec![[0.0f64; 3]; res * res];
+    let mut uvs = vec![[0.0f32; 2]; res * res];
     for j in 0..res {
         for i in 0..res {
             let u = u0 + (u1 - u0) * i as f64 / (res - 1) as f64;
@@ -219,6 +224,7 @@ pub fn build_patch_geometry(
             let (lat, lon) = direction_to_lat_lon(dir);
             let h = source.height_m(lat, lon);
             grid[j * res + i] = (dir * (planet_radius_m + h)).to_array();
+            uvs[j * res + i] = [i as f32 / (res - 1) as f32, j as f32 / (res - 1) as f32];
         }
     }
 
@@ -255,6 +261,7 @@ pub fn build_patch_geometry(
                 let n = DVec3::from_array(normals[idx]);
                 positions.push((p - n * skirt_depth_m).to_array());
                 all_normals.push(normals[idx]);
+                uvs.push(uvs[idx]);
                 skirt_index[idx] = Some(positions.len() as u32 - 1);
             }
         }
@@ -324,6 +331,7 @@ pub fn build_patch_geometry(
     PatchGeometry {
         positions,
         normals: all_normals,
+        uvs,
         indices,
     }
 }
