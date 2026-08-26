@@ -7,12 +7,8 @@
 //!
 //! Conversion: solar system display units -> meters using PhysicalScale.
 
-use crate::application::material_factory::{
-    create_cloud_material, create_planet_material, PlanetMaterialConfig,
-};
-use crate::application::texture_config::{
-    get_cloud_layer_config, get_planet_textures, load_texture,
-};
+use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
+use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::physics_utils::{
@@ -28,7 +24,6 @@ use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use crate::infrastructure::bevy_adapters::terrain_streaming::local_terrain_is_required;
 use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
-use bevy::render::alpha::AlphaMode;
 
 /// Component marking a planet entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -43,32 +38,6 @@ pub struct RocketPlanet {
 pub struct RocketMoon {
     pub name: String,
     pub parent_planet: String,
-}
-
-/// Cloud layer component for rocket-mode planets.
-#[derive(Component, Debug, Clone)]
-pub struct RocketCloudLayer {
-    pub rotation_period_hours: f32,
-}
-
-/// Marker component linking a cloud layer to its parent planet.
-#[derive(Component, Debug, Clone)]
-pub struct RocketCloudOf(pub Entity);
-
-/// Visual atmosphere height above the mean planetary radius. This presentation
-/// boundary is deliberately separate from the physical atmosphere model.
-pub const ROCKET_ATMOSPHERE_VISUAL_TOP_M: f64 = 100_000.0;
-
-pub(crate) fn is_inside_visual_atmosphere(altitude_m: f64) -> bool {
-    altitude_m < ROCKET_ATMOSPHERE_VISUAL_TOP_M
-}
-
-/// Transparent planetary atmosphere visible only when the flight camera is
-/// outside it. Cameras inside the shell use local distance fog instead.
-#[derive(Component, Debug, Clone)]
-pub struct RocketAtmosphereShell {
-    pub planet_name: String,
-    pub radius_m: f64,
 }
 
 /// Resource storing the bound planet name for quick lookup.
@@ -174,54 +143,6 @@ pub fn setup_rocket_planets(
         commands
             .entity(planet_entity)
             .insert(bevy::camera::visibility::NoFrustumCulling);
-
-        if planet_name == "Earth" {
-            let atmosphere_mesh = meshes.add(Sphere::new(
-                (radius_m + ROCKET_ATMOSPHERE_VISUAL_TOP_M) as f32,
-            ));
-            let atmosphere_material = materials.add(StandardMaterial {
-                base_color: Color::srgba(0.18, 0.48, 1.0, 0.14),
-                emissive: LinearRgba::new(0.02, 0.06, 0.16, 1.0),
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                cull_mode: None,
-                ..default()
-            });
-            commands.spawn((
-                Mesh3d(atmosphere_mesh),
-                MeshMaterial3d(atmosphere_material),
-                Transform::default(),
-                bevy::camera::visibility::NoFrustumCulling,
-                RocketAtmosphereShell {
-                    planet_name: planet_name.clone(),
-                    radius_m,
-                },
-            ));
-        }
-
-        // Cloud layer for Earth
-        if let Some(clouds) = get_cloud_layer_config(&planet_name) {
-            let cloud_texture = load_texture(&asset_server, Some(clouds.texture_path));
-            if let Some(cloud_handle) = cloud_texture {
-                let cloud_mesh = meshes.add(Sphere::new(radius_m as f32 * clouds.scale));
-                let cloud_material =
-                    materials.add(create_cloud_material(Some(cloud_handle), clouds.alpha));
-                commands.spawn((
-                    Mesh3d(cloud_mesh),
-                    MeshMaterial3d(cloud_material),
-                    Transform::default(),
-                    RocketCloudLayer {
-                        rotation_period_hours: clouds.rotation_period_hours,
-                    },
-                    RocketCloudOf(planet_entity),
-                    if show_planet_proxy {
-                        Visibility::Visible
-                    } else {
-                        Visibility::Hidden
-                    },
-                ));
-            }
-        }
 
         // Spawn moons of this planet
         let moons = PlanetFactory::get_moons_of(&planet_name);
@@ -442,72 +363,11 @@ pub fn update_rocket_planets(
     }
 }
 
-/// Update cloud layer rotation for the bound planet.
-pub fn update_rocket_clouds(
-    sim_time: Res<SimulationTime>,
-    mut cloud_query: Query<
-        (
-            &RocketCloudLayer,
-            &RocketCloudOf,
-            &mut Transform,
-            &mut Visibility,
-        ),
-        Without<RocketPlanet>,
-    >,
-    planet_query: Query<(&Transform, &Visibility), With<RocketPlanet>>,
-) {
-    let elapsed_hours = sim_time.sim_time_s as f32 / 3600.0;
-    for (cloud, cloud_of, mut transform, mut visibility) in cloud_query.iter_mut() {
-        let rotation = (elapsed_hours / cloud.rotation_period_hours) * std::f32::consts::TAU;
-        transform.rotation = Quat::from_rotation_y(rotation);
-        // Also sync translation with parent planet
-        if let Ok((planet_transform, planet_visibility)) = planet_query.get(cloud_of.0) {
-            transform.translation = planet_transform.translation;
-            *visibility = *planet_visibility;
-        }
-    }
-}
-
-/// Position atmospheric shells in the flight frame and prevent the transparent
-/// outer shell from tinting the full screen while the camera is inside it.
-pub fn update_rocket_atmosphere_shells(
-    render_origin: Res<RenderOrigin>,
-    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
-    mut shell_query: Query<(&RocketAtmosphereShell, &mut Transform, &mut Visibility)>,
-) {
-    let Some((binding, rocket)) = rocket_query.iter().next() else {
-        return;
-    };
-    let altitude_m = (rocket.dynamics.position_m.length()).max(0.0);
-
-    for (shell, mut transform, mut visibility) in shell_query.iter_mut() {
-        if shell.planet_name != binding.planet_name {
-            continue;
-        }
-        transform.translation = -render_origin.origin.as_vec3();
-        let camera_altitude_m = altitude_m - shell.radius_m;
-        *visibility = if is_inside_visual_atmosphere(camera_altitude_m) {
-            Visibility::Hidden
-        } else {
-            Visibility::Visible
-        };
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-
-    #[test]
-    fn visual_atmosphere_boundary_is_consistent() {
-        assert!(is_inside_visual_atmosphere(0.0));
-        assert!(is_inside_visual_atmosphere(
-            ROCKET_ATMOSPHERE_VISUAL_TOP_M - 1.0
-        ));
-        assert!(!is_inside_visual_atmosphere(ROCKET_ATMOSPHERE_VISUAL_TOP_M));
-    }
 
     #[test]
     fn test_physical_scale_conversion() {

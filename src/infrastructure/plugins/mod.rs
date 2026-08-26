@@ -50,8 +50,7 @@ use crate::infrastructure::bevy_adapters::rocket_hud::{
 };
 use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
-    isolate_rocket_presentation, setup_rocket_planets, update_rocket_atmosphere_shells,
-    update_rocket_clouds, update_rocket_planets, RocketBoundPlanet,
+    isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets, RocketBoundPlanet,
 };
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
@@ -65,8 +64,8 @@ use crate::infrastructure::bevy_adapters::rocket_systems::{
     propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
     resolve_ground_contact, setup_rocket_camera_and_origin, setup_rocket_camera_controller,
     setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
-    update_orbital_elements, update_rocket_atmosphere_fog, update_rocket_earth_sphere,
-    update_rocket_gravity, update_rocket_sky_color, update_sun_day_night_cycle,
+    update_orbital_elements, update_rocket_earth_sphere, update_rocket_gravity,
+    update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,
@@ -501,7 +500,7 @@ impl Plugin for RocketModePlugin {
         // Pre-launch hold: Space to launch.
         app.add_systems(Update, handle_rocket_launch_input);
 
-        // Altitude-dependent sky color (blue at low altitude -> black in space).
+        // Keep the rocket-mode sky clear and space-black.
         app.add_systems(Update, update_rocket_sky_color);
 
         // True-scale Earth sphere follows render origin.
@@ -510,15 +509,6 @@ impl Plugin for RocketModePlugin {
         // Rocket-mode planets (bound planet, moons, Sun) in flight units with real textures.
         // Runs after solar system planet positions are updated.
         app.add_systems(Update, update_rocket_planets.after(update_planet_positions));
-        app.add_systems(Update, update_rocket_clouds.after(update_rocket_planets));
-        app.add_systems(
-            Update,
-            (
-                update_rocket_atmosphere_shells.after(update_rocket_planets),
-                update_rocket_atmosphere_fog,
-            ),
-        );
-
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);
     }
