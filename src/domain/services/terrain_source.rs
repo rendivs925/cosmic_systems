@@ -15,6 +15,8 @@
 use bevy::math::DVec3;
 use std::fmt::Debug;
 
+use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
+
 /// Feature-scale of the 3D value-noise field on the unit sphere: higher values
 /// produce more, smaller features across the planet.
 const NOISE_SCALE: f64 = 10.0;
@@ -538,30 +540,38 @@ pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
                 crate::domain::services::dem_terrain_source::DemTerrainConfig::default(),
             );
             let dem_arc = std::sync::Arc::new(dem);
+            let eroded = erode_earth(dem_arc);
             if !sites.is_empty() {
                 return std::sync::Arc::new(SiteAwareTerrainSource {
-                    base: dem_arc,
+                    base: eroded,
                     sites,
                 });
             }
-            return dem_arc;
+            return eroded;
         }
     }
 
-    let base = match name {
-        "Earth" => ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0),
-        "Moon" => ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14),
-        _ => ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0),
+    let base: std::sync::Arc<dyn TerrainSource> = match name {
+        "Earth" => {
+            let procedural =
+                std::sync::Arc::new(ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0));
+            erode_earth(procedural)
+        }
+        "Moon" => std::sync::Arc::new(ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14)),
+        _ => std::sync::Arc::new(ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0)),
     };
-    let base_arc = std::sync::Arc::new(base);
     if sites.is_empty() {
-        base_arc
+        base
     } else {
-        std::sync::Arc::new(SiteAwareTerrainSource {
-            base: base_arc,
-            sites,
-        })
+        std::sync::Arc::new(SiteAwareTerrainSource { base, sites })
     }
+}
+
+/// Wrap an Earth base source with deterministic hydraulic/thermal erosion and
+/// river carving (T2). The site layer sits *above* this so launch pads stay
+/// flat regardless of erosion.
+fn erode_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn TerrainSource> {
+    std::sync::Arc::new(ErodedTerrainSource::new(base, ErosionConfig::default()))
 }
 
 #[cfg(test)]
