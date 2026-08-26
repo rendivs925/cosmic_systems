@@ -52,7 +52,12 @@ guidance, gear, lifecycle, transfers, and telemetry.
 
 Delivered under `openspec/changes/archive/2026-08-23-entry-physics/`.
 All items complete (heating, ablation, blackout, parachutes,
-retro-propulsion, wiring, tests).
+retro-propulsion, wiring, tests). Phase 22 extracts the Sutton-Graves /
+Tauber-Sutton / TPS-recession math into pure domain functions
+(`entry_physics`) that the ECS systems now call (single authority), and adds
+a synthetic reentry "flight validation" (convective-heat peak at high drag
+then decay, 1/√R nose scaling, lunar-return radiative dominance, ablative
+blunting reduces subsequent heating).
 
 ## 5. Telemetry UI — PARTIAL (egui replaced by Bevy HUD)
 

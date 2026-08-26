@@ -10,7 +10,8 @@ use crate::domain::services::aerodynamics::{
 };
 use crate::domain::services::control::control_torque_body;
 use crate::domain::services::entry_physics::{
-    comms_blackout_active, electron_density_m3, retro_propulsion_effectiveness,
+    comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
+    radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_recession_rate_mps,
 };
 use crate::domain::services::gravity::{
     circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
@@ -1832,16 +1833,19 @@ pub fn compute_heating(
         }
 
         // Convective heating: Sutton-Graves q_dot = k * sqrt(rho/R_nose) * v^3
+        // (single authority: domain::services::entry_physics, AGENTS.md 50).
         let nose_radius = config.nose_radius_initial_m;
-        let q_conv = config.convective_coefficient * (rho / nose_radius).sqrt() * v.powi(3);
+        let q_conv = convective_heat_flux_w_m2(
+            config.convective_coefficient,
+            rho,
+            nose_radius,
+            v,
+        );
         thermal.convective_heat_flux_w_m2 = q_conv;
 
-        // Radiative heating: Tauber-Sutton (significant for v > 10 km/s)
-        let q_rad = if v > 10_000.0 {
-            config.radiative_coefficient * rho * v.powi(8) / 1e24 // Simplified scaling
-        } else {
-            0.0
-        };
+        // Radiative heating: Tauber-Sutton (significant for v > 10 km/s).
+        let q_rad =
+            radiative_heat_flux_w_m2(config.radiative_coefficient, rho, v);
         thermal.radiative_heat_flux_w_m2 = q_rad;
 
         thermal.total_heat_flux_w_m2 = q_conv + q_rad;
@@ -1886,7 +1890,11 @@ pub fn compute_ablation(
         ablation.cumulative_heat_load_j_m2 += q_total * dt;
 
         // Recession rate: dr/dt = q_dot / (rho_tps * H_abl)
-        let recession_rate = q_total / (config.tps_density_kg_m3 * config.heat_of_ablation_j_kg);
+        let recession_rate = tps_recession_rate_mps(
+            q_total,
+            config.tps_density_kg_m3,
+            config.heat_of_ablation_j_kg,
+        );
         ablation.recession_depth_m += recession_rate * dt;
 
         // Nose radius growth from recession

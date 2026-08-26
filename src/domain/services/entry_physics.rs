@@ -31,6 +31,59 @@ pub const MIN_RETRO_EFFECTIVENESS: f64 = 0.1;
 /// Maximum Mach excess over the threshold used by the base-pressure fit.
 pub const MAX_RETRO_MACH_EXCESS: f64 = 5.0;
 
+/// Entry velocity (m/s) above which the Tauber-Sutton radiative term is
+/// significant — the ~10 km/s lunar-return regime of the spec scenario
+/// "lunar return radiative dominance".
+pub const RADIATIVE_ENTRY_THRESHOLD_MPS: f64 = 10_000.0;
+
+/// Stagnation-point convective heat flux: Sutton-Graves
+/// `q_dot = k · sqrt(ρ / R_nose) · v³` [W/m²].
+///
+/// `k` is the body-calibrated convective coefficient. The flux scales as
+/// `1/√R_nose`, so a blunter (larger) nose sees less heat — the spec scenario
+/// "nose radius effect".
+pub fn convective_heat_flux_w_m2(
+    convective_coefficient: f64,
+    density_kg_m3: f64,
+    nose_radius_m: f64,
+    velocity_mps: f64,
+) -> f64 {
+    if nose_radius_m <= 0.0 || density_kg_m3 <= 0.0 || velocity_mps <= 0.0 {
+        return 0.0;
+    }
+    convective_coefficient * (density_kg_m3 / nose_radius_m).sqrt() * velocity_mps.powi(3)
+}
+
+/// Radiative heat flux (W/m²) via the Tauber-Sutton approximation. Zero below
+/// the entry-interface velocity (the ~10 km/s lunar-return regime), then
+/// `k_r · ρ · v⁸ / 1e24`. Above that velocity it becomes comparable to, then
+/// exceeds, the convective term for large bodies.
+pub fn radiative_heat_flux_w_m2(
+    radiative_coefficient: f64,
+    density_kg_m3: f64,
+    velocity_mps: f64,
+) -> f64 {
+    if velocity_mps > RADIATIVE_ENTRY_THRESHOLD_MPS && density_kg_m3 > 0.0 {
+        radiative_coefficient * density_kg_m3 * velocity_mps.powi(8) / 1e24
+    } else {
+        0.0
+    }
+}
+
+/// Ablative TPS recession rate `dr/dt = q_dot / (ρ_tps · H_abl)` [m/s].
+/// `q_dot` is the heat flux the surface absorbs, `ρ_tps` the TPS density, and
+/// `H_abl` the heat of ablation.
+pub fn tps_recession_rate_mps(
+    total_heat_flux_w_m2: f64,
+    tps_density_kg_m3: f64,
+    heat_of_ablation_j_kg: f64,
+) -> f64 {
+    if tps_density_kg_m3 <= 0.0 || heat_of_ablation_j_kg <= 0.0 {
+        return 0.0;
+    }
+    total_heat_flux_w_m2 / (tps_density_kg_m3 * heat_of_ablation_j_kg)
+}
+
 /// Electron density from the empirical fit `n_e = C·ρ·v³` [1/m³].
 pub fn electron_density_m3(density_kg_m3: f64, velocity_mps: f64) -> f64 {
     PLASMA_DENSITY_COEFFICIENT_M3 * density_kg_m3 * velocity_mps.powi(3)
@@ -416,5 +469,146 @@ mod tests {
         let expected =
             0.5 * 0.3 * 300.0_f64.powi(2) * config.drogue.reef_cd * config.drogue.reference_area_m2;
         assert!((state.drag_force_n(0.3, 300.0) - expected).abs() < 1e-6);
+    }
+
+    // -----------------------------------------------------------------------
+    // Flight validation (spec: entry-physics "needs flight validation").
+    // A synthetic descent profile is pushed through the heating/ablation
+    // models to validate the physical ordering the spec calls out: heating
+    // peaks at the high-drag region then decays as velocity drops; ablation
+    // recedes a blunt nose which then reduces subsequent heating.
+    // -----------------------------------------------------------------------
+
+    const K_CONV: f64 = 2.0e-5;
+    const NOSE_M: f64 = 0.5;
+
+    /// Exponential tropospheric-style density from altitude (scale height ~
+    /// 7.5 km), just realistic enough to shape the entry profile.
+    fn density_at_alt(altitude_m: f64) -> f64 {
+        1.2 * (-altitude_m / 7_500.0).exp()
+    }
+
+    #[test]
+    fn reentry_convective_flux_peaks_at_high_drag_then_decays() {
+        // Descent: altitude 90 km → 0, velocity 7 700 → 300 m/s (a capsule
+        // bleeding energy), density rising exponentially. The Sutton-Graves
+        // term ∝ sqrt(rho)·v³ must rise from near-zero at the top, peak in the
+        // high-drag region, then decay as the vehicle slows.
+        let mut flux = Vec::new();
+        let mut alt = 90_000.0;
+        let mut v = 7_700.0;
+
+        for _ in 0..150 {
+            flux.push(convective_heat_flux_w_m2(
+                K_CONV,
+                density_at_alt(alt),
+                NOSE_M,
+                v,
+            ));
+            // Descend and bleed energy (drag + gravity turn).
+            alt = (alt - 800.0).max(0.0);
+            v = (v - 55.0).max(300.0);
+        }
+
+        // The flux must be unimodal: a single interior peak (the high-drag
+        // region) with a monotonic decay after it.
+        let peak = flux
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .expect("flux vector non-empty");
+        assert!(
+            peak > 5,
+            "peak {peak} too close to the thin-atmosphere start"
+        );
+        assert!(
+            peak < flux.len() - 5,
+            "peak {peak} too close to the slowed low-altitude end"
+        );
+        assert!(
+            flux[peak] > flux[0] * 3.0,
+            "peak {} not >> thin-atmosphere start {}",
+            flux[peak],
+            flux[0]
+        );
+        assert!(
+            flux[peak] > flux[flux.len() - 1] * 3.0,
+            "peak {} not >> slowed end {}",
+            flux[peak],
+            flux[flux.len() - 1]
+        );
+        // Once past the peak, velocity loss dominates: flux decays (small
+        // tolerance for the discrete sample).
+        for w in flux[peak..].windows(2) {
+            assert!(w[1] <= w[0] * 1.01, "flux must decay after the peak");
+        }
+    }
+
+    #[test]
+    fn doubling_nose_radius_reduces_flux_by_sqrt_two() {
+        // Spec "nose radius effect": peak flux scales as 1/√R_nose, so a nose
+        // twice the radius sees the flux divided by √2.
+        let rho = 5.0e-4;
+        let v = 7_000.0;
+        let q_r = convective_heat_flux_w_m2(K_CONV, rho, NOSE_M, v);
+        let q_2r = convective_heat_flux_w_m2(K_CONV, rho, 2.0 * NOSE_M, v);
+        let expected_ratio = std::f64::consts::SQRT_2;
+        let ratio = q_r / q_2r;
+        assert!(
+            (ratio - expected_ratio).abs() < 1e-9,
+            "1/√R nose scaling broken: ratio {ratio} vs √2 {expected_ratio}"
+        );
+        assert!(q_2r < q_r, "blunter nose must see less convective heat");
+    }
+
+    #[test]
+    fn radiative_dominance_appears_at_lunar_return_velocity() {
+        // Spec "lunar return radiative dominance": below the ~10 km/s interface
+        // the radiative term is zero; above it, with a lunar-return-calibrated
+        // coefficient, it becomes comparable to (here, exceeds) convective.
+        let rho = 2.0e-4;
+        let v = 12_000.0; // > threshold
+        assert_eq!(radiative_heat_flux_w_m2(K_CONV, rho, 9_000.0), 0.0);
+        let q_rad = radiative_heat_flux_w_m2(10.0, rho, v);
+        let q_conv = convective_heat_flux_w_m2(K_CONV, rho, NOSE_M, v);
+        assert!(q_rad > 0.0);
+        assert!(
+            q_rad > q_conv,
+            "lunar-return radiative flux {q_rad} must exceed convective {q_conv}"
+        );
+        // Strong v^8 growth: a 10% speed increase multiplies radiative flux by
+        // roughly 1.1^8 ≈ 2.14.
+        let q_rad_up = radiative_heat_flux_w_m2(10.0, rho, v * 1.1);
+        let expected_growth = 1.1_f64.powi(8);
+        let growth = q_rad_up / q_rad;
+        assert!((growth - expected_growth).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ablation_recedes_nose_and_lowers_subsequent_heating() {
+        // Spec "shape change effect": a blunted (recessed) nose reduces the
+        // heat flux on the next pass (1/√R). Drive a fixed heat load through
+        // the TPS recession model for the spec scenario "TPS recession".
+        let tps_density = 1_600.0;
+        let heat_of_ablation = 3.0e6; // J/kg
+        let q_total = 2.0e6; // W/m² sustained for 1 s
+        let rate = tps_recession_rate_mps(q_total, tps_density, heat_of_ablation);
+        assert!(rate > 0.0);
+        let recession = rate * 1.0;
+        // Nose radius grows by the recession (blunting).
+        let nose_after = NOSE_M + recession;
+        assert!(nose_after > NOSE_M);
+        // Subsequent heating at the same flight condition is reduced by 1/√R.
+        let rho = 1.0e-4;
+        let v = 6_500.0;
+        let q_before = convective_heat_flux_w_m2(K_CONV, rho, NOSE_M, v);
+        let q_after = convective_heat_flux_w_m2(K_CONV, rho, nose_after, v);
+        assert!(
+            q_after < q_before,
+            "blunted nose must reduce subsequent heating"
+        );
+        // Cumulative heat load would also have grown (the ECS integrates it);
+        // here we validate the shape-change coupling.
     }
 }
