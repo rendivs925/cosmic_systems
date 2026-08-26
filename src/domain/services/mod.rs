@@ -25,5 +25,6 @@ pub mod simulation_time;
 pub mod terrain_collision;
 pub mod terrain_patch_manager;
 pub mod terrain_source;
+pub mod trajectory;
 pub mod units;
 pub mod vacuum_physics;

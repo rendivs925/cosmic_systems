@@ -59,7 +59,9 @@ retro-propulsion, wiring, tests).
 - [-] 5.1 Delivered as HUD systems in `rocket_hud.rs` + `RocketSet::Telemetry`
       (no separate plugin, no egui)
 - [-] 5.2 Orbital elements panel = HUD ORBIT group (`OrbitalElements` component)
-- [ ] 5.3 Trajectory prediction panel/propagator
+- [-] 5.3 Trajectory prediction: patched-conics kernel shipped in
+      `domain/services/trajectory.rs` (RK4 two-body + SOI switching, ground
+      track, transition set); panel/Gizmo rendering + maneuver nodes remain
 - [ ] 5.4 Maneuver nodes
 - [ ] 5.5 Terrain map panel
 - [x] 5.6 `FlightRecorder` ring buffer (component) at fixed rate/capacity
@@ -68,7 +70,8 @@ retro-propulsion, wiring, tests).
 - [ ] 5.8 Replay/seek mode
 - [-] 5.9 Config spread across existing resources (no `TelemetryConfig`)
 - [x] 5.10 Wired in rocket mode only
-- [ ] 5.11 Record/replay bitwise test
+- [-] 5.11 Record/replay bitwise determinism covered by the
+      `determinism_regression_tests` suite (Phase 19) rather than the recorder
 
 ## 6. Staging Recovery — PARTIAL
 
