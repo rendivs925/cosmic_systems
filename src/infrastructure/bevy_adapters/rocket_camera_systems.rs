@@ -87,8 +87,13 @@ pub fn handle_free_camera_input(
 }
 
 /// System to update rocket camera based on current mode.
-/// Operates in flight units (1 unit = 1 meter) using the rocket's Transform
-/// which is already in flight units via sync_render_transform.
+/// Operates in flight units (1 unit = 1 meter) using the rocket's Transform,
+/// which `interpolate_render_transform` refreshes every frame from the
+/// interpolated physics state. The camera therefore tracks the vehicle
+/// RIGIDLY: any position lerp here would lag a fast-rising rocket out of the
+/// viewport (the vehicle moves ~700 m/s in ascent, and a 10 %-per-frame chase
+/// lerp trails it by ~100 m). Smoothness comes from the interpolated rocket
+/// state, not from camera smoothing (AGENTS.md sections 28 and 49).
 pub fn update_rocket_camera(
     time: Res<Time>,
     camera_mode: Res<RocketCameraMode>,
@@ -112,7 +117,7 @@ pub fn update_rocket_camera(
     let dt = time.delta_secs();
 
     // Get the rocket entity (assume single rocket for now)
-    let Some((binding, rocket_physics, _geometry, _facade, rocket_transform, _mission_state)) =
+    let Some((binding, rocket_physics, geometry, _facade, rocket_transform, _mission_state)) =
         rocket_query.iter().next()
     else {
         return;
@@ -133,32 +138,14 @@ pub fn update_rocket_camera(
 
     // Up direction in flight frame: radial from planet center to rocket.
     let up_dir = (rocket_pos_flight - planet_center_flight).normalize_or_zero();
+    if up_dir.length_squared() < 0.5 {
+        return; // degenerate frame (rocket at planet center): keep last camera
+    }
 
-    // Rocket orientation in flight frame (already correct from sync_render_transform)
+    // Rocket orientation in flight frame (interpolated render state).
     let rocket_rot = rocket_transform.rotation;
 
-    // Compute forward direction (rocket's forward in flight frame)
-    let forward_dir = (rocket_rot * Vec3::Y).normalize();
-
-    // Compute right direction: cross of forward and up.
-    // At spawn, forward (body +Y) aligns with up (radial), so cross is zero.
-    // Fall back to a horizontal reference (e.g., planet north or arbitrary perpendicular).
-    let right_dir = forward_dir.cross(up_dir);
-    let right_dir = if right_dir.length_squared() < 1e-6 {
-        // Forward and up are parallel; use an arbitrary perpendicular vector.
-        // Choose a vector perpendicular to up_dir.
-        if up_dir.z.abs() < 0.9 {
-            up_dir.cross(Vec3::Z).normalize()
-        } else {
-            up_dir.cross(Vec3::X).normalize()
-        }
-    } else {
-        right_dir.normalize()
-    };
-
     for mut controller in controller_query.iter_mut() {
-        let smooth = config.smooth_factor * dt * 60.0; // Frame-rate independent
-
         // Handle mode transitions
         if controller.current_mode != controller.target_mode {
             controller.transition_progress += dt * config.transition_speed;
@@ -173,7 +160,7 @@ pub fn update_rocket_camera(
         // Compute target camera transform in flight units (meters)
         let (target_pos, target_rot) = match controller.current_mode {
             RocketCameraMode::Chase => {
-                compute_chase_camera(rocket_pos_flight, forward_dir, up_dir, right_dir, &config)
+                compute_chase_camera(rocket_pos_flight, rocket_rot, up_dir, geometry, &config)
             }
             RocketCameraMode::Cockpit => {
                 compute_cockpit_camera(rocket_pos_flight, rocket_rot, &config)
@@ -191,71 +178,97 @@ pub fn update_rocket_camera(
             RocketCameraMode::Free => compute_free_camera(rocket_pos_flight, up_dir, &controller),
         };
 
-        // Smooth interpolation
+        // Apply the target. During a mode transition, blend from where the
+        // camera ACTUALLY is (never from a stored previous target, which made
+        // the first transition frame jump).
         for (mut cam_transform, _projection) in camera_query.iter_mut() {
             if controller.transition_progress > 0.0 {
-                // Interpolate during transition
-                let prev_pos = controller
-                    .last_rocket_transform
-                    .map(|t| t.translation)
-                    .unwrap_or(cam_transform.translation);
-                let prev_rot = controller
-                    .last_rocket_transform
-                    .map(|t| t.rotation)
-                    .unwrap_or(cam_transform.rotation);
-
-                cam_transform.translation =
-                    prev_pos.lerp(target_pos, controller.transition_progress);
-                cam_transform.rotation = prev_rot.slerp(target_rot, controller.transition_progress);
+                let t = controller.transition_progress;
+                cam_transform.translation = cam_transform.translation.lerp(target_pos, t);
+                cam_transform.rotation = cam_transform.rotation.slerp(target_rot, t);
             } else {
-                cam_transform.translation = cam_transform.translation.lerp(target_pos, smooth);
-                cam_transform.rotation = cam_transform.rotation.slerp(target_rot, smooth);
+                cam_transform.translation = target_pos;
+                cam_transform.rotation = target_rot;
             }
-
-            // Store current transform for next transition
-            controller.last_rocket_transform =
-                Some(Transform::from_translation(target_pos).with_rotation(target_rot));
         }
     }
 }
 
-/// Chase camera: positioned behind and above the rocket.
+/// Camera rotation looking from `eye` at `target`, with an up reference that is
+/// guaranteed non-parallel to the view direction. `Transform::looking_at`
+/// produces a degenerate (NaN/garbage) rotation when `up ∥ view`, which showed
+/// up as the camera flipping to a "random view" during vertical ascent.
+fn safe_look_rotation(eye: Vec3, target: Vec3, candidates: &[Vec3; 3]) -> Quat {
+    let view = (target - eye).normalize_or_zero();
+    if view.length_squared() < 0.5 {
+        return Quat::IDENTITY;
+    }
+    let mut up_ref = candidates[0];
+    for &candidate in candidates {
+        if candidate.length_squared() > 0.5 && view.dot(candidate).abs() < 0.95 {
+            up_ref = candidate;
+            break;
+        }
+    }
+    Transform::from_translation(eye)
+        .looking_at(target, up_ref)
+        .rotation
+}
+
+/// Chase camera: positioned behind and above the rocket, framing the whole
+/// vehicle.
+///
+/// The offset basis is built from the RADIAL up and the horizontal component
+/// of the vehicle's body axis — never from `cross(body_axis, up)`, which is
+/// degenerate while the rocket is vertical (launch). The look target is the
+/// vehicle's MID-BODY point along its actual (pitched) axis, so the rocket
+/// stays framed through the gravity turn instead of sliding out of frame.
 fn compute_chase_camera(
     rocket_pos: Vec3,
-    forward: Vec3,
+    rocket_rot: Quat,
     up: Vec3,
-    right: Vec3,
+    geometry: &RocketGeometry,
     config: &RocketCameraConfig,
 ) -> (Vec3, Quat) {
-    // Near-vertical flight (launch) has "behind" pointing into the ground, so a
-    // side offset is used. A hard `if` on `forward·up` flips the offset
-    // per-frame as the value crosses the threshold (a visible launch jitter),
-    // so the two candidate offsets are blended continuously over a band instead
-    // (hysteresis/lerp, AGENTS.md §48).
-    let vertical_alignment = forward.dot(up).abs();
-    let threshold_lo = 0.90;
-    let threshold_hi = 0.99;
-    let vert_t =
-        ((vertical_alignment - threshold_lo) / (threshold_hi - threshold_lo)).clamp(0.0, 1.0);
-    let vert_t = vert_t * vert_t * (3.0 - 2.0 * vert_t); // smoothstep
+    let body_fwd = (rocket_rot * Vec3::Y).normalize_or_zero();
+    if body_fwd.length_squared() < 0.5 {
+        // Degenerate orientation: hold position.
+        return (rocket_pos + up * config.chase_height, Quat::IDENTITY);
+    }
 
-    let side_offset = right * config.chase_distance + up * config.chase_height;
-    let behind_offset = -forward * config.chase_distance + up * config.chase_height;
-    let offset = behind_offset.lerp(side_offset, vert_t);
+    // Horizontal component of the body axis (the direction the vehicle is
+    // pitched toward). While vertical this is near-zero, so fall back to a
+    // stable horizontal reference perpendicular to up.
+    let mut horiz = body_fwd - body_fwd.dot(up) * up;
+    if horiz.length_squared() < 1.0e-4 {
+        horiz = if up.z.abs() < 0.9 {
+            up.cross(Vec3::Z)
+        } else {
+            up.cross(Vec3::X)
+        };
+    }
+    let horiz = horiz.normalize_or_zero();
+    // A stable side direction perpendicular to both up and the flight heading.
+    let side = up.cross(horiz).normalize_or_zero();
 
-    let target_pos = rocket_pos + offset;
-    // Look at the rocket's center (half height up) so the entire vehicle is
-    // framed, including engines at the base and nose at the top. The rocket
-    // geometry is 70m tall; center is at ~35m in the flight frame.
-    let rocket_center = rocket_pos + up * 35.0;
-    // Frame the rocket upright against the terrain: `looking_at` keeps the
-    // camera's up on the radial direction so the ground sits at the bottom of
-    // the view. `from_rotation_arc` (previously used) rolls the view
-    // arbitrarily, which put the terrain on the left/right of the screen.
-    let target_rot = Transform::from_translation(target_pos)
-        .looking_at(rocket_center, up)
-        .rotation;
-    (target_pos, target_rot)
+    // Verticality blend: near-vertical flight uses a side view (a rear view
+    // would look into the ground); pitched flight uses a rear chase view. The
+    // smoothstep band prevents any per-frame flip (AGENTS.md section 48).
+    let verticality = body_fwd.dot(up).abs();
+    let t = ((verticality - 0.90) / (0.99 - 0.90)).clamp(0.0, 1.0);
+    let vert_t = t * t * (3.0 - 2.0 * t);
+
+    let behind_dir = -horiz;
+    let offset_dir = behind_dir.lerp(side, vert_t).normalize_or_zero();
+    let target_pos = rocket_pos + offset_dir * config.chase_distance + up * config.chase_height;
+
+    // Frame the mid-body point along the vehicle's ACTUAL axis, so a pitched
+    // rocket stays centered instead of drifting out of the viewport.
+    let half_len = (geometry.height_m * 0.5) as f32;
+    let look_point = rocket_pos + body_fwd * half_len;
+
+    let rotation = safe_look_rotation(target_pos, look_point, &[up, body_fwd, horiz]);
+    (target_pos, rotation)
 }
 
 /// Cockpit camera: first-person from rocket body.
