@@ -30,9 +30,6 @@ pub fn update_planet_positions(
     mut webgpu_state: Option<NonSendMut<WebGpuKeplerState>>,
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
-    // Start timing for physics update
-    let physics_start = std::time::Instant::now();
-
     let elapsed_seconds = time.elapsed_secs();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 

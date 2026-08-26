@@ -12,6 +12,7 @@ use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::trajectory::{predict_patched_conics, GravityBody};
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -108,18 +109,21 @@ impl Plugin for RocketOrbitPlugin {
 }
 
 /// Draw the predicted trajectory (and apoapsis/periapsis markers) in the
-/// flight frame relative to the planet's render transform.
+/// flight frame. The planet centre in flight units (meters) is at
+/// `-render_origin.origin`, because the render origin tracks the rocket's
+/// physics position in planet-centred inertial frame.
 fn draw_orbit_prediction(
-    planet_query: Query<(&PlanetComponent, &Transform)>,
+    planet_query: Query<&PlanetComponent>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    render_origin: Res<RenderOrigin>,
     mut gizmos: Gizmos<OrbitLineGizmos>,
 ) {
     let Some((binding, rocket)) = rocket_query.iter().next() else {
         return;
     };
-    let Some((planet, planet_transform)) = planet_query
+    let Some(planet) = planet_query
         .iter()
-        .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+        .find(|p| p.domain_planet.name == binding.planet_name)
     else {
         return;
     };
@@ -133,7 +137,9 @@ fn draw_orbit_prediction(
         return;
     }
 
-    let planet_pos = planet_transform.translation.as_dvec3();
+    // Planet centre in flight units (meters): render_origin tracks the rocket's
+    // physics position, so planet centre = -origin.
+    let planet_pos = -render_origin.origin;
     let to_world = |p: DVec3| (planet_pos + p).as_vec3();
 
     gizmos.linestrip(

@@ -49,6 +49,9 @@ use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
 use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
+use crate::infrastructure::bevy_adapters::rocket_planet::{
+    RocketBoundPlanet, setup_rocket_planets, update_rocket_clouds, update_rocket_planets,
+};
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
@@ -321,6 +324,10 @@ impl Plugin for RocketModePlugin {
         // Rocket camera resources.
         app.init_resource::<RocketCameraMode>();
         app.init_resource::<RocketCameraConfig>();
+        // Rocket mode flag for conditional shared systems.
+        app.init_resource::<RocketMode>();
+        // Rocket planet system resource.
+        app.init_resource::<RocketBoundPlanet>();
 
         // Simulation time resource for fixed-timestep physics and time acceleration.
         app.insert_resource(SimulationTime::default());
@@ -467,6 +474,7 @@ impl Plugin for RocketModePlugin {
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
                 setup_rocket_sun_light,
+                setup_rocket_planets,
                 // Earth sphere disabled: 6371km radius sphere doesn't work in
                 // flight frame where camera is at rocket position (origin).
                 // Terrain patches provide the local spherical terrain.
@@ -486,6 +494,11 @@ impl Plugin for RocketModePlugin {
 
         // True-scale Earth sphere follows render origin.
         app.add_systems(Update, update_rocket_earth_sphere);
+
+        // Rocket-mode planets (bound planet, moons, Sun) in flight units with real textures.
+        // Runs after solar system planet positions are updated.
+        app.add_systems(Update, update_rocket_planets);
+        app.add_systems(Update, update_rocket_clouds);
 
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);

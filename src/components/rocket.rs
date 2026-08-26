@@ -606,3 +606,9 @@ impl Default for RocketCameraController {
         }
     }
 }
+
+/// Resource flag indicating the application is running in Rocket mode.
+/// Used by shared systems (e.g. planet updates) to conditionally skip
+/// solar-system-scale work when the camera is in the flight frame.
+#[derive(Resource, Debug, Default)]
+pub struct RocketMode;
