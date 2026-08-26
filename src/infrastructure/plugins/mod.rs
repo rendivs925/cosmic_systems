@@ -54,15 +54,15 @@ use crate::infrastructure::bevy_adapters::rocket_separation::{
 };
 use crate::infrastructure::bevy_adapters::rocket_systems::{
     accumulate_forces, actuation_system, advance_topple, aerodynamic_forces, aerodynamic_torque,
-    apply_relaunch_requests, atmosphere_properties, compute_ablation, compute_heating,
-    compute_parachute_forces, compute_plasma_blackout, compute_retro_propulsion, control_system,
-    deploy_landing_legs, guidance_system, handle_relaunch_input_system, handle_rocket_launch_input,
-    integrate_6dof, propulsion_consumption, propulsion_gimbal, propulsion_staging,
-    propulsion_thrust, resolve_ground_contact, setup_rocket_camera_and_origin,
-    setup_rocket_camera_controller, setup_rocket_earth_sphere, setup_rocket_sky_color,
-    setup_rocket_sun_light, sync_render_transform, update_orbital_elements,
-    update_rocket_earth_sphere, update_rocket_gravity, update_rocket_sky_color,
-    update_sun_day_night_cycle,
+    apply_relaunch_requests, atmosphere_properties, capture_render_state, compute_ablation,
+    compute_heating, compute_parachute_forces, compute_plasma_blackout, compute_retro_propulsion,
+    control_system, deploy_landing_legs, guidance_system, handle_relaunch_input_system,
+    handle_rocket_launch_input, integrate_6dof, interpolate_render_transform,
+    propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
+    resolve_ground_contact, setup_rocket_camera_and_origin, setup_rocket_camera_controller,
+    setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
+    update_orbital_elements, update_rocket_earth_sphere, update_rocket_gravity,
+    update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,
@@ -345,6 +345,10 @@ impl Plugin for RocketModePlugin {
         app.add_systems(Update, cap_fixed_overstep);
 
         // Rocket camera systems (run in Update for smooth rendering).
+        app.add_systems(
+            Update,
+            interpolate_render_transform.before(update_rocket_camera),
+        );
         app.add_systems(Update, handle_rocket_camera_input);
         app.add_systems(Update, handle_free_camera_input);
         app.add_systems(Update, update_rocket_camera);
@@ -442,7 +446,7 @@ impl Plugin for RocketModePlugin {
                 advance_topple
                     .in_set(RocketSet::GroundContact)
                     .after(resolve_ground_contact),
-                sync_render_transform.in_set(RocketSet::SyncRender),
+                capture_render_state.in_set(RocketSet::SyncRender),
             ),
         );
         app.add_systems(

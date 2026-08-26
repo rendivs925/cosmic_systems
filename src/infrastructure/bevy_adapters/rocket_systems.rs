@@ -25,6 +25,7 @@ use crate::domain::services::guidance::{
 };
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
+use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed,
     allocate_gimbal_deflections, clamp_gimbal, clamp_throttle_range, consume_propellant,
@@ -52,6 +53,7 @@ use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::ecs::query::QueryData;
 use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 /// Fraction of the circular orbital speed at which ascent guidance declares
 /// orbit insertion.
@@ -610,24 +612,63 @@ pub fn propulsion_gimbal(
 /// Sync the rocket's rendered [`Transform`] and the f32 facade fields from the
 /// authoritative f64 dynamics state. This is the only system that writes the
 /// rocket's `Transform`.
-pub fn sync_render_transform(
+/// Snapshot the authoritative physics state into the render-interpolation
+/// buffer (AGENTS.md section 49). Runs after `integrate_6dof` in `FixedUpdate`;
+/// the actual mesh transform is written every render frame by
+/// [`interpolate_render_transform`].
+pub fn capture_render_state(
+    mut rocket_query: Query<(&RocketPhysicsState, &mut RocketRenderState)>,
+) {
+    for (rocket, mut render) in rocket_query.iter_mut() {
+        render.prev = render.current;
+        render.current = rocket.dynamics;
+    }
+}
+
+/// Interpolate between the last two fixed physics states and write the rocket's
+/// render transform + facade. Runs every frame so the mesh moves smoothly even
+/// though physics only steps at the fixed rate: the `Time<Fixed>` overstep
+/// fraction is the sub-step alpha (AGENTS.md sections 11 and 49).
+pub fn interpolate_render_transform(
     render_origin: Res<RenderOrigin>,
     physical_scale: Res<PhysicalScale>,
-    mut rocket_query: Query<(&RocketPhysicsState, &mut RocketFacade, &mut Transform)>,
+    time: Res<Time<Fixed>>,
+    mut rocket_query: Query<(
+        &RocketPhysicsState,
+        &RocketRenderState,
+        &mut RocketFacade,
+        &mut Transform,
+    )>,
 ) {
-    for (rocket, mut facade, mut transform) in rocket_query.iter_mut() {
-        // Use flight-scale transform relative to render origin (AGENTS.md #13).
-        // This places the rocket at flight scale (1 unit = 1 meter) near the
-        // render origin, avoiding f32 precision loss at planetary distances.
-        *transform = rocket
-            .dynamics
-            .render_transform(render_origin.origin, &physical_scale);
+    let alpha = time.overstep_fraction() as f64;
+    for (rocket, render, mut facade, mut transform) in rocket_query.iter_mut() {
+        // Interpolated dynamics: smooth position/velocity/orientation/angular
+        // velocity between the previous and current fixed states.
+        let a = render.prev;
+        let b = render.current;
+        let interp = RocketDynamicsState {
+            position_m: a.position_m.lerp(b.position_m, alpha),
+            velocity_mps: a.velocity_mps.lerp(b.velocity_mps, alpha),
+            orientation: a.orientation.slerp(b.orientation, alpha),
+            angular_velocity_radps: a
+                .angular_velocity_radps
+                .lerp(b.angular_velocity_radps, alpha),
+            angular_acceleration_radps2: b.angular_acceleration_radps2,
+            mass_kg: b.mass_kg,
+            inertia_body: b.inertia_body,
+            center_of_mass_m: b.center_of_mass_m,
+        };
 
-        // Refresh the compatible facade fields from the authoritative state.
+        // Use flight-scale transform relative to render origin (AGENTS.md #13).
+        *transform = interp.render_transform(render_origin.origin, &physical_scale);
+
+        // Refresh the compatible facade fields from the interpolated state (the
+        // authoritative `dynamics` is the interpolation endpoint at alpha=1, so
+        // the facade stays consistent with physics at fixed-step boundaries).
         facade.position = transform.translation;
-        facade.velocity = rocket.dynamics.velocity_mps.as_vec3();
-        facade.orientation = rocket.dynamics.orientation.as_quat();
-        facade.angular_velocity = rocket.dynamics.angular_velocity_radps.as_vec3();
+        facade.velocity = interp.velocity_mps.as_vec3();
+        facade.orientation = interp.orientation.as_quat();
+        facade.angular_velocity = interp.angular_velocity_radps.as_vec3();
         facade.mass = rocket.dynamics.mass_kg as f32;
     }
 }

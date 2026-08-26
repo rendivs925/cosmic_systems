@@ -16,6 +16,29 @@ pub struct RocketPhysicsState {
     pub dynamics: RocketDynamicsState,
 }
 
+/// Previous/current physics snapshots for render interpolation (AGENTS.md
+/// section 49). Physics runs in `FixedUpdate` while rendering runs every frame,
+/// so the mesh is drawn at an interpolated sub-step position instead of
+/// jumping between fixed ticks.
+///
+/// Written by `capture_render_state` (FixedUpdate); read by
+/// `interpolate_render_transform` (Update). Overwritten in place so it needs
+/// no allocation.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct RocketRenderState {
+    pub prev: RocketDynamicsState,
+    pub current: RocketDynamicsState,
+}
+
+impl RocketRenderState {
+    pub fn new(dynamics: RocketDynamicsState) -> Self {
+        Self {
+            prev: dynamics,
+            current: dynamics,
+        }
+    }
+}
+
 /// Static vehicle geometry (immutable after spawn).
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RocketGeometry {

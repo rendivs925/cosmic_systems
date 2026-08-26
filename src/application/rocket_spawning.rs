@@ -135,6 +135,7 @@ pub fn spawn_rockets(
     // Two inserts because Bevy bundle tuples cap at 15 items.
     commands.entity(entity).insert((
         RocketFacade::default(),
+        RocketRenderState::new(dynamics),
         AtmosphereState::default(),
         AerodynamicForces::default(),
         MaxQTracker::default(),
