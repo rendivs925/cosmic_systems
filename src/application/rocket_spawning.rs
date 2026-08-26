@@ -3,10 +3,11 @@ use crate::components::rocket::*;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
-    body_fixed_to_planet_inertial, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
+    body_fixed_to_inertial_rotation, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
 };
 use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
 use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
+use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -60,22 +61,36 @@ pub fn spawn_rockets(
     // Collision and terrain convert back through the same reference-frame API.
     let earth = PlanetFactory::create_by_name("Earth").unwrap();
     let ksc = predefined_sites::kennedy_space_center();
-    let terrain_elevation_m = terrain_source
-        .map(|source| source.height_m(ksc.latitude_deg as f64, ksc.longitude_deg as f64) as f32)
-        .unwrap_or(ksc.altitude_m);
+    let earth_radius_m = earth.radius_km as f64 * 1000.0;
+    let terrain_sample = terrain_source.map(|source| {
+        sample_surface(
+            source,
+            ksc.latitude_deg as f64,
+            ksc.longitude_deg as f64,
+            earth_radius_m,
+        )
+    });
+    let terrain_elevation_m = terrain_sample
+        .map(|sample| sample.height_m)
+        .unwrap_or(ksc.altitude_m as f64);
     let launch_site = LaunchSiteCoordinates::new(
         ksc.planet_name.clone(),
         ksc.latitude_deg,
         ksc.longitude_deg,
-        terrain_elevation_m,
+        terrain_elevation_m as f32,
     );
-    let position_bf = geodetic_to_body_fixed(&launch_site, &earth);
-    let position_m = body_fixed_to_planet_inertial(position_bf, &earth, 0.0);
+    let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
+        * (earth_radius_m + terrain_elevation_m);
+    let body_to_inertial = body_fixed_to_inertial_rotation(&earth, 0.0);
+    let position_m = body_to_inertial * position_bf;
 
     // Stand vertical on the pad: body +Y aligned with the local up direction
     // (radial). Guidance's launch target is the same attitude, so the
     // closed-loop ascent starts from zero attitude error.
-    let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, position_m.normalize());
+    let launch_up = terrain_sample
+        .map(|sample| body_to_inertial * sample.normal)
+        .unwrap_or_else(|| position_m.normalize());
+    let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, launch_up);
     let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, &earth);
 
     // The fairing rides as structure until jettison, so it joins the dry

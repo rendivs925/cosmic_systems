@@ -26,7 +26,7 @@ use crate::domain::services::guidance::{
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
 use crate::domain::services::reference_frames::{
-    body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
+    body_fixed_to_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
     surface_velocity_in_planet_inertial,
 };
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
@@ -259,6 +259,24 @@ pub fn atmosphere_properties(
     }
 }
 
+/// Velocity relative to the atmosphere and terrain, both co-rotating with the
+/// bound planet. Dynamics remain planet-centered inertial; only force models
+/// and flight-condition displays consume this derived velocity.
+fn surface_relative_velocity(
+    binding: &RocketPlanetBinding,
+    rocket: &RocketPhysicsState,
+    planet_query: &Query<&PlanetComponent>,
+) -> DVec3 {
+    let surface_velocity = planet_query
+        .iter()
+        .find(|planet| planet.domain_planet.name == binding.planet_name)
+        .map(|planet| {
+            surface_velocity_in_planet_inertial(rocket.dynamics.position_m, &planet.domain_planet)
+        })
+        .unwrap_or(DVec3::ZERO);
+    rocket.dynamics.velocity_mps - surface_velocity
+}
+
 /// Compute aerodynamic forces (drag, lift, side) from the atmosphere and
 /// vehicle orientation, add them to the translational accumulator, track Max Q,
 /// and store the body-frame force for the torque system. Never writes the
@@ -281,17 +299,7 @@ pub fn aerodynamic_forces(
     for (binding, rocket, geometry, atmosphere, ablation, mut aero, mut max_q, mut force_accum) in
         rocket_query.iter_mut()
     {
-        let surface_velocity = planet_query
-            .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
-            .map(|planet| {
-                surface_velocity_in_planet_inertial(
-                    rocket.dynamics.position_m,
-                    &planet.domain_planet,
-                )
-            })
-            .unwrap_or(DVec3::ZERO);
-        let velocity = rocket.dynamics.velocity_mps - surface_velocity;
+        let velocity = surface_relative_velocity(binding, rocket, &planet_query);
         let speed = velocity.length();
         aero.center_of_pressure_body = center_of_pressure_m(geometry.height_m as f64);
         if speed < 1.0 || atmosphere.density_kg_m3 <= 0.0 {
@@ -1223,17 +1231,18 @@ pub fn deploy_landing_legs(
     mut rocket_query: Query<(
         &TerrainCollisionState,
         &RocketPhysicsState,
+        &GroundRest,
         &mut LandingLegs,
     )>,
 ) {
-    for (collision, rocket, mut legs) in rocket_query.iter_mut() {
+    for (collision, rocket, ground_rest, mut legs) in rocket_query.iter_mut() {
         // Never deploy while resting on the surface: the pad vehicle is
         // carried by the resting-contact constraint (the launch mount), not
         // the landing struts — a real vehicle lifts off with the legs stowed.
         // This also keeps the micro-sinking residual of the rigid rest clamp
         // (v·up < 0 from the tangential leftover on a sloped normal) from
         // tripping the descent gate while sitting on the pad.
-        if collision.ground_contact == GroundContact::Landed {
+        if ground_rest.active || collision.ground_contact == GroundContact::Landed {
             continue;
         }
         let radius = rocket.dynamics.position_m.length();
@@ -1346,6 +1355,40 @@ pub fn resolve_ground_contact(
         };
         let velocity = rocket.dynamics.velocity_mps - surface_velocity;
         let components = decompose_velocity(velocity, normal);
+
+        if *mission_state == RocketMissionState::PreLaunch {
+            if let Some(launch_site) = access.launch_site {
+                // The pad is fixed to the rotating body, not to inertial space.
+                // Rebuild its physical state every tick so gravity, numerical
+                // integration, and terrain-normal variation cannot slide the
+                // unlaunched vehicle away from its configured launch site.
+                let pad_direction_bf =
+                    geodetic_to_body_fixed(launch_site, &planet.domain_planet).normalize();
+                let pad_sample = sample_surface(
+                    &*planet_terrain.source,
+                    launch_site.latitude_deg as f64,
+                    launch_site.longitude_deg as f64,
+                    radius_m,
+                );
+                let pad_position_m =
+                    body_to_inertial * (pad_direction_bf * (radius_m + pad_sample.height_m));
+                let pad_normal = (body_to_inertial * pad_sample.normal).normalize_or_zero();
+
+                rocket.dynamics.position_m = pad_position_m;
+                rocket.dynamics.velocity_mps =
+                    surface_velocity_in_planet_inertial(pad_position_m, &planet.domain_planet);
+                rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
+                rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+                rest.active = true;
+                collision.radar_altitude_m = 0.0;
+                collision.slope_deg = pad_sample.slope_deg;
+                collision.over_water = planet.domain_planet.has_ocean && pad_sample.height_m < 0.0;
+                collision.ground_contact = GroundContact::Landed;
+                tip_over.exceeded_for_s = 0.0;
+                tip_over.fall = None;
+                continue;
+            }
+        }
 
         // Touchdown criteria, gear-aware when the legs are deployed: the
         // stance-aspect widening lives in the domain (`LandingGear::
@@ -1902,7 +1945,7 @@ pub fn compute_heating(
         };
 
         let rho = atmosphere.density_kg_m3;
-        let v = rocket.dynamics.velocity_mps.length();
+        let v = surface_relative_velocity(binding, rocket, &planet_query).length();
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
         let r = rocket.dynamics.position_m.length();
         let altitude_m = (r - radius_m).max(0.0);
@@ -2000,17 +2043,19 @@ pub fn compute_ablation(
 pub fn compute_plasma_blackout(
     config: Res<EntryPhysicsConfig>,
     mut blackout_writer: MessageWriter<CommsBlackoutEvent>,
+    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         Entity,
+        &RocketPlanetBinding,
         &RocketPhysicsState,
         &AtmosphereState,
         &mut CommsState,
     )>,
 ) {
-    for (rocket_entity, rocket, atmosphere, mut comms) in rocket_query.iter_mut() {
+    for (rocket_entity, binding, rocket, atmosphere, mut comms) in rocket_query.iter_mut() {
         let electron_density = electron_density_m3(
             atmosphere.density_kg_m3,
-            rocket.dynamics.velocity_mps.length(),
+            surface_relative_velocity(binding, rocket, &planet_query).length(),
         );
         let blackout_active =
             comms_blackout_active(electron_density, config.critical_electron_density_m3);
@@ -2038,7 +2083,9 @@ pub fn compute_plasma_blackout(
 pub fn compute_parachute_forces(
     sim_time: Res<SimulationTime>,
     config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
+        &RocketPlanetBinding,
         &RocketPhysicsState,
         &AtmosphereState,
         &TerrainCollisionState,
@@ -2051,6 +2098,7 @@ pub fn compute_parachute_forces(
     let dt = sim_time.fixed_timestep();
     let parachute_config = config.parachute_config();
     for (
+        binding,
         rocket,
         atmosphere,
         collision,
@@ -2073,7 +2121,7 @@ pub fn compute_parachute_forces(
         }
 
         let rho = atmosphere.density_kg_m3;
-        let velocity = rocket.dynamics.velocity_mps;
+        let velocity = surface_relative_velocity(binding, rocket, &planet_query);
         let speed = velocity.length();
         if rho <= 0.0 || speed <= 0.0 {
             continue;
@@ -2119,21 +2167,23 @@ pub fn compute_parachute_forces(
 /// counting — and the direction/ISP handling of `stage_thrust_body` applies.
 pub fn compute_retro_propulsion(
     config: Res<EntryPhysicsConfig>,
+    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
+        &RocketPlanetBinding,
         &RocketPhysicsState,
         &AtmosphereState,
         &RocketPropulsion,
         &mut RetroPropulsionEffect,
     )>,
 ) {
-    for (rocket, atmosphere, propulsion, mut retro) in rocket_query.iter_mut() {
+    for (binding, rocket, atmosphere, propulsion, mut retro) in rocket_query.iter_mut() {
         // Default each tick; re-derived below so state never goes stale
         // (config toggles, Mach drops below threshold, engines shut down).
         let mut multiplier = 1.0;
 
         if config.retro_propulsion_enabled {
-            let mach =
-                rocket.dynamics.velocity_mps.length() / atmosphere.speed_of_sound_mps.max(1.0);
+            let mach = surface_relative_velocity(binding, rocket, &planet_query).length()
+                / atmosphere.speed_of_sound_mps.max(1.0);
             if mach >= config.retro_propulsion_mach_threshold {
                 // Engines must actually be producing thrust at this tick;
                 // the same stage_thrust_body the physics uses decides that.
@@ -2230,14 +2280,14 @@ pub fn setup_rocket_camera_and_origin(
     let camera_transform =
         Transform::from_translation(camera_pos_flight).looking_at(rocket_center, up_dir);
 
-    // Update camera and projection. Far plane kept small enough to exclude the
-    // solar-system's giant spheres (the Sun shell at ~22,835 units sits just
-    // outside it), so the flight frame stays clean.
+    // The launch pad horizon is tens of kilometers away. Start at the chase
+    // camera range so the curved Earth proxy is visible on the first frame;
+    // the regular projection system maintains this range afterwards.
     for (entity, mut cam_transform, projection) in camera_query.iter_mut() {
         *cam_transform = camera_transform;
         if let Projection::Perspective(proj) = projection.into_inner() {
             proj.near = 0.5;
-            proj.far = 5_000.0;
+            proj.far = 100_000.0;
         }
         // Workaround for bevyengine/bevy#18904: with GPU preprocessing on,
         // meshes that pass CPU visibility (rocket, pad primitives) silently
@@ -2650,6 +2700,52 @@ mod ground_contact_tests {
             rocket.dynamics.velocity_mps.length()
         );
         assert_eq!(collision.ground_contact, GroundContact::Landed);
+    }
+
+    #[test]
+    fn prelaunch_vehicle_remains_at_its_rotating_launch_site() {
+        let mut app = pad_app(0.0, 20.0);
+        let launch_site = LaunchSiteCoordinates::default();
+        let entity = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        {
+            let world = app.world_mut();
+            world.entity_mut(entity).insert(launch_site.clone());
+            let mut rocket = world.get_mut::<RocketPhysicsState>(entity).unwrap();
+            rocket.dynamics.velocity_mps = DVec3::new(500.0, -100.0, 250.0);
+            rocket.dynamics.angular_velocity_radps = DVec3::new(0.1, 0.2, 0.3);
+        }
+
+        for _ in 0..96 {
+            app.update();
+        }
+
+        let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
+            .unwrap();
+        let time_days = app.world().resource::<SimulationTime>().sim_time_s / 86_400.0;
+        let world = app.world_mut();
+        let rocket = world.get::<RocketPhysicsState>(entity).unwrap();
+        let position_bf =
+            planet_inertial_to_body_fixed(rocket.dynamics.position_m, &earth, time_days as f32);
+        let expected_direction_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize();
+        let expected_surface_velocity =
+            surface_velocity_in_planet_inertial(rocket.dynamics.position_m, &earth);
+
+        assert!(
+            position_bf.normalize().dot(expected_direction_bf) > 1.0 - 1e-12,
+            "pre-launch position drifted away from the launch site"
+        );
+        assert!(
+            (rocket.dynamics.velocity_mps - expected_surface_velocity).length() < 1e-9,
+            "pre-launch velocity must match the rotating launch pad"
+        );
+        assert!(
+            rocket.dynamics.angular_velocity_radps.length() < 1e-12,
+            "pre-launch vehicle must not rotate on the pad"
+        );
     }
 
     /// Takeoff from resting contact: throttle above TWR 1 releases the

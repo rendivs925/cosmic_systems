@@ -9,6 +9,7 @@ use crate::domain::services::aerodynamics::{
     angle_of_attack, angle_of_sideslip, dynamic_pressure_q,
 };
 use crate::domain::services::gravity::gravitational_parameter;
+use crate::domain::services::reference_frames::surface_velocity_in_planet_inertial;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_mass_with_payload, stage_thrust_body, STANDARD_GRAVITY_MPS2,
 };
@@ -36,6 +37,9 @@ pub struct TelemetryContext<'a> {
     pub planet_radius_m: f64,
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
+    /// Atmosphere and surface velocity in the same planet-centered inertial
+    /// frame. Flight displays report velocity relative to this moving medium.
+    pub surface_velocity_mps: DVec3,
     pub orientation: DQuat,
     pub angular_velocity_radps: DVec3,
     pub mass_kg: f64,
@@ -64,8 +68,9 @@ impl<'a> TelemetryContext<'a> {
 
         let up_dir = self.position_m / radius;
         let altitude_m = (radius - self.planet_radius_m).max(0.0);
-        let speed = self.velocity_mps.length();
-        let vertical_speed = self.velocity_mps.dot(up_dir);
+        let relative_velocity = self.velocity_mps - self.surface_velocity_mps;
+        let speed = relative_velocity.length();
+        let vertical_speed = relative_velocity.dot(up_dir);
         let horizontal_speed = (speed * speed - vertical_speed * vertical_speed)
             .max(0.0)
             .sqrt();
@@ -94,7 +99,7 @@ impl<'a> TelemetryContext<'a> {
         let sensed_force_world = self.orientation * (thrust_body + self.aero_forces.force_body);
         let g_load = sensed_force_world.length() / (self.mass_kg * STANDARD_GRAVITY_MPS2);
 
-        let body_velocity = self.orientation.inverse() * self.velocity_mps;
+        let body_velocity = self.orientation.inverse() * relative_velocity;
         let aoa = angle_of_attack(body_velocity).to_degrees();
         let aos = angle_of_sideslip(body_velocity).to_degrees();
 
@@ -544,6 +549,10 @@ pub fn compute_rocket_telemetry_system(
             planet_radius_m: planet.domain_planet.radius_km as f64 * 1000.0,
             position_m: rocket.dynamics.position_m,
             velocity_mps: rocket.dynamics.velocity_mps,
+            surface_velocity_mps: surface_velocity_in_planet_inertial(
+                rocket.dynamics.position_m,
+                &planet.domain_planet,
+            ),
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
             mass_kg: mass.0,
@@ -654,6 +663,10 @@ pub fn record_flight_data_system(
             planet_radius_m: planet.domain_planet.radius_km as f64 * 1000.0,
             position_m: rocket.dynamics.position_m,
             velocity_mps: rocket.dynamics.velocity_mps,
+            surface_velocity_mps: surface_velocity_in_planet_inertial(
+                rocket.dynamics.position_m,
+                &planet.domain_planet,
+            ),
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
             mass_kg: mass.0,
@@ -1042,6 +1055,7 @@ mod g_load_tests {
             planet_radius_m: EARTH_RADIUS_M,
             position_m: position,
             velocity_mps: velocity,
+            surface_velocity_mps: DVec3::ZERO,
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
@@ -1109,6 +1123,7 @@ mod g_load_tests {
             planet_radius_m: EARTH_RADIUS_M,
             position_m: DVec3::new(EARTH_RADIUS_M + 400_000.0, 0.0, 0.0),
             velocity_mps: DVec3::new(0.0, 0.0, speed_mps),
+            surface_velocity_mps: DVec3::ZERO,
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,

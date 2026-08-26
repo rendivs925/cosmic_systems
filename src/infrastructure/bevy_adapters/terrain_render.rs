@@ -17,7 +17,7 @@ use crate::infrastructure::bevy_adapters::terrain_surface::{
 };
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 
@@ -29,6 +29,10 @@ pub struct TerrainPatchRenderState {
     pub material_handle: Handle<StandardMaterial>,
     pub entity: Entity,
     pub planet_entity: Entity,
+    /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
+    pub body_to_inertial_at_spawn: DQuat,
+    /// Render origin used to bake this mesh's vertices.
+    pub render_origin_at_spawn: DVec3,
 }
 
 /// Resource for the floating render origin (AGENTS.md section 13).
@@ -55,8 +59,8 @@ impl Default for TerrainRenderConfig {
     fn default() -> Self {
         Self {
             recenter_threshold_m: 10_000.0,
-            skirt_depth_m: 50.0,
-            patch_resolution: 8,
+            skirt_depth_m: 5.0,
+            patch_resolution: 32,
         }
     }
 }
@@ -91,6 +95,7 @@ impl Plugin for TerrainRenderPlugin {
                 Update,
                 (
                     recenter_render_origin,
+                    update_patch_transforms,
                     spawn_patch_mesh_system,
                     despawn_patch_mesh_system,
                 )
@@ -167,6 +172,8 @@ fn spawn_patch_mesh_system(
                     material_handle: material_handle.clone(),
                     entity: Entity::PLACEHOLDER,
                     planet_entity,
+                    body_to_inertial_at_spawn: body_to_inertial,
+                    render_origin_at_spawn: render_origin.origin,
                 },
                 Name::new(format!(
                     "TerrainPatch_{:?}_{}_{}_{}",
@@ -210,6 +217,8 @@ fn spawn_patch_mesh_system(
             material_handle,
             entity,
             planet_entity,
+            body_to_inertial_at_spawn: body_to_inertial,
+            render_origin_at_spawn: render_origin.origin,
         });
     }
 }
@@ -292,7 +301,6 @@ pub fn recenter_render_origin(
     config: Res<TerrainRenderConfig>,
     rocket_query: Query<&RocketPhysicsState>,
     mut render_origin: ResMut<RenderOrigin>,
-    mut patch_query: Query<&mut Transform, With<TerrainPatchRenderState>>,
 ) {
     let Some(rocket) = rocket_query.iter().next() else {
         return;
@@ -301,12 +309,35 @@ pub fn recenter_render_origin(
     if (new_origin - render_origin.origin).length() < config.recenter_threshold_m {
         return;
     }
-    let shift = (render_origin.origin - new_origin).as_vec3();
-    for mut transform in patch_query.iter_mut() {
-        transform.translation += shift;
-    }
     render_origin.origin = new_origin;
     render_origin.last_camera_pos = new_origin;
+}
+
+/// Keep terrain meshes attached to the rotating planet after generation. Patch
+/// vertices are baked in an inertial render frame for local f32 precision, so
+/// their entity transform supplies the rotation and origin delta accumulated
+/// since that bake. Without this, an Earth-fixed launch pad visibly moves under
+/// a correctly co-rotating pre-launch rocket.
+fn update_patch_transforms(
+    sim_time: Res<SimulationTime>,
+    render_origin: Res<RenderOrigin>,
+    planet_query: Query<&PlanetComponent>,
+    mut patch_query: Query<(&TerrainPatchRenderState, &mut Transform)>,
+) {
+    for (state, mut transform) in patch_query.iter_mut() {
+        let Ok(planet) = planet_query.get(state.planet_entity) else {
+            continue;
+        };
+        let body_to_inertial = body_fixed_to_inertial_rotation(
+            &planet.domain_planet,
+            (sim_time.sim_time_s / 86_400.0) as f32,
+        );
+        let rotation = body_to_inertial * state.body_to_inertial_at_spawn.conjugate();
+
+        transform.rotation = rotation.as_quat();
+        transform.translation =
+            (rotation * state.render_origin_at_spawn - render_origin.origin).as_vec3();
+    }
 }
 
 /// Create the base terrain material. The albedo and normal map are supplied per

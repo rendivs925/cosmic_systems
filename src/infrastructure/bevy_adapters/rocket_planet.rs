@@ -143,6 +143,14 @@ pub fn setup_rocket_planets(
             ))
             .id();
 
+        // The camera is only meters above a sphere whose center is thousands
+        // of kilometers away. Its bounds can otherwise be rejected before its
+        // nearby surface reaches the frustum, leaving terrain patches against
+        // empty space instead of a continuous curved planet.
+        commands
+            .entity(planet_entity)
+            .insert(bevy::camera::visibility::NoFrustumCulling);
+
         // Cloud layer for Earth
         if let Some(clouds) = get_cloud_layer_config(&planet_name) {
             let cloud_texture = load_texture(&asset_server, Some(clouds.texture_path));
