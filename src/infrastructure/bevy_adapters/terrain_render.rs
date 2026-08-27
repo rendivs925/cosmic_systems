@@ -4,6 +4,7 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
+use crate::domain::entities::planet::Planet;
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
@@ -19,6 +20,7 @@ use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use bevy_mesh::{Indices, PrimitiveTopology};
 
 /// Component tracking the render state of a terrain patch.
@@ -116,6 +118,7 @@ fn spawn_patch_mesh_system(
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
+    time: Res<Time<Fixed>>,
     planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
     planet_entities: Query<Entity, With<PlanetComponent>>,
 ) {
@@ -138,9 +141,10 @@ fn spawn_patch_mesh_system(
         // geometry into the rocket-local flight frame so f32 mesh vertices stay
         // small near the camera (avoids precision loss at ~6371 km magnitudes
         // that degrades the sphere into a flat plane with broken triangles).
-        let body_to_inertial = body_fixed_to_inertial_rotation(
+        let body_to_inertial = interpolated_body_to_inertial_rotation(
             &planet.domain_planet,
-            (sim_time.sim_time_s / 86_400.0) as f32,
+            &sim_time,
+            time.overstep_fraction() as f64,
         );
         let mesh = patch_geometry_to_mesh(geometry, &render_origin.origin, body_to_inertial);
         let mesh_handle = meshes.add(mesh);
@@ -321,23 +325,52 @@ pub fn recenter_render_origin(
 fn update_patch_transforms(
     sim_time: Res<SimulationTime>,
     render_origin: Res<RenderOrigin>,
+    time: Res<Time<Fixed>>,
     planet_query: Query<&PlanetComponent>,
     mut patch_query: Query<(&TerrainPatchRenderState, &mut Transform)>,
 ) {
+    let alpha = time.overstep_fraction() as f64;
     for (state, mut transform) in patch_query.iter_mut() {
         let Ok(planet) = planet_query.get(state.planet_entity) else {
             continue;
         };
-        let body_to_inertial = body_fixed_to_inertial_rotation(
-            &planet.domain_planet,
-            (sim_time.sim_time_s / 86_400.0) as f32,
+        let body_to_inertial =
+            interpolated_body_to_inertial_rotation(&planet.domain_planet, &sim_time, alpha);
+        let (rotation, translation) = patch_transform_components(
+            state.body_to_inertial_at_spawn,
+            state.render_origin_at_spawn,
+            body_to_inertial,
+            render_origin.origin,
         );
-        let rotation = body_to_inertial * state.body_to_inertial_at_spawn.conjugate();
 
         transform.rotation = rotation.as_quat();
-        transform.translation =
-            (rotation * state.render_origin_at_spawn - render_origin.origin).as_vec3();
+        transform.translation = translation.as_vec3();
     }
+}
+
+/// Match the previous/current fixed-step body poses used by rocket presentation.
+fn interpolated_body_to_inertial_rotation(
+    planet: &Planet,
+    sim_time: &SimulationTime,
+    alpha: f64,
+) -> DQuat {
+    let previous_time_s = (sim_time.sim_time_s - sim_time.fixed_timestep()).max(0.0);
+    let previous = body_fixed_to_inertial_rotation(planet, (previous_time_s / 86_400.0) as f32);
+    let current = body_fixed_to_inertial_rotation(planet, (sim_time.sim_time_s / 86_400.0) as f32);
+    previous.slerp(current, alpha)
+}
+
+/// Return the presentation-only transform taking a baked terrain patch into the
+/// current interpolated body pose and render-origin frame.
+fn patch_transform_components(
+    body_to_inertial_at_spawn: DQuat,
+    render_origin_at_spawn: DVec3,
+    body_to_inertial: DQuat,
+    render_origin: DVec3,
+) -> (DQuat, DVec3) {
+    let rotation = body_to_inertial * body_to_inertial_at_spawn.conjugate();
+    let translation = rotation * render_origin_at_spawn - render_origin;
+    (rotation, translation)
 }
 
 /// Create the base terrain material. The albedo and normal map are supplied per
@@ -369,6 +402,25 @@ fn patch_material(patch: &TerrainPatch, source: &dyn TerrainSource) -> StandardM
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
+    use crate::domain::services::planet_factory::PlanetFactory;
+
+    fn terrain_position_in_render_frame(
+        body_fixed_position_m: DVec3,
+        body_to_inertial_at_spawn: DQuat,
+        render_origin_at_spawn: DVec3,
+        body_to_inertial: DQuat,
+        render_origin: DVec3,
+    ) -> DVec3 {
+        let baked_position =
+            body_to_inertial_at_spawn * body_fixed_position_m - render_origin_at_spawn;
+        let (rotation, translation) = patch_transform_components(
+            body_to_inertial_at_spawn,
+            render_origin_at_spawn,
+            body_to_inertial,
+            render_origin,
+        );
+        rotation * baked_position + translation
+    }
 
     #[test]
     fn patch_geometry_emits_skirt_ring_for_crack_free_lod() {
@@ -406,5 +458,65 @@ mod tests {
         }
         // Skirt quads are present: more indices than a flat grid alone.
         assert!(geom.indices.len() > (res - 1) * (res - 1) * 6);
+    }
+
+    #[test]
+    fn interpolated_terrain_matches_surface_fixed_rocket_across_fixed_overstep() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let mut sim_time = SimulationTime::new(0.25);
+        sim_time.sim_time_s = 12_345.0;
+        let surface_position_m = DVec3::new(earth.radius_km as f64 * 1_000.0, 0.0, 0.0);
+        let body_to_inertial_at_spawn = body_fixed_to_inertial_rotation(&earth, 0.1);
+        let render_origin_at_spawn = DVec3::new(100.0, -200.0, 300.0);
+        let current_body_to_inertial =
+            body_fixed_to_inertial_rotation(&earth, (sim_time.sim_time_s / 86_400.0) as f32);
+        let render_origin = current_body_to_inertial * surface_position_m;
+
+        for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let body_to_inertial = interpolated_body_to_inertial_rotation(&earth, &sim_time, alpha);
+            let terrain_position = terrain_position_in_render_frame(
+                surface_position_m,
+                body_to_inertial_at_spawn,
+                render_origin_at_spawn,
+                body_to_inertial,
+                render_origin,
+            );
+            let rocket_position = body_to_inertial * surface_position_m - render_origin;
+
+            assert!(
+                terrain_position.distance(rocket_position) < 1e-7,
+                "terrain diverged from a surface-fixed rocket at alpha {alpha}"
+            );
+        }
+    }
+
+    #[test]
+    fn newly_spawned_patch_uses_the_interpolated_body_pose() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let mut sim_time = SimulationTime::new(0.25);
+        sim_time.sim_time_s = 12_345.0;
+        let alpha = 0.5;
+        let body_to_inertial = interpolated_body_to_inertial_rotation(&earth, &sim_time, alpha);
+        let surface_position_m = DVec3::new(0.0, earth.radius_km as f64 * 1_000.0, 0.0);
+        let render_origin = DVec3::new(10.0, 20.0, 30.0);
+
+        let (rotation, translation) = patch_transform_components(
+            body_to_inertial,
+            render_origin,
+            body_to_inertial,
+            render_origin,
+        );
+        let terrain_position = terrain_position_in_render_frame(
+            surface_position_m,
+            body_to_inertial,
+            render_origin,
+            body_to_inertial,
+            render_origin,
+        );
+
+        assert!(rotation.abs_diff_eq(DQuat::IDENTITY, 1e-12));
+        assert!(translation.abs_diff_eq(DVec3::ZERO, 1e-12));
+        assert!(terrain_position
+            .abs_diff_eq(body_to_inertial * surface_position_m - render_origin, 1e-7));
     }
 }
