@@ -351,6 +351,7 @@ impl Plugin for RocketModePlugin {
             Update,
             interpolate_render_transform
                 .after(recenter_render_origin)
+                .after(handle_rocket_launch_input)
                 .before(update_rocket_camera),
         );
         app.add_systems(Update, handle_rocket_camera_input);

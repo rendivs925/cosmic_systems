@@ -2508,11 +2508,20 @@ pub fn update_sun_day_night_cycle(
 /// Handles the pre-launch hold: Space key arms the launch.
 pub fn handle_rocket_launch_input(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut mission_query: Query<&mut RocketMissionState>,
+    mut mission_query: Query<(
+        &mut RocketMissionState,
+        &RocketPhysicsState,
+        &mut RocketRenderState,
+    )>,
 ) {
     if keyboard.just_pressed(KeyCode::Space) {
-        for mut mission in mission_query.iter_mut() {
+        for (mut mission, rocket, mut render) in mission_query.iter_mut() {
             if *mission == RocketMissionState::PreLaunch {
+                // Prelaunch renders the latest body-fixed pad state rather
+                // than its interpolation buffer. Reset that buffer before
+                // enabling airborne interpolation to avoid blending two
+                // stale rotating-pad snapshots on the launch transition.
+                *render = RocketRenderState::new(rocket.dynamics);
                 *mission = RocketMissionState::Launch;
             }
         }
@@ -3865,6 +3874,50 @@ mod render_interpolation_tests {
         );
 
         assert_eq!(rendered.position_m, DVec3::new(2.5, 0.0, 0.0));
+    }
+
+    #[test]
+    fn launch_resets_pad_snapshots_before_enabling_interpolation() {
+        let dynamics = RocketDynamicsState::new(
+            DVec3::new(10.0, 20.0, 30.0),
+            DVec3::new(1.0, 2.0, 3.0),
+            DQuat::IDENTITY,
+            100.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let stale_snapshot = RocketDynamicsState {
+            position_m: DVec3::new(-10.0, -20.0, -30.0),
+            ..dynamics
+        };
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        let rocket = app
+            .world_mut()
+            .spawn((
+                RocketMissionState::PreLaunch,
+                RocketPhysicsState { dynamics },
+                RocketRenderState {
+                    prev: stale_snapshot,
+                    current: stale_snapshot,
+                },
+            ))
+            .id();
+        app.add_systems(Update, handle_rocket_launch_input);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+
+        app.update();
+
+        let world = app.world();
+        assert_eq!(
+            *world.get::<RocketMissionState>(rocket).unwrap(),
+            RocketMissionState::Launch
+        );
+        let render = world.get::<RocketRenderState>(rocket).unwrap();
+        assert_eq!(render.prev, dynamics);
+        assert_eq!(render.current, dynamics);
     }
 }
 
