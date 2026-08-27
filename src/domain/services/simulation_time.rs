@@ -35,9 +35,13 @@ impl SimulationTime {
         }
     }
 
-    /// Get the fixed physics timestep (simulation seconds per physics step).
+    /// Get the bounded physics timestep (simulation seconds per physics step).
+    ///
+    /// Time acceleration changes how often Bevy runs `FixedUpdate`, not the
+    /// duration integrated by one physics tick. This keeps powered-flight,
+    /// contact, and propellant calculations numerically stable at warp.
     pub fn fixed_timestep(&self) -> f64 {
-        self.fixed_timestep_s * self.time_acceleration
+        self.fixed_timestep_s
     }
 
     /// Get the fixed physics timestep as f32.
@@ -45,9 +49,14 @@ impl SimulationTime {
         self.fixed_timestep() as f32
     }
 
-    /// Set time acceleration factor. Valid range: 0.0 to 10000.0.
+    /// Fixed-update frequency in real-time hertz for the requested warp rate.
+    pub fn fixed_update_hz(&self) -> f64 {
+        self.time_acceleration / self.fixed_timestep_s
+    }
+
+    /// Set time acceleration factor. Pausing is controlled separately.
     pub fn set_time_acceleration(&mut self, factor: f64) {
-        self.time_acceleration = factor.clamp(0.0, 10000.0);
+        self.time_acceleration = factor.clamp(TIME_ACCELERATION_MIN, Self::ACCEL_10000X);
     }
 
     /// Toggle pause state.
@@ -60,6 +69,18 @@ impl SimulationTime {
         self.real_time_s += real_dt_s;
         if !self.paused {
             self.sim_time_s += real_dt_s * self.time_acceleration;
+        }
+    }
+
+    /// Record real time without advancing the authoritative simulation clock.
+    pub fn advance_real_time(&mut self, real_dt_s: f64) {
+        self.real_time_s += real_dt_s;
+    }
+
+    /// Advance the authoritative clock after one completed bounded physics tick.
+    pub fn advance_fixed_step(&mut self) {
+        if !self.paused {
+            self.sim_time_s += self.fixed_timestep();
         }
     }
 
@@ -88,7 +109,7 @@ pub fn stepped_time_acceleration(current: f64, direction: i32) -> f64 {
 
 /// Time-acceleration keys for rocket mode (Phase 15): `.` speeds up a decade,
 /// `,` slows down a decade, `0` resets to real time. Centralized here —
-/// physics systems keep consuming the scaled fixed timestep unchanged.
+/// physics systems keep consuming the bounded fixed timestep unchanged.
 pub fn handle_time_acceleration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut sim_time: ResMut<SimulationTime>,
@@ -116,14 +137,22 @@ impl Default for SimulationTime {
     }
 }
 
-/// System to advance SimulationTime from real time (runs in Update schedule).
-pub fn advance_simulation_time(time: Res<Time>, mut sim_time: ResMut<SimulationTime>) {
-    sim_time.advance(time.delta_secs_f64());
+/// System to record wall-clock time from the render schedule.
+pub fn advance_real_time(time: Res<Time>, mut sim_time: ResMut<SimulationTime>) {
+    sim_time.advance_real_time(time.delta_secs_f64());
 }
 
-/// System to sync Bevy's fixed timestep with SimulationTime (runs in FixedUpdate schedule).
+/// System to advance simulation time only after a bounded physics tick.
+pub fn advance_fixed_simulation_time(mut sim_time: ResMut<SimulationTime>) {
+    sim_time.advance_fixed_step();
+}
+
+/// System to configure Bevy's fixed-update frequency from time acceleration.
+///
+/// The authoritative step remains `fixed_timestep_s`; acceleration schedules
+/// more or fewer bounded ticks per real second.
 pub fn sync_fixed_timestep(mut fixed_time: ResMut<Time<Fixed>>, sim_time: Res<SimulationTime>) {
-    fixed_time.set_timestep_hz(1.0 / sim_time.fixed_timestep());
+    fixed_time.set_timestep_hz(sim_time.fixed_update_hz());
 }
 
 #[cfg(test)]
@@ -137,10 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn time_acceleration_scales_fixed_timestep() {
+    fn time_acceleration_keeps_physics_timestep_bounded() {
         let mut sim = SimulationTime::new(1.0 / 60.0);
         sim.set_time_acceleration(10.0);
-        assert!((sim.fixed_timestep() - 10.0 / 60.0).abs() < 1e-9);
+        assert!((sim.fixed_timestep() - 1.0 / 60.0).abs() < 1e-9);
+        assert!((sim.fixed_update_hz() - 600.0).abs() < 1e-9);
     }
 
     #[test]
@@ -153,10 +183,21 @@ mod tests {
     }
 
     #[test]
+    fn fixed_steps_advance_simulation_time_independently_of_warp() {
+        let mut sim = SimulationTime::new(0.25);
+        sim.set_time_acceleration(100.0);
+        sim.advance_real_time(0.0025);
+        sim.advance_fixed_step();
+
+        assert_eq!(sim.real_time_s, 0.0025);
+        assert_eq!(sim.sim_time_s, 0.25);
+    }
+
+    #[test]
     fn clamp_time_acceleration() {
         let mut sim = SimulationTime::default();
         sim.set_time_acceleration(-5.0);
-        assert_eq!(sim.time_acceleration, 0.0);
+        assert_eq!(sim.time_acceleration, TIME_ACCELERATION_MIN);
         sim.set_time_acceleration(20000.0);
         assert_eq!(sim.time_acceleration, 10000.0);
     }

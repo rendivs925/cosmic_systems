@@ -3424,8 +3424,8 @@ mod ascent_pipeline_tests {
     /// Shared minimal burn rig (Phase 15/17): electron-class vehicle in
     /// vacuum, throttle forced fully open, only consumption/staging systems
     /// running so guidance policy cannot mask machinery behavior. Each
-    /// `app.update()` executes exactly one fixed step of length
-    /// `DT * acceleration`.
+    /// FixedUpdate is scheduled at the requested warp frequency while every
+    /// authoritative step remains `DT` simulation seconds.
     fn burn_rig_app(acceleration: f64) -> App {
         use bevy::asset::{AssetApp, AssetPlugin};
 
@@ -3438,7 +3438,7 @@ mod ascent_pipeline_tests {
         sim_time.set_time_acceleration(acceleration);
         app.insert_resource(sim_time);
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
-            DT,
+            DT / acceleration,
         )));
 
         let vehicle = electron_like();
@@ -3500,12 +3500,16 @@ mod ascent_pipeline_tests {
             )
                 .chain(),
         );
+        app.add_systems(
+            Update,
+            crate::domain::services::simulation_time::sync_fixed_timestep,
+        );
         app
     }
 
-    /// Phase 15 regression: with time acceleration at 100× (dt = 100/64 s),
-    /// the consumption/staging MACHINERY must stay stable — one clean
-    /// separation, drained first stage, conserved mass, finite dynamics.
+    /// With time acceleration at 100×, propulsion still advances through
+    /// bounded `DT` steps: one clean separation, drained first stage,
+    /// conserved mass, and finite dynamics.
     /// A minimal burn rig drives the throttle directly so guidance policy
     /// (which legitimately coasts into insertion under coarse steps) cannot
     /// mask the machinery being tested.
@@ -3513,8 +3517,8 @@ mod ascent_pipeline_tests {
     fn staging_and_consumption_stable_at_100x_acceleration() {
         let mut app = burn_rig_app(100.0);
 
-        // Stage 1 drains in ~119 s ≈ 76 big steps; run well past that.
-        for _ in 0..200 {
+        // Stage 1 drains in ~119 s; run well past that at bounded timesteps.
+        for _ in 0..9_000 {
             app.update();
         }
 
@@ -3551,17 +3555,17 @@ mod ascent_pipeline_tests {
     /// Phase 17 scenario `time_warp_burn`: the SAME burn executed at 1×, 10×
     /// and 100× must produce identical staging decisions and consistent mass
     /// bookkeeping at equal SIMULATED time. Consumption is linear in sim
-    /// seconds, so only the quantization of the staging boundary (up to one
-    /// coarse step, DT*100 ≈ 1.56 s of stage-2 flow) may differ.
+    /// seconds, so staging and mass bookkeeping must match exactly.
     #[test]
     fn burn_rig_invariants_hold_across_time_warp_factors() {
+        let mut expected_post_burn: Option<(f32, f64)> = None;
+
         for acceleration in [1.0, 10.0, 100.0] {
             let mut app = burn_rig_app(acceleration);
 
             // Same simulated duration for every factor: T = 140 s > the
-            // ~119 s first-stage drain. Each update advances exactly one
-            // fixed step of DT * acceleration.
-            let steps = ((140.0 / (DT * acceleration)).ceil()) as usize;
+            // ~119 s first-stage drain. Each fixed tick advances by DT.
+            let steps = (140.0 / DT).ceil() as usize + 2;
             for _ in 0..steps {
                 app.update();
             }
@@ -3586,6 +3590,24 @@ mod ascent_pipeline_tests {
                 mass.0
             );
             assert!(rocket.dynamics.mass_kg.is_finite());
+
+            let post_burn = (propulsion.propellant_remaining_kg[1], mass.0);
+            if let Some(expected) = expected_post_burn {
+                assert!(
+                    (post_burn.0 - expected.0).abs() < f32::EPSILON,
+                    "stage-2 propellant diverged at {acceleration}x: {} vs {}",
+                    post_burn.0,
+                    expected.0
+                );
+                assert!(
+                    (post_burn.1 - expected.1).abs() < f64::EPSILON,
+                    "mass diverged at {acceleration}x: {} vs {}",
+                    post_burn.1,
+                    expected.1
+                );
+            } else {
+                expected_post_burn = Some(post_burn);
+            }
         }
     }
 

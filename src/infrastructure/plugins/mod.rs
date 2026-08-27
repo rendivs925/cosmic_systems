@@ -20,7 +20,8 @@ use crate::domain::events::{
     StageSeparatedEvent,
 };
 use crate::domain::services::simulation_time::{
-    advance_simulation_time, handle_time_acceleration_input, sync_fixed_timestep, SimulationTime,
+    advance_fixed_simulation_time, advance_real_time, handle_time_acceleration_input,
+    sync_fixed_timestep, SimulationTime,
 };
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::infrastructure::bevy_adapters::components::{
@@ -338,8 +339,9 @@ impl Plugin for RocketModePlugin {
         // Rocket debug visualization plugin.
         app.add_plugins(RocketDebugPlugin);
 
-        // Advance simulation time from real time (runs in Update).
-        app.add_systems(Update, advance_simulation_time);
+        // Wall-clock time is updated per rendered frame; simulation time is
+        // advanced only by completed fixed physics ticks below.
+        app.add_systems(Update, advance_real_time);
 
         // Cap fixed timestep overstep (runs in Update).
         app.add_systems(Update, cap_fixed_overstep);
@@ -382,15 +384,15 @@ impl Plugin for RocketModePlugin {
         // Relaunch input (runs in Update; mutation happens in FixedUpdate).
         app.add_systems(Update, handle_relaunch_input_system);
 
-        // Time acceleration keys (runs in Update; physics reads the scaled
-        // fixed timestep from SimulationTime).
-        app.add_systems(Update, handle_time_acceleration_input);
+        // Time acceleration adjusts fixed-update frequency while every physics
+        // tick keeps the bounded SimulationTime timestep.
+        app.add_systems(
+            Update,
+            (handle_time_acceleration_input, sync_fixed_timestep).chain(),
+        );
 
         // Event feed: domain messages → HUD line + flight-log entries (Update).
         app.add_systems(Update, rocket_event_feed_system);
-
-        // Sync Bevy's fixed timestep with SimulationTime (runs in FixedUpdate).
-        app.add_systems(FixedUpdate, sync_fixed_timestep);
 
         // Total execution order for the fixed-step flight loop (AGENTS.md
         // sections 9 and 47). `.chain()` gives real pairwise ordering — the
@@ -462,6 +464,9 @@ impl Plugin for RocketModePlugin {
                     .in_set(RocketSet::GroundContact)
                     .after(resolve_ground_contact),
                 capture_render_state.in_set(RocketSet::SyncRender),
+                advance_fixed_simulation_time
+                    .in_set(RocketSet::Telemetry)
+                    .before(compute_rocket_telemetry_system),
             ),
         );
         app.add_systems(
