@@ -16,6 +16,26 @@ use bevy::ecs::query::QueryData;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+/// Feed a moving deck's domain prediction into the existing recovery guidance
+/// laws. This adapter does not introduce new guidance mathematics or mutate a
+/// render transform: boostback and terminal guidance continue to consume the
+/// normal `RocketAutopilot::target_landing_position_m` command input.
+pub fn update_drone_ship_landing_targets(
+    ships: Query<&DroneShip>,
+    mut rockets: Query<(&DroneShipLandingTarget, &mut RocketAutopilot)>,
+) {
+    for (target, mut autopilot) in &mut rockets {
+        let Ok(ship) = ships.get(target.drone_ship) else {
+            continue;
+        };
+        if !target.prediction_horizon_s.is_finite() || target.prediction_horizon_s < 0.0 {
+            continue;
+        }
+        autopilot.target_landing_position_m =
+            ship.state.predict_position(target.prediction_horizon_s);
+    }
+}
+
 /// Bundled read access for the guidance stage: one rocket's mission-relevant
 /// state. A derived query keeps the system signature readable and gives every
 /// field an explicit name at the use site (composition over positional

@@ -650,6 +650,310 @@ mod ground_contact_tests {
     }
 }
 
+/// Recovery regression coverage uses the real fixed-tick guidance, control,
+/// actuation, thrust, integration, and contact systems. The stages start from
+/// finite descent states; neither test writes a Transform or forces a mission
+/// completion verdict.
+#[cfg(test)]
+mod recovery_pipeline_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::events::SplashdownDetectedEvent;
+    use crate::domain::services::guidance::AutopilotMode;
+    use crate::domain::services::recovery::{DroneShip as DomainDroneShip, StationKeeper};
+    use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
+    use crate::domain::services::simulation_time::SimulationTime;
+    use crate::domain::services::terrain_collision::radial_direction;
+    use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+    use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
+    use crate::infrastructure::bevy_adapters::rocket_contact::resolve_ground_contact;
+    use crate::infrastructure::bevy_adapters::rocket_control::{actuation_system, control_system};
+    use crate::infrastructure::bevy_adapters::rocket_dynamics::{
+        accumulate_forces, integrate_6dof,
+    };
+    use crate::infrastructure::bevy_adapters::rocket_guidance::{
+        guidance_system, update_drone_ship_landing_targets,
+    };
+    use crate::infrastructure::bevy_adapters::rocket_propulsion::{
+        propulsion_consumption, propulsion_thrust,
+    };
+    use crate::infrastructure::bevy_adapters::rocket_recovery::{
+        resolve_drone_ship_deck_contact, station_keep_drone_ships,
+    };
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    const DT: f64 = 1.0 / 64.0;
+
+    fn recovery_stage() -> Rocket {
+        Rocket {
+            name: "Recovery test stage".into(),
+            diameter_m: 1.0,
+            height_m: 10.0,
+            stages: vec![RocketStage {
+                name: "Booster".into(),
+                dry_mass_kg: 400.0,
+                propellant_mass_kg: 600.0,
+                engines: vec![RocketEngine {
+                    position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
+                    thrust_axis: bevy::math::Vec3::Y,
+                    isp_sea_level: 250.0,
+                    isp_vacuum: 300.0,
+                    gimbal_range_deg: 4.0,
+                    max_thrust_kn: 20.0,
+                    throttle_min: 0.0,
+                    throttle_max: 1.0,
+                    restartable: true,
+                    state: EngineState::Running,
+                }],
+            }],
+        }
+    }
+
+    fn recovery_app(deck_altitude_m: f64) -> (App, DVec3) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<SplashdownDetectedEvent>();
+        app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )));
+
+        let planet =
+            crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
+                .expect("Earth exists");
+        let terrain = PlanetTerrain::default_for("Earth");
+        let terrain_source = terrain.source.clone();
+        app.world_mut().spawn((
+            PlanetComponent {
+                domain_planet: planet,
+                material: Handle::default(),
+                has_texture: false,
+                base_reflectance: 1.0,
+                base_roughness: 1.0,
+            },
+            terrain,
+        ));
+
+        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let up = radial_direction(lat, lon);
+        let terrain_surface_m = EARTH_RADIUS_M + terrain_source.height_m(lat, lon);
+        let deck_center_m = up * (terrain_surface_m + deck_altitude_m);
+        let vehicle = recovery_stage();
+        let propellant = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let (inertia, center_of_mass_m) = rocket_inertia_tensor(400.0, 600.0, 0.5, 10.0);
+
+        let stage = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        deck_center_m + up * 2.0,
+                        -up * 2.0,
+                        DQuat::from_rotation_arc(DVec3::Y, up),
+                        1_000.0,
+                        inertia,
+                        center_of_mass_m,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: 0.5,
+                    height_m: 10.0,
+                },
+                RocketMass(1_000.0),
+                RocketFlightConditions::default(),
+                RocketMissionState::Landing,
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg: propellant,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 10.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+            ))
+            .id();
+        app.world_mut().entity_mut(stage).insert((
+            RocketCommands::default(),
+            RocketAutopilot {
+                mode: AutopilotMode::Boostback,
+                target_landing_position_m: deck_center_m,
+                ..Default::default()
+            },
+            OrbitalElements::default(),
+            TerrainCollisionState::default(),
+            GroundRest { active: false },
+            TipOverState::default(),
+            LandingScorecard::default(),
+            RocketPlanetBinding {
+                planet_name: CelestialBodyId::earth(),
+            },
+            GravityAcceleration {
+                value: -up * 9.80665,
+            },
+            ForceAccumulator::default(),
+            TorqueAccumulator::default(),
+            RetroPropulsionEffect::default(),
+        ));
+
+        app.add_systems(
+            FixedUpdate,
+            (
+                station_keep_drone_ships,
+                update_drone_ship_landing_targets,
+                guidance_system,
+                control_system,
+                actuation_system,
+                propulsion_thrust,
+                accumulate_forces,
+                integrate_6dof,
+                resolve_drone_ship_deck_contact,
+                resolve_ground_contact,
+                propulsion_consumption,
+            )
+                .chain(),
+        );
+        (app, deck_center_m)
+    }
+
+    #[test]
+    fn rtls_recovery_stage_hands_off_and_lands_through_fixed_systems() {
+        let (mut app, pad_position_m) = recovery_app(0.0);
+        let stage = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+
+        // The first physical tick must execute real RTLS boostback guidance and
+        // hand its finite, on-target state to terminal guidance.
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().get::<RocketAutopilot>(stage).unwrap().mode,
+            AutopilotMode::Landing,
+            "boostback did not hand off to terminal recovery"
+        );
+        for _ in 0..512 {
+            app.update();
+        }
+
+        let world = app.world();
+        let rocket = world.get::<RocketPhysicsState>(stage).unwrap();
+        let mission = world.get::<RocketMissionState>(stage).unwrap();
+        let scorecard = world.get::<LandingScorecard>(stage).unwrap();
+        assert_eq!(*mission, RocketMissionState::Landed);
+        assert!(
+            scorecard.recorded,
+            "terrain contact must record recovery touchdown"
+        );
+        assert!(scorecard.touchdown_vertical_speed_mps <= 5.0);
+        assert!(
+            (rocket.dynamics.position_m - pad_position_m).length() < 5.0,
+            "RTLS stage missed its explicit recovery target"
+        );
+    }
+
+    fn droneship_outcome() -> (DVec3, DVec3, DVec3, LandingScorecard, bool) {
+        let (mut app, deck_center_m) = recovery_app(20.0);
+        let ship = app
+            .world_mut()
+            .spawn(DroneShip {
+                state: DomainDroneShip {
+                    position_m: deck_center_m,
+                    velocity_mps: DVec3::new(0.0, 0.4, 0.0),
+                    external_accel_mps2: DVec3::new(0.0, 0.05, 0.0),
+                    mass_kg: 4.0e6,
+                },
+                station_target_position_m: deck_center_m,
+                station_keeper: StationKeeper {
+                    kp: 0.05,
+                    kd: 0.2,
+                    max_thrust_n: 2.0e6,
+                },
+                deck_half_extent_m: 25.0,
+            })
+            .id();
+        let stage = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        app.world_mut()
+            .entity_mut(stage)
+            .insert(DroneShipLandingTarget {
+                drone_ship: ship,
+                prediction_horizon_s: 2.0,
+                deck_contact: false,
+            });
+
+        for _ in 0..512 {
+            app.update();
+        }
+        let world = app.world();
+        let rocket = world.get::<RocketPhysicsState>(stage).unwrap();
+        let autopilot = world.get::<RocketAutopilot>(stage).unwrap();
+        let scorecard = world.get::<LandingScorecard>(stage).unwrap().clone();
+        let target = world.get::<DroneShipLandingTarget>(stage).unwrap();
+        (
+            rocket.dynamics.position_m,
+            rocket.dynamics.velocity_mps,
+            autopilot.target_landing_position_m,
+            scorecard,
+            target.deck_contact,
+        )
+    }
+
+    #[test]
+    fn moving_droneship_recovery_is_deck_relative_and_deterministic() {
+        let first = droneship_outcome();
+        let second = droneship_outcome();
+
+        assert!(
+            first.4,
+            "deck-relative contact must latch a successful recovery"
+        );
+        assert!(
+            first.3.recorded,
+            "deck touchdown must populate the landing scorecard"
+        );
+        assert!(first.3.touchdown_vertical_speed_mps <= 5.0);
+        assert!(
+            first.2.y.abs() > 0.01,
+            "guidance must consume the moving ship's predicted target, not its static origin"
+        );
+        assert_eq!(
+            first.0.to_array().map(f64::to_bits),
+            second.0.to_array().map(f64::to_bits)
+        );
+        assert_eq!(
+            first.1.to_array().map(f64::to_bits),
+            second.1.to_array().map(f64::to_bits)
+        );
+        assert_eq!(
+            first.2.to_array().map(f64::to_bits),
+            second.2.to_array().map(f64::to_bits)
+        );
+        assert_eq!(
+            first.3.touchdown_vertical_speed_mps.to_bits(),
+            second.3.touchdown_vertical_speed_mps.to_bits()
+        );
+        assert_eq!(
+            first.3.distance_to_target_m.to_bits(),
+            second.3.distance_to_target_m.to_bits()
+        );
+    }
+}
+
 /// Ascent-pipeline regression tests: the real Guidance → Control → Actuation
 /// → Gravity → Forces → Integrate → GroundContact chain driving a low-thrust
 /// (electron-class) vehicle off the pad. Pins two Phase 12 behaviors: the

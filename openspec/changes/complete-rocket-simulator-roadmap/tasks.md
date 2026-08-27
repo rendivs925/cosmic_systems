@@ -106,15 +106,18 @@ blunting reduces subsequent heating).
 - [x] 6.6 `LandingLegs` component + `deploy_landing_legs` gate (Phase 13),
       strut contact in GroundContact
 - [x] 6.7 Drone ship: `DroneShip` + `StationKeeper` domain models
-      (position/velocity prediction, disturbance-rejecting bounded station
-      thrust) + tests (Phase 23); ECS `DroneShip` entity/station-keeping
-      system remains
+       (position/velocity prediction, disturbance-rejecting bounded station
+       thrust) + tests (Phase 23); Phase 25 adds the ECS `DroneShip` entity,
+       fixed-tick station-keeping adapter, and predicted-target publication
 - [x] 6.8 Catch tower: `CatchTower` + `catch_verdict` domain model
       (capture envelope, velocity/attitude criteria) + tests (Phase 23); ECS
       tower entity/arms animation remains
 - [x] 6.9 Recovery phase transitions in `guidance_system`
 - [x] 6.10 Boostback/throttle/gear unit tests
-- [ ] 6.11 Full RTLS/droneship landing integration test
+- [x] 6.11 Full RTLS/droneship landing integration test (Phase 25):
+      `recovery_pipeline_tests` runs finite-state RTLS handoff/touchdown and
+      moving-deck recovery through fixed guidance/control/actuation/thrust/
+      integration/contact systems; the drone-ship run repeats bitwise exactly
 
 ## 7. Determinism Regression Suite — DIFFERENT SHAPE
 

@@ -34,6 +34,7 @@ pub mod rocket_pipeline_tests;
 pub mod rocket_planet;
 pub mod rocket_presentation;
 pub mod rocket_propulsion;
+pub mod rocket_recovery;
 pub mod rocket_replay;
 pub mod rocket_separation;
 pub mod rocket_telemetry;

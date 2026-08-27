@@ -111,7 +111,13 @@ The rocket simulator has a complete physics pipeline across 8 archived changes: 
 
 **Grid fins:** Four fins at 45° offsets; mixer converts desired body torque → fin deflections via pseudo-inverse. Effectiveness scaled by Mach/alpha tables.
 
-**Drone ship:** Entity with `DroneShip { target_position, station_keep_radius }`; simple PID holds position; publishes predicted position via `DroneShipPrediction` resource.
+**Drone ship:** Entity with an ECS `DroneShip` component embedding the domain
+`recovery::DroneShip` state and `StationKeeper`. A fixed-tick adapter
+integrates the bounded station-keeping thrust, then a guidance adapter writes
+the existing landing target from `predict_position`; no transform participates
+in either path. A post-integration deck-relative contact constraint evaluates
+relative velocity and touchdown criteria, records the normal landing scorecard,
+and prevents terrain contact from applying a second static-world constraint.
 
 **Catch tower:** Entity with `CatchTower { arm_positions, capture_envelope }`; arms are kinematic; capture succeeds if stage hardpoints enter envelope with low relative velocity.
 

@@ -6,6 +6,9 @@ use bevy::ecs::schedule::SystemSet;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RocketSet {
     Guidance,
+    /// Autonomous recovery targets and station-keeping, before guidance reads
+    /// the moving landing target.
+    Recovery,
     Control,
     Actuation,
     Gravity,

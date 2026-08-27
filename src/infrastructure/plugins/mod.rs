@@ -66,7 +66,9 @@ use crate::infrastructure::bevy_adapters::rocket_flight_conditions::refresh_flig
 use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::{
     update_orbital_elements, update_rocket_gravity,
 };
-use crate::infrastructure::bevy_adapters::rocket_guidance::guidance_system;
+use crate::infrastructure::bevy_adapters::rocket_guidance::{
+    guidance_system, update_drone_ship_landing_targets,
+};
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
@@ -82,6 +84,9 @@ use crate::infrastructure::bevy_adapters::rocket_presentation::{
 };
 use crate::infrastructure::bevy_adapters::rocket_propulsion::{
     propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
+};
+use crate::infrastructure::bevy_adapters::rocket_recovery::{
+    resolve_drone_ship_deck_contact, station_keep_drone_ships,
 };
 use crate::infrastructure::bevy_adapters::rocket_replay::{
     apply_replay_actions_system, record_replay_snapshot_system, replay_active, replay_inactive,
@@ -469,6 +474,7 @@ impl Plugin for RocketModePlugin {
             FixedUpdate,
             (
                 RocketSet::Atmosphere,
+                RocketSet::Recovery,
                 RocketSet::Guidance,
                 RocketSet::Control,
                 RocketSet::Actuation,
@@ -510,6 +516,12 @@ impl Plugin for RocketModePlugin {
             FixedUpdate,
             (
                 guidance_system.in_set(RocketSet::Guidance),
+                update_drone_ship_landing_targets
+                    .in_set(RocketSet::Recovery)
+                    .before(guidance_system),
+                station_keep_drone_ships
+                    .in_set(RocketSet::Recovery)
+                    .before(update_drone_ship_landing_targets),
                 apply_relaunch_requests
                     .in_set(RocketSet::Guidance)
                     .before(guidance_system),
@@ -542,6 +554,9 @@ impl Plugin for RocketModePlugin {
                 advance_fixed_simulation_time.in_set(RocketSet::AdvanceTime),
                 update_orbital_elements.in_set(RocketSet::OrbitalElements),
                 resolve_ground_contact.in_set(RocketSet::GroundContact),
+                resolve_drone_ship_deck_contact
+                    .in_set(RocketSet::GroundContact)
+                    .before(resolve_ground_contact),
                 advance_topple
                     .in_set(RocketSet::GroundContact)
                     .after(resolve_ground_contact),

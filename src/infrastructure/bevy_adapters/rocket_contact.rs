@@ -1,9 +1,9 @@
 //! Terrain-contact preparation and constraint adapters.
 
 use crate::components::rocket::{
-    GroundRest, LandingLegs, LandingScorecard, RocketAutopilot, RocketFlightConditions,
-    RocketGeometry, RocketMissionState, RocketPhysicsState, RocketPlanetBinding, RocketPropulsion,
-    TipOverState,
+    DroneShipLandingTarget, GroundRest, LandingLegs, LandingScorecard, RocketAutopilot,
+    RocketFlightConditions, RocketGeometry, RocketMissionState, RocketPhysicsState,
+    RocketPlanetBinding, RocketPropulsion, TipOverState,
 };
 use crate::domain::events::SplashdownDetectedEvent;
 use crate::domain::services::gravity::gravitational_parameter;
@@ -46,6 +46,7 @@ pub struct GroundContactAccess {
     pub tip_over: &'static mut TipOverState,
     pub scorecard: &'static mut LandingScorecard,
     pub autopilot: &'static RocketAutopilot,
+    pub drone_ship_target: Option<&'static DroneShipLandingTarget>,
 }
 
 /// Advance the one-way gear-deployment latch before terrain-contact resolution.
@@ -107,6 +108,14 @@ pub fn resolve_ground_contact(
             .unwrap_or(0.0);
         let geometry = access.geometry;
         let autopilot = access.autopilot;
+        if access
+            .drone_ship_target
+            .is_some_and(|target| target.deck_contact)
+        {
+            // Moving-deck contact is resolved by rocket_recovery in the deck's
+            // own frame. Terrain must not re-apply a static-world constraint.
+            continue;
+        }
         let rocket = &mut *access.dynamics;
         let collision = &mut *access.collision;
         let rest = &mut *access.rest;

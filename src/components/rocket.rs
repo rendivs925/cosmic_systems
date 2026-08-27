@@ -403,6 +403,30 @@ pub struct LandingScorecard {
     pub recorded: bool,
 }
 
+/// Autonomous recovery vessel state. The embedded domain model is the
+/// authoritative f64 inertial state; presentation may follow it but never
+/// drives the vessel.
+#[derive(Component, Debug, Clone)]
+pub struct DroneShip {
+    pub state: crate::domain::services::recovery::DroneShip,
+    /// Inertial position that station keeping attempts to hold, meters.
+    pub station_target_position_m: DVec3,
+    pub station_keeper: crate::domain::services::recovery::StationKeeper,
+    /// Half-width of the square landing deck, meters.
+    pub deck_half_extent_m: f64,
+}
+
+/// Associates a recovery stage with a moving drone-ship deck. Guidance updates
+/// the existing landing target from the ship's domain prediction; deck contact
+/// latches only after a successful deck-relative touchdown verdict.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct DroneShipLandingTarget {
+    pub drone_ship: Entity,
+    /// Fixed prediction horizon supplied by the active recovery profile, s.
+    pub prediction_horizon_s: f64,
+    pub deck_contact: bool,
+}
+
 /// Orbital elements computed from rocket state vectors (planet-centered inertial frame).
 /// Updated by orbital_elements_system for telemetry and guidance.
 #[derive(Component, Debug, Clone, Copy, Default)]
