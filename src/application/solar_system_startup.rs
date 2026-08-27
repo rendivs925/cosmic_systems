@@ -29,6 +29,7 @@ pub fn setup_space(
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
     solar_camera_enabled: Option<Res<SolarCameraEnabled>>,
+    earth_terrain: Option<Res<crate::application::terrain_config::EarthTerrainConfig>>,
 ) {
     // Insert solar system parameters as a resource
     let solar_params = SolarSystemParameters::for_visualization();
@@ -154,6 +155,7 @@ pub fn setup_space(
             &mut entity_map,
             &mut position_map,
             &axial_tilts,
+            earth_terrain.as_deref(),
         );
     }
 }
@@ -199,6 +201,7 @@ pub fn spawn_bodies_progressively(
             entity_map,
             position_map,
             axial_tilts,
+            None,
         );
     }
 }
@@ -213,6 +216,7 @@ fn spawn_celestial_body(
     entity_map: &mut HashMap<String, Entity>,
     position_map: &mut HashMap<String, Vec3>,
     axial_tilts: &HashMap<String, f32>,
+    earth_terrain: Option<&crate::application::terrain_config::EarthTerrainConfig>,
 ) {
     let visual_radius = if planet.name == "Sun" {
         physics::calculate_sun_visual_radius(solar_params)
@@ -312,6 +316,19 @@ fn spawn_celestial_body(
 
     let material_handle = materials.add(material);
 
+    #[cfg(feature = "dem")]
+    let terrain = PlanetTerrain::with_srtm_directory(
+        &planet.name,
+        earth_terrain
+            .as_deref()
+            .and_then(|config| config.srtm_dir.as_deref()),
+    );
+    #[cfg(not(feature = "dem"))]
+    let terrain = {
+        let _ = earth_terrain;
+        PlanetTerrain::default_for(&planet.name)
+    };
+
     let planet_entity = commands
         .spawn((
             Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
@@ -326,7 +343,7 @@ fn spawn_celestial_body(
             base_roughness: perceptual_roughness,
         })
         .insert(PlanetAtmosphere::default_for(&planet.name))
-        .insert(PlanetTerrain::default_for(&planet.name))
+        .insert(terrain)
         .insert(Selectable {
             name: planet.name.clone(),
             selected: false,

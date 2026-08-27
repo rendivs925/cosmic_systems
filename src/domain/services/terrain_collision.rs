@@ -50,7 +50,10 @@ pub fn surface_normal(
     longitude_deg: f64,
     planet_radius_m: f64,
 ) -> DVec3 {
-    const STEP_DEG: f64 = 0.05;
+    // ~5.5 m at Earth's equator: this resolves the pad-scale clearance
+    // footprint and the shared source's local relief instead of averaging a
+    // launch pad with terrain kilometres away.
+    const STEP_DEG: f64 = 0.00005;
     let r = planet_radius_m;
 
     let at = |la_deg: f64, lo_deg: f64| -> DVec3 {

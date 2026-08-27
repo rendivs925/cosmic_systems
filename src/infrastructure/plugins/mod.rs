@@ -15,6 +15,9 @@ use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
+#[cfg(feature = "dem")]
+use crate::application::terrain_config::EarthTerrainConfig;
+use crate::components::rocket::RocketMode;
 use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, RelaunchRequested, SplashdownDetectedEvent,
     StageSeparatedEvent,
@@ -133,6 +136,12 @@ fn simulation_unpaused(sim_time: Res<SimulationTime>) -> bool {
     !sim_time.paused
 }
 
+/// The native Kepler solver serves the solar-system presentation, not rocket
+/// flight's fixed-step dynamics. Avoid its costly device setup in rocket mode.
+fn vulkan_solver_required(rocket_mode: Option<Res<RocketMode>>) -> bool {
+    rocket_mode.is_none()
+}
+
 /// Shared solar-system world: resources, physics, orbit visuals, performance,
 /// Vulkan compute, screenshot/recording, terrain, and starfield.
 pub struct SharedSimulationPlugin;
@@ -195,7 +204,7 @@ impl Plugin for SharedSimulationPlugin {
 
         // Vulkan compute (native only)
         #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
-        app.add_systems(Update, init_vulkan_solver);
+        app.add_systems(Update, init_vulkan_solver.run_if(vulkan_solver_required));
 
         // Screenshot and recording
         app.add_systems(Update, take_pending_screenshot);
@@ -323,6 +332,9 @@ pub struct RocketModePlugin;
 
 impl Plugin for RocketModePlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(feature = "dem")]
+        app.insert_resource(EarthTerrainConfig::from_environment());
+
         // Vehicle catalog: data-driven definitions from assets/configs/rockets
         // (AGENTS.md section 65: fail fast on invalid configuration).
         #[cfg(not(target_arch = "wasm32"))]

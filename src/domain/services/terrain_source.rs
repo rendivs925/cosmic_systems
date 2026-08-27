@@ -14,6 +14,8 @@
 
 use bevy::math::DVec3;
 use std::fmt::Debug;
+#[cfg(feature = "dem")]
+use std::path::Path;
 
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
 
@@ -42,11 +44,38 @@ const SEED_MOISTURE: u64 = 0x4C3A_2B19_08F7_E6D5;
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
 
+    /// Coarse, non-authoritative height for whole-body presentation such as the
+    /// rocket overview map. Sources with expensive local detail should expose a
+    /// cheap base value here; physics, collision, and terrain meshes must keep
+    /// using [`Self::height_m`].
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.height_m(latitude_deg, longitude_deg)
+    }
+
     /// Normalized soil moisture in `[0, 1]` (drives vegetation/biome). Sources
     /// without a moisture model default to a neutral `0.5` so biomes still
     /// vary by elevation and latitude.
     fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.5
+    }
+
+    /// Coarse, non-authoritative moisture for whole-body presentation.
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.moisture(latitude_deg, longitude_deg)
+    }
+
+    /// Coarse, non-authoritative slope for whole-body presentation. It derives
+    /// from overview heights so it cannot initialize local terrain caches.
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let d = 0.02; // ~2 km probe for a stable, feature-scale gradient
+        let hx = self.overview_height_m(latitude_deg, longitude_deg + d)
+            - self.overview_height_m(latitude_deg, longitude_deg - d);
+        let hy = self.overview_height_m(latitude_deg + d, longitude_deg)
+            - self.overview_height_m(latitude_deg - d, longitude_deg);
+        let lat_m = 111_320.0;
+        let lon_m = (111_320.0 * latitude_deg.to_radians().cos()).abs().max(1.0);
+        let gradient = (hx / (2.0 * d * lon_m)).hypot(hy / (2.0 * d * lat_m));
+        gradient.atan().to_degrees()
     }
 
     /// Normalized latitude zone in `[0, 1]` (`0` = south pole, `1` = north
@@ -297,6 +326,75 @@ impl TerrainSource for ProceduralTerrainSource {
     }
 }
 
+/// Adds bounded near-surface relief after Earth-scale erosion. Sampling seeded
+/// 3D noise on the unit sphere keeps this layer continuous across longitude and
+/// cube-sphere face boundaries.
+#[derive(Debug, Clone)]
+pub struct LocalDetailTerrainSource {
+    base: std::sync::Arc<dyn TerrainSource>,
+    seed: u64,
+    noise: ValueNoise,
+}
+
+impl LocalDetailTerrainSource {
+    pub fn new(base: std::sync::Arc<dyn TerrainSource>, seed: u64) -> Self {
+        Self {
+            base,
+            seed,
+            noise: ValueNoise,
+        }
+    }
+
+    fn detail_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+
+        // ~250 m ridges plus ~100 m drainage-like troughs at Earth's radius.
+        let ridges = self.noise.ridged_noise(
+            self.seed,
+            direction.x * 25_000.0,
+            direction.y * 25_000.0,
+            direction.z * 25_000.0,
+            3,
+        ) - 0.5;
+        let drainage_noise = self.noise.value_noise3(
+            self.seed ^ 0xD2A1_6A6E,
+            direction.x * 60_000.0,
+            direction.y * 60_000.0,
+            direction.z * 60_000.0,
+        );
+        let drainage = (1.0 - (drainage_noise * 2.0 - 1.0).abs()).powi(3);
+        (ridges * 48.0 - drainage * 12.0).clamp(-36.0, 24.0)
+    }
+}
+
+impl TerrainSource for LocalDetailTerrainSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.height_m(latitude_deg, longitude_deg) + self.detail_m(latitude_deg, longitude_deg)
+    }
+
+    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_height_m(latitude_deg, longitude_deg)
+    }
+
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_slope_deg(latitude_deg, longitude_deg)
+    }
+
+    fn zone_lat(&self, latitude_deg: f64) -> f64 {
+        self.base.zone_lat(latitude_deg)
+    }
+}
+
 /// A flat detailed launch/landing site inside the global terrain.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TerrainSite {
@@ -311,6 +409,14 @@ impl TerrainSite {
     pub fn contains(&self, lat: f64, lon: f64) -> bool {
         central_angle_deg(lat, lon, self.latitude_deg, self.longitude_deg) <= self.radius_deg
     }
+
+    fn flat_weight(&self, lat: f64, lon: f64) -> f64 {
+        let distance_deg = central_angle_deg(lat, lon, self.latitude_deg, self.longitude_deg);
+        if distance_deg <= self.radius_deg {
+            return 1.0;
+        }
+        1.0 - ss(self.radius_deg, self.radius_deg * 2.0, distance_deg)
+    }
 }
 
 /// Detailed launch-site patches overlaid on a base terrain source. Sites
@@ -324,11 +430,34 @@ pub struct SiteAwareTerrainSource {
 impl TerrainSource for SiteAwareTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         for site in &self.sites {
-            if site.contains(latitude_deg, longitude_deg) {
-                return site.elevation_m;
+            let flat_weight = site.flat_weight(latitude_deg, longitude_deg);
+            if flat_weight > 0.0 {
+                let base = self.base.height_m(latitude_deg, longitude_deg);
+                return base + (site.elevation_m - base) * flat_weight;
             }
         }
         self.base.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        // Launch-pad flattening is too local to be meaningful in a global map.
+        self.base.overview_height_m(latitude_deg, longitude_deg)
+    }
+
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_slope_deg(latitude_deg, longitude_deg)
+    }
+
+    fn zone_lat(&self, latitude_deg: f64) -> f64 {
+        self.base.zone_lat(latitude_deg)
     }
 }
 
@@ -493,32 +622,45 @@ pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg
     grad.atan().to_degrees()
 }
 
-/// The shared terrain source for a planet by name: Earth gets flat detailed
-/// launch sites over a procedural base; the Moon gets a cratered procedural
-/// surface with a landing site. Other bodies use a plain procedural base.
-/// When the `dem` feature is enabled, Earth uses SRTM DEM data with procedural fallback.
+/// The shared terrain source for a planet by name. Earth gets coarse erosion,
+/// seam-safe local relief, and pad-scale launch sites; other bodies retain
+/// their existing procedural sources.
 pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
-    let sites = match name {
+    let base: std::sync::Arc<dyn TerrainSource> = match name {
+        "Earth" => {
+            let procedural =
+                std::sync::Arc::new(ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0));
+            detail_earth(erode_earth(procedural))
+        }
+        "Moon" => std::sync::Arc::new(ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14)),
+        _ => std::sync::Arc::new(ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0)),
+    };
+    with_sites(base, terrain_sites(name))
+}
+
+fn terrain_sites(name: &str) -> Vec<TerrainSite> {
+    match name {
         "Earth" => vec![
             TerrainSite {
                 name: "Kennedy Space Center",
                 latitude_deg: 28.5721,
                 longitude_deg: -80.6480,
-                radius_deg: 0.09,
+                // ~17 m flat pad, feathered over the next ~17 m.
+                radius_deg: 0.00015,
                 elevation_m: 2.0,
             },
             TerrainSite {
                 name: "RTLS Landing Pad",
                 latitude_deg: 28.61,
                 longitude_deg: -80.55,
-                radius_deg: 0.05,
+                radius_deg: 0.00015,
                 elevation_m: 3.0,
             },
             TerrainSite {
                 name: "Drone Ship",
                 latitude_deg: 28.50,
                 longitude_deg: -80.05,
-                radius_deg: 0.05,
+                radius_deg: 0.00025,
                 elevation_m: 0.0,
             },
         ],
@@ -526,40 +668,17 @@ pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
             name: "Lunar Landing Site",
             latitude_deg: 0.0,
             longitude_deg: 0.0,
-            radius_deg: 0.05,
+            radius_deg: 0.0003,
             elevation_m: 0.0,
         }],
         _ => vec![],
-    };
-
-    #[cfg(feature = "dem")]
-    {
-        use crate::domain::services::dem_terrain_source::DemTerrainSource;
-        if name == "Earth" {
-            let dem = DemTerrainSource::new(
-                crate::domain::services::dem_terrain_source::DemTerrainConfig::default(),
-            );
-            let dem_arc = std::sync::Arc::new(dem);
-            let eroded = erode_earth(dem_arc);
-            if !sites.is_empty() {
-                return std::sync::Arc::new(SiteAwareTerrainSource {
-                    base: eroded,
-                    sites,
-                });
-            }
-            return eroded;
-        }
     }
+}
 
-    let base: std::sync::Arc<dyn TerrainSource> = match name {
-        "Earth" => {
-            let procedural =
-                std::sync::Arc::new(ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0));
-            erode_earth(procedural)
-        }
-        "Moon" => std::sync::Arc::new(ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14)),
-        _ => std::sync::Arc::new(ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0)),
-    };
+fn with_sites(
+    base: std::sync::Arc<dyn TerrainSource>,
+    sites: Vec<TerrainSite>,
+) -> std::sync::Arc<dyn TerrainSource> {
     if sites.is_empty() {
         base
     } else {
@@ -567,11 +686,38 @@ pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
     }
 }
 
+/// Select raw SRTM data for Earth when an application-validated local directory
+/// is available. Missing tile coverage still uses `DemTerrainSource`'s seeded
+/// procedural fallback, and no DEM sample passes through coarse erosion.
+#[cfg(feature = "dem")]
+pub fn terrain_source_for_with_srtm_dir(
+    name: &str,
+    data_dir: Option<&Path>,
+) -> std::sync::Arc<dyn TerrainSource> {
+    let Some(data_dir) = data_dir.filter(|dir| dir.is_dir()) else {
+        return terrain_source_for(name);
+    };
+    if name != "Earth" {
+        return terrain_source_for(name);
+    }
+
+    use crate::domain::services::dem_terrain_source::{DemTerrainConfig, DemTerrainSource};
+    let source = std::sync::Arc::new(DemTerrainSource::new(DemTerrainConfig {
+        data_dir: Some(data_dir.to_path_buf()),
+        ..DemTerrainConfig::default()
+    }));
+    with_sites(source, terrain_sites(name))
+}
+
 /// Wrap an Earth base source with deterministic hydraulic/thermal erosion and
 /// river carving (T2). The site layer sits *above* this so launch pads stay
 /// flat regardless of erosion.
 fn erode_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn TerrainSource> {
     std::sync::Arc::new(ErodedTerrainSource::new(base, ErosionConfig::default()))
+}
+
+fn detail_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn TerrainSource> {
+    std::sync::Arc::new(LocalDetailTerrainSource::new(base, 0xE4A7_D371))
 }
 
 #[cfg(test)]
@@ -656,6 +802,71 @@ mod tests {
         assert!(
             far.abs() > 10.0,
             "expected non-flat global terrain, got {far}"
+        );
+    }
+
+    #[test]
+    fn local_detail_is_deterministic_seam_safe_and_varied_nearby() {
+        let base = std::sync::Arc::new(ProceduralTerrainSource::new(42, 0.0, 0.0, 0));
+        let source = LocalDetailTerrainSource::new(base, 99);
+        let point = (28.573, -80.647);
+        assert_eq!(
+            source.height_m(point.0, point.1),
+            source.height_m(point.0, point.1)
+        );
+
+        let nearby: Vec<f64> = (0..8)
+            .map(|step| source.height_m(point.0, point.1 + step as f64 * 0.0005))
+            .collect();
+        let range = nearby.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - nearby.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(range > 0.01, "expected local relief, got range {range}");
+        assert!(
+            nearby.iter().all(|height| (-36.0..=24.0).contains(height)),
+            "local detail exceeded its bounded envelope: {nearby:?}"
+        );
+
+        let east = source.height_m(10.0, 179.9999);
+        let west = source.height_m(10.0, -179.9999);
+        assert!(
+            (east - west).abs() < 1.0,
+            "local detail must remain continuous across the longitude seam: {east} vs {west}"
+        );
+    }
+
+    #[derive(Debug)]
+    struct SlopedTerrain;
+
+    impl TerrainSource for SlopedTerrain {
+        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+            latitude_deg * 100.0 + longitude_deg * 20.0
+        }
+    }
+
+    #[test]
+    fn site_pad_is_flat_and_feathers_continuously_to_base() {
+        let site = TerrainSite {
+            name: "Test pad",
+            latitude_deg: 10.0,
+            longitude_deg: 20.0,
+            radius_deg: 0.001,
+            elevation_m: 7.0,
+        };
+        let base = std::sync::Arc::new(SlopedTerrain);
+        let source = SiteAwareTerrainSource {
+            base: base.clone(),
+            sites: vec![site],
+        };
+
+        assert_eq!(source.height_m(10.0005, 20.0), 7.0);
+        let outer = 10.0 + site.radius_deg * 2.0;
+        assert!((source.height_m(outer, 20.0) - base.height_m(outer, 20.0)).abs() < 1e-9);
+
+        let inside = source.height_m(outer - 0.000001, 20.0);
+        let outside = source.height_m(outer + 0.000001, 20.0);
+        assert!(
+            (inside - outside).abs() < 0.01,
+            "pad boundary must be continuous: {inside} vs {outside}"
         );
     }
 

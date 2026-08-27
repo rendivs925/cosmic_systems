@@ -15,6 +15,8 @@ use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSo
 use std::collections::HashMap;
 #[cfg(feature = "dem")]
 use std::path::{Path, PathBuf};
+#[cfg(all(feature = "dem", test))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "dem")]
 use std::sync::Mutex;
 
@@ -147,6 +149,8 @@ pub struct DemTerrainSource {
     /// against the LRU cache).
     cache: Mutex<DemTileCache>,
     procedural_fallback: ProceduralTerrainSource,
+    #[cfg(test)]
+    tile_loads: AtomicUsize,
 }
 
 #[cfg(feature = "dem")]
@@ -159,6 +163,8 @@ impl DemTerrainSource {
             config,
             cache: Mutex::new(DemTileCache::new(cache_max_tiles)),
             procedural_fallback,
+            #[cfg(test)]
+            tile_loads: AtomicUsize::new(0),
         }
     }
 
@@ -212,6 +218,8 @@ impl DemTerrainSource {
     /// tiles are 1°×1° `.hgt` grids (`N28W081.hgt`, big-endian i16 posts at
     /// 3″ or 1″ spacing). Returns `None` when no data directory/coverage.
     fn load_tile(&self, dataset: DemDataset, tile_x: i32, tile_y: i32) -> Option<DemTile> {
+        #[cfg(test)]
+        self.tile_loads.fetch_add(1, Ordering::Relaxed);
         let dir = self.config.data_dir.as_ref()?;
         let path = match dataset {
             DemDataset::Srtm3 | DemDataset::Srtm1 => {
@@ -243,6 +251,11 @@ impl DemTerrainSource {
     /// pipeline to warm the cache without an on-disk read.
     pub fn insert_tile(&self, tile: DemTile) {
         self.cache.lock().expect("dem cache lock").insert(tile);
+    }
+
+    #[cfg(test)]
+    fn tile_load_count(&self) -> usize {
+        self.tile_loads.load(Ordering::Relaxed)
     }
 }
 
@@ -336,22 +349,27 @@ impl TerrainSource for DemTerrainSource {
             tile_x,
             tile_y,
         };
-        // Parse outside the cache borrow so `load_tile` (a `&self` method)
-        // never contends with the cache's mutable borrow.
-        let parsed = self.load_tile(dataset, tile_x, tile_y);
-
-        let height = {
+        let cached_height = {
             let mut cache = self.cache.lock().expect("dem cache lock");
             cache.tick();
-            if cache.get(key).is_none() {
-                if let Some(tile) = parsed {
-                    cache.insert(tile);
-                }
-            }
             cache
                 .get(key)
                 .and_then(|t| Self::height_from_tile(t, latitude_deg, longitude_deg))
         };
+
+        let height = cached_height.or_else(|| {
+            // Loading occurs only after a cache miss. Re-locking also handles a
+            // concurrent insertion without replacing its resident tile.
+            let loaded = self.load_tile(dataset, tile_x, tile_y)?;
+            let mut cache = self.cache.lock().expect("dem cache lock");
+            cache.tick();
+            if cache.get(key).is_none() {
+                cache.insert(loaded);
+            }
+            cache
+                .get(key)
+                .and_then(|t| Self::height_from_tile(t, latitude_deg, longitude_deg))
+        });
 
         match height {
             Some(h) => h,
@@ -364,6 +382,22 @@ impl TerrainSource for DemTerrainSource {
                 }
             }
         }
+    }
+
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        // A map preview must never synchronously load a grid of DEM tiles.
+        self.procedural_fallback
+            .overview_height_m(latitude_deg, longitude_deg)
+    }
+
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.procedural_fallback
+            .overview_moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.procedural_fallback
+            .overview_slope_deg(latitude_deg, longitude_deg)
     }
 }
 
@@ -382,6 +416,10 @@ impl DemTerrainSource {
 #[cfg(not(feature = "dem"))]
 impl crate::domain::services::terrain_source::TerrainSource for DemTerrainSource {
     fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+
+    fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.0
     }
 }
@@ -543,6 +581,26 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
+    fn overview_sampling_does_not_load_dem_tiles() {
+        let dir = std::env::temp_dir().join("dem_overview_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = DemTerrainSource::new(DemTerrainConfig {
+            cache_max_tiles: 4,
+            fallback_to_procedural: true,
+            data_dir: Some(dir.clone()),
+            dataset: DemDataset::Srtm3,
+        });
+
+        let _ = source.overview_height_m(28.5, -80.5);
+        let _ = source.overview_moisture(28.5, -80.5);
+        let _ = source.overview_slope_deg(28.5, -80.5);
+
+        assert_eq!(source.tile_load_count(), 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
     fn hgt_tile_parses_big_endian_posts() {
         // Write a 2×2 .hgt (8 bytes big-endian) and load it: posts 1,2,3,4.
         let dir = std::env::temp_dir().join("dem_hgt_test");
@@ -611,6 +669,11 @@ mod tests {
         );
         // Deterministic across queries.
         assert_eq!(h, source.height_m(28.5, -80.5));
+        assert_eq!(
+            source.tile_load_count(),
+            1,
+            "resident tile must not be reparsed"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -1,8 +1,9 @@
 //! Compact body-fixed terrain map for rocket-mode flight presentation.
 //!
-//! The map is deliberately a read-only consumer: its cached raster samples the
-//! same per-body [`TerrainSource`] and [`surface_appearance`] law as terrain
-//! rendering, while all overlays are derived from authoritative state.
+//! The map is deliberately a read-only, non-authoritative overview preview: its
+//! cached raster samples the per-body [`TerrainSource`] overview and shared
+//! [`surface_appearance`] law, while all overlays are derived from authoritative
+//! state.
 
 use crate::components::rocket::{
     GroundRest, PlannedManeuver, RocketAutopilot, RocketMissionState, RocketPhysicsState,
@@ -10,7 +11,7 @@ use crate::components::rocket::{
 };
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
+use crate::domain::services::terrain_source::{surface_appearance, TerrainSource};
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
 use crate::infrastructure::bevy_adapters::rocket_orbit::{
@@ -96,20 +97,21 @@ pub fn map_segment(
     })
 }
 
-/// Build an RGBA terrain raster from the shared terrain visual law. This is a
-/// pure function so cache creation does not introduce another terrain model.
+/// Build an RGBA non-authoritative overview raster from the shared terrain
+/// visual law. This is a pure function so cache creation does not introduce
+/// another terrain model or initialize local terrain caches.
 pub fn terrain_map_raster(source: &dyn TerrainSource, width: u32, height: u32) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);
     for y in 0..height {
         let latitude_deg = 90.0 - (y as f64 + 0.5) * 180.0 / height as f64;
         for x in 0..width {
             let longitude_deg = -180.0 + (x as f64 + 0.5) * 360.0 / width as f64;
-            let elevation_m = source.height_m(latitude_deg, longitude_deg);
+            let elevation_m = source.overview_height_m(latitude_deg, longitude_deg);
             let appearance = surface_appearance(
                 elevation_m,
-                source.moisture(latitude_deg, longitude_deg),
+                source.overview_moisture(latitude_deg, longitude_deg),
                 source.zone_lat(latitude_deg),
-                slope_deg_at(source, latitude_deg, longitude_deg),
+                source.overview_slope_deg(latitude_deg, longitude_deg),
             );
             pixels.extend(appearance.albedo.map(|channel| (channel * 255.0) as u8));
             pixels.push(255);
@@ -194,7 +196,7 @@ fn spawn_terrain_map_panel(mut commands: Commands) {
         ))
         .with_children(|panel| {
             panel.spawn((
-                Text::new("BODY-FIXED MAP"),
+                Text::new("BODY-FIXED OVERVIEW"),
                 TextFont {
                     font_size: 9.0,
                     ..default()
@@ -615,6 +617,27 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct OverviewOnlyTerrain;
+
+    impl TerrainSource for OverviewOnlyTerrain {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            panic!("map preview must not query authoritative height")
+        }
+
+        fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            panic!("map preview must not query authoritative moisture")
+        }
+
+        fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            100.0
+        }
+
+        fn overview_moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.75
+        }
+    }
+
     #[test]
     fn equirectangular_projection_places_equator_and_poles() {
         assert_eq!(
@@ -640,6 +663,12 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.len(), 3 * 2 * 4);
         assert_eq!(&a[..4], &[30, 71, 106, 255]);
+    }
+
+    #[test]
+    fn raster_uses_only_non_authoritative_overview_samples() {
+        let raster = terrain_map_raster(&OverviewOnlyTerrain, 3, 2);
+        assert_eq!(raster.len(), 3 * 2 * 4);
     }
 
     #[test]

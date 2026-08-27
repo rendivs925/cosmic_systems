@@ -10,6 +10,8 @@ use crate::domain::services::terrain_source::{terrain_source_for, TerrainSource}
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+#[cfg(feature = "dem")]
+use std::path::Path;
 use std::sync::Arc;
 
 pub use crate::components::rocket::*;
@@ -166,6 +168,15 @@ impl PlanetTerrain {
     pub fn default_for(name: &str) -> Self {
         Self {
             source: terrain_source_for(name),
+        }
+    }
+
+    #[cfg(feature = "dem")]
+    pub fn with_srtm_directory(name: &str, directory: Option<&Path>) -> Self {
+        Self {
+            source: crate::domain::services::terrain_source::terrain_source_for_with_srtm_dir(
+                name, directory,
+            ),
         }
     }
 }

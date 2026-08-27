@@ -477,6 +477,22 @@ impl TerrainSource for ErodedTerrainSource {
         let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * dx;
         (top + (bottom - top) * dy).clamp(0.0, 1.0)
     }
+
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_height_m(latitude_deg, longitude_deg)
+    }
+
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.overview_slope_deg(latitude_deg, longitude_deg)
+    }
+
+    fn zone_lat(&self, latitude_deg: f64) -> f64 {
+        self.base.zone_lat(latitude_deg)
+    }
 }
 
 #[cfg(test)]

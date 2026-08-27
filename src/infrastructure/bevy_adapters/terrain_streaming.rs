@@ -32,6 +32,9 @@ const SCREEN_ERROR_PX: f64 = 4.0;
 /// Approximate bytes per generated patch vertex (f64 position + normal).
 const BYTES_PER_VERTEX: u64 = 48;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+/// Bound synchronous terrain work so the launch view becomes responsive before
+/// neighboring detail is ready.
+const MAX_NEW_PATCHES_PER_FRAME: usize = 1;
 
 /// Minimum distance for LOD calculation when on the ground.
 /// Uses estimated camera-to-terrain distance (~150m) instead of orbital heuristic.
@@ -178,37 +181,43 @@ pub fn stream_terrain_patches(
     let previously_visible: Vec<TerrainPatch> =
         streaming.manager.visible_patches().copied().collect();
 
-    // Drive lifecycle for the focus window and generate geometry.
+    // Drive lifecycle for the focus window. All patches remain requested and
+    // visible so cached geometry is reused, but synchronous generation is
+    // explicitly budgeted below.
     let window = surrounding_patches(&focus);
     for patch in window.iter() {
         let resolution = config.patch_resolution as u64;
         let size_bytes = BYTES_PER_VERTEX * resolution * resolution;
         streaming.manager.request(*patch, size_bytes);
+    }
 
-        let was_ready = matches!(
-            streaming.manager.state_of(patch),
-            Some(PatchState::Ready) | Some(PatchState::Visible)
-        );
-
-        streaming.manager.begin_generation(patch);
+    for patch in generation_batch(
+        &window,
+        &streaming.manager,
+        &streaming.generated,
+        MAX_NEW_PATCHES_PER_FRAME,
+    ) {
+        streaming.manager.begin_generation(&patch);
         let geometry = build_patch_geometry(
-            patch,
+            &patch,
             planet_terrain.source.as_ref(),
             radius_m,
             config.patch_resolution,
             config.skirt_depth_m,
         );
-        streaming.generated.insert(*patch, geometry);
-        streaming.manager.mark_ready(patch);
-        streaming.manager.mark_visible(patch);
+        streaming.generated.insert(patch, geometry);
+        streaming.manager.mark_ready(&patch);
 
-        // Emit ready event for newly ready patches.
-        if !was_ready {
-            ready_events.write(TerrainPatchReady {
-                patch: *patch,
-                planet_entity,
-            });
-        }
+        // Only newly generated geometry needs a render-ready event. Cached and
+        // visible patches retain their existing mesh entity until eviction.
+        ready_events.write(TerrainPatchReady {
+            patch,
+            planet_entity,
+        });
+    }
+
+    for patch in &window {
+        streaming.manager.mark_visible(patch);
     }
 
     // Move departed patches to the cache. They remain renderable and can be
@@ -228,6 +237,26 @@ pub fn stream_terrain_patches(
             planet_entity,
         });
     }
+}
+
+fn patch_needs_geometry(state: Option<PatchState>, has_geometry: bool) -> bool {
+    matches!(state, Some(PatchState::Requested)) || !has_geometry
+}
+
+fn generation_batch(
+    ordered_window: &[TerrainPatch],
+    manager: &TerrainPatchManager,
+    generated: &HashMap<TerrainPatch, PatchGeometry>,
+    limit: usize,
+) -> Vec<TerrainPatch> {
+    ordered_window
+        .iter()
+        .copied()
+        .filter(|patch| {
+            patch_needs_geometry(manager.state_of(patch), generated.contains_key(patch))
+        })
+        .take(limit)
+        .collect()
 }
 
 /// The focus patch plus its neighbors at the same level (a 3×3 patch window
@@ -252,6 +281,11 @@ fn surrounding_patches(focus: &TerrainPatch) -> Vec<TerrainPatch> {
             });
         }
     }
+    out.sort_by_key(|patch| {
+        let dx = patch.tile_x.abs_diff(focus.tile_x);
+        let dy = patch.tile_y.abs_diff(focus.tile_y);
+        (dx * dx + dy * dy, patch.tile_y, patch.tile_x)
+    });
     out
 }
 
@@ -281,6 +315,18 @@ mod tests {
         // Interior 3×3 window.
         assert_eq!(window.len(), 9);
         assert!(window.contains(&focus));
+        assert_eq!(
+            window[0], focus,
+            "the focused patch must be generated first"
+        );
+        let distances: Vec<u32> = window
+            .iter()
+            .map(|patch| {
+                patch.tile_x.abs_diff(focus.tile_x).pow(2)
+                    + patch.tile_y.abs_diff(focus.tile_y).pow(2)
+            })
+            .collect();
+        assert!(distances.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]
@@ -309,5 +355,49 @@ mod tests {
             assert!(s >= last - 1e-12, "must be non-decreasing");
             last = s;
         }
+    }
+
+    #[test]
+    fn stable_patches_reuse_cached_geometry_while_new_requests_generate() {
+        let mut manager = TerrainPatchManager::new();
+        let patch = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 2,
+            tile_x: 1,
+            tile_y: 1,
+        };
+        manager.request(patch, 1);
+        assert!(patch_needs_geometry(manager.state_of(&patch), false));
+
+        manager.begin_generation(&patch);
+        manager.mark_ready(&patch);
+        manager.mark_visible(&patch);
+        assert!(!patch_needs_geometry(manager.state_of(&patch), true));
+
+        manager.mark_cached(&patch);
+        assert!(!patch_needs_geometry(manager.state_of(&patch), true));
+    }
+
+    #[test]
+    fn generation_batch_limits_new_work_to_the_focused_patch() {
+        let focus = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 2,
+            tile_x: 2,
+            tile_y: 2,
+        };
+        let window = surrounding_patches(&focus);
+        let mut manager = TerrainPatchManager::new();
+        for patch in &window {
+            manager.request(*patch, 1);
+        }
+
+        let batch = generation_batch(
+            &window,
+            &manager,
+            &HashMap::new(),
+            MAX_NEW_PATCHES_PER_FRAME,
+        );
+        assert_eq!(batch, vec![focus]);
     }
 }
