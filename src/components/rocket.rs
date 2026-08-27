@@ -624,11 +624,12 @@ pub struct RocketCameraController {
     pub current_mode: RocketCameraMode,
     pub target_mode: RocketCameraMode,
     pub transition_progress: f32,
-    /// Actual camera pose at the start of a mode change. Keeping this
-    /// presentation-only snapshot avoids a hard cut when the destination mode
-    /// has a substantially different offset from the moving rocket.
-    pub transition_start: Option<Transform>,
-    pub last_rocket_transform: Option<Transform>,
+    /// Camera pose relative to the rocket at the start of a mode change.
+    /// Keeping it in this frame avoids a visible jump when RenderOrigin rebases.
+    pub transition_start_relative: Option<Transform>,
+    /// Presentation-only camera pose relative to the rocket. The rocket's
+    /// authoritative transform is reapplied each frame after smoothing.
+    pub smoothed_relative_pose: Option<Transform>,
     /// Free-fly (space) camera orbit angles, radians, and distance from the
     /// rocket. Adjusted by mouse drag / scroll while in `Free` mode.
     pub free_orbit_yaw: f32,
@@ -642,8 +643,8 @@ impl Default for RocketCameraController {
             current_mode: RocketCameraMode::default(),
             target_mode: RocketCameraMode::default(),
             transition_progress: 0.0,
-            transition_start: None,
-            last_rocket_transform: None,
+            transition_start_relative: None,
+            smoothed_relative_pose: None,
             free_orbit_yaw: 0.0,
             free_orbit_pitch: 0.35,
             free_orbit_distance: 600.0,
@@ -658,22 +659,22 @@ impl RocketCameraController {
         }
         self.target_mode = mode;
         self.transition_progress = 0.0;
-        self.transition_start = None;
+        self.transition_start_relative = None;
     }
 
-    pub fn begin_transition(&mut self, pose: Transform) -> Transform {
-        *self.transition_start.get_or_insert(pose)
+    pub fn begin_transition(&mut self, relative_pose: Transform) -> Transform {
+        *self.transition_start_relative.get_or_insert(relative_pose)
     }
 
     pub fn complete_transition(&mut self) {
         self.current_mode = self.target_mode;
         self.transition_progress = 0.0;
-        self.transition_start = None;
+        self.transition_start_relative = None;
     }
 
     pub fn cancel_transition(&mut self) {
         self.transition_progress = 0.0;
-        self.transition_start = None;
+        self.transition_start_relative = None;
     }
 }
 
@@ -684,14 +685,14 @@ mod camera_controller_tests {
     #[test]
     fn retargeting_clears_the_previous_transition_pose() {
         let mut controller = RocketCameraController::default();
-        controller.transition_start = Some(Transform::from_xyz(1.0, 2.0, 3.0));
+        controller.transition_start_relative = Some(Transform::from_xyz(1.0, 2.0, 3.0));
         controller.transition_progress = 0.5;
 
         controller.request_mode(RocketCameraMode::Cockpit);
 
         assert_eq!(controller.target_mode, RocketCameraMode::Cockpit);
         assert_eq!(controller.transition_progress, 0.0);
-        assert!(controller.transition_start.is_none());
+        assert!(controller.transition_start_relative.is_none());
     }
 }
 

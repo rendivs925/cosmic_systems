@@ -33,6 +33,7 @@ pub fn setup_rocket_camera_and_origin(
     mut commands: Commands,
     mut camera_query: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
     mut render_origin: ResMut<RenderOrigin>,
+    config: Res<RocketCameraConfig>,
     rocket_query: Query<&RocketPhysicsState>,
 ) {
     let Some(rocket) = rocket_query.iter().next() else {
@@ -52,10 +53,6 @@ pub fn setup_rocket_camera_and_origin(
     // At spawn, rocket body +Y aligns with radial up. The chase camera
     // detects this vertical alignment and uses a side offset (right vector)
     // instead of a rear offset. We replicate that logic here.
-    // Use RocketCameraConfig defaults for consistency.
-    let chase_distance = 220.0; // meters
-    let chase_height = 50.0; // meters
-
     // Up direction (radial from planet center to rocket)
     let up_dir = rocket_pos_m.normalize().as_vec3();
 
@@ -67,7 +64,7 @@ pub fn setup_rocket_camera_and_origin(
     };
 
     // For vertical rocket, chase camera uses side offset (right) + up
-    let camera_pos_flight = right_dir * chase_distance + up_dir * chase_height;
+    let camera_pos_flight = right_dir * config.chase_distance + up_dir * config.chase_height;
 
     // Camera looks at rocket center (half height up in flight frame).
     // The Falcon 9 is 70m tall; center is at ~35m in the flight frame.
@@ -190,30 +187,25 @@ pub fn handle_free_camera_input(
 pub fn update_rocket_camera(
     time: Res<Time>,
     fixed_time: Res<Time<Fixed>>,
-    camera_mode: Res<RocketCameraMode>,
     config: Res<RocketCameraConfig>,
     render_origin: Res<RenderOrigin>,
     planet_query: Query<(&PlanetComponent, &Transform), Without<Camera3d>>,
     rocket_query: Query<
         (
             &RocketPlanetBinding,
-            &RocketPhysicsState,
             &RocketRenderState,
             &RocketGeometry,
             &RocketFacade,
             &Transform,
-            &RocketMissionState,
         ),
         Without<Camera3d>,
     >,
-    mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
-    mut controller_query: Query<&mut RocketCameraController>,
+    mut camera_query: Query<(&mut Transform, &mut RocketCameraController), With<Camera3d>>,
 ) {
     let dt = time.delta_secs();
 
     // Get the rocket entity (assume single rocket for now)
-    let Some((binding, rocket_physics, render, geometry, _facade, rocket_transform, mission_state)) =
-        rocket_query.iter().next()
+    let Some((binding, render, geometry, _facade, rocket_transform)) = rocket_query.iter().next()
     else {
         return;
     };
@@ -227,12 +219,7 @@ pub fn update_rocket_camera(
 
     // Rocket position in flight units (meters) from its Transform.
     let rocket_pos_flight = rocket_transform.translation;
-    let rendered_dynamics = render_dynamics_state(
-        *mission_state,
-        rocket_physics.dynamics,
-        *render,
-        fixed_time.overstep_fraction() as f64,
-    );
+    let rendered_dynamics = render_dynamics_state(*render, fixed_time.overstep_fraction() as f64);
 
     // Planet center in flight units: -render_origin.origin converted to flight units
     let planet_center_flight = -render_origin.origin.as_vec3();
@@ -248,7 +235,7 @@ pub fn update_rocket_camera(
     // Rocket orientation in flight frame (interpolated render state).
     let rocket_rot = rocket_transform.rotation;
 
-    for mut controller in controller_query.iter_mut() {
+    for (mut camera_transform, mut controller) in camera_query.iter_mut() {
         // Compute target camera transform in flight units (meters)
         let (target_pos, target_rot) = match controller.target_mode {
             RocketCameraMode::Chase => {
@@ -264,39 +251,87 @@ pub fn update_rocket_camera(
                 rendered_dynamics.velocity_mps.as_vec3(),
                 &config,
             ),
-            RocketCameraMode::Surface => compute_surface_camera(
-                rocket_pos_flight,
-                planet_center_flight,
-                up_dir,
-                rendered_dynamics.velocity_mps.length() as f32,
-                &config,
-            ),
+            RocketCameraMode::Surface => compute_surface_camera(rocket_pos_flight, up_dir, &config),
             RocketCameraMode::Free => compute_free_camera(rocket_pos_flight, up_dir, &controller),
         };
 
-        // Blend from the actual rendered pose to the destination mode. The
-        // target continues tracking the rocket while the transition proceeds.
-        for (mut cam_transform, _projection) in camera_query.iter_mut() {
-            if controller.current_mode == controller.target_mode {
-                controller.cancel_transition();
-                cam_transform.translation = target_pos;
-                cam_transform.rotation = target_rot;
-                continue;
-            }
+        let target_relative = rocket_relative_camera_pose(
+            rocket_pos_flight,
+            rocket_rot,
+            Transform::from_translation(target_pos).with_rotation(target_rot),
+        );
+        let current_relative = controller.smoothed_relative_pose.unwrap_or_else(|| {
+            rocket_relative_camera_pose(rocket_pos_flight, rocket_rot, *camera_transform)
+        });
 
-            let start = controller.begin_transition(*cam_transform);
+        // Transitions and smoothing are intentionally rocket-relative. A
+        // RenderOrigin rebase changes both flight-frame positions, while this
+        // stored offset remains unchanged and therefore cannot produce a cut.
+        let mode_relative = if controller.current_mode == controller.target_mode {
+            controller.cancel_transition();
+            target_relative
+        } else {
+            let start = controller.begin_transition(current_relative);
             controller.transition_progress =
                 (controller.transition_progress + dt * config.transition_speed).min(1.0);
             let linear_t = controller.transition_progress;
             let t = linear_t * linear_t * (3.0 - 2.0 * linear_t);
-            cam_transform.translation = start.translation.lerp(target_pos, t);
-            cam_transform.rotation = start.rotation.slerp(target_rot, t);
+            let pose = interpolate_camera_pose(start, target_relative, t);
 
             if controller.transition_progress >= 1.0 {
                 controller.complete_transition();
             }
-        }
+            pose
+        };
+        let smoothing = camera_smoothing_alpha(config.smooth_factor, dt);
+        let smoothed_relative = controller
+            .smoothed_relative_pose
+            .map(|previous| interpolate_camera_pose(previous, mode_relative, smoothing))
+            .unwrap_or(current_relative);
+        controller.smoothed_relative_pose = Some(smoothed_relative);
+        *camera_transform =
+            rocket_relative_to_camera_pose(rocket_pos_flight, rocket_rot, smoothed_relative);
     }
+}
+
+/// Convert a world-space camera pose into a rocket-body-relative presentation
+/// pose. This is the only camera state retained between frames.
+fn rocket_relative_camera_pose(
+    rocket_position: Vec3,
+    rocket_rotation: Quat,
+    camera_pose: Transform,
+) -> Transform {
+    let inverse_rocket_rotation = rocket_rotation.inverse();
+    Transform::from_translation(
+        inverse_rocket_rotation * (camera_pose.translation - rocket_position),
+    )
+    .with_rotation(inverse_rocket_rotation * camera_pose.rotation)
+}
+
+/// Reapply a stored rocket-relative camera pose to the current flight frame.
+fn rocket_relative_to_camera_pose(
+    rocket_position: Vec3,
+    rocket_rotation: Quat,
+    relative_pose: Transform,
+) -> Transform {
+    Transform::from_translation(rocket_position + rocket_rotation * relative_pose.translation)
+        .with_rotation(rocket_rotation * relative_pose.rotation)
+}
+
+fn interpolate_camera_pose(from: Transform, to: Transform, amount: f32) -> Transform {
+    Transform::from_translation(from.translation.lerp(to.translation, amount))
+        .with_rotation(from.rotation.slerp(to.rotation, amount))
+}
+
+/// Convert the existing 60 Hz smoothing fraction into a frame-rate-independent
+/// response. For the default 0.1 factor, one 1/60 s frame retains its existing
+/// behavior while the same wall-clock duration converges identically at any FPS.
+fn camera_smoothing_alpha(smooth_factor: f32, delta_seconds: f32) -> f32 {
+    let smooth_factor = smooth_factor.clamp(0.0, 1.0);
+    if smooth_factor >= 1.0 {
+        return 1.0;
+    }
+    1.0 - (1.0 - smooth_factor).powf((delta_seconds.max(0.0)) * 60.0)
 }
 
 /// Camera rotation looking from `eye` at `target`, with an up reference that is
@@ -424,9 +459,7 @@ fn compute_orbital_camera(
 /// Surface camera: planet-relative for landing.
 fn compute_surface_camera(
     rocket_pos: Vec3,
-    planet_pos: Vec3,
     up_dir: Vec3,
-    speed: f32,
     config: &RocketCameraConfig,
 ) -> (Vec3, Quat) {
     // Position camera above and ahead of landing trajectory
@@ -478,7 +511,6 @@ fn compute_free_camera(
 /// System to update the camera near/far planes for rocket mode.
 pub fn update_rocket_camera_projection(
     camera_mode: Res<RocketCameraMode>,
-    config: Res<RocketCameraConfig>,
     rocket_query: Query<&RocketPhysicsState>,
     rocket_binding_query: Query<&RocketPlanetBinding>,
     planet_query: Query<&PlanetComponent>,
@@ -538,5 +570,39 @@ pub fn update_rocket_camera_projection(
             proj.near = proj.near.lerp(near, lerp);
             proj.far = proj.far.lerp(far.clamp(proj.near * 1.1, far), lerp);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rocket_relative_camera_pose_rebases_without_a_camera_cut() {
+        let rocket_rotation = Quat::from_rotation_y(0.4);
+        let relative = Transform::from_translation(Vec3::new(-220.0, 50.0, 0.0))
+            .with_rotation(Quat::from_rotation_x(-0.2));
+        let before_rocket = Vec3::new(1_000.0, -200.0, 50.0);
+        let rebase_delta = Vec3::new(10_000.0, -4_000.0, 1_000.0);
+
+        let before = rocket_relative_to_camera_pose(before_rocket, rocket_rotation, relative);
+        let after =
+            rocket_relative_to_camera_pose(before_rocket - rebase_delta, rocket_rotation, relative);
+
+        assert!((after.translation + rebase_delta - before.translation).length() < 1e-3);
+        assert_eq!(after.rotation, before.rotation);
+    }
+
+    #[test]
+    fn smoothing_response_is_independent_of_render_frame_rate() {
+        let advance = |delta_seconds: f32, frames: usize| {
+            (0..frames).fold(0.0, |value, _| {
+                value + (1.0 - value) * camera_smoothing_alpha(0.1, delta_seconds)
+            })
+        };
+
+        let at_60_fps = advance(1.0 / 60.0, 60);
+        let at_120_fps = advance(1.0 / 120.0, 120);
+        assert!((at_60_fps - at_120_fps).abs() < 1e-5);
     }
 }

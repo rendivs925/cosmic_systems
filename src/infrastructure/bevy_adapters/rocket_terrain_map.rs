@@ -5,7 +5,8 @@
 //! rendering, while all overlays are derived from authoritative state.
 
 use crate::components::rocket::{
-    PlannedManeuver, RocketAutopilot, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
+    GroundRest, PlannedManeuver, RocketAutopilot, RocketMissionState, RocketPhysicsState,
+    RocketPlanetBinding, TerrainCollisionState,
 };
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -13,7 +14,7 @@ use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, 
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
 use crate::infrastructure::bevy_adapters::rocket_orbit::{
-    predicted_orbit_with_maneuver, OrbitPrediction,
+    orbit_prediction_allowed, predicted_orbit_with_maneuver, OrbitPrediction,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{FlightLogEntry, FlightRecorder};
 use bevy::asset::RenderAssetUsages;
@@ -326,6 +327,8 @@ fn update_terrain_map_panel(
         &LaunchSiteCoordinates,
         &RocketAutopilot,
         &RocketMissionState,
+        &TerrainCollisionState,
+        &GroundRest,
         &FlightRecorder,
         Option<&PlannedManeuver>,
     )>,
@@ -334,8 +337,17 @@ fn update_terrain_map_panel(
     mut raster_query: Query<&mut ImageNode, With<TerrainMapRasterImage>>,
     mut overlay_query: Query<(&TerrainMapOverlay, &mut Node, &mut UiTransform)>,
 ) {
-    let Some((binding, rocket, launch_site, autopilot, mission, recorder, maneuver)) =
-        rocket_query.iter().next()
+    let Some((
+        binding,
+        rocket,
+        launch_site,
+        autopilot,
+        mission,
+        collision,
+        ground_rest,
+        recorder,
+        maneuver,
+    )) = rocket_query.iter().next()
     else {
         return;
     };
@@ -399,13 +411,22 @@ fn update_terrain_map_panel(
             },
         )
     });
-    let prediction = predicted_orbit_with_maneuver(
-        rocket.dynamics.position_m,
-        rocket.dynamics.velocity_mps,
-        planet.domain_planet.mass_kg,
-        body_radius_m,
-        planned_impulse,
-    );
+    let prediction = orbit_prediction_allowed(
+        *mission,
+        collision.ground_contact,
+        ground_rest.active,
+        collision.radar_altitude_m,
+    )
+    .then(|| {
+        predicted_orbit_with_maneuver(
+            rocket.dynamics.position_m,
+            rocket.dynamics.velocity_mps,
+            planet.domain_planet.mass_kg,
+            body_radius_m,
+            planned_impulse,
+        )
+    })
+    .unwrap_or_else(OrbitPrediction::empty);
     let impact = predicted_impact(&prediction, body_radius_m)
         .and_then(|position| to_map(position, sim_time.sim_time_s).map(|point| point.0));
     let history = history_track(recorder, &planet.domain_planet);

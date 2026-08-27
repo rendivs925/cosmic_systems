@@ -1702,7 +1702,7 @@ mod render_interpolation_tests {
     use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
 
     #[test]
-    fn prelaunch_render_uses_current_pad_state_without_interpolation() {
+    fn prelaunch_render_interpolates_with_the_rotating_pad() {
         let current = RocketDynamicsState::new(
             DVec3::new(10.0, 20.0, 30.0),
             DVec3::new(1.0, 2.0, 3.0),
@@ -1717,8 +1717,6 @@ mod render_interpolation_tests {
         };
 
         let rendered = render_dynamics_state(
-            RocketMissionState::PreLaunch,
-            current,
             RocketRenderState {
                 prev: previous,
                 current,
@@ -1726,7 +1724,7 @@ mod render_interpolation_tests {
             0.5,
         );
 
-        assert_eq!(rendered, current);
+        assert_eq!(rendered.position_m, DVec3::ZERO);
     }
 
     #[test]
@@ -1745,8 +1743,6 @@ mod render_interpolation_tests {
         };
 
         let rendered = render_dynamics_state(
-            RocketMissionState::Ascent,
-            current,
             RocketRenderState {
                 prev: previous,
                 current,

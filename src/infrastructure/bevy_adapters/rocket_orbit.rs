@@ -9,11 +9,13 @@
 //! planet-centred points to the flight frame and draws them.
 
 use crate::components::rocket::{
-    PlannedManeuver, RocketMissionState, RocketPlanetBinding, RocketRenderState,
+    GroundRest, PlannedManeuver, RocketMissionState, RocketPlanetBinding, RocketRenderState,
+    TerrainCollisionState,
 };
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
 use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::services::terrain_collision::GroundContact;
 use crate::domain::services::trajectory::{
     predict_patched_conics, predict_patched_conics_with_impulse, GravityBody, ManeuverImpulse,
     ManeuverPrediction,
@@ -40,6 +42,27 @@ pub struct OrbitPrediction {
     pub periapsis: Option<DVec3>,
     /// The planned burn point, when it is reachable within this prediction.
     pub maneuver: Option<ManeuverPrediction>,
+}
+
+/// Minimum radar altitude before a projected trajectory is meaningful flight
+/// presentation. Near-surface ballistic arcs are not reliable orbit guidance.
+pub const MIN_ORBIT_PREDICTION_ALTITUDE_M: f64 = 1_000.0;
+
+/// Shared presentation policy for the flight-frame orbit line and terrain-map
+/// prediction track. This reads contact/lifecycle state but never changes it.
+pub fn orbit_prediction_allowed(
+    mission: RocketMissionState,
+    ground_contact: GroundContact,
+    resting: bool,
+    radar_altitude_m: f64,
+) -> bool {
+    !matches!(
+        mission,
+        RocketMissionState::PreLaunch | RocketMissionState::Landed | RocketMissionState::Crashed
+    ) && ground_contact == GroundContact::None
+        && !resting
+        && radar_altitude_m.is_finite()
+        && radar_altitude_m >= MIN_ORBIT_PREDICTION_ALTITUDE_M
 }
 
 impl OrbitPrediction {
@@ -83,16 +106,29 @@ pub fn predicted_orbit_with_maneuver(
     maneuver: Option<ManeuverImpulse>,
 ) -> OrbitPrediction {
     let speed = velocity_mps.length();
-    if !position_m.length().is_finite()
+    if !position_m.is_finite()
+        || !velocity_mps.is_finite()
+        || !planet_mass_kg.is_finite()
+        || planet_mass_kg <= 0.0
+        || !surface_radius_m.is_finite()
+        || surface_radius_m <= 0.0
         || !speed.is_finite()
         || speed < 1.0
         || position_m.length() <= surface_radius_m
+        || maneuver.is_some_and(|maneuver| {
+            !maneuver.execute_after_s.is_finite()
+                || maneuver.execute_after_s < 0.0
+                || !maneuver.delta_v_mps.is_finite()
+        })
     {
         return OrbitPrediction::empty();
     }
 
     let mu = gravitational_parameter(planet_mass_kg);
     let r = position_m.length();
+    if !mu.is_finite() || mu <= 0.0 || !r.is_finite() {
+        return OrbitPrediction::empty();
+    }
     let inv_a = 2.0 / r - speed * speed / mu;
     let semi_major = if inv_a > 1e-12 { 1.0 / inv_a } else { f64::NAN };
     let is_bound = semi_major.is_finite() && semi_major > 0.0;
@@ -107,6 +143,9 @@ pub fn predicted_orbit_with_maneuver(
     }
     .max(60.0);
     let step = (horizon / 160.0).max(1.0);
+    if !horizon.is_finite() || !step.is_finite() {
+        return OrbitPrediction::empty();
+    }
 
     let body = GravityBody::new("central", DVec3::ZERO, planet_mass_kg);
     let pred = match maneuver {
@@ -129,20 +168,21 @@ pub fn predicted_orbit_with_maneuver(
     points.push(position_m);
     times_s.push(0.0);
     let mut previous_position = position_m;
+    let mut previous_time_s = 0.0;
     let mut intersects_surface = false;
     let mut impact_point_index = None;
     for (index, p) in pred.points.iter().enumerate().skip(1) {
-        let rad = p.position_m.length();
-        if rad <= surface_radius_m {
-            // Point-mass propagation does not model terrain impact. Stop at the
-            // spherical surface so a sub-orbital prediction cannot continue
-            // through Earth and reappear as a detached chord.
-            points.push(surface_intersection(
-                previous_position,
-                p.position_m,
-                surface_radius_m,
-            ));
-            times_s.push(p.time_s);
+        if !p.position_m.is_finite() || !p.time_s.is_finite() || p.time_s < previous_time_s {
+            return OrbitPrediction::empty();
+        }
+        if let Some((impact_position, fraction)) =
+            segment_surface_intersection(previous_position, p.position_m, surface_radius_m)
+        {
+            // Validate every rendered chord, not just sampled endpoints. A
+            // coarse propagated arc can otherwise jump from one outside point
+            // to another through the planet before its next sample.
+            points.push(impact_position);
+            times_s.push(previous_time_s + (p.time_s - previous_time_s) * fraction);
             intersects_surface = true;
             impact_point_index = Some(index);
             break;
@@ -150,6 +190,11 @@ pub fn predicted_orbit_with_maneuver(
         points.push(p.position_m);
         times_s.push(p.time_s);
         previous_position = p.position_m;
+        previous_time_s = p.time_s;
+    }
+
+    if points.len() < 2 {
+        return OrbitPrediction::empty();
     }
 
     let apsis_state = pred
@@ -174,25 +219,28 @@ pub fn predicted_orbit_with_maneuver(
     }
 }
 
-/// Find the first intersection between an outside-to-inside trajectory segment
-/// and the planet's spherical visual surface.
-fn surface_intersection(start: DVec3, end: DVec3, radius_m: f64) -> DVec3 {
+/// Find the first intersection between an outside trajectory chord and the
+/// planet's spherical visual surface. Both endpoints may be outside when a
+/// coarse propagator would otherwise draw a chord through the surface.
+fn segment_surface_intersection(start: DVec3, end: DVec3, radius_m: f64) -> Option<(DVec3, f64)> {
     let direction = end - start;
     let a = direction.length_squared();
     if a <= f64::EPSILON {
-        return start.normalize_or_zero() * radius_m;
+        return None;
     }
     let b = 2.0 * start.dot(direction);
     let c = start.length_squared() - radius_m * radius_m;
-    let discriminant = (b * b - 4.0 * a * c).max(0.0);
+    let discriminant = b * b - 4.0 * a * c;
+    if !discriminant.is_finite() || discriminant < 0.0 {
+        return None;
+    }
     let sqrt_discriminant = discriminant.sqrt();
     let near = (-b - sqrt_discriminant) / (2.0 * a);
     let far = (-b + sqrt_discriminant) / (2.0 * a);
     let fraction = [near, far]
         .into_iter()
-        .find(|fraction| (0.0..=1.0).contains(fraction))
-        .unwrap_or(1.0);
-    start.lerp(end, fraction)
+        .find(|fraction| fraction.is_finite() && (0.0..=1.0).contains(fraction))?;
+    Some((start.lerp(end, fraction), fraction))
 }
 
 fn planet_frame_to_flight(
@@ -230,6 +278,8 @@ fn draw_orbit_prediction(
         &RocketPlanetBinding,
         &RocketRenderState,
         &RocketMissionState,
+        &TerrainCollisionState,
+        &GroundRest,
         Option<&PlannedManeuver>,
     )>,
     render_origin: Res<RenderOrigin>,
@@ -238,10 +288,17 @@ fn draw_orbit_prediction(
     sim_time: Res<SimulationTime>,
     mut gizmos: Gizmos<OrbitLineGizmos>,
 ) {
-    let Some((binding, render, mission, planned_maneuver)) = rocket_query.iter().next() else {
+    let Some((binding, render, mission, collision, ground_rest, planned_maneuver)) =
+        rocket_query.iter().next()
+    else {
         return;
     };
-    if *mission == RocketMissionState::PreLaunch {
+    if !orbit_prediction_allowed(
+        *mission,
+        collision.ground_contact,
+        ground_rest.active,
+        collision.radar_altitude_m,
+    ) {
         return;
     }
     let Some(planet) = planet_query
@@ -368,6 +425,83 @@ mod tests {
     }
 
     #[test]
+    fn invalid_prediction_inputs_yield_an_empty_prediction() {
+        let invalid_states = [
+            (
+                DVec3::new(f64::NAN, 0.0, 0.0),
+                DVec3::X,
+                EARTH_MASS_KG,
+                EARTH_RADIUS_M,
+            ),
+            (
+                DVec3::new(EARTH_RADIUS_M + 10_000.0, 0.0, 0.0),
+                DVec3::NAN,
+                EARTH_MASS_KG,
+                EARTH_RADIUS_M,
+            ),
+            (
+                DVec3::new(EARTH_RADIUS_M + 10_000.0, 0.0, 0.0),
+                DVec3::X,
+                0.0,
+                EARTH_RADIUS_M,
+            ),
+            (
+                DVec3::new(EARTH_RADIUS_M + 10_000.0, 0.0, 0.0),
+                DVec3::X,
+                EARTH_MASS_KG,
+                0.0,
+            ),
+        ];
+
+        for (position, velocity, mass, radius) in invalid_states {
+            assert_eq!(
+                predicted_orbit(position, velocity, mass, radius),
+                OrbitPrediction::empty()
+            );
+        }
+    }
+
+    #[test]
+    fn prediction_policy_hides_terminal_contact_and_low_altitude_states() {
+        assert!(orbit_prediction_allowed(
+            RocketMissionState::Ascent,
+            GroundContact::None,
+            false,
+            MIN_ORBIT_PREDICTION_ALTITUDE_M,
+        ));
+        assert!(!orbit_prediction_allowed(
+            RocketMissionState::Crashed,
+            GroundContact::None,
+            false,
+            10_000.0,
+        ));
+        assert!(!orbit_prediction_allowed(
+            RocketMissionState::Landed,
+            GroundContact::None,
+            false,
+            10_000.0,
+        ));
+        assert!(!orbit_prediction_allowed(
+            RocketMissionState::Landing,
+            GroundContact::Landed,
+            false,
+            10_000.0,
+        ));
+        assert!(!orbit_prediction_allowed(
+            RocketMissionState::Ascent,
+            GroundContact::None,
+            true,
+            10_000.0,
+        ));
+        assert!(!orbit_prediction_allowed(
+            RocketMissionState::Ascent,
+            GroundContact::None,
+            false,
+            MIN_ORBIT_PREDICTION_ALTITUDE_M - 0.1,
+        ));
+    }
+
+    #[test]
     fn prediction_is_deterministic() {
         let r = EARTH_RADIUS_M + 400_000.0;
         let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
@@ -436,6 +570,18 @@ mod tests {
         assert!((impact.length() - EARTH_RADIUS_M).abs() < 1e-3);
         assert!(pred.apoapsis.is_none());
         assert!(pred.periapsis.is_none());
+    }
+
+    #[test]
+    fn surface_crossing_chord_stops_at_its_first_surface_intersection() {
+        let start = DVec3::new(EARTH_RADIUS_M + 100.0, 0.0, 0.0);
+        let end = DVec3::new(-EARTH_RADIUS_M - 100.0, 0.0, 0.0);
+        let (impact, fraction) =
+            segment_surface_intersection(start, end, EARTH_RADIUS_M).expect("surface crossing");
+
+        assert!((impact.length() - EARTH_RADIUS_M).abs() < 1e-6);
+        assert!(impact.x > 0.0, "must stop at the first, near-side crossing");
+        assert!(fraction > 0.0 && fraction < 0.5);
     }
 
     #[test]

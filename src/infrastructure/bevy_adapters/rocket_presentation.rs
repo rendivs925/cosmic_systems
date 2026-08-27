@@ -1,8 +1,6 @@
 //! Presentation adapters for the authoritative rocket dynamics state.
 
-use crate::components::rocket::{
-    RocketFacade, RocketMissionState, RocketPhysicsState, RocketRenderState,
-};
+use crate::components::rocket::{RocketFacade, RocketPhysicsState, RocketRenderState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
@@ -27,14 +25,13 @@ pub fn interpolate_render_transform(
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &RocketRenderState,
-        &RocketMissionState,
         &mut RocketFacade,
         &mut Transform,
     )>,
 ) {
     let alpha = time.overstep_fraction() as f64;
-    for (rocket, render, mission, mut facade, mut transform) in rocket_query.iter_mut() {
-        let interpolated = render_dynamics_state(*mission, rocket.dynamics, *render, alpha);
+    for (rocket, render, mut facade, mut transform) in rocket_query.iter_mut() {
+        let interpolated = render_dynamics_state(*render, alpha);
         *transform = interpolated.render_transform(render_origin.origin, &physical_scale);
         facade.position = transform.translation;
         facade.velocity = interpolated.velocity_mps.as_vec3();
@@ -44,17 +41,12 @@ pub fn interpolate_render_transform(
     }
 }
 
-/// Prevent pre-launch interpolation between distinct rotating-body pad poses.
-pub(crate) fn render_dynamics_state(
-    mission: RocketMissionState,
-    dynamics: RocketDynamicsState,
-    render: RocketRenderState,
-    alpha: f64,
-) -> RocketDynamicsState {
-    if mission == RocketMissionState::PreLaunch {
-        return dynamics;
-    }
-
+/// Interpolate every rocket state at the same presentation timestamp as terrain.
+///
+/// A pre-launch rocket is fixed to a rotating planetary surface, so rendering
+/// its newest fixed state against interpolated terrain makes it visibly snap
+/// across the pad once per physics step.
+pub(crate) fn render_dynamics_state(render: RocketRenderState, alpha: f64) -> RocketDynamicsState {
     let previous = render.prev;
     let current = render.current;
     RocketDynamicsState {
