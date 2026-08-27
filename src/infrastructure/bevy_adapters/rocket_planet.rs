@@ -19,9 +19,20 @@ use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
-use crate::infrastructure::bevy_adapters::terrain_streaming::local_terrain_is_required;
 use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
+
+/// Keeps the continuous globe below all local terrain geometry without
+/// materially changing Earth's visible scale.
+///
+/// This matches the local terrain skirt depth, so the skirt overlaps the
+/// underlay at the streaming window boundary instead of exposing a deep gap.
+pub(crate) const PLANET_UNDERLAY_INSET_M: f64 = 5.0;
+
+/// Radius for the continuous planet presentation under local terrain.
+pub(crate) fn planet_underlay_radius_m(body_radius_m: f64) -> f64 {
+    body_radius_m - PLANET_UNDERLAY_INSET_M
+}
 
 /// Component marking a planet entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -68,18 +79,18 @@ pub fn setup_rocket_planets(
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
-    let Some((binding, rocket)) = rocket_query.iter().next() else {
+    let Some((binding, _rocket)) = rocket_query.iter().next() else {
         return;
     };
     let planet_name = binding.planet_name.to_string();
     bound_planet_res.0 = Some(planet_name.clone());
 
-    // Create the bound planet (Earth) with true-scale radius in meters
+    // The globe is an Earth-scale underlay; local terrain remains the exact
+    // visual surface and collision authority.
     if let Some(planet) = PlanetFactory::create_by_name(&planet_name) {
         let radius_m = planet.radius_km as f64 * 1000.0;
-        let show_planet_proxy =
-            !local_terrain_is_required((rocket.dynamics.position_m.length() - radius_m).max(0.0));
-        let mesh_handle = create_flight_globe_mesh(&mut meshes, radius_m as f32);
+        let mesh_handle =
+            create_flight_globe_mesh(&mut meshes, planet_underlay_radius_m(radius_m) as f32);
 
         let textures = get_planet_textures(&planet_name);
         let albedo_handle = load_texture(&asset_server, textures.albedo);
@@ -126,11 +137,7 @@ pub fn setup_rocket_planets(
                     is_bound_planet: true,
                     is_sun: false,
                 },
-                if show_planet_proxy {
-                    Visibility::Visible
-                } else {
-                    Visibility::Hidden
-                },
+                Visibility::Visible,
             ))
             .id();
 
@@ -268,7 +275,7 @@ pub fn update_rocket_planets(
     physical_scale: Res<PhysicalScale>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
-    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    rocket_query: Query<&RocketPhysicsState>,
     planet_query: Query<
         (&PlanetComponent, &Transform),
         (Without<RocketPlanet>, Without<RocketMoon>),
@@ -282,7 +289,7 @@ pub fn update_rocket_planets(
     let Some(bound_planet_name) = &bound_planet_res.0 else {
         return;
     };
-    let Some((binding, rocket)) = rocket_query.iter().next() else {
+    let Some(_rocket) = rocket_query.iter().next() else {
         return;
     };
 
@@ -295,15 +302,6 @@ pub fn update_rocket_planets(
     let Some(bound_planet_pos) = bound_planet_transform else {
         return;
     };
-    let bound_planet_radius_m = planet_query
-        .iter()
-        .find(|(planet, _)| planet.matches_body(&binding.planet_name))
-        .map(|(planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
-        .unwrap_or(6_371_000.0);
-    let show_bound_planet_proxy = !local_terrain_is_required(
-        (rocket.dynamics.position_m.length() - bound_planet_radius_m).max(0.0),
-    );
-
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit as f64;
 
@@ -313,11 +311,7 @@ pub fn update_rocket_planets(
     for (rocket_planet, mut transform, mut visibility) in query_set.p0().iter_mut() {
         if rocket_planet.is_bound_planet {
             transform.translation = planet_center_flight;
-            *visibility = if show_bound_planet_proxy {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
+            *visibility = Visibility::Visible;
             if let Some((planet, _)) = planet_query
                 .iter()
                 .find(|(planet, _)| planet.domain_planet.name == rocket_planet.name)
@@ -374,5 +368,17 @@ mod tests {
         // 1 AU in meters should map to scale_factor display units
         let au_display = scale.solar_meters_to_units(149_597_870_700.0);
         assert!((au_display - solar.scale_factor as f64).abs() < 1.0);
+    }
+
+    #[test]
+    fn planet_underlay_radius_is_finite_positive_and_inset() {
+        let earth_radius_m = 6_371_000.0;
+        let underlay_radius_m = planet_underlay_radius_m(earth_radius_m);
+
+        assert!(underlay_radius_m.is_finite());
+        assert!(underlay_radius_m > 0.0);
+        assert!(underlay_radius_m < earth_radius_m);
+        assert_eq!(earth_radius_m - underlay_radius_m, PLANET_UNDERLAY_INSET_M);
+        assert!(PLANET_UNDERLAY_INSET_M / earth_radius_m < 1e-6);
     }
 }
