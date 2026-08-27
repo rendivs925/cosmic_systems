@@ -25,6 +25,7 @@ pub mod rocket_entry;
 pub mod rocket_flight_conditions;
 pub mod rocket_gravity_orbit;
 pub mod rocket_hud;
+pub mod rocket_lifecycle;
 pub mod rocket_orbit;
 pub mod rocket_planet;
 pub mod rocket_presentation;

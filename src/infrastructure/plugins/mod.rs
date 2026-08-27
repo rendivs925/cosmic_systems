@@ -43,8 +43,8 @@ use crate::infrastructure::bevy_adapters::gyroscope_systems::{
 };
 use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overstep;
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
-    handle_free_camera_input, handle_rocket_camera_input, update_rocket_camera,
-    update_rocket_camera_projection,
+    handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
+    setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket_contact::{
     advance_topple, deploy_landing_legs, resolve_ground_contact,
@@ -65,6 +65,9 @@ use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::{
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
+use crate::infrastructure::bevy_adapters::rocket_lifecycle::{
+    apply_relaunch_requests, handle_relaunch_input_system, handle_rocket_launch_input,
+};
 use crate::infrastructure::bevy_adapters::rocket_planet::{
     isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets, RocketBoundPlanet,
 };
@@ -78,9 +81,7 @@ use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_systems::{
-    apply_relaunch_requests, guidance_system, handle_relaunch_input_system,
-    handle_rocket_launch_input, setup_rocket_camera_and_origin, setup_rocket_camera_controller,
-    setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
+    guidance_system, setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
     update_rocket_earth_sphere, update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{

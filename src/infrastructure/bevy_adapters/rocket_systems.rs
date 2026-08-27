@@ -1,5 +1,4 @@
 use crate::components::rocket::*;
-use crate::domain::events::RelaunchRequested;
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
@@ -8,15 +7,11 @@ use crate::domain::services::guidance::{
     reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
     DescentGuidanceConfig, TransferBurnPhase,
 };
-use crate::domain::services::landing_gear::LegDeploymentState;
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
 #[cfg(test)]
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 #[cfg(test)]
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
-use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload,
-};
 use crate::domain::services::simulation_time::SimulationTime;
 #[cfg(test)]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -27,11 +22,10 @@ use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::light::CascadeShadowConfigBuilder;
 
 pub(crate) use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
-use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::ecs::query::QueryData;
 #[cfg(test)]
-use bevy::math::DMat3;
-use bevy::math::{DQuat, DVec3, Vec3};
+use bevy::math::{DMat3, DQuat};
+use bevy::math::{DVec3, Vec3};
 use bevy::prelude::*;
 
 /// Bundled read access for the guidance stage: one rocket's mission-relevant
@@ -472,227 +466,6 @@ pub fn guidance_system(
     }
 }
 
-/// Relaunch input (Phase 14): R commands a full pad-style reset of every
-/// vehicle. Presentation-adjacent input handling only — the mutation happens
-/// in FixedUpdate via [`apply_relaunch_requests`].
-pub fn handle_relaunch_input_system(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    rockets: Query<Entity, With<RocketPhysicsState>>,
-    mut relaunch_writer: MessageWriter<RelaunchRequested>,
-) {
-    if !keyboard.just_pressed(KeyCode::KeyR) {
-        return;
-    }
-    for entity in rockets.iter() {
-        relaunch_writer.write(RelaunchRequested { rocket: entity });
-        bevy::log::info!("Relaunch requested for rocket {entity}");
-    }
-}
-
-/// Apply relaunch commands (Phase 14): refuel every stage to its configured
-/// propellant load, reset the vehicle upright and at rest at the current
-/// site, restore mission PreLaunch, re-stow gear, clear lifecycle state, and
-/// despawn jettisoned debris. One authority for the whole reset; runs before
-/// guidance so the auto-launch takes over on the same tick.
-#[allow(clippy::type_complexity)]
-pub fn apply_relaunch_requests(
-    mut reader: MessageReader<RelaunchRequested>,
-    planet_query: Query<&PlanetComponent>,
-    spent_stages: Query<(Entity, &SpentStage)>,
-    mut commands: Commands,
-    mut rocket_query: Query<(
-        Entity,
-        &RocketPlanetBinding,
-        &RocketGeometry,
-        &mut RocketPhysicsState,
-        &mut RocketPropulsion,
-        &mut RocketMass,
-        &mut RocketMissionState,
-        &mut GroundRest,
-        Option<&mut LandingLegs>,
-        &mut LandingScorecard,
-        &mut TipOverState,
-        &mut FlightRecorder,
-    )>,
-) {
-    for event in reader.read() {
-        let Ok((
-            entity,
-            binding,
-            geometry,
-            mut rocket,
-            mut propulsion,
-            mut mass,
-            mut mission_state,
-            mut rest,
-            legs,
-            mut scorecard,
-            mut tip_over,
-            mut recorder,
-        )) = rocket_query.get_mut(event.rocket)
-        else {
-            continue;
-        };
-
-        // Jettisoned hardware goes away with the flight that shed it.
-        for (debris, spent) in spent_stages.iter() {
-            if spent.parent_rocket == entity {
-                commands.entity(debris).despawn();
-            }
-        }
-
-        // Refuel from the authoritative configuration and reset propulsion.
-        propulsion.propellant_remaining_kg = propulsion
-            .vehicle
-            .stages
-            .iter()
-            .map(|stage| stage.propellant_mass_kg)
-            .collect();
-        propulsion.active_stage = 0;
-        propulsion.separations_count = 0;
-        propulsion.throttle = 0.0;
-        propulsion.gimbal_pitch_rad = 0.0;
-        propulsion.gimbal_yaw_rad = 0.0;
-        propulsion.time_since_separation_s = propulsion.ullage_settle_time_s;
-
-        // Mass and inertia from the refueled stack.
-        let total_mass_kg = active_vehicle_mass_with_payload(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            0,
-            propulsion.attached_payload_kg,
-        );
-        let (inertia, com) = active_vehicle_inertia(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            0,
-            geometry.radius_m as f64,
-            geometry.height_m as f64,
-        );
-        rocket.dynamics.mass_kg = total_mass_kg;
-        rocket.dynamics.inertia_body = inertia;
-        rocket.dynamics.center_of_mass_m = com;
-        mass.0 = total_mass_kg;
-
-        // Upright, motionless, resting at the current site.
-        let Some(planet) = planet_query
-            .iter()
-            .find(|planet| planet.matches_body(&binding.planet_name))
-        else {
-            continue;
-        };
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let position_m = rocket.dynamics.position_m;
-        let up = position_m / position_m.length().max(1.0);
-        rocket.dynamics.position_m = up * (position_m.length().max(radius_m));
-        rocket.dynamics.velocity_mps = DVec3::ZERO;
-        rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
-        rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, up);
-
-        // Mission and lifecycle state back to a fresh pad.
-        *mission_state = RocketMissionState::PreLaunch;
-        rest.active = true;
-        if let Some(mut legs) = legs {
-            legs.deployment = LegDeploymentState::default();
-            legs.compression_m = 0.0;
-        }
-        *scorecard = LandingScorecard::default();
-        tip_over.reset();
-        recorder.clear();
-
-        bevy::log::info!(
-            "Relaunch ready: {:.0} kg refueled, vehicle upright and held on the pad",
-            total_mass_kg
-        );
-    }
-}
-
-/// Adds RocketCameraController to the existing camera entity so the rocket
-/// camera systems can drive it. The camera is spawned by setup_space with a
-/// solar CameraController. We keep the solar CameraController marker so shared
-/// systems (e.g. update_planet_positions) can still locate the camera via
-/// `.single()`, but since SolarSystemModePlugin is not composed into Rocket
-/// Mode, its free-flight camera system never runs — Rocket Mode owns the camera.
-pub fn setup_rocket_camera_controller(
-    mut commands: Commands,
-    camera_query: Query<Entity, With<Camera3d>>,
-) {
-    for entity in camera_query.iter() {
-        commands
-            .entity(entity)
-            .insert(RocketCameraController::default());
-    }
-}
-
-/// Initializes the camera position and render origin for rocket mode.
-/// The camera starts at the solar system position; this system repositions it
-/// to the rocket's location on the launch pad and sets the render origin to
-/// the rocket's physics position so the rocket renders near the origin.
-pub fn setup_rocket_camera_and_origin(
-    mut commands: Commands,
-    mut camera_query: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
-    mut render_origin: ResMut<crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin>,
-    rocket_query: Query<&RocketPhysicsState>,
-) {
-    let Some(rocket) = rocket_query.iter().next() else {
-        bevy::log::warn!("setup_rocket_camera_and_origin: no rocket entity found");
-        return;
-    };
-
-    // Rocket physics position in planet-centered inertial frame (meters)
-    let rocket_pos_m = rocket.dynamics.position_m;
-
-    // Set render origin to the rocket's physics position so the rocket
-    // renders near the origin (flight units = meters, 1:1 scale).
-    render_origin.origin = rocket_pos_m;
-    render_origin.last_camera_pos = rocket_pos_m;
-
-    // Compute initial camera position matching the chase camera logic.
-    // At spawn, rocket body +Y aligns with radial up. The chase camera
-    // detects this vertical alignment and uses a side offset (right vector)
-    // instead of a rear offset. We replicate that logic here.
-    // Use RocketCameraConfig defaults for consistency.
-    let chase_distance = 220.0; // meters
-    let chase_height = 50.0; // meters
-
-    // Up direction (radial from planet center to rocket)
-    let up_dir = rocket_pos_m.normalize().as_vec3();
-
-    // Right direction: perpendicular to up_dir
-    let right_dir = if up_dir.z.abs() < 0.9 {
-        up_dir.cross(Vec3::Z).normalize()
-    } else {
-        up_dir.cross(Vec3::X).normalize()
-    };
-
-    // For vertical rocket, chase camera uses side offset (right) + up
-    let camera_pos_flight = right_dir * chase_distance + up_dir * chase_height;
-
-    // Camera looks at rocket center (half height up in flight frame).
-    // The Falcon 9 is 70m tall; center is at ~35m in the flight frame.
-    let rocket_center = Vec3::new(0.0, 35.0, 0.0);
-    let camera_transform =
-        Transform::from_translation(camera_pos_flight).looking_at(rocket_center, up_dir);
-
-    // The launch pad horizon is tens of kilometers away. Start at the chase
-    // camera range so the curved Earth proxy is visible on the first frame;
-    // the regular projection system maintains this range afterwards.
-    for (entity, mut cam_transform, projection) in camera_query.iter_mut() {
-        *cam_transform = camera_transform;
-        if let Projection::Perspective(proj) = projection.into_inner() {
-            proj.near = 0.5;
-            proj.far = 100_000.0;
-        }
-        // Workaround for bevyengine/bevy#18904: with GPU preprocessing on,
-        // meshes that pass CPU visibility (rocket, pad primitives) silently
-        // drop out of the indirect-draw path on this driver. Drawing directly
-        // keeps every visible mesh on screen.
-        commands
-            .entity(entity)
-            .insert(bevy::render::view::NoIndirectDrawing);
-    }
-}
-
 /// Spawns a directional sun light for rocket mode. The solar simulation uses
 /// a PointLight at the origin, but in the flight frame the sun should be a
 /// directional light at infinity. The sun is placed well above the LOCAL horizon
@@ -877,29 +650,6 @@ pub fn update_sun_day_night_cycle(
     }
 }
 
-/// Handles the pre-launch hold: Space key arms the launch.
-pub fn handle_rocket_launch_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut mission_query: Query<(
-        &mut RocketMissionState,
-        &RocketPhysicsState,
-        &mut RocketRenderState,
-    )>,
-) {
-    if keyboard.just_pressed(KeyCode::Space) {
-        for (mut mission, rocket, mut render) in mission_query.iter_mut() {
-            if *mission == RocketMissionState::PreLaunch {
-                // Prelaunch renders the latest body-fixed pad state rather
-                // than its interpolation buffer. Reset that buffer before
-                // enabling airborne interpolation to avoid blending two
-                // stale rotating-pad snapshots on the launch transition.
-                *render = RocketRenderState::new(rocket.dynamics);
-                *mission = RocketMissionState::Launch;
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod ground_contact_tests {
     use super::*;
@@ -921,6 +671,8 @@ mod ground_contact_tests {
     use crate::infrastructure::bevy_adapters::rocket_dynamics::{
         accumulate_forces, integrate_6dof,
     };
+    use crate::infrastructure::bevy_adapters::rocket_lifecycle::apply_relaunch_requests;
+    use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
     use bevy::math::DQuat;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
@@ -2218,6 +1970,7 @@ mod ascent_pipeline_tests {
 #[cfg(test)]
 mod render_interpolation_tests {
     use super::*;
+    use crate::infrastructure::bevy_adapters::rocket_lifecycle::handle_rocket_launch_input;
 
     #[test]
     fn prelaunch_render_uses_current_pad_state_without_interpolation() {

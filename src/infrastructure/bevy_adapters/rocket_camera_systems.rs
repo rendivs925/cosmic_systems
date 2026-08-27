@@ -8,6 +8,92 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::{Quat, Vec3};
 use bevy::prelude::*;
 
+/// Adds RocketCameraController to the existing camera entity so the rocket
+/// camera systems can drive it. The camera is spawned by setup_space with a
+/// solar CameraController. We keep the solar CameraController marker so shared
+/// systems (e.g. update_planet_positions) can still locate the camera via
+/// `.single()`, but since SolarSystemModePlugin is not composed into Rocket
+/// Mode, its free-flight camera system never runs — Rocket Mode owns the camera.
+pub fn setup_rocket_camera_controller(
+    mut commands: Commands,
+    camera_query: Query<Entity, With<Camera3d>>,
+) {
+    for entity in camera_query.iter() {
+        commands
+            .entity(entity)
+            .insert(RocketCameraController::default());
+    }
+}
+
+/// Initializes the camera position and render origin for rocket mode.
+/// The camera starts at the solar system position; this system repositions it
+/// to the rocket's location on the launch pad and sets the render origin to
+/// the rocket's physics position so the rocket renders near the origin.
+pub fn setup_rocket_camera_and_origin(
+    mut commands: Commands,
+    mut camera_query: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
+    mut render_origin: ResMut<RenderOrigin>,
+    rocket_query: Query<&RocketPhysicsState>,
+) {
+    let Some(rocket) = rocket_query.iter().next() else {
+        bevy::log::warn!("setup_rocket_camera_and_origin: no rocket entity found");
+        return;
+    };
+
+    // Rocket physics position in planet-centered inertial frame (meters)
+    let rocket_pos_m = rocket.dynamics.position_m;
+
+    // Set render origin to the rocket's physics position so the rocket
+    // renders near the origin (flight units = meters, 1:1 scale).
+    render_origin.origin = rocket_pos_m;
+    render_origin.last_camera_pos = rocket_pos_m;
+
+    // Compute initial camera position matching the chase camera logic.
+    // At spawn, rocket body +Y aligns with radial up. The chase camera
+    // detects this vertical alignment and uses a side offset (right vector)
+    // instead of a rear offset. We replicate that logic here.
+    // Use RocketCameraConfig defaults for consistency.
+    let chase_distance = 220.0; // meters
+    let chase_height = 50.0; // meters
+
+    // Up direction (radial from planet center to rocket)
+    let up_dir = rocket_pos_m.normalize().as_vec3();
+
+    // Right direction: perpendicular to up_dir
+    let right_dir = if up_dir.z.abs() < 0.9 {
+        up_dir.cross(Vec3::Z).normalize()
+    } else {
+        up_dir.cross(Vec3::X).normalize()
+    };
+
+    // For vertical rocket, chase camera uses side offset (right) + up
+    let camera_pos_flight = right_dir * chase_distance + up_dir * chase_height;
+
+    // Camera looks at rocket center (half height up in flight frame).
+    // The Falcon 9 is 70m tall; center is at ~35m in the flight frame.
+    let rocket_center = Vec3::new(0.0, 35.0, 0.0);
+    let camera_transform =
+        Transform::from_translation(camera_pos_flight).looking_at(rocket_center, up_dir);
+
+    // The launch pad horizon is tens of kilometers away. Start at the chase
+    // camera range so the curved Earth proxy is visible on the first frame;
+    // the regular projection system maintains this range afterwards.
+    for (entity, mut cam_transform, projection) in camera_query.iter_mut() {
+        *cam_transform = camera_transform;
+        if let Projection::Perspective(proj) = projection.into_inner() {
+            proj.near = 0.5;
+            proj.far = 100_000.0;
+        }
+        // Workaround for bevyengine/bevy#18904: with GPU preprocessing on,
+        // meshes that pass CPU visibility (rocket, pad primitives) silently
+        // drop out of the indirect-draw path on this driver. Drawing directly
+        // keeps every visible mesh on screen.
+        commands
+            .entity(entity)
+            .insert(bevy::render::view::NoIndirectDrawing);
+    }
+}
+
 /// System to handle rocket camera mode input and transitions.
 pub fn handle_rocket_camera_input(
     keyboard: Res<ButtonInput<KeyCode>>,
