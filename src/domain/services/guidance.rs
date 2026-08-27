@@ -665,36 +665,23 @@ pub fn unpowered_descent_guidance(
 
 /// Advance the ascent mission phase from the current state:
 /// - Launch → Ascent once above `ascent_start_altitude_m`.
-/// - Ascent → Orbit once the speed reaches `circular_speed_mps` (within
-///   `orbit_speed_fraction`) AND the vehicle is above the atmosphere
-///   ([`MIN_ORBIT_ALTITUDE_M`]) — raw speed alone misclassifies boosted
-///   trajectories near perigee, especially under large fixed steps.
+/// - Ascent → Orbit only after the authoritative state satisfies the configured
+///   target-orbit predicate. Raw speed alone misclassifies boosted trajectories
+///   with an Earth-intersecting periapsis.
 pub fn advance_ascent_phase(
     phase: RocketMissionState,
     altitude_m: f64,
-    speed_mps: f64,
-    circular_speed_mps: f64,
     ascent_start_altitude_m: f64,
-    orbit_speed_fraction: f64,
+    target_orbit_reached: bool,
 ) -> RocketMissionState {
     match phase {
         RocketMissionState::Launch if altitude_m >= ascent_start_altitude_m => {
             RocketMissionState::Ascent
         }
-        RocketMissionState::Ascent
-            if speed_mps >= circular_speed_mps * orbit_speed_fraction
-                && altitude_m >= MIN_ORBIT_ALTITUDE_M =>
-        {
-            RocketMissionState::Orbit
-        }
+        RocketMissionState::Ascent if target_orbit_reached => RocketMissionState::Orbit,
         _ => phase,
     }
 }
-
-/// Lowest altitude (m) at which the ascent phase may declare orbit: above
-/// the sensible-atmosphere band, so "orbital" speed inside the atmosphere
-/// still counts as ascent.
-pub const MIN_ORBIT_ALTITUDE_M: f64 = 120_000.0;
 
 /// Advance the descent mission phase based on altitude, velocity, and propulsion state.
 pub fn advance_descent_phase(
@@ -1228,50 +1215,21 @@ mod tests {
 
     #[test]
     fn phase_advances_launch_ascent_orbit() {
-        let circular = circular_orbit_speed_mps(5.97237e24, 6_571_000.0);
         assert_eq!(
-            advance_ascent_phase(
-                RocketMissionState::Launch,
-                1_000.0,
-                0.0,
-                circular,
-                5_000.0,
-                0.98
-            ),
+            advance_ascent_phase(RocketMissionState::Launch, 1_000.0, 5_000.0, false,),
             RocketMissionState::Launch
         );
         assert_eq!(
-            advance_ascent_phase(
-                RocketMissionState::Launch,
-                6_000.0,
-                100.0,
-                circular,
-                5_000.0,
-                0.98
-            ),
+            advance_ascent_phase(RocketMissionState::Launch, 6_000.0, 5_000.0, false,),
             RocketMissionState::Ascent
         );
         assert_eq!(
-            advance_ascent_phase(
-                RocketMissionState::Ascent,
-                200_000.0,
-                circular,
-                circular,
-                5_000.0,
-                0.98
-            ),
+            advance_ascent_phase(RocketMissionState::Ascent, 200_000.0, 5_000.0, true,),
             RocketMissionState::Orbit
         );
-        // Below orbital speed stays in ascent.
+        // An unsafe or incomplete target state stays in ascent.
         assert_eq!(
-            advance_ascent_phase(
-                RocketMissionState::Ascent,
-                200_000.0,
-                circular * 0.5,
-                circular,
-                5_000.0,
-                0.98
-            ),
+            advance_ascent_phase(RocketMissionState::Ascent, 200_000.0, 5_000.0, false,),
             RocketMissionState::Ascent
         );
     }

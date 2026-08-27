@@ -121,7 +121,8 @@ pub struct RocketPropulsion {
 }
 
 /// Flight computer command interface between guidance, control, actuation, physics.
-/// Guidance writes target_attitude; Control writes throttle/gimbal/RCS; Actuation clamps.
+/// Guidance writes attitude and throttle targets; control writes gimbal/RCS;
+/// actuation applies physical limits before the physics step.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct RocketCommands {
     pub target_attitude: DQuat,
@@ -131,12 +132,13 @@ pub struct RocketCommands {
     pub rcs_torque_cmd_body: DVec3,
 }
 
-/// Autopilot configuration: PID gains, ascent profile, actuator limits, and mode.
+/// Autopilot configuration: guidance targets, PID gains, actuator limits, and mode.
 #[derive(Component, Debug, Clone, Default)]
 pub struct RocketAutopilot {
     pub gains: crate::domain::services::control::PidGains,
     pub integral: DVec3,
     pub ascent_profile: crate::domain::services::guidance::AscentGuidanceProfile,
+    pub target_orbit: crate::domain::services::physics_orbital::LowEarthOrbitTarget,
     pub actuation: crate::domain::services::actuation::ActuationLimits,
     pub mode: crate::domain::services::guidance::AutopilotMode,
     pub time_since_liftoff_s: f64,

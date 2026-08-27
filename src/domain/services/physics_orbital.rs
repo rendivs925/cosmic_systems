@@ -490,11 +490,111 @@ pub struct StateVectorOrbitalElements {
 /// Below this eccentricity, an ellipse has no useful unique apsis direction.
 pub const APSIS_ECCENTRICITY_EPSILON: f64 = 1e-6;
 
+/// Nominal Earth orbit constraints evaluated from an authoritative f64 state
+/// vector. Altitudes are above the bound body's reference radius in meters.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LowEarthOrbitTarget {
+    pub target_apoapsis_altitude_m: f64,
+    pub target_periapsis_altitude_m: f64,
+    pub altitude_tolerance_m: f64,
+    pub maximum_eccentricity: f64,
+    pub target_inclination_rad: f64,
+    pub inclination_tolerance_rad: f64,
+    pub minimum_safe_periapsis_altitude_m: f64,
+}
+
+impl Default for LowEarthOrbitTarget {
+    fn default() -> Self {
+        Self {
+            target_apoapsis_altitude_m: 200_000.0,
+            target_periapsis_altitude_m: 200_000.0,
+            altitude_tolerance_m: 25_000.0,
+            maximum_eccentricity: 0.02,
+            target_inclination_rad: 28.5_f64.to_radians(),
+            inclination_tolerance_rad: 2.0_f64.to_radians(),
+            minimum_safe_periapsis_altitude_m: 160_000.0,
+        }
+    }
+}
+
+impl LowEarthOrbitTarget {
+    /// Returns whether a bound osculating state satisfies the target's safety
+    /// and geometry constraints. This never relies on cached ECS telemetry.
+    pub fn matches_state(
+        self,
+        position_m: DVec3,
+        velocity_mps: DVec3,
+        mu: f64,
+        body_radius_m: f64,
+    ) -> bool {
+        if !self.is_valid() || !body_radius_m.is_finite() || body_radius_m <= 0.0 {
+            return false;
+        }
+
+        let Some(specific_energy) = specific_orbital_energy(position_m, velocity_mps, mu) else {
+            return false;
+        };
+        if specific_energy >= 0.0 {
+            return false;
+        }
+
+        let elements = orbital_elements_from_state(position_m, velocity_mps, mu);
+        let apoapsis_altitude_m = elements.apoapsis_m - body_radius_m;
+        let periapsis_altitude_m = elements.periapsis_m - body_radius_m;
+        if !apoapsis_altitude_m.is_finite()
+            || !periapsis_altitude_m.is_finite()
+            || !elements.eccentricity.is_finite()
+            || !elements.inclination_rad.is_finite()
+        {
+            return false;
+        }
+
+        (apoapsis_altitude_m - self.target_apoapsis_altitude_m).abs() <= self.altitude_tolerance_m
+            && (periapsis_altitude_m - self.target_periapsis_altitude_m).abs()
+                <= self.altitude_tolerance_m
+            && periapsis_altitude_m >= self.minimum_safe_periapsis_altitude_m
+            && elements.eccentricity <= self.maximum_eccentricity
+            && (elements.inclination_rad - self.target_inclination_rad).abs()
+                <= self.inclination_tolerance_rad
+    }
+
+    fn is_valid(self) -> bool {
+        self.target_apoapsis_altitude_m.is_finite()
+            && self.target_periapsis_altitude_m.is_finite()
+            && self.altitude_tolerance_m.is_finite()
+            && self.maximum_eccentricity.is_finite()
+            && self.target_inclination_rad.is_finite()
+            && self.inclination_tolerance_rad.is_finite()
+            && self.minimum_safe_periapsis_altitude_m.is_finite()
+            && self.target_apoapsis_altitude_m >= self.target_periapsis_altitude_m
+            && self.target_periapsis_altitude_m >= self.minimum_safe_periapsis_altitude_m
+            && self.altitude_tolerance_m >= 0.0
+            && (0.0..1.0).contains(&self.maximum_eccentricity)
+            && (0.0..=std::f64::consts::PI).contains(&self.target_inclination_rad)
+            && self.inclination_tolerance_rad >= 0.0
+    }
+}
+
 /// Exact f64 positions of the apsides of a bound two-body orbit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ApsisEndpoints {
     pub apoapsis_position_m: DVec3,
     pub periapsis_position_m: DVec3,
+}
+
+/// Specific orbital energy in J/kg for a planet-centered inertial state.
+pub fn specific_orbital_energy(position_m: DVec3, velocity_mps: DVec3, mu: f64) -> Option<f64> {
+    let radius_m = position_m.length();
+    if !radius_m.is_finite()
+        || radius_m <= 0.0
+        || !velocity_mps.is_finite()
+        || !mu.is_finite()
+        || mu <= 0.0
+    {
+        return None;
+    }
+
+    Some(velocity_mps.length_squared() * 0.5 - mu / radius_m)
 }
 
 /// Derive the exact apsis positions of a bound, non-circular osculating orbit.
@@ -505,16 +605,13 @@ pub fn apsis_endpoints_from_state(
     mu: f64,
 ) -> Option<ApsisEndpoints> {
     let radius_m = position_m.length();
-    if !radius_m.is_finite() || !velocity_mps.is_finite() || !mu.is_finite() || mu <= 0.0 {
-        return None;
-    }
 
     let angular_momentum = position_m.cross(velocity_mps);
     if angular_momentum.length_squared() <= f64::EPSILON {
         return None;
     }
-    let specific_energy = velocity_mps.length_squared() * 0.5 - mu / radius_m;
-    if !specific_energy.is_finite() || specific_energy >= 0.0 {
+    let specific_energy = specific_orbital_energy(position_m, velocity_mps, mu)?;
+    if specific_energy >= 0.0 {
         return None;
     }
 
@@ -729,6 +826,7 @@ mod tests {
     use bevy::math::DVec3;
 
     const EARTH_MU: f64 = 3.986004418e14; // m^3/s^2
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
     #[test]
     fn circular_orbit_elements() {
@@ -803,6 +901,23 @@ mod tests {
     }
 
     #[test]
+    fn analytic_apsides_remain_exact_for_a_long_period_orbit() {
+        let periapsis_m = EARTH_RADIUS_M + 200_000.0;
+        let apoapsis_m = 250_000_000.0;
+        let semi_major_axis_m = (periapsis_m + apoapsis_m) * 0.5;
+        let velocity_mps = (EARTH_MU * (2.0 / periapsis_m - 1.0 / semi_major_axis_m)).sqrt();
+        let apsides = apsis_endpoints_from_state(
+            DVec3::new(periapsis_m, 0.0, 0.0),
+            DVec3::new(0.0, velocity_mps, 0.0),
+            EARTH_MU,
+        )
+        .expect("long-period ellipse has unique apsides");
+
+        assert!((apsides.periapsis_position_m.length() - periapsis_m).abs() < periapsis_m * 1e-12);
+        assert!((apsides.apoapsis_position_m.length() - apoapsis_m).abs() < apoapsis_m * 1e-12);
+    }
+
+    #[test]
     fn circular_orbit_has_no_unique_analytic_apsides() {
         let radius_m = 6_771_000.0;
         let velocity_mps = (EARTH_MU / radius_m).sqrt();
@@ -830,6 +945,64 @@ mod tests {
         let elements = orbital_elements_from_state(pos, vel, EARTH_MU);
 
         assert!((elements.inclination_rad - inclination).abs() < 1e-4);
+    }
+
+    #[test]
+    fn low_earth_target_accepts_a_safe_inclined_circular_orbit() {
+        let target = LowEarthOrbitTarget::default();
+        let radius_m = EARTH_RADIUS_M + 200_000.0;
+        let circular_speed_mps = (EARTH_MU / radius_m).sqrt();
+        let velocity_mps = DVec3::new(
+            0.0,
+            circular_speed_mps * target.target_inclination_rad.cos(),
+            circular_speed_mps * target.target_inclination_rad.sin(),
+        );
+
+        assert!(target.matches_state(
+            DVec3::new(radius_m, 0.0, 0.0),
+            velocity_mps,
+            EARTH_MU,
+            EARTH_RADIUS_M,
+        ));
+    }
+
+    #[test]
+    fn low_earth_target_rejects_near_orbital_speed_state_with_unsafe_periapsis() {
+        let target = LowEarthOrbitTarget::default();
+        let radius_m = EARTH_RADIUS_M + 200_000.0;
+        let circular_speed_mps = (EARTH_MU / radius_m).sqrt();
+        let velocity_mps = DVec3::new(
+            0.0,
+            circular_speed_mps * 0.98 * target.target_inclination_rad.cos(),
+            circular_speed_mps * 0.98 * target.target_inclination_rad.sin(),
+        );
+
+        assert!(!target.matches_state(
+            DVec3::new(radius_m, 0.0, 0.0),
+            velocity_mps,
+            EARTH_MU,
+            EARTH_RADIUS_M,
+        ));
+    }
+
+    #[test]
+    fn low_earth_target_rejects_unbound_or_wrong_plane_states() {
+        let target = LowEarthOrbitTarget::default();
+        let radius_m = EARTH_RADIUS_M + 200_000.0;
+        let circular_speed_mps = (EARTH_MU / radius_m).sqrt();
+
+        assert!(!target.matches_state(
+            DVec3::new(radius_m, 0.0, 0.0),
+            DVec3::new(0.0, circular_speed_mps * 2.0, 0.0),
+            EARTH_MU,
+            EARTH_RADIUS_M,
+        ));
+        assert!(!target.matches_state(
+            DVec3::new(radius_m, 0.0, 0.0),
+            DVec3::new(0.0, circular_speed_mps, 0.0),
+            EARTH_MU,
+            EARTH_RADIUS_M,
+        ));
     }
 
     #[test]

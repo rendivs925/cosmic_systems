@@ -13,9 +13,7 @@ use crate::domain::services::entry_physics::{
     comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
     radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_recession_rate_mps,
 };
-use crate::domain::services::gravity::{
-    circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
-};
+use crate::domain::services::gravity::{gravitational_acceleration, gravitational_parameter};
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
     gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
@@ -57,10 +55,6 @@ use bevy::ecs::query::QueryData;
 use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 use bevy::prelude::*;
 use bevy::time::Fixed;
-
-/// Fraction of the circular orbital speed at which ascent guidance declares
-/// orbit insertion.
-const ORBIT_SPEED_FRACTION: f64 = 0.98;
 
 /// Bundled read access for the guidance stage: one rocket's mission-relevant
 /// state. A derived query keeps the system signature readable and gives every
@@ -668,28 +662,14 @@ pub fn interpolate_render_transform(
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &RocketRenderState,
+        &RocketMissionState,
         &mut RocketFacade,
         &mut Transform,
     )>,
 ) {
     let alpha = time.overstep_fraction() as f64;
-    for (rocket, render, mut facade, mut transform) in rocket_query.iter_mut() {
-        // Interpolated dynamics: smooth position/velocity/orientation/angular
-        // velocity between the previous and current fixed states.
-        let a = render.prev;
-        let b = render.current;
-        let interp = RocketDynamicsState {
-            position_m: a.position_m.lerp(b.position_m, alpha),
-            velocity_mps: a.velocity_mps.lerp(b.velocity_mps, alpha),
-            orientation: a.orientation.slerp(b.orientation, alpha),
-            angular_velocity_radps: a
-                .angular_velocity_radps
-                .lerp(b.angular_velocity_radps, alpha),
-            angular_acceleration_radps2: b.angular_acceleration_radps2,
-            mass_kg: b.mass_kg,
-            inertia_body: b.inertia_body,
-            center_of_mass_m: b.center_of_mass_m,
-        };
+    for (rocket, render, mission, mut facade, mut transform) in rocket_query.iter_mut() {
+        let interp = render_dynamics_state(*mission, rocket.dynamics, *render, alpha);
 
         // Use flight-scale transform relative to render origin (AGENTS.md #13).
         *transform = interp.render_transform(render_origin.origin, &physical_scale);
@@ -702,6 +682,37 @@ pub fn interpolate_render_transform(
         facade.orientation = interp.orientation.as_quat();
         facade.angular_velocity = interp.angular_velocity_radps.as_vec3();
         facade.mass = rocket.dynamics.mass_kg as f32;
+    }
+}
+
+/// Select presentation state without changing simulation authority. The pad is
+/// rebuilt in the rotating body frame once per fixed tick, while terrain is
+/// presented at the latest tick. Interpolating those two pad snapshots causes
+/// a visible relative oscillation before liftoff, so prelaunch renders the
+/// current authoritative pad state exactly.
+fn render_dynamics_state(
+    mission: RocketMissionState,
+    dynamics: RocketDynamicsState,
+    render: RocketRenderState,
+    alpha: f64,
+) -> RocketDynamicsState {
+    if mission == RocketMissionState::PreLaunch {
+        return dynamics;
+    }
+
+    let a = render.prev;
+    let b = render.current;
+    RocketDynamicsState {
+        position_m: a.position_m.lerp(b.position_m, alpha),
+        velocity_mps: a.velocity_mps.lerp(b.velocity_mps, alpha),
+        orientation: a.orientation.slerp(b.orientation, alpha),
+        angular_velocity_radps: a
+            .angular_velocity_radps
+            .lerp(b.angular_velocity_radps, alpha),
+        angular_acceleration_radps2: b.angular_acceleration_radps2,
+        mass_kg: b.mass_kg,
+        inertia_body: b.inertia_body,
+        center_of_mass_m: b.center_of_mass_m,
     }
 }
 
@@ -729,6 +740,21 @@ pub fn guidance_system(
         let autopilot = &mut *access.autopilot;
         let commands = &mut *access.commands;
 
+        // Guidance owns throttle targets. Preserve the established phase
+        // defaults for modes that do not need a specialized burn law.
+        commands.throttle_cmd = match *mission_state {
+            RocketMissionState::Launch | RocketMissionState::Ascent => 1.0,
+            RocketMissionState::PoweredDescent => 0.7,
+            RocketMissionState::Landing => 0.5,
+            RocketMissionState::PreLaunch
+            | RocketMissionState::Orbit
+            | RocketMissionState::DeorbitBurn
+            | RocketMissionState::ReentryCorridor
+            | RocketMissionState::UnpoweredDescent
+            | RocketMissionState::Landed
+            | RocketMissionState::Crashed => 0.0,
+        };
+
         let Some(planet) = planet_query
             .iter()
             .find(|planet| planet.domain_planet.name == binding.planet_name)
@@ -745,6 +771,11 @@ pub fn guidance_system(
         let altitude_m = (radius - radius_m).max(0.0);
         let velocity = rocket.dynamics.velocity_mps;
         let speed = velocity.length();
+        let mu = gravitational_parameter(planet.domain_planet.mass_kg);
+        let state_elements = orbital_elements_from_state(position_m, velocity, mu);
+        let target_orbit_reached = autopilot
+            .target_orbit
+            .matches_state(position_m, velocity, mu, radius_m);
 
         // Update time since liftoff for time-based ascent guidance.
         if *mission_state != RocketMissionState::PreLaunch {
@@ -778,15 +809,12 @@ pub fn guidance_system(
         // Note: we'd need to add AtmosphereState to the query; for now approximate.
         let dynamic_pressure_pa = 0.0; // TODO: read from AtmosphereState
 
-        // Advance the mission phase (ascent + descent).
-        let circular_speed = circular_orbit_speed_mps(planet.domain_planet.mass_kg, radius);
+        // Advance the mission phase from the authoritative f64 target predicate.
         *mission_state = advance_ascent_phase(
             (*mission_state).into(),
             altitude_m,
-            speed,
-            circular_speed,
             autopilot.ascent_profile.ascent_start_altitude_m,
-            ORBIT_SPEED_FRACTION,
+            target_orbit_reached,
         )
         .into();
         // Also advance descent phases.
@@ -799,6 +827,12 @@ pub fn guidance_system(
             &descent_config,
         )
         .into();
+
+        if target_orbit_reached && *mission_state == RocketMissionState::Orbit {
+            autopilot.mode = AutopilotMode::Off;
+            commands.throttle_cmd = 0.0;
+            continue;
+        }
 
         // The ascent plane is fixed in the planet-inertial frame; the pitch
         // axis is the horizontal perpendicular to it.
@@ -823,10 +857,16 @@ pub fn guidance_system(
                     autopilot.time_since_liftoff_s,
                     vertical_speed_mps,
                 ));
+                commands.throttle_cmd = 1.0;
 
-                // Auto-transition to OrbitInsertion when near orbital speed.
-                if speed >= circular_speed * 0.95 && altitude_m > 150_000.0 {
+                // Cut off once the target apoapsis is established; insertion
+                // mode coasts to apoapsis before the circularization burn.
+                if state_elements.apoapsis_m
+                    >= radius_m + autopilot.target_orbit.target_apoapsis_altitude_m
+                        - autopilot.target_orbit.altitude_tolerance_m
+                {
                     autopilot.mode = AutopilotMode::OrbitInsertion;
+                    commands.throttle_cmd = 0.0;
                 }
             }
             AutopilotMode::Transfer => {
@@ -865,21 +905,21 @@ pub fn guidance_system(
                 }
             }
             AutopilotMode::OrbitInsertion => {
-                // Prograde burn to circularize at apoapsis.
-                if orbital.apoapsis_m > radius_m + 100_000.0 {
-                    // Not at apoapsis yet - coast.
-                    commands.target_attitude = prograde_attitude(velocity);
-                    commands.throttle_cmd = 0.0;
-                } else {
-                    // At apoapsis - circularize burn.
+                if state_elements.apoapsis_m
+                    < radius_m + autopilot.target_orbit.target_apoapsis_altitude_m
+                        - autopilot.target_orbit.altitude_tolerance_m
+                {
+                    // Raise the apoapsis until the insertion coast can begin.
                     commands.target_attitude = prograde_attitude(velocity);
                     commands.throttle_cmd = 1.0;
-
-                    // Check if orbit is circularized (eccentricity < 0.01).
-                    if orbital.eccentricity < 0.01 {
-                        autopilot.mode = AutopilotMode::Off;
-                        *mission_state = RocketMissionState::Orbit;
-                    }
+                } else {
+                    // Coast to apoapsis, then circularize only near the target
+                    // altitude instead of accepting an arbitrary low-e orbit.
+                    commands.target_attitude = prograde_attitude(velocity);
+                    let near_target_apoapsis = velocity.dot(up_dir).abs() <= 25.0
+                        && (altitude_m - autopilot.target_orbit.target_apoapsis_altitude_m).abs()
+                            <= autopilot.target_orbit.altitude_tolerance_m;
+                    commands.throttle_cmd = if near_target_apoapsis { 1.0 } else { 0.0 };
                 }
             }
             AutopilotMode::Deorbit => {
@@ -1095,8 +1135,8 @@ pub fn guidance_system(
     }
 }
 
-/// Attitude control: converts the guidance target and current state into
-/// commanded throttle, gimbal deflections, and RCS torque using the PID with
+/// Attitude control: converts the guidance attitude target and current state into
+/// gimbal deflections and RCS torque using the PID with
 /// anti-windup. Writes only the command interface; never the vehicle's motion.
 /// Uses SimulationTime fixed timestep.
 pub fn control_system(
@@ -1106,29 +1146,13 @@ pub fn control_system(
         &RocketPhysicsState,
         &RocketGeometry,
         &RocketMass,
-        &RocketMissionState,
         &RocketPropulsion,
         &mut RocketAutopilot,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut commands, rocket, geometry, mass, mission_state, propulsion, mut autopilot) in
-        rocket_query.iter_mut()
+    for (mut commands, rocket, geometry, mass, propulsion, mut autopilot) in rocket_query.iter_mut()
     {
-        // Throttle schedule from the mission phase.
-        commands.throttle_cmd = match *mission_state {
-            RocketMissionState::Launch | RocketMissionState::Ascent => 1.0,
-            RocketMissionState::PoweredDescent => 0.7, // Hover throttle
-            RocketMissionState::Landing => 0.5,        // Terminal descent
-            RocketMissionState::PreLaunch
-            | RocketMissionState::Orbit
-            | RocketMissionState::DeorbitBurn
-            | RocketMissionState::ReentryCorridor
-            | RocketMissionState::UnpoweredDescent
-            | RocketMissionState::Landed
-            | RocketMissionState::Crashed => 0.0,
-        };
-
         let gains = autopilot.gains;
         // The dynamics model carries a diagonal body-frame inertia; pass its
         // diagonal so the normalized gains produce vehicle-scaled torque.
@@ -3122,6 +3146,7 @@ mod ground_contact_tests {
 mod ascent_pipeline_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::terrain_collision::radial_direction;
     use bevy::math::{DQuat, DVec3};
@@ -3421,6 +3446,107 @@ mod ascent_pipeline_tests {
         );
     }
 
+    /// A completed insertion is a property of the authoritative orbital state,
+    /// not a speed threshold. A circular target state completes the ascent,
+    /// while a nearly orbital state with an Earth-intersecting periapsis does
+    /// not, even though both are evaluated by the same guidance system.
+    #[test]
+    fn target_orbit_predicate_controls_ascent_completion() {
+        let target = LowEarthOrbitTarget::default();
+        let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
+        let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
+        let circular_velocity_mps = DVec3::new(
+            0.0,
+            circular_speed_mps * target.target_inclination_rad.cos(),
+            circular_speed_mps * target.target_inclination_rad.sin(),
+        );
+
+        let mut safe_app = ascent_app();
+        let safe_entity = {
+            let world = safe_app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        {
+            let world = safe_app.world_mut();
+            let mut rocket = world.get_mut::<RocketPhysicsState>(safe_entity).unwrap();
+            rocket.dynamics.position_m = DVec3::new(radius_m, 0.0, 0.0);
+            rocket.dynamics.velocity_mps = circular_velocity_mps;
+            *world.get_mut::<RocketMissionState>(safe_entity).unwrap() = RocketMissionState::Ascent;
+        }
+        // The first app update initializes Bevy's fixed-time clock; the
+        // second executes the configured fixed-step flight pipeline.
+        safe_app.update();
+        safe_app.update();
+        {
+            let world = safe_app.world_mut();
+            assert_eq!(
+                *world.get::<RocketMissionState>(safe_entity).unwrap(),
+                RocketMissionState::Orbit
+            );
+            assert_eq!(
+                world
+                    .get::<RocketCommands>(safe_entity)
+                    .unwrap()
+                    .throttle_cmd,
+                0.0
+            );
+        }
+
+        let mut unsafe_app = ascent_app();
+        let unsafe_entity = {
+            let world = unsafe_app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        {
+            let world = unsafe_app.world_mut();
+            let mut rocket = world.get_mut::<RocketPhysicsState>(unsafe_entity).unwrap();
+            rocket.dynamics.position_m = DVec3::new(radius_m, 0.0, 0.0);
+            rocket.dynamics.velocity_mps = circular_velocity_mps * 0.98;
+            *world.get_mut::<RocketMissionState>(unsafe_entity).unwrap() =
+                RocketMissionState::Ascent;
+        }
+        unsafe_app.update();
+        unsafe_app.update();
+        assert_ne!(
+            *unsafe_app
+                .world()
+                .get::<RocketMissionState>(unsafe_entity)
+                .unwrap(),
+            RocketMissionState::Orbit,
+            "an unsafe periapsis must not complete ascent"
+        );
+    }
+
+    /// Control allocates attitude torque only. It must retain the throttle
+    /// target supplied by guidance for the subsequent actuation stage.
+    #[test]
+    fn control_preserves_guidance_throttle_command() {
+        let mut app = ascent_app();
+        app.world_mut()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+        let entity = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketCommands>>();
+            query.single(world).unwrap()
+        };
+        app.world_mut()
+            .get_mut::<RocketCommands>(entity)
+            .unwrap()
+            .throttle_cmd = 0.37;
+        app.add_systems(Update, control_system);
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<RocketCommands>(entity)
+                .unwrap()
+                .throttle_cmd,
+            0.37
+        );
+    }
+
     /// Shared minimal burn rig (Phase 15/17): electron-class vehicle in
     /// vacuum, throttle forced fully open, only consumption/staging systems
     /// running so guidance policy cannot mask machinery behavior. Each
@@ -3678,6 +3804,67 @@ mod ascent_pipeline_tests {
             "guidance target attitude diverged"
         );
         assert_eq!(vec3(&a.12), vec3(&b.12), "gravity diverged");
+    }
+}
+
+#[cfg(test)]
+mod render_interpolation_tests {
+    use super::*;
+
+    #[test]
+    fn prelaunch_render_uses_current_pad_state_without_interpolation() {
+        let current = RocketDynamicsState::new(
+            DVec3::new(10.0, 20.0, 30.0),
+            DVec3::new(1.0, 2.0, 3.0),
+            DQuat::IDENTITY,
+            100.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let previous = RocketDynamicsState {
+            position_m: DVec3::new(-10.0, -20.0, -30.0),
+            ..current
+        };
+
+        let rendered = render_dynamics_state(
+            RocketMissionState::PreLaunch,
+            current,
+            RocketRenderState {
+                prev: previous,
+                current,
+            },
+            0.5,
+        );
+
+        assert_eq!(rendered, current);
+    }
+
+    #[test]
+    fn airborne_render_keeps_fixed_state_interpolation() {
+        let current = RocketDynamicsState::new(
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            100.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let previous = RocketDynamicsState {
+            position_m: DVec3::ZERO,
+            ..current
+        };
+
+        let rendered = render_dynamics_state(
+            RocketMissionState::Ascent,
+            current,
+            RocketRenderState {
+                prev: previous,
+                current,
+            },
+            0.25,
+        );
+
+        assert_eq!(rendered.position_m, DVec3::new(2.5, 0.0, 0.0));
     }
 }
 
