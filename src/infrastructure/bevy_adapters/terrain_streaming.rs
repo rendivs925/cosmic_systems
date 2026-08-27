@@ -32,8 +32,7 @@ const SCREEN_ERROR_PX: f64 = 4.0;
 /// Approximate bytes per generated patch vertex (f64 position + normal).
 const BYTES_PER_VERTEX: u64 = 48;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
-/// Bound synchronous terrain work so the launch view becomes responsive before
-/// neighboring detail is ready.
+/// Bound synchronous terrain work after the initial ground window is ready.
 const MAX_NEW_PATCHES_PER_FRAME: usize = 1;
 
 /// Minimum distance for LOD calculation when on the ground.
@@ -191,21 +190,32 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
-    for patch in generation_batch(
+    // The first local window must be complete before any patch is announced to
+    // the renderer; a partial window exposes the center patch's skirts.
+    let generation_limit = if streaming.generated.is_empty() {
+        window.len()
+    } else {
+        MAX_NEW_PATCHES_PER_FRAME
+    };
+    let batch = generation_batch(
         &window,
         &streaming.manager,
         &streaming.generated,
-        MAX_NEW_PATCHES_PER_FRAME,
-    ) {
+        generation_limit,
+    );
+    for patch in &batch {
         streaming.manager.begin_generation(&patch);
         let geometry = build_patch_geometry(
-            &patch,
+            patch,
             planet_terrain.source.as_ref(),
             radius_m,
             config.patch_resolution,
             config.skirt_depth_m,
         );
-        streaming.generated.insert(patch, geometry);
+        streaming.generated.insert(*patch, geometry);
+    }
+
+    for patch in batch {
         streaming.manager.mark_ready(&patch);
 
         // Only newly generated geometry needs a render-ready event. Cached and
@@ -379,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_batch_limits_new_work_to_the_focused_patch() {
+    fn empty_cache_bootstraps_the_complete_window_then_caps_later_work() {
         let focus = TerrainPatch {
             face: CubeFace::PosZ,
             level: 2,
@@ -392,12 +402,43 @@ mod tests {
             manager.request(*patch, 1);
         }
 
-        let batch = generation_batch(
+        let generated = HashMap::new();
+        let bootstrap_batch = generation_batch(
             &window,
             &manager,
-            &HashMap::new(),
-            MAX_NEW_PATCHES_PER_FRAME,
+            &generated,
+            if generated.is_empty() {
+                window.len()
+            } else {
+                MAX_NEW_PATCHES_PER_FRAME
+            },
         );
-        assert_eq!(batch, vec![focus]);
+        assert_eq!(bootstrap_batch, window);
+
+        let mut generated = HashMap::new();
+        generated.insert(
+            focus,
+            PatchGeometry {
+                positions: Vec::new(),
+                normals: Vec::new(),
+                uvs: Vec::new(),
+                indices: Vec::new(),
+            },
+        );
+        manager.begin_generation(&focus);
+        manager.mark_ready(&focus);
+        manager.mark_visible(&focus);
+        let later_batch = generation_batch(
+            &window,
+            &manager,
+            &generated,
+            if generated.is_empty() {
+                window.len()
+            } else {
+                MAX_NEW_PATCHES_PER_FRAME
+            },
+        );
+        assert_eq!(later_batch.len(), MAX_NEW_PATCHES_PER_FRAME);
+        assert_ne!(later_batch, vec![focus]);
     }
 }
