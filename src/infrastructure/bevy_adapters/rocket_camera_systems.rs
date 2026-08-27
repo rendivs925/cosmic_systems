@@ -2,7 +2,7 @@
 
 use crate::components::rocket::*;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
-use crate::infrastructure::bevy_adapters::rocket_systems::render_dynamics_state;
+use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::{Quat, Vec3};

@@ -58,10 +58,15 @@ use crate::infrastructure::bevy_adapters::rocket_entry::{
     compute_ablation, compute_heating, compute_parachute_forces, compute_plasma_blackout,
     compute_retro_propulsion,
 };
+use crate::infrastructure::bevy_adapters::rocket_environment::{
+    setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
+    update_rocket_earth_sphere, update_rocket_sky_color, update_sun_day_night_cycle,
+};
 use crate::infrastructure::bevy_adapters::rocket_flight_conditions::refresh_flight_conditions;
 use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::{
     update_orbital_elements, update_rocket_gravity,
 };
+use crate::infrastructure::bevy_adapters::rocket_guidance::guidance_system;
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
@@ -79,10 +84,6 @@ use crate::infrastructure::bevy_adapters::rocket_propulsion::{
 };
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
-};
-use crate::infrastructure::bevy_adapters::rocket_systems::{
-    guidance_system, setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
-    update_rocket_earth_sphere, update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,

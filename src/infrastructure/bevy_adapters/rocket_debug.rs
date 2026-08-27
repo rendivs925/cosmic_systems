@@ -244,6 +244,15 @@ fn offset_to_units(scale: &PhysicalScale, offset_m: DVec3) -> Vec3 {
     .as_vec3()
 }
 
+fn find_bound_planet<'a>(
+    planet_query: &'a Query<(&PlanetComponent, &Transform)>,
+    binding: &RocketPlanetBinding,
+) -> Option<(&'a PlanetComponent, &'a Transform)> {
+    planet_query
+        .iter()
+        .find(|(planet, _)| planet.matches_body(&binding.planet_name))
+}
+
 /// Gravity vector from the single authoritative `GravityAcceleration`
 /// component (computed by `update_rocket_gravity`). No physics re-computed.
 fn draw_gravity_vectors(
@@ -262,10 +271,7 @@ fn draw_gravity_vectors(
     }
 
     for (binding, rocket, gravity) in rocket_query.iter() {
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
 
@@ -306,10 +312,7 @@ fn draw_velocity_vectors(
     }
 
     for (binding, rocket) in rocket_query.iter() {
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
 
@@ -348,10 +351,7 @@ fn draw_thrust_vectors(
     }
 
     for (binding, rocket, propulsion, atmosphere) in rocket_query.iter() {
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
@@ -411,10 +411,7 @@ fn draw_aero_forces(
         if aero.force_body.length_squared() < 1e-9 {
             continue;
         }
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
 
@@ -454,10 +451,7 @@ fn draw_coordinate_frames(
     const BODY_Z: Color = Color::srgb(0.0, 0.0, 1.0);
 
     for (binding, rocket) in rocket_query.iter() {
-        let Some((planet, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((planet, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
@@ -551,10 +545,7 @@ fn draw_com_cop(
     }
 
     for (binding, rocket, aero) in rocket_query.iter() {
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
 
@@ -714,10 +705,7 @@ fn draw_terrain_collision(
     mut gizmos: Gizmos<RocketDebugGizmos>,
 ) {
     for (binding, rocket, collision) in rocket_query.iter() {
-        let Some((_, planet_transform)) = planet_query
-            .iter()
-            .find(|(p, _)| p.matches_body(&binding.planet_name))
-        else {
+        let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
 

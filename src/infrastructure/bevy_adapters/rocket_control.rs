@@ -53,7 +53,9 @@ pub fn control_system(
         );
         commands.gimbal_pitch_cmd_rad = gimbal_pitch;
         commands.gimbal_yaw_cmd_rad = gimbal_yaw;
-        commands.rcs_torque_cmd_body = DVec3::new(0.0, torque.y, 0.0);
+        // Engines cannot gimbal during an orbital coast, so RCS must damp all
+        // body axes rather than only preserving roll control.
+        commands.rcs_torque_cmd_body = torque;
     }
 }
 

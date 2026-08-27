@@ -1,654 +1,20 @@
+#[cfg(test)]
 use crate::components::rocket::*;
+#[cfg(test)]
 use crate::domain::services::gravity::gravitational_parameter;
-use crate::domain::services::guidance::{
-    advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
-    gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
-    powered_descent_guidance_convex, prograde_attitude, reentry_bank_angle,
-    reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
-    DescentGuidanceConfig, TransferBurnPhase,
-};
-use crate::domain::services::physics_orbital::orbital_elements_from_state;
 #[cfg(test)]
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 #[cfg(test)]
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
-use crate::domain::services::simulation_time::SimulationTime;
 #[cfg(test)]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::infrastructure::bevy_adapters::components::{
-    PlanetComponent, RocketAutopilot, RocketCommands,
-};
-use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
-use bevy::light::CascadeShadowConfigBuilder;
-
-pub(crate) use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
-use bevy::ecs::query::QueryData;
 #[cfg(test)]
-use bevy::math::{DMat3, DQuat};
-use bevy::math::{DVec3, Vec3};
+use crate::infrastructure::bevy_adapters::components::{RocketAutopilot, RocketCommands};
+
+#[cfg(test)]
+use bevy::math::{DMat3, DQuat, DVec3};
+#[cfg(test)]
 use bevy::prelude::*;
-
-/// Bundled read access for the guidance stage: one rocket's mission-relevant
-/// state. A derived query keeps the system signature readable and gives every
-/// field an explicit name at the use site (composition over positional
-/// tuples).
-#[derive(QueryData)]
-#[query_data(mutable)]
-pub struct GuidanceAccess {
-    pub binding: &'static RocketPlanetBinding,
-    pub dynamics: &'static RocketPhysicsState,
-    pub geometry: &'static RocketGeometry,
-    pub mass: &'static RocketMass,
-    pub mission_state: &'static mut RocketMissionState,
-    pub autopilot: &'static mut RocketAutopilot,
-    pub propulsion: &'static RocketPropulsion,
-    pub conditions: &'static RocketFlightConditions,
-    pub orbital: &'static OrbitalElements,
-    pub commands: &'static mut RocketCommands,
-}
-
-/// Mission guidance: computes the target attitude from the mission phase and
-/// current state, and advances the ascent/descent phase (Launch → Ascent →
-/// Orbit → DeorbitBurn → ReentryCorridor → PoweredDescent/UnpoweredDescent →
-/// Landing). Writes only the command interface; never the vehicle's motion
-/// (AGENTS.md section 18).
-pub fn guidance_system(
-    sim_time: Res<SimulationTime>,
-    planet_query: Query<&PlanetComponent>,
-    mut rocket_query: Query<GuidanceAccess>,
-) {
-    let dt = sim_time.fixed_timestep();
-    for mut access in rocket_query.iter_mut() {
-        // Rebind the bundled fields to the names the guidance body reads;
-        // mutable fields deref out of Bevy's change-detection wrappers.
-        // Read-only view of the bundled dynamics.
-        let rocket = &access.dynamics;
-        let binding = access.binding;
-        let propulsion = access.propulsion;
-        let conditions = access.conditions;
-        let orbital = access.orbital;
-        let mass = access.mass;
-        let mission_state = &mut *access.mission_state;
-        let autopilot = &mut *access.autopilot;
-        let commands = &mut *access.commands;
-
-        // Guidance owns throttle targets. Preserve the established phase
-        // defaults for modes that do not need a specialized burn law.
-        commands.throttle_cmd = match *mission_state {
-            RocketMissionState::Launch | RocketMissionState::Ascent => 1.0,
-            RocketMissionState::PoweredDescent => 0.7,
-            RocketMissionState::Landing => 0.5,
-            RocketMissionState::PreLaunch
-            | RocketMissionState::Orbit
-            | RocketMissionState::DeorbitBurn
-            | RocketMissionState::ReentryCorridor
-            | RocketMissionState::UnpoweredDescent
-            | RocketMissionState::Landed
-            | RocketMissionState::Crashed => 0.0,
-        };
-
-        let Some(planet) = planet_query
-            .iter()
-            .find(|planet| planet.matches_body(&binding.planet_name))
-        else {
-            continue;
-        };
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let position_m = rocket.dynamics.position_m;
-        let radius = position_m.length();
-        if radius < 1.0 {
-            continue;
-        }
-        let up_dir = position_m / radius;
-        let altitude_m = (radius - radius_m).max(0.0);
-        let velocity = rocket.dynamics.velocity_mps;
-        let speed = velocity.length();
-        let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-        let state_elements = orbital_elements_from_state(position_m, velocity, mu);
-        let target_orbit_reached = autopilot
-            .target_orbit
-            .matches_state(position_m, velocity, mu, radius_m);
-
-        // Update time since liftoff for time-based ascent guidance.
-        if *mission_state != RocketMissionState::PreLaunch {
-            autopilot.time_since_liftoff_s += dt;
-        }
-
-        // Pre-launch hold: wait for user input (Space) via handle_rocket_launch_input.
-        // Do NOT auto-transition to Launch; physics keeps the vehicle on the pad
-        // via GroundRest until thrust exceeds weight.
-
-        // If mission state is Launch but autopilot is still Off (e.g., test setup
-        // or user just pressed Space), arm the ascent autopilot.
-        if *mission_state == RocketMissionState::Launch
-            && autopilot.mode == crate::domain::services::guidance::AutopilotMode::Off
-        {
-            autopilot.mode = crate::domain::services::guidance::AutopilotMode::Ascent;
-        }
-
-        // Get descent guidance config for this body.
-        let descent_config = DescentGuidanceConfig::for_body(&planet.domain_planet.name);
-
-        // Check if engines are active for descent phase logic.
-        let has_active_engines = propulsion.active_stage < propulsion.vehicle.stages.len()
-            && propulsion
-                .propellant_remaining_kg
-                .get(propulsion.active_stage)
-                .map(|m| *m > 0.0)
-                .unwrap_or(false);
-
-        // Guidance constraints use the shared fixed-tick flight conditions.
-        let dynamic_pressure_pa = conditions.dynamic_pressure_pa;
-
-        // Advance the mission phase from the authoritative f64 target predicate.
-        *mission_state = advance_ascent_phase(
-            (*mission_state).into(),
-            altitude_m,
-            autopilot.ascent_profile.ascent_start_altitude_m,
-            target_orbit_reached,
-        )
-        .into();
-        // Also advance descent phases.
-        *mission_state = advance_descent_phase(
-            (*mission_state).into(),
-            altitude_m,
-            speed,
-            dynamic_pressure_pa,
-            has_active_engines,
-            &descent_config,
-        )
-        .into();
-
-        if target_orbit_reached && *mission_state == RocketMissionState::Orbit {
-            autopilot.mode = AutopilotMode::Off;
-            commands.throttle_cmd = 0.0;
-            continue;
-        }
-
-        // The ascent plane is fixed in the planet-inertial frame; the pitch
-        // axis is the horizontal perpendicular to it.
-        let pitch_axis = pitch_axis_from_reference(up_dir, DVec3::Z)
-            .or_else(|| pitch_axis_from_reference(up_dir, DVec3::X))
-            .unwrap_or(DVec3::X);
-
-        // Compute target attitude based on autopilot mode.
-        match autopilot.mode {
-            AutopilotMode::Ascent => {
-                // Gated combined schedule: hold the local vertical until the
-                // vehicle clears the pad/tower (altitude AND vertical speed),
-                // then follow the altitude/time pitch ramp. Low-thrust
-                // vehicles must never start the turn while still near the
-                // ground just because the wall clock says so.
-                let vertical_speed_mps = velocity.dot(up_dir);
-                commands.target_attitude = attitude_from_direction(gravity_turn_direction_gated(
-                    &autopilot.ascent_profile,
-                    up_dir,
-                    pitch_axis,
-                    altitude_m,
-                    autopilot.time_since_liftoff_s,
-                    vertical_speed_mps,
-                ));
-                commands.throttle_cmd = 1.0;
-
-                // Cut off once the target apoapsis is established; insertion
-                // mode coasts to apoapsis before the circularization burn.
-                if state_elements.apoapsis_m
-                    >= radius_m + autopilot.target_orbit.target_apoapsis_altitude_m
-                        - autopilot.target_orbit.altitude_tolerance_m
-                {
-                    autopilot.mode = AutopilotMode::OrbitInsertion;
-                    commands.throttle_cmd = 0.0;
-                }
-            }
-            AutopilotMode::Transfer => {
-                // Two-impulse transfer (Phase 15): this branch executes the
-                // departure burn only — once the transfer apoapsis reaches
-                // the target, OrbitInsertion machinery owns the coast and
-                // circularization burn (burn-coast-burn composition).
-                let target_radius_m = autopilot.transfer_target_radius_m;
-                if target_radius_m <= radius_m {
-                    // No target configured: hold and hand back.
-                    autopilot.mode = AutopilotMode::OrbitInsertion;
-                    commands.target_attitude = prograde_attitude(velocity);
-                    commands.throttle_cmd = 0.0;
-                    continue;
-                }
-                match transfer_burn_phase(
-                    radius,
-                    target_radius_m,
-                    orbital.apoapsis_m,
-                    orbital.eccentricity,
-                ) {
-                    TransferBurnPhase::Departure => {
-                        // Burn along the velocity vector when raising,
-                        // against it when lowering.
-                        let raising = target_radius_m > radius;
-                        commands.throttle_cmd = 1.0;
-                        commands.target_attitude = if raising {
-                            prograde_attitude(velocity)
-                        } else {
-                            attitude_from_direction(-velocity / speed.max(1e-6))
-                        };
-                    }
-                    // Coast and arrival circularization belong to the
-                    // existing insertion mode.
-                    _ => autopilot.mode = AutopilotMode::OrbitInsertion,
-                }
-            }
-            AutopilotMode::OrbitInsertion => {
-                if state_elements.apoapsis_m
-                    < radius_m + autopilot.target_orbit.target_apoapsis_altitude_m
-                        - autopilot.target_orbit.altitude_tolerance_m
-                {
-                    // Raise the apoapsis until the insertion coast can begin.
-                    commands.target_attitude = prograde_attitude(velocity);
-                    commands.throttle_cmd = 1.0;
-                } else {
-                    // Coast to apoapsis, then circularize only near the target
-                    // altitude instead of accepting an arbitrary low-e orbit.
-                    commands.target_attitude = prograde_attitude(velocity);
-                    let near_target_apoapsis = velocity.dot(up_dir).abs() <= 25.0
-                        && (altitude_m - autopilot.target_orbit.target_apoapsis_altitude_m).abs()
-                            <= autopilot.target_orbit.altitude_tolerance_m;
-                    commands.throttle_cmd = if near_target_apoapsis { 1.0 } else { 0.0 };
-                }
-            }
-            AutopilotMode::Deorbit => {
-                // Retrograde burn to lower periapsis.
-                commands.target_attitude = attitude_from_direction(-velocity / speed.max(1e-6));
-                commands.throttle_cmd = 1.0;
-
-                // Check if periapsis is low enough for entry.
-                if orbital.periapsis_m < descent_config.entry_interface_altitude_m + radius_m {
-                    autopilot.mode = AutopilotMode::Reentry;
-                    *mission_state = RocketMissionState::DeorbitBurn;
-                }
-            }
-            AutopilotMode::Reentry => {
-                // Enhanced reentry bank-angle management.
-                // Compute g-load from acceleration (gravity + aero).
-                let g_load = (rocket.dynamics.velocity_mps.length() / 9.81).min(10.0); // Simplified
-                let heat_flux = 0.0; // TODO: from ThermalState
-                let crossrange = 0.0; // TODO: compute from target
-                let downrange = 0.0; // TODO: compute from target
-
-                // Reference bank angle from precomputed profile (simplified).
-                let reference_bank = if altitude_m > 80_000.0 {
-                    30.0_f64.to_radians()
-                } else if altitude_m > 40_000.0 {
-                    50.0_f64.to_radians()
-                } else {
-                    70.0_f64.to_radians()
-                };
-
-                let bank_angle = reentry_bank_angle_enhanced(
-                    altitude_m,
-                    speed,
-                    0.0, // flight path angle
-                    dynamic_pressure_pa,
-                    heat_flux,
-                    g_load,
-                    &descent_config,
-                    crossrange,
-                    downrange,
-                    reference_bank,
-                );
-
-                // Apply bank angle via RCS torque command (roll axis).
-                commands.rcs_torque_cmd_body = DVec3::new(0.0, 0.0, bank_angle);
-
-                // Hold angle of attack (nose up).
-                commands.target_attitude = attitude_from_direction(up_dir);
-
-                // Transition to powered descent when slow enough.
-                if speed < 500.0 && altitude_m < descent_config.powered_descent_altitude_m {
-                    autopilot.mode = AutopilotMode::PoweredDescent;
-                    *mission_state = RocketMissionState::PoweredDescent;
-                }
-            }
-            AutopilotMode::PoweredDescent => {
-                // Use convex optimization powered descent guidance.
-                let target_pos = autopilot.target_landing_position_m;
-                if target_pos.length() < 1.0 {
-                    // Default to point below current position.
-                    autopilot.target_landing_position_m = position_m * (altitude_m / radius);
-                }
-
-                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
-                    .engines
-                    .iter()
-                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                    .sum::<f64>();
-                let min_thrust = max_thrust * 0.1; // Assume 10% minimum throttle
-
-                // Estimate gravity at current altitude.
-                let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-                let gravity_accel = mu / (radius * radius);
-
-                // Use orbital elements for time-to-go estimate.
-                let t_go = if orbital.orbital_period_s.is_finite() {
-                    orbital.orbital_period_s / 4.0 // Quarter orbit approximation
-                } else {
-                    60.0
-                }
-                .min(300.0)
-                .max(10.0);
-
-                let (thrust_vec, thrust_att) = powered_descent_guidance_convex(
-                    position_m,
-                    velocity,
-                    autopilot.target_landing_position_m,
-                    mass.0,
-                    max_thrust,
-                    min_thrust,
-                    15.0_f64.to_radians(),
-                    gravity_accel,
-                    t_go,
-                );
-                commands.target_attitude = thrust_att;
-                commands.throttle_cmd = (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
-
-                // Check for terminal guidance transition.
-                if altitude_m < descent_config.terminal_descent_altitude_m {
-                    autopilot.mode = AutopilotMode::Landing;
-                }
-            }
-            AutopilotMode::Landing => {
-                // Suicide burn / hover-slam terminal guidance.
-                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
-                    .engines
-                    .iter()
-                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                    .sum::<f64>();
-
-                let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-                let gravity_accel = mu / (radius * radius);
-
-                let (thrust_vec, thrust_att, _suicide_alt, should_burn) = suicide_burn_guidance(
-                    position_m,
-                    velocity,
-                    autopilot.target_landing_position_m,
-                    mass.0,
-                    max_thrust,
-                    gravity_accel,
-                );
-
-                if should_burn {
-                    commands.target_attitude = thrust_att;
-                    commands.throttle_cmd =
-                        (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
-                } else {
-                    // Hover-slam: maintain low descent rate.
-                    let (hv_thrust_vec, hv_att) = hover_slam_guidance(
-                        position_m,
-                        velocity,
-                        autopilot.target_landing_position_m,
-                        mass.0,
-                        max_thrust,
-                        gravity_accel,
-                        -1.0, // Target -1 m/s descent rate
-                    );
-                    commands.target_attitude = hv_att;
-                    commands.throttle_cmd =
-                        (hv_thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
-                }
-
-                // Check for touchdown.
-                if altitude_m < 5.0 && speed < 2.0 {
-                    *mission_state = RocketMissionState::Landed;
-                    autopilot.mode = AutopilotMode::Off;
-                    commands.throttle_cmd = 0.0;
-                }
-            }
-            AutopilotMode::Boostback => {
-                // Booster flyback (RTLS): downrange-zeroing retrograde burn.
-                // The landing target doubles as the launch-site pad position;
-                // default to the sub-vehicle surface point when unset.
-                if autopilot.target_landing_position_m.length() < 1.0 {
-                    autopilot.target_landing_position_m = up_dir * radius_m;
-                }
-                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
-                    .engines
-                    .iter()
-                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                    .sum::<f64>();
-
-                let boostback = boostback_guidance(
-                    position_m,
-                    velocity,
-                    autopilot.target_landing_position_m,
-                    mass.0,
-                    max_thrust,
-                );
-                commands.target_attitude = boostback.attitude;
-                commands.throttle_cmd = boostback.throttle as f32;
-
-                // Hand off to the landing leg once the pad is roughly below.
-                if boostback.complete {
-                    autopilot.mode = AutopilotMode::Landing;
-                }
-            }
-            AutopilotMode::StationKeep => {
-                // Maintain position relative to target (for orbital station-keeping).
-                commands.target_attitude = prograde_attitude(velocity);
-                commands.throttle_cmd = 0.0;
-            }
-            AutopilotMode::Rendezvous => {
-                // Future: rendezvous guidance.
-                commands.target_attitude = prograde_attitude(velocity);
-                commands.throttle_cmd = 0.0;
-            }
-            AutopilotMode::Off => {
-                // Manual or no guidance.
-                commands.target_attitude = rocket.dynamics.orientation;
-                commands.throttle_cmd = 0.0;
-            }
-        }
-
-        // For reentry corridor (legacy mission state), compute bank angle command.
-        if *mission_state == RocketMissionState::ReentryCorridor
-            && autopilot.mode == AutopilotMode::Off
-        {
-            let g_load = 1.0;
-            let heat_flux = 0.0;
-            let crossrange = 0.0;
-            let bank_angle = reentry_bank_angle(
-                altitude_m,
-                speed,
-                dynamic_pressure_pa,
-                heat_flux,
-                g_load,
-                &descent_config,
-                crossrange,
-            );
-            commands.rcs_torque_cmd_body = DVec3::new(0.0, 0.0, bank_angle);
-        }
-    }
-}
-
-/// Spawns a directional sun light for rocket mode. The solar simulation uses
-/// a PointLight at the origin, but in the flight frame the sun should be a
-/// directional light at infinity. The sun is placed well above the LOCAL horizon
-/// (the rocket's radial up direction) so the pad and terrain are brightly lit:
-/// a fixed world-space direction would sit only a few degrees above the KSC
-/// horizon because the flight frame's axes are not the planet's local frame.
-pub fn setup_rocket_sun_light(mut commands: Commands, rocket_query: Query<&RocketPhysicsState>) {
-    // Radial up at the pad (the rocket's body +Y at spawn).
-    let up = rocket_query
-        .iter()
-        .next()
-        .map(|r| r.dynamics.position_m.normalize_or_zero().as_vec3())
-        .filter(|v| v.length_squared() > 0.5)
-        .unwrap_or(Vec3::Y);
-    // A fixed horizontal reference perpendicular to the local up.
-    let east = if up.z.abs() < 0.9 {
-        up.cross(Vec3::Z).normalize()
-    } else {
-        up.cross(Vec3::X).normalize()
-    };
-    // Sun ~20 deg above the local horizon (morning golden hour): long shadows
-    // and warm light like the launch-pad reference footage.
-    let sun_dir = (up * 0.342 + east * 0.94).normalize();
-
-    // Sky-blue ambient fill so shadowed faces read as sky-lit instead of black.
-    commands.insert_resource(bevy::light::AmbientLight {
-        color: Color::srgb(0.5, 0.6, 0.75),
-        brightness: 400.0,
-        ..default()
-    });
-
-    commands.spawn((
-        bevy::light::DirectionalLight {
-            illuminance: 100_000.0,             // bright daylight (lux)
-            color: Color::srgb(1.0, 0.9, 0.75), // warm low-sun light
-            shadows_enabled: true,
-            ..default()
-        },
-        // Cascade shadow config tuned for the rocket flight scale (1 unit = 1 m).
-        // The first cascade covers the immediate pad area; later cascades extend
-        // to the horizon so distant terrain still casts visible shadows.
-        CascadeShadowConfigBuilder {
-            first_cascade_far_bound: 30.0,
-            maximum_distance: 800.0,
-            ..default()
-        }
-        .build(),
-        // Light travels along the light's -Z toward the scene; orient it so the
-        // sun appears in the `sun_dir` direction.
-        Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_dir, Vec3::Y),
-        // Tag component so the day/night system can find and rotate this light.
-        SunLight,
-        // Store the computed sun direction so the day/night rotation starts from
-        // the correct horizon angle (not a generic default).
-        SunLightState {
-            initial_direction: sun_dir,
-        },
-    ));
-}
-
-/// Tag component marking the sun directional light for day/night rotation.
-#[derive(Component, Debug)]
-pub struct SunLight;
-
-/// Component storing the sun's initial direction so the day/night system can
-/// rotate it around the planet's north pole each frame.
-#[derive(Component, Debug)]
-pub struct SunLightState {
-    pub initial_direction: Vec3,
-}
-
-impl Default for SunLightState {
-    fn default() -> Self {
-        Self {
-            initial_direction: Vec3::new(0.0, 0.26, 0.97).normalize(), // ~15 deg above horizon
-        }
-    }
-}
-
-/// Space is the clear color. Atmospheric haze is applied only to local geometry
-/// through the camera fog; it must never turn the entire universe blue.
-pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
-    *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
-}
-
-/// Spawns a true-scale Earth sphere for the rocket mode. The Earth radius is
-/// ~6,371 km; in flight units (1 unit = 1 meter) this is 6,371,000 units.
-/// The sphere is positioned each frame relative to the render origin so it
-/// provides a correct horizon and planet body from any altitude.
-pub fn setup_rocket_earth_sphere(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let earth_radius_m = 6_371_000.0; // True Earth radius in meters
-    let earth_radius_units = earth_radius_m as f32; // Flight units = meters
-
-    // Use true radius (not 0.999) so the sphere surface matches terrain height.
-    let mesh_handle = meshes.add(Sphere::new(earth_radius_units));
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.2, 0.4, 0.7), // Earth blue-green
-        perceptual_roughness: 0.9,
-        metallic: 0.0,
-        cull_mode: None, // Render both sides for horizon visibility
-        ..default()
-    });
-
-    commands.spawn((
-        Mesh3d(mesh_handle),
-        MeshMaterial3d(material),
-        Transform::default(),
-        RocketEarthSphere,
-    ));
-}
-
-/// Component marking the true-scale Earth sphere entity for updates.
-#[derive(Component, Debug, Default)]
-pub struct RocketEarthSphere;
-
-/// Kept as an update hook so future atmospheric scattering can drive a local
-/// sky pass. ClearColor deliberately remains space-black at every altitude.
-pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
-    *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
-}
-
-/// Updates the true-scale Earth sphere position to stay centered on the planet
-/// center relative to the render origin.
-pub fn update_rocket_earth_sphere(
-    render_origin: Res<RenderOrigin>,
-    mut sphere_query: Query<&mut Transform, With<RocketEarthSphere>>,
-) {
-    // Planet center in flight units: -render_origin.origin (scaled to meters).
-    // render_origin is in physics meters; flight units = meters.
-    let center = -(render_origin.origin.as_vec3());
-    for mut transform in sphere_query.iter_mut() {
-        transform.translation = center;
-    }
-}
-
-/// Day/night cycle: rotates the sun light direction around the planet's rotation
-/// axis (Y in the flight frame) as simulation time advances. The planet's angular
-/// velocity comes from the Earth planet definition. The sun makes one full
-/// revolution per planet rotation period (~24 hours for Earth).
-pub fn update_sun_day_night_cycle(
-    sim_time: Res<SimulationTime>,
-    planet_query: Query<&PlanetComponent>,
-    mut sun_query: Query<(&mut Transform, &SunLightState), With<SunLight>>,
-) {
-    // Find Earth planet for its rotation period, then compute angular velocity.
-    // omega = 2π / period_seconds.
-    let earth_rotation_rad_s = planet_query
-        .iter()
-        .find(|p| p.domain_planet.name == "Earth")
-        .map(|p| {
-            let period_s = p.domain_planet.rotation_period_hours as f64 * 3600.0;
-            if period_s > 0.0 {
-                std::f64::consts::TAU / period_s
-            } else {
-                7.2921159e-5 // Earth sidereal rotation rate rad/s
-            }
-        })
-        .unwrap_or(7.2921159e-5_f64);
-
-    let total_time_s = sim_time.sim_time_s;
-    let rotation_angle = (total_time_s * earth_rotation_rad_s) as f32;
-
-    for (mut light_transform, sun_state) in sun_query.iter_mut() {
-        // Rotate initial sun direction around the Y axis (planet rotation axis).
-        // The planet's north pole points along +Y in the flight frame.
-        let cos_a = rotation_angle.cos();
-        let sin_a = rotation_angle.sin();
-        let dir = sun_state.initial_direction;
-        let rotated = Vec3::new(
-            cos_a * dir.x - sin_a * dir.z,
-            dir.y,
-            sin_a * dir.x + cos_a * dir.z,
-        )
-        .normalize();
-
-        // Update the light's look-direction so the sun travels across the sky.
-        *light_transform = Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-rotated, Vec3::Y);
-    }
-}
 
 #[cfg(test)]
 mod ground_contact_tests {
@@ -660,6 +26,7 @@ mod ground_contact_tests {
         geodetic_to_body_fixed, planet_inertial_to_body_fixed, surface_velocity_in_planet_inertial,
     };
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::simulation_time::SimulationTime;
     use crate::domain::services::terrain_collision::{radial_direction, GroundContact};
     use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
     use crate::infrastructure::bevy_adapters::components::{
@@ -1294,14 +661,18 @@ mod ascent_pipeline_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
     use crate::domain::events::{SplashdownDetectedEvent, StageSeparatedEvent};
+    use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::simulation_time::SimulationTime;
     use crate::domain::services::terrain_collision::radial_direction;
+    use crate::infrastructure::bevy_adapters::components::PlanetComponent;
     use crate::infrastructure::bevy_adapters::rocket_contact::resolve_ground_contact;
     use crate::infrastructure::bevy_adapters::rocket_control::{actuation_system, control_system};
     use crate::infrastructure::bevy_adapters::rocket_dynamics::{
         accumulate_forces, integrate_6dof,
     };
+    use crate::infrastructure::bevy_adapters::rocket_guidance::guidance_system;
     use crate::infrastructure::bevy_adapters::rocket_propulsion::{
         propulsion_consumption, propulsion_staging,
     };
@@ -1679,6 +1050,59 @@ mod ascent_pipeline_tests {
         );
     }
 
+    #[test]
+    fn orbital_coast_holds_attitude_and_damps_all_body_axes() {
+        let target = LowEarthOrbitTarget::default();
+        let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
+        let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
+        let initial_rate = DVec3::new(0.2, 0.0, -0.15);
+        let mut app = ascent_app();
+        let entity = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        {
+            let world = app.world_mut();
+            let mut rocket = world.get_mut::<RocketPhysicsState>(entity).unwrap();
+            rocket.dynamics.position_m = DVec3::new(radius_m, 0.0, 0.0);
+            rocket.dynamics.velocity_mps = DVec3::new(
+                0.0,
+                circular_speed_mps * target.target_inclination_rad.cos(),
+                circular_speed_mps * target.target_inclination_rad.sin(),
+            );
+            rocket.dynamics.angular_velocity_radps = initial_rate;
+            *world.get_mut::<RocketMissionState>(entity).unwrap() = RocketMissionState::Ascent;
+        }
+
+        // The first update initializes fixed time. The following two updates
+        // complete insertion, enter the coast hold, and apply its RCS damping.
+        app.update();
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let rocket = world.get::<RocketPhysicsState>(entity).unwrap();
+        let commands = world.get::<RocketCommands>(entity).unwrap();
+        let autopilot = world.get::<RocketAutopilot>(entity).unwrap();
+        assert_eq!(autopilot.mode, AutopilotMode::Off);
+        assert_eq!(autopilot.integral, DVec3::ZERO);
+        assert!(
+            rocket.dynamics.angular_velocity_radps.x.abs() < initial_rate.x.abs()
+                && rocket.dynamics.angular_velocity_radps.z.abs() < initial_rate.z.abs(),
+            "orbital coast must damp residual pitch/yaw rates: {}",
+            rocket.dynamics.angular_velocity_radps
+        );
+        assert!(
+            commands
+                .target_attitude
+                .dot(rocket.dynamics.orientation)
+                .abs()
+                > 0.99,
+            "orbital coast must hold the current attitude"
+        );
+    }
+
     /// Control allocates attitude torque only. It must retain the throttle
     /// target supplied by guidance for the subsequent actuation stage.
     #[test]
@@ -1971,6 +1395,7 @@ mod ascent_pipeline_tests {
 mod render_interpolation_tests {
     use super::*;
     use crate::infrastructure::bevy_adapters::rocket_lifecycle::handle_rocket_launch_input;
+    use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
 
     #[test]
     fn prelaunch_render_uses_current_pad_state_without_interpolation() {
