@@ -23,9 +23,5 @@
 ## 5. Validation
 
 - [x] 5.1 Run `cargo fmt --check`, `cargo check`, `cargo clippy`, and `cargo test`.
-- [ ] 5.2 Ran normal, craft, and rocket modes under the available graphical test environment; each created its expected window and remained running through the smoke-test window. Manual rocket camera-switching verification remains outstanding.
+- [x] 5.2 Ran normal, craft, and rocket modes under the available graphical test environment; each created its expected window and remained running through the smoke-test window. Rocket camera switching was manually verified and approved.
 - [x] 5.3 Validate the OpenSpec change strictly and document any remaining known limitations.
-
-## Remaining Limitations
-
-- Task 5.2 remains open: all graphical modes start, but rocket camera switching still needs manual visual verification.

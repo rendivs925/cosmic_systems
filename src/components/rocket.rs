@@ -419,6 +419,15 @@ pub struct OrbitalElements {
     pub periapsis_m: f64,
 }
 
+/// One hypothetical orbital impulse planned against authoritative simulation
+/// time. It is consumed only by presentation prediction until a future command
+/// arbitration system executes a physical burn.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PlannedManeuver {
+    pub execute_at_sim_time_s: f64,
+    pub delta_v_mps: DVec3,
+}
+
 /// Aggregated rocket telemetry for HUD, flight log, and external consumers.
 /// Computed from authoritative state in `compute_rocket_telemetry` (FixedUpdate).
 /// All units are explicit per AGENTS.md section 15.

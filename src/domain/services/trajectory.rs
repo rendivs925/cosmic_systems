@@ -78,6 +78,38 @@ pub struct PredictionPoint {
     pub lon_deg: f64,
 }
 
+/// A hypothetical instantaneous velocity change applied during a prediction.
+/// This is planning data only: it never changes the authoritative vehicle state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ManeuverImpulse {
+    /// Seconds after the start of the prediction when the impulse occurs.
+    pub execute_after_s: f64,
+    /// Planet-inertial velocity change in m/s.
+    pub delta_v_mps: DVec3,
+}
+
+/// Exact state at a planned impulse, retained for UI markers and burn previews.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ManeuverPrediction {
+    pub execute_after_s: f64,
+    pub position_m: DVec3,
+    pub pre_burn_velocity_mps: DVec3,
+    pub post_burn_velocity_mps: DVec3,
+    /// Index of the pre-burn point in [`TrajectoryPrediction::points`].
+    pub pre_burn_point_index: usize,
+}
+
+/// Invalid planning inputs must not panic a presentation-only prediction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManeuverPredictionError {
+    EmptyBodies,
+    InvalidState,
+    InvalidHorizon,
+    InvalidStep,
+    InvalidManeuver,
+    ManeuverOutsideHorizon,
+}
+
 /// The result of a patched-conics prediction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrajectoryPrediction {
@@ -86,6 +118,8 @@ pub struct TrajectoryPrediction {
     /// Indices into `points` at which the dominant (central) body changed — an
     /// SOI crossing. The first point is never listed.
     pub body_transitions: Vec<usize>,
+    /// Metadata for the hypothetical impulse, when the prediction includes one.
+    pub maneuver: Option<ManeuverPrediction>,
 }
 
 /// Index of the body exerting the strongest gravitational acceleration on an
@@ -159,7 +193,110 @@ pub fn predict_patched_conics(
     TrajectoryPrediction {
         points,
         body_transitions: transitions,
+        maneuver: None,
     }
+}
+
+/// Propagate a patched-conics trajectory with one hypothetical instantaneous
+/// impulse. The burn is evaluated at its exact requested time, including when it
+/// falls between regular prediction samples.
+pub fn predict_patched_conics_with_impulse(
+    bodies: &[GravityBody],
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    horizon_s: f64,
+    step_s: f64,
+    maneuver: ManeuverImpulse,
+) -> Result<TrajectoryPrediction, ManeuverPredictionError> {
+    if bodies.is_empty() {
+        return Err(ManeuverPredictionError::EmptyBodies);
+    }
+    if !position_m.is_finite() || !velocity_mps.is_finite() {
+        return Err(ManeuverPredictionError::InvalidState);
+    }
+    if !horizon_s.is_finite() || horizon_s <= 0.0 {
+        return Err(ManeuverPredictionError::InvalidHorizon);
+    }
+    if !step_s.is_finite() || step_s <= 0.0 {
+        return Err(ManeuverPredictionError::InvalidStep);
+    }
+    if !maneuver.execute_after_s.is_finite()
+        || maneuver.execute_after_s <= 0.0
+        || !maneuver.delta_v_mps.is_finite()
+    {
+        return Err(ManeuverPredictionError::InvalidManeuver);
+    }
+    if maneuver.execute_after_s > horizon_s {
+        return Err(ManeuverPredictionError::ManeuverOutsideHorizon);
+    }
+
+    let mut time_s = 0.0;
+    let mut position = position_m;
+    let mut velocity = velocity_mps;
+    let mut body_index = dominant_body(position, bodies);
+    let mut points = vec![make_point(time_s, position, velocity, body_index, bodies)];
+    let mut transitions = Vec::new();
+
+    while time_s < horizon_s {
+        let next_boundary_s = if time_s < maneuver.execute_after_s {
+            maneuver.execute_after_s
+        } else {
+            horizon_s
+        };
+        let dt = (next_boundary_s - time_s).min(step_s);
+        if dt > f64::EPSILON {
+            let (next_position, next_velocity) =
+                rk4_step(position, velocity, bodies, body_index, dt);
+            position = next_position;
+            velocity = next_velocity;
+            time_s += dt;
+
+            let next_body_index = dominant_body(position, bodies);
+            if next_body_index != body_index {
+                transitions.push(points.len());
+                body_index = next_body_index;
+            }
+            points.push(make_point(time_s, position, velocity, body_index, bodies));
+        }
+
+        if (time_s - maneuver.execute_after_s).abs() <= f64::EPSILON {
+            let pre_burn_point_index = points.len() - 1;
+            let pre_burn_velocity_mps = velocity;
+            velocity += maneuver.delta_v_mps;
+            let prediction = ManeuverPrediction {
+                execute_after_s: maneuver.execute_after_s,
+                position_m: position,
+                pre_burn_velocity_mps,
+                post_burn_velocity_mps: velocity,
+                pre_burn_point_index,
+            };
+            points.push(make_point(time_s, position, velocity, body_index, bodies));
+
+            while time_s < horizon_s {
+                let dt = (horizon_s - time_s).min(step_s);
+                let (next_position, next_velocity) =
+                    rk4_step(position, velocity, bodies, body_index, dt);
+                position = next_position;
+                velocity = next_velocity;
+                time_s += dt;
+
+                let next_body_index = dominant_body(position, bodies);
+                if next_body_index != body_index {
+                    transitions.push(points.len());
+                    body_index = next_body_index;
+                }
+                points.push(make_point(time_s, position, velocity, body_index, bodies));
+            }
+
+            return Ok(TrajectoryPrediction {
+                points,
+                body_transitions: transitions,
+                maneuver: Some(prediction),
+            });
+        }
+    }
+
+    Err(ManeuverPredictionError::ManeuverOutsideHorizon)
 }
 
 fn rk4_step(
@@ -325,5 +462,70 @@ mod tests {
             "identical inputs must yield identical predictions"
         );
         assert_eq!(a.body_transitions, b.body_transitions);
+    }
+
+    #[test]
+    fn impulse_is_applied_at_the_exact_requested_time() {
+        let r = EARTH_RADIUS_M + 300_000.0;
+        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
+        let delta_v_mps = DVec3::new(0.0, 0.0, 120.0);
+        let prediction = predict_patched_conics_with_impulse(
+            &[earth_at_origin()],
+            DVec3::new(r, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, v),
+            600.0,
+            60.0,
+            ManeuverImpulse {
+                execute_after_s: 123.45,
+                delta_v_mps,
+            },
+        )
+        .expect("valid maneuver prediction");
+
+        let maneuver = prediction.maneuver.expect("maneuver metadata");
+        let pre_burn = &prediction.points[maneuver.pre_burn_point_index];
+        let post_burn = &prediction.points[maneuver.pre_burn_point_index + 1];
+        assert!((pre_burn.time_s - 123.45).abs() < 1e-9);
+        assert_eq!(pre_burn.time_s, post_burn.time_s);
+        assert_eq!(pre_burn.position_m, post_burn.position_m);
+        assert_eq!(post_burn.velocity_mps, pre_burn.velocity_mps + delta_v_mps);
+        assert_eq!(maneuver.pre_burn_velocity_mps, pre_burn.velocity_mps);
+        assert_eq!(maneuver.post_burn_velocity_mps, post_burn.velocity_mps);
+    }
+
+    #[test]
+    fn invalid_or_out_of_horizon_impulses_are_rejected() {
+        let state = (
+            DVec3::new(EARTH_RADIUS_M + 200_000.0, 0.0, 0.0),
+            DVec3::Z * 7_800.0,
+        );
+        let invalid = predict_patched_conics_with_impulse(
+            &[earth_at_origin()],
+            state.0,
+            state.1,
+            600.0,
+            30.0,
+            ManeuverImpulse {
+                execute_after_s: 0.0,
+                delta_v_mps: DVec3::Y,
+            },
+        );
+        assert_eq!(invalid, Err(ManeuverPredictionError::InvalidManeuver));
+
+        let outside_horizon = predict_patched_conics_with_impulse(
+            &[earth_at_origin()],
+            state.0,
+            state.1,
+            600.0,
+            30.0,
+            ManeuverImpulse {
+                execute_after_s: 601.0,
+                delta_v_mps: DVec3::Y,
+            },
+        );
+        assert_eq!(
+            outside_horizon,
+            Err(ManeuverPredictionError::ManeuverOutsideHorizon)
+        );
     }
 }

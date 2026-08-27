@@ -76,7 +76,10 @@ blunting reduces subsequent heating).
 - [-] 5.3 Trajectory prediction: patched-conics kernel shipped in
       `domain/services/trajectory.rs` (RK4 two-body + SOI switching, ground
       track, transition set); panel/Gizmo rendering + maneuver nodes remain
-- [ ] 5.4 Maneuver nodes
+- [x] 5.4 One planned f64 impulse updates the patched-conics prediction at its
+      exact simulation-relative time, with a rocket-mode gizmo marker and HUD
+      countdown/delta-v readout. Node placement/editing and physical execution
+      remain in the dedicated MVP orbital-planning tasks.
 - [ ] 5.5 Terrain map panel
 - [x] 5.6 `FlightRecorder` ring buffer (component) at fixed rate/capacity
 - [-] 5.7 Recorder controls (F9 record toggle / F10 clear / F11 CSV export);

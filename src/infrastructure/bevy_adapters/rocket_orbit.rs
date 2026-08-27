@@ -8,10 +8,16 @@
 //! unit-testable without a renderer; the Bevy system only converts the
 //! planet-centred points to the flight frame and draws them.
 
-use crate::components::rocket::{RocketMissionState, RocketPlanetBinding, RocketRenderState};
+use crate::components::rocket::{
+    PlannedManeuver, RocketMissionState, RocketPlanetBinding, RocketRenderState,
+};
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
-use crate::domain::services::trajectory::{predict_patched_conics, GravityBody};
+use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::services::trajectory::{
+    predict_patched_conics, predict_patched_conics_with_impulse, GravityBody, ManeuverImpulse,
+    ManeuverPrediction,
+};
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::rocket_presentation::interpolate_render_transform;
@@ -28,6 +34,8 @@ pub struct OrbitPrediction {
     pub apoapsis: Option<DVec3>,
     /// Planet-centred periapsis position, if a bound/perigee was found.
     pub periapsis: Option<DVec3>,
+    /// The planned burn point, when it is reachable within this prediction.
+    pub maneuver: Option<ManeuverPrediction>,
 }
 
 impl OrbitPrediction {
@@ -36,6 +44,7 @@ impl OrbitPrediction {
             planet_frame_points: Vec::new(),
             apoapsis: None,
             periapsis: None,
+            maneuver: None,
         }
     }
 }
@@ -50,6 +59,23 @@ pub fn predicted_orbit(
     velocity_mps: DVec3,
     planet_mass_kg: f64,
     surface_radius_m: f64,
+) -> OrbitPrediction {
+    predicted_orbit_with_maneuver(
+        position_m,
+        velocity_mps,
+        planet_mass_kg,
+        surface_radius_m,
+        None,
+    )
+}
+
+/// Like [`predicted_orbit`], with an optional presentation-only planned impulse.
+pub fn predicted_orbit_with_maneuver(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    planet_mass_kg: f64,
+    surface_radius_m: f64,
+    maneuver: Option<ManeuverImpulse>,
 ) -> OrbitPrediction {
     let speed = velocity_mps.length();
     if !position_m.length().is_finite()
@@ -78,13 +104,27 @@ pub fn predicted_orbit(
     let step = (horizon / 160.0).max(1.0);
 
     let body = GravityBody::new("central", DVec3::ZERO, planet_mass_kg);
-    let pred = predict_patched_conics(&[body], position_m, velocity_mps, horizon, step);
+    let pred = match maneuver {
+        Some(maneuver) => match predict_patched_conics_with_impulse(
+            &[body],
+            position_m,
+            velocity_mps,
+            horizon,
+            step,
+            maneuver,
+        ) {
+            Ok(prediction) => prediction,
+            Err(_) => return OrbitPrediction::empty(),
+        },
+        None => predict_patched_conics(&[body], position_m, velocity_mps, horizon, step),
+    };
 
     let mut points = Vec::with_capacity(pred.points.len());
     points.push(position_m);
     let mut previous_position = position_m;
     let mut intersects_surface = false;
-    for p in pred.points.iter().skip(1) {
+    let mut impact_point_index = None;
+    for (index, p) in pred.points.iter().enumerate().skip(1) {
         let rad = p.position_m.length();
         if rad <= surface_radius_m {
             // Point-mass propagation does not model terrain impact. Stop at the
@@ -96,20 +136,31 @@ pub fn predicted_orbit(
                 surface_radius_m,
             ));
             intersects_surface = true;
+            impact_point_index = Some(index);
             break;
         }
         points.push(p.position_m);
         previous_position = p.position_m;
     }
 
+    let apsis_state = pred
+        .maneuver
+        .map(|maneuver| (maneuver.position_m, maneuver.post_burn_velocity_mps))
+        .unwrap_or((position_m, velocity_mps));
     let apsides = (!intersects_surface)
-        .then(|| apsis_endpoints_from_state(position_m, velocity_mps, mu))
+        .then(|| apsis_endpoints_from_state(apsis_state.0, apsis_state.1, mu))
         .flatten();
+    let maneuver = pred.maneuver.filter(|maneuver| {
+        impact_point_index
+            .map(|impact_index| maneuver.pre_burn_point_index < impact_index)
+            .unwrap_or(true)
+    });
 
     OrbitPrediction {
         planet_frame_points: points,
         apoapsis: apsides.map(|apsides| apsides.apoapsis_position_m),
         periapsis: apsides.map(|apsides| apsides.periapsis_position_m),
+        maneuver,
     }
 }
 
@@ -169,13 +220,15 @@ fn draw_orbit_prediction(
         &RocketPlanetBinding,
         &RocketRenderState,
         &RocketMissionState,
+        Option<&PlannedManeuver>,
     )>,
     render_origin: Res<RenderOrigin>,
     physical_scale: Res<PhysicalScale>,
     time: Res<Time<Fixed>>,
+    sim_time: Res<SimulationTime>,
     mut gizmos: Gizmos<OrbitLineGizmos>,
 ) {
-    let Some((binding, render, mission)) = rocket_query.iter().next() else {
+    let Some((binding, render, mission, planned_maneuver)) = rocket_query.iter().next() else {
         return;
     };
     if *mission == RocketMissionState::PreLaunch {
@@ -197,11 +250,20 @@ fn draw_orbit_prediction(
         .prev
         .velocity_mps
         .lerp(render.current.velocity_mps, alpha);
-    let pred = predicted_orbit(
+    let maneuver = planned_maneuver.and_then(|planned| {
+        let execute_after_s = planned.execute_at_sim_time_s - sim_time.sim_time_s;
+        (execute_after_s > 0.0 && execute_after_s.is_finite() && planned.delta_v_mps.is_finite())
+            .then_some(ManeuverImpulse {
+                execute_after_s,
+                delta_v_mps: planned.delta_v_mps,
+            })
+    });
+    let pred = predicted_orbit_with_maneuver(
         position_m,
         velocity_mps,
         planet.domain_planet.mass_kg,
         planet.domain_planet.radius_km as f64 * 1000.0,
+        maneuver,
     );
     if pred.planet_frame_points.len() < 2 {
         return;
@@ -218,6 +280,13 @@ fn draw_orbit_prediction(
     }
     if let Some(pe) = pred.periapsis {
         gizmos.sphere(to_world(pe), 6.0, Color::srgb(1.0, 0.35, 0.35));
+    }
+    if let Some(maneuver) = pred.maneuver {
+        gizmos.sphere(
+            to_world(maneuver.position_m),
+            10.0,
+            Color::srgb(1.0, 0.8, 0.15),
+        );
     }
 }
 
@@ -305,6 +374,38 @@ mod tests {
             EARTH_RADIUS_M,
         );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn planned_prograde_impulse_marks_and_changes_the_prediction() {
+        let r = EARTH_RADIUS_M + 400_000.0;
+        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
+        let baseline = predicted_orbit(
+            DVec3::new(r, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, v),
+            EARTH_MASS_KG,
+            EARTH_RADIUS_M,
+        );
+        let with_maneuver = predicted_orbit_with_maneuver(
+            DVec3::new(r, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, v),
+            EARTH_MASS_KG,
+            EARTH_RADIUS_M,
+            Some(ManeuverImpulse {
+                execute_after_s: 120.0,
+                delta_v_mps: DVec3::new(0.0, 0.0, 100.0),
+            }),
+        );
+
+        assert!(with_maneuver.maneuver.is_some());
+        assert_ne!(
+            baseline.planet_frame_points,
+            with_maneuver.planet_frame_points
+        );
+        assert!(
+            with_maneuver.apoapsis.expect("post-burn apoapsis").length() > r,
+            "a prograde impulse must raise apoapsis"
+        );
     }
 
     #[test]

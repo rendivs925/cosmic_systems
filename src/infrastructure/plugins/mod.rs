@@ -73,6 +73,7 @@ use crate::infrastructure::bevy_adapters::rocket_hud::{
 use crate::infrastructure::bevy_adapters::rocket_lifecycle::{
     apply_relaunch_requests, handle_relaunch_input_system, handle_rocket_launch_input,
 };
+use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
     isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets, RocketBoundPlanet,
 };
@@ -365,6 +366,9 @@ impl Plugin for RocketModePlugin {
 
         // Rocket debug visualization plugin.
         app.add_plugins(RocketDebugPlugin);
+
+        // Presentation-only patched-conics prediction and maneuver markers.
+        app.add_plugins(RocketOrbitPlugin);
 
         // Wall-clock time is updated per rendered frame; simulation time is
         // advanced only by completed fixed physics ticks below.
