@@ -48,7 +48,7 @@ The system SHALL render a 2D map projection of the current planetary body with t
 
 ### Requirement: Flight recorder and replay
 
-The system SHALL record the complete simulation state (position, velocity, attitude, mass, throttle, gimbal, guidance mode, atmospheric state, terrain contacts) at a configurable rate and support deterministic replay.
+The system SHALL record a complete fixed-tick simulation snapshot (position, velocity, attitude, mass, throttle, gimbal, guidance mode, atmospheric state, terrain contacts, thermal/recovery state, propulsion/stage state, timestamp, and entity identity) separately from lower-rate telemetry at a configurable retention capacity, and support deterministic replay.
 
 #### Scenario: Continuous recording
 
@@ -58,9 +58,9 @@ The system SHALL record the complete simulation state (position, velocity, attit
 #### Scenario: Deterministic replay
 
 - **WHEN** a recorded flight is replayed
-- **THEN** the simulation reproduces the exact same state sequence bit-for-bit
+- **THEN** restoring the same selected snapshot reproduces the exact recorded state bit-for-bit while live physics integration is paused
 
 #### Scenario: Replay scrubbing
 
 - **WHEN** the user seeks in the replay timeline
-- **THEN** the simulation state jumps to that timestamp and the UI updates
+- **THEN** the simulation restores the selected snapshot and the UI updates without rewinding the live simulation clock

@@ -96,9 +96,9 @@ The rocket simulator has a complete physics pipeline across 8 archived changes: 
 - `OrbitalElementsPanel`: reads `RocketPhysicsState` + `Gravity` for osculating elements
 - `TrajectoryPredictionPanel`: runs lightweight patched-conics propagator in a background task (Bevy `TaskPool`), renders as `Gizmo` line strip
 - `TerrainMapPanel`: orthographic projection of current body; samples `TerrainSource` for height colorization; draws ground track from recorder/predictor
-- `FlightRecorderPanel`: playback controls + timeline scrubber; on seek, sends `FlightReplaySeekEvent` → `SimulationTime` override + state restore
+- `FlightRecorderPanel`: playback controls + timeline scrubber. A dedicated fixed-tick replay snapshot stream records complete rocket state separately from the lower-rate telemetry ring buffer. On seek, replay restores the selected snapshot and derives presentation from that state; it never rewinds the live `SimulationTime` clock.
 
-**Replay determinism:** Recorder stores full `RocketPhysicsState` + `RocketMissionState` + `AtmosphereState` + `TerrainCollisionState` per frame. Replay mode sets `SimulationTime` to recorded timestamps and forces state from buffer (bypasses physics integration).
+**Replay determinism:** The fixed-tick snapshot stream stores all authoritative state needed to resume a rocket deterministically: dynamics, mission, propulsion and stage state, control/guidance state, atmospheric and terrain-contact state, thermal/recovery state, and timestamp/entity identity. Replay pauses live simulation and restores a selected snapshot while bypassing physics integration. It does not set `SimulationTime` backward; resuming live flight restores the pre-replay clock and control state.
 
 ### Staging Recovery Architecture
 

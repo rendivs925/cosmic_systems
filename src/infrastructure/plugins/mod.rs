@@ -83,6 +83,10 @@ use crate::infrastructure::bevy_adapters::rocket_presentation::{
 use crate::infrastructure::bevy_adapters::rocket_propulsion::{
     propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
 };
+use crate::infrastructure::bevy_adapters::rocket_replay::{
+    apply_replay_actions_system, record_replay_snapshot_system, replay_active, replay_inactive,
+    ReplayAction, ReplaySnapshotStream,
+};
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
@@ -91,6 +95,7 @@ use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     handle_flight_recorder_input_system, record_flight_data_system, rocket_event_feed_system,
     RocketEventFeed,
 };
+use crate::infrastructure::bevy_adapters::rocket_terrain_map::RocketTerrainMapPlugin;
 use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
     recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
@@ -332,6 +337,8 @@ impl Plugin for RocketModePlugin {
         // Rocket telemetry resource for HUD and flight log.
         app.init_resource::<RocketTelemetry>();
         app.init_resource::<RocketEventFeed>();
+        app.init_resource::<ReplaySnapshotStream>();
+        app.add_message::<ReplayAction>();
 
         // Terrain rendering configuration.
         app.init_resource::<TerrainRenderConfig>();
@@ -369,6 +376,9 @@ impl Plugin for RocketModePlugin {
 
         // Presentation-only patched-conics prediction and maneuver markers.
         app.add_plugins(RocketOrbitPlugin);
+
+        // Compact body-fixed terrain map and trajectory overlays.
+        app.add_plugins(RocketTerrainMapPlugin);
 
         // Wall-clock time is updated per rendered frame; simulation time is
         // advanced only by completed fixed physics ticks below.
@@ -410,19 +420,42 @@ impl Plugin for RocketModePlugin {
         );
 
         // Flight recorder input (runs in Update).
-        app.add_systems(Update, handle_flight_recorder_input_system);
+        app.add_systems(
+            Update,
+            handle_flight_recorder_input_system.run_if(replay_inactive),
+        );
 
         // Flight-recorder CSV export (F11, runs in Update).
         app.add_systems(Update, handle_flight_recorder_export_system);
 
         // Relaunch input (runs in Update; mutation happens in FixedUpdate).
-        app.add_systems(Update, handle_relaunch_input_system);
+        app.add_systems(Update, handle_relaunch_input_system.run_if(replay_inactive));
 
         // Time acceleration adjusts fixed-update frequency while every physics
         // tick keeps the bounded SimulationTime timestep.
         app.add_systems(
             Update,
-            (handle_time_acceleration_input, sync_fixed_timestep).chain(),
+            (
+                handle_time_acceleration_input.run_if(replay_inactive),
+                sync_fixed_timestep,
+            )
+                .chain(),
+        );
+
+        // Replay controls are message-driven so a future HUD can issue seeks
+        // without coupling playback to the telemetry recorder.
+        app.add_systems(
+            Update,
+            apply_replay_actions_system
+                .before(handle_rocket_launch_input)
+                .before(update_rocket_hud_system),
+        );
+        app.add_systems(
+            Update,
+            compute_rocket_telemetry_system
+                .after(apply_replay_actions_system)
+                .before(update_rocket_hud_system)
+                .run_if(replay_active),
         );
 
         // Event feed: domain messages → HUD line + flight-log entries (Update).
@@ -463,6 +496,7 @@ impl Plugin for RocketModePlugin {
                 RocketSet::GroundContact,
                 RocketSet::SyncRender,
                 RocketSet::Telemetry,
+                RocketSet::Replay,
             )
                 .chain()
                 .run_if(simulation_unpaused),
@@ -519,6 +553,7 @@ impl Plugin for RocketModePlugin {
             (
                 compute_rocket_telemetry_system.in_set(RocketSet::Telemetry),
                 record_flight_data_system.in_set(RocketSet::Telemetry),
+                record_replay_snapshot_system.in_set(RocketSet::Replay),
             ),
         );
 
@@ -546,7 +581,7 @@ impl Plugin for RocketModePlugin {
         );
 
         // Pre-launch hold: Space to launch.
-        app.add_systems(Update, handle_rocket_launch_input);
+        app.add_systems(Update, handle_rocket_launch_input.run_if(replay_inactive));
 
         // Keep the rocket-mode sky clear and space-black.
         app.add_systems(Update, update_rocket_sky_color);

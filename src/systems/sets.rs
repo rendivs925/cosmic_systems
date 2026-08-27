@@ -33,4 +33,7 @@ pub enum RocketSet {
     GroundContact,
     SyncRender,
     Telemetry,
+    /// Complete fixed-tick replay snapshot capture after all authoritative
+    /// state and telemetry have been updated.
+    Replay,
 }

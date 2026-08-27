@@ -30,6 +30,10 @@ use bevy::prelude::*;
 pub struct OrbitPrediction {
     /// Planet-centred inertial sample positions (meters) along the trajectory.
     pub planet_frame_points: Vec<DVec3>,
+    /// Seconds since the prediction start for each planet-frame sample. Kept
+    /// alongside the line points so body-fixed presentation can account for
+    /// planetary rotation without rerunning the predictor.
+    pub planet_frame_times_s: Vec<f64>,
     /// Planet-centred apoapsis position, if a bound/apogee was found.
     pub apoapsis: Option<DVec3>,
     /// Planet-centred periapsis position, if a bound/perigee was found.
@@ -42,6 +46,7 @@ impl OrbitPrediction {
     pub fn empty() -> Self {
         Self {
             planet_frame_points: Vec::new(),
+            planet_frame_times_s: Vec::new(),
             apoapsis: None,
             periapsis: None,
             maneuver: None,
@@ -120,7 +125,9 @@ pub fn predicted_orbit_with_maneuver(
     };
 
     let mut points = Vec::with_capacity(pred.points.len());
+    let mut times_s = Vec::with_capacity(pred.points.len());
     points.push(position_m);
+    times_s.push(0.0);
     let mut previous_position = position_m;
     let mut intersects_surface = false;
     let mut impact_point_index = None;
@@ -135,11 +142,13 @@ pub fn predicted_orbit_with_maneuver(
                 p.position_m,
                 surface_radius_m,
             ));
+            times_s.push(p.time_s);
             intersects_surface = true;
             impact_point_index = Some(index);
             break;
         }
         points.push(p.position_m);
+        times_s.push(p.time_s);
         previous_position = p.position_m;
     }
 
@@ -158,6 +167,7 @@ pub fn predicted_orbit_with_maneuver(
 
     OrbitPrediction {
         planet_frame_points: points,
+        planet_frame_times_s: times_s,
         apoapsis: apsides.map(|apsides| apsides.apoapsis_position_m),
         periapsis: apsides.map(|apsides| apsides.periapsis_position_m),
         maneuver,

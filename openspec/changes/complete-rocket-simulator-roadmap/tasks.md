@@ -80,11 +80,12 @@ blunting reduces subsequent heating).
       exact simulation-relative time, with a rocket-mode gizmo marker and HUD
       countdown/delta-v readout. Node placement/editing and physical execution
       remain in the dedicated MVP orbital-planning tasks.
-- [ ] 5.5 Terrain map panel
+- [x] 5.5 Terrain map panel
 - [x] 5.6 `FlightRecorder` ring buffer (component) at fixed rate/capacity
 - [-] 5.7 Recorder controls (F9 record toggle / F10 clear / F11 CSV export);
       no playback UI
-- [ ] 5.8 Replay/seek mode
+- [x] 5.8 Deterministic replay/seek mode backed by a complete fixed-tick
+      snapshot stream; lower-rate `FlightRecorder` telemetry remains analysis-only
 - [-] 5.9 Config spread across existing resources (no `TelemetryConfig`)
 - [x] 5.10 Wired in rocket mode only
 - [-] 5.11 Record/replay bitwise determinism covered by the
