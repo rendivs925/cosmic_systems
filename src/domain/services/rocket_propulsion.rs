@@ -7,7 +7,7 @@
 //! accumulator and never write the transform directly (AGENTS.md section 17).
 
 use crate::domain::entities::rocket::{EngineState, RocketEngine, RocketStage};
-use crate::domain::services::atmosphere::SEA_LEVEL_DENSITY_KG_M3;
+use crate::domain::services::atmosphere::SEA_LEVEL_PRESSURE_PA;
 use crate::domain::services::rocket_dynamics::rocket_inertia_tensor;
 use bevy::math::{DMat3, DQuat, DVec3};
 
@@ -80,13 +80,42 @@ pub fn mass_flow_from_thrust(thrust_n: f64, isp_s: f32) -> f64 {
     thrust_n / (isp_s as f64 * STANDARD_GRAVITY_MPS2)
 }
 
-/// Select the effective specific impulse from ambient density, blending
-/// between sea-level and vacuum ISP as density drops toward vacuum (back-
-/// pressure effect). At standard sea-level density the sea-level ISP applies;
-/// in a vacuum the vacuum ISP applies. Consumes the shared atmosphere model.
-pub fn selected_isp(isp_sea_level: f32, isp_vacuum: f32, density_kg_m3: f64) -> f32 {
-    let t = (1.0 - (density_kg_m3 / SEA_LEVEL_DENSITY_KG_M3).clamp(0.0, 1.0)) as f32;
+/// Select the effective specific impulse from ambient pressure, linearly
+/// interpolating the configured sea-level and vacuum endpoints. With a fixed
+/// nozzle mass flow, the pressure-thrust term is linear in back pressure.
+pub fn selected_isp(isp_sea_level: f32, isp_vacuum: f32, ambient_pressure_pa: f64) -> f32 {
+    let t = (1.0 - (ambient_pressure_pa / SEA_LEVEL_PRESSURE_PA).clamp(0.0, 1.0)) as f32;
     isp_sea_level + (isp_vacuum - isp_sea_level) * t
+}
+
+/// One engine's coherent operating point at a fixed throttle and back pressure.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EngineOperatingPoint {
+    pub specific_impulse_s: f32,
+    pub mass_flow_kg_s: f64,
+    pub thrust_n: f64,
+}
+
+impl EngineOperatingPoint {
+    pub fn from_engine(engine: &RocketEngine, throttle: f32, ambient_pressure_pa: f64) -> Self {
+        let sea_level_thrust_n =
+            engine.max_thrust_kn as f64 * 1000.0 * throttle.clamp(0.0, 1.0) as f64;
+        let mass_flow_kg_s = mass_flow_from_thrust(sea_level_thrust_n, engine.isp_sea_level);
+        let specific_impulse_s =
+            selected_isp(engine.isp_sea_level, engine.isp_vacuum, ambient_pressure_pa);
+        Self {
+            specific_impulse_s,
+            mass_flow_kg_s,
+            thrust_n: thrust_from_isp(mass_flow_kg_s, specific_impulse_s),
+        }
+    }
+}
+
+/// Full-throttle thrust at an ambient pressure. Engine catalog thrust is
+/// calibrated at sea level, so mass flow is fixed from that reference and the
+/// pressure-selected Isp determines the resulting force.
+pub fn engine_thrust_n(engine: &RocketEngine, throttle: f32, ambient_pressure_pa: f64) -> f64 {
+    EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa).thrust_n
 }
 
 /// Consume propellant at the given mass flow for `dt` seconds. Returns the
@@ -133,6 +162,7 @@ pub fn allocate_gimbal_deflections(
     center_of_mass_m: DVec3,
     torque_cmd: DVec3,
     thrust_scale: f32,
+    ambient_pressure_pa: f64,
 ) -> (f32, f32) {
     if engines.is_empty() {
         return (0.0, 0.0);
@@ -147,7 +177,7 @@ pub fn allocate_gimbal_deflections(
                 engine.position_m.as_dvec3(),
                 center_of_mass_m,
                 engine.thrust_axis.as_dvec3(),
-                engine.max_thrust_kn as f64 * 1000.0 * scale,
+                engine_thrust_n(engine, scale as f32, ambient_pressure_pa),
                 pitch,
                 yaw,
             );
@@ -282,13 +312,13 @@ pub fn shed_stage(
 }
 
 /// Total running-engine thrust (body frame) for the active stage at a throttle,
-/// honoring per-engine ISP selection by ambient density. Only engines in
+/// honoring per-engine ISP selection by ambient pressure. Only engines in
 /// [`EngineState::Running`] contribute — every thrust consumer routes through
 /// here so shutdown state is respected consistently everywhere.
 pub fn stage_thrust_body(
     engines: &[RocketEngine],
     throttle: f32,
-    density_kg_m3: f64,
+    ambient_pressure_pa: f64,
 ) -> (DVec3, f64) {
     let throttle = throttle.clamp(0.0, 1.0);
     let mut force = DVec3::ZERO;
@@ -297,10 +327,9 @@ pub fn stage_thrust_body(
         if engine.state != EngineState::Running {
             continue;
         }
-        let isp = selected_isp(engine.isp_sea_level, engine.isp_vacuum, density_kg_m3);
-        let thrust = engine.max_thrust_kn as f64 * 1000.0 * throttle as f64;
-        force += engine.thrust_axis.as_dvec3() * thrust;
-        mass_flow += mass_flow_from_thrust(thrust, isp);
+        let point = EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa);
+        force += engine.thrust_axis.as_dvec3() * point.thrust_n;
+        mass_flow += point.mass_flow_kg_s;
     }
     (force, mass_flow)
 }
@@ -498,11 +527,23 @@ mod tests {
     }
 
     #[test]
-    fn isp_selection_blends_with_density() {
-        assert_eq!(selected_isp(282.0, 311.0, 1.225), 282.0); // sea level
+    fn isp_selection_blends_with_ambient_pressure() {
+        assert_eq!(selected_isp(282.0, 311.0, SEA_LEVEL_PRESSURE_PA), 282.0);
         assert_eq!(selected_isp(282.0, 311.0, 0.0), 311.0); // vacuum
-        let mid = selected_isp(282.0, 311.0, 0.6);
+        let mid = selected_isp(282.0, 311.0, SEA_LEVEL_PRESSURE_PA * 0.5);
         assert!(mid > 282.0 && mid < 311.0);
+    }
+
+    #[test]
+    fn pressure_changes_thrust_without_changing_mass_flow() {
+        let engine = engine_with_throttle(0.0, 1.0);
+        let (sea_level_thrust, sea_level_flow) =
+            stage_thrust_body(&[engine.clone()], 1.0, SEA_LEVEL_PRESSURE_PA);
+        let (vacuum_thrust, vacuum_flow) = stage_thrust_body(&[engine], 1.0, 0.0);
+
+        assert!((sea_level_thrust.y - 1_000_000.0).abs() < 1e-6);
+        assert!(vacuum_thrust.y > sea_level_thrust.y);
+        assert!((vacuum_flow - sea_level_flow).abs() < 1e-9);
     }
 
     #[test]
@@ -512,7 +553,8 @@ mod tests {
         let mut shutdown = running.clone();
         shutdown.state = EngineState::Off;
 
-        let (thrust_on, flow_on) = stage_thrust_body(&[running.clone(), shutdown], 1.0, 0.0);
+        let (thrust_on, flow_on) =
+            stage_thrust_body(&[running.clone(), shutdown], 1.0, SEA_LEVEL_PRESSURE_PA);
         assert!(
             (thrust_on.y - 1_000_000.0).abs() < 1e-6,
             "only Running engines thrust"
@@ -521,7 +563,7 @@ mod tests {
 
         let mut all_off = running;
         all_off.state = EngineState::Off;
-        let (thrust_off, flow_off) = stage_thrust_body(&[all_off], 1.0, 0.0);
+        let (thrust_off, flow_off) = stage_thrust_body(&[all_off], 1.0, SEA_LEVEL_PRESSURE_PA);
         assert_eq!(thrust_off, DVec3::ZERO);
         assert_eq!(flow_off, 0.0);
     }
@@ -685,7 +727,7 @@ mod tests {
         let com = DVec3::new(0.0, -20.0, 0.0);
         let torque_cmd = DVec3::new(5.0e6, 0.0, -3.0e6);
 
-        let (pitch, yaw) = allocate_gimbal_deflections(engines, com, torque_cmd, 1.0);
+        let (pitch, yaw) = allocate_gimbal_deflections(engines, com, torque_cmd, 1.0, 0.0);
         // Positive X torque needs a negative pitch (engines below COM).
         assert!(pitch < 0.0);
         assert!(yaw > 0.0);
@@ -697,7 +739,7 @@ mod tests {
                 engine.position_m.as_dvec3(),
                 com,
                 engine.thrust_axis.as_dvec3(),
-                engine.max_thrust_kn as f64 * 1000.0,
+                engine_thrust_n(engine, 1.0, 0.0),
                 pitch as f64,
                 yaw as f64,
             );
@@ -709,7 +751,7 @@ mod tests {
 
         // No engines → no deflections.
         assert_eq!(
-            allocate_gimbal_deflections(&[], com, torque_cmd, 1.0),
+            allocate_gimbal_deflections(&[], com, torque_cmd, 1.0, 0.0),
             (0.0, 0.0)
         );
     }

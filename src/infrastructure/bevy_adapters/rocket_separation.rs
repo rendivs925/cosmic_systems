@@ -81,7 +81,10 @@ pub fn spawn_spent_stage(
             GravityAcceleration::default(),
             AtmosphereState::default(),
             RocketPlanetBinding {
-                planet_name: spec.planet_name,
+                planet_name: crate::domain::value_objects::celestial_body_id::CelestialBodyId::new(
+                    spec.planet_name,
+                )
+                .expect("spent-stage planet name is validated by its parent rocket binding"),
             },
             Mesh3d(mesh),
             MeshMaterial3d(material),
@@ -213,7 +216,7 @@ pub fn check_fairing_separation(
                 &mut materials,
                 SpentStageSpec {
                     parent_rocket: entity,
-                    planet_name: binding.planet_name.clone(),
+                    planet_name: binding.planet_name.to_string(),
                     dynamics: half_dynamics(sign),
                     radius_m: half_radius_m,
                     height_m: half_height_m,

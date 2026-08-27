@@ -31,8 +31,8 @@ use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed,
     allocate_gimbal_deflections, clamp_gimbal, clamp_throttle_range, consume_propellant,
-    gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse, shed_stage,
-    stage_throttle_envelope, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
+    engine_thrust_n, gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse,
+    shed_stage, stage_throttle_envelope, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
     SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
@@ -70,6 +70,7 @@ pub struct GuidanceAccess {
     pub mission_state: &'static mut RocketMissionState,
     pub autopilot: &'static mut RocketAutopilot,
     pub propulsion: &'static RocketPropulsion,
+    pub atmosphere: &'static AtmosphereState,
     pub orbital: &'static OrbitalElements,
     pub commands: &'static mut RocketCommands,
 }
@@ -89,6 +90,7 @@ pub struct GroundContactAccess {
     pub launch_site: Option<&'static LaunchSiteCoordinates>,
     pub dynamics: &'static mut RocketPhysicsState,
     pub propulsion: &'static RocketPropulsion,
+    pub atmosphere: Option<&'static AtmosphereState>,
     pub geometry: &'static RocketGeometry,
     pub collision: &'static mut TerrainCollisionState,
     pub rest: &'static mut GroundRest,
@@ -390,8 +392,7 @@ pub fn propulsion_thrust(
         if throttle <= 0.0 || remaining <= 0.0 {
             continue;
         }
-        let (thrust_body, _) =
-            stage_thrust_body(&stage.engines, throttle, atmosphere.density_kg_m3);
+        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, atmosphere.pressure_pa);
         let thrust_world = rocket.dynamics.orientation * thrust_body;
         force_accum.0 += thrust_world * retro.thrust_multiplier;
     }
@@ -438,7 +439,7 @@ pub fn propulsion_consumption(
         if throttle <= 0.0 || remaining <= 0.0 {
             continue;
         }
-        let (_, mass_flow) = stage_thrust_body(&stage.engines, throttle, atmosphere.density_kg_m3);
+        let (_, mass_flow) = stage_thrust_body(&stage.engines, throttle, atmosphere.pressure_pa);
         let (remaining_new, _consumed) = consume_propellant(remaining, mass_flow, dt);
         let active_stage = propulsion.active_stage;
         propulsion.propellant_remaining_kg[active_stage] = remaining_new;
@@ -571,7 +572,7 @@ pub fn propulsion_staging(
             &mut materials,
             SpentStageSpec {
                 parent_rocket: entity,
-                planet_name: binding.planet_name.clone(),
+                planet_name: binding.planet_name.to_string(),
                 dynamics: spent_dynamics,
                 radius_m: geometry.radius_m,
                 height_m: estimated_height_m,
@@ -601,11 +602,13 @@ pub fn propulsion_gimbal(
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &RocketGeometry,
+        &AtmosphereState,
         &mut RocketPropulsion,
         &mut TorqueAccumulator,
     )>,
 ) {
-    for (rocket, geometry, mut propulsion, mut torque_accum) in rocket_query.iter_mut() {
+    for (rocket, geometry, atmosphere, mut propulsion, mut torque_accum) in rocket_query.iter_mut()
+    {
         let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
             continue;
         };
@@ -622,7 +625,7 @@ pub fn propulsion_gimbal(
         for engine in &stage.engines {
             let pitch = clamp_gimbal(propulsion.gimbal_pitch_rad, engine.gimbal_range_deg) as f64;
             let yaw = clamp_gimbal(propulsion.gimbal_yaw_rad, engine.gimbal_range_deg) as f64;
-            let thrust = engine.max_thrust_kn as f64 * 1000.0 * throttle as f64;
+            let thrust = engine_thrust_n(engine, throttle, atmosphere.pressure_pa);
             torque_accum.0 += gimbal_torque_body(
                 engine.position_m.as_dvec3(),
                 com,
@@ -734,6 +737,7 @@ pub fn guidance_system(
         let rocket = &access.dynamics;
         let binding = access.binding;
         let propulsion = access.propulsion;
+        let atmosphere = access.atmosphere;
         let orbital = access.orbital;
         let mass = access.mass;
         let mission_state = &mut *access.mission_state;
@@ -805,9 +809,11 @@ pub fn guidance_system(
                 .map(|m| *m > 0.0)
                 .unwrap_or(false);
 
-        // Read dynamic pressure from cached atmosphere state.
-        // Note: we'd need to add AtmosphereState to the query; for now approximate.
-        let dynamic_pressure_pa = 0.0; // TODO: read from AtmosphereState
+        // Guidance constraints use the same co-rotating atmospheric velocity
+        // and density as the aerodynamic force model.
+        let relative_velocity = surface_relative_velocity(binding, rocket, &planet_query);
+        let dynamic_pressure_pa =
+            dynamic_pressure_q(atmosphere.density_kg_m3, relative_velocity.length());
 
         // Advance the mission phase from the authoritative f64 target predicate.
         *mission_state = advance_ascent_phase(
@@ -1147,11 +1153,13 @@ pub fn control_system(
         &RocketGeometry,
         &RocketMass,
         &RocketPropulsion,
+        &AtmosphereState,
         &mut RocketAutopilot,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut commands, rocket, geometry, mass, propulsion, mut autopilot) in rocket_query.iter_mut()
+    for (mut commands, rocket, geometry, mass, propulsion, atmosphere, mut autopilot) in
+        rocket_query.iter_mut()
     {
         let gains = autopilot.gains;
         // The dynamics model carries a diagonal body-frame inertia; pass its
@@ -1181,6 +1189,7 @@ pub fn control_system(
             rocket.dynamics.center_of_mass_m,
             torque,
             propulsion.throttle,
+            atmosphere.pressure_pa,
         );
         commands.gimbal_pitch_cmd_rad = gimbal_pitch;
         commands.gimbal_yaw_cmd_rad = gimbal_yaw;
@@ -1312,6 +1321,10 @@ pub fn resolve_ground_contact(
         let rocket_entity = access.entity;
         let binding = access.binding;
         let propulsion = access.propulsion;
+        let ambient_pressure_pa = access
+            .atmosphere
+            .map(|atmosphere| atmosphere.pressure_pa)
+            .unwrap_or(0.0);
         let geometry = access.geometry;
         let autopilot = access.autopilot;
         let rocket = &mut *access.dynamics;
@@ -1435,9 +1448,7 @@ pub fn resolve_ground_contact(
                 .stages
                 .get(propulsion.active_stage)
                 .map(|stage| {
-                    // Thrust magnitude does not depend on the density-driven
-                    // Isp selection; pass vacuum-ish 0.0.
-                    stage_thrust_body(&stage.engines, propulsion.throttle, 0.0)
+                    stage_thrust_body(&stage.engines, propulsion.throttle, ambient_pressure_pa)
                         .0
                         .length()
                 })
@@ -2218,7 +2229,7 @@ pub fn compute_retro_propulsion(
                     let throttle = propulsion.throttle.clamp(0.0, 1.0);
                     if throttle > 0.0 && remaining > 0.0 {
                         let (thrust_body, _) =
-                            stage_thrust_body(&stage.engines, throttle, atmosphere.density_kg_m3);
+                            stage_thrust_body(&stage.engines, throttle, atmosphere.pressure_pa);
                         if thrust_body.length_squared() > 0.0 {
                             multiplier = retro_propulsion_effectiveness(
                                 mach,

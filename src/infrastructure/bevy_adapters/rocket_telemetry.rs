@@ -84,7 +84,7 @@ impl<'a> TelemetryContext<'a> {
         let gravity_accel = mu / (radius * radius);
         let weight = self.mass_kg * gravity_accel;
 
-        let (thrust_body, isp_vac) = self.compute_thrust(rho);
+        let (thrust_body, isp_vac) = self.compute_thrust(self.atmosphere.pressure_pa);
         let total_thrust_n = thrust_body.length();
         let tw_ratio = if weight > 0.0 {
             total_thrust_n / weight
@@ -174,7 +174,7 @@ impl<'a> TelemetryContext<'a> {
         }
     }
 
-    fn compute_thrust(&self, rho: f64) -> (DVec3, f64) {
+    fn compute_thrust(&self, ambient_pressure_pa: f64) -> (DVec3, f64) {
         if self.propulsion.active_stage >= self.propulsion.vehicle.stages.len() {
             return (DVec3::ZERO, 0.0);
         }
@@ -189,7 +189,7 @@ impl<'a> TelemetryContext<'a> {
         if throttle <= 0.0 || remaining <= 0.0 {
             return (DVec3::ZERO, 0.0);
         }
-        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, rho);
+        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, ambient_pressure_pa);
         let isp_vac = stage
             .engines
             .iter()

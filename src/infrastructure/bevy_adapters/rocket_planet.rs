@@ -71,7 +71,7 @@ pub fn setup_rocket_planets(
     let Some((binding, rocket)) = rocket_query.iter().next() else {
         return;
     };
-    let planet_name = binding.planet_name.clone();
+    let planet_name = binding.planet_name.to_string();
     bound_planet_res.0 = Some(planet_name.clone());
 
     // Create the bound planet (Earth) with true-scale radius in meters

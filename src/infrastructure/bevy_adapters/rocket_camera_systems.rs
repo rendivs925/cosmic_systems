@@ -14,31 +14,43 @@ pub fn handle_rocket_camera_input(
     mut camera_mode: ResMut<RocketCameraMode>,
     mut controller_query: Query<&mut RocketCameraController>,
 ) {
+    let requested_mode =
     // Cycle camera modes with number keys or C key.
     if keyboard.just_pressed(KeyCode::Digit1) {
-        *camera_mode = RocketCameraMode::Chase;
+        Some(RocketCameraMode::Chase)
     } else if keyboard.just_pressed(KeyCode::Digit2) {
-        *camera_mode = RocketCameraMode::Cockpit;
+        Some(RocketCameraMode::Cockpit)
     } else if keyboard.just_pressed(KeyCode::Digit3) {
-        *camera_mode = RocketCameraMode::Orbital;
+        Some(RocketCameraMode::Orbital)
     } else if keyboard.just_pressed(KeyCode::Digit4) {
-        *camera_mode = RocketCameraMode::Surface;
+        Some(RocketCameraMode::Surface)
     } else if keyboard.just_pressed(KeyCode::Digit5) {
-        *camera_mode = RocketCameraMode::Free;
+        Some(RocketCameraMode::Free)
     } else if keyboard.just_pressed(KeyCode::KeyC) {
         // Cycle through modes (Free now included).
-        *camera_mode = match *camera_mode {
+        Some(match *camera_mode {
             RocketCameraMode::Chase => RocketCameraMode::Cockpit,
             RocketCameraMode::Cockpit => RocketCameraMode::Orbital,
             RocketCameraMode::Orbital => RocketCameraMode::Surface,
             RocketCameraMode::Surface => RocketCameraMode::Free,
             RocketCameraMode::Free => RocketCameraMode::Chase,
-        };
-    }
+        })
+    } else {
+        None
+    };
 
-    // Update controller target mode
+    let Some(requested_mode) = requested_mode else {
+        return;
+    };
+    *camera_mode = requested_mode;
+
+    // Reset from the currently rendered pose when a transition is retargeted.
     for mut controller in controller_query.iter_mut() {
-        controller.target_mode = *camera_mode;
+        if controller.target_mode != requested_mode {
+            controller.target_mode = requested_mode;
+            controller.transition_progress = 0.0;
+            controller.transition_start = None;
+        }
     }
 }
 
@@ -155,19 +167,8 @@ pub fn update_rocket_camera(
     let rocket_rot = rocket_transform.rotation;
 
     for mut controller in controller_query.iter_mut() {
-        // Handle mode transitions
-        if controller.current_mode != controller.target_mode {
-            controller.transition_progress += dt * config.transition_speed;
-            if controller.transition_progress >= 1.0 {
-                controller.current_mode = controller.target_mode;
-                controller.transition_progress = 0.0;
-            }
-        } else {
-            controller.transition_progress = 0.0;
-        }
-
         // Compute target camera transform in flight units (meters)
-        let (target_pos, target_rot) = match controller.current_mode {
+        let (target_pos, target_rot) = match controller.target_mode {
             RocketCameraMode::Chase => {
                 compute_chase_camera(rocket_pos_flight, rocket_rot, up_dir, geometry, &config)
             }
@@ -191,17 +192,29 @@ pub fn update_rocket_camera(
             RocketCameraMode::Free => compute_free_camera(rocket_pos_flight, up_dir, &controller),
         };
 
-        // Apply the target. During a mode transition, blend from where the
-        // camera ACTUALLY is (never from a stored previous target, which made
-        // the first transition frame jump).
+        // Blend from the actual rendered pose to the destination mode. The
+        // target continues tracking the rocket while the transition proceeds.
         for (mut cam_transform, _projection) in camera_query.iter_mut() {
-            if controller.transition_progress > 0.0 {
-                let t = controller.transition_progress;
-                cam_transform.translation = cam_transform.translation.lerp(target_pos, t);
-                cam_transform.rotation = cam_transform.rotation.slerp(target_rot, t);
-            } else {
+            if controller.current_mode == controller.target_mode {
+                controller.transition_progress = 0.0;
+                controller.transition_start = None;
                 cam_transform.translation = target_pos;
                 cam_transform.rotation = target_rot;
+                continue;
+            }
+
+            let start = *controller.transition_start.get_or_insert(*cam_transform);
+            controller.transition_progress =
+                (controller.transition_progress + dt * config.transition_speed).min(1.0);
+            let linear_t = controller.transition_progress;
+            let t = linear_t * linear_t * (3.0 - 2.0 * linear_t);
+            cam_transform.translation = start.translation.lerp(target_pos, t);
+            cam_transform.rotation = start.rotation.slerp(target_rot, t);
+
+            if controller.transition_progress >= 1.0 {
+                controller.current_mode = controller.target_mode;
+                controller.transition_progress = 0.0;
+                controller.transition_start = None;
             }
         }
     }

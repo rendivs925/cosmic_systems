@@ -5,6 +5,7 @@ use crate::domain::entities::rocket::{Rocket, RocketMissionState as DomainRocket
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::terrain_collision::GroundContact;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use bevy::math::{DQuat, DVec3, Quat, Vec3};
 use bevy::prelude::*;
 use std::ops::Deref;
@@ -162,7 +163,7 @@ pub struct TorqueAccumulator(pub DVec3);
 /// Binds rocket to its dominant gravity body.
 #[derive(Component, Debug, Clone)]
 pub struct RocketPlanetBinding {
-    pub planet_name: String,
+    pub planet_name: CelestialBodyId,
 }
 
 /// Authoritative gravitational acceleration (m/s²) acting on vehicle.
@@ -587,6 +588,10 @@ pub struct RocketCameraController {
     pub current_mode: RocketCameraMode,
     pub target_mode: RocketCameraMode,
     pub transition_progress: f32,
+    /// Actual camera pose at the start of a mode change. Keeping this
+    /// presentation-only snapshot avoids a hard cut when the destination mode
+    /// has a substantially different offset from the moving rocket.
+    pub transition_start: Option<Transform>,
     pub last_rocket_transform: Option<Transform>,
     /// Free-fly (space) camera orbit angles, radians, and distance from the
     /// rocket. Adjusted by mouse drag / scroll while in `Free` mode.
@@ -601,6 +606,7 @@ impl Default for RocketCameraController {
             current_mode: RocketCameraMode::default(),
             target_mode: RocketCameraMode::default(),
             transition_progress: 0.0,
+            transition_start: None,
             last_rocket_transform: None,
             free_orbit_yaw: 0.0,
             free_orbit_pitch: 0.35,

@@ -370,7 +370,7 @@ fn draw_thrust_vectors(
         let (thrust_body, _) = crate::domain::services::rocket_propulsion::stage_thrust_body(
             &stage.engines,
             throttle,
-            atmosphere.density_kg_m3,
+            atmosphere.pressure_pa,
         );
         let thrust_inertial = rocket.dynamics.orientation * thrust_body;
 

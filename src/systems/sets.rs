@@ -24,6 +24,9 @@ pub enum RocketSet {
     PropulsionStaging,
     AccumulateForces,
     Integrate,
+    /// Advance the authoritative epoch after integration, before any system
+    /// samples body-fixed terrain or records the completed state.
+    AdvanceTime,
     /// Post-integration terrain contact: touchdown verdict, resting-contact
     /// constraint (penetration clamp / normal-velocity removal), liftoff
     /// release. Acts on the just-integrated authoritative state.

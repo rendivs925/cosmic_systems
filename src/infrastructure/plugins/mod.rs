@@ -99,6 +99,11 @@ fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
     }
 }
 
+/// A paused simulation must not keep advancing its fixed physics pipeline.
+fn simulation_unpaused(sim_time: Res<SimulationTime>) -> bool {
+    !sim_time.paused
+}
+
 /// Shared solar-system world: resources, physics, orbit visuals, performance,
 /// Vulkan compute, screenshot/recording, terrain, and starfield.
 pub struct SharedSimulationPlugin;
@@ -349,15 +354,17 @@ impl Plugin for RocketModePlugin {
         // Rocket camera systems (run in Update for smooth rendering).
         app.add_systems(
             Update,
-            interpolate_render_transform
-                .after(recenter_render_origin)
-                .after(handle_rocket_launch_input)
-                .before(update_rocket_camera),
+            (
+                handle_rocket_camera_input,
+                handle_free_camera_input,
+                interpolate_render_transform
+                    .after(recenter_render_origin)
+                    .after(handle_rocket_launch_input),
+                update_rocket_camera,
+                update_rocket_camera_projection,
+            )
+                .chain(),
         );
-        app.add_systems(Update, handle_rocket_camera_input);
-        app.add_systems(Update, handle_free_camera_input);
-        app.add_systems(Update, update_rocket_camera);
-        app.add_systems(Update, update_rocket_camera_projection);
 
         // Rocket HUD UI (runs in Update).
         app.add_systems(Startup, spawn_rocket_hud_system);
@@ -402,13 +409,12 @@ impl Plugin for RocketModePlugin {
         app.configure_sets(
             FixedUpdate,
             (
+                RocketSet::Atmosphere,
                 RocketSet::Guidance,
                 RocketSet::Control,
                 RocketSet::Actuation,
                 RocketSet::Gravity,
-                RocketSet::OrbitalElements,
                 RocketSet::TerrainInteraction,
-                RocketSet::Atmosphere,
                 RocketSet::SpentStage,
                 RocketSet::EntryPhysics,
                 RocketSet::AeroForces,
@@ -419,11 +425,25 @@ impl Plugin for RocketModePlugin {
                 RocketSet::PropulsionStaging,
                 RocketSet::AccumulateForces,
                 RocketSet::Integrate,
+                RocketSet::AdvanceTime,
+                RocketSet::OrbitalElements,
+            )
+                .chain()
+                .run_if(simulation_unpaused),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            (
                 RocketSet::GroundContact,
                 RocketSet::SyncRender,
                 RocketSet::Telemetry,
             )
-                .chain(),
+                .chain()
+                .run_if(simulation_unpaused),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            RocketSet::OrbitalElements.before(RocketSet::GroundContact),
         );
 
         app.add_systems(
@@ -436,7 +456,6 @@ impl Plugin for RocketModePlugin {
                 control_system.in_set(RocketSet::Control),
                 actuation_system.in_set(RocketSet::Actuation),
                 update_rocket_gravity.in_set(RocketSet::Gravity),
-                update_orbital_elements.in_set(RocketSet::OrbitalElements),
                 atmosphere_properties.in_set(RocketSet::Atmosphere),
                 spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
                 update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
@@ -460,14 +479,13 @@ impl Plugin for RocketModePlugin {
                 propulsion_staging.in_set(RocketSet::PropulsionStaging),
                 accumulate_forces.in_set(RocketSet::AccumulateForces),
                 integrate_6dof.in_set(RocketSet::Integrate),
+                advance_fixed_simulation_time.in_set(RocketSet::AdvanceTime),
+                update_orbital_elements.in_set(RocketSet::OrbitalElements),
                 resolve_ground_contact.in_set(RocketSet::GroundContact),
                 advance_topple
                     .in_set(RocketSet::GroundContact)
                     .after(resolve_ground_contact),
                 capture_render_state.in_set(RocketSet::SyncRender),
-                advance_fixed_simulation_time
-                    .in_set(RocketSet::Telemetry)
-                    .before(compute_rocket_telemetry_system),
             ),
         );
         app.add_systems(

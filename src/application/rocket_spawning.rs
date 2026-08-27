@@ -1,5 +1,6 @@
 use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
 use crate::components::rocket::*;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
@@ -145,7 +146,7 @@ pub fn spawn_rockets(
             TorqueAccumulator::default(),
             GravityAcceleration::default(),
             RocketPlanetBinding {
-                planet_name: "Earth".to_string(),
+                planet_name: CelestialBodyId::earth(),
             },
             launch_site,
         ))

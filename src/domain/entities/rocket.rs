@@ -29,6 +29,7 @@ pub struct RocketEngine {
     pub isp_sea_level: f32,
     pub isp_vacuum: f32,
     pub gimbal_range_deg: f32,
+    /// Full-throttle thrust at standard sea-level pressure, kilonewtons.
     pub max_thrust_kn: f32,
     /// Lowest commanded throttle the engine can hold (0..1).
     pub throttle_min: f32,
