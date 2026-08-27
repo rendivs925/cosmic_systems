@@ -28,6 +28,7 @@
 
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics_utils::calculate_planet_rotation;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use bevy::math::{DQuat, DVec3, Vec3};
@@ -74,7 +75,8 @@ pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoord
     let lat_rad = (pos_bf.y / r).clamp(-1.0, 1.0).asin();
     let lon_rad = pos_bf.z.atan2(pos_bf.x);
     LaunchSiteCoordinates::new(
-        planet.name.clone(),
+        CelestialBodyId::new(planet.name.clone())
+            .expect("planet names are validated at catalog construction"),
         lat_rad.to_degrees() as f32,
         lon_rad.to_degrees() as f32,
         (r - radius_m) as f32,
@@ -313,7 +315,7 @@ mod tests {
         let planet = earth();
         let origin = ksc();
         let site = LaunchSiteCoordinates::new(
-            "Earth".to_string(),
+            CelestialBodyId::earth(),
             origin.latitude_deg + 0.5,
             origin.longitude_deg + 1.0,
             origin.altitude_m + 1000.0,

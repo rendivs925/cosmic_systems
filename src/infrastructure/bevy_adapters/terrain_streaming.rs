@@ -103,14 +103,14 @@ pub fn stream_terrain_patches(
     };
     let Some((planet_entity, _planet, planet_terrain)) = planet_query
         .iter()
-        .find(|(_, planet, _)| planet.domain_planet.name == binding.planet_name)
+        .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
     else {
         return;
     };
 
     let radius_m = planet_query
         .iter()
-        .find(|(_, planet, _)| planet.domain_planet.name == binding.planet_name)
+        .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
         .map(|(_, planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
         .unwrap_or(6_371_000.0);
 

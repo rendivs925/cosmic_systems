@@ -14,7 +14,7 @@ use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
 use crate::domain::services::trajectory::{predict_patched_conics, GravityBody};
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
-use crate::infrastructure::bevy_adapters::rocket_systems::interpolate_render_transform;
+use crate::infrastructure::bevy_adapters::rocket_presentation::interpolate_render_transform;
 use crate::infrastructure::bevy_adapters::terrain_render::{recenter_render_origin, RenderOrigin};
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -183,7 +183,7 @@ fn draw_orbit_prediction(
     }
     let Some(planet) = planet_query
         .iter()
-        .find(|p| p.domain_planet.name == binding.planet_name)
+        .find(|p| p.matches_body(&binding.planet_name))
     else {
         return;
     };

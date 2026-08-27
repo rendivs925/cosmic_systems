@@ -297,7 +297,7 @@ pub fn update_rocket_planets(
     };
     let bound_planet_radius_m = planet_query
         .iter()
-        .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        .find(|(planet, _)| planet.matches_body(&binding.planet_name))
         .map(|(planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
         .unwrap_or(6_371_000.0);
     let show_bound_planet_proxy = !local_terrain_is_required(

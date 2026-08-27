@@ -1,4 +1,5 @@
 use crate::domain::entities::planet::Planet;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use bevy::math::Vec3;
 use bevy::prelude::Component;
 
@@ -6,7 +7,7 @@ use bevy::prelude::Component;
 /// This provides accurate positioning relative to planetary surfaces
 #[derive(Component, Debug, Clone)]
 pub struct LaunchSiteCoordinates {
-    pub planet_name: String,
+    pub planet_id: CelestialBodyId,
     pub latitude_deg: f32,  // -90 to 90 degrees
     pub longitude_deg: f32, // -180 to 180 degrees
     pub altitude_m: f32,    // Height above reference ellipsoid in meters
@@ -15,13 +16,13 @@ pub struct LaunchSiteCoordinates {
 impl LaunchSiteCoordinates {
     /// Create a new launch site coordinate
     pub fn new(
-        planet_name: String,
+        planet_id: CelestialBodyId,
         latitude_deg: f32,
         longitude_deg: f32,
         altitude_m: f32,
     ) -> Self {
         Self {
-            planet_name,
+            planet_id,
             latitude_deg: latitude_deg.clamp(-90.0, 90.0),
             longitude_deg: longitude_deg.clamp(-180.0, 180.0),
             altitude_m,
@@ -60,7 +61,7 @@ impl LaunchSiteCoordinates {
 impl Default for LaunchSiteCoordinates {
     fn default() -> Self {
         Self {
-            planet_name: "Earth".to_string(),
+            planet_id: CelestialBodyId::earth(),
             latitude_deg: 28.5721,   // Kennedy Space Center latitude
             longitude_deg: -80.6480, // Kennedy Space Center longitude
             altitude_m: 0.0,         // Sea level
@@ -71,10 +72,11 @@ impl Default for LaunchSiteCoordinates {
 /// Predefined launch site coordinates for common launch facilities
 pub mod predefined_sites {
     use super::LaunchSiteCoordinates;
+    use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 
     pub fn kennedy_space_center() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
-            "Earth".to_string(),
+            CelestialBodyId::earth(),
             28.5721,  // Latitude
             -80.6480, // Longitude
             3.0,      // Altitude above sea level (meters)
@@ -83,7 +85,7 @@ pub mod predefined_sites {
 
     pub fn cape_canaveral() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
-            "Earth".to_string(),
+            CelestialBodyId::earth(),
             28.4889,  // Latitude
             -80.5778, // Longitude
             3.0,      // Altitude above sea level (meters)
@@ -92,7 +94,7 @@ pub mod predefined_sites {
 
     pub fn baikonur_cosmodrome() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
-            "Earth".to_string(),
+            CelestialBodyId::earth(),
             45.9650, // Latitude
             63.3050, // Longitude
             90.0,    // Altitude above sea level (meters)
@@ -101,7 +103,7 @@ pub mod predefined_sites {
 
     pub fn guiana_space_centre() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(
-            "Earth".to_string(),
+            CelestialBodyId::earth(),
             5.2360,   // Latitude
             -52.7750, // Longitude
             10.0,     // Altitude above sea level (meters)

@@ -1,6 +1,5 @@
 use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
 use crate::components::rocket::*;
-use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
@@ -10,6 +9,7 @@ use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDyna
 use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::Selectable;
@@ -60,8 +60,8 @@ pub fn spawn_rockets(
     // The launch site is defined in Earth body-fixed geodetic coordinates, then
     // converted once into the authoritative planet-centered inertial frame.
     // Collision and terrain convert back through the same reference-frame API.
-    let earth = PlanetFactory::create_by_name("Earth").unwrap();
     let ksc = predefined_sites::kennedy_space_center();
+    let earth = PlanetFactory::create_by_name(ksc.planet_id.as_str()).unwrap();
     let earth_radius_m = earth.radius_km as f64 * 1000.0;
     let terrain_sample = terrain_source.map(|source| {
         sample_surface(
@@ -75,7 +75,7 @@ pub fn spawn_rockets(
         .map(|sample| sample.height_m)
         .unwrap_or(ksc.altitude_m as f64);
     let launch_site = LaunchSiteCoordinates::new(
-        ksc.planet_name.clone(),
+        ksc.planet_id.clone(),
         ksc.latitude_deg,
         ksc.longitude_deg,
         terrain_elevation_m as f32,
@@ -157,7 +157,7 @@ pub fn spawn_rockets(
     commands.entity(entity).insert((
         RocketFacade::default(),
         RocketRenderState::new(dynamics),
-        AtmosphereState::default(),
+        RocketFlightConditions::default(),
         AerodynamicForces::default(),
         MaxQTracker::default(),
         RocketCommands::default(),

@@ -5,18 +5,13 @@ use crate::domain::entities::rocket::EngineState;
 use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
 };
-use crate::domain::services::aerodynamics::{
-    angle_of_attack, angle_of_sideslip, dynamic_pressure_q,
-};
+use crate::domain::services::aerodynamics::{angle_of_attack, angle_of_sideslip};
 use crate::domain::services::gravity::gravitational_parameter;
-use crate::domain::services::reference_frames::surface_velocity_in_planet_inertial;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_mass_with_payload, stage_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::infrastructure::bevy_adapters::components::{
-    PlanetAtmosphere, PlanetComponent, Selectable,
-};
+use crate::infrastructure::bevy_adapters::components::{PlanetComponent, Selectable};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -37,9 +32,6 @@ pub struct TelemetryContext<'a> {
     pub planet_radius_m: f64,
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
-    /// Atmosphere and surface velocity in the same planet-centered inertial
-    /// frame. Flight displays report velocity relative to this moving medium.
-    pub surface_velocity_mps: DVec3,
     pub orientation: DQuat,
     pub angular_velocity_radps: DVec3,
     pub mass_kg: f64,
@@ -49,7 +41,7 @@ pub struct TelemetryContext<'a> {
     pub mission_state: &'a RocketMissionState,
     pub autopilot: &'a RocketAutopilot,
     pub orbital: &'a OrbitalElements,
-    pub atmosphere: &'a AtmosphereState,
+    pub conditions: &'a RocketFlightConditions,
     pub comms: &'a CommsState,
     pub aero_forces: &'a AerodynamicForces,
     pub thermal: &'a ThermalState,
@@ -68,23 +60,21 @@ impl<'a> TelemetryContext<'a> {
 
         let up_dir = self.position_m / radius;
         let altitude_m = (radius - self.planet_radius_m).max(0.0);
-        let relative_velocity = self.velocity_mps - self.surface_velocity_mps;
-        let speed = relative_velocity.length();
+        let relative_velocity = self.conditions.atmosphere_relative_velocity_mps;
+        let speed = self.conditions.airspeed_mps;
         let vertical_speed = relative_velocity.dot(up_dir);
         let horizontal_speed = (speed * speed - vertical_speed * vertical_speed)
             .max(0.0)
             .sqrt();
 
-        let rho = self.atmosphere.density_kg_m3;
-        let sos = self.atmosphere.speed_of_sound_mps.max(1.0);
-        let mach = speed / sos;
-        let q = dynamic_pressure_q(rho, speed);
+        let mach = self.conditions.mach_number;
+        let q = self.conditions.dynamic_pressure_pa;
 
         let mu = gravitational_parameter(self.planet_mass);
         let gravity_accel = mu / (radius * radius);
         let weight = self.mass_kg * gravity_accel;
 
-        let (thrust_body, isp_vac) = self.compute_thrust(self.atmosphere.pressure_pa);
+        let (thrust_body, isp_vac) = self.compute_thrust(self.conditions.ambient_pressure_pa);
         let total_thrust_n = thrust_body.length();
         let tw_ratio = if weight > 0.0 {
             total_thrust_n / weight
@@ -492,7 +482,7 @@ fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> 
 /// System: compute rocket telemetry and write to resource.
 pub fn compute_rocket_telemetry_system(
     sim_time: Res<SimulationTime>,
-    planet_query: Query<(&PlanetComponent, &PlanetAtmosphere)>,
+    planet_query: Query<&PlanetComponent>,
     mut telemetry: ResMut<RocketTelemetry>,
     rocket_query: Query<(
         &RocketPlanetBinding,
@@ -503,7 +493,7 @@ pub fn compute_rocket_telemetry_system(
         &RocketMissionState,
         &RocketAutopilot,
         &OrbitalElements,
-        &AtmosphereState,
+        &RocketFlightConditions,
         &CommsState,
         &AerodynamicForces,
         &ThermalState,
@@ -526,7 +516,7 @@ pub fn compute_rocket_telemetry_system(
         mission_state,
         autopilot,
         orbital,
-        atmosphere,
+        conditions,
         comms,
         aero,
         thermal,
@@ -535,9 +525,9 @@ pub fn compute_rocket_telemetry_system(
         collision,
     ) in rocket_query.iter()
     {
-        let Some((planet, _)) = planet_query
+        let Some(planet) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|p| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -549,10 +539,6 @@ pub fn compute_rocket_telemetry_system(
             planet_radius_m: planet.domain_planet.radius_km as f64 * 1000.0,
             position_m: rocket.dynamics.position_m,
             velocity_mps: rocket.dynamics.velocity_mps,
-            surface_velocity_mps: surface_velocity_in_planet_inertial(
-                rocket.dynamics.position_m,
-                &planet.domain_planet,
-            ),
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
             mass_kg: mass.0,
@@ -562,7 +548,7 @@ pub fn compute_rocket_telemetry_system(
             mission_state,
             autopilot,
             orbital,
-            atmosphere,
+            conditions,
             comms,
             aero_forces: aero,
             thermal,
@@ -598,7 +584,7 @@ pub fn compute_rocket_telemetry_system(
 /// tuples cap at 15 items; joining on Entity keeps it one logical record.
 pub fn record_flight_data_system(
     sim_time: Res<SimulationTime>,
-    planet_query: Query<(&PlanetComponent, &PlanetAtmosphere)>,
+    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         Entity,
         &RocketPlanetBinding,
@@ -609,7 +595,7 @@ pub fn record_flight_data_system(
         &RocketMissionState,
         &RocketAutopilot,
         &OrbitalElements,
-        &AtmosphereState,
+        &RocketFlightConditions,
         &CommsState,
         &AerodynamicForces,
         &ThermalState,
@@ -631,7 +617,7 @@ pub fn record_flight_data_system(
         mission_state,
         autopilot,
         orbital,
-        atmosphere,
+        conditions,
         comms,
         aero,
         thermal,
@@ -649,9 +635,9 @@ pub fn record_flight_data_system(
             continue;
         };
 
-        let Some((planet, _)) = planet_query
+        let Some(planet) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|p| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -663,10 +649,6 @@ pub fn record_flight_data_system(
             planet_radius_m: planet.domain_planet.radius_km as f64 * 1000.0,
             position_m: rocket.dynamics.position_m,
             velocity_mps: rocket.dynamics.velocity_mps,
-            surface_velocity_mps: surface_velocity_in_planet_inertial(
-                rocket.dynamics.position_m,
-                &planet.domain_planet,
-            ),
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
             mass_kg: mass.0,
@@ -676,7 +658,7 @@ pub fn record_flight_data_system(
             mission_state,
             autopilot,
             orbital,
-            atmosphere,
+            conditions,
             comms,
             aero_forces: aero,
             thermal,
@@ -968,6 +950,9 @@ mod export_tests {
 mod g_load_tests {
     use super::*;
     use crate::domain::entities::rocket::{Rocket, RocketEngine, RocketStage};
+    use crate::domain::services::atmosphere::{
+        AtmosphereSource, EarthAtmosphere, FlightConditions,
+    };
 
     const MASS_KG: f64 = 1_000.0;
     const EARTH_MASS_KG: f64 = 5.97237e24;
@@ -1032,7 +1017,12 @@ mod g_load_tests {
         let mission_state = RocketMissionState::default();
         let autopilot = RocketAutopilot::default();
         let orbital = OrbitalElements::default();
-        let atmosphere = AtmosphereState::default();
+        let earth_atmosphere = EarthAtmosphere;
+        let conditions = RocketFlightConditions(FlightConditions::from_atmosphere(
+            0.0,
+            earth_atmosphere.properties(0.0),
+            DVec3::ZERO,
+        ));
         let comms = CommsState::default();
         let aero_forces = AerodynamicForces {
             force_body: DVec3::ZERO,
@@ -1044,7 +1034,7 @@ mod g_load_tests {
         let collision = TerrainCollisionState::default();
 
         // Hovering just above the equator at low altitude.
-        let position = DVec3::new(EARTH_RADIUS_M + 1_000.0, 0.0, 0.0);
+        let position = DVec3::new(EARTH_RADIUS_M, 0.0, 0.0);
         // Velocity purely horizontal so it does not contribute to sensed force.
         let velocity = DVec3::new(0.0, 0.0, speed_mps);
 
@@ -1055,7 +1045,6 @@ mod g_load_tests {
             planet_radius_m: EARTH_RADIUS_M,
             position_m: position,
             velocity_mps: velocity,
-            surface_velocity_mps: DVec3::ZERO,
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
@@ -1065,7 +1054,7 @@ mod g_load_tests {
             mission_state: &mission_state,
             autopilot: &autopilot,
             orbital: &orbital,
-            atmosphere: &atmosphere,
+            conditions: &conditions,
             comms: &comms,
             aero_forces: &aero_forces,
             thermal: &thermal,
@@ -1105,7 +1094,7 @@ mod g_load_tests {
         let mission_state = RocketMissionState::default();
         let autopilot = RocketAutopilot::default();
         let orbital = OrbitalElements::default();
-        let atmosphere = AtmosphereState::default();
+        let conditions = RocketFlightConditions::default();
         let comms = CommsState::default();
         let aero_forces = AerodynamicForces {
             force_body: DVec3::ZERO,
@@ -1123,7 +1112,6 @@ mod g_load_tests {
             planet_radius_m: EARTH_RADIUS_M,
             position_m: DVec3::new(EARTH_RADIUS_M + 400_000.0, 0.0, 0.0),
             velocity_mps: DVec3::new(0.0, 0.0, speed_mps),
-            surface_velocity_mps: DVec3::ZERO,
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
@@ -1133,7 +1121,7 @@ mod g_load_tests {
             mission_state: &mission_state,
             autopilot: &autopilot,
             orbital: &orbital,
-            atmosphere: &atmosphere,
+            conditions: &conditions,
             comms: &comms,
             aero_forces: &aero_forces,
             thermal: &thermal,

@@ -30,24 +30,6 @@ impl fmt::Display for CelestialBodyId {
     }
 }
 
-impl PartialEq<CelestialBodyId> for String {
-    fn eq(&self, other: &CelestialBodyId) -> bool {
-        self == other.as_str()
-    }
-}
-
-impl PartialEq<String> for CelestialBodyId {
-    fn eq(&self, other: &String) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<&str> for CelestialBodyId {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

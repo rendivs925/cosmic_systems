@@ -23,6 +23,7 @@ use crate::domain::services::simulation_time::{
     advance_fixed_simulation_time, advance_real_time, handle_time_acceleration_input,
     sync_fixed_timestep, SimulationTime,
 };
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, PerformanceStats, ScreenshotState,
@@ -45,26 +46,37 @@ use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_free_camera_input, handle_rocket_camera_input, update_rocket_camera,
     update_rocket_camera_projection,
 };
+use crate::infrastructure::bevy_adapters::rocket_contact::{advance_topple, deploy_landing_legs};
+use crate::infrastructure::bevy_adapters::rocket_control::{actuation_system, control_system};
 use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
+use crate::infrastructure::bevy_adapters::rocket_dynamics::{
+    accumulate_forces, aerodynamic_forces, aerodynamic_torque, integrate_6dof,
+};
+use crate::infrastructure::bevy_adapters::rocket_flight_conditions::refresh_flight_conditions;
+use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::{
+    update_orbital_elements, update_rocket_gravity,
+};
 use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
 use crate::infrastructure::bevy_adapters::rocket_planet::{
     isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets, RocketBoundPlanet,
 };
+use crate::infrastructure::bevy_adapters::rocket_presentation::{
+    capture_render_state, interpolate_render_transform,
+};
+use crate::infrastructure::bevy_adapters::rocket_propulsion::{
+    propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
+};
 use crate::infrastructure::bevy_adapters::rocket_separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_systems::{
-    accumulate_forces, actuation_system, advance_topple, aerodynamic_forces, aerodynamic_torque,
-    apply_relaunch_requests, atmosphere_properties, capture_render_state, compute_ablation,
-    compute_heating, compute_parachute_forces, compute_plasma_blackout, compute_retro_propulsion,
-    control_system, deploy_landing_legs, guidance_system, handle_relaunch_input_system,
-    handle_rocket_launch_input, integrate_6dof, interpolate_render_transform,
-    propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
-    resolve_ground_contact, setup_rocket_camera_and_origin, setup_rocket_camera_controller,
-    setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
-    update_orbital_elements, update_rocket_earth_sphere, update_rocket_gravity,
+    apply_relaunch_requests, compute_ablation, compute_heating, compute_parachute_forces,
+    compute_plasma_blackout, compute_retro_propulsion, guidance_system,
+    handle_relaunch_input_system, handle_rocket_launch_input, resolve_ground_contact,
+    setup_rocket_camera_and_origin, setup_rocket_camera_controller, setup_rocket_earth_sphere,
+    setup_rocket_sky_color, setup_rocket_sun_light, update_rocket_earth_sphere,
     update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{
@@ -270,10 +282,14 @@ fn spawn_rockets_system(
         &crate::infrastructure::bevy_adapters::components::PlanetTerrain,
     )>,
 ) {
+    let launch_body = CelestialBodyId::earth();
     let terrain_source = terrain_query
         .iter()
-        .find(|(planet, _)| planet.domain_planet.name == "Earth")
+        .find(|(planet, _)| planet.matches_body(&launch_body))
         .map(|(_, terrain)| terrain.source.as_ref());
+    if terrain_source.is_none() {
+        panic!("Rocket launch configuration references unknown body '{launch_body}'");
+    }
     spawn_rockets(
         &mut commands,
         &mut meshes,
@@ -456,7 +472,7 @@ impl Plugin for RocketModePlugin {
                 control_system.in_set(RocketSet::Control),
                 actuation_system.in_set(RocketSet::Actuation),
                 update_rocket_gravity.in_set(RocketSet::Gravity),
-                atmosphere_properties.in_set(RocketSet::Atmosphere),
+                refresh_flight_conditions.in_set(RocketSet::Atmosphere),
                 spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
                 update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
                 check_fairing_separation.in_set(RocketSet::SpentStage),

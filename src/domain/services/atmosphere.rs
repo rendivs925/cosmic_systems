@@ -20,7 +20,9 @@
 //! a real ISA implementation or measured data can replace the formulas behind
 //! the same trait.
 
+use crate::domain::services::aerodynamics::{dynamic_pressure_q, mach_number};
 use crate::domain::services::rocket_propulsion::STANDARD_GRAVITY_MPS2;
+use bevy::math::DVec3;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -48,6 +50,50 @@ pub struct AtmosphereProperties {
     pub pressure_pa: f64,
     pub density_kg_m3: f64,
     pub speed_of_sound_mps: f64,
+}
+
+/// One vehicle's atmosphere sample and air-relative motion for a fixed tick.
+///
+/// The inertial dynamics state remains authoritative. This value captures the
+/// one atmosphere sample that every flight consumer must share for that tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlightConditions {
+    pub altitude_m: f64,
+    pub temperature_k: f64,
+    pub ambient_pressure_pa: f64,
+    pub density_kg_m3: f64,
+    pub speed_of_sound_mps: f64,
+    pub atmosphere_relative_velocity_mps: DVec3,
+    pub airspeed_mps: f64,
+    pub mach_number: f64,
+    pub dynamic_pressure_pa: f64,
+}
+
+impl FlightConditions {
+    pub fn from_atmosphere(
+        altitude_m: f64,
+        atmosphere: AtmosphereProperties,
+        atmosphere_relative_velocity_mps: DVec3,
+    ) -> Self {
+        let airspeed_mps = atmosphere_relative_velocity_mps.length();
+        Self {
+            altitude_m,
+            temperature_k: atmosphere.temperature_k,
+            ambient_pressure_pa: atmosphere.pressure_pa,
+            density_kg_m3: atmosphere.density_kg_m3,
+            speed_of_sound_mps: atmosphere.speed_of_sound_mps,
+            atmosphere_relative_velocity_mps,
+            airspeed_mps,
+            mach_number: mach_number(airspeed_mps, atmosphere.speed_of_sound_mps),
+            dynamic_pressure_pa: dynamic_pressure_q(atmosphere.density_kg_m3, airspeed_mps),
+        }
+    }
+}
+
+impl Default for FlightConditions {
+    fn default() -> Self {
+        Self::from_atmosphere(0.0, VacuumAtmosphere.properties(0.0), DVec3::ZERO)
+    }
 }
 
 /// A planet's atmosphere model: returns the state at a given geometric
@@ -179,5 +225,24 @@ mod tests {
         assert_eq!(props.pressure_pa, 0.0);
         assert_eq!(props.density_kg_m3, 0.0);
         assert_eq!(props.speed_of_sound_mps, 0.0);
+    }
+
+    #[test]
+    fn flight_conditions_share_one_atmosphere_sample() {
+        let velocity = DVec3::new(100.0, 0.0, 0.0);
+        let conditions = FlightConditions::from_atmosphere(
+            1_000.0,
+            AtmosphereProperties {
+                temperature_k: 280.0,
+                pressure_pa: 90_000.0,
+                density_kg_m3: 1.0,
+                speed_of_sound_mps: 350.0,
+            },
+            velocity,
+        );
+        assert_eq!(conditions.ambient_pressure_pa, 90_000.0);
+        assert_eq!(conditions.airspeed_mps, 100.0);
+        assert!((conditions.mach_number - 100.0 / 350.0).abs() < 1e-12);
+        assert_eq!(conditions.dynamic_pressure_pa, 5_000.0);
     }
 }

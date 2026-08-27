@@ -264,7 +264,7 @@ fn draw_gravity_vectors(
     for (binding, rocket, gravity) in rocket_query.iter() {
         let Some((_, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -308,7 +308,7 @@ fn draw_velocity_vectors(
     for (binding, rocket) in rocket_query.iter() {
         let Some((_, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -339,7 +339,7 @@ fn draw_thrust_vectors(
         &RocketPlanetBinding,
         &RocketPhysicsState,
         &RocketPropulsion,
-        &AtmosphereState,
+        &RocketFlightConditions,
     )>,
     mut gizmos: Gizmos<RocketDebugGizmos>,
 ) {
@@ -350,7 +350,7 @@ fn draw_thrust_vectors(
     for (binding, rocket, propulsion, atmosphere) in rocket_query.iter() {
         let Some((_, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -370,7 +370,7 @@ fn draw_thrust_vectors(
         let (thrust_body, _) = crate::domain::services::rocket_propulsion::stage_thrust_body(
             &stage.engines,
             throttle,
-            atmosphere.pressure_pa,
+            atmosphere.ambient_pressure_pa,
         );
         let thrust_inertial = rocket.dynamics.orientation * thrust_body;
 
@@ -413,7 +413,7 @@ fn draw_aero_forces(
         }
         let Some((_, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -456,7 +456,7 @@ fn draw_coordinate_frames(
     for (binding, rocket) in rocket_query.iter() {
         let Some((planet, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -553,7 +553,7 @@ fn draw_com_cop(
     for (binding, rocket, aero) in rocket_query.iter() {
         let Some((_, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -716,7 +716,7 @@ fn draw_terrain_collision(
     for (binding, rocket, collision) in rocket_query.iter() {
         let Some((_, planet_transform)) = planet_query
             .iter()
-            .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+            .find(|(p, _)| p.matches_body(&binding.planet_name))
         else {
             continue;
         };

@@ -7,6 +7,7 @@ use crate::domain::services::atmosphere::AtmosphereSource;
 use crate::domain::services::physics_orbital::OrbitShape;
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::terrain_source::{terrain_source_for, TerrainSource};
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::sync::Arc;
@@ -32,6 +33,14 @@ pub struct PlanetComponent {
     pub has_texture: bool,
     pub base_reflectance: f32,
     pub base_roughness: f32,
+}
+
+impl PlanetComponent {
+    /// Typed rocket-flight boundary over the catalog's presentation-oriented
+    /// body name. The celestial registry remains configurable and string-backed.
+    pub fn matches_body(&self, body_id: &CelestialBodyId) -> bool {
+        self.domain_planet.name == body_id.as_str()
+    }
 }
 
 // Component for orbital path visualization

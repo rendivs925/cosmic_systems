@@ -46,11 +46,7 @@ pub fn handle_rocket_camera_input(
 
     // Reset from the currently rendered pose when a transition is retargeted.
     for mut controller in controller_query.iter_mut() {
-        if controller.target_mode != requested_mode {
-            controller.target_mode = requested_mode;
-            controller.transition_progress = 0.0;
-            controller.transition_start = None;
-        }
+        controller.request_mode(requested_mode);
     }
 }
 
@@ -138,7 +134,7 @@ pub fn update_rocket_camera(
 
     let Some((_planet, _planet_transform)) = planet_query
         .iter()
-        .find(|(p, _)| p.domain_planet.name == binding.planet_name)
+        .find(|(p, _)| p.matches_body(&binding.planet_name))
     else {
         return;
     };
@@ -196,14 +192,13 @@ pub fn update_rocket_camera(
         // target continues tracking the rocket while the transition proceeds.
         for (mut cam_transform, _projection) in camera_query.iter_mut() {
             if controller.current_mode == controller.target_mode {
-                controller.transition_progress = 0.0;
-                controller.transition_start = None;
+                controller.cancel_transition();
                 cam_transform.translation = target_pos;
                 cam_transform.rotation = target_rot;
                 continue;
             }
 
-            let start = *controller.transition_start.get_or_insert(*cam_transform);
+            let start = controller.begin_transition(*cam_transform);
             controller.transition_progress =
                 (controller.transition_progress + dt * config.transition_speed).min(1.0);
             let linear_t = controller.transition_progress;
@@ -212,9 +207,7 @@ pub fn update_rocket_camera(
             cam_transform.rotation = start.rotation.slerp(target_rot, t);
 
             if controller.transition_progress >= 1.0 {
-                controller.current_mode = controller.target_mode;
-                controller.transition_progress = 0.0;
-                controller.transition_start = None;
+                controller.complete_transition();
             }
         }
     }
@@ -415,7 +408,7 @@ pub fn update_rocket_camera_projection(
     let altitude = rocket.dynamics.position_m.length();
     let planet_radius = planet_query
         .iter()
-        .find(|p| p.domain_planet.name == binding.planet_name)
+        .find(|p| p.matches_body(&binding.planet_name))
         .map(|p| p.domain_planet.radius_km as f64 * 1000.0)
         .unwrap_or(6_371_000.0);
     let height_above_surface = (altitude - planet_radius).max(0.0);

@@ -9,8 +9,9 @@
 
 use crate::components::rocket::*;
 use crate::domain::events::FairingSeparatedEvent;
-use crate::domain::services::aerodynamics::{drag_force_body, dynamic_pressure_q};
+use crate::domain::services::aerodynamics::drag_force_body;
 use crate::domain::services::terrain_collision::radar_altitude_m;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -34,7 +35,7 @@ pub const FAIRING_HALF_LATERAL_DV_MPS: f64 = 2.0;
 /// spawner signature small and the call sites self-documenting).
 pub struct SpentStageSpec {
     pub parent_rocket: Entity,
-    pub planet_name: String,
+    pub planet_id: CelestialBodyId,
     pub dynamics: crate::domain::services::rocket_dynamics::RocketDynamicsState,
     pub radius_m: f32,
     pub height_m: f32,
@@ -79,12 +80,9 @@ pub fn spawn_spent_stage(
             RocketMass(spec.dynamics.mass_kg),
             ForceAccumulator::default(),
             GravityAcceleration::default(),
-            AtmosphereState::default(),
+            RocketFlightConditions::default(),
             RocketPlanetBinding {
-                planet_name: crate::domain::value_objects::celestial_body_id::CelestialBodyId::new(
-                    spec.planet_name,
-                )
-                .expect("spent-stage planet name is validated by its parent rocket binding"),
+                planet_name: spec.planet_id,
             },
             Mesh3d(mesh),
             MeshMaterial3d(material),
@@ -97,25 +95,28 @@ pub fn spawn_spent_stage(
 /// attitude model): `F = -v̂ · q·Cd·A`. Consumes the shared atmosphere cache;
 /// runs before force accumulation like every other force writer.
 pub fn spent_stage_aerodynamics(
-    mut debris_query: Query<(
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &AtmosphereState,
-        &mut ForceAccumulator,
-    )>,
+    mut debris_query: Query<
+        (
+            &RocketPhysicsState,
+            &RocketGeometry,
+            &RocketFlightConditions,
+            &mut ForceAccumulator,
+        ),
+        With<SpentStage>,
+    >,
 ) {
-    for (debris, geometry, atmosphere, mut force_accum) in debris_query.iter_mut() {
-        // Guard clause: only SpentStage entities carry the marker; queries are
-        // filtered at registration time via With<SpentStage>.
-        let velocity = debris.dynamics.velocity_mps;
-        let speed = velocity.length();
-        if speed < 1.0 || atmosphere.density_kg_m3 <= 0.0 {
+    for (_debris, geometry, conditions, mut force_accum) in debris_query.iter_mut() {
+        let velocity = conditions.atmosphere_relative_velocity_mps;
+        if conditions.airspeed_mps < 1.0 || conditions.density_kg_m3 <= 0.0 {
             continue;
         }
-        let q = dynamic_pressure_q(atmosphere.density_kg_m3, speed);
         let reference_area_m2 = std::f64::consts::PI * (geometry.radius_m as f64).powi(2);
-        force_accum.0 +=
-            drag_force_body(q, SPENT_STAGE_DRAG_COEFFICIENT, reference_area_m2, velocity);
+        force_accum.0 += drag_force_body(
+            conditions.dynamic_pressure_pa,
+            SPENT_STAGE_DRAG_COEFFICIENT,
+            reference_area_m2,
+            velocity,
+        );
     }
 }
 
@@ -130,7 +131,7 @@ pub fn update_spent_stage_lifecycle(
     for (entity, binding, debris) in debris_query.iter() {
         let Some((_, planet_terrain)) = planet_query
             .iter()
-            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+            .find(|(planet, _)| planet.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -157,7 +158,7 @@ fn planet_terrain_radius(
 ) -> f64 {
     planet_query
         .iter()
-        .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+        .find(|(planet, _)| planet.matches_body(&binding.planet_name))
         .map(|(planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
         .unwrap_or(0.0)
 }
@@ -176,16 +177,16 @@ pub fn check_fairing_separation(
         Entity,
         &RocketPlanetBinding,
         &mut RocketPhysicsState,
-        &AtmosphereState,
+        &RocketFlightConditions,
         &mut RocketMass,
         &mut RocketPropulsion,
         &PayloadFairing,
     )>,
 ) {
-    for (entity, binding, mut rocket, atmosphere, mut mass, mut propulsion, fairing) in
+    for (entity, binding, mut rocket, conditions, mut mass, mut propulsion, fairing) in
         rocket_query.iter_mut()
     {
-        if atmosphere.altitude_m < FAIRING_JETTISON_ALTITUDE_M {
+        if conditions.altitude_m < FAIRING_JETTISON_ALTITUDE_M {
             continue;
         }
 
@@ -216,7 +217,7 @@ pub fn check_fairing_separation(
                 &mut materials,
                 SpentStageSpec {
                     parent_rocket: entity,
-                    planet_name: binding.planet_name.to_string(),
+                    planet_id: binding.planet_name.clone(),
                     dynamics: half_dynamics(sign),
                     radius_m: half_radius_m,
                     height_m: half_height_m,
@@ -231,7 +232,7 @@ pub fn check_fairing_separation(
         });
         bevy::log::info!(
             "Fairing separated at {:.0} km (-{:.0} kg)",
-            atmosphere.altitude_m / 1000.0,
+            conditions.altitude_m / 1000.0,
             fairing.dry_mass_kg
         );
     }
@@ -244,7 +245,9 @@ mod tests {
     use crate::domain::services::gravity::gravitational_acceleration;
     use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
     use crate::domain::services::simulation_time::SimulationTime;
-    use crate::infrastructure::bevy_adapters::rocket_systems::{accumulate_forces, integrate_6dof};
+    use crate::infrastructure::bevy_adapters::rocket_dynamics::{
+        accumulate_forces, integrate_6dof,
+    };
     use bevy::math::{DQuat, DVec3};
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;

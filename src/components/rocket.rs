@@ -2,6 +2,7 @@
 // Each component has a single responsibility, enabling parallel system execution.
 
 use crate::domain::entities::rocket::{Rocket, RocketMissionState as DomainRocketMissionState};
+use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::terrain_collision::GroundContact;
@@ -173,14 +174,16 @@ pub struct GravityAcceleration {
     pub value: DVec3,
 }
 
-/// Cached atmosphere state at vehicle altitude.
+/// Cached fixed-tick atmosphere sample and atmosphere-relative motion.
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct AtmosphereState {
-    pub altitude_m: f64,
-    pub temperature_k: f64,
-    pub pressure_pa: f64,
-    pub density_kg_m3: f64,
-    pub speed_of_sound_mps: f64,
+pub struct RocketFlightConditions(pub FlightConditions);
+
+impl Deref for RocketFlightConditions {
+    type Target = FlightConditions;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// Aerodynamic force in body frame, computed by aerodynamic_forces.
@@ -612,6 +615,50 @@ impl Default for RocketCameraController {
             free_orbit_pitch: 0.35,
             free_orbit_distance: 600.0,
         }
+    }
+}
+
+impl RocketCameraController {
+    pub fn request_mode(&mut self, mode: RocketCameraMode) {
+        if self.target_mode == mode {
+            return;
+        }
+        self.target_mode = mode;
+        self.transition_progress = 0.0;
+        self.transition_start = None;
+    }
+
+    pub fn begin_transition(&mut self, pose: Transform) -> Transform {
+        *self.transition_start.get_or_insert(pose)
+    }
+
+    pub fn complete_transition(&mut self) {
+        self.current_mode = self.target_mode;
+        self.transition_progress = 0.0;
+        self.transition_start = None;
+    }
+
+    pub fn cancel_transition(&mut self) {
+        self.transition_progress = 0.0;
+        self.transition_start = None;
+    }
+}
+
+#[cfg(test)]
+mod camera_controller_tests {
+    use super::*;
+
+    #[test]
+    fn retargeting_clears_the_previous_transition_pose() {
+        let mut controller = RocketCameraController::default();
+        controller.transition_start = Some(Transform::from_xyz(1.0, 2.0, 3.0));
+        controller.transition_progress = 0.5;
+
+        controller.request_mode(RocketCameraMode::Cockpit);
+
+        assert_eq!(controller.target_mode, RocketCameraMode::Cockpit);
+        assert_eq!(controller.transition_progress, 0.0);
+        assert!(controller.transition_start.is_none());
     }
 }
 

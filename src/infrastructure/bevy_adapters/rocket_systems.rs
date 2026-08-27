@@ -1,19 +1,10 @@
 use crate::components::rocket::*;
-use crate::domain::events::{
-    CommsBlackoutEvent, RelaunchRequested, SplashdownDetectedEvent, StageSeparatedEvent,
-};
-use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
-use crate::domain::services::aerodynamics::{
-    aerodynamic_coefficients_with_nose_bluntness, aerodynamic_torque_body, angle_of_attack,
-    angle_of_sideslip, center_of_pressure_m, drag_force_body, dynamic_pressure_q, lift_force_body,
-    side_force_body, update_max_q,
-};
-use crate::domain::services::control::control_torque_body;
+use crate::domain::events::{CommsBlackoutEvent, RelaunchRequested, SplashdownDetectedEvent};
 use crate::domain::services::entry_physics::{
     comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
     radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_recession_rate_mps,
 };
-use crate::domain::services::gravity::{gravitational_acceleration, gravitational_parameter};
+use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
     gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
@@ -21,40 +12,39 @@ use crate::domain::services::guidance::{
     reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
     DescentGuidanceConfig, TransferBurnPhase,
 };
-use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
+use crate::domain::services::landing_gear::{
+    topple_critical_angle_rad, LegDeploymentState, ToppleFall,
+};
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
 use crate::domain::services::reference_frames::{
     body_fixed_to_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
     surface_velocity_in_planet_inertial,
 };
+#[cfg(test)]
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed,
-    allocate_gimbal_deflections, clamp_gimbal, clamp_throttle_range, consume_propellant,
-    engine_thrust_n, gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse,
-    shed_stage, stage_throttle_envelope, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
-    SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
+    active_vehicle_inertia, active_vehicle_mass_with_payload, stage_thrust_body,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
     decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
     resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
 };
+#[cfg(test)]
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::{
-    AerodynamicForces, AtmosphereState, EntryPhysicsConfig, MaxQTracker, PlanetAtmosphere,
-    PlanetComponent, PlanetTerrain, RocketAutopilot, RocketCommands, TerrainCollisionState,
+    EntryPhysicsConfig, PlanetComponent, PlanetTerrain, RocketAutopilot, RocketCommands,
+    TerrainCollisionState,
 };
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::light::CascadeShadowConfigBuilder;
 
-use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
+pub(crate) use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::ecs::query::QueryData;
 use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 use bevy::prelude::*;
-use bevy::time::Fixed;
 
 /// Bundled read access for the guidance stage: one rocket's mission-relevant
 /// state. A derived query keeps the system signature readable and gives every
@@ -70,7 +60,7 @@ pub struct GuidanceAccess {
     pub mission_state: &'static mut RocketMissionState,
     pub autopilot: &'static mut RocketAutopilot,
     pub propulsion: &'static RocketPropulsion,
-    pub atmosphere: &'static AtmosphereState,
+    pub conditions: &'static RocketFlightConditions,
     pub orbital: &'static OrbitalElements,
     pub commands: &'static mut RocketCommands,
 }
@@ -90,7 +80,7 @@ pub struct GroundContactAccess {
     pub launch_site: Option<&'static LaunchSiteCoordinates>,
     pub dynamics: &'static mut RocketPhysicsState,
     pub propulsion: &'static RocketPropulsion,
-    pub atmosphere: Option<&'static AtmosphereState>,
+    pub conditions: Option<&'static RocketFlightConditions>,
     pub geometry: &'static RocketGeometry,
     pub collision: &'static mut TerrainCollisionState,
     pub rest: &'static mut GroundRest,
@@ -102,621 +92,6 @@ pub struct GroundContactAccess {
     pub scorecard: &'static mut LandingScorecard,
     /// Autopilot state, read for the landing-target distance record.
     pub autopilot: &'static RocketAutopilot,
-}
-
-/// Compute authoritative gravitational acceleration for each rocket from its
-/// dominant body (see [`RocketPlanetBinding`]) and store it for the force
-/// accumulation stage. Gravity uses the rocket's f64 planet-centered inertial
-/// position directly and the single gravity implementation in
-/// `domain::services::gravity`.
-pub fn update_rocket_gravity(
-    planet_query: Query<(&PlanetComponent, &Transform)>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &mut GravityAcceleration,
-    )>,
-) {
-    for (binding, rocket, mut gravity) in rocket_query.iter_mut() {
-        let Some((planet, _)) = planet_query
-            .iter()
-            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-
-        gravity.value = gravitational_acceleration(
-            planet.domain_planet.mass_kg,
-            rocket.dynamics.position_m,
-            DVec3::ZERO,
-        );
-    }
-}
-
-/// Compute orbital elements from rocket state vectors for telemetry and guidance.
-/// Runs in FixedUpdate after gravity to use the current planet-centered inertial state.
-pub fn update_orbital_elements(
-    planet_query: Query<&PlanetComponent>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &RocketMissionState,
-        &mut OrbitalElements,
-    )>,
-) {
-    for (binding, rocket, mission, mut elements) in rocket_query.iter_mut() {
-        if *mission == RocketMissionState::PreLaunch {
-            *elements = OrbitalElements::default();
-            continue;
-        }
-        let Some(planet) = planet_query
-            .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-
-        let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-        let state_elements = orbital_elements_from_state(
-            rocket.dynamics.position_m,
-            rocket.dynamics.velocity_mps,
-            mu,
-        );
-
-        elements.semi_major_axis_m = state_elements.semi_major_axis_m;
-        elements.eccentricity = state_elements.eccentricity;
-        elements.inclination_rad = state_elements.inclination_rad;
-        elements.longitude_ascending_node_rad = state_elements.longitude_ascending_node_rad;
-        elements.argument_of_periapsis_rad = state_elements.argument_of_periapsis_rad;
-        elements.true_anomaly_rad = state_elements.true_anomaly_rad;
-        elements.mean_anomaly_rad = state_elements.mean_anomaly_rad;
-        elements.orbital_period_s = state_elements.orbital_period_s;
-        elements.apoapsis_m = state_elements.apoapsis_m;
-        elements.periapsis_m = state_elements.periapsis_m;
-    }
-}
-
-/// Accumulate the gravitational force acting on each rocket ON TOP of the
-/// forces written by earlier systems (aero, parachutes, thrust). Forces are
-/// in the planet-centered inertial meter frame. This must ADD, not overwrite:
-/// integration clears the accumulators at the end of every step
-/// (`integrate_6dof`), so an overwrite here would silently discard every
-/// non-gravity force (regression-tested in `rocket_separation::tests`).
-pub fn accumulate_forces(
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &RocketMass,
-        &GravityAcceleration,
-        &mut ForceAccumulator,
-    )>,
-) {
-    for (rocket, mass, gravity, mut force_accum) in rocket_query.iter_mut() {
-        let gravity_force = gravity.value * mass.0;
-        force_accum.0 += gravity_force;
-    }
-}
-
-/// Integrate the authoritative 6-DOF dynamics (semi-implicit Euler in f64)
-/// from the accumulated force/torque, then reset the accumulators. Propellant
-/// depletion and staging are handled by the propulsion systems.
-/// Uses SimulationTime fixed timestep for deterministic physics.
-pub fn integrate_6dof(
-    sim_time: Res<SimulationTime>,
-    mut rocket_query: Query<(
-        &mut RocketPhysicsState,
-        &mut RocketMass,
-        &mut ForceAccumulator,
-        &mut TorqueAccumulator,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep();
-
-    for (mut rocket, mut mass, mut force_accum, mut torque_accum) in rocket_query.iter_mut() {
-        let force = force_accum.0;
-        let torque = torque_accum.0;
-        rocket.dynamics.integrate_translation(force, dt);
-        rocket.dynamics.integrate_rotation(torque, dt);
-        mass.0 = rocket.dynamics.mass_kg;
-
-        force_accum.0 = DVec3::ZERO;
-        torque_accum.0 = DVec3::ZERO;
-    }
-}
-
-/// Cache the atmosphere state (altitude → temperature/pressure/density/speed
-/// of sound) at each rocket's position, using the shared per-planet atmosphere
-/// model. Aero and propulsion systems consume this rather than recomputing
-/// planet lookups or scattering their own formulas.
-pub fn atmosphere_properties(
-    planet_query: Query<(&PlanetComponent, &PlanetAtmosphere)>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &mut AtmosphereState,
-    )>,
-) {
-    for (binding, rocket, mut atmosphere) in rocket_query.iter_mut() {
-        let Some((planet, planet_atmosphere)) = planet_query
-            .iter()
-            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let altitude_m = (rocket.dynamics.position_m.length() - radius_m).max(0.0);
-        let props = planet_atmosphere.source.properties(altitude_m);
-        atmosphere.altitude_m = altitude_m;
-        atmosphere.temperature_k = props.temperature_k;
-        atmosphere.pressure_pa = props.pressure_pa;
-        atmosphere.density_kg_m3 = props.density_kg_m3;
-        atmosphere.speed_of_sound_mps = props.speed_of_sound_mps;
-    }
-}
-
-/// Velocity relative to the atmosphere and terrain, both co-rotating with the
-/// bound planet. Dynamics remain planet-centered inertial; only force models
-/// and flight-condition displays consume this derived velocity.
-fn surface_relative_velocity(
-    binding: &RocketPlanetBinding,
-    rocket: &RocketPhysicsState,
-    planet_query: &Query<&PlanetComponent>,
-) -> DVec3 {
-    let surface_velocity = planet_query
-        .iter()
-        .find(|planet| planet.domain_planet.name == binding.planet_name)
-        .map(|planet| {
-            surface_velocity_in_planet_inertial(rocket.dynamics.position_m, &planet.domain_planet)
-        })
-        .unwrap_or(DVec3::ZERO);
-    rocket.dynamics.velocity_mps - surface_velocity
-}
-
-/// Compute aerodynamic forces (drag, lift, side) from the atmosphere and
-/// vehicle orientation, add them to the translational accumulator, track Max Q,
-/// and store the body-frame force for the torque system. Never writes the
-/// transform. Drag couples to ablation: a blunted (recessed) nose raises Cd
-/// via `aerodynamic_coefficients_with_nose_bluntness`.
-pub fn aerodynamic_forces(
-    config: Res<EntryPhysicsConfig>,
-    planet_query: Query<&PlanetComponent>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &AtmosphereState,
-        &AblationState,
-        &mut AerodynamicForces,
-        &mut MaxQTracker,
-        &mut ForceAccumulator,
-    )>,
-) {
-    for (binding, rocket, geometry, atmosphere, ablation, mut aero, mut max_q, mut force_accum) in
-        rocket_query.iter_mut()
-    {
-        let velocity = surface_relative_velocity(binding, rocket, &planet_query);
-        let speed = velocity.length();
-        aero.center_of_pressure_body = center_of_pressure_m(geometry.height_m as f64);
-        if speed < 1.0 || atmosphere.density_kg_m3 <= 0.0 {
-            aero.force_body = DVec3::ZERO;
-            continue;
-        }
-
-        let q = dynamic_pressure_q(atmosphere.density_kg_m3, speed);
-        max_q.max_q_pa = update_max_q(q, max_q.max_q_pa);
-
-        let reference_area_m2 = std::f64::consts::PI * (geometry.radius_m as f64).powi(2);
-        let body_velocity = rocket.dynamics.orientation.inverse() * velocity;
-        // Ablation blunts the nose: ratio of current to initial nose radius.
-        // Zero (or pre-heating) ablation keeps the baseline coefficients.
-        let nose_radius_ratio =
-            if ablation.nose_radius_m > 0.0 && config.nose_radius_initial_m > 0.0 {
-                ablation.nose_radius_m / config.nose_radius_initial_m
-            } else {
-                1.0
-            };
-        let (cd, cl, cy) = aerodynamic_coefficients_with_nose_bluntness(
-            angle_of_attack(body_velocity),
-            angle_of_sideslip(body_velocity),
-            nose_radius_ratio,
-        );
-
-        let total_body = drag_force_body(q, cd, reference_area_m2, body_velocity)
-            + lift_force_body(q, cl, reference_area_m2, body_velocity)
-            + side_force_body(q, cy, reference_area_m2, body_velocity);
-        aero.force_body = total_body;
-        let orientation = rocket.dynamics.orientation;
-        force_accum.0 += orientation * total_body;
-    }
-}
-
-/// Apply the aerodynamic force at the center of pressure to produce a torque
-/// about the center of mass, added to the rotational accumulator (body frame).
-pub fn aerodynamic_torque(
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &AerodynamicForces,
-        &mut TorqueAccumulator,
-    )>,
-) {
-    for (rocket, geometry, aero, mut torque_accum) in rocket_query.iter_mut() {
-        if aero.force_body.length_squared() == 0.0 {
-            continue;
-        }
-        let center_of_mass_m = rocket.dynamics.center_of_mass_m;
-        torque_accum.0 += aerodynamic_torque_body(
-            aero.force_body,
-            aero.center_of_pressure_body,
-            center_of_mass_m,
-        );
-    }
-}
-
-/// Compute thrust from the active stage's engines (T = m_dot · Isp · g0, with
-/// density-selected ISP) and add it to the translational accumulator in the
-/// planet-inertial frame. The supersonic retro-propulsion multiplier scales
-/// the effective thrust (single thrust writer; no double counting). Never
-/// writes the transform.
-pub fn propulsion_thrust(
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &AtmosphereState,
-        &RocketPropulsion,
-        &RetroPropulsionEffect,
-        &mut ForceAccumulator,
-    )>,
-) {
-    for (rocket, atmosphere, propulsion, retro, mut force_accum) in rocket_query.iter_mut() {
-        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
-            continue;
-        };
-        // Air-start gate: after any separation, only restartable engines may
-        // light. Combined with the ullage settle gate below.
-        let engines_restartable = stage.engines.iter().all(|e| e.restartable);
-        if !air_start_allowed(propulsion.separations_count > 0, engines_restartable) {
-            continue;
-        }
-        // Ullage gate: no ignition until propellant has settled post-staging.
-        if !ignition_allowed_during_ullage(
-            propulsion.time_since_separation_s,
-            propulsion.ullage_settle_time_s,
-        ) {
-            continue;
-        }
-        let remaining = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        if throttle <= 0.0 || remaining <= 0.0 {
-            continue;
-        }
-        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, atmosphere.pressure_pa);
-        let thrust_world = rocket.dynamics.orientation * thrust_body;
-        force_accum.0 += thrust_world * retro.thrust_multiplier;
-    }
-}
-
-/// Deplete the active stage's propellant at the engine mass flow and update the
-/// vehicle mass, inertia tensor, and center of mass. Mass always derives from
-/// the vehicle state (single source). Uses SimulationTime fixed timestep.
-pub fn propulsion_consumption(
-    sim_time: Res<SimulationTime>,
-    mut rocket_query: Query<(
-        &mut RocketPhysicsState,
-        &RocketGeometry,
-        &AtmosphereState,
-        &mut RocketPropulsion,
-        &mut RocketMass,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep();
-    for (mut rocket, geometry, atmosphere, mut propulsion, mut mass) in rocket_query.iter_mut() {
-        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
-            continue;
-        };
-        // Air-start gate: consumption follows the same ignition authority as
-        // thrust so mass bookkeeping can never diverge from applied force.
-        let engines_restartable = stage.engines.iter().all(|e| e.restartable);
-        if !air_start_allowed(propulsion.separations_count > 0, engines_restartable) {
-            continue;
-        }
-        // Ullage gate: consumption follows the same ignition authority as
-        // thrust so mass bookkeeping can never diverge from applied force.
-        if !ignition_allowed_during_ullage(
-            propulsion.time_since_separation_s,
-            propulsion.ullage_settle_time_s,
-        ) {
-            continue;
-        }
-        let remaining = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        if throttle <= 0.0 || remaining <= 0.0 {
-            continue;
-        }
-        let (_, mass_flow) = stage_thrust_body(&stage.engines, throttle, atmosphere.pressure_pa);
-        let (remaining_new, _consumed) = consume_propellant(remaining, mass_flow, dt);
-        let active_stage = propulsion.active_stage;
-        propulsion.propellant_remaining_kg[active_stage] = remaining_new;
-
-        let new_mass = active_vehicle_mass_with_payload(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            propulsion.attached_payload_kg,
-        );
-        mass.0 = new_mass;
-        rocket.dynamics.mass_kg = new_mass;
-        let (inertia, com) = active_vehicle_inertia(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            geometry.radius_m as f64,
-            geometry.height_m as f64,
-        );
-        rocket.dynamics.inertia_body = inertia;
-        rocket.dynamics.center_of_mass_m = com;
-    }
-}
-
-/// Separate the spent stage when its propellant is exhausted and the vehicle
-/// is still thrusting:
-/// - applies the domain separation impulse to the vehicle (upper stage),
-/// - respawns the spent stage as its own debris entity (`SpentStage`) carrying
-///   the pre-separation dynamics plus the retro impulse,
-/// - restarts the ullage settle timer for the upper stage's next ignition,
-/// - emits [`StageSeparatedEvent`].
-///
-/// Vehicle mass/inertia are recomputed from the active stage afterwards.
-pub fn propulsion_staging(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    sim_time: Res<SimulationTime>,
-    mut separated_writer: MessageWriter<StageSeparatedEvent>,
-    mut rocket_query: Query<(
-        Entity,
-        &RocketPlanetBinding,
-        &RocketGeometry,
-        &mut RocketPhysicsState,
-        &mut RocketMass,
-        &mut RocketPropulsion,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep() as f32;
-    for (entity, binding, geometry, mut rocket, mut mass, mut propulsion) in rocket_query.iter_mut()
-    {
-        // Advance the post-separation timer every tick; reset on staging.
-        propulsion.time_since_separation_s += dt;
-
-        let remaining = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        let thrusting = propulsion.throttle.clamp(0.0, 1.0) > 0.0;
-        if remaining > 0.0 || !thrusting {
-            continue;
-        }
-        let Some((next, shed)) = shed_stage(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-        ) else {
-            continue;
-        };
-
-        // Pre-separation dynamics become the spent stage's initial state.
-        let pre_separation = rocket.dynamics;
-
-        propulsion.active_stage = next;
-        // The next stage's ignition is now an air-start: it requires the
-        // stage's engines to be restartable, on top of the ullage settle.
-        propulsion.separations_count += 1;
-
-        // Separation impulses: pusher Δv to the upper stage, optional retro
-        // Δv to the spent stage (pure domain function).
-        let outcome = separation_impulse(
-            pre_separation.velocity_mps,
-            pre_separation.orientation,
-            DVec3::Y,
-            SEPARATION_UPPER_DV_MPS,
-            SPENT_STAGE_RETRO_DV_MPS,
-        );
-        rocket.dynamics.velocity_mps = outcome.upper_velocity_mps;
-
-        let new_mass = active_vehicle_mass_with_payload(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            propulsion.attached_payload_kg,
-        );
-        mass.0 = new_mass;
-        rocket.dynamics.mass_kg = new_mass;
-        let (inertia, com) = active_vehicle_inertia(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            geometry.radius_m as f64,
-            geometry.height_m as f64,
-        );
-        rocket.dynamics.inertia_body = inertia;
-        rocket.dynamics.center_of_mass_m = com;
-
-        // Spent-stage debris: pre-separation dynamics + retro impulse, shed
-        // dry + residual mass, height estimated from the stage count
-        // (documented approximation until per-stage lengths exist).
-        let mut spent_dynamics = pre_separation;
-        spent_dynamics.velocity_mps = outcome.spent_velocity_mps;
-        spent_dynamics.mass_kg = shed;
-        let estimated_height_m = geometry.height_m / propulsion.vehicle.stages.len() as f32;
-
-        // Interstage collision avoidance: the impulse model guarantees
-        // growing clearance over time; defensively log a spawn that would
-        // start inside the minimum clearance band (limitation documented in
-        // AGENTS.md section 71 notes — no continuous collision shape).
-        if MIN_SEPARATION_CLEARANCE_M > estimated_height_m as f64 {
-            bevy::log::warn!(
-                "Separation clearance {MIN_SEPARATION_CLEARANCE_M} m exceeds estimated stage length {estimated_height_m} m"
-            );
-        }
-
-        let spent_entity = spawn_spent_stage(
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            SpentStageSpec {
-                parent_rocket: entity,
-                planet_name: binding.planet_name.to_string(),
-                dynamics: spent_dynamics,
-                radius_m: geometry.radius_m,
-                height_m: estimated_height_m,
-                kind: SpentStageKind::Booster,
-            },
-        );
-
-        // Ullage: the next ignition must wait for propellant to settle.
-        propulsion.time_since_separation_s = 0.0;
-
-        separated_writer.write(StageSeparatedEvent {
-            rocket: entity,
-            spent_stage: spent_entity,
-            shed_mass_kg: shed,
-        });
-        bevy::log::info!(
-            "Stage {} separated: shed {shed:.0} kg, upper stage {:.0} kg",
-            propulsion.active_stage - 1,
-            new_mass
-        );
-    }
-}
-
-/// Apply engine gimbal deflection to produce torque about the rocket's center
-/// of mass, added to the rotational accumulator (body frame).
-pub fn propulsion_gimbal(
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &AtmosphereState,
-        &mut RocketPropulsion,
-        &mut TorqueAccumulator,
-    )>,
-) {
-    for (rocket, geometry, atmosphere, mut propulsion, mut torque_accum) in rocket_query.iter_mut()
-    {
-        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
-            continue;
-        };
-        let remaining = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        if throttle <= 0.0 || remaining <= 0.0 {
-            continue;
-        }
-        let com = rocket.dynamics.center_of_mass_m;
-        for engine in &stage.engines {
-            let pitch = clamp_gimbal(propulsion.gimbal_pitch_rad, engine.gimbal_range_deg) as f64;
-            let yaw = clamp_gimbal(propulsion.gimbal_yaw_rad, engine.gimbal_range_deg) as f64;
-            let thrust = engine_thrust_n(engine, throttle, atmosphere.pressure_pa);
-            torque_accum.0 += gimbal_torque_body(
-                engine.position_m.as_dvec3(),
-                com,
-                engine.thrust_axis.as_dvec3(),
-                thrust,
-                pitch,
-                yaw,
-            );
-        }
-    }
-}
-
-/// Sync the rocket's rendered [`Transform`] and the f32 facade fields from the
-/// authoritative f64 dynamics state. This is the only system that writes the
-/// rocket's `Transform`.
-/// Snapshot the authoritative physics state into the render-interpolation
-/// buffer (AGENTS.md section 49). Runs after `integrate_6dof` in `FixedUpdate`;
-/// the actual mesh transform is written every render frame by
-/// [`interpolate_render_transform`].
-pub fn capture_render_state(
-    mut rocket_query: Query<(&RocketPhysicsState, &mut RocketRenderState)>,
-) {
-    for (rocket, mut render) in rocket_query.iter_mut() {
-        render.prev = render.current;
-        render.current = rocket.dynamics;
-    }
-}
-
-/// Interpolate between the last two fixed physics states and write the rocket's
-/// render transform + facade. Runs every frame so the mesh moves smoothly even
-/// though physics only steps at the fixed rate: the `Time<Fixed>` overstep
-/// fraction is the sub-step alpha (AGENTS.md sections 11 and 49).
-pub fn interpolate_render_transform(
-    render_origin: Res<RenderOrigin>,
-    physical_scale: Res<PhysicalScale>,
-    time: Res<Time<Fixed>>,
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &RocketRenderState,
-        &RocketMissionState,
-        &mut RocketFacade,
-        &mut Transform,
-    )>,
-) {
-    let alpha = time.overstep_fraction() as f64;
-    for (rocket, render, mission, mut facade, mut transform) in rocket_query.iter_mut() {
-        let interp = render_dynamics_state(*mission, rocket.dynamics, *render, alpha);
-
-        // Use flight-scale transform relative to render origin (AGENTS.md #13).
-        *transform = interp.render_transform(render_origin.origin, &physical_scale);
-
-        // Refresh the compatible facade fields from the interpolated state (the
-        // authoritative `dynamics` is the interpolation endpoint at alpha=1, so
-        // the facade stays consistent with physics at fixed-step boundaries).
-        facade.position = transform.translation;
-        facade.velocity = interp.velocity_mps.as_vec3();
-        facade.orientation = interp.orientation.as_quat();
-        facade.angular_velocity = interp.angular_velocity_radps.as_vec3();
-        facade.mass = rocket.dynamics.mass_kg as f32;
-    }
-}
-
-/// Select presentation state without changing simulation authority. The pad is
-/// rebuilt in the rotating body frame once per fixed tick, while terrain is
-/// presented at the latest tick. Interpolating those two pad snapshots causes
-/// a visible relative oscillation before liftoff, so prelaunch renders the
-/// current authoritative pad state exactly.
-pub(crate) fn render_dynamics_state(
-    mission: RocketMissionState,
-    dynamics: RocketDynamicsState,
-    render: RocketRenderState,
-    alpha: f64,
-) -> RocketDynamicsState {
-    if mission == RocketMissionState::PreLaunch {
-        return dynamics;
-    }
-
-    let a = render.prev;
-    let b = render.current;
-    RocketDynamicsState {
-        position_m: a.position_m.lerp(b.position_m, alpha),
-        velocity_mps: a.velocity_mps.lerp(b.velocity_mps, alpha),
-        orientation: a.orientation.slerp(b.orientation, alpha),
-        angular_velocity_radps: a
-            .angular_velocity_radps
-            .lerp(b.angular_velocity_radps, alpha),
-        angular_acceleration_radps2: b.angular_acceleration_radps2,
-        mass_kg: b.mass_kg,
-        inertia_body: b.inertia_body,
-        center_of_mass_m: b.center_of_mass_m,
-    }
 }
 
 /// Mission guidance: computes the target attitude from the mission phase and
@@ -737,7 +112,7 @@ pub fn guidance_system(
         let rocket = &access.dynamics;
         let binding = access.binding;
         let propulsion = access.propulsion;
-        let atmosphere = access.atmosphere;
+        let conditions = access.conditions;
         let orbital = access.orbital;
         let mass = access.mass;
         let mission_state = &mut *access.mission_state;
@@ -761,7 +136,7 @@ pub fn guidance_system(
 
         let Some(planet) = planet_query
             .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
+            .find(|planet| planet.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -809,11 +184,8 @@ pub fn guidance_system(
                 .map(|m| *m > 0.0)
                 .unwrap_or(false);
 
-        // Guidance constraints use the same co-rotating atmospheric velocity
-        // and density as the aerodynamic force model.
-        let relative_velocity = surface_relative_velocity(binding, rocket, &planet_query);
-        let dynamic_pressure_pa =
-            dynamic_pressure_q(atmosphere.density_kg_m3, relative_velocity.length());
+        // Guidance constraints use the shared fixed-tick flight conditions.
+        let dynamic_pressure_pa = conditions.dynamic_pressure_pa;
 
         // Advance the mission phase from the authoritative f64 target predicate.
         *mission_state = advance_ascent_phase(
@@ -1141,161 +513,6 @@ pub fn guidance_system(
     }
 }
 
-/// Attitude control: converts the guidance attitude target and current state into
-/// gimbal deflections and RCS torque using the PID with
-/// anti-windup. Writes only the command interface; never the vehicle's motion.
-/// Uses SimulationTime fixed timestep.
-pub fn control_system(
-    sim_time: Res<SimulationTime>,
-    mut rocket_query: Query<(
-        &mut RocketCommands,
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &RocketMass,
-        &RocketPropulsion,
-        &AtmosphereState,
-        &mut RocketAutopilot,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep();
-    for (mut commands, rocket, geometry, mass, propulsion, atmosphere, mut autopilot) in
-        rocket_query.iter_mut()
-    {
-        let gains = autopilot.gains;
-        // The dynamics model carries a diagonal body-frame inertia; pass its
-        // diagonal so the normalized gains produce vehicle-scaled torque.
-        let inertia_diag = DVec3::new(
-            rocket.dynamics.inertia_body.x_axis.x,
-            rocket.dynamics.inertia_body.y_axis.y,
-            rocket.dynamics.inertia_body.z_axis.z,
-        );
-        let torque = control_torque_body(
-            commands.target_attitude,
-            rocket.dynamics.orientation,
-            rocket.dynamics.angular_velocity_radps,
-            inertia_diag,
-            &gains,
-            &mut autopilot.integral,
-            dt,
-        );
-
-        // Allocate the commanded torque to gimbal pitch/yaw (inverting the
-        // real engine geometry) and RCS (roll).
-        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
-            continue;
-        };
-        let (gimbal_pitch, gimbal_yaw) = allocate_gimbal_deflections(
-            &stage.engines,
-            rocket.dynamics.center_of_mass_m,
-            torque,
-            propulsion.throttle,
-            atmosphere.pressure_pa,
-        );
-        commands.gimbal_pitch_cmd_rad = gimbal_pitch;
-        commands.gimbal_yaw_cmd_rad = gimbal_yaw;
-        commands.rcs_torque_cmd_body = DVec3::new(0.0, torque.y, 0.0);
-    }
-}
-
-/// Actuation: apply the physical actuator limits (throttle slew, gimbal range,
-/// RCS torque) to the control commands and deliver the bounded outputs to the
-/// propulsion systems and the torque accumulator. The last layer before
-/// physics; it never writes the vehicle's motion directly.
-/// Uses SimulationTime fixed timestep.
-pub fn actuation_system(
-    sim_time: Res<SimulationTime>,
-    mut rocket_query: Query<(
-        &RocketCommands,
-        &mut RocketPropulsion,
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &mut TorqueAccumulator,
-        &RocketAutopilot,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep_f32();
-    for (commands, mut propulsion, rocket, geometry, mut torque_accum, autopilot) in
-        rocket_query.iter_mut()
-    {
-        let limits = autopilot.actuation;
-        // Slew limit first, then clamp to the active stage's per-engine
-        // throttle envelope (intersection of individual engine ranges), so
-        // no engine is commanded outside its own capability.
-        let slewed = limit_throttle_slew(
-            propulsion.throttle,
-            commands.throttle_cmd,
-            limits.max_throttle_slew_per_s,
-            dt,
-        );
-        let envelope = propulsion
-            .vehicle
-            .stages
-            .get(propulsion.active_stage)
-            .map(|stage| stage_throttle_envelope(&stage.engines))
-            .unwrap_or((0.0, 1.0));
-        // Commanded-off must bypass the envelope floor: raising the slewed
-        // value back to throttle_min would make shutdown impossible (the
-        // engine can never reach zero once lit).
-        propulsion.throttle = if commands.throttle_cmd <= 0.0 {
-            slewed
-        } else {
-            clamp_throttle_range(slewed, envelope.0, envelope.1)
-        };
-        propulsion.gimbal_pitch_rad = clamp_deflection(
-            commands.gimbal_pitch_cmd_rad,
-            limits.max_gimbal_deflection_rad,
-        );
-        propulsion.gimbal_yaw_rad = clamp_deflection(
-            commands.gimbal_yaw_cmd_rad,
-            limits.max_gimbal_deflection_rad,
-        );
-        let rcs = clamp_rcs_torque(commands.rcs_torque_cmd_body, limits.max_rcs_torque_nm);
-        torque_accum.0 += rcs;
-    }
-}
-
-/// Landing-gear deployment: advances each vehicle's one-way deployment latch
-/// from the authoritative radar altitude and surface-relative vertical speed.
-/// Runs in [`RocketSet::EntryPhysics`] so the gear is down before any
-/// GroundContact verdict can be gear-aware. Never touches motion.
-pub fn deploy_landing_legs(
-    mut rocket_query: Query<(
-        &TerrainCollisionState,
-        &RocketPhysicsState,
-        &GroundRest,
-        &mut LandingLegs,
-    )>,
-) {
-    for (collision, rocket, ground_rest, mut legs) in rocket_query.iter_mut() {
-        // Never deploy while resting on the surface: the pad vehicle is
-        // carried by the resting-contact constraint (the launch mount), not
-        // the landing struts — a real vehicle lifts off with the legs stowed.
-        // This also keeps the micro-sinking residual of the rigid rest clamp
-        // (v·up < 0 from the tangential leftover on a sloped normal) from
-        // tripping the descent gate while sitting on the pad.
-        if ground_rest.active || collision.ground_contact == GroundContact::Landed {
-            continue;
-        }
-        let radius = rocket.dynamics.position_m.length();
-        if radius < 1.0 {
-            continue;
-        }
-        let up_dir = rocket.dynamics.position_m / radius;
-        let vertical_speed = rocket.dynamics.velocity_mps.dot(up_dir);
-        let deploy_gate_altitude_m = legs.deploy_gate_altitude_m();
-        if legs.deployment.update(
-            deploy_gate_altitude_m,
-            collision.radar_altitude_m,
-            vertical_speed,
-        ) {
-            bevy::log::info!(
-                "Landing legs deployed at {:.0} m AGL",
-                collision.radar_altitude_m
-            );
-        }
-    }
-}
-
 /// Authoritative rocket–terrain contact. Runs POST-integration in
 /// [`RocketSet::GroundContact`], so verdicts and constraints act on the
 /// just-integrated state: samples collision terrain, refreshes the
@@ -1322,8 +539,8 @@ pub fn resolve_ground_contact(
         let binding = access.binding;
         let propulsion = access.propulsion;
         let ambient_pressure_pa = access
-            .atmosphere
-            .map(|atmosphere| atmosphere.pressure_pa)
+            .conditions
+            .map(|conditions| conditions.ambient_pressure_pa)
             .unwrap_or(0.0);
         let geometry = access.geometry;
         let autopilot = access.autopilot;
@@ -1336,7 +553,7 @@ pub fn resolve_ground_contact(
         let scorecard = &mut *access.scorecard;
         let Some((planet, planet_terrain)) = planet_query
             .iter()
-            .find(|(planet, _)| planet.domain_planet.name == binding.planet_name)
+            .find(|(planet, _)| planet.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -1747,79 +964,6 @@ fn arm_topple_if_leaning(
     false
 }
 
-/// Advance an armed topple (Phase 14): rigid rotation about the foot-plane
-/// edge driven by the domain gravity-pendulum model, with the tilt mapped
-/// onto the authoritative orientation. Runs inside [`RocketSet::GroundContact`]
-/// after `resolve_ground_contact`; ends with mission Crashed.
-pub fn advance_topple(
-    sim_time: Res<SimulationTime>,
-    planet_query: Query<&PlanetComponent>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &mut RocketPhysicsState,
-        &mut TipOverState,
-        &mut RocketMissionState,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep();
-    for (binding, mut rocket, mut tip_over, mut mission_state) in rocket_query.iter_mut() {
-        // Guard: only armed vehicles participate.
-        if tip_over.fall.is_none() {
-            continue;
-        }
-        let com_height_m = tip_over.com_height_m;
-        let Some(planet) = planet_query
-            .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-        let radius = rocket.dynamics.position_m.length();
-        if radius < 1.0 {
-            continue;
-        }
-        let up = rocket.dynamics.position_m / radius;
-        let body_y = rocket.dynamics.orientation * DVec3::Y;
-
-        // Fixed fall plane: horizontal lean direction captured from the
-        // current attitude; upright bodies have none and wait.
-        let fall_dir_h = (body_y - up * body_y.dot(up)).normalize_or_zero();
-        if fall_dir_h.length_squared() < 0.5 {
-            // Upright: nothing to map yet.
-            continue;
-        }
-
-        let gravity_mps2 =
-            gravitational_parameter(planet.domain_planet.mass_kg) / (radius * radius);
-        let fall = tip_over.fall.as_mut().expect("armed above");
-        let completed = fall.advance(gravity_mps2, com_height_m, dt);
-
-        // Rebuild the attitude with the longitudinal axis at the model's
-        // tilt, preserving as much of the original roll as possible.
-        let y_new = up * fall.tilt_rad.cos() + fall_dir_h * fall.tilt_rad.sin();
-        let x_old = body_y.cross(y_new).cross(body_y).normalize_or_zero();
-        let x_new = if x_old.length_squared() > 0.5 {
-            x_old
-        } else {
-            fall_dir_h.cross(up).normalize_or_zero()
-        };
-        if x_new.length_squared() < 0.5 {
-            continue;
-        }
-        let z_new = x_new.cross(y_new);
-        rocket.dynamics.orientation = DQuat::from_mat3(&DMat3::from_cols(
-            x_new.normalize(),
-            y_new,
-            z_new.normalize(),
-        ));
-
-        if completed && *mission_state != RocketMissionState::Crashed {
-            *mission_state = RocketMissionState::Crashed;
-            bevy::log::info!("Vehicle toppled over — mission lost");
-        }
-    }
-}
-
 /// Relaunch input (Phase 14): R commands a full pad-style reset of every
 /// vehicle. Presentation-adjacent input handling only — the mutation happens
 /// in FixedUpdate via [`apply_relaunch_requests`].
@@ -1925,7 +1069,7 @@ pub fn apply_relaunch_requests(
         // Upright, motionless, resting at the current site.
         let Some(planet) = planet_query
             .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
+            .find(|planet| planet.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -1941,7 +1085,7 @@ pub fn apply_relaunch_requests(
         *mission_state = RocketMissionState::PreLaunch;
         rest.active = true;
         if let Some(mut legs) = legs {
-            legs.deployment = crate::domain::services::landing_gear::LegDeploymentState::default();
+            legs.deployment = LegDeploymentState::default();
             legs.compression_m = 0.0;
         }
         *scorecard = LandingScorecard::default();
@@ -1956,32 +1100,15 @@ pub fn apply_relaunch_requests(
 }
 
 /// Convective heating (Sutton-Graves) and radiative heating (Tauber-Sutton).
-/// Runs in FixedUpdate before force accumulation. Reads AtmosphereState and
+/// Runs in FixedUpdate before force accumulation. Reads RocketFlightConditions and
 /// writes ThermalState for the ablation system.
 pub fn compute_heating(
     config: Res<EntryPhysicsConfig>,
-    planet_query: Query<&PlanetComponent>,
-    mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &RocketGeometry,
-        &AtmosphereState,
-        &mut ThermalState,
-    )>,
+    mut rocket_query: Query<(&RocketFlightConditions, &mut ThermalState)>,
 ) {
-    for (binding, rocket, geometry, atmosphere, mut thermal) in rocket_query.iter_mut() {
-        let Some(planet) = planet_query
-            .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-
-        let rho = atmosphere.density_kg_m3;
-        let v = surface_relative_velocity(binding, rocket, &planet_query).length();
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let r = rocket.dynamics.position_m.length();
-        let altitude_m = (r - radius_m).max(0.0);
+    for (conditions, mut thermal) in rocket_query.iter_mut() {
+        let rho = conditions.density_kg_m3;
+        let v = conditions.airspeed_mps;
 
         // Skip if no meaningful atmosphere
         if rho <= 0.0 || v < 100.0 {
@@ -2012,28 +1139,15 @@ pub fn compute_heating(
 pub fn compute_ablation(
     sim_time: Res<SimulationTime>,
     config: Res<EntryPhysicsConfig>,
-    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
-        &RocketPlanetBinding,
         &mut RocketPhysicsState,
-        &RocketGeometry,
-        &AtmosphereState,
         &ThermalState,
         &mut AblationState,
         &mut RocketMass,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (binding, mut rocket, geometry, _atmosphere, thermal, mut ablation, mut mass) in
-        rocket_query.iter_mut()
-    {
-        let Some(_planet) = planet_query
-            .iter()
-            .find(|planet| planet.domain_planet.name == binding.planet_name)
-        else {
-            continue;
-        };
-
+    for (mut rocket, thermal, mut ablation, mut mass) in rocket_query.iter_mut() {
         let q_total = thermal.total_heat_flux_w_m2;
         if q_total <= 0.0 {
             continue;
@@ -2076,20 +1190,11 @@ pub fn compute_ablation(
 pub fn compute_plasma_blackout(
     config: Res<EntryPhysicsConfig>,
     mut blackout_writer: MessageWriter<CommsBlackoutEvent>,
-    planet_query: Query<&PlanetComponent>,
-    mut rocket_query: Query<(
-        Entity,
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &AtmosphereState,
-        &mut CommsState,
-    )>,
+    mut rocket_query: Query<(Entity, &RocketFlightConditions, &mut CommsState)>,
 ) {
-    for (rocket_entity, binding, rocket, atmosphere, mut comms) in rocket_query.iter_mut() {
-        let electron_density = electron_density_m3(
-            atmosphere.density_kg_m3,
-            surface_relative_velocity(binding, rocket, &planet_query).length(),
-        );
+    for (rocket_entity, conditions, mut comms) in rocket_query.iter_mut() {
+        let electron_density =
+            electron_density_m3(conditions.density_kg_m3, conditions.airspeed_mps);
         let blackout_active =
             comms_blackout_active(electron_density, config.critical_electron_density_m3);
 
@@ -2116,11 +1221,9 @@ pub fn compute_plasma_blackout(
 pub fn compute_parachute_forces(
     sim_time: Res<SimulationTime>,
     config: Res<EntryPhysicsConfig>,
-    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
-        &RocketPlanetBinding,
         &RocketPhysicsState,
-        &AtmosphereState,
+        &RocketFlightConditions,
         &TerrainCollisionState,
         &GroundRest,
         &RocketMissionState,
@@ -2131,9 +1234,8 @@ pub fn compute_parachute_forces(
     let dt = sim_time.fixed_timestep();
     let parachute_config = config.parachute_config();
     for (
-        binding,
         rocket,
-        atmosphere,
+        conditions,
         collision,
         ground_rest,
         mission_state,
@@ -2153,9 +1255,9 @@ pub fn compute_parachute_forces(
             continue;
         }
 
-        let rho = atmosphere.density_kg_m3;
-        let velocity = surface_relative_velocity(binding, rocket, &planet_query);
-        let speed = velocity.length();
+        let rho = conditions.density_kg_m3;
+        let velocity = conditions.atmosphere_relative_velocity_mps;
+        let speed = conditions.airspeed_mps;
         if rho <= 0.0 || speed <= 0.0 {
             continue;
         }
@@ -2165,19 +1267,18 @@ pub fn compute_parachute_forces(
             continue;
         }
         let vertical_speed = velocity.dot(up_dir);
-        let mach = speed / atmosphere.speed_of_sound_mps.max(1.0);
 
         let transitions = parachute.deployment.advance(
             &parachute_config,
-            atmosphere.altitude_m,
-            mach,
+            conditions.altitude_m,
+            conditions.mach_number,
             vertical_speed,
             dt,
         );
         if transitions.any() {
             bevy::log::info!(
                 "Parachute transition at {:.0} m: drogue_deployed={} drogue_inflated={} main_deployed={} main_inflated={}",
-                atmosphere.altitude_m,
+                conditions.altitude_m,
                 transitions.drogue_deployed,
                 transitions.drogue_inflated,
                 transitions.main_deployed,
@@ -2200,23 +1301,19 @@ pub fn compute_parachute_forces(
 /// counting — and the direction/ISP handling of `stage_thrust_body` applies.
 pub fn compute_retro_propulsion(
     config: Res<EntryPhysicsConfig>,
-    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &AtmosphereState,
+        &RocketFlightConditions,
         &RocketPropulsion,
         &mut RetroPropulsionEffect,
     )>,
 ) {
-    for (binding, rocket, atmosphere, propulsion, mut retro) in rocket_query.iter_mut() {
+    for (conditions, propulsion, mut retro) in rocket_query.iter_mut() {
         // Default each tick; re-derived below so state never goes stale
         // (config toggles, Mach drops below threshold, engines shut down).
         let mut multiplier = 1.0;
 
         if config.retro_propulsion_enabled {
-            let mach = surface_relative_velocity(binding, rocket, &planet_query).length()
-                / atmosphere.speed_of_sound_mps.max(1.0);
+            let mach = conditions.mach_number;
             if mach >= config.retro_propulsion_mach_threshold {
                 // Engines must actually be producing thrust at this tick;
                 // the same stage_thrust_body the physics uses decides that.
@@ -2228,8 +1325,11 @@ pub fn compute_retro_propulsion(
                         .unwrap_or(0.0);
                     let throttle = propulsion.throttle.clamp(0.0, 1.0);
                     if throttle > 0.0 && remaining > 0.0 {
-                        let (thrust_body, _) =
-                            stage_thrust_body(&stage.engines, throttle, atmosphere.pressure_pa);
+                        let (thrust_body, _) = stage_thrust_body(
+                            &stage.engines,
+                            throttle,
+                            conditions.ambient_pressure_pa,
+                        );
                         if thrust_body.length_squared() > 0.0 {
                             multiplier = retro_propulsion_effectiveness(
                                 mach,
@@ -2546,6 +1646,12 @@ mod ground_contact_tests {
     use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::terrain_collision::{radial_direction, sample_surface};
+    use crate::infrastructure::bevy_adapters::rocket_contact::{
+        advance_topple, deploy_landing_legs,
+    };
+    use crate::infrastructure::bevy_adapters::rocket_dynamics::{
+        accumulate_forces, integrate_6dof,
+    };
     use bevy::math::{DMat3, DQuat};
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
@@ -2661,7 +1767,7 @@ mod ground_contact_tests {
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
             RocketPlanetBinding {
-                planet_name: "Earth".to_string(),
+                planet_name: CelestialBodyId::earth(),
             },
         ));
 
@@ -3166,9 +2272,17 @@ mod ground_contact_tests {
 mod ascent_pipeline_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::events::StageSeparatedEvent;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::terrain_collision::radial_direction;
+    use crate::infrastructure::bevy_adapters::rocket_control::{actuation_system, control_system};
+    use crate::infrastructure::bevy_adapters::rocket_dynamics::{
+        accumulate_forces, integrate_6dof,
+    };
+    use crate::infrastructure::bevy_adapters::rocket_propulsion::{
+        propulsion_consumption, propulsion_staging,
+    };
     use bevy::math::{DQuat, DVec3};
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
@@ -3288,6 +2402,7 @@ mod ascent_pipeline_tests {
                     height_m: 18.0,
                 },
                 RocketMass(total_mass_kg),
+                RocketFlightConditions::default(),
                 RocketMissionState::Launch,
                 RocketPropulsion {
                     vehicle,
@@ -3313,7 +2428,7 @@ mod ascent_pipeline_tests {
             TipOverState::default(),
             LandingScorecard::default(),
             RocketPlanetBinding {
-                planet_name: "Earth".to_string(),
+                planet_name: CelestialBodyId::earth(),
             },
             GravityAcceleration { value: -up * 9.81 },
             ForceAccumulator::default(),
@@ -3344,7 +2459,6 @@ mod ascent_pipeline_tests {
                 guidance_system,
                 control_system,
                 actuation_system,
-                update_rocket_gravity,
                 write_flight_forces,
                 accumulate_forces,
                 integrate_6dof,
@@ -3386,15 +2500,19 @@ mod ascent_pipeline_tests {
         // not the 139 kN envelope-floor value: nothing downstream may cap the
         // command once the slew has caught up.
         let world = app.world_mut();
-        let mut q = world.query::<(&RocketPropulsion, &GroundRest)>();
-        let (propulsion, _rest) = q.single(world).unwrap();
+        let mut q = world.query::<(&RocketPropulsion, &RocketFlightConditions, &GroundRest)>();
+        let (propulsion, conditions, _rest) = q.single(world).unwrap();
         let Some(stage) = propulsion.vehicle.stages.first() else {
             panic!("stage 1 missing");
         };
-        let (thrust_body, _) = stage_thrust_body(&stage.engines, propulsion.throttle, 0.0);
+        let (thrust_body, _) = stage_thrust_body(
+            &stage.engines,
+            propulsion.throttle,
+            conditions.ambient_pressure_pa,
+        );
         assert!(
-            (thrust_body.length() - 232_200.0).abs() < 500.0,
-            "steady-state thrust {} N is not the expected ~232 kN",
+            thrust_body.length() > 230_000.0,
+            "steady-state thrust {} N is not the expected full-throttle output",
             thrust_body.length()
         );
     }
@@ -3613,7 +2731,7 @@ mod ascent_pipeline_tests {
                 height_m: 18.0,
             },
             RocketMass(total_mass_kg),
-            AtmosphereState::default(),
+            RocketFlightConditions::default(),
             RocketPropulsion {
                 vehicle,
                 active_stage: 0,
@@ -3627,7 +2745,7 @@ mod ascent_pipeline_tests {
                 attached_payload_kg: 50.0,
             },
             RocketPlanetBinding {
-                planet_name: "Earth".to_string(),
+                planet_name: CelestialBodyId::earth(),
             },
         ));
 
