@@ -401,7 +401,11 @@ pub struct TerrainSite {
     pub name: &'static str,
     pub latitude_deg: f64,
     pub longitude_deg: f64,
+    /// Radius of the exactly flat pad surface.
     pub radius_deg: f64,
+    /// Outer radius of the C1 grade back to the unmodified terrain. Must be
+    /// greater than `radius_deg`.
+    pub blend_radius_deg: f64,
     pub elevation_m: f64,
 }
 
@@ -415,25 +419,63 @@ impl TerrainSite {
         if distance_deg <= self.radius_deg {
             return 1.0;
         }
-        1.0 - ss(self.radius_deg, self.radius_deg * 2.0, distance_deg)
+        if self.blend_radius_deg <= self.radius_deg {
+            return 0.0;
+        }
+        1.0 - ss(self.radius_deg, self.blend_radius_deg, distance_deg)
     }
 }
 
+/// A site with its base-terrain height sampled once during source construction.
+/// This keeps the site correction deterministic without repeatedly evaluating
+/// potentially cached or expensive terrain sources at the site center.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CalibratedTerrainSite {
+    site: TerrainSite,
+    base_center_height_m: f64,
+}
+
 /// Detailed launch-site patches overlaid on a base terrain source. Sites
-/// stay flat (localized objects) while the rest of the planet uses the base.
+/// stay flat while a broad, smooth grade rejoins the unmodified base terrain.
 #[derive(Debug, Clone)]
 pub struct SiteAwareTerrainSource {
-    pub base: std::sync::Arc<dyn TerrainSource>,
-    pub sites: Vec<TerrainSite>,
+    base: std::sync::Arc<dyn TerrainSource>,
+    sites: Vec<CalibratedTerrainSite>,
+}
+
+impl SiteAwareTerrainSource {
+    pub fn new(base: std::sync::Arc<dyn TerrainSource>, sites: Vec<TerrainSite>) -> Self {
+        let sites = sites
+            .into_iter()
+            .map(|site| {
+                assert!(
+                    site.radius_deg >= 0.0 && site.blend_radius_deg > site.radius_deg,
+                    "terrain site '{}' must have a non-negative flat radius and a larger blend radius",
+                    site.name
+                );
+                CalibratedTerrainSite {
+                    base_center_height_m: base.height_m(site.latitude_deg, site.longitude_deg),
+                    site,
+                }
+            })
+            .collect();
+        Self { base, sites }
+    }
 }
 
 impl TerrainSource for SiteAwareTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        for site in &self.sites {
+        for calibrated in &self.sites {
+            let site = calibrated.site;
             let flat_weight = site.flat_weight(latitude_deg, longitude_deg);
             if flat_weight > 0.0 {
                 let base = self.base.height_m(latitude_deg, longitude_deg);
-                return base + (site.elevation_m - base) * flat_weight;
+                // Preserve local relief while carrying the center-height bias
+                // across the whole grade. The smoothstep-derived flat weight
+                // has zero slope at both ends, avoiding a pad-edge shelf.
+                let center_bias_m = site.elevation_m - calibrated.base_center_height_m;
+                let corrected_base = base + center_bias_m * flat_weight;
+                return corrected_base + (site.elevation_m - corrected_base) * flat_weight;
             }
         }
         self.base.height_m(latitude_deg, longitude_deg)
@@ -645,8 +687,10 @@ fn terrain_sites(name: &str) -> Vec<TerrainSite> {
                 name: "Kennedy Space Center",
                 latitude_deg: 28.5721,
                 longitude_deg: -80.6480,
-                // ~17 m flat pad, feathered over the next ~17 m.
+                // ~17 m flat pad, then an ~11 km C1 grade. The procedural
+                // Earth can differ substantially from the surveyed 2 m pad.
                 radius_deg: 0.00015,
+                blend_radius_deg: 0.1,
                 elevation_m: 2.0,
             },
             TerrainSite {
@@ -654,6 +698,7 @@ fn terrain_sites(name: &str) -> Vec<TerrainSite> {
                 latitude_deg: 28.61,
                 longitude_deg: -80.55,
                 radius_deg: 0.00015,
+                blend_radius_deg: 0.05,
                 elevation_m: 3.0,
             },
             TerrainSite {
@@ -661,6 +706,7 @@ fn terrain_sites(name: &str) -> Vec<TerrainSite> {
                 latitude_deg: 28.50,
                 longitude_deg: -80.05,
                 radius_deg: 0.00025,
+                blend_radius_deg: 0.03,
                 elevation_m: 0.0,
             },
         ],
@@ -669,6 +715,7 @@ fn terrain_sites(name: &str) -> Vec<TerrainSite> {
             latitude_deg: 0.0,
             longitude_deg: 0.0,
             radius_deg: 0.0003,
+            blend_radius_deg: 0.02,
             elevation_m: 0.0,
         }],
         _ => vec![],
@@ -682,7 +729,7 @@ fn with_sites(
     if sites.is_empty() {
         base
     } else {
-        std::sync::Arc::new(SiteAwareTerrainSource { base, sites })
+        std::sync::Arc::new(SiteAwareTerrainSource::new(base, sites))
     }
 }
 
@@ -806,6 +853,24 @@ mod tests {
     }
 
     #[test]
+    fn ksc_spawn_surface_sample_matches_the_authoritative_pad_height() {
+        let source = terrain_source_for("Earth");
+        let launch_site = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
+        let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
+            .expect("Earth exists");
+        let sample = crate::domain::services::terrain_collision::sample_surface(
+            source.as_ref(),
+            launch_site.latitude_deg as f64,
+            launch_site.longitude_deg as f64,
+            earth.radius_km as f64 * 1_000.0,
+        );
+        assert_eq!(
+            sample.height_m, 2.0,
+            "rocket spawning must use the authoritative KSC pad elevation"
+        );
+    }
+
+    #[test]
     fn local_detail_is_deterministic_seam_safe_and_varied_nearby() {
         let base = std::sync::Arc::new(ProceduralTerrainSource::new(42, 0.0, 0.0, 0));
         let source = LocalDetailTerrainSource::new(base, 99);
@@ -844,22 +909,20 @@ mod tests {
     }
 
     #[test]
-    fn site_pad_is_flat_and_feathers_continuously_to_base() {
+    fn site_pad_is_flat_and_grades_continuously_to_calibrated_base() {
         let site = TerrainSite {
             name: "Test pad",
             latitude_deg: 10.0,
             longitude_deg: 20.0,
             radius_deg: 0.001,
+            blend_radius_deg: 0.02,
             elevation_m: 7.0,
         };
         let base = std::sync::Arc::new(SlopedTerrain);
-        let source = SiteAwareTerrainSource {
-            base: base.clone(),
-            sites: vec![site],
-        };
+        let source = SiteAwareTerrainSource::new(base.clone(), vec![site]);
 
         assert_eq!(source.height_m(10.0005, 20.0), 7.0);
-        let outer = 10.0 + site.radius_deg * 2.0;
+        let outer = 10.0 + site.blend_radius_deg;
         assert!((source.height_m(outer, 20.0) - base.height_m(outer, 20.0)).abs() < 1e-9);
 
         let inside = source.height_m(outer - 0.000001, 20.0);
@@ -867,6 +930,63 @@ mod tests {
         assert!(
             (inside - outside).abs() < 0.01,
             "pad boundary must be continuous: {inside} vs {outside}"
+        );
+    }
+
+    #[derive(Debug)]
+    struct SteepOffsetTerrain;
+
+    impl TerrainSource for SteepOffsetTerrain {
+        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+            2_500.0 + (latitude_deg - 10.0) * 30_000.0 + (longitude_deg - 20.0) * 4_000.0
+        }
+    }
+
+    #[test]
+    fn calibrated_site_avoids_a_cliff_at_the_pad_and_grade_boundaries() {
+        let site = TerrainSite {
+            name: "Calibrated test pad",
+            latitude_deg: 10.0,
+            longitude_deg: 20.0,
+            radius_deg: 0.001,
+            blend_radius_deg: 0.1,
+            elevation_m: 7.0,
+        };
+        let base = std::sync::Arc::new(SteepOffsetTerrain);
+        let source = SiteAwareTerrainSource::new(base.clone(), vec![site]);
+        let step_deg = 0.00001;
+
+        assert_eq!(source.height_m(10.0, 20.0), site.elevation_m);
+        assert_eq!(
+            source.height_m(10.0 + site.radius_deg * 0.5, 20.0),
+            site.elevation_m
+        );
+
+        let pad_edge_inside = source.height_m(10.0 + site.radius_deg, 20.0);
+        let pad_edge_outside = source.height_m(10.0 + site.radius_deg + step_deg, 20.0);
+        assert!(
+            (pad_edge_outside - pad_edge_inside).abs() < 0.01,
+            "C1 pad edge must not become a shelf: {pad_edge_inside} vs {pad_edge_outside}"
+        );
+
+        let grade_edge = 10.0 + site.blend_radius_deg;
+        let before_grade_edge = source.height_m(grade_edge - step_deg, 20.0);
+        let after_grade_edge = source.height_m(grade_edge + step_deg, 20.0);
+        assert!(
+            (source.height_m(grade_edge - step_deg, 20.0)
+                - base.height_m(grade_edge - step_deg, 20.0))
+            .abs()
+                < 0.01,
+            "grade must converge to the base without a hard wall"
+        );
+        assert!(
+            (after_grade_edge - before_grade_edge - 2.0 * step_deg * 30_000.0).abs() < 0.01,
+            "grade boundary must retain the base terrain slope: {before_grade_edge} vs {after_grade_edge}"
+        );
+        assert_eq!(
+            source.height_m(grade_edge + 0.01, 20.0),
+            base.height_m(grade_edge + 0.01, 20.0),
+            "terrain relief outside the grade must remain the base terrain"
         );
     }
 
