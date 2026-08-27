@@ -21,6 +21,7 @@ pub mod rocket_contact;
 pub mod rocket_control;
 pub mod rocket_debug;
 pub mod rocket_dynamics;
+pub mod rocket_entry;
 pub mod rocket_flight_conditions;
 pub mod rocket_gravity_orbit;
 pub mod rocket_hud;

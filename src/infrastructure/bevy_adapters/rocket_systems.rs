@@ -1,9 +1,5 @@
 use crate::components::rocket::*;
-use crate::domain::events::{CommsBlackoutEvent, RelaunchRequested, SplashdownDetectedEvent};
-use crate::domain::services::entry_physics::{
-    comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
-    radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_recession_rate_mps,
-};
+use crate::domain::events::RelaunchRequested;
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
@@ -12,30 +8,20 @@ use crate::domain::services::guidance::{
     reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
     DescentGuidanceConfig, TransferBurnPhase,
 };
-use crate::domain::services::landing_gear::{
-    topple_critical_angle_rad, LegDeploymentState, ToppleFall,
-};
+use crate::domain::services::landing_gear::LegDeploymentState;
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
-use crate::domain::services::reference_frames::{
-    body_fixed_to_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
-    surface_velocity_in_planet_inertial,
-};
 #[cfg(test)]
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+#[cfg(test)]
+use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload, stage_thrust_body,
+    active_vehicle_inertia, active_vehicle_mass_with_payload,
 };
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::services::terrain_collision::{
-    decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
-    resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
-};
 #[cfg(test)]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::{
-    EntryPhysicsConfig, PlanetComponent, PlanetTerrain, RocketAutopilot, RocketCommands,
-    TerrainCollisionState,
+    PlanetComponent, RocketAutopilot, RocketCommands,
 };
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::light::CascadeShadowConfigBuilder;
@@ -43,7 +29,9 @@ use bevy::light::CascadeShadowConfigBuilder;
 pub(crate) use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::ecs::query::QueryData;
-use bevy::math::{DMat3, DQuat, DVec3, Vec3};
+#[cfg(test)]
+use bevy::math::DMat3;
+use bevy::math::{DQuat, DVec3, Vec3};
 use bevy::prelude::*;
 
 /// Bundled read access for the guidance stage: one rocket's mission-relevant
@@ -63,35 +51,6 @@ pub struct GuidanceAccess {
     pub conditions: &'static RocketFlightConditions,
     pub orbital: &'static OrbitalElements,
     pub commands: &'static mut RocketCommands,
-}
-
-/// Bundled access for the ground-contact authority ([`RocketSet::GroundContact`]):
-/// the just-integrated dynamics plus every piece of state a contact verdict or
-/// constraint may touch. Gear access is optional — gear-less vehicles take the
-/// rigid point-contact path.
-#[derive(QueryData)]
-#[query_data(mutable)]
-pub struct GroundContactAccess {
-    pub entity: Entity,
-    pub binding: &'static RocketPlanetBinding,
-    /// Production launch vehicles carry their geographic source location and
-    /// therefore use the rotating-body contact path. Synthetic test/debris
-    /// bodies without one retain their explicitly configured frame.
-    pub launch_site: Option<&'static LaunchSiteCoordinates>,
-    pub dynamics: &'static mut RocketPhysicsState,
-    pub propulsion: &'static RocketPropulsion,
-    pub conditions: Option<&'static RocketFlightConditions>,
-    pub geometry: &'static RocketGeometry,
-    pub collision: &'static mut TerrainCollisionState,
-    pub rest: &'static mut GroundRest,
-    pub mission_state: &'static mut RocketMissionState,
-    pub legs: Option<&'static mut LandingLegs>,
-    /// Tip-over monitor/fall model (Phase 14 lifecycle).
-    pub tip_over: &'static mut TipOverState,
-    /// One-shot touchdown record (Phase 14 lifecycle).
-    pub scorecard: &'static mut LandingScorecard,
-    /// Autopilot state, read for the landing-target distance record.
-    pub autopilot: &'static RocketAutopilot,
 }
 
 /// Mission guidance: computes the target attitude from the mission phase and
@@ -513,457 +472,6 @@ pub fn guidance_system(
     }
 }
 
-/// Authoritative rocket–terrain contact. Runs POST-integration in
-/// [`RocketSet::GroundContact`], so verdicts and constraints act on the
-/// just-integrated state: samples collision terrain, refreshes the
-/// [`TerrainCollisionState`] sensors, evaluates multi-criteria touchdown,
-/// enforces the resting-contact constraint (`resolve_resting_contact`:
-/// penetration clamp + normal-velocity removal + tangential damping),
-/// releases rest when thrust exceeds weight, and emits splashdown on water
-/// touchdowns exactly as before.
-pub fn resolve_ground_contact(
-    sim_time: Res<SimulationTime>,
-    mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
-    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
-    mut rocket_query: Query<GroundContactAccess>,
-) {
-    let dt = sim_time.fixed_timestep();
-    /// Terrain heights within this band of mean sea level are treated as
-    /// water on bodies with oceans.
-    const SEA_LEVEL_TOLERANCE_M: f64 = 10.0;
-
-    for mut access in rocket_query.iter_mut() {
-        // Rebind the bundled fields; mutable fields deref out of Bevy's
-        // change-detection wrappers.
-        let rocket_entity = access.entity;
-        let binding = access.binding;
-        let propulsion = access.propulsion;
-        let ambient_pressure_pa = access
-            .conditions
-            .map(|conditions| conditions.ambient_pressure_pa)
-            .unwrap_or(0.0);
-        let geometry = access.geometry;
-        let autopilot = access.autopilot;
-        let rocket = &mut *access.dynamics;
-        let collision = &mut *access.collision;
-        let rest = &mut *access.rest;
-        let mission_state = &mut *access.mission_state;
-        let mut legs = access.legs.as_deref_mut();
-        let tip_over = &mut *access.tip_over;
-        let scorecard = &mut *access.scorecard;
-        let Some((planet, planet_terrain)) = planet_query
-            .iter()
-            .find(|(planet, _)| planet.matches_body(&binding.planet_name))
-        else {
-            continue;
-        };
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-
-        let position_m = rocket.dynamics.position_m;
-        let time_days = (sim_time.sim_time_s / 86_400.0) as f32;
-        let rotating_surface = access.launch_site.is_some();
-        let position_bf = if rotating_surface {
-            planet_inertial_to_body_fixed(position_m, &planet.domain_planet, time_days)
-        } else {
-            position_m
-        };
-        let dir_bf = position_bf.normalize_or_zero();
-        if dir_bf.length_squared() < 1e-12 {
-            continue;
-        }
-        let (lat, lon) = lat_lon_from_direction(dir_bf);
-        let sample = sample_surface(&*planet_terrain.source, lat, lon, radius_m);
-        // Signed altitude: negative means penetrating the sampled surface.
-        let surface_radius_m = radius_m + sample.height_m;
-        let signed_altitude_m = position_m.length() - surface_radius_m;
-
-        collision.radar_altitude_m = signed_altitude_m.max(0.0);
-        collision.slope_deg = sample.slope_deg;
-
-        // Water inference: water is strictly below sea level (negative height).
-        // The 10m sea-level tolerance was incorrectly classifying coastal land
-        // (like KSC at ~2m) as water. Only negative heights are water.
-        collision.over_water = planet.domain_planet.has_ocean && sample.height_m < 0.0;
-
-        let body_to_inertial = if rotating_surface {
-            body_fixed_to_inertial_rotation(&planet.domain_planet, time_days)
-        } else {
-            DQuat::IDENTITY
-        };
-        let normal = if sample.normal.length_squared() > 1e-12 {
-            body_to_inertial * sample.normal
-        } else {
-            body_to_inertial * dir_bf
-        };
-        // Tilt of the longitudinal body axis (+Y nose-up convention at spawn)
-        // away from the local surface normal.
-        let tilt_deg = (rocket.dynamics.orientation * DVec3::Y)
-            .angle_between(normal)
-            .to_degrees();
-        let surface_velocity = if rotating_surface {
-            surface_velocity_in_planet_inertial(position_m, &planet.domain_planet)
-        } else {
-            DVec3::ZERO
-        };
-        let velocity = rocket.dynamics.velocity_mps - surface_velocity;
-        let components = decompose_velocity(velocity, normal);
-
-        if *mission_state == RocketMissionState::PreLaunch {
-            if let Some(launch_site) = access.launch_site {
-                // The pad is fixed to the rotating body, not to inertial space.
-                // Rebuild its physical state every tick so gravity, numerical
-                // integration, and terrain-normal variation cannot slide the
-                // unlaunched vehicle away from its configured launch site.
-                let pad_direction_bf =
-                    geodetic_to_body_fixed(launch_site, &planet.domain_planet).normalize();
-                let pad_sample = sample_surface(
-                    &*planet_terrain.source,
-                    launch_site.latitude_deg as f64,
-                    launch_site.longitude_deg as f64,
-                    radius_m,
-                );
-                let pad_position_m =
-                    body_to_inertial * (pad_direction_bf * (radius_m + pad_sample.height_m));
-                let pad_normal = (body_to_inertial * pad_sample.normal).normalize_or_zero();
-
-                rocket.dynamics.position_m = pad_position_m;
-                rocket.dynamics.velocity_mps =
-                    surface_velocity_in_planet_inertial(pad_position_m, &planet.domain_planet);
-                rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
-                rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
-                rest.active = true;
-                collision.radar_altitude_m = 0.0;
-                collision.slope_deg = pad_sample.slope_deg;
-                collision.over_water = planet.domain_planet.has_ocean && pad_sample.height_m < 0.0;
-                collision.ground_contact = GroundContact::Landed;
-                tip_over.exceeded_for_s = 0.0;
-                tip_over.fall = None;
-                continue;
-            }
-        }
-
-        // Touchdown criteria, gear-aware when the legs are deployed: the
-        // stance-aspect widening lives in the domain (`LandingGear::
-        // touchdown_criteria`); undeployed (or absent) legs keep the no-gear
-        // criteria exactly.
-        let criteria = match legs.as_ref() {
-            Some(legs) if legs.deployed() => legs
-                .gear
-                .touchdown_criteria(TouchdownCriteria::default(), geometry.height_m as f64),
-            _ => TouchdownCriteria::default(),
-        };
-
-        // Release first: a resting vehicle leaves the ground as soon as the
-        // active stage's available thrust exceeds its weight (guidance ramps
-        // throttle up → constraint lets go → normal integration takes over).
-        if rest.active {
-            let gravity_mps2 =
-                gravitational_parameter(planet.domain_planet.mass_kg) / position_m.length().powi(2);
-            let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
-            let thrust_n = propulsion
-                .vehicle
-                .stages
-                .get(propulsion.active_stage)
-                .map(|stage| {
-                    stage_thrust_body(&stage.engines, propulsion.throttle, ambient_pressure_pa)
-                        .0
-                        .length()
-                })
-                .unwrap_or(0.0);
-            if liftoff_from_rest(thrust_n, weight_n) {
-                rest.active = false;
-                collision.ground_contact = GroundContact::None;
-                bevy::log::info!(
-                    "Liftoff: thrust {:.0} N exceeds weight {:.0} N, released from surface",
-                    thrust_n,
-                    weight_n
-                );
-                continue;
-            }
-        }
-
-        if rest.active {
-            // Hold the vehicle on the surface. With deployed landing legs
-            // the strut spring-damper carries the load (penalty-method soft
-            // contact: compression is measured from actual hull penetration
-            // each tick); the gear-less fallback is the historical rigid
-            // point contact. Constraint authority stays here, in
-            // GroundContact.
-            match legs.as_mut().filter(|l| l.deployed()).map(|l| {
-                let penetration_m = (-signed_altitude_m).max(0.0);
-                (
-                    l.gear.resolve_contact_step(
-                        velocity,
-                        normal,
-                        penetration_m,
-                        rocket.dynamics.mass_kg,
-                        dt,
-                    ),
-                    l,
-                )
-            }) {
-                Some((outcome, legs)) if outcome.bottomed_out => {
-                    // Strut out of travel: fall back to the rigid clamp so
-                    // the hull cannot tunnel (documented approximation —
-                    // the body reference may sink by up to one stroke on
-                    // soft contact).
-                    bevy::log::warn!("Landing gear bottomed out; rigid contact engaged");
-                    let res =
-                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
-                    rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
-                    legs.compression_m = legs.gear.spec.stroke_m;
-                }
-                Some((outcome, legs)) => {
-                    // Soft contact: position rides the struts; only the
-                    // velocity changes this step (impulse form).
-                    rocket.dynamics.velocity_mps = outcome.velocity_mps + surface_velocity;
-                    legs.compression_m = outcome.compression_m;
-                    scorecard.leg_compression_peak_m =
-                        scorecard.leg_compression_peak_m.max(outcome.compression_m);
-                }
-                None => {
-                    let res =
-                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
-                    rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
-                }
-            }
-            collision.ground_contact = GroundContact::Landed;
-
-            // Sustained-lean monitor while grounded (Phase 14): a resting
-            // vehicle that keeps leaning past its critical angle topples
-            // under gravity. Lives INSIDE the rest branch: the branch
-            // continues past every later statement, so a monitor placed
-            // after it could never accumulate its sustain time.
-            if !tip_over.is_toppling() {
-                let critical_rad = topple_critical_angle_rad(
-                    legs.as_deref()
-                        .filter(|l| l.deployed())
-                        .map(|l| l.gear.spec.base_radius_m)
-                        .unwrap_or(geometry.radius_m as f64),
-                    com_height_on_ground(legs.as_deref(), geometry),
-                );
-                let lean_rad = tilt_deg.to_radians();
-                if lean_rad > critical_rad && critical_rad > 0.0 {
-                    tip_over.exceeded_for_s += dt;
-                    if tip_over.exceeded_for_s >= TIP_OVER_SUSTAINED_S {
-                        tip_over.com_height_m = com_height_on_ground(legs.as_deref(), geometry);
-                        tip_over.fall = Some(ToppleFall::from_tilt(lean_rad));
-                        bevy::log::info!(
-                            "Vehicle leaning {:.1} deg beyond the {:.1} deg critical angle — toppling",
-                            tilt_deg,
-                            critical_rad.to_degrees()
-                        );
-                    }
-                } else {
-                    tip_over.exceeded_for_s = 0.0;
-                }
-            }
-            continue;
-        }
-
-        // Not resting: penetration is still forbidden for any airborne or
-        // crashed vehicle — push back to the surface and kill the
-        // into-ground normal component so it cannot tunnel.
-        if signed_altitude_m < 0.0 {
-            let radial_dir = position_m.normalize_or_zero();
-            rocket.dynamics.position_m = radial_dir * surface_radius_m;
-            let into_ground = velocity.dot(normal).min(0.0);
-            rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity;
-        }
-
-        // Airborne: a touchdown verdict exists only inside the contact band
-        // while actually approaching the ground (receding fly-throughs are
-        // not touchdowns).
-        if signed_altitude_m > TOUCHDOWN_BAND_M || components.normal_mps > 0.0 {
-            collision.ground_contact = GroundContact::None;
-            continue;
-        }
-
-        let verdict = evaluate_touchdown(
-            -components.normal_mps,
-            components.lateral_mps,
-            sample.slope_deg,
-            tilt_deg,
-            &criteria,
-        );
-        collision.ground_contact = verdict;
-
-        match verdict {
-            GroundContact::Landed => {
-                // Engage rest immediately so this step already ends pinned to
-                // the surface. Deployed legs absorb through the struts
-                // (stroke-aware); the gear-less path snaps to point contact.
-                rest.active = true;
-                bevy::log::info!(
-                    "Touchdown at ({lat:.2}, {lon:.2}): descent {:.2} m/s, lateral {:.2} m/s, slope {:.1} deg, tilt {:.1} deg{}",
-                    -components.normal_mps,
-                    components.lateral_mps,
-                    sample.slope_deg,
-                    tilt_deg,
-                    if collision.over_water { " (water)" } else { "" }
-                );
-                record_scorecard(
-                    scorecard,
-                    -components.normal_mps,
-                    components.lateral_mps,
-                    tilt_deg,
-                    sample.slope_deg,
-                    position_m,
-                    radius_m,
-                    autopilot.target_landing_position_m,
-                    collision.over_water,
-                );
-                match legs.as_ref().filter(|l| l.deployed()).map(|l| {
-                    l.gear.absorbs_touchdown_energy(
-                        rocket.dynamics.mass_kg,
-                        (-components.normal_mps).max(0.0),
-                    )
-                }) {
-                    // Gear path: penalty-method soft contact — no position
-                    // snap here. The resting branch catches the hull as soon
-                    // as it actually penetrates the surface and the struts
-                    // absorb from there.
-                    Some(true) => {}
-                    Some(false) => bevy::log::warn!(
-                        "Touchdown energy exceeds strut stroke capacity (descent {:.2} m/s)",
-                        -components.normal_mps
-                    ),
-                    // Gear-less fallback: snap to point contact immediately.
-                    None => {
-                        let res = resolve_resting_contact(
-                            position_m,
-                            velocity,
-                            surface_radius_m,
-                            normal,
-                            dt,
-                        );
-                        rocket.dynamics.position_m = res.position_m;
-                        rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
-                    }
-                }
-
-                if matches!(
-                    *mission_state,
-                    RocketMissionState::PoweredDescent
-                        | RocketMissionState::UnpoweredDescent
-                        | RocketMissionState::Landing
-                        | RocketMissionState::ReentryCorridor
-                ) {
-                    *mission_state = RocketMissionState::Landed;
-                    if collision.over_water {
-                        splashdown_writer.write(SplashdownDetectedEvent {
-                            rocket: rocket_entity,
-                            position_m,
-                            touchdown_vertical_speed_mps: -components.normal_mps,
-                        });
-                        bevy::log::info!(
-                            "Splashdown detected at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s",
-                            -components.normal_mps
-                        );
-                    }
-                }
-            }
-            GroundContact::Crash => {
-                // A pad-hold at zero speed during pre-launch is not a crash.
-                if *mission_state != RocketMissionState::PreLaunch {
-                    *mission_state = RocketMissionState::Crashed;
-                    record_scorecard(
-                        scorecard,
-                        -components.normal_mps,
-                        components.lateral_mps,
-                        tilt_deg,
-                        sample.slope_deg,
-                        position_m,
-                        radius_m,
-                        autopilot.target_landing_position_m,
-                        collision.over_water,
-                    );
-                    // A crashed vehicle with a lean beyond its critical angle
-                    // falls over visibly (Phase 14 lifecycle).
-                    arm_topple_if_leaning(tip_over, legs.as_deref(), geometry, tilt_deg);
-                }
-            }
-            GroundContact::None => {}
-        }
-    }
-}
-
-/// How long a beyond-critical lean must persist before the fall is armed, s.
-const TIP_OVER_SUSTAINED_S: f64 = 0.5;
-
-/// Center-of-mass height above the foot plane while grounded: on deployed
-/// struts the ride height includes the stroke; bare-hull contact puts the
-/// geometric center at hull half-height.
-fn com_height_on_ground(legs: Option<&LandingLegs>, geometry: &RocketGeometry) -> f64 {
-    match legs.filter(|l| l.deployed()) {
-        Some(l) => l.gear.com_height_on_gear_m(geometry.height_m as f64),
-        None => geometry.height_m as f64 / 2.0,
-    }
-}
-
-/// Fill the one-shot landing scorecard at a verdict tick (GroundContact is
-/// the only writer).
-#[allow(clippy::too_many_arguments)]
-fn record_scorecard(
-    scorecard: &mut LandingScorecard,
-    descent_speed_mps: f64,
-    lateral_speed_mps: f64,
-    tilt_deg: f64,
-    slope_deg: f64,
-    position_m: DVec3,
-    planet_radius_m: f64,
-    target_position_m: DVec3,
-    over_water: bool,
-) {
-    // Surface distance between the sub-vehicle point and the configured
-    // landing target (chord approximation — targets are local).
-    let sub_point = position_m.normalize_or_zero() * planet_radius_m;
-    let distance_to_target_m = if target_position_m.length_squared() > 1.0 {
-        (sub_point - target_position_m.normalize_or_zero() * planet_radius_m).length()
-    } else {
-        0.0
-    };
-    *scorecard = LandingScorecard {
-        touchdown_vertical_speed_mps: descent_speed_mps,
-        touchdown_lateral_speed_mps: lateral_speed_mps,
-        touchdown_tilt_deg: tilt_deg,
-        touchdown_slope_deg: slope_deg,
-        distance_to_target_m,
-        leg_compression_peak_m: scorecard.leg_compression_peak_m,
-        over_water,
-        recorded: true,
-    };
-}
-
-/// Arm the gravity-driven topple immediately when a crashed vehicle leans
-/// beyond its critical angle (no sustained window — the verdict already
-/// decided it).
-fn arm_topple_if_leaning(
-    tip_over: &mut TipOverState,
-    legs: Option<&LandingLegs>,
-    geometry: &RocketGeometry,
-    tilt_deg: f64,
-) -> bool {
-    if tip_over.is_toppling() {
-        return false;
-    }
-    let critical_rad = topple_critical_angle_rad(
-        legs.filter(|l| l.deployed())
-            .map(|l| l.gear.spec.base_radius_m)
-            .unwrap_or(geometry.radius_m as f64),
-        com_height_on_ground(legs, geometry),
-    );
-    let lean_rad = tilt_deg.to_radians();
-    if critical_rad > 0.0 && lean_rad > critical_rad {
-        tip_over.com_height_m = com_height_on_ground(legs, geometry);
-        tip_over.fall = Some(ToppleFall::from_tilt(lean_rad));
-        return true;
-    }
-    false
-}
-
 /// Relaunch input (Phase 14): R commands a full pad-style reset of every
 /// vehicle. Presentation-adjacent input handling only — the mutation happens
 /// in FixedUpdate via [`apply_relaunch_requests`].
@@ -1096,253 +604,6 @@ pub fn apply_relaunch_requests(
             "Relaunch ready: {:.0} kg refueled, vehicle upright and held on the pad",
             total_mass_kg
         );
-    }
-}
-
-/// Convective heating (Sutton-Graves) and radiative heating (Tauber-Sutton).
-/// Runs in FixedUpdate before force accumulation. Reads RocketFlightConditions and
-/// writes ThermalState for the ablation system.
-pub fn compute_heating(
-    config: Res<EntryPhysicsConfig>,
-    mut rocket_query: Query<(&RocketFlightConditions, &mut ThermalState)>,
-) {
-    for (conditions, mut thermal) in rocket_query.iter_mut() {
-        let rho = conditions.density_kg_m3;
-        let v = conditions.airspeed_mps;
-
-        // Skip if no meaningful atmosphere
-        if rho <= 0.0 || v < 100.0 {
-            thermal.convective_heat_flux_w_m2 = 0.0;
-            thermal.radiative_heat_flux_w_m2 = 0.0;
-            thermal.total_heat_flux_w_m2 = 0.0;
-            continue;
-        }
-
-        // Convective heating: Sutton-Graves q_dot = k * sqrt(rho/R_nose) * v^3
-        // (single authority: domain::services::entry_physics, AGENTS.md 50).
-        let nose_radius = config.nose_radius_initial_m;
-        let q_conv = convective_heat_flux_w_m2(config.convective_coefficient, rho, nose_radius, v);
-        thermal.convective_heat_flux_w_m2 = q_conv;
-
-        // Radiative heating: Tauber-Sutton (significant for v > 10 km/s).
-        let q_rad = radiative_heat_flux_w_m2(config.radiative_coefficient, rho, v);
-        thermal.radiative_heat_flux_w_m2 = q_rad;
-
-        thermal.total_heat_flux_w_m2 = q_conv + q_rad;
-        thermal.stagnation_point_heat_flux_w_m2 = q_conv; // Stagnation point = convective peak
-    }
-}
-
-/// Ablation: char-layer recession from integrated heat load.
-/// Updates nose radius and mass loss in AblationState.
-/// Uses SimulationTime fixed timestep.
-pub fn compute_ablation(
-    sim_time: Res<SimulationTime>,
-    config: Res<EntryPhysicsConfig>,
-    mut rocket_query: Query<(
-        &mut RocketPhysicsState,
-        &ThermalState,
-        &mut AblationState,
-        &mut RocketMass,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep();
-    for (mut rocket, thermal, mut ablation, mut mass) in rocket_query.iter_mut() {
-        let q_total = thermal.total_heat_flux_w_m2;
-        if q_total <= 0.0 {
-            continue;
-        }
-
-        // Integrated heat load
-        ablation.cumulative_heat_load_j_m2 += q_total * dt;
-
-        // Recession rate: dr/dt = q_dot / (rho_tps * H_abl)
-        let recession_rate = tps_recession_rate_mps(
-            q_total,
-            config.tps_density_kg_m3,
-            config.heat_of_ablation_j_kg,
-        );
-        ablation.recession_depth_m += recession_rate * dt;
-
-        // Nose radius growth from recession
-        ablation.nose_radius_m = config.nose_radius_initial_m + ablation.recession_depth_m;
-
-        // Mass loss from TPS
-        let tps_area = std::f64::consts::PI * ablation.nose_radius_m.powi(2); // Approximate
-        let mass_loss_rate = recession_rate * config.tps_density_kg_m3 * tps_area;
-        let mass_loss = mass_loss_rate * dt;
-        ablation.mass_loss_kg += mass_loss;
-        ablation.tps_thickness_remaining_m =
-            (config.tps_initial_thickness_m - ablation.recession_depth_m).max(0.0);
-
-        // Update vehicle mass
-        let new_mass = rocket.dynamics.mass_kg - mass_loss;
-        rocket.dynamics.mass_kg = new_mass;
-        mass.0 = new_mass;
-    }
-}
-
-/// Plasma blackout detection from electron density (single authority: the
-/// domain fit in `entry_physics`). Tracks blackout state per rocket and emits
-/// a [`CommsBlackoutEvent`] on every start/stop edge. The condition is purely
-/// physical (density × velocity); it is intentionally not gated on mission
-/// phase, so an unexpected high-plasma ascent would also be reported.
-pub fn compute_plasma_blackout(
-    config: Res<EntryPhysicsConfig>,
-    mut blackout_writer: MessageWriter<CommsBlackoutEvent>,
-    mut rocket_query: Query<(Entity, &RocketFlightConditions, &mut CommsState)>,
-) {
-    for (rocket_entity, conditions, mut comms) in rocket_query.iter_mut() {
-        let electron_density =
-            electron_density_m3(conditions.density_kg_m3, conditions.airspeed_mps);
-        let blackout_active =
-            comms_blackout_active(electron_density, config.critical_electron_density_m3);
-
-        // Edge detection against the previous tick's state.
-        if blackout_active != comms.in_blackout {
-            comms.in_blackout = blackout_active;
-            blackout_writer.write(CommsBlackoutEvent {
-                rocket: rocket_entity,
-                blackout_active,
-            });
-            bevy::log::info!(
-                "Comms blackout {} for rocket {rocket_entity}",
-                if blackout_active { "started" } else { "ended" }
-            );
-        }
-    }
-}
-
-/// Parachute deployment and drag (mortar → reefed → full). The transition
-/// state machine lives in `domain::services::entry_physics` (pure, tested);
-/// this system only adapts it: feed flight condition, apply the resulting
-/// canopy drag to the translational accumulator. Deployment requires a
-/// descending airstream, so an ascent cannot trigger the chutes.
-pub fn compute_parachute_forces(
-    sim_time: Res<SimulationTime>,
-    config: Res<EntryPhysicsConfig>,
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &RocketFlightConditions,
-        &TerrainCollisionState,
-        &GroundRest,
-        &RocketMissionState,
-        &mut ParachuteState,
-        &mut ForceAccumulator,
-    )>,
-) {
-    let dt = sim_time.fixed_timestep();
-    let parachute_config = config.parachute_config();
-    for (
-        rocket,
-        conditions,
-        collision,
-        ground_rest,
-        mission_state,
-        mut parachute,
-        mut force_accum,
-    ) in rocket_query.iter_mut()
-    {
-        // Parachutes only deploy during descent/landing phases, not on the pad.
-        if *mission_state == RocketMissionState::PreLaunch
-            || *mission_state == RocketMissionState::Launch
-            || *mission_state == RocketMissionState::Ascent
-            || *mission_state == RocketMissionState::Orbit
-            || ground_rest.active
-            || collision.ground_contact
-                == crate::domain::services::terrain_collision::GroundContact::Landed
-        {
-            continue;
-        }
-
-        let rho = conditions.density_kg_m3;
-        let velocity = conditions.atmosphere_relative_velocity_mps;
-        let speed = conditions.airspeed_mps;
-        if rho <= 0.0 || speed <= 0.0 {
-            continue;
-        }
-
-        let up_dir = rocket.dynamics.position_m.normalize_or_zero();
-        if up_dir.length_squared() < 1e-12 {
-            continue;
-        }
-        let vertical_speed = velocity.dot(up_dir);
-
-        let transitions = parachute.deployment.advance(
-            &parachute_config,
-            conditions.altitude_m,
-            conditions.mach_number,
-            vertical_speed,
-            dt,
-        );
-        if transitions.any() {
-            bevy::log::info!(
-                "Parachute transition at {:.0} m: drogue_deployed={} drogue_inflated={} main_deployed={} main_inflated={}",
-                conditions.altitude_m,
-                transitions.drogue_deployed,
-                transitions.drogue_inflated,
-                transitions.main_deployed,
-                transitions.main_inflated,
-            );
-        }
-
-        // Apply combined canopy drag opposite the velocity.
-        let drag_magnitude = parachute.deployment.drag_force_n(rho, speed);
-        if drag_magnitude > 0.0 {
-            force_accum.0 += (-velocity / speed) * drag_magnitude;
-        }
-    }
-}
-
-/// Supersonic retro-propulsion: plume-freestream interaction. Computes the
-/// DLR base-pressure effectiveness multiplier (pure domain correlation) and
-/// stores it in [`RetroPropulsionEffect`]. `propulsion_thrust` consumes the
-/// multiplier, so thrust is still written by exactly one system — no double
-/// counting — and the direction/ISP handling of `stage_thrust_body` applies.
-pub fn compute_retro_propulsion(
-    config: Res<EntryPhysicsConfig>,
-    mut rocket_query: Query<(
-        &RocketFlightConditions,
-        &RocketPropulsion,
-        &mut RetroPropulsionEffect,
-    )>,
-) {
-    for (conditions, propulsion, mut retro) in rocket_query.iter_mut() {
-        // Default each tick; re-derived below so state never goes stale
-        // (config toggles, Mach drops below threshold, engines shut down).
-        let mut multiplier = 1.0;
-
-        if config.retro_propulsion_enabled {
-            let mach = conditions.mach_number;
-            if mach >= config.retro_propulsion_mach_threshold {
-                // Engines must actually be producing thrust at this tick;
-                // the same stage_thrust_body the physics uses decides that.
-                if let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) {
-                    let remaining = propulsion
-                        .propellant_remaining_kg
-                        .get(propulsion.active_stage)
-                        .copied()
-                        .unwrap_or(0.0);
-                    let throttle = propulsion.throttle.clamp(0.0, 1.0);
-                    if throttle > 0.0 && remaining > 0.0 {
-                        let (thrust_body, _) = stage_thrust_body(
-                            &stage.engines,
-                            throttle,
-                            conditions.ambient_pressure_pa,
-                        );
-                        if thrust_body.length_squared() > 0.0 {
-                            multiplier = retro_propulsion_effectiveness(
-                                mach,
-                                config.retro_propulsion_mach_threshold,
-                                config.base_pressure_coefficient,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        retro.thrust_multiplier = multiplier;
     }
 }
 
@@ -1643,16 +904,24 @@ pub fn handle_rocket_launch_input(
 mod ground_contact_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::events::SplashdownDetectedEvent;
     use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
+    use crate::domain::services::reference_frames::{
+        geodetic_to_body_fixed, planet_inertial_to_body_fixed, surface_velocity_in_planet_inertial,
+    };
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
-    use crate::domain::services::terrain_collision::{radial_direction, sample_surface};
+    use crate::domain::services::terrain_collision::{radial_direction, GroundContact};
+    use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
+    use crate::infrastructure::bevy_adapters::components::{
+        PlanetComponent, TerrainCollisionState,
+    };
     use crate::infrastructure::bevy_adapters::rocket_contact::{
-        advance_topple, deploy_landing_legs,
+        advance_topple, deploy_landing_legs, resolve_ground_contact,
     };
     use crate::infrastructure::bevy_adapters::rocket_dynamics::{
         accumulate_forces, integrate_6dof,
     };
-    use bevy::math::{DMat3, DQuat};
+    use bevy::math::DQuat;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
 
@@ -2272,10 +1541,11 @@ mod ground_contact_tests {
 mod ascent_pipeline_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
-    use crate::domain::events::StageSeparatedEvent;
+    use crate::domain::events::{SplashdownDetectedEvent, StageSeparatedEvent};
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::terrain_collision::radial_direction;
+    use crate::infrastructure::bevy_adapters::rocket_contact::resolve_ground_contact;
     use crate::infrastructure::bevy_adapters::rocket_control::{actuation_system, control_system};
     use crate::infrastructure::bevy_adapters::rocket_dynamics::{
         accumulate_forces, integrate_6dof,

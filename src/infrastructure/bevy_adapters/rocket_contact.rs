@@ -1,16 +1,52 @@
 //! Terrain-contact preparation and constraint adapters.
 
 use crate::components::rocket::{
-    GroundRest, LandingLegs, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
+    GroundRest, LandingLegs, LandingScorecard, RocketAutopilot, RocketFlightConditions,
+    RocketGeometry, RocketMissionState, RocketPhysicsState, RocketPlanetBinding, RocketPropulsion,
     TipOverState,
 };
+use crate::domain::events::SplashdownDetectedEvent;
 use crate::domain::services::gravity::gravitational_parameter;
+use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
+use crate::domain::services::reference_frames::{
+    body_fixed_to_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
+    surface_velocity_in_planet_inertial,
+};
+use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::services::terrain_collision::GroundContact;
-use crate::infrastructure::bevy_adapters::components::{PlanetComponent, TerrainCollisionState};
+use crate::domain::services::terrain_collision::{
+    decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
+    resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
+};
+use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
+use crate::infrastructure::bevy_adapters::components::{
+    PlanetComponent, PlanetTerrain, TerrainCollisionState,
+};
+use bevy::ecs::query::QueryData;
 use bevy::log::info;
 use bevy::math::{DMat3, DQuat, DVec3};
-use bevy::prelude::{Query, Res};
+use bevy::prelude::{Entity, MessageWriter, Query, Res};
+
+/// Bundled state required by the post-integration ground-contact authority.
+/// Landing gear is optional so gear-less vehicles retain rigid point contact.
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct GroundContactAccess {
+    pub entity: Entity,
+    pub binding: &'static RocketPlanetBinding,
+    pub launch_site: Option<&'static LaunchSiteCoordinates>,
+    pub dynamics: &'static mut RocketPhysicsState,
+    pub propulsion: &'static RocketPropulsion,
+    pub conditions: Option<&'static RocketFlightConditions>,
+    pub geometry: &'static RocketGeometry,
+    pub collision: &'static mut TerrainCollisionState,
+    pub rest: &'static mut GroundRest,
+    pub mission_state: &'static mut RocketMissionState,
+    pub legs: Option<&'static mut LandingLegs>,
+    pub tip_over: &'static mut TipOverState,
+    pub scorecard: &'static mut LandingScorecard,
+    pub autopilot: &'static RocketAutopilot,
+}
 
 /// Advance the one-way gear-deployment latch before terrain-contact resolution.
 pub fn deploy_landing_legs(
@@ -41,6 +77,302 @@ pub fn deploy_landing_legs(
                 "Landing legs deployed at {:.0} m AGL",
                 collision.radar_altitude_m
             );
+        }
+    }
+}
+
+/// Authoritative rocket-terrain contact. Runs POST-integration in
+/// [`RocketSet::GroundContact`], so verdicts and constraints act on the
+/// just-integrated state: samples collision terrain, refreshes the
+/// [`TerrainCollisionState`] sensors, evaluates multi-criteria touchdown,
+/// enforces the resting-contact constraint (`resolve_resting_contact`:
+/// penetration clamp + normal-velocity removal + tangential damping),
+/// releases rest when thrust exceeds weight, and emits splashdown on water
+/// touchdowns exactly as before.
+pub fn resolve_ground_contact(
+    sim_time: Res<SimulationTime>,
+    mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
+    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
+    mut rocket_query: Query<GroundContactAccess>,
+) {
+    let dt = sim_time.fixed_timestep();
+
+    for mut access in rocket_query.iter_mut() {
+        let rocket_entity = access.entity;
+        let binding = access.binding;
+        let propulsion = access.propulsion;
+        let ambient_pressure_pa = access
+            .conditions
+            .map(|conditions| conditions.ambient_pressure_pa)
+            .unwrap_or(0.0);
+        let geometry = access.geometry;
+        let autopilot = access.autopilot;
+        let rocket = &mut *access.dynamics;
+        let collision = &mut *access.collision;
+        let rest = &mut *access.rest;
+        let mission_state = &mut *access.mission_state;
+        let mut legs = access.legs.as_deref_mut();
+        let tip_over = &mut *access.tip_over;
+        let scorecard = &mut *access.scorecard;
+        let Some((planet, planet_terrain)) = planet_query
+            .iter()
+            .find(|(planet, _)| planet.matches_body(&binding.planet_name))
+        else {
+            continue;
+        };
+        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+
+        let position_m = rocket.dynamics.position_m;
+        let time_days = (sim_time.sim_time_s / 86_400.0) as f32;
+        let rotating_surface = access.launch_site.is_some();
+        let position_bf = if rotating_surface {
+            planet_inertial_to_body_fixed(position_m, &planet.domain_planet, time_days)
+        } else {
+            position_m
+        };
+        let dir_bf = position_bf.normalize_or_zero();
+        if dir_bf.length_squared() < 1e-12 {
+            continue;
+        }
+        let (lat, lon) = lat_lon_from_direction(dir_bf);
+        let sample = sample_surface(&*planet_terrain.source, lat, lon, radius_m);
+        let surface_radius_m = radius_m + sample.height_m;
+        let signed_altitude_m = position_m.length() - surface_radius_m;
+
+        collision.radar_altitude_m = signed_altitude_m.max(0.0);
+        collision.slope_deg = sample.slope_deg;
+        collision.over_water = planet.domain_planet.has_ocean && sample.height_m < 0.0;
+
+        let body_to_inertial = if rotating_surface {
+            body_fixed_to_inertial_rotation(&planet.domain_planet, time_days)
+        } else {
+            DQuat::IDENTITY
+        };
+        let normal = if sample.normal.length_squared() > 1e-12 {
+            body_to_inertial * sample.normal
+        } else {
+            body_to_inertial * dir_bf
+        };
+        let tilt_deg = (rocket.dynamics.orientation * DVec3::Y)
+            .angle_between(normal)
+            .to_degrees();
+        let surface_velocity = if rotating_surface {
+            surface_velocity_in_planet_inertial(position_m, &planet.domain_planet)
+        } else {
+            DVec3::ZERO
+        };
+        let velocity = rocket.dynamics.velocity_mps - surface_velocity;
+        let components = decompose_velocity(velocity, normal);
+
+        if *mission_state == RocketMissionState::PreLaunch {
+            if let Some(launch_site) = access.launch_site {
+                let pad_direction_bf =
+                    geodetic_to_body_fixed(launch_site, &planet.domain_planet).normalize();
+                let pad_sample = sample_surface(
+                    &*planet_terrain.source,
+                    launch_site.latitude_deg as f64,
+                    launch_site.longitude_deg as f64,
+                    radius_m,
+                );
+                let pad_position_m =
+                    body_to_inertial * (pad_direction_bf * (radius_m + pad_sample.height_m));
+                let pad_normal = (body_to_inertial * pad_sample.normal).normalize_or_zero();
+
+                rocket.dynamics.position_m = pad_position_m;
+                rocket.dynamics.velocity_mps =
+                    surface_velocity_in_planet_inertial(pad_position_m, &planet.domain_planet);
+                rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
+                rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+                rest.active = true;
+                collision.radar_altitude_m = 0.0;
+                collision.slope_deg = pad_sample.slope_deg;
+                collision.over_water = planet.domain_planet.has_ocean && pad_sample.height_m < 0.0;
+                collision.ground_contact = GroundContact::Landed;
+                tip_over.exceeded_for_s = 0.0;
+                tip_over.fall = None;
+                continue;
+            }
+        }
+
+        let criteria = match legs.as_ref() {
+            Some(legs) if legs.deployed() => legs
+                .gear
+                .touchdown_criteria(TouchdownCriteria::default(), geometry.height_m as f64),
+            _ => TouchdownCriteria::default(),
+        };
+
+        if rest.active {
+            let gravity_mps2 =
+                gravitational_parameter(planet.domain_planet.mass_kg) / position_m.length().powi(2);
+            let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
+            let thrust_n = propulsion
+                .vehicle
+                .stages
+                .get(propulsion.active_stage)
+                .map(|stage| {
+                    stage_thrust_body(&stage.engines, propulsion.throttle, ambient_pressure_pa)
+                        .0
+                        .length()
+                })
+                .unwrap_or(0.0);
+            if liftoff_from_rest(thrust_n, weight_n) {
+                rest.active = false;
+                collision.ground_contact = GroundContact::None;
+                bevy::log::info!(
+                    "Liftoff: thrust {:.0} N exceeds weight {:.0} N, released from surface",
+                    thrust_n,
+                    weight_n
+                );
+                continue;
+            }
+        }
+
+        if rest.active {
+            match legs.as_mut().filter(|legs| legs.deployed()).map(|legs| {
+                let penetration_m = (-signed_altitude_m).max(0.0);
+                (
+                    legs.gear.resolve_contact_step(
+                        velocity,
+                        normal,
+                        penetration_m,
+                        rocket.dynamics.mass_kg,
+                        dt,
+                    ),
+                    legs,
+                )
+            }) {
+                Some((outcome, legs)) if outcome.bottomed_out => {
+                    bevy::log::warn!("Landing gear bottomed out; rigid contact engaged");
+                    let res =
+                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
+                    rocket.dynamics.position_m = res.position_m;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
+                    legs.compression_m = legs.gear.spec.stroke_m;
+                }
+                Some((outcome, legs)) => {
+                    rocket.dynamics.velocity_mps = outcome.velocity_mps + surface_velocity;
+                    legs.compression_m = outcome.compression_m;
+                    scorecard.leg_compression_peak_m =
+                        scorecard.leg_compression_peak_m.max(outcome.compression_m);
+                }
+                None => {
+                    let res =
+                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
+                    rocket.dynamics.position_m = res.position_m;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
+                }
+            }
+            collision.ground_contact = GroundContact::Landed;
+            monitor_grounded_topple(tip_over, legs.as_deref(), geometry, tilt_deg, dt);
+            continue;
+        }
+
+        if signed_altitude_m < 0.0 {
+            let radial_dir = position_m.normalize_or_zero();
+            rocket.dynamics.position_m = radial_dir * surface_radius_m;
+            let into_ground = velocity.dot(normal).min(0.0);
+            rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity;
+        }
+
+        if signed_altitude_m > TOUCHDOWN_BAND_M || components.normal_mps > 0.0 {
+            collision.ground_contact = GroundContact::None;
+            continue;
+        }
+
+        let verdict = evaluate_touchdown(
+            -components.normal_mps,
+            components.lateral_mps,
+            sample.slope_deg,
+            tilt_deg,
+            &criteria,
+        );
+        collision.ground_contact = verdict;
+
+        match verdict {
+            GroundContact::Landed => {
+                rest.active = true;
+                bevy::log::info!(
+                    "Touchdown at ({lat:.2}, {lon:.2}): descent {:.2} m/s, lateral {:.2} m/s, slope {:.1} deg, tilt {:.1} deg{}",
+                    -components.normal_mps,
+                    components.lateral_mps,
+                    sample.slope_deg,
+                    tilt_deg,
+                    if collision.over_water { " (water)" } else { "" }
+                );
+                record_scorecard(
+                    scorecard,
+                    -components.normal_mps,
+                    components.lateral_mps,
+                    tilt_deg,
+                    sample.slope_deg,
+                    position_m,
+                    radius_m,
+                    autopilot.target_landing_position_m,
+                    collision.over_water,
+                );
+                match legs.as_ref().filter(|legs| legs.deployed()).map(|legs| {
+                    legs.gear.absorbs_touchdown_energy(
+                        rocket.dynamics.mass_kg,
+                        (-components.normal_mps).max(0.0),
+                    )
+                }) {
+                    Some(true) => {}
+                    Some(false) => bevy::log::warn!(
+                        "Touchdown energy exceeds strut stroke capacity (descent {:.2} m/s)",
+                        -components.normal_mps
+                    ),
+                    None => {
+                        let res = resolve_resting_contact(
+                            position_m,
+                            velocity,
+                            surface_radius_m,
+                            normal,
+                            dt,
+                        );
+                        rocket.dynamics.position_m = res.position_m;
+                        rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
+                    }
+                }
+
+                if matches!(
+                    *mission_state,
+                    RocketMissionState::PoweredDescent
+                        | RocketMissionState::UnpoweredDescent
+                        | RocketMissionState::Landing
+                        | RocketMissionState::ReentryCorridor
+                ) {
+                    *mission_state = RocketMissionState::Landed;
+                    if collision.over_water {
+                        splashdown_writer.write(SplashdownDetectedEvent {
+                            rocket: rocket_entity,
+                            position_m,
+                            touchdown_vertical_speed_mps: -components.normal_mps,
+                        });
+                        bevy::log::info!(
+                            "Splashdown detected at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s",
+                            -components.normal_mps
+                        );
+                    }
+                }
+            }
+            GroundContact::Crash => {
+                if *mission_state != RocketMissionState::PreLaunch {
+                    *mission_state = RocketMissionState::Crashed;
+                    record_scorecard(
+                        scorecard,
+                        -components.normal_mps,
+                        components.lateral_mps,
+                        tilt_deg,
+                        sample.slope_deg,
+                        position_m,
+                        radius_m,
+                        autopilot.target_landing_position_m,
+                        collision.over_water,
+                    );
+                    arm_topple_if_leaning(tip_over, legs.as_deref(), geometry, tilt_deg);
+                }
+            }
+            GroundContact::None => {}
         }
     }
 }
@@ -106,4 +438,106 @@ pub fn advance_topple(
             info!("Vehicle toppled over; mission lost");
         }
     }
+}
+
+/// Center-of-mass height above the foot plane while grounded.
+pub(crate) fn com_height_on_ground(legs: Option<&LandingLegs>, geometry: &RocketGeometry) -> f64 {
+    match legs.filter(|legs| legs.deployed()) {
+        Some(legs) => legs.gear.com_height_on_gear_m(geometry.height_m as f64),
+        None => geometry.height_m as f64 / 2.0,
+    }
+}
+
+/// Record the one-shot landing scorecard from the contact verdict.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_scorecard(
+    scorecard: &mut LandingScorecard,
+    descent_speed_mps: f64,
+    lateral_speed_mps: f64,
+    tilt_deg: f64,
+    slope_deg: f64,
+    position_m: DVec3,
+    planet_radius_m: f64,
+    target_position_m: DVec3,
+    over_water: bool,
+) {
+    let sub_point = position_m.normalize_or_zero() * planet_radius_m;
+    let distance_to_target_m = if target_position_m.length_squared() > 1.0 {
+        (sub_point - target_position_m.normalize_or_zero() * planet_radius_m).length()
+    } else {
+        0.0
+    };
+    *scorecard = LandingScorecard {
+        touchdown_vertical_speed_mps: descent_speed_mps,
+        touchdown_lateral_speed_mps: lateral_speed_mps,
+        touchdown_tilt_deg: tilt_deg,
+        touchdown_slope_deg: slope_deg,
+        distance_to_target_m,
+        leg_compression_peak_m: scorecard.leg_compression_peak_m,
+        over_water,
+        recorded: true,
+    };
+}
+
+/// Arm a topple immediately for a crashed vehicle beyond its critical lean.
+pub(crate) fn arm_topple_if_leaning(
+    tip_over: &mut TipOverState,
+    legs: Option<&LandingLegs>,
+    geometry: &RocketGeometry,
+    tilt_deg: f64,
+) -> bool {
+    if tip_over.is_toppling() {
+        return false;
+    }
+    let critical_rad = topple_critical_angle_rad(
+        legs.filter(|legs| legs.deployed())
+            .map(|legs| legs.gear.spec.base_radius_m)
+            .unwrap_or(geometry.radius_m as f64),
+        com_height_on_ground(legs, geometry),
+    );
+    let lean_rad = tilt_deg.to_radians();
+    if critical_rad <= 0.0 || lean_rad <= critical_rad {
+        return false;
+    }
+    tip_over.com_height_m = com_height_on_ground(legs, geometry);
+    tip_over.fall = Some(ToppleFall::from_tilt(lean_rad));
+    true
+}
+
+/// Arm a topple when a grounded vehicle sustains a beyond-critical lean.
+pub(crate) fn monitor_grounded_topple(
+    tip_over: &mut TipOverState,
+    legs: Option<&LandingLegs>,
+    geometry: &RocketGeometry,
+    tilt_deg: f64,
+    dt: f64,
+) {
+    const SUSTAINED_LEAN_DURATION_S: f64 = 0.5;
+
+    if tip_over.is_toppling() {
+        return;
+    }
+    let critical_rad = topple_critical_angle_rad(
+        legs.filter(|legs| legs.deployed())
+            .map(|legs| legs.gear.spec.base_radius_m)
+            .unwrap_or(geometry.radius_m as f64),
+        com_height_on_ground(legs, geometry),
+    );
+    let lean_rad = tilt_deg.to_radians();
+    if critical_rad <= 0.0 || lean_rad <= critical_rad {
+        tip_over.exceeded_for_s = 0.0;
+        return;
+    }
+
+    tip_over.exceeded_for_s += dt;
+    if tip_over.exceeded_for_s < SUSTAINED_LEAN_DURATION_S {
+        return;
+    }
+    tip_over.com_height_m = com_height_on_ground(legs, geometry);
+    tip_over.fall = Some(ToppleFall::from_tilt(lean_rad));
+    info!(
+        "Vehicle leaning {:.1} deg beyond the {:.1} deg critical angle; toppling",
+        tilt_deg,
+        critical_rad.to_degrees()
+    );
 }
