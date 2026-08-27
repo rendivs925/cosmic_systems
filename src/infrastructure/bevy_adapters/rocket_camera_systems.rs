@@ -2,6 +2,7 @@
 
 use crate::components::rocket::*;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::rocket_systems::render_dynamics_state;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::{Quat, Vec3};
@@ -89,13 +90,12 @@ pub fn handle_free_camera_input(
 /// System to update rocket camera based on current mode.
 /// Operates in flight units (1 unit = 1 meter) using the rocket's Transform,
 /// which `interpolate_render_transform` refreshes every frame from the
-/// interpolated physics state. The camera therefore tracks the vehicle
-/// RIGIDLY: any position lerp here would lag a fast-rising rocket out of the
-/// viewport (the vehicle moves ~700 m/s in ascent, and a 10 %-per-frame chase
-/// lerp trails it by ~100 m). Smoothness comes from the interpolated rocket
-/// state, not from camera smoothing (AGENTS.md sections 28 and 49).
+/// interpolated physics state. The radial frame and velocity use that same
+/// interpolated f64 state, so camera inputs do not mix render-frame position
+/// with a newer fixed-tick physics sample at liftoff.
 pub fn update_rocket_camera(
     time: Res<Time>,
+    fixed_time: Res<Time<Fixed>>,
     camera_mode: Res<RocketCameraMode>,
     config: Res<RocketCameraConfig>,
     render_origin: Res<RenderOrigin>,
@@ -104,6 +104,7 @@ pub fn update_rocket_camera(
         (
             &RocketPlanetBinding,
             &RocketPhysicsState,
+            &RocketRenderState,
             &RocketGeometry,
             &RocketFacade,
             &Transform,
@@ -117,7 +118,7 @@ pub fn update_rocket_camera(
     let dt = time.delta_secs();
 
     // Get the rocket entity (assume single rocket for now)
-    let Some((binding, rocket_physics, geometry, _facade, rocket_transform, _mission_state)) =
+    let Some((binding, rocket_physics, render, geometry, _facade, rocket_transform, mission_state)) =
         rocket_query.iter().next()
     else {
         return;
@@ -132,12 +133,20 @@ pub fn update_rocket_camera(
 
     // Rocket position in flight units (meters) from its Transform.
     let rocket_pos_flight = rocket_transform.translation;
+    let rendered_dynamics = render_dynamics_state(
+        *mission_state,
+        rocket_physics.dynamics,
+        *render,
+        fixed_time.overstep_fraction() as f64,
+    );
 
     // Planet center in flight units: -render_origin.origin converted to flight units
     let planet_center_flight = -render_origin.origin.as_vec3();
 
-    // Up direction in flight frame: radial from planet center to rocket.
-    let up_dir = (rocket_pos_flight - planet_center_flight).normalize_or_zero();
+    // Compute radial up in the authoritative planet-centered f64 frame before
+    // crossing the render boundary. Subtracting two f32 flight coordinates at
+    // an Earth-radius scale loses precision near liftoff.
+    let up_dir = rendered_dynamics.position_m.normalize_or_zero().as_vec3();
     if up_dir.length_squared() < 0.5 {
         return; // degenerate frame (rocket at planet center): keep last camera
     }
@@ -169,14 +178,14 @@ pub fn update_rocket_camera(
                 rocket_pos_flight,
                 planet_center_flight,
                 up_dir,
-                rocket_physics.dynamics.velocity_mps.as_vec3(),
+                rendered_dynamics.velocity_mps.as_vec3(),
                 &config,
             ),
             RocketCameraMode::Surface => compute_surface_camera(
                 rocket_pos_flight,
                 planet_center_flight,
                 up_dir,
-                rocket_physics.dynamics.velocity_mps.length() as f32,
+                rendered_dynamics.velocity_mps.length() as f32,
                 &config,
             ),
             RocketCameraMode::Free => compute_free_camera(rocket_pos_flight, up_dir, &controller),

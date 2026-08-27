@@ -690,7 +690,7 @@ pub fn interpolate_render_transform(
 /// presented at the latest tick. Interpolating those two pad snapshots causes
 /// a visible relative oscillation before liftoff, so prelaunch renders the
 /// current authoritative pad state exactly.
-fn render_dynamics_state(
+pub(crate) fn render_dynamics_state(
     mission: RocketMissionState,
     dynamics: RocketDynamicsState,
     render: RocketRenderState,
