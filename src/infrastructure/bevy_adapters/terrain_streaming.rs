@@ -8,20 +8,22 @@
 //! per-planet `TerrainSource`. Coarse roots provide fallback coverage for the
 //! active viewport; only its camera neighborhood is refined.
 
+use crate::components::rocket::RocketMissionState;
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, face_uv_to_direction, lod_for_distance,
-    projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge,
-    PatchGeometricError, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
+    build_patch_geometry_with_stitches, build_patch_overview_geometry_with_stitches,
+    face_uv_to_direction, lod_for_distance, projected_patch_error_px, select_quadtree_leaves,
+    CameraProjection, PatchEdge, PatchGeometricError, PatchGeometry, QuadtreePatchState,
+    QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::reference_frames::{
     body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
-#[cfg(test)]
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::rocket_contact::TerrainSurfaceSampleCache;
 use crate::infrastructure::bevy_adapters::terrain_render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
@@ -98,6 +100,114 @@ pub struct TerrainStreamingResource {
     /// Next generated-tile count at which streaming metrics are reported.
     next_metrics_report_at: usize,
     cadence: TerrainStreamingCadence,
+}
+
+/// Startup warmup work remains off the main thread. Holding the tasks until
+/// completion prevents their cancellation while the first presentation frame
+/// is being prepared.
+#[derive(Resource, Default)]
+pub struct TerrainWarmupTasks(Vec<Task<()>>);
+
+/// Prime the shared terrain evaluator before first presentation. `sample` also
+/// computes the source normal, which exercises the same height probes used by
+/// ground contact while preallocating the exact 512-entry contact cache.
+pub fn warmup_terrain_system(
+    surface_cache: Res<TerrainSurfaceSampleCache>,
+    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
+    mut warmup_tasks: ResMut<TerrainWarmupTasks>,
+) {
+    if !warmup_tasks.0.is_empty() {
+        return;
+    }
+    let task_pool = AsyncComputeTaskPool::get();
+    for (planet_entity, planet, terrain) in &planet_query {
+        let radius_m = planet.domain_planet.radius_km as f64 * 1_000.0;
+        let source = terrain.source.clone();
+        let surface_cache = surface_cache.clone();
+        warmup_tasks.0.push(task_pool.spawn(async move {
+            surface_cache.sample(planet_entity, source.as_ref(), 0.0, 0.0, radius_m);
+        }));
+    }
+}
+
+/// Drop completed startup warmup tasks without blocking presentation.
+pub fn collect_terrain_warmup_tasks(mut warmup_tasks: ResMut<TerrainWarmupTasks>) {
+    warmup_tasks
+        .0
+        .retain_mut(|task| block_on(future::poll_once(task)).is_none());
+}
+
+/// Start the root that contains the stationary launch vehicle while it is in
+/// the pre-launch hold. The regular streaming system owns subsequent task
+/// completion and publication, so this only advances the existing lifecycle.
+pub fn prebake_prelaunch_launchpad_patch(
+    mut streaming: ResMut<TerrainStreamingResource>,
+    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
+    rocket_query: Query<
+        (
+            &RocketMissionState,
+            &RocketPlanetBinding,
+            &RocketPhysicsState,
+        ),
+        Without<SpentStage>,
+    >,
+    config: Res<TerrainRenderConfig>,
+    sim_time: Res<SimulationTime>,
+) {
+    let Some((mission, binding, rocket)) = rocket_query.iter().next() else {
+        return;
+    };
+    if *mission != RocketMissionState::PreLaunch {
+        return;
+    }
+    let Some((planet_entity, planet, terrain)) = planet_query
+        .iter()
+        .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
+    else {
+        return;
+    };
+
+    let radius_m = planet.domain_planet.radius_km as f64 * 1_000.0;
+    let position_bf = planet_inertial_to_body_fixed(
+        rocket.dynamics.position_m,
+        &planet.domain_planet,
+        (sim_time.sim_time_s / 86_400.0) as f32,
+    );
+    let Some(direction) = position_bf.try_normalize() else {
+        return;
+    };
+    let patch = TerrainPatch::for_direction(direction, 0);
+    if streaming.inflight.contains_key(&patch) || streaming.generated.contains_key(&patch) {
+        return;
+    }
+
+    streaming.active_planet = Some(planet_entity);
+    streaming.manager.tick();
+    streaming
+        .manager
+        .request(patch, estimated_patch_bytes(patch, config.patch_resolution));
+    streaming.manager.begin_generation(&patch);
+
+    let source = terrain.source.clone();
+    let patch_resolution = config.patch_resolution;
+    let skirt_depth_m = config.skirt_depth_m;
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let generation_started = Instant::now();
+        let geometry = build_streamed_patch_geometry(
+            &patch,
+            source.as_ref(),
+            radius_m,
+            patch_resolution,
+            skirt_depth_m,
+            &[],
+        );
+        GeneratedTerrainPatch {
+            geometry,
+            stitch_mask: 0,
+            generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
+        }
+    });
+    streaming.inflight.insert(patch, task);
 }
 
 impl Default for TerrainStreamingResource {
@@ -343,11 +453,10 @@ pub fn stream_terrain_patches(
         );
     }
 
-    // Root tiles are the always-resident fallback cover. Filtering roots by the
-    // current frustum leaves holes whenever the camera crosses a cube-face seam
-    // before its neighboring root has been uploaded.
-    let active_roots = complete_root_cover();
-    let mut requested = active_roots.clone();
+    // The flight-globe fallback covers non-requested faces, so only the camera
+    // neighborhood enters terrain generation. Each selected group still keeps
+    // siblings and ancestors to preserve terrain LOD seam invariants.
+    let mut requested = BTreeSet::new();
     for patch in selection
         .requested
         .iter()
@@ -393,16 +502,21 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
-    let roots_ready = active_roots
+    let requested_roots: BTreeSet<_> = requested
+        .iter()
+        .copied()
+        .filter(|patch| patch.level == 0)
+        .collect();
+    let roots_ready = requested_roots
         .iter()
         .all(|root| streaming.generated.contains_key(root));
     let mut generation_order: Vec<_> = if roots_ready {
         requested.iter().copied().collect()
     } else {
-        // Do not let refinement contend with the complete root fallback. Until
-        // every face is available, the root cover is the only useful geometry
-        // and gives the asynchronous workers a bounded, high-priority batch.
-        active_roots.iter().copied().collect()
+        // A visible face root must be available before any of its descendants
+        // replace it. The globe remains continuous while this small bootstrap
+        // set is generated asynchronously.
+        requested_roots.iter().copied().collect()
     };
     generation_order.sort_by_key(|patch| {
         let center = patch.center_direction();
@@ -436,7 +550,7 @@ pub fn stream_terrain_patches(
         let skirt_depth_m = config.skirt_depth_m;
         let task = task_pool.spawn(async move {
             let generation_started = Instant::now();
-            let geometry = build_patch_geometry_with_stitches(
+            let geometry = build_streamed_patch_geometry(
                 &patch,
                 source.as_ref(),
                 radius_m,
@@ -486,17 +600,6 @@ pub fn stream_terrain_patches(
     }
     streaming.published = current_visible;
 
-    // Outside the viewport range, cached geometry has no presentation value.
-    // Release it immediately instead of retaining invisible GPU meshes until
-    // unrelated memory pressure happens to evict them.
-    for patch in evict_cached_patches_outside_viewport(&mut streaming, &requested) {
-        streaming.generated.remove(&patch);
-        evicted_events.write(TerrainPatchEvicted {
-            patch,
-            planet_entity,
-        });
-    }
-
     let metrics_due =
         completed_batch_count > 0 && streaming.generated.len() >= streaming.next_metrics_report_at;
     if metrics_due {
@@ -517,7 +620,7 @@ pub fn stream_terrain_patches(
     }
 
     let budget = streaming.budget_bytes;
-    let protected = active_roots;
+    let protected = requested_roots;
     let evicted = streaming
         .manager
         .enforce_memory_budget_protecting(budget, &protected);
@@ -527,6 +630,38 @@ pub fn stream_terrain_patches(
             patch,
             planet_entity,
         });
+    }
+}
+
+fn build_streamed_patch_geometry(
+    patch: &TerrainPatch,
+    source: &dyn TerrainSource,
+    radius_m: f64,
+    resolution: u32,
+    skirt_depth_m: f64,
+    stitched_edges: &[PatchEdge],
+) -> PatchGeometry {
+    if patch.level == 0 {
+        // Root tiles are visual fallback coverage. Avoiding expensive local
+        // terrain caches here keeps the first flight frame responsive; all
+        // refinements retain the authoritative source height field.
+        build_patch_overview_geometry_with_stitches(
+            patch,
+            source,
+            radius_m,
+            resolution,
+            skirt_depth_m,
+            stitched_edges,
+        )
+    } else {
+        build_patch_geometry_with_stitches(
+            patch,
+            source,
+            radius_m,
+            resolution,
+            skirt_depth_m,
+            stitched_edges,
+        )
     }
 }
 
@@ -596,10 +731,6 @@ fn terrain_viewport(
     })
 }
 
-fn complete_root_cover() -> BTreeSet<TerrainPatch> {
-    TerrainPatch::roots().into_iter().collect()
-}
-
 /// Intersect the presentation camera's forward ray with the terrain sphere.
 /// LOD selection must use the same focus as viewport culling; using the rocket
 /// position here generates detailed tiles behind a free or orbital camera.
@@ -648,9 +779,9 @@ fn add_viewport_lod_group(
     }
 }
 
-/// Conservative sphere-frustum test using each cube-sphere patch's angular
-/// extent. It intentionally retains a small margin for smooth camera motion;
-/// patches outside it are not requested, rendered, or retained in the cache.
+/// Conservative bounding-sphere frustum test. It intentionally retains a small
+/// margin for smooth camera motion; patches outside it are not requested,
+/// rendered, or retained in the cache.
 fn patch_intersects_viewport(
     patch: TerrainPatch,
     viewport: Option<&TerrainViewport>,
@@ -668,28 +799,10 @@ fn patch_intersects_viewport(
     }
 
     let center = patch.center_direction();
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let samples = [
-        center,
-        face_uv_to_direction(patch.face, u0, v0),
-        face_uv_to_direction(patch.face, u1, v0),
-        face_uv_to_direction(patch.face, u0, v1),
-        face_uv_to_direction(patch.face, u1, v1),
-    ];
-    let camera_surface_direction = viewport.position_m.normalize();
-    let contains_camera_surface =
-        TerrainPatch::for_direction(camera_surface_direction, patch.level) == patch;
-    let patch_radius_rad = samples[1..]
-        .into_iter()
-        .map(|sample| center.dot(*sample).clamp(-1.0, 1.0).acos())
-        .fold(0.0, f64::max)
-        .max(
-            contains_camera_surface
-                .then(|| center.dot(camera_surface_direction).clamp(-1.0, 1.0).acos())
-                .unwrap_or(0.0),
-        );
     let to_center = center * radius_m - viewport.position_m;
-    if to_center.length_squared() < 1.0 {
+    let distance_m = to_center.length();
+    let bounding_radius_m = patch_bounding_radius_m(patch, radius_m);
+    if distance_m <= bounding_radius_m {
         return true;
     }
     let view_angle = viewport
@@ -697,7 +810,26 @@ fn patch_intersects_viewport(
         .dot(to_center.normalize())
         .clamp(-1.0, 1.0)
         .acos();
-    view_angle <= viewport.half_fov_rad + patch_radius_rad + VIEWPORT_PREFETCH_MARGIN_RAD
+    let sphere_angle_rad = (bounding_radius_m / distance_m).clamp(0.0, 1.0).asin();
+    view_angle <= viewport.half_fov_rad + sphere_angle_rad + VIEWPORT_PREFETCH_MARGIN_RAD
+}
+
+fn patch_bounding_radius_m(patch: TerrainPatch, radius_m: f64) -> f64 {
+    let center = patch.center_direction();
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    let patch_radius_rad = [
+        face_uv_to_direction(patch.face, u0, v0),
+        face_uv_to_direction(patch.face, u1, v0),
+        face_uv_to_direction(patch.face, u0, v1),
+        face_uv_to_direction(patch.face, u1, v1),
+    ]
+    .into_iter()
+    .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
+    .fold(0.0, f64::max);
+
+    // The chord reaches the farthest patch corner. An arc-length estimate here
+    // is too small and could cull a tile that still contributes to the limb.
+    2.0 * radius_m * (patch_radius_rad * 0.5).sin() + HORIZON_CULL_HEIGHT_MARGIN_M
 }
 
 /// Reject a quadtree node only when its conservative bounding sphere lies
@@ -712,41 +844,10 @@ fn patch_is_behind_horizon(patch: TerrainPatch, camera_position_m: DVec3, radius
     }
 
     let center = patch.center_direction();
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let patch_radius_rad = [
-        face_uv_to_direction(patch.face, u0, v0),
-        face_uv_to_direction(patch.face, u1, v0),
-        face_uv_to_direction(patch.face, u0, v1),
-        face_uv_to_direction(patch.face, u1, v1),
-    ]
-    .into_iter()
-    .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
-    .fold(0.0, f64::max);
-    // The chord reaches the farthest patch corner. An arc-length estimate here
-    // is too small and could cull a tile that still contributes to the limb.
-    let bounding_radius_m =
-        2.0 * radius_m * (patch_radius_rad * 0.5).sin() + HORIZON_CULL_HEIGHT_MARGIN_M;
+    let bounding_radius_m = patch_bounding_radius_m(patch, radius_m);
 
     camera_position_m.dot(center * radius_m) + camera_distance_m * bounding_radius_m
         < radius_m * radius_m
-}
-
-fn evict_cached_patches_outside_viewport(
-    streaming: &mut TerrainStreamingResource,
-    requested: &BTreeSet<TerrainPatch>,
-) -> Vec<TerrainPatch> {
-    let evicted: Vec<_> = streaming
-        .manager
-        .patch_states()
-        .filter_map(|(patch, state)| {
-            (state == PatchState::Cached && !requested.contains(&patch)).then_some(patch)
-        })
-        .collect();
-    for patch in &evicted {
-        streaming.manager.evict(patch);
-    }
-    streaming.manager.sweep_evicted();
-    evicted
 }
 
 fn patch_needs_geometry(state: Option<PatchState>, has_geometry: bool) -> bool {
@@ -967,6 +1068,24 @@ mod tests {
     }
 
     #[test]
+    fn root_fallback_uses_overview_while_refinement_uses_authoritative_height() {
+        let source = DivergentOverviewSource;
+        let root = TerrainPatch::for_direction(DVec3::Z, 0);
+        let child = TerrainPatch::for_direction(DVec3::Z, 1);
+
+        let root_geometry = build_streamed_patch_geometry(&root, &source, 6_371_000.0, 3, 5.0, &[]);
+        let child_geometry =
+            build_streamed_patch_geometry(&child, &source, 6_371_000.0, 3, 5.0, &[]);
+
+        assert!(root_geometry.positions.iter().take(9).all(|position| {
+            (DVec3::from_array(*position).length() - 6_370_750.0).abs() < 1e-6
+        }));
+        assert!(child_geometry.positions.iter().take(9).all(|position| {
+            (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6
+        }));
+    }
+
+    #[test]
     fn neighborhood_crosses_face_boundaries_without_losing_coverage() {
         let focus = TerrainPatch {
             face: CubeFace::PosZ,
@@ -1030,17 +1149,23 @@ mod tests {
     }
 
     #[test]
-    fn root_fallback_always_covers_all_cube_faces() {
-        let roots = complete_root_cover();
+    fn viewport_request_retains_only_the_camera_face_root() {
+        let parent = TerrainPatch::root(CubeFace::PosZ);
+        let selected: BTreeSet<_> = parent.children().into_iter().collect();
+        let mut requested = BTreeSet::new();
 
-        assert_eq!(roots.len(), TerrainPatch::roots().len());
-        assert!(TerrainPatch::roots()
-            .into_iter()
-            .all(|root| roots.contains(&root)));
+        add_viewport_lod_group(parent.children()[0], &selected, &mut requested);
+
+        let roots: Vec<_> = requested
+            .iter()
+            .copied()
+            .filter(|patch| patch.level == 0)
+            .collect();
+        assert_eq!(roots, vec![parent]);
     }
 
     #[test]
-    fn cached_terrain_outside_the_request_set_is_evicted_immediately() {
+    fn cached_terrain_is_retained_until_memory_budget_requires_eviction() {
         let patch = TerrainPatch::root(CubeFace::PosZ);
         let mut streaming = TerrainStreamingResource::default();
         streaming.manager.request(patch, 1_024);
@@ -1048,8 +1173,11 @@ mod tests {
         streaming.manager.mark_visible(&patch);
         streaming.manager.mark_cached(&patch);
 
+        assert_eq!(streaming.manager.state_of(&patch), Some(PatchState::Cached));
         assert_eq!(
-            evict_cached_patches_outside_viewport(&mut streaming, &BTreeSet::new()),
+            streaming
+                .manager
+                .enforce_memory_budget_protecting(0, &BTreeSet::new()),
             vec![patch]
         );
         assert_eq!(streaming.manager.state_of(&patch), None);

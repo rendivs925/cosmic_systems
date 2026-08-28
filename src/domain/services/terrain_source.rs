@@ -16,7 +16,7 @@ use bevy::math::DVec3;
 use std::fmt::Debug;
 #[cfg(feature = "dem")]
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
 
@@ -663,13 +663,13 @@ impl TerrainSite {
     }
 }
 
-/// A site with its base-terrain height sampled once during source construction.
-/// This keeps the site correction deterministic without repeatedly evaluating
-/// potentially cached or expensive terrain sources at the site center.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A site whose base-terrain center height is calibrated once on first use in
+/// its grade band. Exact pad samples need no calibration and must not force a
+/// synchronous terrain bake while the scene is being constructed.
+#[derive(Debug, Clone)]
 struct CalibratedTerrainSite {
     site: TerrainSite,
-    base_center_height_m: f64,
+    base_center_height_m: Arc<OnceLock<f64>>,
 }
 
 /// Detailed launch-site patches overlaid on a base terrain source. Sites
@@ -691,8 +691,8 @@ impl SiteAwareTerrainSource {
                     site.name
                 );
                 CalibratedTerrainSite {
-                    base_center_height_m: base.height_m(site.latitude_deg, site.longitude_deg),
                     site,
+                    base_center_height_m: Arc::new(OnceLock::new()),
                 }
             })
             .collect();
@@ -706,11 +706,17 @@ impl TerrainSource for SiteAwareTerrainSource {
             let site = calibrated.site;
             let flat_weight = site.flat_weight(latitude_deg, longitude_deg);
             if flat_weight > 0.0 {
+                if flat_weight == 1.0 {
+                    return site.elevation_m;
+                }
                 let base = self.base.height_m(latitude_deg, longitude_deg);
                 // Preserve local relief while carrying the center-height bias
                 // across the whole grade. The smoothstep-derived flat weight
                 // has zero slope at both ends, avoiding a pad-edge shelf.
-                let center_bias_m = site.elevation_m - calibrated.base_center_height_m;
+                let base_center_height_m = *calibrated
+                    .base_center_height_m
+                    .get_or_init(|| self.base.height_m(site.latitude_deg, site.longitude_deg));
+                let center_bias_m = site.elevation_m - base_center_height_m;
                 let corrected_base = base + center_bias_m * flat_weight;
                 return corrected_base + (site.elevation_m - corrected_base) * flat_weight;
             }
@@ -1046,6 +1052,7 @@ fn erode_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn Te
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn procedural_regeneration_is_identical() {
@@ -1126,6 +1133,39 @@ mod tests {
             far.abs() > 10.0,
             "expected non-flat global terrain, got {far}"
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct CountingTerrainSource(AtomicUsize);
+
+    impl TerrainSource for CountingTerrainSource {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            10.0
+        }
+    }
+
+    #[test]
+    fn site_calibration_is_lazy_and_exact_pad_samples_do_not_touch_the_base() {
+        let base = Arc::new(CountingTerrainSource::default());
+        let source = SiteAwareTerrainSource::new(
+            base.clone(),
+            vec![TerrainSite {
+                name: "test pad",
+                latitude_deg: 0.0,
+                longitude_deg: 0.0,
+                radius_deg: 0.01,
+                blend_radius_deg: 0.02,
+                elevation_m: 2.0,
+            }],
+        );
+
+        assert_eq!(base.0.load(Ordering::Relaxed), 0);
+        assert_eq!(source.height_m(0.0, 0.0), 2.0);
+        assert_eq!(base.0.load(Ordering::Relaxed), 0);
+
+        let _ = source.height_m(0.015, 0.0);
+        assert!(base.0.load(Ordering::Relaxed) >= 2);
     }
 
     #[test]

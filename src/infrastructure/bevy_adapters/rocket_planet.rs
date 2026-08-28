@@ -9,6 +9,7 @@
 //! Conversion: solar system display units -> meters using PhysicalScale.
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
+use crate::application::mesh_factory::create_flight_globe_mesh;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::physics::calculate_planet_position;
@@ -72,9 +73,20 @@ pub fn setup_rocket_planets(
     let planet_name = binding.planet_name.to_string();
     bound_planet_res.0 = Some(planet_name.clone());
 
-    // The terrain hierarchy is the sole bound-planet surface. RocketPlanet
-    // proxies remain for the Sun and moons, but no textured Earth underlay is
-    // spawned beneath terrain tiles.
+    let Some(bound_planet) = PlanetFactory::create_by_name(&planet_name) else {
+        return;
+    };
+    spawn_rocket_bound_planet(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &asset_server,
+        &bound_planet,
+    );
+
+    // The globe is an inner presentation fallback. Terrain streaming overlays
+    // only the visible camera neighborhood, so no full-planet terrain bake is
+    // required to avoid a hole at the horizon.
     for moon in PlanetFactory::get_moons_of(&planet_name) {
         spawn_rocket_moon(
             &mut commands,
@@ -87,6 +99,40 @@ pub fn setup_rocket_planets(
 
     // Spawn the Sun
     spawn_rocket_sun(&mut commands, &mut meshes, &mut materials, &asset_server);
+}
+
+fn spawn_rocket_bound_planet(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    asset_server: &AssetServer,
+    planet: &crate::domain::entities::planet::Planet,
+) {
+    const TERRAIN_FALLBACK_DEPTH_M: f32 = 15_000.0;
+    let radius_m = (planet.radius_km * 1_000.0 - TERRAIN_FALLBACK_DEPTH_M).max(1.0);
+    let mesh_handle = create_flight_globe_mesh(meshes, radius_m);
+    let textures = get_planet_textures(&planet.name);
+    let material_handle = materials.add(create_planet_material(PlanetMaterialConfig {
+        base_color_texture: load_texture(asset_server, textures.albedo),
+        normal_map_texture: None,
+        emissive_texture: load_texture(asset_server, textures.emissive),
+        base_color: planet.color,
+        emissive: LinearRgba::BLACK,
+        unlit: false,
+        metallic: 0.0,
+        reflectance: 0.35,
+        perceptual_roughness: 0.9,
+    }));
+    commands.spawn((
+        Mesh3d(mesh_handle),
+        MeshMaterial3d(material_handle),
+        Transform::default(),
+        RocketPlanet {
+            name: planet.name.clone(),
+            is_bound_planet: true,
+            is_sun: false,
+        },
+    ));
 }
 
 /// Spawn a moon in flight units.

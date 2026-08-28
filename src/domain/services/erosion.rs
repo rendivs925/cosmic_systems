@@ -15,8 +15,15 @@
 //! own resolution; it is not transferred across scales.
 
 use crate::domain::services::terrain_source::TerrainSource;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
+
+thread_local! {
+    // Flow routing is temporary tile-build state. Reusing it per worker avoids
+    // a fresh index-vector allocation for every erosion raster.
+    static FLOW_ORDER_SCRATCH: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
 
 /// A deterministic xorshift64 PRNG so droplet erosion is fully reproducible
 /// without pulling in a PRNG dependency or depending on `rand`'s version.
@@ -245,13 +252,17 @@ pub fn hydraulic_erode(
 /// upslope flow is fully accumulated before it is passed on.
 pub fn flow_accumulation(h: &[f32], w: usize, hgt: usize) -> Vec<f32> {
     let mut acc = vec![1.0f32; w * hgt];
-    let mut order: Vec<usize> = (0..w * hgt).collect();
-    order.sort_by(|&a, &b| h[b].partial_cmp(&h[a]).unwrap_or(std::cmp::Ordering::Equal));
-    for &i in &order {
-        if let Some((n, _)) = steepest_downhill(i % w, i / w, h, w, hgt) {
-            acc[n] += acc[i];
+    FLOW_ORDER_SCRATCH.with(|scratch| {
+        let mut order = scratch.borrow_mut();
+        order.clear();
+        order.extend(0..w * hgt);
+        order.sort_by(|&a, &b| h[b].partial_cmp(&h[a]).unwrap_or(std::cmp::Ordering::Equal));
+        for &i in order.iter() {
+            if let Some((n, _)) = steepest_downhill(i % w, i / w, h, w, hgt) {
+                acc[n] += acc[i];
+            }
         }
-    }
+    });
     acc
 }
 
@@ -404,12 +415,15 @@ struct TileBuild {
 
 impl ErodedTerrainSource {
     pub fn new(base: Arc<dyn TerrainSource>, cfg: ErosionConfig) -> Self {
+        let cache_capacity = cfg.cache_max_tiles;
         Self {
             base,
             cfg,
-            cache: Mutex::new(HashMap::new()),
-            order: Mutex::new(Vec::new()),
-            in_flight: Mutex::new(HashMap::new()),
+            // Raster buffers are retained by the bounded cache, so reserve all
+            // metadata storage before the first terrain task reaches it.
+            cache: Mutex::new(HashMap::with_capacity(cache_capacity)),
+            order: Mutex::new(Vec::with_capacity(cache_capacity)),
+            in_flight: Mutex::new(HashMap::with_capacity(cache_capacity.min(8))),
         }
     }
 

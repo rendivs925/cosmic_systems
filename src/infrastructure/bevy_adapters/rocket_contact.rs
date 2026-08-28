@@ -27,7 +27,7 @@ use crate::infrastructure::bevy_adapters::components::{
 use bevy::ecs::query::QueryData;
 use bevy::log::info;
 use bevy::math::{DMat3, DQuat, DVec3};
-use bevy::prelude::{Entity, Local, MessageWriter, Query, Res};
+use bevy::prelude::{Entity, MessageWriter, Query, Res, Resource};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -39,7 +39,7 @@ const TERRAIN_SURFACE_SAMPLE_CACHE_CAPACITY: usize = 512;
 /// The key uses the input f64 bit patterns rather than spatial quantization, so
 /// a cached result is bit-identical to direct `TerrainSource` evaluation. It is
 /// presentation-independent and does not alter the source or collision model.
-#[derive(Clone)]
+#[derive(Clone, Resource)]
 pub struct TerrainSurfaceSampleCache {
     entries: Arc<Mutex<TerrainSurfaceSampleLru>>,
 }
@@ -55,7 +55,7 @@ impl Default for TerrainSurfaceSampleCache {
 }
 
 impl TerrainSurfaceSampleCache {
-    fn sample(
+    pub(crate) fn sample(
         &self,
         planet: Entity,
         source: &dyn TerrainSource,
@@ -216,7 +216,7 @@ pub fn deploy_landing_legs(
 /// touchdowns exactly as before.
 pub fn resolve_ground_contact(
     sim_time: Res<SimulationTime>,
-    surface_cache: Local<TerrainSurfaceSampleCache>,
+    surface_cache: Option<Res<TerrainSurfaceSampleCache>>,
     mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     mut rocket_query: Query<GroundContactAccess>,
@@ -269,12 +269,17 @@ pub fn resolve_ground_contact(
             continue;
         }
         let (lat, lon) = lat_lon_from_direction(dir_bf);
-        let sample = surface_cache.sample(
-            planet_entity,
-            planet_terrain.source.as_ref(),
-            lat,
-            lon,
-            radius_m,
+        let sample = surface_cache.as_deref().map_or_else(
+            || sample_surface(planet_terrain.source.as_ref(), lat, lon, radius_m),
+            |cache| {
+                cache.sample(
+                    planet_entity,
+                    planet_terrain.source.as_ref(),
+                    lat,
+                    lon,
+                    radius_m,
+                )
+            },
         );
         let surface_radius_m = radius_m + sample.height_m;
         let signed_altitude_m = position_m.length() - surface_radius_m;
@@ -308,12 +313,24 @@ pub fn resolve_ground_contact(
             if let Some(launch_site) = access.launch_site {
                 let pad_direction_bf =
                     geodetic_to_body_fixed(launch_site, &planet.domain_planet).normalize();
-                let pad_sample = surface_cache.sample(
-                    planet_entity,
-                    planet_terrain.source.as_ref(),
-                    launch_site.latitude_deg as f64,
-                    launch_site.longitude_deg as f64,
-                    radius_m,
+                let pad_sample = surface_cache.as_deref().map_or_else(
+                    || {
+                        sample_surface(
+                            planet_terrain.source.as_ref(),
+                            launch_site.latitude_deg as f64,
+                            launch_site.longitude_deg as f64,
+                            radius_m,
+                        )
+                    },
+                    |cache| {
+                        cache.sample(
+                            planet_entity,
+                            planet_terrain.source.as_ref(),
+                            launch_site.latitude_deg as f64,
+                            launch_site.longitude_deg as f64,
+                            radius_m,
+                        )
+                    },
                 );
                 let pad_position_m =
                     body_to_inertial * (pad_direction_bf * (radius_m + pad_sample.height_m));

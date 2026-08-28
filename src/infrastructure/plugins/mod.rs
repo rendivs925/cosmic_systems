@@ -52,7 +52,7 @@ use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket_contact::{
-    advance_topple, deploy_landing_legs, resolve_ground_contact,
+    advance_topple, deploy_landing_legs, resolve_ground_contact, TerrainSurfaceSampleCache,
 };
 use crate::infrastructure::bevy_adapters::rocket_control::{actuation_system, control_system};
 use crate::infrastructure::bevy_adapters::rocket_debug::RocketDebugPlugin;
@@ -112,7 +112,8 @@ use crate::infrastructure::bevy_adapters::terrain_render::{
     recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
 };
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
-    stream_terrain_patches, TerrainStreamingResource,
+    collect_terrain_warmup_tasks, prebake_prelaunch_launchpad_patch, stream_terrain_patches,
+    warmup_terrain_system, TerrainStreamingResource, TerrainWarmupTasks,
 };
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
@@ -370,7 +371,12 @@ impl Plugin for RocketModePlugin {
         app.init_resource::<VehicleSelection>();
 
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, spawn_rockets_system.after(setup_space));
+        app.add_systems(
+            Startup,
+            spawn_rockets_system
+                .after(setup_space)
+                .after(warmup_terrain_system),
+        );
 
         // Rocket telemetry resource for HUD and flight log.
         app.init_resource::<RocketTelemetry>();
@@ -407,8 +413,19 @@ impl Plugin for RocketModePlugin {
 
         // Cube-sphere terrain streaming around the rocket.
         app.insert_resource(TerrainStreamingResource::default());
+        app.init_resource::<TerrainWarmupTasks>();
+        app.init_resource::<TerrainSurfaceSampleCache>();
+        app.add_systems(Startup, warmup_terrain_system.after(setup_space));
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            Startup,
+            prebake_prelaunch_launchpad_patch
+                .after(spawn_rockets_system)
+                .after(warmup_terrain_system),
+        );
         // Terrain priorities use the current presentation camera frustum.
         app.add_systems(Update, stream_terrain_patches.after(update_rocket_camera));
+        app.add_systems(Update, collect_terrain_warmup_tasks);
 
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
