@@ -335,7 +335,10 @@ pub fn stream_terrain_patches(
         );
     }
 
-    let active_roots = active_viewport_roots(viewport.as_ref(), radius_m, focus_direction);
+    // Root tiles are the always-resident fallback cover. Filtering roots by the
+    // current frustum leaves holes whenever the camera crosses a cube-face seam
+    // before its neighboring root has been uploaded.
+    let active_roots = complete_root_cover();
     let mut requested = active_roots.clone();
     for patch in selection
         .requested
@@ -586,19 +589,8 @@ fn terrain_viewport(
     })
 }
 
-fn active_viewport_roots(
-    viewport: Option<&TerrainViewport>,
-    radius_m: f64,
-    fallback_direction: DVec3,
-) -> BTreeSet<TerrainPatch> {
-    let mut roots: BTreeSet<_> = TerrainPatch::roots()
-        .into_iter()
-        .filter(|patch| patch_intersects_viewport(*patch, viewport, radius_m))
-        .collect();
-    if roots.is_empty() {
-        roots.insert(TerrainPatch::for_direction(fallback_direction, 0));
-    }
-    roots
+fn complete_root_cover() -> BTreeSet<TerrainPatch> {
+    TerrainPatch::roots().into_iter().collect()
 }
 
 /// Intersect the presentation camera's forward ray with the terrain sphere.
@@ -1001,6 +993,16 @@ mod tests {
             viewport_focus_direction(Some(&viewport), radius_m, DVec3::X)
                 .abs_diff_eq(DVec3::Z, 1e-9)
         );
+    }
+
+    #[test]
+    fn root_fallback_always_covers_all_cube_faces() {
+        let roots = complete_root_cover();
+
+        assert_eq!(roots.len(), TerrainPatch::roots().len());
+        assert!(TerrainPatch::roots()
+            .into_iter()
+            .all(|root| roots.contains(&root)));
     }
 
     #[test]

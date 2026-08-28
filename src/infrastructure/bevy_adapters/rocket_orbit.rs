@@ -51,18 +51,6 @@ pub struct OrbitPrediction {
 pub struct OrbitPredictionCache {
     prediction: OrbitPrediction,
     prediction_start_sim_time_s: f64,
-    last_refresh_real_time_s: f32,
-    initialized: bool,
-    allowed: bool,
-    planet_mass_bits: u64,
-    surface_radius_bits: u64,
-    planned_maneuver: Option<PlannedManeuverSignature>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PlannedManeuverSignature {
-    execute_at_sim_time_bits: u64,
-    delta_v_bits: [u64; 3],
 }
 
 impl Default for OrbitPredictionCache {
@@ -70,12 +58,6 @@ impl Default for OrbitPredictionCache {
         Self {
             prediction: OrbitPrediction::empty(),
             prediction_start_sim_time_s: 0.0,
-            last_refresh_real_time_s: 0.0,
-            initialized: false,
-            allowed: false,
-            planet_mass_bits: 0,
-            surface_radius_bits: 0,
-            planned_maneuver: None,
         }
     }
 }
@@ -89,10 +71,6 @@ impl OrbitPredictionCache {
         self.prediction_start_sim_time_s
     }
 }
-
-/// Prediction refresh cadence bounds propagator work while keeping flight
-/// presentation responsive to trajectory changes.
-pub const ORBIT_PREDICTION_REFRESH_INTERVAL_S: f32 = 0.25;
 
 /// Minimum radar altitude before a projected trajectory is meaningful flight
 /// presentation. Near-surface ballistic arcs are not reliable orbit guidance.
@@ -321,8 +299,10 @@ impl Plugin for RocketOrbitPlugin {
     }
 }
 
-/// Refresh the shared prediction at a bounded cadence, or immediately when its
-/// presentation policy, central body, or planned maneuver changes.
+/// Refresh the shared prediction from the current interpolated flight state.
+/// The terrain map consumes this same result, so this remains the only
+/// presentation propagation path without allowing the flight line to lag behind
+/// a fast-moving or time-warped vehicle.
 #[allow(clippy::type_complexity)]
 pub fn update_orbit_prediction_cache(
     planet_query: Query<&PlanetComponent>,
@@ -335,7 +315,6 @@ pub fn update_orbit_prediction_cache(
         Option<&PlannedManeuver>,
     )>,
     fixed_time: Res<Time<Fixed>>,
-    real_time: Res<Time>,
     sim_time: Res<SimulationTime>,
     mut cache: ResMut<OrbitPredictionCache>,
 ) {
@@ -359,18 +338,6 @@ pub fn update_orbit_prediction_cache(
     );
     let planet_mass_kg = planet.domain_planet.mass_kg;
     let surface_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-    let planned_maneuver_signature = planned_maneuver.map(planned_maneuver_signature);
-    if !orbit_prediction_refresh_due(
-        &cache,
-        real_time.elapsed_secs(),
-        allowed,
-        planet_mass_kg,
-        surface_radius_m,
-        planned_maneuver_signature,
-    ) {
-        return;
-    }
-
     let alpha = fixed_time.overstep_fraction() as f64;
     let position_m = render
         .prev
@@ -389,51 +356,18 @@ pub fn update_orbit_prediction_cache(
             })
     });
 
-    cache.prediction = allowed
-        .then(|| {
-            predicted_orbit_with_maneuver(
-                position_m,
-                velocity_mps,
-                planet_mass_kg,
-                surface_radius_m,
-                maneuver,
-            )
-        })
-        .unwrap_or_else(OrbitPrediction::empty);
+    cache.prediction = if allowed {
+        predicted_orbit_with_maneuver(
+            position_m,
+            velocity_mps,
+            planet_mass_kg,
+            surface_radius_m,
+            maneuver,
+        )
+    } else {
+        OrbitPrediction::empty()
+    };
     cache.prediction_start_sim_time_s = sim_time.sim_time_s;
-    cache.last_refresh_real_time_s = real_time.elapsed_secs();
-    cache.initialized = true;
-    cache.allowed = allowed;
-    cache.planet_mass_bits = planet_mass_kg.to_bits();
-    cache.surface_radius_bits = surface_radius_m.to_bits();
-    cache.planned_maneuver = planned_maneuver_signature;
-}
-
-fn orbit_prediction_refresh_due(
-    cache: &OrbitPredictionCache,
-    now_s: f32,
-    allowed: bool,
-    planet_mass_kg: f64,
-    surface_radius_m: f64,
-    planned_maneuver: Option<PlannedManeuverSignature>,
-) -> bool {
-    !cache.initialized
-        || cache.allowed != allowed
-        || cache.planet_mass_bits != planet_mass_kg.to_bits()
-        || cache.surface_radius_bits != surface_radius_m.to_bits()
-        || cache.planned_maneuver != planned_maneuver
-        || now_s - cache.last_refresh_real_time_s >= ORBIT_PREDICTION_REFRESH_INTERVAL_S
-}
-
-fn planned_maneuver_signature(maneuver: &PlannedManeuver) -> PlannedManeuverSignature {
-    PlannedManeuverSignature {
-        execute_at_sim_time_bits: maneuver.execute_at_sim_time_s.to_bits(),
-        delta_v_bits: [
-            maneuver.delta_v_mps.x.to_bits(),
-            maneuver.delta_v_mps.y.to_bits(),
-            maneuver.delta_v_mps.z.to_bits(),
-        ],
-    }
 }
 
 /// Draw the predicted trajectory (and apoapsis/periapsis markers) in the
@@ -712,47 +646,5 @@ mod tests {
             &scale,
         );
         assert_eq!(point, Vec3::new(50.0, 10.0, -5.0));
-    }
-
-    #[test]
-    fn prediction_cache_refreshes_on_cadence_or_structural_change() {
-        let mut cache = OrbitPredictionCache {
-            initialized: true,
-            last_refresh_real_time_s: 10.0,
-            allowed: true,
-            planet_mass_bits: EARTH_MASS_KG.to_bits(),
-            surface_radius_bits: EARTH_RADIUS_M.to_bits(),
-            ..default()
-        };
-
-        assert!(!orbit_prediction_refresh_due(
-            &cache,
-            10.1,
-            true,
-            EARTH_MASS_KG,
-            EARTH_RADIUS_M,
-            None,
-        ));
-        assert!(orbit_prediction_refresh_due(
-            &cache,
-            10.0 + ORBIT_PREDICTION_REFRESH_INTERVAL_S,
-            true,
-            EARTH_MASS_KG,
-            EARTH_RADIUS_M,
-            None,
-        ));
-
-        cache.planned_maneuver = Some(PlannedManeuverSignature {
-            execute_at_sim_time_bits: 120.0f64.to_bits(),
-            delta_v_bits: [0.0f64.to_bits(), 0.0f64.to_bits(), 1.0f64.to_bits()],
-        });
-        assert!(orbit_prediction_refresh_due(
-            &cache,
-            10.1,
-            true,
-            EARTH_MASS_KG,
-            EARTH_RADIUS_M,
-            None,
-        ));
     }
 }
