@@ -113,10 +113,9 @@ pub fn update_craft_physics(
         }
 
         if !autopilot_active {
-            let lift = craft.physics.lift_force;
-            let net_vert = lift - craft.craft.weight_kilonewtons;
-            let grav_accel = net_vert / craft.craft.mass_tonnes - 0.29;
-            craft.physics.vertical_velocity += grav_accel * dt;
+            // `compute_physics` is the single vertical integration authority.
+            // Presentation movement consumes its velocity without applying the
+            // lift/gravity acceleration a second time.
             craft.linear_velocity.y = craft.physics.vertical_velocity;
         }
 

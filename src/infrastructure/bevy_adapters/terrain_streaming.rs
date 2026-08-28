@@ -107,6 +107,13 @@ impl Default for TerrainStreamingResource {
     }
 }
 
+impl TerrainStreamingResource {
+    /// The planet that owns `generated` and `published` terrain patches.
+    pub fn active_planet(&self) -> Option<Entity> {
+        self.active_planet
+    }
+}
+
 /// Generated geometry is valid only for the LOD stitch pattern used to build
 /// its index buffer. Reusing it with a different neighboring LOD would reopen
 /// T-junction cracks along the changed edge.

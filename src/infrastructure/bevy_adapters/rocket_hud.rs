@@ -778,6 +778,13 @@ impl FieldFormatters {
 
 /// Flash rate of the blackout banner while the link is down (Hz).
 const BLACKOUT_FLASH_HZ: f32 = 2.0;
+const HUD_UPDATE_INTERVAL_S: f32 = 1.0 / 30.0;
+
+#[derive(Default)]
+pub(crate) struct HudUpdateState {
+    initialized: bool,
+    last_update_real_time_s: f32,
+}
 
 /// System to update all HUD fields from telemetry.
 pub fn update_rocket_hud_system(
@@ -788,7 +795,14 @@ pub fn update_rocket_hud_system(
     event_feed: Res<RocketEventFeed>,
     planned_maneuver_query: Query<&PlannedManeuver>,
     mut hud_query: Query<(&RocketHudMarker, &mut Text, &mut TextColor)>,
+    mut update_state: Local<HudUpdateState>,
 ) {
+    if !hud_update_due(&update_state, time.elapsed_secs()) {
+        return;
+    }
+    update_state.initialized = true;
+    update_state.last_update_real_time_s = time.elapsed_secs();
+
     // Presentation-only flash phase for the blackout banner.
     let flash_on = ((time.elapsed_secs() * BLACKOUT_FLASH_HZ) as usize).is_multiple_of(2);
     for (marker, mut text, mut text_color) in hud_query.iter_mut() {
@@ -802,12 +816,35 @@ pub fn update_rocket_hud_system(
             planned_maneuver_query.iter().next(),
             sim_time.sim_time_s,
         );
-        text.0 = formatted;
-        text_color.0 = color;
+        if text.0 != formatted {
+            text.0 = formatted;
+        }
+        if text_color.0 != color {
+            text_color.0 = color;
+        }
     }
 }
 
+fn hud_update_due(state: &HudUpdateState, now_s: f32) -> bool {
+    !state.initialized || now_s >= state.last_update_real_time_s + HUD_UPDATE_INTERVAL_S
+}
+
 /// System to spawn HUD on startup.
-pub fn spawn_rocket_hud_system(mut commands: Commands) {
+pub fn spawn_rocket_hud_system(commands: Commands) {
     spawn_rocket_hud(commands);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hud_updates_are_cadence_limited() {
+        let state = HudUpdateState {
+            initialized: true,
+            last_update_real_time_s: 2.0,
+        };
+        assert!(!hud_update_due(&state, 2.01));
+        assert!(hud_update_due(&state, 2.0 + HUD_UPDATE_INTERVAL_S));
+    }
 }

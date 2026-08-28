@@ -27,7 +27,7 @@ pub struct VulkanKeplerSolver {
 impl VulkanKeplerSolver {
     /// Create a new Vulkan Kepler solver with GPU acceleration via wgpu's Vulkan backend.
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
@@ -36,17 +36,15 @@ impl VulkanKeplerSolver {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        }))?
-        .ok_or("No Vulkan adapter available")?;
+        }))??;
 
-        let (device, queue) = block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Vulkan Kepler Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-            },
-            None,
-        ))??;
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Vulkan Kepler Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        }))??;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Vulkan Kepler Shader"),
@@ -99,8 +97,9 @@ impl VulkanKeplerSolver {
             label: Some("Vulkan Kepler Compute Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
 
         Ok(Self {
@@ -222,7 +221,7 @@ impl VulkanKeplerSolver {
         buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
             let _ = sender.send(v);
         });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait)?;
         receiver
             .recv()
             .map_err(|_| "Failed to receive Vulkan readback signal")??;

@@ -79,6 +79,7 @@ use crate::infrastructure::bevy_adapters::rocket_hud::{
 };
 use crate::infrastructure::bevy_adapters::rocket_lifecycle::{
     apply_relaunch_requests, handle_relaunch_input_system, handle_rocket_launch_input,
+    RelaunchCommandQueue,
 };
 use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
@@ -114,7 +115,7 @@ use crate::infrastructure::bevy_adapters::terrain_streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
-#[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
 use crate::infrastructure::bevy_adapters::webgpu_systems::init_vulkan_solver;
 use crate::presentation::ui::*;
 use crate::presentation::ui_setup::setup_ui;
@@ -140,8 +141,17 @@ fn simulation_unpaused(sim_time: Res<SimulationTime>) -> bool {
 
 /// The native Kepler solver serves the solar-system presentation, not rocket
 /// flight's fixed-step dynamics. Avoid its costly device setup in rocket mode.
+#[cfg(any(
+    test,
+    all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel")
+))]
+fn shared_solar_presentation_requires_vulkan(rocket_mode_enabled: bool) -> bool {
+    !rocket_mode_enabled
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
 fn vulkan_solver_required(rocket_mode: Option<Res<RocketMode>>) -> bool {
-    rocket_mode.is_none()
+    shared_solar_presentation_requires_vulkan(rocket_mode.is_some())
 }
 
 /// Shared solar-system world: resources, physics, orbit visuals, performance,
@@ -205,7 +215,7 @@ impl Plugin for SharedSimulationPlugin {
         app.add_systems(Update, adaptive_quality_system);
 
         // Vulkan compute (native only)
-        #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
         app.add_systems(Update, init_vulkan_solver.run_if(vulkan_solver_required));
 
         // Screenshot and recording
@@ -374,6 +384,7 @@ impl Plugin for RocketModePlugin {
         app.add_message::<StageSeparatedEvent>();
         app.add_message::<FairingSeparatedEvent>();
         app.add_message::<RelaunchRequested>();
+        app.init_resource::<RelaunchCommandQueue>();
 
         // Rocket camera resources.
         app.init_resource::<RocketCameraMode>();
@@ -594,6 +605,7 @@ impl Plugin for RocketModePlugin {
         // Must run AFTER setup_space (spawns camera + planets) and spawn_rockets_system
         // (spawns rocket) so the render origin is set to the rocket's physical position
         // and the camera is framed on the already-spawned camera entity.
+        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(
             Startup,
             (
@@ -608,6 +620,20 @@ impl Plugin for RocketModePlugin {
                 .after(setup_space)
                 .after(spawn_rockets_system),
         );
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(
+            Startup,
+            (
+                isolate_rocket_presentation,
+                setup_rocket_camera_and_origin,
+                setup_rocket_camera_controller,
+                setup_rocket_sun_light,
+                setup_rocket_planets,
+                setup_rocket_sky_color,
+            )
+                .chain()
+                .after(setup_space),
+        );
 
         // Pre-launch hold: Space to launch.
         app.add_systems(Update, handle_rocket_launch_input.run_if(replay_inactive));
@@ -615,15 +641,21 @@ impl Plugin for RocketModePlugin {
         // Keep the rocket-mode sky clear and space-black.
         app.add_systems(Update, update_rocket_sky_color);
 
-        // Rocket-mode planets (bound planet, moons, Sun) in flight units with real textures.
-        // Runs after solar system planet positions are updated.
-        app.add_systems(
-            Update,
-            update_rocket_planets
-                .after(update_planet_positions)
-                .after(recenter_render_origin),
-        );
+        // Rocket-mode celestial proxies use SimulationTime directly, independent
+        // of the wall-clock shared solar-map presentation.
+        app.add_systems(Update, update_rocket_planets.after(recenter_render_origin));
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shared_solar_presentation_requires_vulkan;
+
+    #[test]
+    fn vulkan_compute_is_not_required_for_rocket_presentation() {
+        assert!(!shared_solar_presentation_requires_vulkan(true));
+        assert!(shared_solar_presentation_requires_vulkan(false));
     }
 }

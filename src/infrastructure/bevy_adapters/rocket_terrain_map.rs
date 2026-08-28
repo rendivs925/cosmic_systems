@@ -6,8 +6,8 @@
 //! state.
 
 use crate::components::rocket::{
-    GroundRest, PlannedManeuver, RocketAutopilot, RocketMissionState, RocketPhysicsState,
-    RocketPlanetBinding, TerrainCollisionState,
+    GroundRest, RocketAutopilot, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
+    TerrainCollisionState,
 };
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -15,7 +15,7 @@ use crate::domain::services::terrain_source::{surface_appearance, TerrainSource}
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
 use crate::infrastructure::bevy_adapters::rocket_orbit::{
-    orbit_prediction_allowed, predicted_orbit_with_maneuver, OrbitPrediction,
+    update_orbit_prediction_cache, OrbitPrediction, OrbitPredictionCache,
 };
 use crate::infrastructure::bevy_adapters::rocket_telemetry::{FlightLogEntry, FlightRecorder};
 use bevy::asset::RenderAssetUsages;
@@ -34,6 +34,7 @@ const HISTORY_SEGMENTS: usize = 64;
 const PREDICTION_SEGMENTS: usize = 96;
 /// Presentation uncertainty only, not an input to landing guidance.
 const ACTIVE_LANDING_UNCERTAINTY_M: f64 = 1_000.0;
+const MAP_UPDATE_INTERVAL_S: f32 = 0.1;
 
 /// A point in the map panel's top-left pixel coordinate system.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -151,6 +152,25 @@ struct TerrainMapRasterCache {
     images: HashMap<String, Handle<Image>>,
 }
 
+#[derive(Resource, Default)]
+struct TerrainMapUpdateState {
+    initialized: bool,
+    last_update_real_time_s: f32,
+    last_key: Option<TerrainMapUpdateKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerrainMapUpdateKey {
+    planet: Entity,
+    rocket_pixel: Option<(i32, i32)>,
+    landing_pixel: Option<(i32, i32)>,
+    mission: RocketMissionState,
+    ground_contact: crate::domain::services::terrain_collision::GroundContact,
+    resting: bool,
+    history_len: usize,
+    prediction_start_sim_time_bits: u64,
+}
+
 #[derive(Component)]
 struct TerrainMapRasterImage;
 
@@ -171,8 +191,12 @@ pub struct RocketTerrainMapPlugin;
 impl Plugin for RocketTerrainMapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainMapRasterCache>()
+            .init_resource::<TerrainMapUpdateState>()
             .add_systems(Startup, spawn_terrain_map_panel)
-            .add_systems(Update, update_terrain_map_panel);
+            .add_systems(
+                Update,
+                update_terrain_map_panel.after(update_orbit_prediction_cache),
+            );
     }
 }
 
@@ -322,7 +346,8 @@ fn spawn_track_segment(
 #[allow(clippy::type_complexity)]
 fn update_terrain_map_panel(
     sim_time: Res<SimulationTime>,
-    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
+    real_time: Res<Time>,
+    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     rocket_query: Query<(
         &RocketPlanetBinding,
         &RocketPhysicsState,
@@ -332,52 +357,25 @@ fn update_terrain_map_panel(
         &TerrainCollisionState,
         &GroundRest,
         &FlightRecorder,
-        Option<&PlannedManeuver>,
     )>,
+    prediction_cache: Res<OrbitPredictionCache>,
     mut cache: ResMut<TerrainMapRasterCache>,
+    mut update_state: ResMut<TerrainMapUpdateState>,
     mut images: ResMut<Assets<Image>>,
     mut raster_query: Query<&mut ImageNode, With<TerrainMapRasterImage>>,
     mut overlay_query: Query<(&TerrainMapOverlay, &mut Node, &mut UiTransform)>,
 ) {
-    let Some((
-        binding,
-        rocket,
-        launch_site,
-        autopilot,
-        mission,
-        collision,
-        ground_rest,
-        recorder,
-        maneuver,
-    )) = rocket_query.iter().next()
+    let Some((binding, rocket, launch_site, autopilot, mission, collision, ground_rest, recorder)) =
+        rocket_query.iter().next()
     else {
         return;
     };
-    let Some((planet, terrain)) = planet_query
+    let Some((planet_entity, planet, terrain)) = planet_query
         .iter()
-        .find(|(planet, _)| planet.matches_body(&binding.planet_name))
+        .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
     else {
         return;
     };
-    let body_name = planet.domain_planet.name.clone();
-    let raster = cache.images.entry(body_name).or_insert_with(|| {
-        let data = terrain_map_raster(&*terrain.source, MAP_RASTER_WIDTH, MAP_RASTER_HEIGHT);
-        images.add(Image::new(
-            Extent3d {
-                width: MAP_RASTER_WIDTH,
-                height: MAP_RASTER_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            data,
-            TextureFormat::Rgba8Unorm,
-            RenderAssetUsages::RENDER_WORLD,
-        ))
-    });
-    for mut image in raster_query.iter_mut() {
-        image.image = raster.clone();
-    }
-
     let body_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
     let to_map = |position_m: DVec3, at_time_s: f64| {
         let position_bf = planet_inertial_to_body_fixed(
@@ -404,35 +402,61 @@ fn update_terrain_map_panel(
     let target = (autopilot.target_landing_position_m.length_squared() > 1.0)
         .then(|| to_map(autopilot.target_landing_position_m, sim_time.sim_time_s))
         .flatten();
-    let planned_impulse = maneuver.and_then(|maneuver| {
-        let execute_after_s = maneuver.execute_at_sim_time_s - sim_time.sim_time_s;
-        (execute_after_s > 0.0 && maneuver.delta_v_mps.is_finite()).then_some(
-            crate::domain::services::trajectory::ManeuverImpulse {
-                execute_after_s,
-                delta_v_mps: maneuver.delta_v_mps,
+    if !terrain_map_update_due(&update_state, real_time.elapsed_secs()) {
+        return;
+    }
+    let key = TerrainMapUpdateKey {
+        planet: planet_entity,
+        rocket_pixel: current.map(terrain_map_pixel_key),
+        landing_pixel: target.map(|(point, _)| terrain_map_pixel_key(point)),
+        mission: *mission,
+        ground_contact: collision.ground_contact,
+        resting: ground_rest.active,
+        history_len: recorder.entries().len(),
+        prediction_start_sim_time_bits: prediction_cache.prediction_start_sim_time_s().to_bits(),
+    };
+    update_state.initialized = true;
+    update_state.last_update_real_time_s = real_time.elapsed_secs();
+    if update_state.last_key == Some(key) {
+        return;
+    }
+    update_state.last_key = Some(key);
+
+    let raster = if let Some(raster) = cache.images.get(&planet.domain_planet.name) {
+        raster.clone()
+    } else {
+        let data = terrain_map_raster(&*terrain.source, MAP_RASTER_WIDTH, MAP_RASTER_HEIGHT);
+        let raster = images.add(Image::new(
+            Extent3d {
+                width: MAP_RASTER_WIDTH,
+                height: MAP_RASTER_HEIGHT,
+                depth_or_array_layers: 1,
             },
-        )
-    });
-    let prediction = orbit_prediction_allowed(
-        *mission,
-        collision.ground_contact,
-        ground_rest.active,
-        collision.radar_altitude_m,
-    )
-    .then(|| {
-        predicted_orbit_with_maneuver(
-            rocket.dynamics.position_m,
-            rocket.dynamics.velocity_mps,
-            planet.domain_planet.mass_kg,
-            body_radius_m,
-            planned_impulse,
-        )
-    })
-    .unwrap_or_else(OrbitPrediction::empty);
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::RENDER_WORLD,
+        ));
+        cache
+            .images
+            .insert(planet.domain_planet.name.clone(), raster.clone());
+        raster
+    };
+    for mut image in raster_query.iter_mut() {
+        if image.image != raster {
+            image.image = raster.clone();
+        }
+    }
+
+    let prediction = prediction_cache.prediction();
     let impact = predicted_impact(&prediction, body_radius_m)
         .and_then(|position| to_map(position, sim_time.sim_time_s).map(|point| point.0));
     let history = history_track(recorder, &planet.domain_planet);
-    let predicted = prediction_track(&prediction, &planet.domain_planet, sim_time.sim_time_s);
+    let predicted = prediction_track(
+        prediction,
+        &planet.domain_planet,
+        prediction_cache.prediction_start_sim_time_s(),
+    );
     let uncertainty = target
         .and_then(|(point, latitude_deg)| {
             landing_uncertainty_active(*mission).then(|| {
@@ -471,6 +495,14 @@ fn update_terrain_map_panel(
             }
         }
     }
+}
+
+fn terrain_map_update_due(state: &TerrainMapUpdateState, now_s: f32) -> bool {
+    !state.initialized || now_s >= state.last_update_real_time_s + MAP_UPDATE_INTERVAL_S
+}
+
+fn terrain_map_pixel_key(point: TerrainMapPoint) -> (i32, i32) {
+    (point.x_px.round() as i32, point.y_px.round() as i32)
 }
 
 fn predicted_impact(prediction: &OrbitPrediction, body_radius_m: f64) -> Option<DVec3> {
@@ -686,5 +718,30 @@ mod tests {
             uncertainty_ellipse_radii_px(75.0, 1_000.0, 6_371_000.0, 288.0, 144.0).unwrap();
         assert!(high_latitude.x > equator.x);
         assert_eq!(high_latitude.y, equator.y);
+    }
+
+    #[test]
+    fn map_updates_are_cadence_limited() {
+        let state = TerrainMapUpdateState {
+            initialized: true,
+            last_update_real_time_s: 5.0,
+            ..default()
+        };
+        assert!(!terrain_map_update_due(&state, 5.05));
+        assert!(terrain_map_update_due(&state, 5.0 + MAP_UPDATE_INTERVAL_S));
+    }
+
+    #[test]
+    fn map_pixel_key_ignores_subpixel_motion() {
+        assert_eq!(
+            terrain_map_pixel_key(TerrainMapPoint {
+                x_px: 10.1,
+                y_px: 20.4,
+            }),
+            terrain_map_pixel_key(TerrainMapPoint {
+                x_px: 10.49,
+                y_px: 20.49,
+            })
+        );
     }
 }

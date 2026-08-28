@@ -5,15 +5,16 @@
 //! can affect a subsequent physics tick.
 
 use crate::components::rocket::{
-    AblationState, CommsState, ForceAccumulator, GroundRest, LandingLegs, LandingScorecard,
-    MaxQTracker, ParachuteState, PayloadFairing, RetroPropulsionEffect, RocketAutopilot,
-    RocketCommands, RocketFlightConditions, RocketMass, RocketMissionState, RocketPhysicsState,
-    RocketPropulsion, RocketRenderState, TerrainCollisionState, ThermalState, TipOverState,
-    TorqueAccumulator,
+    AblationState, CommsState, DroneShip, DroneShipLandingTarget, ForceAccumulator,
+    GravityAcceleration, GroundRest, LandingLegs, LandingScorecard, MaxQTracker, ParachuteState,
+    PayloadFairing, RetroPropulsionEffect, RocketAutopilot, RocketCommands, RocketFlightConditions,
+    RocketMass, RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRenderState,
+    SpentStage, TerrainCollisionState, ThermalState, TipOverState, TorqueAccumulator,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use bevy::ecs::query::QueryData;
 use bevy::prelude::*;
+use std::collections::VecDeque;
 
 /// One minute of exact 60 Hz history by default. Call
 /// [`ReplaySnapshotStream::new`] to select a different retention capacity.
@@ -43,6 +44,7 @@ pub struct RocketReplaySnapshot {
     pub tip_over: TipOverState,
     pub landing_scorecard: LandingScorecard,
     pub payload_fairing: Option<PayloadFairing>,
+    pub drone_ship_target: Option<DroneShipLandingTarget>,
     pub force_accumulator: ForceAccumulator,
     pub torque_accumulator: TorqueAccumulator,
 }
@@ -52,6 +54,26 @@ pub struct RocketReplaySnapshot {
 pub struct ReplayFrame {
     pub timestamp_s: f64,
     pub rockets: Vec<RocketReplaySnapshot>,
+    spent_stages: Vec<SpentStageReplaySnapshot>,
+    drone_ships: Vec<DroneShipReplaySnapshot>,
+}
+
+/// The mutable authoritative state of one jettisoned hardware entity.
+#[derive(Debug, Clone)]
+struct SpentStageReplaySnapshot {
+    entity: Entity,
+    physics: RocketPhysicsState,
+    mass: RocketMass,
+    flight_conditions: RocketFlightConditions,
+    gravity: GravityAcceleration,
+    force_accumulator: ForceAccumulator,
+}
+
+/// The mutable authoritative state of one drone ship.
+#[derive(Debug, Clone)]
+struct DroneShipReplaySnapshot {
+    entity: Entity,
+    ship: DroneShip,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +87,7 @@ struct ReplaySession {
 /// Separate fixed-tick ring buffer and replay session state.
 #[derive(Resource, Debug)]
 pub struct ReplaySnapshotStream {
-    frames: Vec<ReplayFrame>,
+    frames: VecDeque<ReplayFrame>,
     capacity: usize,
     session: Option<ReplaySession>,
 }
@@ -79,13 +101,14 @@ impl Default for ReplaySnapshotStream {
 impl ReplaySnapshotStream {
     pub fn new(capacity: usize) -> Self {
         Self {
-            frames: Vec::with_capacity(capacity),
+            frames: VecDeque::with_capacity(capacity),
             capacity,
             session: None,
         }
     }
 
-    pub fn frames(&self) -> &[ReplayFrame] {
+    /// Frames in chronological order, from oldest retained to newest.
+    pub fn frames(&self) -> &VecDeque<ReplayFrame> {
         &self.frames
     }
 
@@ -102,9 +125,9 @@ impl ReplaySnapshotStream {
             return;
         }
         if self.frames.len() == self.capacity {
-            self.frames.remove(0);
+            self.frames.pop_front();
         }
-        self.frames.push(frame);
+        self.frames.push_back(frame);
     }
 }
 
@@ -139,6 +162,7 @@ pub struct ReplayCaptureAccess {
     pub tip_over: &'static TipOverState,
     pub landing_scorecard: &'static LandingScorecard,
     pub payload_fairing: Option<&'static PayloadFairing>,
+    pub drone_ship_target: Option<&'static DroneShipLandingTarget>,
     pub force_accumulator: &'static ForceAccumulator,
     pub torque_accumulator: &'static TorqueAccumulator,
 }
@@ -167,43 +191,108 @@ pub struct ReplayRestoreAccess {
     pub tip_over: &'static mut TipOverState,
     pub landing_scorecard: &'static mut LandingScorecard,
     pub payload_fairing: Option<&'static mut PayloadFairing>,
+    pub drone_ship_target: Option<&'static mut DroneShipLandingTarget>,
     pub force_accumulator: &'static mut ForceAccumulator,
     pub torque_accumulator: &'static mut TorqueAccumulator,
     pub render: &'static mut RocketRenderState,
 }
 
-fn capture_frame(rockets: &Query<ReplayCaptureAccess>, timestamp_s: f64) -> ReplayFrame {
+/// Authoritative mutable state needed for an already-spawned spent stage.
+#[derive(QueryData)]
+pub struct ReplaySpentStageCaptureAccess {
+    pub entity: Entity,
+    pub physics: &'static RocketPhysicsState,
+    pub mass: &'static RocketMass,
+    pub flight_conditions: &'static RocketFlightConditions,
+    pub gravity: &'static GravityAcceleration,
+    pub force_accumulator: &'static ForceAccumulator,
+}
+
+/// Mutable counterpart used only while physics is paused for replay.
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct ReplaySpentStageRestoreAccess {
+    pub entity: Entity,
+    pub physics: &'static mut RocketPhysicsState,
+    pub mass: &'static mut RocketMass,
+    pub flight_conditions: &'static mut RocketFlightConditions,
+    pub gravity: &'static mut GravityAcceleration,
+    pub force_accumulator: &'static mut ForceAccumulator,
+}
+
+fn capture_frame(
+    rockets: &Query<ReplayCaptureAccess>,
+    spent_stages: &Query<ReplaySpentStageCaptureAccess, With<SpentStage>>,
+    drone_ships: &Query<(Entity, &DroneShip)>,
+    timestamp_s: f64,
+) -> ReplayFrame {
     ReplayFrame {
         timestamp_s,
-        rockets: rockets
-            .iter()
-            .map(|rocket| RocketReplaySnapshot {
-                entity: rocket.entity,
-                timestamp_s,
-                physics: rocket.physics.clone(),
-                mass: *rocket.mass,
-                mission: *rocket.mission,
-                propulsion: rocket.propulsion.clone(),
-                commands: *rocket.commands,
-                autopilot: rocket.autopilot.clone(),
-                flight_conditions: *rocket.flight_conditions,
-                terrain_collision: *rocket.terrain_collision,
-                ground_rest: *rocket.ground_rest,
-                landing_legs: rocket.landing_legs.cloned(),
-                thermal: *rocket.thermal,
-                ablation: *rocket.ablation,
-                comms: *rocket.comms,
-                parachute: *rocket.parachute,
-                retro_propulsion: *rocket.retro_propulsion,
-                max_q: *rocket.max_q,
-                tip_over: rocket.tip_over.clone(),
-                landing_scorecard: rocket.landing_scorecard.clone(),
-                payload_fairing: rocket.payload_fairing.cloned(),
-                force_accumulator: *rocket.force_accumulator,
-                torque_accumulator: *rocket.torque_accumulator,
-            })
-            .collect(),
+        rockets: capture_rockets(rockets, timestamp_s),
+        spent_stages: capture_spent_stages(spent_stages),
+        drone_ships: capture_drone_ships(drone_ships),
     }
+}
+
+fn capture_rockets(
+    rockets: &Query<ReplayCaptureAccess>,
+    timestamp_s: f64,
+) -> Vec<RocketReplaySnapshot> {
+    rockets
+        .iter()
+        .map(|rocket| RocketReplaySnapshot {
+            entity: rocket.entity,
+            timestamp_s,
+            physics: rocket.physics.clone(),
+            mass: *rocket.mass,
+            mission: *rocket.mission,
+            propulsion: rocket.propulsion.clone(),
+            commands: *rocket.commands,
+            autopilot: rocket.autopilot.clone(),
+            flight_conditions: *rocket.flight_conditions,
+            terrain_collision: *rocket.terrain_collision,
+            ground_rest: *rocket.ground_rest,
+            landing_legs: rocket.landing_legs.cloned(),
+            thermal: *rocket.thermal,
+            ablation: *rocket.ablation,
+            comms: *rocket.comms,
+            parachute: *rocket.parachute,
+            retro_propulsion: *rocket.retro_propulsion,
+            max_q: *rocket.max_q,
+            tip_over: rocket.tip_over.clone(),
+            landing_scorecard: rocket.landing_scorecard.clone(),
+            payload_fairing: rocket.payload_fairing.cloned(),
+            drone_ship_target: rocket.drone_ship_target.copied(),
+            force_accumulator: *rocket.force_accumulator,
+            torque_accumulator: *rocket.torque_accumulator,
+        })
+        .collect()
+}
+
+fn capture_spent_stages(
+    spent_stages: &Query<ReplaySpentStageCaptureAccess, With<SpentStage>>,
+) -> Vec<SpentStageReplaySnapshot> {
+    spent_stages
+        .iter()
+        .map(|stage| SpentStageReplaySnapshot {
+            entity: stage.entity,
+            physics: stage.physics.clone(),
+            mass: *stage.mass,
+            flight_conditions: *stage.flight_conditions,
+            gravity: *stage.gravity,
+            force_accumulator: *stage.force_accumulator,
+        })
+        .collect()
+}
+
+fn capture_drone_ships(drone_ships: &Query<(Entity, &DroneShip)>) -> Vec<DroneShipReplaySnapshot> {
+    drone_ships
+        .iter()
+        .map(|(entity, ship)| DroneShipReplaySnapshot {
+            entity,
+            ship: ship.clone(),
+        })
+        .collect()
 }
 
 /// Append one full-authority frame after each live fixed tick.
@@ -211,11 +300,18 @@ pub fn record_replay_snapshot_system(
     sim_time: Res<SimulationTime>,
     mut stream: ResMut<ReplaySnapshotStream>,
     rockets: Query<ReplayCaptureAccess>,
+    spent_stages: Query<ReplaySpentStageCaptureAccess, With<SpentStage>>,
+    drone_ships: Query<(Entity, &DroneShip)>,
 ) {
     if stream.is_replaying() {
         return;
     }
-    stream.push(capture_frame(&rockets, sim_time.sim_time_s));
+    stream.push(capture_frame(
+        &rockets,
+        &spent_stages,
+        &drone_ships,
+        sim_time.sim_time_s,
+    ));
 }
 
 fn restore_frame(
@@ -226,6 +322,7 @@ fn restore_frame(
     for snapshot in &frame.rockets {
         let landing_legs = snapshot.landing_legs.clone();
         let payload_fairing = snapshot.payload_fairing;
+        let drone_ship_target = snapshot.drone_ship_target;
         let entity = {
             let Ok(mut rocket) = rockets.get_mut(snapshot.entity) else {
                 continue;
@@ -262,6 +359,11 @@ fn restore_frame(
                     *fairing = snapshot_fairing;
                 }
             }
+            if let Some(target) = rocket.drone_ship_target.as_deref_mut() {
+                if let Some(snapshot_target) = drone_ship_target {
+                    *target = snapshot_target;
+                }
+            }
 
             rocket.entity
         };
@@ -273,7 +375,62 @@ fn restore_frame(
             Some(fairing) => commands.entity(entity).insert(fairing),
             None => commands.entity(entity).remove::<PayloadFairing>(),
         };
+        match drone_ship_target {
+            Some(target) => commands.entity(entity).insert(target),
+            None => commands.entity(entity).remove::<DroneShipLandingTarget>(),
+        };
     }
+}
+
+fn restore_spent_stages(
+    frame: &ReplayFrame,
+    spent_stages: &mut Query<ReplaySpentStageRestoreAccess, With<SpentStage>>,
+) {
+    for snapshot in &frame.spent_stages {
+        let Ok(mut stage) = spent_stages.get_mut(snapshot.entity) else {
+            continue;
+        };
+        *stage.physics = snapshot.physics.clone();
+        *stage.mass = snapshot.mass;
+        *stage.flight_conditions = snapshot.flight_conditions;
+        *stage.gravity = snapshot.gravity;
+        *stage.force_accumulator = snapshot.force_accumulator;
+    }
+}
+
+fn restore_drone_ships(frame: &ReplayFrame, drone_ships: &mut Query<(Entity, &mut DroneShip)>) {
+    for snapshot in &frame.drone_ships {
+        let Ok((_entity, mut ship)) = drone_ships.get_mut(snapshot.entity) else {
+            continue;
+        };
+        *ship = snapshot.ship.clone();
+    }
+}
+
+/// Spent hardware is spawned and despawned by another adapter. Re-creating an
+/// entity with its original identity would invalidate its parent and deck-target
+/// references, so replay only seeks across frames with the same debris and ship
+/// entity sets. Attached fairings and their existing parent rockets are restored.
+fn spent_stage_lifecycle_is_restorable(
+    frame: &ReplayFrame,
+    spent_stages: &Query<ReplaySpentStageCaptureAccess, With<SpentStage>>,
+) -> bool {
+    frame.spent_stages.len() == spent_stages.iter().count()
+        && frame
+            .spent_stages
+            .iter()
+            .all(|snapshot| spent_stages.get(snapshot.entity).is_ok())
+}
+
+fn drone_ship_lifecycle_is_restorable(
+    frame: &ReplayFrame,
+    drone_ships: &Query<(Entity, &DroneShip)>,
+) -> bool {
+    frame.drone_ships.len() == drone_ships.iter().count()
+        && frame
+            .drone_ships
+            .iter()
+            .all(|snapshot| drone_ships.get(snapshot.entity).is_ok())
 }
 
 /// Restore replay frames while keeping the authoritative live clock monotonic.
@@ -282,7 +439,14 @@ pub fn apply_replay_actions_system(
     mut actions: MessageReader<ReplayAction>,
     mut sim_time: ResMut<SimulationTime>,
     mut stream: ResMut<ReplaySnapshotStream>,
-    mut rockets: ParamSet<(Query<ReplayCaptureAccess>, Query<ReplayRestoreAccess>)>,
+    mut state: ParamSet<(
+        Query<ReplayCaptureAccess>,
+        Query<ReplayRestoreAccess>,
+        Query<ReplaySpentStageCaptureAccess, With<SpentStage>>,
+        Query<ReplaySpentStageRestoreAccess, With<SpentStage>>,
+        Query<(Entity, &DroneShip)>,
+        Query<(Entity, &mut DroneShip)>,
+    )>,
 ) {
     for action in actions.read() {
         match *action {
@@ -294,7 +458,25 @@ pub fn apply_replay_actions_system(
                     continue;
                 };
                 let frame = stream.frames[frame_index].clone();
-                let live_rockets = capture_frame(&rockets.p0(), sim_time.sim_time_s);
+                let spent_stages_restorable =
+                    spent_stage_lifecycle_is_restorable(&frame, &state.p2());
+                let drone_ships_restorable =
+                    drone_ship_lifecycle_is_restorable(&frame, &state.p4());
+                if !spent_stages_restorable || !drone_ships_restorable {
+                    bevy::log::warn!(
+                        "Replay unavailable: spent-stage or drone-ship lifecycle differs from the selected frame"
+                    );
+                    continue;
+                }
+                let live_rocket_snapshots = capture_rockets(&state.p0(), sim_time.sim_time_s);
+                let live_spent_stage_snapshots = capture_spent_stages(&state.p2());
+                let live_drone_ship_snapshots = capture_drone_ships(&state.p4());
+                let live_rockets = ReplayFrame {
+                    timestamp_s: sim_time.sim_time_s,
+                    rockets: live_rocket_snapshots,
+                    spent_stages: live_spent_stage_snapshots,
+                    drone_ships: live_drone_ship_snapshots,
+                };
                 stream.session = Some(ReplaySession {
                     live_time_acceleration: sim_time.time_acceleration,
                     live_was_paused: sim_time.paused,
@@ -302,25 +484,41 @@ pub fn apply_replay_actions_system(
                     selected_frame: frame_index,
                 });
                 sim_time.paused = true;
-                restore_frame(&mut commands, &frame, &mut rockets.p1());
+                restore_frame(&mut commands, &frame, &mut state.p1());
+                restore_spent_stages(&frame, &mut state.p3());
+                restore_drone_ships(&frame, &mut state.p5());
             }
             ReplayAction::Seek { frame_index } => {
                 if !stream.is_replaying() || frame_index >= stream.frames.len() {
                     continue;
                 }
                 let frame = stream.frames[frame_index].clone();
+                let spent_stages_restorable =
+                    spent_stage_lifecycle_is_restorable(&frame, &state.p2());
+                let drone_ships_restorable =
+                    drone_ship_lifecycle_is_restorable(&frame, &state.p4());
+                if !spent_stages_restorable || !drone_ships_restorable {
+                    bevy::log::warn!(
+                        "Replay seek rejected: spent-stage or drone-ship lifecycle differs from the selected frame"
+                    );
+                    continue;
+                }
                 stream
                     .session
                     .as_mut()
                     .expect("replay checked above")
                     .selected_frame = frame_index;
-                restore_frame(&mut commands, &frame, &mut rockets.p1());
+                restore_frame(&mut commands, &frame, &mut state.p1());
+                restore_spent_stages(&frame, &mut state.p3());
+                restore_drone_ships(&frame, &mut state.p5());
             }
             ReplayAction::Resume => {
                 let Some(session) = stream.session.take() else {
                     continue;
                 };
-                restore_frame(&mut commands, &session.live_rockets, &mut rockets.p1());
+                restore_frame(&mut commands, &session.live_rockets, &mut state.p1());
+                restore_spent_stages(&session.live_rockets, &mut state.p3());
+                restore_drone_ships(&session.live_rockets, &mut state.p5());
                 sim_time.time_acceleration = session.live_time_acceleration;
                 sim_time.paused = session.live_was_paused;
             }
@@ -342,10 +540,12 @@ pub fn replay_active(stream: Res<ReplaySnapshotStream>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::rocket::SpentStageKind;
     use crate::domain::entities::rocket::Rocket;
     use crate::domain::services::atmosphere::FlightConditions;
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
+    use crate::domain::services::recovery::{DroneShip as DomainDroneShip, StationKeeper};
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use bevy::math::{DMat3, DQuat, DVec3};
 
@@ -471,6 +671,197 @@ mod tests {
             RocketRenderState::new(dynamics),
         ));
         (app, entity)
+    }
+
+    fn empty_frame(timestamp_s: f64) -> ReplayFrame {
+        ReplayFrame {
+            timestamp_s,
+            rockets: Vec::new(),
+            spent_stages: Vec::new(),
+            drone_ships: Vec::new(),
+        }
+    }
+
+    fn spawn_spent_stage(app: &mut App, parent_rocket: Entity) -> Entity {
+        let dynamics = RocketDynamicsState {
+            position_m: DVec3::new(7.0, 8.0, 9.0),
+            velocity_mps: DVec3::new(10.0, 11.0, 12.0),
+            orientation: DQuat::IDENTITY,
+            angular_velocity_radps: DVec3::ZERO,
+            angular_acceleration_radps2: DVec3::ZERO,
+            mass_kg: 50.0,
+            inertia_body: DMat3::IDENTITY,
+            center_of_mass_m: DVec3::ZERO,
+        };
+        app.world_mut()
+            .spawn((
+                SpentStage {
+                    parent_rocket,
+                    kind: SpentStageKind::Booster,
+                },
+                RocketPhysicsState { dynamics },
+                RocketMass(50.0),
+                RocketFlightConditions(FlightConditions {
+                    altitude_m: 1_000.0,
+                    ..default()
+                }),
+                GravityAcceleration {
+                    value: DVec3::new(0.0, -9.0, 0.0),
+                },
+                ForceAccumulator(DVec3::new(1.0, 2.0, 3.0)),
+            ))
+            .id()
+    }
+
+    fn spawn_drone_ship(app: &mut App) -> Entity {
+        app.world_mut()
+            .spawn(DroneShip {
+                state: DomainDroneShip {
+                    position_m: DVec3::new(100.0, 200.0, 300.0),
+                    velocity_mps: DVec3::new(4.0, 5.0, 6.0),
+                    external_accel_mps2: DVec3::new(0.1, 0.2, 0.3),
+                    mass_kg: 1_000.0,
+                },
+                station_target_position_m: DVec3::new(101.0, 201.0, 301.0),
+                station_keeper: StationKeeper {
+                    kp: 0.1,
+                    kd: 0.2,
+                    max_thrust_n: 3_000.0,
+                },
+                deck_half_extent_m: 20.0,
+            })
+            .id()
+    }
+
+    #[test]
+    fn snapshot_stream_retains_chronological_capacity_without_front_shifts() {
+        let mut stream = ReplaySnapshotStream::new(2);
+        stream.push(empty_frame(1.0));
+        stream.push(empty_frame(2.0));
+        stream.push(empty_frame(3.0));
+
+        assert_eq!(stream.frames().len(), 2);
+        assert_eq!(stream.frames()[0].timestamp_s, 2.0);
+        assert_eq!(stream.frames()[1].timestamp_s, 3.0);
+    }
+
+    #[test]
+    fn replay_restores_stable_spent_stage_and_drone_ship_state() {
+        let (mut app, rocket) = app_with_snapshot_state();
+        let spent_stage = spawn_spent_stage(&mut app, rocket);
+        let drone_ship = spawn_drone_ship(&mut app);
+        app.world_mut()
+            .entity_mut(rocket)
+            .insert(DroneShipLandingTarget {
+                drone_ship,
+                prediction_horizon_s: 15.0,
+                deck_contact: true,
+            });
+        app.world_mut().run_schedule(FixedUpdate);
+
+        {
+            let mut stage = app.world_mut().entity_mut(spent_stage);
+            stage
+                .get_mut::<RocketPhysicsState>()
+                .unwrap()
+                .dynamics
+                .position_m = DVec3::ZERO;
+            stage.get_mut::<RocketMass>().unwrap().0 = 1.0;
+            stage
+                .get_mut::<RocketFlightConditions>()
+                .unwrap()
+                .0
+                .altitude_m = 0.0;
+            stage.get_mut::<GravityAcceleration>().unwrap().value = DVec3::ZERO;
+            stage.get_mut::<ForceAccumulator>().unwrap().0 = DVec3::ZERO;
+        }
+        app.world_mut()
+            .entity_mut(drone_ship)
+            .get_mut::<DroneShip>()
+            .unwrap()
+            .state
+            .position_m = DVec3::ZERO;
+        app.world_mut()
+            .entity_mut(rocket)
+            .get_mut::<DroneShipLandingTarget>()
+            .unwrap()
+            .deck_contact = false;
+
+        app.world_mut()
+            .resource_mut::<Messages<ReplayAction>>()
+            .write(ReplayAction::BeginLatest);
+        app.update();
+
+        let stage = app.world().entity(spent_stage);
+        assert_eq!(
+            stage
+                .get::<RocketPhysicsState>()
+                .unwrap()
+                .dynamics
+                .position_m,
+            DVec3::new(7.0, 8.0, 9.0)
+        );
+        assert_eq!(stage.get::<RocketMass>().unwrap().0, 50.0);
+        assert_eq!(
+            stage.get::<RocketFlightConditions>().unwrap().altitude_m,
+            1_000.0
+        );
+        assert_eq!(
+            stage.get::<GravityAcceleration>().unwrap().value,
+            DVec3::new(0.0, -9.0, 0.0)
+        );
+        assert_eq!(
+            stage.get::<ForceAccumulator>().unwrap().0,
+            DVec3::new(1.0, 2.0, 3.0)
+        );
+        assert_eq!(
+            app.world()
+                .entity(drone_ship)
+                .get::<DroneShip>()
+                .unwrap()
+                .state
+                .position_m,
+            DVec3::new(100.0, 200.0, 300.0)
+        );
+        assert!(
+            app.world()
+                .entity(rocket)
+                .get::<DroneShipLandingTarget>()
+                .unwrap()
+                .deck_contact
+        );
+    }
+
+    #[test]
+    fn replay_rejects_seeks_across_spent_stage_lifecycle_changes() {
+        let (mut app, rocket) = app_with_snapshot_state();
+        app.world_mut().run_schedule(FixedUpdate);
+        let spent_stage = spawn_spent_stage(&mut app, rocket);
+        app.world_mut().run_schedule(FixedUpdate);
+
+        app.world_mut()
+            .resource_mut::<Messages<ReplayAction>>()
+            .write(ReplayAction::BeginLatest);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<ReplaySnapshotStream>()
+                .selected_frame(),
+            Some(1)
+        );
+
+        app.world_mut()
+            .resource_mut::<Messages<ReplayAction>>()
+            .write(ReplayAction::Seek { frame_index: 0 });
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<ReplaySnapshotStream>()
+                .selected_frame(),
+            Some(1)
+        );
+        assert!(app.world().get_entity(spent_stage).is_ok());
     }
 
     #[test]

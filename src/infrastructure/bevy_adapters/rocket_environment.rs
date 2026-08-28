@@ -1,6 +1,7 @@
 use crate::components::rocket::*;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::math::Vec3;
 use bevy::prelude::*;
@@ -98,18 +99,19 @@ pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
 
 /// Day/night cycle: rotates the sun light direction around the planet's rotation
 /// axis (Y in the flight frame) as simulation time advances. The planet's angular
-/// velocity comes from the Earth planet definition. The sun makes one full
-/// revolution per planet rotation period (~24 hours for Earth).
+/// velocity comes from the bound planet definition. The sun makes one full
+/// revolution per bound-planet rotation period.
 pub fn update_sun_day_night_cycle(
     sim_time: Res<SimulationTime>,
+    bound_planet: Res<RocketBoundPlanet>,
     planet_query: Query<&PlanetComponent>,
     mut sun_query: Query<(&mut Transform, &SunLightState), With<SunLight>>,
 ) {
-    // Find Earth planet for its rotation period, then compute angular velocity.
+    // Use the flight body's rotation period, then compute angular velocity.
     // omega = 2π / period_seconds.
-    let earth_rotation_rad_s = planet_query
+    let rotation_rad_s = planet_query
         .iter()
-        .find(|p| p.domain_planet.name == "Earth")
+        .find(|planet| bound_planet.0.as_deref() == Some(planet.domain_planet.name.as_str()))
         .map(|p| {
             let period_s = p.domain_planet.rotation_period_hours as f64 * 3600.0;
             if period_s > 0.0 {
@@ -121,7 +123,7 @@ pub fn update_sun_day_night_cycle(
         .unwrap_or(7.2921159e-5_f64);
 
     let total_time_s = sim_time.sim_time_s;
-    let rotation_angle = (total_time_s * earth_rotation_rad_s) as f32;
+    let rotation_angle = (total_time_s * rotation_rad_s) as f32;
 
     for (mut light_transform, sun_state) in sun_query.iter_mut() {
         // Rotate initial sun direction around the Y axis (planet rotation axis).

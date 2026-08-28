@@ -283,6 +283,13 @@ pub struct PayloadFairing {
     pub dry_mass_kg: f32,
 }
 
+/// Immutable launch configuration retained after fairing separation so a
+/// relaunch can restore the original vehicle mass and presentation state.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct InitialPayloadFairing {
+    pub dry_mass_kg: f32,
+}
+
 /// Parachute deployment state. Wraps the pure domain state machine
 /// (`domain::services::entry_physics::ParachuteDeploymentState`) so the
 /// transition logic stays Bevy-free and unit-testable.

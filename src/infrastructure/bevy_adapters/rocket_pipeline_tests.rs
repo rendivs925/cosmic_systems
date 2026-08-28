@@ -38,7 +38,9 @@ mod ground_contact_tests {
     use crate::infrastructure::bevy_adapters::rocket_dynamics::{
         accumulate_forces, integrate_6dof,
     };
-    use crate::infrastructure::bevy_adapters::rocket_lifecycle::apply_relaunch_requests;
+    use crate::infrastructure::bevy_adapters::rocket_lifecycle::{
+        apply_relaunch_requests, RelaunchCommandQueue,
+    };
     use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
     use bevy::math::DQuat;
     use bevy::time::TimeUpdateStrategy;
@@ -410,14 +412,12 @@ mod ground_contact_tests {
         );
     }
 
-    /// Relaunch (Phase 14): one message restores a flown, drained vehicle to
+    /// Relaunch (Phase 14): one command restores a flown, drained vehicle to
     /// a fresh pad state and clears its jettisoned debris.
     #[test]
     fn relaunch_restores_fresh_pad_state() {
-        use crate::domain::events::RelaunchRequested;
-
         let mut app = pad_app(0.0, 20.0);
-        app.add_message::<RelaunchRequested>();
+        app.init_resource::<RelaunchCommandQueue>();
         app.add_systems(FixedUpdate, apply_relaunch_requests);
 
         let debris_entity;
@@ -451,14 +451,10 @@ mod ground_contact_tests {
             *mission = RocketMissionState::Landed;
         }
 
-        {
-            let world = app.world_mut();
-            world.resource_mut::<Messages<RelaunchRequested>>().write(
-                crate::domain::events::RelaunchRequested {
-                    rocket: rocket_entity,
-                },
-            );
-        }
+        app.world_mut()
+            .resource_mut::<RelaunchCommandQueue>()
+            .0
+            .push(rocket_entity);
 
         app.update();
         app.update();

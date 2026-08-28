@@ -45,3 +45,6 @@ assets/large_files/
 # Trunk output
 dist/
 .cargo
+
+# Generated codebase audit graph
+graphify-out/

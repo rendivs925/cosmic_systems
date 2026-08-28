@@ -4,6 +4,27 @@ use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
+fn push_bounded_frame_time(samples: &mut Vec<f32>, capacity: usize, frame_time_ms: f32) {
+    if capacity == 0 {
+        samples.clear();
+        return;
+    }
+    if samples.len() == capacity {
+        // Sample order is not used by percentile or variance calculations, so
+        // O(1) eviction avoids shifting a large vector every rendered frame.
+        samples.swap_remove(0);
+    }
+    samples.push(frame_time_ms);
+}
+
+fn percentile_99th(samples: &mut [f32]) -> Option<f32> {
+    (!samples.is_empty()).then(|| {
+        let index = ((samples.len() - 1) as f32 * 0.99) as usize;
+        let (_, value, _) = samples.select_nth_unstable_by(index, f32::total_cmp);
+        *value
+    })
+}
+
 /// Request a Bevy framebuffer capture in every simulation mode. This belongs
 /// to shared presentation infrastructure rather than solar-system input so
 /// rocket validation captures the actual rendered terrain, not the desktop.
@@ -310,10 +331,12 @@ pub fn adaptive_quality_system(
 
     // Update frame time history for variance calculation
     let frame_time_ms = perf_stats.frame_time_ms;
-    perf_stats.frame_time_history.push(frame_time_ms);
-    if perf_stats.frame_time_history.len() > perf_stats.history_capacity {
-        perf_stats.frame_time_history.remove(0);
-    }
+    let history_capacity = perf_stats.history_capacity;
+    push_bounded_frame_time(
+        &mut perf_stats.frame_time_history,
+        history_capacity,
+        frame_time_ms,
+    );
 
     // Run quality adaptation
     if let Some(new_quality) = quality_adapter.system.update_and_adapt(&mut perf_stats) {
@@ -385,19 +408,16 @@ pub fn update_performance_stats(
     performance_stats.frame_time_max = performance_stats.frame_time_max.max(frame_time_ms);
 
     // Maintain frame time history for percentile calculations
-    performance_stats.frame_time_history.push(frame_time_ms);
-    if performance_stats.frame_time_history.len() > performance_stats.history_capacity {
-        performance_stats.frame_time_history.remove(0); // Remove oldest
-    }
+    let history_capacity = performance_stats.history_capacity;
+    push_bounded_frame_time(
+        &mut performance_stats.frame_time_history,
+        history_capacity,
+        frame_time_ms,
+    );
 
     // Calculate 99th percentile frame time (stutter detection)
-    if !performance_stats.frame_time_history.is_empty() {
-        let mut sorted_times = performance_stats.frame_time_history.clone();
-        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        let percentile_index = ((sorted_times.len() - 1) as f32 * 0.99) as usize;
-        performance_stats.frame_time_99th =
-            sorted_times[percentile_index.min(sorted_times.len() - 1)];
+    if let Some(percentile) = percentile_99th(&mut performance_stats.frame_time_history) {
+        performance_stats.frame_time_99th = percentile;
     }
 
     // GPU TIMING (when available - Vulkan/WebGPU)
@@ -492,5 +512,24 @@ pub fn cap_fixed_overstep(mut fixed_time: ResMut<Time<Fixed>>) {
     let overstep = fixed_time.overstep();
     if overstep > max_overstep {
         fixed_time.discard_overstep(overstep - max_overstep);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_frame_times_keep_capacity_without_front_shift() {
+        let mut samples = vec![1.0, 2.0, 3.0];
+        push_bounded_frame_time(&mut samples, 3, 4.0);
+        assert_eq!(samples.len(), 3);
+        assert!(samples.contains(&4.0));
+    }
+
+    #[test]
+    fn percentile_uses_in_place_selection() {
+        let mut samples = (1..=100).map(|value| value as f32).collect::<Vec<_>>();
+        assert_eq!(percentile_99th(&mut samples), Some(99.0));
     }
 }

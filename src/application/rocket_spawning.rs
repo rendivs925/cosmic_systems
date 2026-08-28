@@ -195,9 +195,14 @@ pub fn spawn_rockets(
         },
     ));
     if let Some(fairing_dry_mass_kg) = vehicle.fairing_dry_mass_kg {
-        commands.entity(entity).insert(PayloadFairing {
-            dry_mass_kg: fairing_dry_mass_kg,
-        });
+        commands.entity(entity).insert((
+            PayloadFairing {
+                dry_mass_kg: fairing_dry_mass_kg,
+            },
+            InitialPayloadFairing {
+                dry_mass_kg: fairing_dry_mass_kg,
+            },
+        ));
     }
 
     // Landing gear: domain assembly from the catalog spec (struts sized

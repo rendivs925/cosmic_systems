@@ -2,14 +2,16 @@
 //!
 //! In rocket mode, the camera is at the rocket's position (flight units = meters).
 //! This system spawns and positions the bound planet (Earth), its moons, and the
-//! Sun in flight units using real textures, driven by the solar system's
-//! authoritative orbital state (which runs at AU scale in SharedSimulationPlugin).
+//! Sun in flight units using real textures. Their orbital presentation is
+//! evaluated from the rocket simulation epoch rather than shared solar-map
+//! transforms, whose clock is intentionally wall-clock driven.
 //!
 //! Conversion: solar system display units -> meters using PhysicalScale.
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
+use crate::domain::services::physics::calculate_planet_position;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
@@ -61,8 +63,6 @@ pub fn setup_rocket_planets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
-    solar_params: Res<SolarSystemParameters>,
-    physical_scale: Res<PhysicalScale>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
@@ -86,14 +86,7 @@ pub fn setup_rocket_planets(
     }
 
     // Spawn the Sun
-    spawn_rocket_sun(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &asset_server,
-        &solar_params,
-        &physical_scale,
-    );
+    spawn_rocket_sun(&mut commands, &mut meshes, &mut materials, &asset_server);
 }
 
 /// Spawn a moon in flight units.
@@ -156,8 +149,6 @@ fn spawn_rocket_sun(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     asset_server: &AssetServer,
-    solar_params: &SolarSystemParameters,
-    physical_scale: &PhysicalScale,
 ) {
     // True Sun radius in meters
     let sun_radius_m = 696_340_000.0;
@@ -191,18 +182,18 @@ fn spawn_rocket_sun(
     ));
 }
 
-/// Update system: position rocket-mode planets from solar system state.
-/// Runs after solar system planet positions are updated.
+/// Update rocket celestial proxies from the authoritative rocket simulation epoch.
+///
+/// Shared solar-map transforms advance using display wall-clock time for normal
+/// and craft modes. Rocket proxies must not consume those transforms because
+/// replay, pause, and warp advance `SimulationTime` independently.
 pub fn update_rocket_planets(
     solar_params: Res<SolarSystemParameters>,
     physical_scale: Res<PhysicalScale>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
-    rocket_query: Query<&RocketPhysicsState>,
-    planet_query: Query<
-        (&PlanetComponent, &Transform),
-        (Without<RocketPlanet>, Without<RocketMoon>),
-    >,
+    rocket_query: Query<(), With<RocketPhysicsState>>,
+    planet_query: Query<&PlanetComponent, (Without<RocketPlanet>, Without<RocketMoon>)>,
     mut query_set: ParamSet<(
         Query<(&RocketPlanet, &mut Transform, &mut Visibility)>,
         Query<(&RocketMoon, &mut Transform)>,
@@ -212,19 +203,24 @@ pub fn update_rocket_planets(
     let Some(bound_planet_name) = &bound_planet_res.0 else {
         return;
     };
-    let Some(_rocket) = rocket_query.iter().next() else {
+    if rocket_query.is_empty() {
         return;
-    };
-
-    // Find the bound planet's solar system transform
-    let bound_planet_transform = planet_query
+    }
+    let Some(bound_planet) = planet_query
         .iter()
-        .find(|(p, _)| p.domain_planet.name == *bound_planet_name)
-        .map(|(_, t)| t.translation);
-
-    let Some(bound_planet_pos) = bound_planet_transform else {
+        .find(|planet| planet.domain_planet.name == *bound_planet_name)
+    else {
         return;
     };
+
+    let time_days = (sim_time.sim_time_s / 86_400.0) as f32;
+    let bound_planet_pos = calculate_planet_position(
+        &bound_planet.domain_planet,
+        time_days,
+        &solar_params,
+        Vec3::ZERO,
+        None,
+    );
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit as f64;
 
@@ -235,9 +231,9 @@ pub fn update_rocket_planets(
         if rocket_planet.is_bound_planet {
             transform.translation = planet_center_flight;
             *visibility = Visibility::Visible;
-            if let Some((planet, _)) = planet_query
+            if let Some(planet) = planet_query
                 .iter()
-                .find(|(planet, _)| planet.domain_planet.name == rocket_planet.name)
+                .find(|planet| planet.domain_planet.name == rocket_planet.name)
             {
                 transform.rotation = body_fixed_to_inertial_rotation(
                     &planet.domain_planet,
@@ -246,11 +242,19 @@ pub fn update_rocket_planets(
                 .as_quat();
             }
         } else if rocket_planet.is_sun {
-            // Sun position: solar_pos - bound_planet_pos (relative), converted to meters
+            // Sun position relative to the bound planet, converted to meters.
             let sun_solar = planet_query
                 .iter()
-                .find(|(p, _)| p.domain_planet.name == "Sun")
-                .map(|(_, t)| t.translation);
+                .find(|planet| planet.domain_planet.name == "Sun")
+                .map(|planet| {
+                    calculate_planet_position(
+                        &planet.domain_planet,
+                        time_days,
+                        &solar_params,
+                        Vec3::ZERO,
+                        None,
+                    )
+                });
 
             if let Some(sun_pos) = sun_solar {
                 let rel = (sun_pos - bound_planet_pos).as_dvec3() * display_to_meters;
@@ -264,8 +268,16 @@ pub fn update_rocket_planets(
         if rocket_moon.parent_planet == *bound_planet_name {
             let moon_solar = planet_query
                 .iter()
-                .find(|(p, _)| p.domain_planet.name == rocket_moon.name)
-                .map(|(_, t)| t.translation);
+                .find(|planet| planet.domain_planet.name == rocket_moon.name)
+                .map(|planet| {
+                    calculate_planet_position(
+                        &planet.domain_planet,
+                        time_days,
+                        &solar_params,
+                        bound_planet_pos,
+                        Some(bound_planet.domain_planet.axial_tilt_deg),
+                    )
+                });
 
             if let Some(moon_pos) = moon_solar {
                 // Shared solar presentation intentionally exaggerates moon
@@ -280,8 +292,14 @@ pub fn update_rocket_planets(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::domain::services::physics::calculate_planet_position;
+    use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+    use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+    use bevy::math::{DMat3, DQuat, DVec3};
 
     #[test]
     fn test_physical_scale_conversion() {
@@ -290,5 +308,118 @@ mod tests {
         // 1 AU in meters should map to scale_factor display units
         let au_display = scale.solar_meters_to_units(149_597_870_700.0);
         assert!((au_display - solar.scale_factor as f64).abs() < 1.0);
+    }
+
+    #[test]
+    fn rocket_proxies_follow_simulation_time_not_shared_transforms() {
+        let solar = SolarSystemParameters::for_visualization();
+        let scale = PhysicalScale::from_solar_parameters(&solar);
+        let sim_time_s = 86_400.0;
+        let time_days = (sim_time_s / 86_400.0) as f32;
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let moon = PlanetFactory::create_by_name("Moon").unwrap();
+        let sun = PlanetFactory::create_by_name("Sun").unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(solar.clone());
+        app.insert_resource(scale.clone());
+        app.insert_resource(RenderOrigin::default());
+        app.insert_resource(SimulationTime {
+            sim_time_s,
+            ..SimulationTime::default()
+        });
+        app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
+        app.world_mut().spawn(RocketPhysicsState {
+            dynamics: RocketDynamicsState::new(
+                DVec3::ZERO,
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                1.0,
+                DMat3::IDENTITY,
+                DVec3::ZERO,
+            ),
+        });
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth.clone(),
+            material: default(),
+            has_texture: false,
+            base_reflectance: 0.0,
+            base_roughness: 0.0,
+        });
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: moon.clone(),
+            material: default(),
+            has_texture: false,
+            base_reflectance: 0.0,
+            base_roughness: 0.0,
+        });
+        // This deliberately incorrect shared-presentation transform must not
+        // affect rocket proxy placement.
+        app.world_mut().spawn((
+            PlanetComponent {
+                domain_planet: sun.clone(),
+                material: default(),
+                has_texture: false,
+                base_reflectance: 0.0,
+                base_roughness: 0.0,
+            },
+            Transform::from_translation(Vec3::splat(123_456.0)),
+        ));
+        let rocket_sun = app
+            .world_mut()
+            .spawn((
+                RocketPlanet {
+                    name: "Sun".to_string(),
+                    is_bound_planet: false,
+                    is_sun: true,
+                },
+                Transform::default(),
+                Visibility::Visible,
+            ))
+            .id();
+        let rocket_moon = app
+            .world_mut()
+            .spawn((
+                RocketMoon {
+                    name: "Moon".to_string(),
+                    parent_planet: "Earth".to_string(),
+                },
+                Transform::default(),
+            ))
+            .id();
+        app.add_systems(Update, update_rocket_planets);
+
+        app.update();
+
+        let earth_pos = calculate_planet_position(&earth, time_days, &solar, Vec3::ZERO, None);
+        let expected_sun =
+            (-earth_pos.as_dvec3() * scale.solar_meters_per_display_unit as f64).as_vec3();
+        let moon_pos = calculate_planet_position(
+            &moon,
+            time_days,
+            &solar,
+            earth_pos,
+            Some(earth.axial_tilt_deg),
+        );
+        let expected_moon = ((moon_pos - earth_pos).as_dvec3()
+            * (scale.solar_meters_per_display_unit as f64 / MOON_ORBIT_SCALE as f64))
+            .as_vec3();
+
+        assert_eq!(
+            app.world()
+                .entity(rocket_sun)
+                .get::<Transform>()
+                .unwrap()
+                .translation,
+            expected_sun
+        );
+        assert_eq!(
+            app.world()
+                .entity(rocket_moon)
+                .get::<Transform>()
+                .unwrap()
+                .translation,
+            expected_moon
+        );
     }
 }

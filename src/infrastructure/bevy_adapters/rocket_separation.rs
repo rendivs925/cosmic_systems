@@ -81,6 +81,7 @@ pub fn spawn_spent_stage(
             },
             RocketMass(spec.dynamics.mass_kg),
             ForceAccumulator::default(),
+            TorqueAccumulator::default(),
             GravityAcceleration::default(),
             RocketFlightConditions::default(),
             RocketPlanetBinding {
@@ -89,6 +90,8 @@ pub fn spawn_spent_stage(
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::default(),
+            RocketRenderState::new(spec.dynamics),
+            RocketFacade::default(),
         ))
         .id()
 }

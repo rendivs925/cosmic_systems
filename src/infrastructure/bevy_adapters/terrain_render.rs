@@ -13,7 +13,9 @@ use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
-use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
+use crate::infrastructure::bevy_adapters::terrain_streaming::{
+    stream_terrain_patches, TerrainStreamingResource,
+};
 use crate::infrastructure::bevy_adapters::terrain_surface::{
     build_patch_surfaces, build_vegetation_mesh, supports_local_surfaces, supports_vegetation,
 };
@@ -27,12 +29,15 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 use bevy::time::Fixed;
 use bevy_mesh::{Indices, PrimitiveTopology};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
 /// completed terrain batch from stalling camera and HUD presentation.
 const MAX_PATCH_UPLOADS_PER_FRAME: usize = 1;
+/// Ready messages are coalesced and publication backfill makes a rejected entry
+/// retryable, so this cap bounds memory without dropping visible terrain forever.
+const MAX_PENDING_PATCH_UPLOADS: usize = 512;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 struct TerrainSurfaceExtension {
@@ -80,11 +85,64 @@ struct TerrainRenderAssets {
     fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
 }
 
-/// Ready patches wait here until their CPU-to-GPU asset creation budget is
-/// available. Messages expire after two frames, so the queue owns every pending
-/// upload instead of relying on a delayed message read.
+/// Identifies a terrain render entity independently for every planet. Patch
+/// coordinates alone overlap between planets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TerrainPatchRenderKey {
+    planet_entity: Entity,
+    patch: TerrainPatch,
+}
+
+impl From<&TerrainPatchReady> for TerrainPatchRenderKey {
+    fn from(event: &TerrainPatchReady) -> Self {
+        Self {
+            planet_entity: event.planet_entity,
+            patch: event.patch,
+        }
+    }
+}
+
+/// Direct lifecycle lookup avoids scanning every render entity per event.
 #[derive(Resource, Default)]
-struct PendingTerrainPatchUploads(VecDeque<TerrainPatchReady>);
+struct TerrainPatchRenderIndex(HashMap<TerrainPatchRenderKey, Entity>);
+
+/// Ready patches wait here until their CPU-to-GPU asset creation budget is
+/// available. Messages expire after two frames, so the queue owns pending
+/// uploads and coalesces repeated ready notifications.
+#[derive(Resource, Default)]
+struct PendingTerrainPatchUploads {
+    queue: VecDeque<TerrainPatchReady>,
+    queued: HashSet<TerrainPatchRenderKey>,
+}
+
+impl PendingTerrainPatchUploads {
+    fn retain_published_for_planet(
+        &mut self,
+        active_planet: Option<Entity>,
+        published: &std::collections::BTreeSet<TerrainPatch>,
+    ) {
+        self.queue.retain(|event| {
+            active_planet == Some(event.planet_entity) && published.contains(&event.patch)
+        });
+        self.queued = self.queue.iter().map(TerrainPatchRenderKey::from).collect();
+    }
+
+    fn enqueue(&mut self, event: TerrainPatchReady) -> bool {
+        let key = TerrainPatchRenderKey::from(&event);
+        if self.queued.contains(&key) || self.queue.len() >= MAX_PENDING_PATCH_UPLOADS {
+            return false;
+        }
+        self.queued.insert(key);
+        self.queue.push_back(event);
+        true
+    }
+
+    fn pop_front(&mut self) -> Option<TerrainPatchReady> {
+        let event = self.queue.pop_front()?;
+        self.queued.remove(&TerrainPatchRenderKey::from(&event));
+        Some(event)
+    }
+}
 
 /// Resource for the floating render origin (AGENTS.md section 13).
 /// When the camera moves far from the origin, we re-center to avoid f32
@@ -152,21 +210,26 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainRenderConfig>()
             .init_resource::<TerrainRenderAssets>()
             .init_resource::<PendingTerrainPatchUploads>()
+            .init_resource::<TerrainPatchRenderIndex>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
             .add_systems(
                 Update,
+                recenter_render_origin.before(stream_terrain_patches),
+            )
+            .add_systems(
+                Update,
                 (
-                    recenter_render_origin,
                     update_patch_transforms,
                     hide_cached_patch_mesh_system,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
                     despawn_patch_mesh_system,
                 )
-                    .chain(),
+                    .chain()
+                    .after(stream_terrain_patches),
             );
     }
 }
@@ -177,6 +240,7 @@ fn spawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchReady>,
     mut pending_uploads: ResMut<PendingTerrainPatchUploads>,
+    mut render_index: ResMut<TerrainPatchRenderIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
@@ -189,23 +253,45 @@ fn spawn_patch_mesh_system(
     sim_time: Res<SimulationTime>,
     time: Res<Time<Fixed>>,
     planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
-    existing_patches: Query<&TerrainPatchRenderState>,
 ) {
-    pending_uploads.0.extend(events.read().cloned());
+    let active_planet = streaming.active_planet();
+    pending_uploads.retain_published_for_planet(active_planet, &streaming.published);
+    for event in events.read().cloned() {
+        if active_planet == Some(event.planet_entity) && streaming.published.contains(&event.patch)
+        {
+            pending_uploads.enqueue(event);
+        }
+    }
+    // A bounded queue can reject a burst of ready events. Refill from the
+    // streaming resource's authoritative visible set so those patches retry.
+    if let Some(planet_entity) = active_planet {
+        for patch in streaming.published.iter().copied() {
+            let event = TerrainPatchReady {
+                patch,
+                planet_entity,
+            };
+            if !render_index
+                .0
+                .contains_key(&TerrainPatchRenderKey::from(&event))
+            {
+                pending_uploads.enqueue(event);
+            }
+        }
+    }
     for _ in 0..MAX_PATCH_UPLOADS_PER_FRAME {
-        let Some(event) = pending_uploads.0.pop_front() else {
+        let Some(event) = pending_uploads.pop_front() else {
             break;
         };
         // A patch can leave the viewport while waiting in the upload queue.
         // Do not make an obsolete ready message visible after its cache event
         // has already been handled.
-        if !streaming.published.contains(&event.patch) {
+        if streaming.active_planet() != Some(event.planet_entity)
+            || !streaming.published.contains(&event.patch)
+        {
             continue;
         }
-        if existing_patches
-            .iter()
-            .any(|state| state.patch == event.patch && state.planet_entity == event.planet_entity)
-        {
+        let key = TerrainPatchRenderKey::from(&event);
+        if render_index.0.contains_key(&key) {
             continue;
         }
         let Ok((planet_terrain, planet)) = planet_query.get(event.planet_entity) else {
@@ -314,6 +400,7 @@ fn spawn_patch_mesh_system(
                 )),
             ))
             .id();
+        render_index.0.insert(key, entity);
 
         // Merged vegetation + scatter (trees, rocks) is one child draw and
         // shares an immutable material across every terrain tile.
@@ -339,13 +426,21 @@ fn spawn_patch_mesh_system(
 /// The ready handler restores these entities instead of rebuilding them.
 fn hide_cached_patch_mesh_system(
     mut events: MessageReader<TerrainPatchCached>,
-    mut render_query: Query<(&TerrainPatchRenderState, &mut Visibility)>,
+    mut render_index: ResMut<TerrainPatchRenderIndex>,
+    mut render_query: Query<&mut Visibility>,
 ) {
     for event in events.read() {
-        if let Some((_, mut visibility)) = render_query.iter_mut().find(|(state, _)| {
-            state.patch == event.patch && state.planet_entity == event.planet_entity
-        }) {
+        let key = TerrainPatchRenderKey {
+            planet_entity: event.planet_entity,
+            patch: event.patch,
+        };
+        let Some(entity) = render_index.0.get(&key).copied() else {
+            continue;
+        };
+        if let Ok(mut visibility) = render_query.get_mut(entity) {
             *visibility = Visibility::Hidden;
+        } else {
+            render_index.0.remove(&key);
         }
     }
 }
@@ -358,13 +453,15 @@ fn reveal_cached_patch_mesh_system(
     render_origin: Res<RenderOrigin>,
     time: Res<Time<Fixed>>,
     planet_query: Query<&PlanetComponent>,
+    mut render_index: ResMut<TerrainPatchRenderIndex>,
     mut render_query: Query<(&TerrainPatchRenderState, &mut Transform, &mut Visibility)>,
 ) {
     for event in events.read() {
-        for (state, mut transform, mut visibility) in render_query.iter_mut() {
-            if state.patch != event.patch || state.planet_entity != event.planet_entity {
-                continue;
-            }
+        let key = TerrainPatchRenderKey::from(event);
+        let Some(entity) = render_index.0.get(&key).copied() else {
+            continue;
+        };
+        if let Ok((state, mut transform, mut visibility)) = render_query.get_mut(entity) {
             if let Ok(planet) = planet_query.get(state.planet_entity) {
                 update_patch_transform(
                     &mut transform,
@@ -376,7 +473,8 @@ fn reveal_cached_patch_mesh_system(
                 );
             }
             *visibility = Visibility::Visible;
-            break;
+        } else {
+            render_index.0.remove(&key);
         }
     }
 }
@@ -385,18 +483,23 @@ fn reveal_cached_patch_mesh_system(
 fn despawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchEvicted>,
-    render_query: Query<(Entity, &TerrainPatchRenderState)>,
+    mut render_index: ResMut<TerrainPatchRenderIndex>,
+    render_query: Query<&TerrainPatchRenderState>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     for event in events.read() {
-        for (entity, state) in render_query.iter() {
-            if state.patch == event.patch && state.planet_entity == event.planet_entity {
-                commands.entity(entity).despawn();
-                release_patch_render_assets(state, &mut meshes, &mut materials, &mut images);
-                break;
-            }
+        let key = TerrainPatchRenderKey {
+            planet_entity: event.planet_entity,
+            patch: event.patch,
+        };
+        let Some(entity) = render_index.0.remove(&key) else {
+            continue;
+        };
+        if let Ok(state) = render_query.get(entity) {
+            commands.entity(entity).despawn();
+            release_patch_render_assets(state, &mut meshes, &mut materials, &mut images);
         }
     }
 }
@@ -672,9 +775,10 @@ fn patch_material(patch: &TerrainPatch, source: &dyn TerrainSource) -> StandardM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::cube_sphere::build_patch_geometry;
+    use crate::domain::services::cube_sphere::{build_patch_geometry, CubeFace};
     use crate::domain::services::planet_factory::PlanetFactory;
     use bevy::ecs::message::Messages;
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Debug, Default)]
@@ -879,6 +983,7 @@ mod tests {
         app.insert_resource(SimulationTime::default())
             .insert_resource(RenderOrigin::default())
             .insert_resource(Time::<Fixed>::default())
+            .init_resource::<TerrainPatchRenderIndex>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchReady>()
             .add_systems(
@@ -892,6 +997,7 @@ mod tests {
 
         let patch = TerrainPatch::for_direction(DVec3::X, 2);
         let planet_entity = Entity::PLACEHOLDER;
+        let other_planet_entity = app.world_mut().spawn_empty().id();
         let entity = app
             .world_mut()
             .spawn((
@@ -909,6 +1015,43 @@ mod tests {
                 Visibility::Visible,
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<TerrainPatchRenderIndex>()
+            .0
+            .insert(
+                TerrainPatchRenderKey {
+                    planet_entity,
+                    patch,
+                },
+                entity,
+            );
+        let other_entity = app
+            .world_mut()
+            .spawn((
+                TerrainPatchRenderState {
+                    patch,
+                    mesh_handle: Handle::default(),
+                    material_handle: Handle::default(),
+                    local_surface_handles: None,
+                    vegetation_mesh_handle: None,
+                    planet_entity: other_planet_entity,
+                    body_to_inertial_at_spawn: DQuat::IDENTITY,
+                    render_origin_at_spawn: DVec3::ZERO,
+                },
+                Transform::IDENTITY,
+                Visibility::Visible,
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<TerrainPatchRenderIndex>()
+            .0
+            .insert(
+                TerrainPatchRenderKey {
+                    planet_entity: other_planet_entity,
+                    patch,
+                },
+                other_entity,
+            );
 
         app.world_mut()
             .resource_mut::<Messages<TerrainPatchCached>>()
@@ -920,6 +1063,10 @@ mod tests {
         assert_eq!(
             *app.world().get::<Visibility>(entity).unwrap(),
             Visibility::Hidden
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(other_entity).unwrap(),
+            Visibility::Visible
         );
 
         app.world_mut()
@@ -945,14 +1092,69 @@ mod tests {
             TerrainPatch::for_direction(DVec3::Z, 2),
         ];
         let mut pending = PendingTerrainPatchUploads::default();
-        pending.0.extend(patches.map(|patch| TerrainPatchReady {
+        for patch in patches {
+            assert!(pending.enqueue(TerrainPatchReady {
+                patch,
+                planet_entity,
+            }));
+        }
+
+        assert_eq!(pending.pop_front().unwrap().patch, patches[0]);
+        assert_eq!(pending.queue.len(), 2);
+        assert_eq!(pending.queue.front().unwrap().patch, patches[1]);
+    }
+
+    #[test]
+    fn pending_uploads_discard_ready_events_from_the_previous_planet() {
+        let mut app = App::new();
+        let previous_planet = app.world_mut().spawn_empty().id();
+        let active_planet = app.world_mut().spawn_empty().id();
+        let patch = TerrainPatch::for_direction(DVec3::X, 2);
+        let mut pending = PendingTerrainPatchUploads::default();
+
+        pending.enqueue(TerrainPatchReady {
             patch,
+            planet_entity: previous_planet,
+        });
+        pending.retain_published_for_planet(Some(active_planet), &BTreeSet::from([patch]));
+
+        assert!(pending.queue.is_empty());
+        assert!(pending.queued.is_empty());
+    }
+
+    #[test]
+    fn pending_uploads_coalesce_and_cap_ready_bursts() {
+        let planet_entity = Entity::PLACEHOLDER;
+        let mut pending = PendingTerrainPatchUploads::default();
+        let first = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 12,
+            tile_x: 0,
+            tile_y: 0,
+        };
+
+        assert!(pending.enqueue(TerrainPatchReady {
+            patch: first,
             planet_entity,
         }));
-
-        assert_eq!(pending.0.pop_front().unwrap().patch, patches[0]);
-        assert_eq!(pending.0.len(), 2);
-        assert_eq!(pending.0.front().unwrap().patch, patches[1]);
+        assert!(!pending.enqueue(TerrainPatchReady {
+            patch: first,
+            planet_entity,
+        }));
+        for tile_x in 1..MAX_PENDING_PATCH_UPLOADS as u32 {
+            assert!(pending.enqueue(TerrainPatchReady {
+                patch: TerrainPatch { tile_x, ..first },
+                planet_entity,
+            }));
+        }
+        assert!(!pending.enqueue(TerrainPatchReady {
+            patch: TerrainPatch {
+                tile_x: MAX_PENDING_PATCH_UPLOADS as u32,
+                ..first
+            },
+            planet_entity,
+        }));
+        assert_eq!(pending.queue.len(), MAX_PENDING_PATCH_UPLOADS);
     }
 
     #[test]

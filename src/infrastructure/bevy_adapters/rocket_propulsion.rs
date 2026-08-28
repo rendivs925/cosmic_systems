@@ -1,8 +1,9 @@
 //! Propulsion force, mass-flow, and gimbal-torque adapters.
 
 use crate::components::rocket::{
-    ForceAccumulator, RetroPropulsionEffect, RocketFlightConditions, RocketGeometry, RocketMass,
-    RocketPhysicsState, RocketPlanetBinding, RocketPropulsion, SpentStageKind, TorqueAccumulator,
+    AblationState, ForceAccumulator, RetroPropulsionEffect, RocketFlightConditions, RocketGeometry,
+    RocketMass, RocketPhysicsState, RocketPlanetBinding, RocketPropulsion, SpentStageKind,
+    TorqueAccumulator,
 };
 use crate::domain::entities::rocket::{EngineState, RocketStage};
 use crate::domain::events::StageSeparatedEvent;
@@ -61,10 +62,12 @@ pub fn propulsion_staging(
         &mut RocketPhysicsState,
         &mut RocketMass,
         &mut RocketPropulsion,
+        Option<&AblationState>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep() as f32;
-    for (entity, binding, geometry, mut rocket, mut mass, mut propulsion) in rocket_query.iter_mut()
+    for (entity, binding, geometry, mut rocket, mut mass, mut propulsion, ablation) in
+        rocket_query.iter_mut()
     {
         propulsion.time_since_separation_s += dt;
 
@@ -96,12 +99,14 @@ pub fn propulsion_staging(
         );
         rocket.dynamics.velocity_mps = outcome.upper_velocity_mps;
 
-        let new_mass = active_vehicle_mass_with_payload(
+        let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);
+        let new_mass = (active_vehicle_mass_with_payload(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
             propulsion.attached_payload_kg,
-        );
+        ) - ablation_mass_loss_kg)
+            .max(1.0);
         mass.0 = new_mass;
         rocket.dynamics.mass_kg = new_mass;
         let (inertia, center_of_mass_m) = active_vehicle_inertia(
@@ -181,10 +186,13 @@ pub fn propulsion_consumption(
         &RocketFlightConditions,
         &mut RocketPropulsion,
         &mut RocketMass,
+        Option<&AblationState>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut rocket, geometry, conditions, mut propulsion, mut mass) in rocket_query.iter_mut() {
+    for (mut rocket, geometry, conditions, mut propulsion, mut mass, ablation) in
+        rocket_query.iter_mut()
+    {
         let Some((stage, throttle)) = ignitable_stage(&propulsion) else {
             continue;
         };
@@ -195,12 +203,14 @@ pub fn propulsion_consumption(
         let (remaining_new, _) = consume_propellant(remaining, mass_flow_kg_s, dt);
         propulsion.propellant_remaining_kg[active_stage] = remaining_new;
 
-        let new_mass = active_vehicle_mass_with_payload(
+        let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);
+        let new_mass = (active_vehicle_mass_with_payload(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             active_stage,
             propulsion.attached_payload_kg,
-        );
+        ) - ablation_mass_loss_kg)
+            .max(1.0);
         mass.0 = new_mass;
         rocket.dynamics.mass_kg = new_mass;
         let (inertia, center_of_mass_m) = active_vehicle_inertia(
