@@ -765,7 +765,8 @@ fn draw_terrain_lod(
     let planet_pos = planet_transform.translation.as_dvec3();
     let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
-    for (patch, geometry) in streaming.generated.iter() {
+    for (patch, cached_geometry) in streaming.generated.iter() {
+        let geometry = &cached_geometry.geometry;
         let vertex_count = geometry.positions.len();
         if vertex_count == 0 {
             continue;

@@ -4,6 +4,20 @@ use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
+/// Request a Bevy framebuffer capture in every simulation mode. This belongs
+/// to shared presentation infrastructure rather than solar-system input so
+/// rocket validation captures the actual rendered terrain, not the desktop.
+pub fn request_screenshot_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut screenshot_state: ResMut<ScreenshotState>,
+    mut notifications: ResMut<NotificationQueue>,
+) {
+    if keyboard.just_pressed(KeyCode::F12) || keyboard.just_pressed(KeyCode::KeyP) {
+        notifications.hide_for_screenshot = true;
+        screenshot_state.pending = true;
+    }
+}
+
 // Performance monitoring and quality adaptation system
 pub fn update_performance_monitor(
     mut perf_stats: ResMut<PerformanceStats>,

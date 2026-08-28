@@ -6,7 +6,7 @@
 //! the manager never generates a full planet at maximum resolution.
 
 use crate::domain::services::cube_sphere::TerrainPatch;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Lifecycle state of a managed patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,8 +48,28 @@ impl TerrainPatchManager {
         self.patches.len()
     }
 
+    /// Number of patches with generated geometry currently resident in memory.
+    pub fn ready_patch_count(&self) -> usize {
+        self.patches
+            .values()
+            .filter(|patch| {
+                matches!(
+                    patch.state,
+                    PatchState::Ready | PatchState::Visible | PatchState::Cached
+                )
+            })
+            .count()
+    }
+
     pub fn state_of(&self, patch: &TerrainPatch) -> Option<PatchState> {
         self.patches.get(patch).map(|p| p.state)
+    }
+
+    /// Iterate managed patch state for streaming reconciliation.
+    pub fn patch_states(&self) -> impl Iterator<Item = (TerrainPatch, PatchState)> + '_ {
+        self.patches
+            .iter()
+            .map(|(patch, managed)| (*patch, managed.state))
     }
 
     pub fn visible_patches(&self) -> impl Iterator<Item = &TerrainPatch> {
@@ -85,6 +105,20 @@ impl TerrainPatchManager {
     pub fn begin_loading(&mut self, patch: &TerrainPatch) {
         if let Some(p) = self.patches.get_mut(patch) {
             p.state = PatchState::Loading;
+        }
+    }
+
+    /// Drop work that was superseded before it produced resident geometry.
+    /// Completed patches must use the cache lifecycle instead so their geometry
+    /// remains reusable until memory pressure requires eviction.
+    pub fn cancel_pending(&mut self, patch: &TerrainPatch) {
+        if self.patches.get(patch).is_some_and(|managed| {
+            matches!(
+                managed.state,
+                PatchState::Requested | PatchState::Generating | PatchState::Loading
+            )
+        }) {
+            self.patches.remove(patch);
         }
     }
 
@@ -137,11 +171,22 @@ impl TerrainPatchManager {
     /// Enforce the memory budget by evicting least-recently-used cached patches
     /// until the resident total fits. Returns the evicted patches.
     pub fn enforce_memory_budget(&mut self, budget_bytes: u64) -> Vec<TerrainPatch> {
+        self.enforce_memory_budget_protecting(budget_bytes, &BTreeSet::new())
+    }
+
+    /// Evict least-recently-used cached patches while preserving a required
+    /// fallback set. Planet roots and active ancestors stay resident so an
+    /// incomplete refinement can never expose empty space.
+    pub fn enforce_memory_budget_protecting(
+        &mut self,
+        budget_bytes: u64,
+        protected: &BTreeSet<TerrainPatch>,
+    ) -> Vec<TerrainPatch> {
         let mut evicted = Vec::new();
         let mut candidates: Vec<(TerrainPatch, u64)> = self
             .patches
             .iter()
-            .filter(|(_, p)| p.state == PatchState::Cached)
+            .filter(|(patch, p)| p.state == PatchState::Cached && !protected.contains(patch))
             .map(|(k, p)| (*k, p.last_used_frame))
             .collect();
         candidates.sort_by_key(|(_, frame)| *frame); // oldest first
@@ -179,6 +224,7 @@ mod tests {
         let p = patch(1, 1);
         m.request(p, 1_000);
         assert_eq!(m.state_of(&p), Some(PatchState::Requested));
+        assert_eq!(m.ready_patch_count(), 0);
 
         m.begin_generation(&p);
         assert_eq!(m.state_of(&p), Some(PatchState::Generating));
@@ -189,6 +235,7 @@ mod tests {
         m.mark_ready(&p);
         assert_eq!(m.state_of(&p), Some(PatchState::Ready));
         assert_eq!(m.resident_bytes(), 1_000);
+        assert_eq!(m.ready_patch_count(), 1);
 
         m.mark_visible(&p);
         assert_eq!(m.state_of(&p), Some(PatchState::Visible));
@@ -214,6 +261,24 @@ mod tests {
         m.request(p, 500);
         assert_eq!(m.state_of(&p), Some(PatchState::Ready));
         assert_eq!(m.resident_bytes(), 500);
+    }
+
+    #[test]
+    fn cancelling_pending_work_does_not_evict_resident_geometry() {
+        let mut manager = TerrainPatchManager::new();
+        let pending = patch(0, 0);
+        let ready = patch(0, 1);
+
+        manager.request(pending, 100);
+        manager.begin_generation(&pending);
+        manager.request(ready, 100);
+        manager.mark_ready(&ready);
+        manager.cancel_pending(&pending);
+        manager.cancel_pending(&ready);
+
+        assert_eq!(manager.state_of(&pending), None);
+        assert_eq!(manager.state_of(&ready), Some(PatchState::Ready));
+        assert_eq!(manager.resident_bytes(), 100);
     }
 
     #[test]
@@ -256,5 +321,25 @@ mod tests {
         m.request(patch(0, 0), 10);
         // No full-planet generation: only the one requested patch exists.
         assert_eq!(m.resident_patch_count(), 1);
+    }
+
+    #[test]
+    fn protected_fallback_patch_survives_memory_pressure() {
+        let mut manager = TerrainPatchManager::new();
+        let root = TerrainPatch::root(CubeFace::PosZ);
+        let detail = patch(1, 1);
+        for terrain_patch in [root, detail] {
+            manager.request(terrain_patch, 100);
+            manager.mark_ready(&terrain_patch);
+            manager.mark_visible(&terrain_patch);
+            manager.mark_cached(&terrain_patch);
+        }
+
+        let protected = BTreeSet::from([root]);
+        assert_eq!(
+            manager.enforce_memory_budget_protecting(0, &protected),
+            vec![detail]
+        );
+        assert_eq!(manager.state_of(&root), Some(PatchState::Cached));
     }
 }

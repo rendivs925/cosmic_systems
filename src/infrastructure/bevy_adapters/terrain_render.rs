@@ -4,6 +4,7 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
+use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
@@ -12,9 +13,11 @@ use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
-use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
+use crate::infrastructure::bevy_adapters::terrain_streaming::{
+    TerrainStreamingResource, AUTHORITATIVE_TERRAIN_LEVEL,
+};
 use crate::infrastructure::bevy_adapters::terrain_surface::{
-    build_patch_surfaces, build_vegetation_mesh,
+    build_vegetation_mesh, supports_vegetation,
 };
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
@@ -29,12 +32,20 @@ pub struct TerrainPatchRenderState {
     pub patch: TerrainPatch,
     pub mesh_handle: Handle<Mesh>,
     pub material_handle: Handle<StandardMaterial>,
-    pub entity: Entity,
+    pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
     pub body_to_inertial_at_spawn: DQuat,
     /// Render origin used to bake this mesh's vertices.
     pub render_origin_at_spawn: DVec3,
+}
+
+/// Reusable render assets whose appearance is identical for every terrain
+/// patch. Patch terrain materials stay independent because roughness is derived
+/// from their geographic surface sample.
+#[derive(Resource, Default)]
+struct TerrainRenderAssets {
+    vegetation_material: Option<Handle<StandardMaterial>>,
 }
 
 /// Resource for the floating render origin (AGENTS.md section 13).
@@ -62,7 +73,8 @@ impl Default for TerrainRenderConfig {
         Self {
             recenter_threshold_m: 10_000.0,
             skirt_depth_m: 5.0,
-            patch_resolution: 32,
+            // 2^n + 1 samples preserve parent/child boundary sample alignment.
+            patch_resolution: 33,
         }
     }
 }
@@ -71,6 +83,15 @@ impl Default for TerrainRenderConfig {
 /// These are observed by the render system to spawn/despawn meshes.
 #[derive(Message, Debug, Clone)]
 pub struct TerrainPatchReady {
+    pub patch: TerrainPatch,
+    pub planet_entity: Entity,
+}
+
+/// Emitted when a generated patch leaves the active leaf cover but remains in
+/// the streaming cache. Its GPU assets stay resident for a zero-regeneration
+/// return to visibility.
+#[derive(Message, Debug, Clone)]
+pub struct TerrainPatchCached {
     pub patch: TerrainPatch,
     pub planet_entity: Entity,
 }
@@ -91,13 +112,17 @@ impl Plugin for TerrainRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderOrigin>()
             .init_resource::<TerrainRenderConfig>()
+            .init_resource::<TerrainRenderAssets>()
             .add_message::<TerrainPatchReady>()
+            .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
             .add_systems(
                 Update,
                 (
                     recenter_render_origin,
                     update_patch_transforms,
+                    hide_cached_patch_mesh_system,
+                    reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
                     despawn_patch_mesh_system,
                 )
@@ -113,29 +138,34 @@ fn spawn_patch_mesh_system(
     mut events: MessageReader<TerrainPatchReady>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
+    mut render_assets: ResMut<TerrainRenderAssets>,
+    asset_server: Res<AssetServer>,
     streaming: Res<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
     time: Res<Time<Fixed>>,
     planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
-    planet_entities: Query<Entity, With<PlanetComponent>>,
+    existing_patches: Query<&TerrainPatchRenderState>,
 ) {
     for event in events.read() {
-        let Some(planet_entity) = planet_entities.iter().find(|e| *e == event.planet_entity) else {
+        if existing_patches
+            .iter()
+            .any(|state| state.patch == event.patch && state.planet_entity == event.planet_entity)
+        {
             continue;
-        };
-        let Ok((planet_terrain, planet)) = planet_query.get(planet_entity) else {
+        }
+        let Ok((planet_terrain, planet)) = planet_query.get(event.planet_entity) else {
             continue;
         };
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
         let source = planet_terrain.source.as_ref();
 
         let patch = event.patch;
-        let Some(geometry) = streaming.generated.get(&patch) else {
+        let Some(cached_geometry) = streaming.generated.get(&patch) else {
             continue;
         };
+        let geometry = &cached_geometry.geometry;
 
         // Build Bevy mesh from PatchGeometry, rebasing the planet-centered
         // geometry into the rocket-local flight frame so f32 mesh vertices stay
@@ -146,24 +176,52 @@ fn spawn_patch_mesh_system(
             &sim_time,
             time.overstep_fraction() as f64,
         );
-        let mesh = patch_geometry_to_mesh(geometry, &render_origin.origin, body_to_inertial);
+        let mesh = patch_geometry_to_mesh(
+            geometry,
+            &render_origin.origin,
+            body_to_inertial,
+            source,
+            patch.level,
+            radius_m,
+        );
         let mesh_handle = meshes.add(mesh);
 
-        // Procedural surface maps (albedo + tangent-space normal) from the
-        // shared source — this is what makes the terrain read as real ground
-        // up close instead of a flat color (AGENTS.md 27).
-        let (albedo_img, normal_img) = build_patch_surfaces(source, &patch, radius_m);
-        let albedo_handle = images.add(albedo_img);
-        let normal_handle = images.add(normal_img);
-
-        let mut material = patch_material(&patch, source);
-        material.base_color_texture = Some(albedo_handle);
-        material.normal_map_texture = Some(normal_handle);
+        let mut material = patch_material(&patch, source, patch.level);
+        material.base_color_texture = load_texture(
+            &asset_server,
+            get_planet_textures(&planet.domain_planet.name).albedo,
+        );
         let material_handle = materials.add(material);
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
         let transform = Transform::IDENTITY;
+
+        let vegetation_mesh_handle = if supports_vegetation(patch.level) {
+            build_vegetation_mesh(
+                source,
+                &patch,
+                radius_m,
+                &render_origin.origin,
+                body_to_inertial,
+            )
+            .map(|mesh| meshes.add(mesh))
+        } else {
+            None
+        };
+        let vegetation_material = vegetation_mesh_handle.as_ref().map(|_| {
+            render_assets
+                .vegetation_material
+                .get_or_insert_with(|| {
+                    materials.add(StandardMaterial {
+                        base_color: Color::WHITE,
+                        perceptual_roughness: 0.9,
+                        metallic: 0.0,
+                        ..default()
+                    })
+                })
+                .clone()
+        });
 
         let entity = commands
             .spawn((
@@ -174,8 +232,8 @@ fn spawn_patch_mesh_system(
                     patch,
                     mesh_handle: mesh_handle.clone(),
                     material_handle: material_handle.clone(),
-                    entity: Entity::PLACEHOLDER,
-                    planet_entity,
+                    vegetation_mesh_handle: vegetation_mesh_handle.clone(),
+                    planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
                     render_origin_at_spawn: render_origin.origin,
                 },
@@ -186,25 +244,15 @@ fn spawn_patch_mesh_system(
             ))
             .id();
 
-        // Merged vegetation + scatter (trees, rocks) as a single child mesh so
-        // it costs one draw call and despawns with the patch.
-        if let Some(veg_mesh) = build_vegetation_mesh(
-            source,
-            &patch,
-            radius_m,
-            &render_origin.origin,
-            body_to_inertial,
-        ) {
-            let veg_material = StandardMaterial {
-                base_color: Color::WHITE,
-                perceptual_roughness: 0.9,
-                metallic: 0.0,
-                ..default()
-            };
+        // Merged vegetation + scatter (trees, rocks) is one child draw and
+        // shares an immutable material across every terrain tile.
+        if let (Some(vegetation_mesh_handle), Some(vegetation_material)) =
+            (vegetation_mesh_handle.clone(), vegetation_material)
+        {
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
-                    Mesh3d(meshes.add(veg_mesh)),
-                    MeshMaterial3d(materials.add(veg_material)),
+                    Mesh3d(vegetation_mesh_handle),
+                    MeshMaterial3d(vegetation_material),
                     Transform::IDENTITY,
                     Name::new(format!(
                         "Vegetation_{:?}_{}_{}_{}",
@@ -213,17 +261,52 @@ fn spawn_patch_mesh_system(
                 ));
             });
         }
+    }
+}
 
-        // Update the entity reference in the component.
-        commands.entity(entity).insert(TerrainPatchRenderState {
-            patch,
-            mesh_handle,
-            material_handle,
-            entity,
-            planet_entity,
-            body_to_inertial_at_spawn: body_to_inertial,
-            render_origin_at_spawn: render_origin.origin,
-        });
+/// Hide cached tile entities without destroying their mesh/material assets.
+/// The ready handler restores these entities instead of rebuilding them.
+fn hide_cached_patch_mesh_system(
+    mut events: MessageReader<TerrainPatchCached>,
+    mut render_query: Query<(&TerrainPatchRenderState, &mut Visibility)>,
+) {
+    for event in events.read() {
+        if let Some((_, mut visibility)) = render_query.iter_mut().find(|(state, _)| {
+            state.patch == event.patch && state.planet_entity == event.planet_entity
+        }) {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+/// Restore a cached tile before the ready handler considers creating new GPU
+/// assets. A cache hit therefore performs no mesh conversion or asset upload.
+fn reveal_cached_patch_mesh_system(
+    mut events: MessageReader<TerrainPatchReady>,
+    sim_time: Res<SimulationTime>,
+    render_origin: Res<RenderOrigin>,
+    time: Res<Time<Fixed>>,
+    planet_query: Query<&PlanetComponent>,
+    mut render_query: Query<(&TerrainPatchRenderState, &mut Transform, &mut Visibility)>,
+) {
+    for event in events.read() {
+        for (state, mut transform, mut visibility) in render_query.iter_mut() {
+            if state.patch != event.patch || state.planet_entity != event.planet_entity {
+                continue;
+            }
+            if let Ok(planet) = planet_query.get(state.planet_entity) {
+                update_patch_transform(
+                    &mut transform,
+                    state,
+                    &planet.domain_planet,
+                    &sim_time,
+                    time.overstep_fraction() as f64,
+                    render_origin.origin,
+                );
+            }
+            *visibility = Visibility::Visible;
+            break;
+        }
     }
 }
 
@@ -232,14 +315,29 @@ fn despawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchEvicted>,
     render_query: Query<(Entity, &TerrainPatchRenderState)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for event in events.read() {
         for (entity, state) in render_query.iter() {
             if state.patch == event.patch && state.planet_entity == event.planet_entity {
                 commands.entity(entity).despawn();
+                release_patch_render_assets(state, &mut meshes, &mut materials);
                 break;
             }
         }
+    }
+}
+
+fn release_patch_render_assets(
+    state: &TerrainPatchRenderState,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    meshes.remove(state.mesh_handle.id());
+    materials.remove(state.material_handle.id());
+    if let Some(vegetation_mesh_handle) = &state.vegetation_mesh_handle {
+        meshes.remove(vegetation_mesh_handle.id());
     }
 }
 
@@ -251,6 +349,9 @@ fn patch_geometry_to_mesh(
     geometry: &PatchGeometry,
     render_origin: &DVec3,
     body_to_inertial: bevy::math::DQuat,
+    source: &dyn TerrainSource,
+    patch_level: u32,
+    planet_radius_m: f64,
 ) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -279,23 +380,76 @@ fn patch_geometry_to_mesh(
         .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 
-    // UVs in the patch's own [0,1] parameterization (aligns the procedural
-    // surface texture generated from the same parameterization — no seams).
-    let uvs: Vec<[f32; 2]> = geometry
-        .uvs
-        .iter()
-        .map(|uv| [uv[0] as f32, uv[1] as f32])
-        .collect();
+    // UV0 is geographic equirectangular UV so every tile, including roots,
+    // samples the same global Earth imagery. The active StandardMaterial has no
+    // tile-local UV consumer, so UV1 remains domain data until a custom material
+    // actually needs it.
+    let uvs = geometry.uvs.to_vec();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        terrain_vertex_colors(geometry, source, patch_level, planet_radius_m),
+    );
 
     // Indices.
     mesh.insert_indices(Indices::U32(geometry.indices.clone()));
 
-    // Tangents are required for the per-patch normal map to be applied (the
-    // procedural relief). Safe to ignore the error on degenerate skirts.
-    let _ = mesh.generate_tangents();
-
     mesh
+}
+
+/// Blend procedural biome tint in only after close-range refinement. Global
+/// imagery remains the base layer at every level; vertex colors provide a
+/// stable renderer-supported fallback until terrain uses a custom material.
+fn terrain_vertex_colors(
+    geometry: &PatchGeometry,
+    source: &dyn TerrainSource,
+    patch_level: u32,
+    planet_radius_m: f64,
+) -> Vec<[f32; 4]> {
+    let detail = ((patch_level as f32 - 5.0) / 3.0).clamp(0.0, 1.0);
+    if detail == 0.0 {
+        return vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()];
+    }
+    geometry
+        .positions
+        .iter()
+        .zip(&geometry.normals)
+        .map(|(position, normal)| {
+            let (lat, lon) = direction_to_lat_lon(DVec3::from_array(*position));
+            // Geometry was sampled from this same surface already. Reuse its
+            // radial height and normal-derived slope instead of repeating five
+            // terrain-source calls for every render vertex.
+            let radial = DVec3::from_array(*position).normalize();
+            let height_m = DVec3::from_array(*position).length() - planet_radius_m;
+            let slope_deg = DVec3::from_array(*normal)
+                .normalize()
+                .dot(radial)
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            let appearance = if patch_level < AUTHORITATIVE_TERRAIN_LEVEL {
+                surface_appearance(
+                    height_m,
+                    source.overview_moisture(lat, lon),
+                    source.zone_lat(lat),
+                    slope_deg,
+                )
+            } else {
+                surface_appearance(
+                    height_m,
+                    source.moisture(lat, lon),
+                    source.zone_lat(lat),
+                    slope_deg,
+                )
+            };
+            [
+                1.0 + (appearance.albedo[0] - 1.0) * detail * 0.25,
+                1.0 + (appearance.albedo[1] - 1.0) * detail * 0.25,
+                1.0 + (appearance.albedo[2] - 1.0) * detail * 0.25,
+                1.0,
+            ]
+        })
+        .collect()
 }
 
 /// Shift only presentation coordinates when the rocket has moved far enough
@@ -317,35 +471,52 @@ pub fn recenter_render_origin(
     render_origin.last_camera_pos = new_origin;
 }
 
-/// Keep terrain meshes attached to the rotating planet after generation. Patch
-/// vertices are baked in an inertial render frame for local f32 precision, so
-/// their entity transform supplies the rotation and origin delta accumulated
-/// since that bake. Without this, an Earth-fixed launch pad visibly moves under
-/// a correctly co-rotating pre-launch rocket.
+/// Keep visible terrain meshes attached to the rotating planet after generation.
+/// Cached meshes are refreshed immediately before reveal, avoiding transform
+/// writes for geometry that is not currently rendered.
 fn update_patch_transforms(
     sim_time: Res<SimulationTime>,
     render_origin: Res<RenderOrigin>,
     time: Res<Time<Fixed>>,
     planet_query: Query<&PlanetComponent>,
-    mut patch_query: Query<(&TerrainPatchRenderState, &mut Transform)>,
+    mut patch_query: Query<(&TerrainPatchRenderState, &mut Transform, &Visibility)>,
 ) {
     let alpha = time.overstep_fraction() as f64;
-    for (state, mut transform) in patch_query.iter_mut() {
+    for (state, mut transform, visibility) in patch_query.iter_mut() {
+        if *visibility == Visibility::Hidden {
+            continue;
+        }
         let Ok(planet) = planet_query.get(state.planet_entity) else {
             continue;
         };
-        let body_to_inertial =
-            interpolated_body_to_inertial_rotation(&planet.domain_planet, &sim_time, alpha);
-        let (rotation, translation) = patch_transform_components(
-            state.body_to_inertial_at_spawn,
-            state.render_origin_at_spawn,
-            body_to_inertial,
+        update_patch_transform(
+            &mut transform,
+            state,
+            &planet.domain_planet,
+            &sim_time,
+            alpha,
             render_origin.origin,
         );
-
-        transform.rotation = rotation.as_quat();
-        transform.translation = translation.as_vec3();
     }
+}
+
+fn update_patch_transform(
+    transform: &mut Transform,
+    state: &TerrainPatchRenderState,
+    planet: &Planet,
+    sim_time: &SimulationTime,
+    alpha: f64,
+    render_origin: DVec3,
+) {
+    let body_to_inertial = interpolated_body_to_inertial_rotation(planet, sim_time, alpha);
+    let (rotation, translation) = patch_transform_components(
+        state.body_to_inertial_at_spawn,
+        state.render_origin_at_spawn,
+        body_to_inertial,
+        render_origin,
+    );
+    transform.rotation = rotation.as_quat();
+    transform.translation = translation.as_vec3();
 }
 
 /// Match the previous/current fixed-step body poses used by rocket presentation.
@@ -377,16 +548,30 @@ fn patch_transform_components(
 /// patch by `build_patch_surfaces` (set by the caller); this only provides the
 /// representative roughness from the shared `surface_appearance` law (AGENTS.md
 /// 50: one authoritative appearance law).
-fn patch_material(patch: &TerrainPatch, source: &dyn TerrainSource) -> StandardMaterial {
+fn patch_material(
+    patch: &TerrainPatch,
+    source: &dyn TerrainSource,
+    patch_level: u32,
+) -> StandardMaterial {
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let u_mid = (u0 + u1) * 0.5;
     let v_mid = (v0 + v1) * 0.5;
     let dir = face_uv_to_direction(patch.face, u_mid, v_mid);
     let (lat, lon) = direction_to_lat_lon(dir);
-    let height = source.height_m(lat, lon);
-    let moisture = source.moisture(lat, lon);
+    let (height, moisture, slope) = if patch_level < AUTHORITATIVE_TERRAIN_LEVEL {
+        (
+            source.overview_height_m(lat, lon),
+            source.overview_moisture(lat, lon),
+            source.overview_slope_deg(lat, lon),
+        )
+    } else {
+        (
+            source.height_m(lat, lon),
+            source.moisture(lat, lon),
+            slope_deg_at(source, lat, lon),
+        )
+    };
     let zone = source.zone_lat(lat);
-    let slope = slope_deg_at(source, lat, lon);
     let appearance = surface_appearance(height, moisture, zone, slope);
 
     StandardMaterial {
@@ -403,6 +588,39 @@ mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
     use crate::domain::services::planet_factory::PlanetFactory;
+    use bevy::ecs::message::Messages;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug, Default)]
+    struct CountingTerrainSource {
+        authoritative_height_calls: AtomicUsize,
+        overview_height_calls: AtomicUsize,
+    }
+
+    impl TerrainSource for CountingTerrainSource {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.authoritative_height_calls
+                .fetch_add(1, Ordering::Relaxed);
+            0.0
+        }
+
+        fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.overview_height_calls.fetch_add(1, Ordering::Relaxed);
+            0.0
+        }
+
+        fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.5
+        }
+
+        fn overview_moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.5
+        }
+
+        fn overview_slope_deg(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.0
+        }
+    }
 
     fn terrain_position_in_render_frame(
         body_fixed_position_m: DVec3,
@@ -518,5 +736,143 @@ mod tests {
         assert!(translation.abs_diff_eq(DVec3::ZERO, 1e-12));
         assert!(terrain_position
             .abs_diff_eq(body_to_inertial * surface_position_m - render_origin, 1e-7));
+    }
+
+    #[test]
+    fn global_imagery_coordinates_keep_coarse_tiles_neutral_and_fine_tiles_tinted() {
+        let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
+            99, 2_000.0, 800.0, 0,
+        );
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 5, 40.0);
+        let coarse = terrain_vertex_colors(&geometry, &source, 0, 6_371_000.0);
+        let fine = terrain_vertex_colors(&geometry, &source, 8, 6_371_000.0);
+
+        assert!(coarse.iter().all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
+        assert!(fine.iter().any(|color| *color != [1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(geometry.uvs.len(), geometry.local_uvs.len());
+    }
+
+    #[test]
+    fn vertex_colors_reuse_geometry_without_resampling_height_or_slope() {
+        let source = CountingTerrainSource::default();
+        let geometry = PatchGeometry {
+            positions: vec![(DVec3::X * 6_371_000.0).to_array()],
+            normals: vec![DVec3::X.to_array()],
+            uvs: vec![[0.0, 0.0]],
+            local_uvs: vec![[0.0, 0.0]],
+            indices: Vec::new(),
+        };
+
+        terrain_vertex_colors(
+            &geometry,
+            &source,
+            AUTHORITATIVE_TERRAIN_LEVEL - 1,
+            6_371_000.0,
+        );
+        assert_eq!(
+            source.authoritative_height_calls.load(Ordering::Relaxed),
+            0,
+            "vertex colors must reuse the height stored in patch geometry"
+        );
+        assert_eq!(source.overview_height_calls.load(Ordering::Relaxed), 0);
+
+        terrain_vertex_colors(&geometry, &source, AUTHORITATIVE_TERRAIN_LEVEL, 6_371_000.0);
+        assert_eq!(source.authoritative_height_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(source.overview_height_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn cached_patch_reuses_its_render_entity_when_republished() {
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::default())
+            .insert_resource(RenderOrigin::default())
+            .insert_resource(Time::<Fixed>::default())
+            .add_message::<TerrainPatchCached>()
+            .add_message::<TerrainPatchReady>()
+            .add_systems(
+                Update,
+                (
+                    hide_cached_patch_mesh_system,
+                    reveal_cached_patch_mesh_system,
+                )
+                    .chain(),
+            );
+
+        let patch = TerrainPatch::for_direction(DVec3::X, 2);
+        let planet_entity = Entity::PLACEHOLDER;
+        let entity = app
+            .world_mut()
+            .spawn((
+                TerrainPatchRenderState {
+                    patch,
+                    mesh_handle: Handle::default(),
+                    material_handle: Handle::default(),
+                    vegetation_mesh_handle: None,
+                    planet_entity,
+                    body_to_inertial_at_spawn: DQuat::IDENTITY,
+                    render_origin_at_spawn: DVec3::ZERO,
+                },
+                Transform::IDENTITY,
+                Visibility::Visible,
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<Messages<TerrainPatchCached>>()
+            .write(TerrainPatchCached {
+                patch,
+                planet_entity,
+            });
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(entity).unwrap(),
+            Visibility::Hidden
+        );
+
+        app.world_mut()
+            .resource_mut::<Messages<TerrainPatchReady>>()
+            .write(TerrainPatchReady {
+                patch,
+                planet_entity,
+            });
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(entity).unwrap(),
+            Visibility::Visible
+        );
+        assert!(app.world().get_entity(entity).is_ok());
+    }
+
+    #[test]
+    fn evicting_a_patch_releases_its_unique_render_assets() {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mesh_handle = meshes.add(Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        ));
+        let vegetation_mesh_handle = meshes.add(Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        ));
+        let material_handle = materials.add(StandardMaterial::default());
+        let shared_vegetation_material = materials.add(StandardMaterial::default());
+        let state = TerrainPatchRenderState {
+            patch: TerrainPatch::for_direction(DVec3::X, 0),
+            mesh_handle: mesh_handle.clone(),
+            material_handle: material_handle.clone(),
+            vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
+            planet_entity: Entity::PLACEHOLDER,
+            body_to_inertial_at_spawn: DQuat::IDENTITY,
+            render_origin_at_spawn: DVec3::ZERO,
+        };
+
+        release_patch_render_assets(&state, &mut meshes, &mut materials);
+
+        assert!(meshes.get(mesh_handle.id()).is_none());
+        assert!(meshes.get(vegetation_mesh_handle.id()).is_none());
+        assert!(materials.get(material_handle.id()).is_none());
+        assert!(materials.get(shared_vegetation_material.id()).is_some());
     }
 }

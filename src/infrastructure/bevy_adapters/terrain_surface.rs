@@ -24,6 +24,37 @@ use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
+const TREE_COUNT: usize = 70;
+const ROCK_COUNT: usize = 14;
+const TRUNK_SEGMENTS: usize = 6;
+const FOLIAGE_SEGMENTS: usize = 7;
+const BOULDER_SEGMENTS: usize = 6;
+const BOULDER_RINGS: usize = 3;
+const VEGETATION_BYTES_PER_VERTEX: u64 = 40;
+const VEGETATION_BYTES_PER_INDEX: u64 = 4;
+
+/// Vegetation is only useful on the finest terrain tiles. Generating it for
+/// coarse parent coverage spends CPU, GPU memory, and draw calls on scatter
+/// that is too distant to resolve.
+pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
+
+pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
+    patch_level >= VEGETATION_MIN_PATCH_LEVEL
+}
+
+/// Conservative maximum allocation for one merged vegetation mesh. The
+/// streaming budget uses this for vegetation-eligible patches before it knows
+/// their biome.
+pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
+    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + 2 * (FOLIAGE_SEGMENTS + 1);
+    let tree_indices = TRUNK_SEGMENTS * 6 + FOLIAGE_SEGMENTS * 6;
+    let boulder_vertices = (BOULDER_RINGS + 1) * BOULDER_SEGMENTS;
+    let boulder_indices = BOULDER_RINGS * BOULDER_SEGMENTS * 6;
+    let vertices = TREE_COUNT * tree_vertices + ROCK_COUNT * boulder_vertices;
+    let indices = TREE_COUNT * tree_indices + ROCK_COUNT * boulder_indices;
+    vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
+};
+
 /// Texture resolution (texels per side) for the per-patch surface maps.
 const SURFACE_TEX_RES: u32 = 128;
 /// Exaggeration applied to the height-gradient when baking the normal map so
@@ -215,8 +246,8 @@ impl MeshAccum {
         let ref_axis = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
         let tangent = up.cross(ref_axis).normalize();
         let bitangent = up.cross(tangent).normalize();
-        let segments = 6usize;
-        let rings = 3usize;
+        let segments = BOULDER_SEGMENTS;
+        let rings = BOULDER_RINGS;
         let start = self.positions.len() as u32;
         let color = [0.42f32, 0.40f32, 0.38f32];
 
@@ -309,11 +340,9 @@ pub fn build_vegetation_mesh(
         return None;
     }
 
-    let tree_count = 70usize;
-    let rock_count = 14usize;
     let mut accum = MeshAccum::new();
 
-    for k in 0..tree_count {
+    for k in 0..TREE_COUNT {
         let ru = hash01(
             patch.face as u64,
             (patch.tile_x as u64) ^ (k as u64 * 2_654_355_561),
@@ -348,7 +377,15 @@ pub fn build_vegetation_mesh(
         let base = flight;
         let trunk_color = [0.30f32, 0.22f32, 0.13f32];
         let foliage_color = [0.18f32, 0.38f32, 0.13f32];
-        accum.push_prism(base, up, trunk_r, trunk_r * 0.8, trunk_h, 6, trunk_color);
+        accum.push_prism(
+            base,
+            up,
+            trunk_r,
+            trunk_r * 0.8,
+            trunk_h,
+            TRUNK_SEGMENTS,
+            trunk_color,
+        );
         let foliage_base = base + up * trunk_h;
         accum.push_prism(
             foliage_base,
@@ -356,12 +393,12 @@ pub fn build_vegetation_mesh(
             foliage_r,
             0.0,
             foliage_h,
-            7,
+            FOLIAGE_SEGMENTS,
             foliage_color,
         );
     }
 
-    for k in 0..rock_count {
+    for k in 0..ROCK_COUNT {
         let ru = hash01(
             (patch.face as u64) ^ (k as u64 * 7_919),
             patch.tile_y as u64,
@@ -456,5 +493,11 @@ mod tests {
             }
         }
         assert!(found_veg, "expected at least one vegetated patch");
+    }
+
+    #[test]
+    fn vegetation_is_limited_to_the_finest_terrain_tiles() {
+        assert!(!supports_vegetation(VEGETATION_MIN_PATCH_LEVEL - 1));
+        assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
     }
 }

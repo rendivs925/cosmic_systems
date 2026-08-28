@@ -8,7 +8,6 @@
 //! Conversion: solar system display units -> meters using PhysicalScale.
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
-use crate::application::mesh_factory::create_flight_globe_mesh;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
@@ -21,18 +20,6 @@ use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::ecs::system::ParamSet;
 use bevy::prelude::*;
-
-/// Keeps the continuous globe below all local terrain geometry without
-/// materially changing Earth's visible scale.
-///
-/// This matches the local terrain skirt depth, so the skirt overlaps the
-/// underlay at the streaming window boundary instead of exposing a deep gap.
-pub(crate) const PLANET_UNDERLAY_INSET_M: f64 = 5.0;
-
-/// Radius for the continuous planet presentation under local terrain.
-pub(crate) fn planet_underlay_radius_m(body_radius_m: f64) -> f64 {
-    body_radius_m - PLANET_UNDERLAY_INSET_M
-}
 
 /// Component marking a planet entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -85,81 +72,17 @@ pub fn setup_rocket_planets(
     let planet_name = binding.planet_name.to_string();
     bound_planet_res.0 = Some(planet_name.clone());
 
-    // The globe is an Earth-scale underlay; local terrain remains the exact
-    // visual surface and collision authority.
-    if let Some(planet) = PlanetFactory::create_by_name(&planet_name) {
-        let radius_m = planet.radius_km as f64 * 1000.0;
-        let mesh_handle =
-            create_flight_globe_mesh(&mut meshes, planet_underlay_radius_m(radius_m) as f32);
-
-        let textures = get_planet_textures(&planet_name);
-        let albedo_handle = load_texture(&asset_server, textures.albedo);
-        let emissive_handle = load_texture(&asset_server, textures.emissive);
-
-        let (metallic, reflectance, perceptual_roughness, base_color) = match planet_name.as_str() {
-            "Mercury" => (0.1, 0.3, 0.8, planet.color),
-            "Venus" => (0.1, 0.75, 0.25, planet.color),
-            "Earth" => (0.05, 0.4, 0.45, planet.color),
-            "Mars" => (0.05, 0.25, 0.6, planet.color),
-            "Jupiter" => (0.0, 0.7, 0.15, planet.color),
-            "Saturn" => (0.0, 0.65, 0.15, planet.color),
-            "Uranus" => (0.0, 0.5, 0.25, planet.color),
-            "Neptune" => (0.0, 0.6, 0.25, planet.color),
-            _ => (0.0, 0.5, 0.7, planet.color),
-        };
-
-        let material = create_planet_material(PlanetMaterialConfig {
-            base_color_texture: albedo_handle.clone(),
-            normal_map_texture: None,
-            emissive_texture: emissive_handle.clone(),
-            base_color,
-            emissive: if planet_name == "Sun" {
-                LinearRgba::new(1.0, 1.0, 0.8, 1.0)
-            } else if textures.albedo.is_some() {
-                LinearRgba::new(0.35, 0.35, 0.35, 1.0)
-            } else {
-                LinearRgba::BLACK
-            },
-            unlit: planet_name == "Sun",
-            metallic,
-            reflectance,
-            perceptual_roughness,
-        });
-
-        let material_handle = materials.add(material);
-        let planet_entity = commands
-            .spawn((
-                Mesh3d(mesh_handle),
-                MeshMaterial3d(material_handle),
-                Transform::default(),
-                RocketPlanet {
-                    name: planet_name.clone(),
-                    is_bound_planet: true,
-                    is_sun: false,
-                },
-                Visibility::Visible,
-            ))
-            .id();
-
-        // The camera is only meters above a sphere whose center is thousands
-        // of kilometers away. Its bounds can otherwise be rejected before its
-        // nearby surface reaches the frustum, leaving terrain patches against
-        // empty space instead of a continuous curved planet.
-        commands
-            .entity(planet_entity)
-            .insert(bevy::camera::visibility::NoFrustumCulling);
-
-        // Spawn moons of this planet
-        let moons = PlanetFactory::get_moons_of(&planet_name);
-        for moon in moons {
-            spawn_rocket_moon(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                &asset_server,
-                &moon,
-            );
-        }
+    // The terrain hierarchy is the sole bound-planet surface. RocketPlanet
+    // proxies remain for the Sun and moons, but no textured Earth underlay is
+    // spawned beneath terrain tiles.
+    for moon in PlanetFactory::get_moons_of(&planet_name) {
+        spawn_rocket_moon(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &asset_server,
+            &moon,
+        );
     }
 
     // Spawn the Sun
@@ -357,7 +280,6 @@ pub fn update_rocket_planets(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 
@@ -368,17 +290,5 @@ mod tests {
         // 1 AU in meters should map to scale_factor display units
         let au_display = scale.solar_meters_to_units(149_597_870_700.0);
         assert!((au_display - solar.scale_factor as f64).abs() < 1.0);
-    }
-
-    #[test]
-    fn planet_underlay_radius_is_finite_positive_and_inset() {
-        let earth_radius_m = 6_371_000.0;
-        let underlay_radius_m = planet_underlay_radius_m(earth_radius_m);
-
-        assert!(underlay_radius_m.is_finite());
-        assert!(underlay_radius_m > 0.0);
-        assert!(underlay_radius_m < earth_radius_m);
-        assert_eq!(earth_radius_m - underlay_radius_m, PLANET_UNDERLAY_INSET_M);
-        assert!(PLANET_UNDERLAY_INSET_M / earth_radius_m < 1e-6);
     }
 }

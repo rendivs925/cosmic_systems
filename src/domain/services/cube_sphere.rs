@@ -10,9 +10,10 @@
 
 use crate::domain::services::terrain_source::TerrainSource;
 use bevy::math::DVec3;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The six faces of the cube-sphere.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CubeFace {
     PosX,
     NegX,
@@ -20,6 +21,40 @@ pub enum CubeFace {
     NegY,
     PosZ,
     NegZ,
+}
+
+impl CubeFace {
+    /// Cube faces in a stable order for deterministic traversal.
+    pub const ALL: [Self; 6] = [
+        Self::PosX,
+        Self::NegX,
+        Self::PosY,
+        Self::NegY,
+        Self::PosZ,
+        Self::NegZ,
+    ];
+}
+
+/// A directed patch edge in face UV coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PatchEdge {
+    West,
+    East,
+    South,
+    North,
+}
+
+impl PatchEdge {
+    pub const ALL: [Self; 4] = [Self::West, Self::East, Self::South, Self::North];
+
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::West => Self::East,
+            Self::East => Self::West,
+            Self::South => Self::North,
+            Self::North => Self::South,
+        }
+    }
 }
 
 /// Map a unit direction to its dominant cube face and `(u, v)` in [0,1]² within
@@ -70,7 +105,7 @@ pub fn face_uv_to_direction(face: CubeFace, u: f64, v: f64) -> DVec3 {
 }
 
 /// A quadtree patch on a cube face: face + level + tile coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TerrainPatch {
     pub face: CubeFace,
     pub level: u32,
@@ -80,12 +115,38 @@ pub struct TerrainPatch {
 
 impl TerrainPatch {
     /// The level-0 root patch (whole face).
-    pub fn root(face: CubeFace) -> Self {
+    pub const fn root(face: CubeFace) -> Self {
         Self {
             face,
             level: 0,
             tile_x: 0,
             tile_y: 0,
+        }
+    }
+
+    /// One root for every cube face, in stable face order.
+    pub const fn roots() -> [Self; 6] {
+        [
+            Self::root(CubeFace::PosX),
+            Self::root(CubeFace::NegX),
+            Self::root(CubeFace::PosY),
+            Self::root(CubeFace::NegY),
+            Self::root(CubeFace::PosZ),
+            Self::root(CubeFace::NegZ),
+        ]
+    }
+
+    /// The parent patch, or `None` for a face root.
+    pub const fn parent(&self) -> Option<Self> {
+        if self.level == 0 {
+            None
+        } else {
+            Some(Self {
+                face: self.face,
+                level: self.level - 1,
+                tile_x: self.tile_x / 2,
+                tile_y: self.tile_y / 2,
+            })
         }
     }
 
@@ -121,6 +182,94 @@ impl TerrainPatch {
         ]
     }
 
+    /// The four children at the next level, ordered southwest, southeast,
+    /// northwest, northeast in face UV coordinates.
+    pub fn children(&self) -> [TerrainPatch; 4] {
+        self.subdivide()
+    }
+
+    /// Whether this patch is an ancestor of `other`, including itself.
+    pub fn is_ancestor_of(&self, other: &Self) -> bool {
+        if self.face != other.face || self.level > other.level {
+            return false;
+        }
+        let shift = other.level - self.level;
+        other.tile_x >> shift == self.tile_x && other.tile_y >> shift == self.tile_y
+    }
+
+    /// The same-face neighbor across `edge`, if the edge is not a cube-face boundary.
+    pub fn same_face_neighbor(&self, edge: PatchEdge) -> Option<Self> {
+        let span = 1u64 << self.level;
+        let tile_x = self.tile_x as u64;
+        let tile_y = self.tile_y as u64;
+        let (tile_x, tile_y) = match edge {
+            PatchEdge::West if tile_x > 0 => (tile_x - 1, tile_y),
+            PatchEdge::East if tile_x + 1 < span => (tile_x + 1, tile_y),
+            PatchEdge::South if tile_y > 0 => (tile_x, tile_y - 1),
+            PatchEdge::North if tile_y + 1 < span => (tile_x, tile_y + 1),
+            _ => return None,
+        };
+        Some(Self {
+            face: self.face,
+            level: self.level,
+            tile_x: tile_x as u32,
+            tile_y: tile_y as u32,
+        })
+    }
+
+    /// The same-level neighboring patch across a cube-face boundary.
+    ///
+    /// The mapping is derived from the authoritative face-to-direction mapping
+    /// rather than duplicating a hand-maintained face transition table.
+    pub fn cross_face_neighbor(&self, edge: PatchEdge) -> Option<PatchNeighbor> {
+        if self.same_face_neighbor(edge).is_some() {
+            return None;
+        }
+
+        let patch = self.cross_face_neighbor_patch(edge);
+        let neighbor_edge = PatchEdge::ALL
+            .into_iter()
+            .find(|candidate_edge| patch.cross_face_neighbor_patch(*candidate_edge).eq(self))?;
+        Some(PatchNeighbor {
+            patch,
+            edge: neighbor_edge,
+        })
+    }
+
+    /// The patch across `edge`, with the corresponding edge on the neighbor.
+    pub fn neighbor(&self, edge: PatchEdge) -> PatchNeighbor {
+        if let Some(patch) = self.same_face_neighbor(edge) {
+            PatchNeighbor {
+                patch,
+                edge: edge.opposite(),
+            }
+        } else {
+            self.cross_face_neighbor(edge)
+                .expect("every cube-face boundary has a neighbor")
+        }
+    }
+
+    fn cross_face_neighbor_patch(&self, edge: PatchEdge) -> Self {
+        let span = (1u64 << self.level) as f64;
+        let (u0, v0, u1, v1) = self.uv_bounds();
+        let inset = 0.25 / span;
+        let (u, v) = match edge {
+            PatchEdge::West => (u0 - inset, (v0 + v1) * 0.5),
+            PatchEdge::East => (u1 + inset, (v0 + v1) * 0.5),
+            PatchEdge::South => ((u0 + u1) * 0.5, v0 - inset),
+            PatchEdge::North => ((u0 + u1) * 0.5, v1 + inset),
+        };
+        let (face, neighbor_u, neighbor_v) = face_uv(face_uv_to_direction(self.face, u, v));
+        let tile_x = ((neighbor_u * span) as u64).min(span as u64 - 1) as u32;
+        let tile_y = ((neighbor_v * span) as u64).min(span as u64 - 1) as u32;
+        Self {
+            face,
+            level: self.level,
+            tile_x,
+            tile_y,
+        }
+    }
+
     /// The `(u0, v0, u1, v1)` bounds of this patch in face uv space.
     pub fn uv_bounds(&self) -> (f64, f64, f64, f64) {
         let span = (1u64 << self.level) as f64;
@@ -129,6 +278,12 @@ impl TerrainPatch {
         let u1 = (self.tile_x as f64 + 1.0) / span;
         let v1 = (self.tile_y as f64 + 1.0) / span;
         (u0, v0, u1, v1)
+    }
+
+    /// The direction through the center of this patch.
+    pub fn center_direction(&self) -> DVec3 {
+        let (u0, v0, u1, v1) = self.uv_bounds();
+        face_uv_to_direction(self.face, (u0 + u1) * 0.5, (v0 + v1) * 0.5)
     }
 
     /// The patch at `level` covering a given unit direction.
@@ -144,6 +299,13 @@ impl TerrainPatch {
             tile_y: ty,
         }
     }
+}
+
+/// A neighboring patch and the edge on that patch shared with the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatchNeighbor {
+    pub patch: TerrainPatch,
+    pub edge: PatchEdge,
 }
 
 /// Approximate world-space edge length of a patch at a level on a planet.
@@ -188,16 +350,280 @@ pub fn lod_for_distance(
     level
 }
 
+/// Conservative terrain approximation inputs for one patch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PatchGeometricError {
+    /// The known source elevation range within the patch, in meters.
+    pub elevation_range_m: f64,
+    /// The maximum observed or bounded child-to-parent height deviation, in meters.
+    pub child_to_parent_deviation_m: f64,
+}
+
+impl PatchGeometricError {
+    /// A conservative world-space approximation error including curvature.
+    pub fn conservative_m(self, patch: &TerrainPatch, planet_radius_m: f64) -> f64 {
+        let half_face_angle = std::f64::consts::FRAC_PI_4 / (1u64 << patch.level) as f64;
+        let curvature_m = planet_radius_m.abs() * (1.0 - half_face_angle.cos());
+        curvature_m + self.elevation_range_m.abs() + self.child_to_parent_deviation_m.abs()
+    }
+}
+
+/// Camera data needed to project a patch's geometric error into pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraProjection {
+    pub position_m: DVec3,
+    pub vertical_fov_rad: f64,
+    pub viewport_height_px: f64,
+}
+
+/// Project a patch's conservative error using the distance to its center.
+pub fn projected_patch_error_px(
+    patch: &TerrainPatch,
+    geometric_error_m: PatchGeometricError,
+    planet_radius_m: f64,
+    camera: CameraProjection,
+) -> f64 {
+    let patch_center_m = patch.center_direction() * planet_radius_m;
+    let distance_m = camera.position_m.distance(patch_center_m);
+    screen_space_error_m(
+        geometric_error_m.conservative_m(patch, planet_radius_m),
+        distance_m,
+        camera.vertical_fov_rad,
+        camera.viewport_height_px,
+    )
+}
+
+/// Deterministic readiness and visibility inputs for pure quadtree selection.
+///
+/// Visibility applies to a patch and its ancestors or descendants, allowing a
+/// caller to provide either coarse visibility regions or exact leaf coverage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuadtreePatchState {
+    pub ready: BTreeSet<TerrainPatch>,
+    pub visible: BTreeSet<TerrainPatch>,
+}
+
+impl Default for QuadtreePatchState {
+    fn default() -> Self {
+        Self {
+            ready: BTreeSet::new(),
+            visible: TerrainPatch::roots().into_iter().collect(),
+        }
+    }
+}
+
+impl QuadtreePatchState {
+    pub fn is_ready(&self, patch: &TerrainPatch) -> bool {
+        self.ready.contains(patch)
+    }
+
+    pub fn is_visible(&self, patch: &TerrainPatch) -> bool {
+        self.visible
+            .iter()
+            .any(|visible| visible.is_ancestor_of(patch) || patch.is_ancestor_of(visible))
+    }
+}
+
+/// Parameters for deterministic six-face quadtree selection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuadtreeSelectionConfig {
+    pub max_level: u32,
+    pub max_projected_error_px: f64,
+    pub max_neighbor_level_difference: u32,
+}
+
+/// Desired and renderable leaf covers selected without runtime dependencies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuadtreeSelection {
+    /// Finest leaves requested by projected-error traversal, before readiness fallback.
+    pub target_leaves: BTreeSet<TerrainPatch>,
+    /// Requested non-root patches, including required ancestors.
+    pub requested: BTreeSet<TerrainPatch>,
+    /// Leaves that can be published now; unready children retain their parent.
+    pub visible_leaves: BTreeSet<TerrainPatch>,
+}
+
+/// Select a complete, balanced six-face leaf cover from supplied projected errors.
+///
+/// Readiness only affects `visible_leaves`; `target_leaves` and `requested` are
+/// identical for the same visibility, errors, and configuration.
+pub fn select_quadtree_leaves(
+    state: &QuadtreePatchState,
+    projected_errors_px: &BTreeMap<TerrainPatch, f64>,
+    config: QuadtreeSelectionConfig,
+) -> QuadtreeSelection {
+    let mut target_leaves: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+    let mut pending: Vec<_> = TerrainPatch::roots().into_iter().collect();
+
+    while let Some(patch) = pending.pop() {
+        let projected_error_px = projected_errors_px.get(&patch).copied().unwrap_or(0.0);
+        if patch.level >= config.max_level
+            || !state.is_visible(&patch)
+            || projected_error_px <= config.max_projected_error_px
+        {
+            continue;
+        }
+
+        target_leaves.remove(&patch);
+        for child in patch.children() {
+            target_leaves.insert(child);
+            pending.push(child);
+        }
+    }
+
+    target_leaves = balance_visible_leaves(&target_leaves, config.max_neighbor_level_difference);
+
+    let mut requested = BTreeSet::new();
+    for leaf in &target_leaves {
+        let mut current = Some(*leaf);
+        while let Some(patch) = current {
+            if patch.level > 0 {
+                requested.insert(patch);
+            }
+            current = patch.parent();
+        }
+    }
+
+    let mut visible_leaves = BTreeSet::new();
+    for root in TerrainPatch::roots() {
+        resolve_ready_leaves(root, &target_leaves, state, &mut visible_leaves);
+    }
+
+    QuadtreeSelection {
+        target_leaves,
+        requested,
+        visible_leaves,
+    }
+}
+
+fn resolve_ready_leaves(
+    patch: TerrainPatch,
+    target_leaves: &BTreeSet<TerrainPatch>,
+    state: &QuadtreePatchState,
+    visible_leaves: &mut BTreeSet<TerrainPatch>,
+) {
+    if target_leaves.contains(&patch) {
+        visible_leaves.insert(patch);
+        return;
+    }
+
+    let children = patch.children();
+    if children.iter().all(|child| state.is_ready(child)) {
+        for child in children {
+            resolve_ready_leaves(child, target_leaves, state, visible_leaves);
+        }
+    } else {
+        visible_leaves.insert(patch);
+    }
+}
+
+/// Whether two patches share an edge segment, including cube-face seams.
+pub fn patches_are_adjacent(a: &TerrainPatch, b: &TerrainPatch) -> bool {
+    if a == b {
+        return false;
+    }
+    if a.face == b.face {
+        return PatchEdge::ALL
+            .into_iter()
+            .any(|edge| shares_same_face_edge(a, b, edge));
+    }
+
+    patches_share_cross_face_edge(a, b) || patches_share_cross_face_edge(b, a)
+}
+
+fn patches_share_cross_face_edge(a: &TerrainPatch, b: &TerrainPatch) -> bool {
+    PatchEdge::ALL.into_iter().any(|edge| {
+        a.cross_face_neighbor(edge).is_some_and(|neighbor| {
+            neighbor.patch.face == b.face
+                && (neighbor.patch == *b
+                    || patch_touches_ancestor_edge(&neighbor.patch, b, neighbor.edge)
+                    || shares_same_face_edge(&neighbor.patch, b, neighbor.edge))
+        })
+    })
+}
+
+/// Refine coarse leaves until all adjacent leaves meet the configured level limit.
+pub fn balance_visible_leaves(
+    leaves: &BTreeSet<TerrainPatch>,
+    max_level_difference: u32,
+) -> BTreeSet<TerrainPatch> {
+    let mut balanced = leaves.clone();
+    loop {
+        let patches: Vec<_> = balanced.iter().copied().collect();
+        let mut coarser = None;
+        'pairs: for (index, a) in patches.iter().enumerate() {
+            for b in patches.iter().skip(index + 1) {
+                if patches_are_adjacent(a, b) && a.level.abs_diff(b.level) > max_level_difference {
+                    coarser = Some(if a.level < b.level { *a } else { *b });
+                    break 'pairs;
+                }
+            }
+        }
+
+        let Some(coarser) = coarser else {
+            return balanced;
+        };
+        balanced.remove(&coarser);
+        balanced.extend(coarser.children());
+    }
+}
+
+fn shares_same_face_edge(a: &TerrainPatch, b: &TerrainPatch, edge: PatchEdge) -> bool {
+    let level = a.level.max(b.level);
+    let scale_a = 1u64 << (level - a.level);
+    let scale_b = 1u64 << (level - b.level);
+    let ax0 = a.tile_x as u64 * scale_a;
+    let ax1 = (a.tile_x as u64 + 1) * scale_a;
+    let ay0 = a.tile_y as u64 * scale_a;
+    let ay1 = (a.tile_y as u64 + 1) * scale_a;
+    let bx0 = b.tile_x as u64 * scale_b;
+    let bx1 = (b.tile_x as u64 + 1) * scale_b;
+    let by0 = b.tile_y as u64 * scale_b;
+    let by1 = (b.tile_y as u64 + 1) * scale_b;
+
+    match edge {
+        PatchEdge::West => ax0 == bx1 && ranges_overlap(ay0, ay1, by0, by1),
+        PatchEdge::East => ax1 == bx0 && ranges_overlap(ay0, ay1, by0, by1),
+        PatchEdge::South => ay0 == by1 && ranges_overlap(ax0, ax1, bx0, bx1),
+        PatchEdge::North => ay1 == by0 && ranges_overlap(ax0, ax1, bx0, bx1),
+    }
+}
+
+fn patch_touches_ancestor_edge(
+    patch: &TerrainPatch,
+    ancestor: &TerrainPatch,
+    edge: PatchEdge,
+) -> bool {
+    if patch == ancestor || !ancestor.is_ancestor_of(patch) {
+        return false;
+    }
+    let scale = 1u64 << (patch.level - ancestor.level);
+    let min_x = ancestor.tile_x as u64 * scale;
+    let max_x = (ancestor.tile_x as u64 + 1) * scale;
+    let min_y = ancestor.tile_y as u64 * scale;
+    let max_y = (ancestor.tile_y as u64 + 1) * scale;
+    match edge {
+        PatchEdge::West => patch.tile_x as u64 == min_x,
+        PatchEdge::East => patch.tile_x as u64 + 1 == max_x,
+        PatchEdge::South => patch.tile_y as u64 == min_y,
+        PatchEdge::North => patch.tile_y as u64 + 1 == max_y,
+    }
+}
+
+fn ranges_overlap(a0: u64, a1: u64, b0: u64, b1: u64) -> bool {
+    a0 < b1 && b0 < a1
+}
+
 /// Geometry of a terrain patch: sphere-aligned positions, normals, and indices
 /// with a downward skirt ring to hide LOD cracks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PatchGeometry {
     pub positions: Vec<[f64; 3]>,
     pub normals: Vec<[f64; 3]>,
-    /// Per-vertex UV in the patch's own [0,1]×[0,1] parameterization. Used by
-    /// the renderer to map a per-patch procedural surface texture without
-    /// seams (the texture is generated in the same parameterization).
+    /// Stable equirectangular UVs for whole-planet imagery.
     pub uvs: Vec<[f32; 2]>,
+    /// Tile-local UVs retained for future custom material normal/detail maps.
+    pub local_uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -211,37 +637,121 @@ pub fn build_patch_geometry(
     resolution: u32,
     skirt_depth_m: f64,
 ) -> PatchGeometry {
+    build_patch_geometry_with_stitches(
+        patch,
+        source,
+        planet_radius_m,
+        resolution,
+        skirt_depth_m,
+        &[],
+    )
+}
+
+/// Build a patch with 2:1 edge stitch index variants for every listed edge.
+/// A stitched fine edge references only every second boundary sample, which
+/// aligns with the corresponding `2^n+1` coarse grid. Skirts remain below the
+/// surface as a defensive fallback for raster precision and multi-edge corners.
+pub fn build_patch_geometry_with_stitches(
+    patch: &TerrainPatch,
+    source: &dyn TerrainSource,
+    planet_radius_m: f64,
+    resolution: u32,
+    skirt_depth_m: f64,
+    stitched_edges: &[PatchEdge],
+) -> PatchGeometry {
+    build_patch_geometry_with_height_sampler(
+        patch,
+        planet_radius_m,
+        resolution,
+        skirt_depth_m,
+        stitched_edges,
+        |latitude_deg, longitude_deg| source.height_m(latitude_deg, longitude_deg),
+    )
+}
+
+/// Build a coarse presentation mesh from a source's non-authoritative overview
+/// representation. This avoids initializing expensive local terrain caches for
+/// global coverage; refined patches continue to use [`build_patch_geometry`].
+pub fn build_patch_overview_geometry_with_stitches(
+    patch: &TerrainPatch,
+    source: &dyn TerrainSource,
+    planet_radius_m: f64,
+    resolution: u32,
+    skirt_depth_m: f64,
+    stitched_edges: &[PatchEdge],
+) -> PatchGeometry {
+    build_patch_geometry_with_height_sampler(
+        patch,
+        planet_radius_m,
+        resolution,
+        skirt_depth_m,
+        stitched_edges,
+        |latitude_deg, longitude_deg| source.overview_height_m(latitude_deg, longitude_deg),
+    )
+}
+
+fn build_patch_geometry_with_height_sampler(
+    patch: &TerrainPatch,
+    planet_radius_m: f64,
+    resolution: u32,
+    skirt_depth_m: f64,
+    stitched_edges: &[PatchEdge],
+    height_at: impl Fn(f64, f64) -> f64,
+) -> PatchGeometry {
+    // Sample in planet-tangent coordinates, rather than patch UV space, so
+    // shared vertices retain an identical normal across LOD and cube faces.
+    const NORMAL_SAMPLE_DISTANCE_M: f64 = 50.0;
+
     let res = resolution.max(2) as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
     let mut grid = vec![[0.0f64; 3]; res * res];
     let mut uvs = vec![[0.0f32; 2]; res * res];
+    let mut local_uvs = vec![[0.0f32; 2]; res * res];
     for j in 0..res {
         for i in 0..res {
             let u = u0 + (u1 - u0) * i as f64 / (res - 1) as f64;
             let v = v0 + (v1 - v0) * j as f64 / (res - 1) as f64;
             let dir = face_uv_to_direction(patch.face, u, v);
             let (lat, lon) = direction_to_lat_lon(dir);
-            let h = source.height_m(lat, lon);
+            let h = height_at(lat, lon);
             grid[j * res + i] = (dir * (planet_radius_m + h)).to_array();
-            uvs[j * res + i] = [i as f32 / (res - 1) as f32, j as f32 / (res - 1) as f32];
+            // Global imagery uses geographic coordinates, not a tile-local
+            // projection, so every level shares one continuous Earth albedo.
+            uvs[j * res + i] = [
+                ((lon + 180.0) / 360.0) as f32,
+                ((90.0 - lat) / 180.0) as f32,
+            ];
+            local_uvs[j * res + i] = [i as f32 / (res - 1) as f32, j as f32 / (res - 1) as f32];
         }
     }
 
+    let surface_point = |direction: DVec3| {
+        let direction = direction.normalize();
+        let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
+        direction * (planet_radius_m + height_at(latitude_deg, longitude_deg))
+    };
+    let normal_sample_angle = NORMAL_SAMPLE_DISTANCE_M / planet_radius_m;
     let mut normals = vec![[0.0f64; 3]; res * res];
     for j in 0..res {
         for i in 0..res {
             let idx = j * res + i;
             let p = DVec3::from_array(grid[idx]);
-            let right = DVec3::from_array(grid[j * res + (i + 1).min(res - 1)]);
-            let left = DVec3::from_array(grid[j * res + i.saturating_sub(1)]);
-            let up = DVec3::from_array(grid[((j + 1).min(res - 1)) * res + i]);
-            let down = DVec3::from_array(grid[(j.saturating_sub(1)) * res + i]);
-            // (right - left) ~ du, (up - down) ~ dv. Their cross may point
-            // inward or outward depending on the cube face's UV handedness.
-            // Force the normal to point away from the planet center so the
-            // ground receives light correctly on every face.
-            let n = (right - left).cross(up - down).normalize_or_zero();
+            let radial = p.normalize();
+            let reference_axis = if radial.y.abs() < 0.9 {
+                DVec3::Y
+            } else {
+                DVec3::X
+            };
+            let east = reference_axis.cross(radial).normalize();
+            let north = radial.cross(east).normalize();
+            let east_plus = surface_point((radial + east * normal_sample_angle).normalize());
+            let east_minus = surface_point((radial - east * normal_sample_angle).normalize());
+            let north_plus = surface_point((radial + north * normal_sample_angle).normalize());
+            let north_minus = surface_point((radial - north * normal_sample_angle).normalize());
+            let n = (east_plus - east_minus)
+                .cross(north_plus - north_minus)
+                .normalize_or_zero();
             let n = if n.dot(p) < 0.0 { -n } else { n };
             normals[idx] = n.to_array();
         }
@@ -262,6 +772,7 @@ pub fn build_patch_geometry(
                 positions.push((p - n * skirt_depth_m).to_array());
                 all_normals.push(normals[idx]);
                 uvs.push(uvs[idx]);
+                local_uvs.push(local_uvs[idx]);
                 skirt_index[idx] = Some(positions.len() as u32 - 1);
             }
         }
@@ -276,10 +787,10 @@ pub fn build_patch_geometry(
     let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6 + res * 4 * 6);
     for j in 0..res - 1 {
         for i in 0..res - 1 {
-            let tl = (j * res + i) as u32;
-            let tr = (j * res + i + 1) as u32;
-            let bl = ((j + 1) * res + i) as u32;
-            let br = ((j + 1) * res + i + 1) as u32;
+            let tl = stitched_grid_index(i, j, res, stitched_edges);
+            let tr = stitched_grid_index(i + 1, j, res, stitched_edges);
+            let bl = stitched_grid_index(i, j + 1, res, stitched_edges);
+            let br = stitched_grid_index(i + 1, j + 1, res, stitched_edges);
             if reversed {
                 // Flip the winding so front faces outward on left-handed faces.
                 indices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
@@ -329,8 +840,27 @@ pub fn build_patch_geometry(
         positions,
         normals: all_normals,
         uvs,
+        local_uvs,
         indices,
     }
+}
+
+fn stitched_grid_index(i: usize, j: usize, resolution: usize, stitched_edges: &[PatchEdge]) -> u32 {
+    let mut i = i;
+    let mut j = j;
+    if stitched_edges.contains(&PatchEdge::West) && i == 0 && j % 2 == 1 {
+        j -= 1;
+    }
+    if stitched_edges.contains(&PatchEdge::East) && i + 1 == resolution && j % 2 == 1 {
+        j -= 1;
+    }
+    if stitched_edges.contains(&PatchEdge::South) && j == 0 && i % 2 == 1 {
+        i -= 1;
+    }
+    if stitched_edges.contains(&PatchEdge::North) && j + 1 == resolution && i % 2 == 1 {
+        i -= 1;
+    }
+    (j * resolution + i) as u32
 }
 
 /// Direction to latitude/longitude in degrees.
@@ -348,6 +878,37 @@ mod tests {
 
     fn source() -> ProceduralTerrainSource {
         ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0)
+    }
+
+    #[derive(Debug)]
+    struct OverviewOnlySource;
+
+    impl TerrainSource for OverviewOnlySource {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            panic!("coarse presentation must not request authoritative height")
+        }
+
+        fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            125.0
+        }
+    }
+
+    #[test]
+    fn overview_geometry_avoids_authoritative_height_sampling() {
+        let geometry = build_patch_overview_geometry_with_stitches(
+            &TerrainPatch::root(CubeFace::PosZ),
+            &OverviewOnlySource,
+            6_371_000.0,
+            3,
+            40.0,
+            &[],
+        );
+
+        assert_eq!(geometry.positions.len(), 17);
+        assert!(geometry
+            .positions
+            .iter()
+            .any(|position| (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6));
     }
 
     #[test]
@@ -378,6 +939,193 @@ mod tests {
         let mut tiles: Vec<(u32, u32)> = children.iter().map(|c| (c.tile_x, c.tile_y)).collect();
         tiles.sort();
         assert_eq!(tiles, vec![(0, 0), (0, 1), (1, 0), (1, 1)]);
+    }
+
+    #[test]
+    fn parent_children_and_roots_form_deterministic_partition() {
+        let roots = TerrainPatch::roots();
+        assert_eq!(roots.len(), 6);
+        assert_eq!(
+            roots.iter().map(|root| root.face).collect::<Vec<_>>(),
+            CubeFace::ALL
+        );
+        assert!(roots.iter().all(|root| root.parent().is_none()));
+
+        let parent = TerrainPatch {
+            face: CubeFace::NegY,
+            level: 3,
+            tile_x: 5,
+            tile_y: 2,
+        };
+        let children = parent.children();
+        assert!(children.iter().all(|child| child.parent() == Some(parent)));
+        assert!(children.iter().all(|child| parent.is_ancestor_of(child)));
+
+        let parent_area = {
+            let (u0, v0, u1, v1) = parent.uv_bounds();
+            (u1 - u0) * (v1 - v0)
+        };
+        let children_area: f64 = children
+            .iter()
+            .map(|child| {
+                let (u0, v0, u1, v1) = child.uv_bounds();
+                (u1 - u0) * (v1 - v0)
+            })
+            .sum();
+        assert!((children_area - parent_area).abs() < 1e-15);
+    }
+
+    #[test]
+    fn neighbors_are_symmetric_across_every_cube_face_edge() {
+        for face in CubeFace::ALL {
+            let root = TerrainPatch::root(face);
+            for edge in PatchEdge::ALL {
+                let neighbor = root.cross_face_neighbor(edge).unwrap();
+                assert_ne!(neighbor.patch.face, face);
+                assert!(patches_are_adjacent(&root, &neighbor.patch));
+                assert_eq!(neighbor.patch.neighbor(neighbor.edge).patch, root);
+                assert_eq!(neighbor.patch.neighbor(neighbor.edge).edge, edge);
+            }
+        }
+
+        let level = 3;
+        let last = (1 << level) - 1;
+        for face in CubeFace::ALL {
+            for edge in PatchEdge::ALL {
+                let patch = match edge {
+                    PatchEdge::West => TerrainPatch {
+                        face,
+                        level,
+                        tile_x: 0,
+                        tile_y: 2,
+                    },
+                    PatchEdge::East => TerrainPatch {
+                        face,
+                        level,
+                        tile_x: last,
+                        tile_y: 2,
+                    },
+                    PatchEdge::South => TerrainPatch {
+                        face,
+                        level,
+                        tile_x: 2,
+                        tile_y: 0,
+                    },
+                    PatchEdge::North => TerrainPatch {
+                        face,
+                        level,
+                        tile_x: 2,
+                        tile_y: last,
+                    },
+                };
+                let neighbor = patch.cross_face_neighbor(edge).unwrap();
+                assert!(patches_are_adjacent(&patch, &neighbor.patch));
+                assert_eq!(neighbor.patch.neighbor(neighbor.edge).patch, patch);
+            }
+        }
+
+        let interior = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 3,
+            tile_x: 3,
+            tile_y: 4,
+        };
+        let west = interior.same_face_neighbor(PatchEdge::West).unwrap();
+        assert_eq!(west.face, interior.face);
+        assert_eq!(west.tile_x, interior.tile_x - 1);
+        assert!(patches_are_adjacent(&interior, &west));
+    }
+
+    #[test]
+    fn geometric_error_and_projection_order_by_detail_and_distance() {
+        let error = PatchGeometricError {
+            elevation_range_m: 100.0,
+            child_to_parent_deviation_m: 20.0,
+        };
+        let root = TerrainPatch::root(CubeFace::PosX);
+        let child = root.children()[0];
+        assert!(
+            error.conservative_m(&root, 6_371_000.0) > error.conservative_m(&child, 6_371_000.0)
+        );
+
+        let near = CameraProjection {
+            position_m: root.center_direction() * 7_000_000.0,
+            vertical_fov_rad: 1.0,
+            viewport_height_px: 1_080.0,
+        };
+        let far = CameraProjection {
+            position_m: root.center_direction() * 20_000_000.0,
+            ..near
+        };
+        assert!(
+            projected_patch_error_px(&root, error, 6_371_000.0, near)
+                > projected_patch_error_px(&root, error, 6_371_000.0, far)
+        );
+    }
+
+    #[test]
+    fn balancing_refines_coarse_cross_face_neighbors() {
+        let pos_z_root = TerrainPatch::root(CubeFace::PosZ);
+        let mut leaves: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+        leaves.remove(&pos_z_root);
+        leaves.extend(pos_z_root.children());
+
+        let east_child = pos_z_root.children()[1];
+        leaves.remove(&east_child);
+        leaves.extend(east_child.children());
+
+        let balanced = balance_visible_leaves(&leaves, 1);
+        for a in &balanced {
+            for b in &balanced {
+                if patches_are_adjacent(a, b) {
+                    assert!(a.level.abs_diff(b.level) <= 1, "{a:?} and {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn readiness_changes_only_the_published_leaf_cover() {
+        let root = TerrainPatch::root(CubeFace::PosZ);
+        let errors = BTreeMap::from([(root, 10.0)]);
+        let config = QuadtreeSelectionConfig {
+            max_level: 1,
+            max_projected_error_px: 1.0,
+            max_neighbor_level_difference: 1,
+        };
+
+        let unready = QuadtreePatchState::default();
+        let fallback = select_quadtree_leaves(&unready, &errors, config);
+        assert_eq!(fallback.target_leaves.len(), 9);
+        assert!(fallback.target_leaves.contains(&root.children()[0]));
+        assert!(fallback.visible_leaves.contains(&root));
+
+        let mut ready = unready.clone();
+        ready.ready.extend(root.children());
+        let published = select_quadtree_leaves(&ready, &errors, config);
+        assert_eq!(fallback.target_leaves, published.target_leaves);
+        assert_eq!(fallback.requested, published.requested);
+        assert!(!published.visible_leaves.contains(&root));
+        assert!(root
+            .children()
+            .iter()
+            .all(|child| published.visible_leaves.contains(child)));
+    }
+
+    #[test]
+    fn selection_always_retains_six_root_cover() {
+        let selection = select_quadtree_leaves(
+            &QuadtreePatchState::default(),
+            &BTreeMap::new(),
+            QuadtreeSelectionConfig {
+                max_level: 4,
+                max_projected_error_px: 1.0,
+                max_neighbor_level_difference: 1,
+            },
+        );
+        let roots: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+        assert_eq!(selection.target_leaves, roots);
+        assert_eq!(selection.visible_leaves, roots);
     }
 
     #[test]
@@ -437,6 +1185,67 @@ mod tests {
         let h_coarse = sample_height(&coarse, &s, dir, 6_371_000.0);
         let h_fine = sample_height(&fine, &s, dir, 6_371_000.0);
         assert_eq!(h_coarse, h_fine);
+    }
+
+    #[test]
+    fn parent_and_child_share_aligned_outer_edge_samples() {
+        let parent = TerrainPatch::root(CubeFace::PosZ);
+        let child = parent.children()[0];
+        let source = source();
+        let parent_geometry = build_patch_geometry(&parent, &source, 6_371_000.0, 33, 40.0);
+        let child_geometry = build_patch_geometry(&child, &source, 6_371_000.0, 33, 40.0);
+
+        // The child covers the lower half of the parent's west edge. With a
+        // 2^n+1 grid, every other child sample equals a parent sample exactly.
+        for child_y in (0..33usize).step_by(2) {
+            let parent_y = child_y / 2;
+            let parent_index = parent_y * 33;
+            let child_index = child_y * 33;
+            let parent_position = parent_geometry.positions[parent_index];
+            let child_position = child_geometry.positions[child_index];
+            assert_eq!(parent_position, child_position);
+            assert_eq!(
+                parent_geometry.normals[parent_index], child_geometry.normals[child_index],
+                "shared parent/child edge vertex has mismatched lighting normal"
+            );
+        }
+    }
+
+    #[test]
+    fn fine_edge_stitch_references_only_coarse_aligned_boundary_samples() {
+        let patch = TerrainPatch::root(CubeFace::PosZ).children()[0];
+        let geometry = build_patch_geometry_with_stitches(
+            &patch,
+            &source(),
+            6_371_000.0,
+            33,
+            40.0,
+            &[PatchEdge::West],
+        );
+        let grid_index_count = 32 * 32 * 6;
+        for index in geometry.indices.iter().take(grid_index_count) {
+            if (*index as usize) % 33 == 0 {
+                let row = *index as usize / 33;
+                assert_eq!(row % 2, 0, "stitched west edge used odd row {row}");
+            }
+        }
+    }
+
+    #[test]
+    fn global_uvs_are_stable_across_patch_boundaries() {
+        let west = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 1,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let east = west.neighbor(PatchEdge::East).patch;
+        let source = source();
+        let west_geometry = build_patch_geometry(&west, &source, 6_371_000.0, 5, 40.0);
+        let east_geometry = build_patch_geometry(&east, &source, 6_371_000.0, 5, 40.0);
+        for row in 0..5usize {
+            assert_eq!(west_geometry.uvs[row * 5 + 4], east_geometry.uvs[row * 5]);
+        }
     }
 
     fn sample_height(

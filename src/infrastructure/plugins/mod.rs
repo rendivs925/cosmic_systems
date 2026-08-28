@@ -44,7 +44,9 @@ use crate::infrastructure::bevy_adapters::education_systems::register_education_
 use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
-use crate::infrastructure::bevy_adapters::performance_systems::cap_fixed_overstep;
+use crate::infrastructure::bevy_adapters::performance_systems::{
+    cap_fixed_overstep, request_screenshot_input, take_pending_screenshot,
+};
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
@@ -62,8 +64,8 @@ use crate::infrastructure::bevy_adapters::rocket_entry::{
     compute_retro_propulsion,
 };
 use crate::infrastructure::bevy_adapters::rocket_environment::{
-    setup_rocket_earth_sphere, setup_rocket_sky_color, setup_rocket_sun_light,
-    update_rocket_earth_sphere, update_rocket_sky_color, update_sun_day_night_cycle,
+    setup_rocket_sky_color, setup_rocket_sun_light, update_rocket_sky_color,
+    update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_flight_conditions::refresh_flight_conditions;
 use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::{
@@ -207,7 +209,10 @@ impl Plugin for SharedSimulationPlugin {
         app.add_systems(Update, init_vulkan_solver.run_if(vulkan_solver_required));
 
         // Screenshot and recording
-        app.add_systems(Update, take_pending_screenshot);
+        app.add_systems(
+            Update,
+            (request_screenshot_input, take_pending_screenshot).chain(),
+        );
         app.add_systems(Update, toggle_video_recording);
         app.add_systems(Update, handle_video_recording);
 
@@ -584,7 +589,7 @@ impl Plugin for RocketModePlugin {
             ),
         );
 
-        // Rocket-specific startup: camera controller, sun light, Earth sphere, sky color.
+        // Rocket-specific startup: camera controller, sun light, planets, and sky color.
         // Must run AFTER setup_space (spawns camera + planets) and spawn_rockets_system
         // (spawns rocket) so the render origin is set to the rocket's physical position
         // and the camera is framed on the already-spawned camera entity.
@@ -596,10 +601,6 @@ impl Plugin for RocketModePlugin {
                 setup_rocket_camera_controller,
                 setup_rocket_sun_light,
                 setup_rocket_planets,
-                // Earth sphere disabled: 6371km radius sphere doesn't work in
-                // flight frame where camera is at rocket position (origin).
-                // Terrain patches provide the local spherical terrain.
-                // setup_rocket_earth_sphere,
                 setup_rocket_sky_color,
             )
                 .chain()
@@ -612,9 +613,6 @@ impl Plugin for RocketModePlugin {
 
         // Keep the rocket-mode sky clear and space-black.
         app.add_systems(Update, update_rocket_sky_color);
-
-        // True-scale Earth sphere follows render origin.
-        app.add_systems(Update, update_rocket_earth_sphere);
 
         // Rocket-mode planets (bound planet, moons, Sun) in flight units with real textures.
         // Runs after solar system planet positions are updated.

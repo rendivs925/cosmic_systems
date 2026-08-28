@@ -16,6 +16,7 @@ use bevy::math::DVec3;
 use std::fmt::Debug;
 #[cfg(feature = "dem")]
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
 
@@ -83,6 +84,222 @@ pub trait TerrainSource: Send + Sync + Debug {
     /// latitude linearly; planets cold/temperate callers may override.
     fn zone_lat(&self, latitude_deg: f64) -> f64 {
         ((latitude_deg + 90.0) / 180.0).clamp(0.0, 1.0)
+    }
+}
+
+/// Conservative elevation interval in meters above mean radius.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ElevationBounds {
+    pub min_m: f64,
+    pub max_m: f64,
+}
+
+impl ElevationBounds {
+    pub fn new(min_m: f64, max_m: f64) -> Self {
+        assert!(
+            min_m.is_finite() && max_m.is_finite() && min_m <= max_m,
+            "terrain elevation bounds must be finite and ordered"
+        );
+        Self { min_m, max_m }
+    }
+
+    /// Conservative bounds for the sum of two independent elevation layers.
+    pub fn combine(self, other: Self) -> Self {
+        Self::new(self.min_m + other.min_m, self.max_m + other.max_m)
+    }
+
+    pub fn range_m(self) -> f64 {
+        self.max_m - self.min_m
+    }
+}
+
+/// A terrain elevation layer with an explicitly declared conservative envelope.
+/// The source must return a contribution, not a radius, in meters.
+#[derive(Debug)]
+pub struct TerrainElevationLayer {
+    source: Arc<dyn TerrainSource>,
+    bounds: ElevationBounds,
+}
+
+impl TerrainElevationLayer {
+    pub fn new(source: Arc<dyn TerrainSource>, bounds: ElevationBounds) -> Self {
+        Self { source, bounds }
+    }
+
+    pub fn bounds(&self) -> ElevationBounds {
+        self.bounds
+    }
+}
+
+/// LOD-only fade metadata for bounded procedural detail. It is intentionally
+/// separate from terrain sampling: camera movement must never change height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetailLodFade {
+    /// Detail is absent at this LOD and every coarser LOD.
+    pub first_faded_level: u32,
+    /// Detail is fully represented at this LOD and every finer LOD.
+    pub first_full_detail_level: u32,
+}
+
+impl DetailLodFade {
+    pub fn new(first_faded_level: u32, first_full_detail_level: u32) -> Self {
+        assert!(
+            first_faded_level <= first_full_detail_level,
+            "detail fade must progress from coarse to fine LOD"
+        );
+        Self {
+            first_faded_level,
+            first_full_detail_level,
+        }
+    }
+
+    /// Smoothly increases detail representation from coarse to fine LOD.
+    pub fn weight_for_level(self, level: u32) -> f64 {
+        if level <= self.first_faded_level {
+            return 0.0;
+        }
+        if level >= self.first_full_detail_level {
+            return 1.0;
+        }
+        let span = (self.first_full_detail_level - self.first_faded_level) as f64;
+        let t = (level - self.first_faded_level) as f64 / span;
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
+/// A bounded procedural contribution plus the LOD metadata used by mesh
+/// generation. The fade is not applied by [`LayeredTerrainSource::height_m`].
+#[derive(Debug)]
+pub struct TerrainDetailLayer {
+    source: Arc<dyn TerrainSource>,
+    bounds: ElevationBounds,
+    pub lod_fade: DetailLodFade,
+}
+
+impl TerrainDetailLayer {
+    pub fn new(
+        source: Arc<dyn TerrainSource>,
+        bounds: ElevationBounds,
+        lod_fade: DetailLodFade,
+    ) -> Self {
+        Self {
+            source,
+            bounds,
+            lod_fade,
+        }
+    }
+
+    pub fn bounds(&self) -> ElevationBounds {
+        self.bounds
+    }
+}
+
+/// The one authoritative composition of a planet's terrain elevation layers.
+///
+/// The base and macro layers provide global shape, an optional DEM layer adds
+/// configured local data or its own deterministic fallback, and detail remains
+/// in the physical source at every LOD. Rendering may use `lod_fade` to blend a
+/// representation, but collision and height queries always sample this sum.
+#[derive(Debug)]
+pub struct LayeredTerrainSource {
+    pub base: TerrainElevationLayer,
+    pub macro_elevation: Option<TerrainElevationLayer>,
+    pub dem_elevation: Option<TerrainElevationLayer>,
+    pub procedural_detail: Option<TerrainDetailLayer>,
+}
+
+impl LayeredTerrainSource {
+    pub fn new(
+        base: TerrainElevationLayer,
+        macro_elevation: Option<TerrainElevationLayer>,
+        dem_elevation: Option<TerrainElevationLayer>,
+        procedural_detail: Option<TerrainDetailLayer>,
+    ) -> Self {
+        Self {
+            base,
+            macro_elevation,
+            dem_elevation,
+            procedural_detail,
+        }
+    }
+
+    /// Conservative deterministic bounds for every active elevation layer.
+    pub fn elevation_bounds_m(&self) -> ElevationBounds {
+        [
+            Some(self.base.bounds()),
+            self.macro_elevation
+                .as_ref()
+                .map(TerrainElevationLayer::bounds),
+            self.dem_elevation
+                .as_ref()
+                .map(TerrainElevationLayer::bounds),
+            self.procedural_detail
+                .as_ref()
+                .map(TerrainDetailLayer::bounds),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(ElevationBounds::new(0.0, 0.0), ElevationBounds::combine)
+    }
+
+    fn primary_surface(&self) -> &dyn TerrainSource {
+        self.dem_elevation
+            .as_ref()
+            .map(|layer| layer.source.as_ref())
+            .or_else(|| {
+                self.macro_elevation
+                    .as_ref()
+                    .map(|layer| layer.source.as_ref())
+            })
+            .unwrap_or(self.base.source.as_ref())
+    }
+}
+
+impl TerrainSource for LayeredTerrainSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let mut height_m = self.base.source.height_m(latitude_deg, longitude_deg);
+        if let Some(layer) = &self.macro_elevation {
+            height_m += layer.source.height_m(latitude_deg, longitude_deg);
+        }
+        if let Some(layer) = &self.dem_elevation {
+            height_m += layer.source.height_m(latitude_deg, longitude_deg);
+        }
+        if let Some(layer) = &self.procedural_detail {
+            height_m += layer.source.height_m(latitude_deg, longitude_deg);
+        }
+        height_m
+    }
+
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let mut height_m = self
+            .base
+            .source
+            .overview_height_m(latitude_deg, longitude_deg);
+        if let Some(layer) = &self.macro_elevation {
+            height_m += layer.source.overview_height_m(latitude_deg, longitude_deg);
+        }
+        if let Some(layer) = &self.dem_elevation {
+            height_m += layer.source.overview_height_m(latitude_deg, longitude_deg);
+        }
+        height_m
+    }
+
+    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.primary_surface().moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.primary_surface()
+            .overview_moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.primary_surface()
+            .overview_slope_deg(latitude_deg, longitude_deg)
+    }
+
+    fn zone_lat(&self, latitude_deg: f64) -> f64 {
+        self.primary_surface().zone_lat(latitude_deg)
     }
 }
 
@@ -230,6 +447,16 @@ impl ProceduralTerrainSource {
         }
     }
 
+    /// Conservative analytic envelope of the rolling, ridge, and crater terms.
+    pub fn elevation_bounds_m(&self) -> ElevationBounds {
+        let crater_depth_m = self.crater_count as f64 * 1_600.0;
+        let crater_rim_m = self.crater_count as f64 * 480.0;
+        ElevationBounds::new(
+            -self.amplitude_m - crater_depth_m,
+            self.amplitude_m + self.mountain_amplitude_m + crater_rim_m,
+        )
+    }
+
     fn crater_field(&self, lat: f64, lon: f64) -> f64 {
         if self.crater_count == 0 {
             return 0.0;
@@ -345,6 +572,13 @@ impl LocalDetailTerrainSource {
         }
     }
 
+    pub const fn elevation_bounds_m() -> ElevationBounds {
+        ElevationBounds {
+            min_m: -36.0,
+            max_m: 24.0,
+        }
+    }
+
     fn detail_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let lat = latitude_deg.to_radians();
         let lon = longitude_deg.to_radians();
@@ -365,7 +599,10 @@ impl LocalDetailTerrainSource {
             direction.z * 60_000.0,
         );
         let drainage = (1.0 - (drainage_noise * 2.0 - 1.0).abs()).powi(3);
-        (ridges * 48.0 - drainage * 12.0).clamp(-36.0, 24.0)
+        (ridges * 48.0 - drainage * 12.0).clamp(
+            Self::elevation_bounds_m().min_m,
+            Self::elevation_bounds_m().max_m,
+        )
     }
 }
 
@@ -669,15 +906,47 @@ pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg
 /// their existing procedural sources.
 pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
     let base: std::sync::Arc<dyn TerrainSource> = match name {
-        "Earth" => {
-            let procedural =
-                std::sync::Arc::new(ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0));
-            detail_earth(erode_earth(procedural))
-        }
+        "Earth" => layered_earth_source(),
         "Moon" => std::sync::Arc::new(ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14)),
         _ => std::sync::Arc::new(ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0)),
     };
     with_sites(base, terrain_sites(name))
+}
+
+#[derive(Debug)]
+struct FlatTerrainSource;
+
+impl TerrainSource for FlatTerrainSource {
+    fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+}
+
+fn zero_elevation_layer() -> TerrainElevationLayer {
+    TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0))
+}
+
+fn layered_earth_source() -> Arc<dyn TerrainSource> {
+    let procedural = Arc::new(ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0));
+    let eroded = erode_earth(procedural);
+    let detail = Arc::new(LocalDetailTerrainSource::new(
+        Arc::new(FlatTerrainSource),
+        0xE4A7_D371,
+    ));
+
+    // The erosion solver has a finite, configuration-bounded material budget.
+    // This broad interval remains conservative without probing terrain samples.
+    let eroded_bounds = ElevationBounds::new(-10_000.0, 20_000_000.0);
+    Arc::new(LayeredTerrainSource::new(
+        zero_elevation_layer(),
+        Some(TerrainElevationLayer::new(eroded, eroded_bounds)),
+        None,
+        Some(TerrainDetailLayer::new(
+            detail,
+            LocalDetailTerrainSource::elevation_bounds_m(),
+            DetailLodFade::new(3, 6),
+        )),
+    ))
 }
 
 fn terrain_sites(name: &str) -> Vec<TerrainSite> {
@@ -749,11 +1018,22 @@ pub fn terrain_source_for_with_srtm_dir(
     }
 
     use crate::domain::services::dem_terrain_source::{DemTerrainConfig, DemTerrainSource};
-    let source = std::sync::Arc::new(DemTerrainSource::new(DemTerrainConfig {
+    let source = Arc::new(DemTerrainSource::new(DemTerrainConfig {
         data_dir: Some(data_dir.to_path_buf()),
         ..DemTerrainConfig::default()
     }));
-    with_sites(source, terrain_sites(name))
+    let composed: Arc<dyn TerrainSource> = Arc::new(LayeredTerrainSource::new(
+        zero_elevation_layer(),
+        None,
+        // SRTM posts are signed 16-bit meters; the embedded procedural fallback
+        // is safely within this interval when a local tile is unavailable.
+        Some(TerrainElevationLayer::new(
+            source,
+            ElevationBounds::new(i16::MIN as f64, i16::MAX as f64),
+        )),
+        None,
+    ));
+    with_sites(composed, terrain_sites(name))
 }
 
 /// Wrap an Earth base source with deterministic hydraulic/thermal erosion and
@@ -761,10 +1041,6 @@ pub fn terrain_source_for_with_srtm_dir(
 /// flat regardless of erosion.
 fn erode_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn TerrainSource> {
     std::sync::Arc::new(ErodedTerrainSource::new(base, ErosionConfig::default()))
-}
-
-fn detail_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn TerrainSource> {
-    std::sync::Arc::new(LocalDetailTerrainSource::new(base, 0xE4A7_D371))
 }
 
 #[cfg(test)]
@@ -896,6 +1172,144 @@ mod tests {
         assert!(
             (east - west).abs() < 1.0,
             "local detail must remain continuous across the longitude seam: {east} vs {west}"
+        );
+    }
+
+    #[derive(Debug)]
+    struct ConstantTerrain(f64);
+
+    impl TerrainSource for ConstantTerrain {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn layered_source_sums_explicit_contributions_with_conservative_bounds() {
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(10.0)),
+                ElevationBounds::new(10.0, 10.0),
+            ),
+            Some(TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(-4.0)),
+                ElevationBounds::new(-4.0, -4.0),
+            )),
+            Some(TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(3.0)),
+                ElevationBounds::new(3.0, 3.0),
+            )),
+            Some(TerrainDetailLayer::new(
+                Arc::new(ConstantTerrain(-2.0)),
+                ElevationBounds::new(-2.0, 4.0),
+                DetailLodFade::new(3, 6),
+            )),
+        );
+
+        assert_eq!(source.height_m(12.0, -45.0), 7.0);
+        assert_eq!(source.elevation_bounds_m(), ElevationBounds::new(7.0, 13.0));
+    }
+
+    #[test]
+    fn detail_lod_fade_is_continuous_and_does_not_change_physical_height() {
+        let fade = DetailLodFade::new(3, 6);
+        assert_eq!(fade.weight_for_level(3), 0.0);
+        assert_eq!(fade.weight_for_level(6), 1.0);
+        assert!(fade.weight_for_level(4) > 0.0 && fade.weight_for_level(4) < 1.0);
+        assert!(fade.weight_for_level(5) > fade.weight_for_level(4));
+        assert!((fade.weight_for_level(4) + fade.weight_for_level(5) - 1.0).abs() < 1e-12);
+
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(10.0)),
+                ElevationBounds::new(10.0, 10.0),
+            ),
+            None,
+            None,
+            Some(TerrainDetailLayer::new(
+                Arc::new(ConstantTerrain(4.0)),
+                ElevationBounds::new(4.0, 4.0),
+                fade,
+            )),
+        );
+        assert_eq!(source.height_m(0.0, 0.0), 14.0);
+        assert_eq!(source.height_m(0.0, 0.0), 14.0);
+    }
+
+    #[test]
+    fn layered_source_is_deterministic_and_continuous_at_the_longitude_seam() {
+        let make_source = || {
+            let base = Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0));
+            let detail = Arc::new(LocalDetailTerrainSource::new(
+                Arc::new(FlatTerrainSource),
+                99,
+            ));
+            LayeredTerrainSource::new(
+                TerrainElevationLayer::new(base.clone(), base.elevation_bounds_m()),
+                None,
+                None,
+                Some(TerrainDetailLayer::new(
+                    detail,
+                    LocalDetailTerrainSource::elevation_bounds_m(),
+                    DetailLodFade::new(3, 6),
+                )),
+            )
+        };
+        let first = make_source();
+        let second = make_source();
+        let point = (10.0, 179.9999);
+        assert_eq!(
+            first.height_m(point.0, point.1),
+            second.height_m(point.0, point.1)
+        );
+
+        let east = first.height_m(10.0, 180.0);
+        let west = first.height_m(10.0, -180.0);
+        assert!(
+            (east - west).abs() < 1e-6,
+            "layered source must be continuous at the longitude seam: {east} vs {west}"
+        );
+    }
+
+    #[test]
+    fn collision_and_render_samples_agree_on_composed_height() {
+        let detail = Arc::new(LocalDetailTerrainSource::new(
+            Arc::new(FlatTerrainSource),
+            99,
+        ));
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0)),
+                ElevationBounds::new(-2_500.0, 3_700.0),
+            ),
+            None,
+            None,
+            Some(TerrainDetailLayer::new(
+                detail,
+                LocalDetailTerrainSource::elevation_bounds_m(),
+                DetailLodFade::new(3, 6),
+            )),
+        );
+        let (lat, lon) = (33.0, -110.0);
+        let render_height = source.height_m(lat, lon);
+        let collision = crate::domain::services::terrain_collision::sample_surface(
+            &source,
+            lat,
+            lon,
+            6_371_000.0,
+        );
+        assert_eq!(collision.height_m, render_height);
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn unavailable_srtm_directory_keeps_the_composed_earth_fallback() {
+        let expected = terrain_source_for("Earth");
+        let fallback = terrain_source_for_with_srtm_dir("Earth", None);
+        let point = (28.5721, -80.6480);
+        assert_eq!(
+            fallback.height_m(point.0, point.1),
+            expected.height_m(point.0, point.1)
         );
     }
 

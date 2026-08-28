@@ -1,7 +1,6 @@
 use crate::components::rocket::*;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
-use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::math::Vec3;
 use bevy::prelude::*;
@@ -91,58 +90,10 @@ pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
     *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
 }
 
-/// Spawns a true-scale Earth sphere for the rocket mode. The Earth radius is
-/// ~6,371 km; in flight units (1 unit = 1 meter) this is 6,371,000 units.
-/// The sphere is positioned each frame relative to the render origin so it
-/// provides a correct horizon and planet body from any altitude.
-pub fn setup_rocket_earth_sphere(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let earth_radius_m = 6_371_000.0; // True Earth radius in meters
-    let earth_radius_units = earth_radius_m as f32; // Flight units = meters
-
-    // Use true radius (not 0.999) so the sphere surface matches terrain height.
-    let mesh_handle = meshes.add(Sphere::new(earth_radius_units));
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.2, 0.4, 0.7), // Earth blue-green
-        perceptual_roughness: 0.9,
-        metallic: 0.0,
-        cull_mode: None, // Render both sides for horizon visibility
-        ..default()
-    });
-
-    commands.spawn((
-        Mesh3d(mesh_handle),
-        MeshMaterial3d(material),
-        Transform::default(),
-        RocketEarthSphere,
-    ));
-}
-
-/// Component marking the true-scale Earth sphere entity for updates.
-#[derive(Component, Debug, Default)]
-pub struct RocketEarthSphere;
-
 /// Kept as an update hook so future atmospheric scattering can drive a local
 /// sky pass. ClearColor deliberately remains space-black at every altitude.
 pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
     *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
-}
-
-/// Updates the true-scale Earth sphere position to stay centered on the planet
-/// center relative to the render origin.
-pub fn update_rocket_earth_sphere(
-    render_origin: Res<RenderOrigin>,
-    mut sphere_query: Query<&mut Transform, With<RocketEarthSphere>>,
-) {
-    // Planet center in flight units: -render_origin.origin (scaled to meters).
-    // render_origin is in physics meters; flight units = meters.
-    let center = -(render_origin.origin.as_vec3());
-    for mut transform in sphere_query.iter_mut() {
-        transform.translation = center;
-    }
 }
 
 /// Day/night cycle: rotates the sun light direction around the planet's rotation

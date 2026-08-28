@@ -88,6 +88,18 @@ Recent phases, in brief:
 - **Ocean mask & housekeeping** — water inference is driven by an explicit
   per-body `has_ocean` config flag (no name guessing); both previously failing
   legacy tests are fixed, and OpenSpec artifacts were reconciled/archived.
+- **Planetary terrain hierarchy** — rocket mode renders Earth as six permanent
+  cube-sphere roots with bounded screen-space refinement and parent fallback,
+  instead of a local terrain slab plus a separate globe. The checked-in Earth
+  albedo is the global visual layer. Coarse tiles use the terrain source's
+  inexpensive overview representation so global coverage cannot initialize
+  local erosion or DEM caches; level 8 and finer use deterministic terrain and
+  optional local SRTM (`COSMIC_SRTM_DIR=/path/to/hgt cargo run --features dem
+  -- rocket`) as the shared rendering and collision authority. Root tiles are
+  low resolution, refinement is capped at two new tiles per frame, and the 128
+  MiB patch budget should be profiled before raising terrain resolution.
+  Future public or licensed global DEM/imagery sources belong behind the shared
+  terrain-source and material boundaries, never in selection or collision.
 
 Validation for every phase: `fmt`, `check`, `clippy` (zero new warnings),
 `test`, release build, plus panic-free xvfb runs of all modes.

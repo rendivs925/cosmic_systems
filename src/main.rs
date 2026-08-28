@@ -1,3 +1,4 @@
+use bevy::asset::AssetPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 
@@ -62,10 +63,19 @@ fn main() {
         ..default()
     };
 
-    let plugins = DefaultPlugins.set(window_plugin).set(LogPlugin {
-        filter: "info,bevy_render::view::window=error,wgpu_hal::vulkan::instance=error".to_string(),
-        ..default()
-    });
+    let plugins = DefaultPlugins
+        .set(window_plugin)
+        // Keep native runs rooted at the repository's checked-in assets, just
+        // like the WASM entrypoint, rather than alongside the built binary.
+        .set(AssetPlugin {
+            file_path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets").to_string(),
+            ..default()
+        })
+        .set(LogPlugin {
+            filter: "info,bevy_render::view::window=error,wgpu_hal::vulkan::instance=error"
+                .to_string(),
+            ..default()
+        });
 
     let mut app = App::new();
     // GizmoPlugin ships inside DefaultPlugins (bevy_gizmos feature); no
