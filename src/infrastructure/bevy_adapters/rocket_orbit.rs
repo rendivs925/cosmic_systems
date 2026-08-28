@@ -8,9 +8,11 @@
 //! unit-testable without a renderer; the Bevy system only converts the
 //! planet-centred points to the flight frame and draws them.
 
+use crate::application::material_factory::{create_orbit_material, ORBIT_LINE_COLOR};
+use crate::application::mesh_factory::create_polyline_ribbon_mesh;
 use crate::components::rocket::{
-    GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
-    TerrainCollisionState,
+    GroundRest, PlannedManeuver, RocketGeometry, RocketMissionState, RocketPhysicsState,
+    RocketPlanetBinding, TerrainCollisionState,
 };
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
@@ -23,7 +25,7 @@ use crate::domain::services::trajectory::{
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::rocket_presentation::interpolate_render_transform;
-use crate::infrastructure::bevy_adapters::terrain_render::{recenter_render_origin, RenderOrigin};
+use crate::infrastructure::bevy_adapters::terrain_render::recenter_render_origin;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -191,7 +193,10 @@ pub fn predicted_orbit_with_maneuver(
         4.0 * 3600.0
     }
     .max(60.0);
-    let step = (horizon / 160.0).max(1.0);
+    // Keep path chords short near the ground and during high-curvature arcs.
+    // The old 90-second sub-orbital samples made a ballistic path visibly kink.
+    let sample_count = if is_bound { 512.0 } else { 720.0 };
+    let step = (horizon / sample_count).max(0.25);
     if !horizon.is_finite() || !step.is_finite() {
         return OrbitPrediction::empty();
     }
@@ -292,6 +297,7 @@ fn segment_surface_intersection(start: DVec3, end: DVec3, radius_m: f64) -> Opti
     Some((start.lerp(end, fraction), fraction))
 }
 
+#[cfg(test)]
 fn planet_frame_to_flight(
     point_m: DVec3,
     render_origin: DVec3,
@@ -300,8 +306,12 @@ fn planet_frame_to_flight(
     ((point_m - render_origin) * physical_scale.flight_display_units_per_meter as f64).as_vec3()
 }
 
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct OrbitLineGizmos {}
+#[derive(Resource, Default)]
+struct OrbitPredictionRender {
+    entity: Option<Entity>,
+    mesh: Option<Handle<Mesh>>,
+    material: Option<Handle<StandardMaterial>>,
+}
 
 /// Plugin that draws the always-on orbit prediction line in rocket mode.
 pub struct RocketOrbitPlugin;
@@ -309,7 +319,7 @@ pub struct RocketOrbitPlugin;
 impl Plugin for RocketOrbitPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OrbitPredictionCache>()
-            .init_gizmo_group::<OrbitLineGizmos>()
+            .init_resource::<OrbitPredictionRender>()
             .add_systems(
                 Update,
                 (update_orbit_prediction_cache, draw_orbit_prediction)
@@ -413,34 +423,69 @@ fn dvec3_bits(value: DVec3) -> [u64; 3] {
 /// `-render_origin.origin`, because the render origin tracks the rocket's
 /// physics position in planet-centred inertial frame.
 fn draw_orbit_prediction(
-    render_origin: Res<RenderOrigin>,
     physical_scale: Res<PhysicalScale>,
     prediction_cache: Res<OrbitPredictionCache>,
-    mut gizmos: Gizmos<OrbitLineGizmos>,
+    rocket_query: Query<(&Transform, &RocketGeometry)>,
+    mut render: ResMut<OrbitPredictionRender>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let pred = prediction_cache.prediction();
     if pred.planet_frame_points.len() < 2 {
+        if let Some(entity) = render.entity.take() {
+            commands.entity(entity).despawn();
+        }
+        render.mesh = None;
         return;
     }
+    let Some((rocket_transform, geometry)) = rocket_query.iter().next() else {
+        return;
+    };
 
-    let to_world = |p: DVec3| planet_frame_to_flight(p, render_origin.origin, &physical_scale);
+    let start = pred.planet_frame_points[0];
+    let scale = physical_scale.flight_display_units_per_meter;
+    let points: Vec<_> = pred
+        .planet_frame_points
+        .iter()
+        .map(|point| ((*point - start) * scale as f64).as_vec3())
+        .collect();
+    let mesh = create_polyline_ribbon_mesh(&points, ORBIT_LINE_COLOR, 0.75);
+    let nose = rocket_transform.translation
+        + rocket_transform.rotation * Vec3::Y * geometry.height_m * scale;
 
-    gizmos.linestrip(
-        pred.planet_frame_points.iter().copied().map(to_world),
-        Color::srgb(0.35, 0.75, 1.0),
-    );
-    if let Some(ap) = pred.apoapsis {
-        gizmos.sphere(to_world(ap), 6.0, Color::srgb(0.2, 1.0, 0.4));
+    let material = render
+        .material
+        .get_or_insert_with(|| {
+            materials.add(create_orbit_material(
+                ORBIT_LINE_COLOR,
+                LinearRgba::new(0.035, 0.04, 0.05, 1.0),
+                0.16,
+            ))
+        })
+        .clone();
+    if let Some(mesh_handle) = &render.mesh {
+        if let Some(existing) = meshes.get_mut(mesh_handle) {
+            *existing = mesh;
+        }
+    } else {
+        let mesh_handle = meshes.add(mesh);
+        let entity = commands
+            .spawn((
+                Mesh3d(mesh_handle.clone()),
+                MeshMaterial3d(material),
+                Transform::from_translation(nose),
+                Name::new("Rocket orbit prediction"),
+            ))
+            .id();
+        render.mesh = Some(mesh_handle);
+        render.entity = Some(entity);
+        return;
     }
-    if let Some(pe) = pred.periapsis {
-        gizmos.sphere(to_world(pe), 6.0, Color::srgb(1.0, 0.35, 0.35));
-    }
-    if let Some(maneuver) = pred.maneuver {
-        gizmos.sphere(
-            to_world(maneuver.position_m),
-            10.0,
-            Color::srgb(1.0, 0.8, 0.15),
-        );
+    if let Some(entity) = render.entity {
+        commands
+            .entity(entity)
+            .insert(Transform::from_translation(nose));
     }
 }
 

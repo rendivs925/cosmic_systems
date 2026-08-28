@@ -912,6 +912,72 @@ pub fn hover_slam_guidance(
     (thrust_dir * thrust_mag, attitude)
 }
 
+/// Terrain-relative terminal guidance for a reusable vertical landing. The
+/// controller combines a stopping-distance brake with velocity damping and
+/// limits lateral acceleration to a strict thrust-vector tilt envelope. It
+/// never commands a downward-pointing main engine near the ground.
+pub fn terminal_landing_guidance(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    target_position_m: DVec3,
+    radar_altitude_m: f64,
+    mass_kg: f64,
+    max_thrust_n: f64,
+    gravity_accel_mps2: f64,
+) -> (DVec3, DQuat) {
+    const MAX_TILT_RAD: f64 = 12.0_f64.to_radians();
+    const LANDING_MARGIN_M: f64 = 15.0;
+    let up_dir = position_m.normalize_or_zero();
+    let mass_kg = mass_kg.max(1.0);
+    let max_accel_mps2 = (max_thrust_n / mass_kg).max(0.0);
+    if up_dir.length_squared() <= 1e-12 || max_accel_mps2 <= gravity_accel_mps2 {
+        return (DVec3::ZERO, attitude_from_direction(up_dir));
+    }
+
+    let altitude_m = radar_altitude_m.max(0.0);
+    let vertical_speed_mps = velocity_mps.dot(up_dir);
+    let horizontal_velocity_mps = velocity_mps - up_dir * vertical_speed_mps;
+    let target_offset_m = target_position_m - position_m;
+    let horizontal_error_m = target_offset_m - up_dir * target_offset_m.dot(up_dir);
+    let max_net_upward_accel_mps2 = max_accel_mps2 - gravity_accel_mps2;
+    let stopping_distance_m = if vertical_speed_mps < 0.0 {
+        vertical_speed_mps.powi(2) / (2.0 * max_net_upward_accel_mps2)
+    } else {
+        0.0
+    };
+    let braking = altitude_m <= stopping_distance_m + LANDING_MARGIN_M;
+    let target_descent_rate_mps = if braking {
+        -1.5
+    } else {
+        -(altitude_m * 0.04).clamp(3.0, 45.0)
+    };
+    let vertical_error_mps = target_descent_rate_mps - vertical_speed_mps;
+    let requested_net_upward_accel_mps2 = if braking {
+        (vertical_error_mps * 1.5)
+            .max(stopping_distance_m / altitude_m.max(1.0) * 0.5)
+            .clamp(0.0, max_net_upward_accel_mps2)
+    } else {
+        (vertical_error_mps * 0.8).clamp(-gravity_accel_mps2 * 0.75, max_net_upward_accel_mps2)
+    };
+    // Keep a positive ground-normal thrust component. Reducing throttle is the
+    // safe response to excess upward velocity, never turning the engine down.
+    let vertical_thrust_accel_mps2 = (gravity_accel_mps2 + requested_net_upward_accel_mps2)
+        .clamp(gravity_accel_mps2 * 0.25, max_accel_mps2);
+    let requested_horizontal_accel_mps2 =
+        horizontal_error_m * 0.0015 - horizontal_velocity_mps * 0.8;
+    let max_horizontal_accel_mps2 = vertical_thrust_accel_mps2 * MAX_TILT_RAD.tan();
+    let horizontal_accel_mps2 =
+        requested_horizontal_accel_mps2.clamp_length_max(max_horizontal_accel_mps2);
+    let thrust_accel_mps2 = up_dir * vertical_thrust_accel_mps2 + horizontal_accel_mps2;
+    let thrust_magnitude_n = (thrust_accel_mps2.length() * mass_kg).min(max_thrust_n);
+    let thrust_direction = thrust_accel_mps2.normalize_or_zero();
+
+    (
+        thrust_direction * thrust_magnitude_n,
+        attitude_from_direction(thrust_direction),
+    )
+}
+
 /// Enhanced powered descent guidance using lossless convexification.
 /// Solves minimum-fuel landing problem with thrust and pointing constraints.
 pub fn powered_descent_guidance_convex(
@@ -1688,6 +1754,28 @@ mod tests {
         assert!(
             should_burn_near,
             "must ignite once inside the suicide burn altitude"
+        );
+    }
+
+    #[test]
+    fn terminal_landing_guidance_keeps_main_thrust_above_the_horizon() {
+        let up = DVec3::X;
+        let target = up * 6_371_000.0;
+        let position = target + up * 100.0;
+        let (thrust, attitude) = terminal_landing_guidance(
+            position,
+            up * 12.0 + DVec3::Z * 8.0,
+            target,
+            100.0,
+            40_000.0,
+            800_000.0,
+            9.81,
+        );
+
+        assert!(thrust.dot(up) > 0.0, "terminal thrust must remain upward");
+        assert!(
+            (attitude * DVec3::Y).angle_between(up) <= 12.0_f64.to_radians() + 1e-9,
+            "terminal attitude must remain inside the landing tilt envelope"
         );
     }
 }

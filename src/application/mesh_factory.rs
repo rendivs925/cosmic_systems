@@ -181,6 +181,64 @@ pub fn create_orbit_ribbon_mesh(
     meshes.add(mesh)
 }
 
+/// Build an open ribbon around a sampled path. Unlike orbital elements, a
+/// predicted flight path is not necessarily planar or closed.
+pub fn create_polyline_ribbon_mesh(points: &[Vec3], color: Color, thickness: f32) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    if points.len() < 2 {
+        return mesh;
+    }
+
+    let mut positions = Vec::with_capacity(points.len() * 2);
+    let mut normals = Vec::with_capacity(points.len() * 2);
+    let mut uvs = Vec::with_capacity(points.len() * 2);
+    let mut colors = Vec::with_capacity(points.len() * 2);
+    let mut indices = Vec::with_capacity((points.len() - 1) * 6);
+    let linear_color: LinearRgba = color.into();
+    let color = [
+        linear_color.red,
+        linear_color.green,
+        linear_color.blue,
+        linear_color.alpha,
+    ];
+    let half_width = thickness.clamp(0.1, 15.0) * 0.5;
+
+    for (index, point) in points.iter().copied().enumerate() {
+        let previous = points[index.saturating_sub(1)];
+        let next = points[(index + 1).min(points.len() - 1)];
+        let tangent = (next - previous).normalize_or_zero();
+        let reference_axis = if tangent.y.abs() < 0.9 {
+            Vec3::Y
+        } else {
+            Vec3::X
+        };
+        let side = tangent.cross(reference_axis).normalize_or_zero();
+        let left = point - side * half_width;
+        let right = point + side * half_width;
+        let u = index as f32 / (points.len() - 1) as f32;
+
+        positions.extend_from_slice(&[left.to_array(), right.to_array()]);
+        normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 2]);
+        uvs.extend_from_slice(&[[u, 0.0], [u, 1.0]]);
+        colors.extend_from_slice(&[color; 2]);
+    }
+
+    for index in 0..points.len() - 1 {
+        let start = (index * 2) as u32;
+        indices.extend_from_slice(&[start, start + 2, start + 1, start + 1, start + 2, start + 3]);
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
 pub fn create_placeholder_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
     let positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
     let normals = vec![[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]];

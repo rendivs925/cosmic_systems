@@ -3,12 +3,12 @@ use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction,
     banked_attitude_from_direction, boostback_guidance, default_surface_landing_target,
-    gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
-    powered_descent_guidance_convex, prograde_attitude, reentry_bank_angle,
-    reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
+    gravity_turn_direction_gated, pitch_axis_from_reference, prograde_attitude, reentry_bank_angle,
+    reentry_bank_angle_enhanced, terminal_landing_guidance, transfer_burn_phase, AutopilotMode,
     DescentGuidanceConfig, TransferBurnPhase,
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state;
+use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{
     PlanetComponent, RocketAutopilot, RocketCommands,
@@ -52,6 +52,7 @@ pub struct GuidanceAccess {
     pub autopilot: &'static mut RocketAutopilot,
     pub propulsion: &'static RocketPropulsion,
     pub conditions: &'static RocketFlightConditions,
+    pub collision: &'static TerrainCollisionState,
     pub orbital: &'static OrbitalElements,
     pub commands: &'static mut RocketCommands,
 }
@@ -75,6 +76,7 @@ pub fn guidance_system(
         let binding = access.binding;
         let propulsion = access.propulsion;
         let conditions = access.conditions;
+        let collision = access.collision;
         let orbital = access.orbital;
         let mass = access.mass;
         let mission_state = &mut *access.mission_state;
@@ -110,6 +112,11 @@ pub fn guidance_system(
         }
         let up_dir = position_m / radius;
         let altitude_m = (radius - radius_m).max(0.0);
+        let radar_altitude_m = if collision.radar_altitude_m.is_finite() {
+            collision.radar_altitude_m.max(0.0)
+        } else {
+            altitude_m
+        };
         let velocity = rocket.dynamics.velocity_mps;
         let speed = velocity.length();
         let mu = gravitational_parameter(planet.domain_planet.mass_kg);
@@ -160,13 +167,25 @@ pub fn guidance_system(
         // Also advance descent phases.
         *mission_state = advance_descent_phase(
             (*mission_state).into(),
-            altitude_m,
+            radar_altitude_m,
             speed,
             dynamic_pressure_pa,
             has_active_engines,
             &descent_config,
         )
         .into();
+
+        // The mission state owns phase handoffs; without this synchronization a
+        // descent can remain in an Off/Reentry mode and coast into the ground.
+        match (*mission_state, autopilot.mode) {
+            (RocketMissionState::PoweredDescent, AutopilotMode::Off | AutopilotMode::Reentry) => {
+                autopilot.mode = AutopilotMode::PoweredDescent;
+            }
+            (RocketMissionState::Landing, AutopilotMode::PoweredDescent | AutopilotMode::Off) => {
+                autopilot.mode = AutopilotMode::Landing;
+            }
+            _ => {}
+        }
 
         if target_orbit_reached
             && *mission_state == RocketMissionState::Orbit
@@ -316,7 +335,6 @@ pub fn guidance_system(
                 }
             }
             AutopilotMode::PoweredDescent => {
-                // Use convex optimization powered descent guidance.
                 let target_pos = autopilot.target_landing_position_m;
                 if target_pos.length() < 1.0 {
                     // Default to point below current position.
@@ -324,91 +342,74 @@ pub fn guidance_system(
                         default_surface_landing_target(position_m, radius_m);
                 }
 
-                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
-                    .engines
-                    .iter()
-                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                    .sum::<f64>();
-                let min_thrust = max_thrust * 0.1; // Assume 10% minimum throttle
+                let max_thrust = propulsion
+                    .vehicle
+                    .stages
+                    .get(propulsion.active_stage)
+                    .map_or(0.0, |stage| {
+                        stage_thrust_body(&stage.engines, 1.0, conditions.ambient_pressure_pa)
+                            .0
+                            .length()
+                    });
+                if max_thrust <= 0.0 {
+                    *mission_state = RocketMissionState::UnpoweredDescent;
+                    autopilot.mode = AutopilotMode::Off;
+                    commands.throttle_cmd = 0.0;
+                    continue;
+                }
 
                 // Estimate gravity at current altitude.
                 let mu = gravitational_parameter(planet.domain_planet.mass_kg);
                 let gravity_accel = mu / (radius * radius);
 
-                // Use orbital elements for time-to-go estimate.
-                let t_go = if orbital.orbital_period_s.is_finite() {
-                    orbital.orbital_period_s / 4.0 // Quarter orbit approximation
-                } else {
-                    60.0
-                }
-                .min(300.0)
-                .max(10.0);
-
-                let (thrust_vec, thrust_att) = powered_descent_guidance_convex(
+                let (thrust_vec, thrust_att) = terminal_landing_guidance(
                     position_m,
                     velocity,
                     autopilot.target_landing_position_m,
+                    radar_altitude_m,
                     mass.0,
                     max_thrust,
-                    min_thrust,
-                    15.0_f64.to_radians(),
                     gravity_accel,
-                    t_go,
                 );
                 commands.target_attitude = thrust_att;
                 commands.throttle_cmd = (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
 
                 // Check for terminal guidance transition.
-                if altitude_m < descent_config.terminal_descent_altitude_m {
+                if radar_altitude_m < descent_config.terminal_descent_altitude_m {
                     autopilot.mode = AutopilotMode::Landing;
+                    *mission_state = RocketMissionState::Landing;
                 }
             }
             AutopilotMode::Landing => {
-                // Suicide burn / hover-slam terminal guidance.
-                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
-                    .engines
-                    .iter()
-                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                    .sum::<f64>();
+                let max_thrust = propulsion
+                    .vehicle
+                    .stages
+                    .get(propulsion.active_stage)
+                    .map_or(0.0, |stage| {
+                        stage_thrust_body(&stage.engines, 1.0, conditions.ambient_pressure_pa)
+                            .0
+                            .length()
+                    });
 
                 let mu = gravitational_parameter(planet.domain_planet.mass_kg);
                 let gravity_accel = mu / (radius * radius);
 
-                let (thrust_vec, thrust_att, _suicide_alt, should_burn) = suicide_burn_guidance(
+                let (thrust_vec, thrust_att) = terminal_landing_guidance(
                     position_m,
                     velocity,
                     autopilot.target_landing_position_m,
+                    radar_altitude_m,
                     mass.0,
                     max_thrust,
                     gravity_accel,
                 );
-
-                if should_burn {
-                    commands.target_attitude = thrust_att;
-                    commands.throttle_cmd =
-                        (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
+                commands.target_attitude = thrust_att;
+                commands.throttle_cmd = if max_thrust > 0.0 {
+                    (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32
                 } else {
-                    // Hover-slam: maintain low descent rate.
-                    let (hv_thrust_vec, hv_att) = hover_slam_guidance(
-                        position_m,
-                        velocity,
-                        autopilot.target_landing_position_m,
-                        mass.0,
-                        max_thrust,
-                        gravity_accel,
-                        -1.0, // Target -1 m/s descent rate
-                    );
-                    commands.target_attitude = hv_att;
-                    commands.throttle_cmd =
-                        (hv_thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
-                }
-
-                // Check for touchdown.
-                if altitude_m < 5.0 && speed < 2.0 {
-                    *mission_state = RocketMissionState::Landed;
-                    autopilot.mode = AutopilotMode::Off;
-                    commands.throttle_cmd = 0.0;
-                }
+                    0.0
+                };
+                // Ground contact alone owns the Landed verdict.
             }
             AutopilotMode::Boostback => {
                 // Booster flyback (RTLS): downrange-zeroing retrograde burn.

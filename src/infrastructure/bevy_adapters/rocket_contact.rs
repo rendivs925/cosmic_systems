@@ -160,7 +160,7 @@ pub struct GroundContactAccess {
     pub binding: &'static RocketPlanetBinding,
     pub launch_site: Option<&'static LaunchSiteCoordinates>,
     pub dynamics: &'static mut RocketPhysicsState,
-    pub propulsion: &'static RocketPropulsion,
+    pub propulsion: &'static mut RocketPropulsion,
     pub conditions: Option<&'static RocketFlightConditions>,
     pub geometry: &'static RocketGeometry,
     pub collision: &'static mut TerrainCollisionState,
@@ -169,7 +169,7 @@ pub struct GroundContactAccess {
     pub legs: Option<&'static mut LandingLegs>,
     pub tip_over: &'static mut TipOverState,
     pub scorecard: &'static mut LandingScorecard,
-    pub autopilot: &'static RocketAutopilot,
+    pub autopilot: &'static mut RocketAutopilot,
     pub drone_ship_target: Option<&'static DroneShipLandingTarget>,
 }
 
@@ -226,13 +226,13 @@ pub fn resolve_ground_contact(
     for mut access in rocket_query.iter_mut() {
         let rocket_entity = access.entity;
         let binding = access.binding;
-        let propulsion = access.propulsion;
+        let propulsion = &mut *access.propulsion;
         let ambient_pressure_pa = access
             .conditions
             .map(|conditions| conditions.ambient_pressure_pa)
             .unwrap_or(0.0);
         let geometry = access.geometry;
-        let autopilot = access.autopilot;
+        let autopilot = &mut *access.autopilot;
         if access
             .drone_ship_target
             .is_some_and(|target| target.deck_contact)
@@ -363,22 +363,25 @@ pub fn resolve_ground_contact(
             let gravity_mps2 =
                 gravitational_parameter(planet.domain_planet.mass_kg) / position_m.length().powi(2);
             let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
-            let thrust_n = propulsion
+            let upward_thrust_n = propulsion
                 .vehicle
                 .stages
                 .get(propulsion.active_stage)
                 .map(|stage| {
-                    stage_thrust_body(&stage.engines, propulsion.throttle, ambient_pressure_pa)
-                        .0
-                        .length()
+                    let thrust_body =
+                        stage_thrust_body(&stage.engines, propulsion.throttle, ambient_pressure_pa)
+                            .0;
+                    (rocket.dynamics.orientation * thrust_body)
+                        .dot(normal)
+                        .max(0.0)
                 })
                 .unwrap_or(0.0);
-            if liftoff_from_rest(thrust_n, weight_n) {
+            if liftoff_from_rest(upward_thrust_n, weight_n) {
                 rest.active = false;
                 collision.ground_contact = GroundContact::None;
                 bevy::log::info!(
-                    "Liftoff: thrust {:.0} N exceeds weight {:.0} N, released from surface",
-                    thrust_n,
+                    "Liftoff: upward thrust {:.0} N exceeds weight {:.0} N, released from surface",
+                    upward_thrust_n,
                     weight_n
                 );
                 continue;
@@ -500,6 +503,10 @@ pub fn resolve_ground_contact(
                         | RocketMissionState::ReentryCorridor
                 ) {
                     *mission_state = RocketMissionState::Landed;
+                    autopilot.integral = DVec3::ZERO;
+                    propulsion.throttle = 0.0;
+                    propulsion.gimbal_pitch_rad = 0.0;
+                    propulsion.gimbal_yaw_rad = 0.0;
                     if collision.over_water {
                         splashdown_writer.write(SplashdownDetectedEvent {
                             rocket: rocket_entity,
