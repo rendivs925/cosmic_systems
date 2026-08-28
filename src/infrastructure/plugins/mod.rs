@@ -402,6 +402,8 @@ impl Plugin for RocketModePlugin {
 
         // Simulation time resource for fixed-timestep physics and time acceleration.
         app.insert_resource(SimulationTime::default());
+        // Configure the first fixed tick as well as later time-warp changes.
+        app.add_systems(Startup, sync_fixed_timestep);
 
         // Cube-sphere terrain streaming around the rocket.
         app.insert_resource(TerrainStreamingResource::default());

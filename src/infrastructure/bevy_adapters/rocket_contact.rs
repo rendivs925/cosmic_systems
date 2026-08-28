@@ -16,8 +16,10 @@ use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
     decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
-    resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
+    resolve_resting_contact, sample_surface, GroundContact, SurfaceSample, TouchdownCriteria,
+    TOUCHDOWN_BAND_M,
 };
+use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::{
     PlanetComponent, PlanetTerrain, TerrainCollisionState,
@@ -25,7 +27,129 @@ use crate::infrastructure::bevy_adapters::components::{
 use bevy::ecs::query::QueryData;
 use bevy::log::info;
 use bevy::math::{DMat3, DQuat, DVec3};
-use bevy::prelude::{Entity, MessageWriter, Query, Res};
+use bevy::prelude::{Entity, Local, MessageWriter, Query, Res};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+
+const TERRAIN_SURFACE_SAMPLE_CACHE_CAPACITY: usize = 512;
+
+/// Thread-safe exact-sample cache for repeated fixed-step contact probes.
+///
+/// The key uses the input f64 bit patterns rather than spatial quantization, so
+/// a cached result is bit-identical to direct `TerrainSource` evaluation. It is
+/// presentation-independent and does not alter the source or collision model.
+#[derive(Clone)]
+pub struct TerrainSurfaceSampleCache {
+    entries: Arc<Mutex<TerrainSurfaceSampleLru>>,
+}
+
+impl Default for TerrainSurfaceSampleCache {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(TerrainSurfaceSampleLru::new(
+                TERRAIN_SURFACE_SAMPLE_CACHE_CAPACITY,
+            ))),
+        }
+    }
+}
+
+impl TerrainSurfaceSampleCache {
+    fn sample(
+        &self,
+        planet: Entity,
+        source: &dyn TerrainSource,
+        latitude_deg: f64,
+        longitude_deg: f64,
+        radius_m: f64,
+    ) -> SurfaceSample {
+        let key = TerrainSurfaceSampleKey::new(planet, latitude_deg, longitude_deg, radius_m);
+        if let Some(sample) = self.lock().get(&key) {
+            return sample;
+        }
+
+        // Do not hold the lock through the multi-octave terrain evaluation.
+        let sample = sample_surface(source, latitude_deg, longitude_deg, radius_m);
+        let mut entries = self.lock();
+        if let Some(existing) = entries.get(&key) {
+            return existing;
+        }
+        entries.insert(key, sample);
+        sample
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TerrainSurfaceSampleLru> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TerrainSurfaceSampleKey {
+    planet: Entity,
+    latitude_bits: u64,
+    longitude_bits: u64,
+    radius_bits: u64,
+}
+
+impl TerrainSurfaceSampleKey {
+    fn new(planet: Entity, latitude_deg: f64, longitude_deg: f64, radius_m: f64) -> Self {
+        Self {
+            planet,
+            latitude_bits: latitude_deg.to_bits(),
+            longitude_bits: longitude_deg.to_bits(),
+            radius_bits: radius_m.to_bits(),
+        }
+    }
+}
+
+struct TerrainSurfaceSampleLru {
+    samples: HashMap<TerrainSurfaceSampleKey, SurfaceSample>,
+    recency: VecDeque<TerrainSurfaceSampleKey>,
+    capacity: usize,
+}
+
+impl TerrainSurfaceSampleLru {
+    fn new(capacity: usize) -> Self {
+        Self {
+            samples: HashMap::with_capacity(capacity),
+            recency: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &TerrainSurfaceSampleKey) -> Option<SurfaceSample> {
+        let sample = self.samples.get(key).copied()?;
+        self.touch(*key);
+        Some(sample)
+    }
+
+    fn insert(&mut self, key: TerrainSurfaceSampleKey, sample: SurfaceSample) {
+        match self.samples.entry(key) {
+            Entry::Occupied(mut entry) => {
+                entry.insert(sample);
+                self.touch(key);
+                return;
+            }
+            Entry::Vacant(_) => {}
+        }
+        if self.samples.len() == self.capacity {
+            if let Some(oldest) = self.recency.pop_front() {
+                self.samples.remove(&oldest);
+            }
+        }
+        self.samples.insert(key, sample);
+        self.recency.push_back(key);
+    }
+
+    fn touch(&mut self, key: TerrainSurfaceSampleKey) {
+        if let Some(index) = self.recency.iter().position(|candidate| *candidate == key) {
+            self.recency.remove(index);
+        }
+        self.recency.push_back(key);
+    }
+}
 
 /// Bundled state required by the post-integration ground-contact authority.
 /// Landing gear is optional so gear-less vehicles retain rigid point contact.
@@ -92,8 +216,9 @@ pub fn deploy_landing_legs(
 /// touchdowns exactly as before.
 pub fn resolve_ground_contact(
     sim_time: Res<SimulationTime>,
+    surface_cache: Local<TerrainSurfaceSampleCache>,
     mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
-    planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
+    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     mut rocket_query: Query<GroundContactAccess>,
 ) {
     let dt = sim_time.fixed_timestep();
@@ -123,9 +248,9 @@ pub fn resolve_ground_contact(
         let mut legs = access.legs.as_deref_mut();
         let tip_over = &mut *access.tip_over;
         let scorecard = &mut *access.scorecard;
-        let Some((planet, planet_terrain)) = planet_query
+        let Some((planet_entity, planet, planet_terrain)) = planet_query
             .iter()
-            .find(|(planet, _)| planet.matches_body(&binding.planet_name))
+            .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -144,7 +269,13 @@ pub fn resolve_ground_contact(
             continue;
         }
         let (lat, lon) = lat_lon_from_direction(dir_bf);
-        let sample = sample_surface(&*planet_terrain.source, lat, lon, radius_m);
+        let sample = surface_cache.sample(
+            planet_entity,
+            planet_terrain.source.as_ref(),
+            lat,
+            lon,
+            radius_m,
+        );
         let surface_radius_m = radius_m + sample.height_m;
         let signed_altitude_m = position_m.length() - surface_radius_m;
 
@@ -177,8 +308,9 @@ pub fn resolve_ground_contact(
             if let Some(launch_site) = access.launch_site {
                 let pad_direction_bf =
                     geodetic_to_body_fixed(launch_site, &planet.domain_planet).normalize();
-                let pad_sample = sample_surface(
-                    &*planet_terrain.source,
+                let pad_sample = surface_cache.sample(
+                    planet_entity,
+                    planet_terrain.source.as_ref(),
                     launch_site.latitude_deg as f64,
                     launch_site.longitude_deg as f64,
                     radius_m,
@@ -383,6 +515,83 @@ pub fn resolve_ground_contact(
             }
             GroundContact::None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::rocket::RocketRenderState;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::terrain_collision::decompose_velocity;
+    use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
+    use bevy::math::{DMat3, DQuat, DVec3};
+
+    #[test]
+    fn cached_surface_samples_are_exactly_identical_to_the_authoritative_source() {
+        let source = ProceduralTerrainSource::new(7, 1_000.0, 500.0, 0);
+        let cache = TerrainSurfaceSampleCache::default();
+        let latitude_deg = 28.5721;
+        let longitude_deg = -80.6480;
+        let radius_m = 6_371_000.0;
+        let direct = sample_surface(&source, latitude_deg, longitude_deg, radius_m);
+        let cached = cache.sample(
+            Entity::PLACEHOLDER,
+            &source,
+            latitude_deg,
+            longitude_deg,
+            radius_m,
+        );
+        let repeated = cache.sample(
+            Entity::PLACEHOLDER,
+            &source,
+            latitude_deg,
+            longitude_deg,
+            radius_m,
+        );
+
+        assert_eq!(cached, direct);
+        assert_eq!(repeated, direct);
+    }
+
+    #[test]
+    fn interpolation_leaves_fixed_contact_verdict_deterministic() {
+        let previous = RocketDynamicsState::new(
+            DVec3::new(0.0, 100.0, 0.0),
+            DVec3::new(1.0, -2.0, 0.0),
+            DQuat::IDENTITY,
+            1_000.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let current = RocketDynamicsState::new(
+            DVec3::new(0.0, 99.0, 0.0),
+            DVec3::new(1.0, -4.0, 0.0),
+            DQuat::IDENTITY,
+            1_000.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let render = RocketRenderState {
+            prev: previous,
+            current,
+        };
+        let _visual = render_dynamics_state(render, 0.5);
+        let velocity = decompose_velocity(render.current.velocity_mps, DVec3::Y);
+        let criteria = TouchdownCriteria::default();
+
+        assert_eq!(
+            evaluate_touchdown(
+                -velocity.normal_mps,
+                velocity.lateral_mps,
+                0.0,
+                0.0,
+                &criteria
+            ),
+            GroundContact::Landed
+        );
+        assert_eq!(render.current, current);
     }
 }
 

@@ -59,6 +59,14 @@ const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 /// Extra frustum angle retained around the viewport so terrain does not pop at
 /// its edge while the camera is moving between streaming updates.
 const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
+/// Terrain envelopes stay within this conservative height margin for horizon
+/// culling. Keeping the sphere deliberately large can retain a tile, but can
+/// never reject terrain that could break the visible silhouette.
+const HORIZON_CULL_HEIGHT_MARGIN_M: f64 = 20_000.0;
+/// One CPU geometry bake is admitted per presentation frame. The async pool
+/// remains available for other simulator work and completed bakes are still
+/// consumed independently of new submissions.
+const MAX_TERRAIN_TASKS_PER_FRAME: usize = 1;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
@@ -526,7 +534,9 @@ pub fn stream_terrain_patches(
 /// retain priority, but submitting more jobs than workers only queues expensive
 /// bakes and starves the render/simulation task pools on a cold start.
 fn generation_capacity(_roots_ready: bool, worker_count: usize, inflight_count: usize) -> usize {
-    worker_count.saturating_sub(inflight_count)
+    worker_count
+        .saturating_sub(inflight_count)
+        .min(MAX_TERRAIN_TASKS_PER_FRAME)
 }
 
 fn should_reconcile_terrain(
@@ -653,6 +663,10 @@ fn patch_intersects_viewport(
         return true;
     }
 
+    if patch_is_behind_horizon(patch, viewport.position_m, radius_m) {
+        return false;
+    }
+
     let center = patch.center_direction();
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let samples = [
@@ -665,14 +679,6 @@ fn patch_intersects_viewport(
     let camera_surface_direction = viewport.position_m.normalize();
     let contains_camera_surface =
         TerrainPatch::for_direction(camera_surface_direction, patch.level) == patch;
-    if viewport.position_m.length() > radius_m
-        && !samples
-            .iter()
-            .any(|sample| viewport.position_m.dot(*sample * radius_m) >= radius_m * radius_m)
-        && !contains_camera_surface
-    {
-        return false;
-    }
     let patch_radius_rad = samples[1..]
         .into_iter()
         .map(|sample| center.dot(*sample).clamp(-1.0, 1.0).acos())
@@ -692,6 +698,37 @@ fn patch_intersects_viewport(
         .clamp(-1.0, 1.0)
         .acos();
     view_angle <= viewport.half_fov_rad + patch_radius_rad + VIEWPORT_PREFETCH_MARGIN_RAD
+}
+
+/// Reject a quadtree node only when its conservative bounding sphere lies
+/// wholly behind the tangent plane of the planet as seen by the camera.
+///
+/// This runs before queueing a `TerrainSource` bake. Root coverage remains
+/// unconditional, while refined nodes behind the limb never consume a task.
+fn patch_is_behind_horizon(patch: TerrainPatch, camera_position_m: DVec3, radius_m: f64) -> bool {
+    let camera_distance_m = camera_position_m.length();
+    if camera_distance_m <= radius_m {
+        return false;
+    }
+
+    let center = patch.center_direction();
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    let patch_radius_rad = [
+        face_uv_to_direction(patch.face, u0, v0),
+        face_uv_to_direction(patch.face, u1, v0),
+        face_uv_to_direction(patch.face, u0, v1),
+        face_uv_to_direction(patch.face, u1, v1),
+    ]
+    .into_iter()
+    .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
+    .fold(0.0, f64::max);
+    // The chord reaches the farthest patch corner. An arc-length estimate here
+    // is too small and could cull a tile that still contributes to the limb.
+    let bounding_radius_m =
+        2.0 * radius_m * (patch_radius_rad * 0.5).sin() + HORIZON_CULL_HEIGHT_MARGIN_M;
+
+    camera_position_m.dot(center * radius_m) + camera_distance_m * bounding_radius_m
+        < radius_m * radius_m
 }
 
 fn evict_cached_patches_outside_viewport(
@@ -1239,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_capacity_prioritizes_roots_without_oversubscribing_workers() {
+    fn generation_capacity_throttles_new_work_to_one_tile_per_frame() {
         let roots = TerrainPatch::roots().to_vec();
         let mut manager = TerrainPatchManager::new();
         for patch in &roots {
@@ -1253,7 +1290,7 @@ mod tests {
             &generated,
             generation_capacity(false, 4, 0),
         );
-        assert_eq!(bootstrap_batch, roots[..4].to_vec());
+        assert_eq!(bootstrap_batch, roots[..1].to_vec());
 
         let mut generated = HashMap::new();
         let focus = TerrainPatch::root(CubeFace::PosZ);
@@ -1279,11 +1316,26 @@ mod tests {
             &generated,
             generation_capacity(true, 4, 0),
         );
-        assert_eq!(later_batch.len(), 4);
+        assert_eq!(later_batch.len(), 1);
         assert_ne!(later_batch, vec![focus]);
 
         assert_eq!(generation_capacity(false, 4, 4), 0);
-        assert_eq!(generation_capacity(false, 8, 6), 2);
-        assert_eq!(generation_capacity(true, 8, 3), 5);
+        assert_eq!(generation_capacity(false, 8, 6), 1);
+        assert_eq!(generation_capacity(true, 8, 3), 1);
+    }
+
+    #[test]
+    fn horizon_culling_rejects_refined_nodes_behind_the_planetary_limb() {
+        let radius_m = 6_371_000.0;
+        let camera_position_m = DVec3::Z * (radius_m + 1_000.0);
+        let visible = TerrainPatch::for_direction(DVec3::Z, 8);
+        let hidden = TerrainPatch::for_direction(-DVec3::Z, 8);
+
+        assert!(!patch_is_behind_horizon(
+            visible,
+            camera_position_m,
+            radius_m
+        ));
+        assert!(patch_is_behind_horizon(hidden, camera_position_m, radius_m));
     }
 }

@@ -19,7 +19,7 @@ pub struct SimulationTime {
     pub time_acceleration: f64,
     /// Whether simulation time is paused.
     pub paused: bool,
-    /// Fixed physics timestep in seconds (e.g., 1/60 = 60 Hz physics).
+    /// Fixed physics timestep in seconds (e.g., 1/120 = 120 Hz physics).
     pub fixed_timestep_s: f64,
 }
 
@@ -133,7 +133,7 @@ pub fn handle_time_acceleration_input(
 
 impl Default for SimulationTime {
     fn default() -> Self {
-        Self::new(1.0 / 60.0) // 60 Hz physics
+        Self::new(1.0 / 120.0) // 120 Hz physics
     }
 }
 
@@ -160,9 +160,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_60hz() {
+    fn default_120hz() {
         let sim = SimulationTime::default();
-        assert!((sim.fixed_timestep() - 1.0 / 60.0).abs() < 1e-9);
+        assert!((sim.fixed_timestep() - 1.0 / 120.0).abs() < 1e-9);
     }
 
     #[test]
