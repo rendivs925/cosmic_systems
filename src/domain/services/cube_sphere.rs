@@ -503,7 +503,9 @@ fn resolve_ready_leaves(
     visible_leaves: &mut BTreeSet<TerrainPatch>,
 ) {
     if target_leaves.contains(&patch) {
-        visible_leaves.insert(patch);
+        if state.is_ready(&patch) {
+            visible_leaves.insert(patch);
+        }
         return;
     }
 
@@ -666,27 +668,6 @@ pub fn build_patch_geometry_with_stitches(
         skirt_depth_m,
         stitched_edges,
         |latitude_deg, longitude_deg| source.height_m(latitude_deg, longitude_deg),
-    )
-}
-
-/// Build a coarse presentation mesh from a source's non-authoritative overview
-/// representation. This avoids initializing expensive local terrain caches for
-/// global coverage; refined patches continue to use [`build_patch_geometry`].
-pub fn build_patch_overview_geometry_with_stitches(
-    patch: &TerrainPatch,
-    source: &dyn TerrainSource,
-    planet_radius_m: f64,
-    resolution: u32,
-    skirt_depth_m: f64,
-    stitched_edges: &[PatchEdge],
-) -> PatchGeometry {
-    build_patch_geometry_with_height_sampler(
-        patch,
-        planet_radius_m,
-        resolution,
-        skirt_depth_m,
-        stitched_edges,
-        |latitude_deg, longitude_deg| source.overview_height_m(latitude_deg, longitude_deg),
     )
 }
 
@@ -880,37 +861,6 @@ mod tests {
         ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0)
     }
 
-    #[derive(Debug)]
-    struct OverviewOnlySource;
-
-    impl TerrainSource for OverviewOnlySource {
-        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            panic!("coarse presentation must not request authoritative height")
-        }
-
-        fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            125.0
-        }
-    }
-
-    #[test]
-    fn overview_geometry_avoids_authoritative_height_sampling() {
-        let geometry = build_patch_overview_geometry_with_stitches(
-            &TerrainPatch::root(CubeFace::PosZ),
-            &OverviewOnlySource,
-            6_371_000.0,
-            3,
-            40.0,
-            &[],
-        );
-
-        assert_eq!(geometry.positions.len(), 17);
-        assert!(geometry
-            .positions
-            .iter()
-            .any(|position| (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6));
-    }
-
     #[test]
     fn face_uv_round_trips() {
         for dir in [
@@ -1094,7 +1044,8 @@ mod tests {
             max_neighbor_level_difference: 1,
         };
 
-        let unready = QuadtreePatchState::default();
+        let mut unready = QuadtreePatchState::default();
+        unready.ready.extend(TerrainPatch::roots());
         let fallback = select_quadtree_leaves(&unready, &errors, config);
         assert_eq!(fallback.target_leaves.len(), 9);
         assert!(fallback.target_leaves.contains(&root.children()[0]));
@@ -1113,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_always_retains_six_root_cover() {
+    fn selection_waits_for_authoritative_root_geometry() {
         let selection = select_quadtree_leaves(
             &QuadtreePatchState::default(),
             &BTreeMap::new(),
@@ -1125,6 +1076,21 @@ mod tests {
         );
         let roots: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
         assert_eq!(selection.target_leaves, roots);
+        assert!(selection.visible_leaves.is_empty());
+
+        let ready = QuadtreePatchState {
+            ready: roots.clone(),
+            ..QuadtreePatchState::default()
+        };
+        let selection = select_quadtree_leaves(
+            &ready,
+            &BTreeMap::new(),
+            QuadtreeSelectionConfig {
+                max_level: 4,
+                max_projected_error_px: 1.0,
+                max_neighbor_level_difference: 1,
+            },
+        );
         assert_eq!(selection.visible_leaves, roots);
     }
 

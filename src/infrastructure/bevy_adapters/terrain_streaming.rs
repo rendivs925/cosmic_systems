@@ -9,14 +9,14 @@
 //! camera neighborhood is refined.
 
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, build_patch_overview_geometry_with_stitches,
-    lod_for_distance, projected_patch_error_px, select_quadtree_leaves, CameraProjection,
-    PatchEdge, PatchGeometricError, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig,
-    TerrainPatch,
+    build_patch_geometry_with_stitches, lod_for_distance, projected_patch_error_px,
+    select_quadtree_leaves, CameraProjection, PatchEdge, PatchGeometricError, PatchGeometry,
+    QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
+#[cfg(test)]
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
@@ -25,7 +25,8 @@ use crate::infrastructure::bevy_adapters::terrain_render::{
 #[cfg(test)]
 use crate::infrastructure::bevy_adapters::terrain_surface::VEGETATION_MIN_PATCH_LEVEL;
 use crate::infrastructure::bevy_adapters::terrain_surface::{
-    supports_vegetation, MAX_VEGETATION_MESH_BYTES,
+    supports_local_surfaces, supports_vegetation, LOCAL_SURFACE_MAP_BYTES,
+    MAX_VEGETATION_MESH_BYTES,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -47,11 +48,6 @@ const RENDER_BYTES_PER_VERTEX: u64 = 48;
 const BYTES_PER_INDEX: u64 = 4;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 const METRICS_GENERATED_TILE_INTERVAL: usize = 32;
-/// Global and continental tiles render the terrain source's inexpensive overview
-/// representation. Local tiles at this level and finer use authoritative height
-/// samples, matching collision and avoiding global erosion-cache initialization.
-pub(crate) const AUTHORITATIVE_TERRAIN_LEVEL: u32 = 8;
-
 /// Minimum distance for LOD calculation when on the ground.
 /// Uses estimated camera-to-terrain distance (~150m) instead of orbital heuristic.
 const SURFACE_LOD_DISTANCE_M: f64 = 150.0;
@@ -71,9 +67,8 @@ pub struct TerrainStreamingResource {
     pub manager: TerrainPatchManager,
     pub budget_bytes: u64,
     pub generated: HashMap<TerrainPatch, CachedTerrainGeometry>,
-    /// Background geometry jobs for requested refinement tiles. Coarse roots are
-    /// generated synchronously once so the initial frame always has a complete
-    /// fallback surface; all later work is polled without blocking rendering.
+    /// Background geometry jobs for requested tiles. Every LOD, including roots,
+    /// samples the authoritative source off the render thread.
     inflight: BTreeMap<TerrainPatch, Task<GeneratedTerrainPatch>>,
     /// Leaves currently published to the renderer. Generated descendants remain
     /// cached until all siblings are ready, then replace their parent together.
@@ -175,8 +170,7 @@ pub fn stream_terrain_patches(
     }
     streaming.active_planet = Some(planet_entity);
 
-    let (mut completed_batch_count, mut completed_batch_ms) =
-        collect_completed_generation(&mut streaming);
+    let (completed_batch_count, completed_batch_ms) = collect_completed_generation(&mut streaming);
 
     let radius_m = planet_query
         .iter()
@@ -337,67 +331,30 @@ pub fn stream_terrain_patches(
         &streaming.generated,
         generation_limit,
     );
-    if streaming.generated.is_empty() && streaming.inflight.is_empty() {
-        let generation_started = Instant::now();
-        for patch in batch {
-            streaming.manager.begin_generation(&patch);
-            let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
-            let stitch_mask = stitch_mask(&stitch_edges);
-            let geometry = generate_patch_geometry(
-                patch,
-                planet_terrain.source.as_ref(),
+    for patch in batch {
+        streaming.manager.begin_generation(&patch);
+        let source = planet_terrain.source.clone();
+        let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
+        let stitch_mask = stitch_mask(&stitch_edges);
+        let patch_resolution = config.patch_resolution;
+        let skirt_depth_m = config.skirt_depth_m;
+        let task = task_pool.spawn(async move {
+            let generation_started = Instant::now();
+            let geometry = build_patch_geometry_with_stitches(
+                &patch,
+                source.as_ref(),
                 radius_m,
-                &config,
+                patch_resolution,
+                skirt_depth_m,
                 &stitch_edges,
             );
-            streaming.generated.insert(
-                patch,
-                CachedTerrainGeometry {
-                    geometry,
-                    stitch_mask,
-                },
-            );
-            streaming.manager.mark_ready(&patch);
-            completed_batch_count += 1;
-        }
-        completed_batch_ms += generation_started.elapsed().as_secs_f64() * 1_000.0;
-    } else {
-        for patch in batch {
-            streaming.manager.begin_generation(&patch);
-            let source = planet_terrain.source.clone();
-            let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
-            let stitch_mask = stitch_mask(&stitch_edges);
-            let patch_resolution = config.patch_resolution;
-            let skirt_depth_m = config.skirt_depth_m;
-            let task = task_pool.spawn(async move {
-                let generation_started = Instant::now();
-                let geometry = if patch.level < AUTHORITATIVE_TERRAIN_LEVEL {
-                    build_patch_overview_geometry_with_stitches(
-                        &patch,
-                        source.as_ref(),
-                        radius_m,
-                        patch_resolution,
-                        skirt_depth_m,
-                        &stitch_edges,
-                    )
-                } else {
-                    build_patch_geometry_with_stitches(
-                        &patch,
-                        source.as_ref(),
-                        radius_m,
-                        patch_resolution,
-                        skirt_depth_m,
-                        &stitch_edges,
-                    )
-                };
-                GeneratedTerrainPatch {
-                    geometry,
-                    stitch_mask,
-                    generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
-                }
-            });
-            streaming.inflight.insert(patch, task);
-        }
+            GeneratedTerrainPatch {
+                geometry,
+                stitch_mask,
+                generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
+            }
+        });
+        streaming.inflight.insert(patch, task);
     }
 
     // Publish only a complete ready leaf cover. Cached child meshes are never
@@ -463,8 +420,8 @@ pub fn stream_terrain_patches(
 }
 
 /// Keep every available asynchronous terrain worker busy without creating a
-/// backlog that would delay higher-priority camera movement. The root cover is
-/// the one exception: it is built synchronously as an atomic initial fallback.
+/// backlog that would delay higher-priority camera movement. Root requests are
+/// submitted together to establish complete authoritative coverage promptly.
 fn generation_capacity(cache_is_empty: bool, worker_count: usize, inflight_count: usize) -> usize {
     if cache_is_empty {
         TerrainPatch::roots().len()
@@ -529,34 +486,6 @@ fn clear_terrain_cache(streaming: &mut TerrainStreamingResource) -> Vec<TerrainP
     evicted
 }
 
-fn generate_patch_geometry(
-    patch: TerrainPatch,
-    source: &dyn TerrainSource,
-    radius_m: f64,
-    config: &TerrainRenderConfig,
-    stitch_edges: &[PatchEdge],
-) -> PatchGeometry {
-    if patch.level < AUTHORITATIVE_TERRAIN_LEVEL {
-        build_patch_overview_geometry_with_stitches(
-            &patch,
-            source,
-            radius_m,
-            config.patch_resolution,
-            config.skirt_depth_m,
-            stitch_edges,
-        )
-    } else {
-        build_patch_geometry_with_stitches(
-            &patch,
-            source,
-            radius_m,
-            config.patch_resolution,
-            config.skirt_depth_m,
-            stitch_edges,
-        )
-    }
-}
-
 fn generation_batch(
     ordered_window: &[TerrainPatch],
     manager: &TerrainPatchManager,
@@ -577,13 +506,15 @@ fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     let resolution = u64::from(resolution.max(2));
     let vertices = resolution * resolution + 4 * (resolution - 1);
     let indices = 6 * ((resolution - 1) * (resolution - 1) + 4 * (resolution - 1));
-    let terrain_bytes = vertices * (DOMAIN_BYTES_PER_VERTEX + RENDER_BYTES_PER_VERTEX)
+    let mut terrain_bytes = vertices * (DOMAIN_BYTES_PER_VERTEX + RENDER_BYTES_PER_VERTEX)
         + indices * 2 * BYTES_PER_INDEX;
-    if supports_vegetation(patch.level) {
-        terrain_bytes + MAX_VEGETATION_MESH_BYTES
-    } else {
-        terrain_bytes
+    if supports_local_surfaces(patch.level) {
+        terrain_bytes += LOCAL_SURFACE_MAP_BYTES;
     }
+    if supports_vegetation(patch.level) {
+        terrain_bytes += MAX_VEGETATION_MESH_BYTES;
+    }
+    terrain_bytes
 }
 
 /// Populate only the camera neighborhood at each level. The pure selection
@@ -677,6 +608,43 @@ fn stale_cached_stitch_variants(
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::CubeFace;
+
+    #[derive(Debug)]
+    struct DivergentOverviewSource;
+
+    impl TerrainSource for DivergentOverviewSource {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            125.0
+        }
+
+        fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            -250.0
+        }
+    }
+
+    #[test]
+    fn every_render_lod_uses_the_authoritative_terrain_height() {
+        let source = DivergentOverviewSource;
+        let config = TerrainRenderConfig {
+            patch_resolution: 3,
+            ..default()
+        };
+
+        for level in [0, 7, 8, MAX_PATCH_LEVEL] {
+            let patch = TerrainPatch::for_direction(DVec3::Z, level);
+            let geometry = build_patch_geometry_with_stitches(
+                &patch,
+                &source,
+                6_371_000.0,
+                config.patch_resolution,
+                config.skirt_depth_m,
+                &[],
+            );
+            assert!(geometry.positions.iter().take(9).all(|position| {
+                (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6
+            }));
+        }
+    }
 
     #[test]
     fn neighborhood_crosses_face_boundaries_without_losing_coverage() {
@@ -872,12 +840,12 @@ mod tests {
         );
         assert_eq!(
             estimated_patch_bytes(vegetation_detail, 33),
-            estimated_patch_bytes(coarse, 33) + MAX_VEGETATION_MESH_BYTES
+            estimated_patch_bytes(coarse, 33) + LOCAL_SURFACE_MAP_BYTES + MAX_VEGETATION_MESH_BYTES
         );
     }
 
     #[test]
-    fn generation_capacity_bootstraps_roots_then_fills_all_available_workers() {
+    fn generation_capacity_queues_roots_then_fills_all_available_workers() {
         let roots = TerrainPatch::roots().to_vec();
         let mut manager = TerrainPatchManager::new();
         for patch in &roots {

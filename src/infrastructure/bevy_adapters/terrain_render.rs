@@ -13,25 +13,52 @@ use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
-use crate::infrastructure::bevy_adapters::terrain_streaming::{
-    TerrainStreamingResource, AUTHORITATIVE_TERRAIN_LEVEL,
-};
+use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
 use crate::infrastructure::bevy_adapters::terrain_surface::{
-    build_vegetation_mesh, supports_vegetation,
+    build_patch_surfaces, build_vegetation_mesh, supports_local_surfaces, supports_vegetation,
 };
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
 use bevy::math::{DQuat, DVec3};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::shader::ShaderRef;
 use bevy::time::Fixed;
 use bevy_mesh::{Indices, PrimitiveTopology};
+
+const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+struct TerrainSurfaceExtension {
+    #[texture(100)]
+    #[sampler(101)]
+    local_albedo: Handle<Image>,
+    #[texture(102)]
+    #[sampler(103)]
+    local_normal: Handle<Image>,
+    #[uniform(104)]
+    local_detail_weight: f32,
+}
+
+impl MaterialExtension for TerrainSurfaceExtension {
+    fn fragment_shader() -> ShaderRef {
+        TERRAIN_SURFACE_SHADER.into()
+    }
+}
+
+type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
 
 /// Component tracking the render state of a terrain patch.
 #[derive(Component, Debug, Clone)]
 pub struct TerrainPatchRenderState {
     pub patch: TerrainPatch,
     pub mesh_handle: Handle<Mesh>,
-    pub material_handle: Handle<StandardMaterial>,
+    material_handle: Handle<TerrainMaterial>,
+    /// Per-patch local surface textures. Shared fallback maps are not stored or
+    /// released with a patch.
+    local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
@@ -46,6 +73,7 @@ pub struct TerrainPatchRenderState {
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
+    fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
 }
 
 /// Resource for the floating render origin (AGENTS.md section 13).
@@ -113,6 +141,7 @@ impl Plugin for TerrainRenderPlugin {
         app.init_resource::<RenderOrigin>()
             .init_resource::<TerrainRenderConfig>()
             .init_resource::<TerrainRenderAssets>()
+            .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
@@ -137,7 +166,9 @@ fn spawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchReady>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+    mut standard_materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     asset_server: Res<AssetServer>,
     streaming: Res<TerrainStreamingResource>,
@@ -186,12 +217,29 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        let mut material = patch_material(&patch, source, patch.level);
-        material.base_color_texture = load_texture(
+        let mut base_material = patch_material(&patch, source);
+        base_material.base_color_texture = load_texture(
             &asset_server,
             get_planet_textures(&planet.domain_planet.name).albedo,
         );
-        let material_handle = materials.add(material);
+        let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
+            if supports_local_surfaces(patch.level) {
+                let (albedo, normal) = build_patch_surfaces(source, &patch, radius_m);
+                let albedo = images.add(albedo);
+                let normal = images.add(normal);
+                (albedo.clone(), normal.clone(), 1.0, Some((albedo, normal)))
+            } else {
+                let (albedo, normal) = fallback_surface_maps(&mut render_assets, &mut images);
+                (albedo, normal, 0.0, None)
+            };
+        let material_handle = materials.add(TerrainMaterial {
+            base: base_material,
+            extension: TerrainSurfaceExtension {
+                local_albedo,
+                local_normal,
+                local_detail_weight,
+            },
+        });
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
@@ -213,7 +261,7 @@ fn spawn_patch_mesh_system(
             render_assets
                 .vegetation_material
                 .get_or_insert_with(|| {
-                    materials.add(StandardMaterial {
+                    standard_materials.add(StandardMaterial {
                         base_color: Color::WHITE,
                         perceptual_roughness: 0.9,
                         metallic: 0.0,
@@ -232,6 +280,7 @@ fn spawn_patch_mesh_system(
                     patch,
                     mesh_handle: mesh_handle.clone(),
                     material_handle: material_handle.clone(),
+                    local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
@@ -316,13 +365,14 @@ fn despawn_patch_mesh_system(
     mut events: MessageReader<TerrainPatchEvicted>,
     render_query: Query<(Entity, &TerrainPatchRenderState)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     for event in events.read() {
         for (entity, state) in render_query.iter() {
             if state.patch == event.patch && state.planet_entity == event.planet_entity {
                 commands.entity(entity).despawn();
-                release_patch_render_assets(state, &mut meshes, &mut materials);
+                release_patch_render_assets(state, &mut meshes, &mut materials, &mut images);
                 break;
             }
         }
@@ -332,13 +382,49 @@ fn despawn_patch_mesh_system(
 fn release_patch_render_assets(
     state: &TerrainPatchRenderState,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<TerrainMaterial>,
+    images: &mut Assets<Image>,
 ) {
     meshes.remove(state.mesh_handle.id());
     materials.remove(state.material_handle.id());
     if let Some(vegetation_mesh_handle) = &state.vegetation_mesh_handle {
         meshes.remove(vegetation_mesh_handle.id());
     }
+    if let Some((albedo, normal)) = &state.local_surface_handles {
+        images.remove(albedo.id());
+        images.remove(normal.id());
+    }
+}
+
+fn fallback_surface_maps(
+    render_assets: &mut TerrainRenderAssets,
+    images: &mut Assets<Image>,
+) -> (Handle<Image>, Handle<Image>) {
+    render_assets
+        .fallback_surface_maps
+        .get_or_insert_with(|| {
+            let extent = Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            };
+            let albedo = images.add(Image::new_fill(
+                extent,
+                TextureDimension::D2,
+                &[255, 255, 255, 255],
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::RENDER_WORLD,
+            ));
+            let normal = images.add(Image::new_fill(
+                extent,
+                TextureDimension::D2,
+                &[128, 128, 255, 255],
+                TextureFormat::Rgba8Unorm,
+                RenderAssetUsages::RENDER_WORLD,
+            ));
+            (albedo, normal)
+        })
+        .clone()
 }
 
 /// Convert domain PatchGeometry to Bevy Mesh, rebasing planet-centered positions
@@ -380,12 +466,11 @@ fn patch_geometry_to_mesh(
         .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 
-    // UV0 is geographic equirectangular UV so every tile, including roots,
-    // samples the same global Earth imagery. The active StandardMaterial has no
-    // tile-local UV consumer, so UV1 remains domain data until a custom material
-    // actually needs it.
+    // UV0 is geographic equirectangular UV for global imagery. UV1 is tile-local
+    // and consumed by TerrainSurfaceExtension's local albedo and normal maps.
     let uvs = geometry.uvs.to_vec();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, geometry.local_uvs.clone());
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
         terrain_vertex_colors(geometry, source, patch_level, planet_radius_m),
@@ -427,21 +512,12 @@ fn terrain_vertex_colors(
                 .clamp(-1.0, 1.0)
                 .acos()
                 .to_degrees();
-            let appearance = if patch_level < AUTHORITATIVE_TERRAIN_LEVEL {
-                surface_appearance(
-                    height_m,
-                    source.overview_moisture(lat, lon),
-                    source.zone_lat(lat),
-                    slope_deg,
-                )
-            } else {
-                surface_appearance(
-                    height_m,
-                    source.moisture(lat, lon),
-                    source.zone_lat(lat),
-                    slope_deg,
-                )
-            };
+            let appearance = surface_appearance(
+                height_m,
+                source.moisture(lat, lon),
+                source.zone_lat(lat),
+                slope_deg,
+            );
             [
                 1.0 + (appearance.albedo[0] - 1.0) * detail * 0.25,
                 1.0 + (appearance.albedo[1] - 1.0) * detail * 0.25,
@@ -548,29 +624,17 @@ fn patch_transform_components(
 /// patch by `build_patch_surfaces` (set by the caller); this only provides the
 /// representative roughness from the shared `surface_appearance` law (AGENTS.md
 /// 50: one authoritative appearance law).
-fn patch_material(
-    patch: &TerrainPatch,
-    source: &dyn TerrainSource,
-    patch_level: u32,
-) -> StandardMaterial {
+fn patch_material(patch: &TerrainPatch, source: &dyn TerrainSource) -> StandardMaterial {
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let u_mid = (u0 + u1) * 0.5;
     let v_mid = (v0 + v1) * 0.5;
     let dir = face_uv_to_direction(patch.face, u_mid, v_mid);
     let (lat, lon) = direction_to_lat_lon(dir);
-    let (height, moisture, slope) = if patch_level < AUTHORITATIVE_TERRAIN_LEVEL {
-        (
-            source.overview_height_m(lat, lon),
-            source.overview_moisture(lat, lon),
-            source.overview_slope_deg(lat, lon),
-        )
-    } else {
-        (
-            source.height_m(lat, lon),
-            source.moisture(lat, lon),
-            slope_deg_at(source, lat, lon),
-        )
-    };
+    let (height, moisture, slope) = (
+        source.height_m(lat, lon),
+        source.moisture(lat, lon),
+        slope_deg_at(source, lat, lon),
+    );
     let zone = source.zone_lat(lat);
     let appearance = surface_appearance(height, moisture, zone, slope);
 
@@ -751,6 +815,16 @@ mod tests {
         assert!(coarse.iter().all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
         assert!(fine.iter().any(|color| *color != [1.0, 1.0, 1.0, 1.0]));
         assert_eq!(geometry.uvs.len(), geometry.local_uvs.len());
+
+        let mesh = patch_geometry_to_mesh(
+            &geometry,
+            &DVec3::ZERO,
+            DQuat::IDENTITY,
+            &source,
+            12,
+            6_371_000.0,
+        );
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
     }
 
     #[test]
@@ -764,12 +838,7 @@ mod tests {
             indices: Vec::new(),
         };
 
-        terrain_vertex_colors(
-            &geometry,
-            &source,
-            AUTHORITATIVE_TERRAIN_LEVEL - 1,
-            6_371_000.0,
-        );
+        terrain_vertex_colors(&geometry, &source, 0, 6_371_000.0);
         assert_eq!(
             source.authoritative_height_calls.load(Ordering::Relaxed),
             0,
@@ -777,7 +846,7 @@ mod tests {
         );
         assert_eq!(source.overview_height_calls.load(Ordering::Relaxed), 0);
 
-        terrain_vertex_colors(&geometry, &source, AUTHORITATIVE_TERRAIN_LEVEL, 6_371_000.0);
+        terrain_vertex_colors(&geometry, &source, 8, 6_371_000.0);
         assert_eq!(source.authoritative_height_calls.load(Ordering::Relaxed), 0);
         assert_eq!(source.overview_height_calls.load(Ordering::Relaxed), 0);
     }
@@ -808,6 +877,7 @@ mod tests {
                     patch,
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
+                    local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
@@ -847,7 +917,8 @@ mod tests {
     #[test]
     fn evicting_a_patch_releases_its_unique_render_assets() {
         let mut meshes = Assets::<Mesh>::default();
-        let mut materials = Assets::<StandardMaterial>::default();
+        let mut materials = Assets::<TerrainMaterial>::default();
+        let mut images = Assets::<Image>::default();
         let mesh_handle = meshes.add(Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD,
@@ -856,23 +927,27 @@ mod tests {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD,
         ));
-        let material_handle = materials.add(StandardMaterial::default());
-        let shared_vegetation_material = materials.add(StandardMaterial::default());
+        let material_handle = materials.add(TerrainMaterial::default());
+        let mut vegetation_materials = Assets::<StandardMaterial>::default();
+        let shared_vegetation_material = vegetation_materials.add(StandardMaterial::default());
         let state = TerrainPatchRenderState {
             patch: TerrainPatch::for_direction(DVec3::X, 0),
             mesh_handle: mesh_handle.clone(),
             material_handle: material_handle.clone(),
+            local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,
             render_origin_at_spawn: DVec3::ZERO,
         };
 
-        release_patch_render_assets(&state, &mut meshes, &mut materials);
+        release_patch_render_assets(&state, &mut meshes, &mut materials, &mut images);
 
         assert!(meshes.get(mesh_handle.id()).is_none());
         assert!(meshes.get(vegetation_mesh_handle.id()).is_none());
         assert!(materials.get(material_handle.id()).is_none());
-        assert!(materials.get(shared_vegetation_material.id()).is_some());
+        assert!(vegetation_materials
+            .get(shared_vegetation_material.id())
+            .is_some());
     }
 }

@@ -38,8 +38,19 @@ const VEGETATION_BYTES_PER_INDEX: u64 = 4;
 /// that is too distant to resolve.
 pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
 
+/// Local surface maps are reserved for the same close-range terrain level as
+/// vegetation so their source sampling and GPU residency stay bounded.
+pub(crate) const LOCAL_SURFACE_MIN_PATCH_LEVEL: u32 = VEGETATION_MIN_PATCH_LEVEL;
+
+/// Albedo and normal maps are both RGBA8 textures.
+pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 = SURFACE_TEX_RES as u64 * SURFACE_TEX_RES as u64 * 8;
+
 pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
     patch_level >= VEGETATION_MIN_PATCH_LEVEL
+}
+
+pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
+    patch_level >= LOCAL_SURFACE_MIN_PATCH_LEVEL
 }
 
 /// Conservative maximum allocation for one merged vegetation mesh. The
