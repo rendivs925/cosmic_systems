@@ -46,10 +46,6 @@ const DOMAIN_BYTES_PER_VERTEX: u64 = 64;
 const RENDER_BYTES_PER_VERTEX: u64 = 48;
 const BYTES_PER_INDEX: u64 = 4;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
-/// Bound synchronous terrain work after the six roots are ready.
-const MAX_NEW_PATCHES_PER_FRAME: usize = 2;
-/// Bound queued refinement work so terrain never monopolizes the shared compute pool.
-const MAX_IN_FLIGHT_GENERATION_TASKS: usize = 4;
 const METRICS_GENERATED_TILE_INTERVAL: usize = 32;
 /// Global and continental tiles render the terrain source's inexpensive overview
 /// representation. Local tiles at this level and finer use authoritative height
@@ -330,12 +326,12 @@ pub fn stream_terrain_patches(
             patch.tile_x,
         )
     });
-    let generation_limit = if streaming.generated.is_empty() && streaming.inflight.is_empty() {
-        TerrainPatch::roots().len()
-    } else {
-        MAX_NEW_PATCHES_PER_FRAME
-            .min(MAX_IN_FLIGHT_GENERATION_TASKS.saturating_sub(streaming.inflight.len()))
-    };
+    let task_pool = AsyncComputeTaskPool::get();
+    let generation_limit = generation_capacity(
+        streaming.generated.is_empty() && streaming.inflight.is_empty(),
+        task_pool.thread_num(),
+        streaming.inflight.len(),
+    );
     let batch = generation_batch(
         &generation_order,
         &streaming.manager,
@@ -367,7 +363,6 @@ pub fn stream_terrain_patches(
         }
         completed_batch_ms += generation_started.elapsed().as_secs_f64() * 1_000.0;
     } else {
-        let task_pool = AsyncComputeTaskPool::get();
         for patch in batch {
             streaming.manager.begin_generation(&patch);
             let source = planet_terrain.source.clone();
@@ -465,6 +460,17 @@ pub fn stream_terrain_patches(
             patch,
             planet_entity,
         });
+    }
+}
+
+/// Keep every available asynchronous terrain worker busy without creating a
+/// backlog that would delay higher-priority camera movement. The root cover is
+/// the one exception: it is built synchronously as an atomic initial fallback.
+fn generation_capacity(cache_is_empty: bool, worker_count: usize, inflight_count: usize) -> usize {
+    if cache_is_empty {
+        TerrainPatch::roots().len()
+    } else {
+        worker_count.saturating_sub(inflight_count)
     }
 }
 
@@ -872,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_cache_bootstraps_all_roots_then_caps_later_work() {
+    fn generation_capacity_bootstraps_roots_then_fills_all_available_workers() {
         let roots = TerrainPatch::roots().to_vec();
         let mut manager = TerrainPatchManager::new();
         for patch in &roots {
@@ -884,11 +890,7 @@ mod tests {
             &roots,
             &manager,
             &generated,
-            if generated.is_empty() {
-                TerrainPatch::roots().len()
-            } else {
-                MAX_NEW_PATCHES_PER_FRAME
-            },
+            generation_capacity(generated.is_empty(), 4, 0),
         );
         assert_eq!(bootstrap_batch, roots);
 
@@ -914,13 +916,12 @@ mod tests {
             &roots,
             &manager,
             &generated,
-            if generated.is_empty() {
-                TerrainPatch::roots().len()
-            } else {
-                MAX_NEW_PATCHES_PER_FRAME
-            },
+            generation_capacity(generated.is_empty(), 4, 0),
         );
-        assert_eq!(later_batch.len(), MAX_NEW_PATCHES_PER_FRAME);
+        assert_eq!(later_batch.len(), 4);
         assert_ne!(later_batch, vec![focus]);
+
+        assert_eq!(generation_capacity(false, 4, 4), 0);
+        assert_eq!(generation_capacity(false, 8, 3), 5);
     }
 }
