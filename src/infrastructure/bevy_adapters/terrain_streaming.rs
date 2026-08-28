@@ -1,26 +1,29 @@
 //! Cube-sphere terrain streaming (AGENTS.md sections 22-23).
 //!
 //! A `TerrainPatchManager` resource is driven each tick by a streaming system
-//! that keeps a complete six-face quadtree surface alive through the
+//! that keeps a viewport-local cube-sphere quadtree through the
 //! requested → generating → ready → visible → cached → evicted lifecycle, and
 //! enforces the configured memory budget by evicting least-recently-used cached
 //! patches. Generated patch geometry is built deterministically from the shared
-//! per-planet `TerrainSource`. Coarse roots cover the whole planet; only the
-//! camera neighborhood is refined.
+//! per-planet `TerrainSource`. Coarse roots provide fallback coverage for the
+//! active viewport; only its camera neighborhood is refined.
 
+use crate::domain::entities::planet::Planet;
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, lod_for_distance, projected_patch_error_px,
-    select_quadtree_leaves, CameraProjection, PatchEdge, PatchGeometricError, PatchGeometry,
-    QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
+    build_patch_geometry_with_stitches, face_uv_to_direction, lod_for_distance,
+    projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge,
+    PatchGeometricError, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
-use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
+use crate::domain::services::reference_frames::{
+    body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
+};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 #[cfg(test)]
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
-    TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
+    RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
 #[cfg(test)]
 use crate::infrastructure::bevy_adapters::terrain_surface::VEGETATION_MIN_PATCH_LEVEL;
@@ -53,6 +56,9 @@ const METRICS_GENERATED_TILE_INTERVAL: usize = 32;
 const SURFACE_LOD_DISTANCE_M: f64 = 150.0;
 /// Altitude threshold below which surface LOD distance is used.
 const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
+/// Extra frustum angle retained around the viewport so terrain does not pop at
+/// its edge while the camera is moving between streaming updates.
+const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
 /// Smooth `[0,1]` ramp used to blend the on-ground and orbital LOD distances so
 /// the terrain LOD level steps gradually rather than jumping several at once.
 fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
@@ -108,6 +114,15 @@ struct GeneratedTerrainPatch {
     generation_ms: f64,
 }
 
+/// Camera data in the terrain source's body-fixed frame. Streaming uses this
+/// only for presentation culling; terrain geometry remains source-authoritative.
+#[derive(Debug, Clone, Copy)]
+struct TerrainViewport {
+    position_m: DVec3,
+    forward: DVec3,
+    half_fov_rad: f64,
+}
+
 /// Streaming system: keep six root tiles available for the bound planet, refine
 /// the rocket-facing neighborhood by projected geometric error, generate
 /// deterministic geometry from the shared terrain source, and enforce the
@@ -122,6 +137,8 @@ pub fn stream_terrain_patches(
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
     config: Res<TerrainRenderConfig>,
     sim_time: Res<SimulationTime>,
+    render_origin: Res<RenderOrigin>,
+    camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
 ) {
     streaming.manager.tick();
 
@@ -193,6 +210,17 @@ pub fn stream_terrain_patches(
         (sim_time.sim_time_s / 86_400.0) as f32,
     );
     let dir = position_bf.normalize_or_zero();
+    let viewport = terrain_viewport(
+        &camera_query,
+        &render_origin,
+        &_planet.domain_planet,
+        sim_time.sim_time_s,
+    );
+    let focus_direction = viewport_focus_direction(viewport.as_ref(), radius_m, dir);
+    let lod_camera_position_m = viewport
+        .as_ref()
+        .map(|viewport| viewport.position_m)
+        .unwrap_or(position_bf);
 
     // Blend ground and orbital camera distance before evaluating projected
     // error. The selection itself remains a pure f64 domain calculation.
@@ -215,11 +243,11 @@ pub fn stream_terrain_patches(
         MAX_PATCH_LEVEL,
     );
     let errors = projected_errors_for_focus(
-        dir,
+        focus_direction,
         max_focus_level,
         radius_m,
         CameraProjection {
-            position_m: position_bf,
+            position_m: lod_camera_position_m,
             vertical_fov_rad: FOV_RAD,
             viewport_height_px: SCREEN_HEIGHT_PX,
         },
@@ -268,8 +296,16 @@ pub fn stream_terrain_patches(
         );
     }
 
-    let mut requested: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
-    requested.extend(selection.requested.iter().copied());
+    let active_roots = active_viewport_roots(viewport.as_ref(), radius_m, focus_direction);
+    let mut requested = active_roots.clone();
+    for patch in selection
+        .requested
+        .iter()
+        .copied()
+        .filter(|patch| patch_intersects_viewport(*patch, viewport.as_ref(), radius_m))
+    {
+        add_viewport_lod_group(patch, &selection.requested, &mut requested);
+    }
 
     // The camera can move before a queued refinement finishes. Cancel obsolete
     // unfinished tasks now; completed geometry follows the cache lifecycle below
@@ -307,20 +343,20 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
-    let roots_ready = TerrainPatch::roots()
-        .into_iter()
-        .all(|root| streaming.generated.contains_key(&root));
+    let roots_ready = active_roots
+        .iter()
+        .all(|root| streaming.generated.contains_key(root));
     let mut generation_order: Vec<_> = if roots_ready {
-        requested.into_iter().collect()
+        requested.iter().copied().collect()
     } else {
         // Do not let refinement contend with the complete root fallback. Until
         // every face is available, the root cover is the only useful geometry
         // and gives the asynchronous workers a bounded, high-priority batch.
-        TerrainPatch::roots().to_vec()
+        active_roots.iter().copied().collect()
     };
     generation_order.sort_by_key(|patch| {
         let center = patch.center_direction();
-        let distance_key = ((1.0 - center.dot(dir)).max(0.0) * 1_000_000.0) as u64;
+        let distance_key = ((1.0 - center.dot(focus_direction)).max(0.0) * 1_000_000.0) as u64;
         (
             patch.level,
             distance_key,
@@ -370,7 +406,11 @@ pub fn stream_terrain_patches(
     // Publish only a complete ready leaf cover. Cached child meshes are never
     // spawned until every sibling can replace the parent, preventing z-fighting
     // and blank-space transitions.
-    let current_visible: BTreeSet<_> = selection.visible_leaves;
+    let current_visible: BTreeSet<_> = selection
+        .visible_leaves
+        .into_iter()
+        .filter(|patch| requested.contains(patch))
+        .collect();
     let departed: Vec<_> = streaming
         .published
         .difference(&current_visible)
@@ -396,6 +436,17 @@ pub fn stream_terrain_patches(
     }
     streaming.published = current_visible;
 
+    // Outside the viewport range, cached geometry has no presentation value.
+    // Release it immediately instead of retaining invisible GPU meshes until
+    // unrelated memory pressure happens to evict them.
+    for patch in evict_cached_patches_outside_viewport(&mut streaming, &requested) {
+        streaming.generated.remove(&patch);
+        evicted_events.write(TerrainPatchEvicted {
+            patch,
+            planet_entity,
+        });
+    }
+
     let metrics_due =
         completed_batch_count > 0 && streaming.generated.len() >= streaming.next_metrics_report_at;
     if metrics_due {
@@ -416,7 +467,7 @@ pub fn stream_terrain_patches(
     }
 
     let budget = streaming.budget_bytes;
-    let protected: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+    let protected = active_roots;
     let evicted = streaming
         .manager
         .enforce_memory_budget_protecting(budget, &protected);
@@ -437,6 +488,171 @@ fn generation_capacity(roots_ready: bool, worker_count: usize, inflight_count: u
     } else {
         worker_count.saturating_sub(inflight_count)
     }
+}
+
+fn terrain_viewport(
+    camera_query: &Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
+    render_origin: &RenderOrigin,
+    planet: &Planet,
+    sim_time_s: f64,
+) -> Option<TerrainViewport> {
+    let (camera, transform, projection) = camera_query.iter().next()?;
+    let vertical_fov_rad = match projection {
+        Projection::Perspective(perspective) => perspective.fov as f64,
+        _ => return None,
+    };
+    let aspect_ratio = camera
+        .logical_viewport_size()
+        .filter(|size| size.y > 0.0)
+        .map(|size| (size.x / size.y) as f64)
+        .unwrap_or(16.0 / 9.0);
+    let horizontal_fov_rad = 2.0 * ((vertical_fov_rad * 0.5).tan() * aspect_ratio).atan();
+    let body_to_inertial = body_fixed_to_inertial_rotation(planet, (sim_time_s / 86_400.0) as f32);
+    let camera_position_inertial = render_origin.origin + transform.translation().as_dvec3();
+    let forward_inertial = transform.compute_transform().forward().as_vec3().as_dvec3();
+
+    Some(TerrainViewport {
+        position_m: body_to_inertial.inverse() * camera_position_inertial,
+        forward: (body_to_inertial.inverse() * forward_inertial).normalize_or_zero(),
+        half_fov_rad: vertical_fov_rad.max(horizontal_fov_rad) * 0.5,
+    })
+}
+
+fn active_viewport_roots(
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+    fallback_direction: DVec3,
+) -> BTreeSet<TerrainPatch> {
+    let mut roots: BTreeSet<_> = TerrainPatch::roots()
+        .into_iter()
+        .filter(|patch| patch_intersects_viewport(*patch, viewport, radius_m))
+        .collect();
+    if roots.is_empty() {
+        roots.insert(TerrainPatch::for_direction(fallback_direction, 0));
+    }
+    roots
+}
+
+/// Intersect the presentation camera's forward ray with the terrain sphere.
+/// LOD selection must use the same focus as viewport culling; using the rocket
+/// position here generates detailed tiles behind a free or orbital camera.
+fn viewport_focus_direction(
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+    fallback_direction: DVec3,
+) -> DVec3 {
+    let Some(viewport) = viewport else {
+        return fallback_direction;
+    };
+    let b = viewport.position_m.dot(viewport.forward);
+    let c = viewport.position_m.length_squared() - radius_m * radius_m;
+    let discriminant = b * b - c;
+    if discriminant < 0.0 {
+        return fallback_direction;
+    }
+    let distance_m = -b - discriminant.sqrt();
+    if distance_m < 0.0 {
+        return fallback_direction;
+    }
+    (viewport.position_m + viewport.forward * distance_m).normalize_or_zero()
+}
+
+/// Refinement is published only when every child replacing a parent is ready.
+/// Once a child intersects the viewport, retain its selected sibling group and
+/// ancestors as a bounded prefetch unit. Culling individual siblings would
+/// strand the parent forever and make close terrain arrive late.
+fn add_viewport_lod_group(
+    patch: TerrainPatch,
+    selected: &BTreeSet<TerrainPatch>,
+    requested: &mut BTreeSet<TerrainPatch>,
+) {
+    let mut current = patch;
+    loop {
+        let Some(parent) = current.parent() else {
+            requested.insert(current);
+            break;
+        };
+        for sibling in parent.children() {
+            if selected.contains(&sibling) {
+                requested.insert(sibling);
+            }
+        }
+        current = parent;
+    }
+}
+
+/// Conservative sphere-frustum test using each cube-sphere patch's angular
+/// extent. It intentionally retains a small margin for smooth camera motion;
+/// patches outside it are not requested, rendered, or retained in the cache.
+fn patch_intersects_viewport(
+    patch: TerrainPatch,
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+) -> bool {
+    let Some(viewport) = viewport else {
+        return true;
+    };
+    if viewport.forward.length_squared() < 0.5 {
+        return true;
+    }
+
+    let center = patch.center_direction();
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    let samples = [
+        center,
+        face_uv_to_direction(patch.face, u0, v0),
+        face_uv_to_direction(patch.face, u1, v0),
+        face_uv_to_direction(patch.face, u0, v1),
+        face_uv_to_direction(patch.face, u1, v1),
+    ];
+    let camera_surface_direction = viewport.position_m.normalize();
+    let contains_camera_surface =
+        TerrainPatch::for_direction(camera_surface_direction, patch.level) == patch;
+    if viewport.position_m.length() > radius_m
+        && !samples
+            .iter()
+            .any(|sample| viewport.position_m.dot(*sample * radius_m) >= radius_m * radius_m)
+        && !contains_camera_surface
+    {
+        return false;
+    }
+    let patch_radius_rad = samples[1..]
+        .into_iter()
+        .map(|sample| center.dot(*sample).clamp(-1.0, 1.0).acos())
+        .fold(0.0, f64::max)
+        .max(
+            contains_camera_surface
+                .then(|| center.dot(camera_surface_direction).clamp(-1.0, 1.0).acos())
+                .unwrap_or(0.0),
+        );
+    let to_center = center * radius_m - viewport.position_m;
+    if to_center.length_squared() < 1.0 {
+        return true;
+    }
+    let view_angle = viewport
+        .forward
+        .dot(to_center.normalize())
+        .clamp(-1.0, 1.0)
+        .acos();
+    view_angle <= viewport.half_fov_rad + patch_radius_rad + VIEWPORT_PREFETCH_MARGIN_RAD
+}
+
+fn evict_cached_patches_outside_viewport(
+    streaming: &mut TerrainStreamingResource,
+    requested: &BTreeSet<TerrainPatch>,
+) -> Vec<TerrainPatch> {
+    let evicted: Vec<_> = streaming
+        .manager
+        .patch_states()
+        .filter_map(|(patch, state)| {
+            (state == PatchState::Cached && !requested.contains(&patch)).then_some(patch)
+        })
+        .collect();
+    for patch in &evicted {
+        streaming.manager.evict(patch);
+    }
+    streaming.manager.sweep_evicted();
+    evicted
 }
 
 fn patch_needs_geometry(state: Option<PatchState>, has_geometry: bool) -> bool {
@@ -690,6 +906,64 @@ mod tests {
                 }));
             }
         }
+    }
+
+    #[test]
+    fn viewport_selection_rejects_terrain_outside_the_camera_frustum() {
+        let radius_m = 6_371_000.0;
+        let viewport = TerrainViewport {
+            position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
+            forward: -DVec3::Z,
+            half_fov_rad: 0.5,
+        };
+
+        assert!(patch_intersects_viewport(
+            TerrainPatch::root(CubeFace::PosZ),
+            Some(&viewport),
+            radius_m,
+        ));
+        assert!(!patch_intersects_viewport(
+            TerrainPatch::root(CubeFace::PosX),
+            Some(&viewport),
+            radius_m,
+        ));
+
+        assert!(
+            viewport_focus_direction(Some(&viewport), radius_m, DVec3::X)
+                .abs_diff_eq(DVec3::Z, 1e-9)
+        );
+    }
+
+    #[test]
+    fn cached_terrain_outside_the_request_set_is_evicted_immediately() {
+        let patch = TerrainPatch::root(CubeFace::PosZ);
+        let mut streaming = TerrainStreamingResource::default();
+        streaming.manager.request(patch, 1_024);
+        streaming.manager.mark_ready(&patch);
+        streaming.manager.mark_visible(&patch);
+        streaming.manager.mark_cached(&patch);
+
+        assert_eq!(
+            evict_cached_patches_outside_viewport(&mut streaming, &BTreeSet::new()),
+            vec![patch]
+        );
+        assert_eq!(streaming.manager.state_of(&patch), None);
+        assert_eq!(streaming.manager.resident_bytes(), 0);
+    }
+
+    #[test]
+    fn viewport_request_keeps_the_complete_sibling_group_for_progressive_lod() {
+        let parent = TerrainPatch::root(CubeFace::PosZ);
+        let selected: BTreeSet<_> = parent.children().into_iter().collect();
+        let mut requested = BTreeSet::new();
+
+        add_viewport_lod_group(parent.children()[0], &selected, &mut requested);
+
+        assert!(parent
+            .children()
+            .into_iter()
+            .all(|child| requested.contains(&child)));
+        assert!(requested.contains(&parent));
     }
 
     #[test]

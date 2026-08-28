@@ -388,7 +388,8 @@ impl Plugin for RocketModePlugin {
 
         // Cube-sphere terrain streaming around the rocket.
         app.insert_resource(TerrainStreamingResource::default());
-        app.add_systems(Update, stream_terrain_patches);
+        // Terrain priorities use the current presentation camera frustum.
+        app.add_systems(Update, stream_terrain_patches.after(update_rocket_camera));
 
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);

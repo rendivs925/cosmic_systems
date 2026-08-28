@@ -514,7 +514,10 @@ fn resolve_ready_leaves(
         for child in children {
             resolve_ready_leaves(child, target_leaves, state, visible_leaves);
         }
-    } else {
+    } else if state.is_ready(&patch) {
+        // A descendant cannot replace this parent until its complete sibling
+        // set is ready. Do not publish an unready fallback: render observers
+        // receive lifecycle events only once and cannot build absent geometry.
         visible_leaves.insert(patch);
     }
 }

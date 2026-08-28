@@ -26,7 +26,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     );
     pbr_input.material.base_color = mix(
         pbr_input.material.base_color,
-        pbr_input.material.base_color * local_albedo,
+        local_albedo,
         detail_weight,
     );
 

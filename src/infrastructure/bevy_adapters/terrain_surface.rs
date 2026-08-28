@@ -70,7 +70,7 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
 const SURFACE_TEX_RES: u32 = 128;
 /// Exaggeration applied to the height-gradient when baking the normal map so
 /// fine relief reads clearly under the launch-pad sun.
-const NORMAL_STRENGTH: f64 = 2.5;
+const NORMAL_STRENGTH: f64 = 0.6;
 
 /// Deterministic 3D pseudo-noise for micro surface variation (independent of the
 /// source's own noise fields). Cheap hash-based; only used to break up flat
@@ -142,11 +142,10 @@ pub fn build_patch_surfaces(
             let r = (appearance.albedo[0] * shade as f32).clamp(0.0, 1.0);
             let g = (appearance.albedo[1] * shade as f32).clamp(0.0, 1.0);
             let b = (appearance.albedo[2] * shade as f32).clamp(0.0, 1.0);
-            let c = bevy::prelude::Color::srgb(r, g, b).to_linear();
             albedo.extend_from_slice(&[
-                (c.red * 255.0) as u8,
-                (c.green * 255.0) as u8,
-                (c.blue * 255.0) as u8,
+                (r * 255.0) as u8,
+                (g * 255.0) as u8,
+                (b * 255.0) as u8,
                 255,
             ]);
 
@@ -173,7 +172,7 @@ pub fn build_patch_surfaces(
         extent,
         TextureDimension::D2,
         albedo,
-        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
     let normal_img = Image::new(
@@ -459,6 +458,10 @@ mod tests {
         assert_eq!(albedo.width(), SURFACE_TEX_RES);
         assert_eq!(albedo.height(), SURFACE_TEX_RES);
         assert_eq!(normal.width(), SURFACE_TEX_RES);
+        assert_eq!(
+            albedo.texture_descriptor.format,
+            TextureFormat::Rgba8UnormSrgb
+        );
         // 4 channels per texel.
         assert_eq!(
             albedo.data.as_ref().unwrap().len(),
