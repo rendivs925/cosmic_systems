@@ -59,6 +59,11 @@ const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 /// Extra frustum angle retained around the viewport so terrain does not pop at
 /// its edge while the camera is moving between streaming updates.
 const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
+/// Full quadtree reconciliation is bounded to this rate while async job polling
+/// remains per-frame. Camera movement beyond the thresholds below bypasses it.
+const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
+const FOCUS_RECONCILE_ANGLE_RAD: f64 = 0.01;
+const VIEWPORT_POSITION_RECONCILE_RATIO: f64 = 0.01;
 /// Smooth `[0,1]` ramp used to blend the on-ground and orbital LOD distances so
 /// the terrain LOD level steps gradually rather than jumping several at once.
 fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
@@ -84,6 +89,7 @@ pub struct TerrainStreamingResource {
     active_planet: Option<Entity>,
     /// Next generated-tile count at which streaming metrics are reported.
     next_metrics_report_at: usize,
+    cadence: TerrainStreamingCadence,
 }
 
 impl Default for TerrainStreamingResource {
@@ -96,6 +102,7 @@ impl Default for TerrainStreamingResource {
             published: BTreeSet::new(),
             active_planet: None,
             next_metrics_report_at: 0,
+            cadence: TerrainStreamingCadence::default(),
         }
     }
 }
@@ -123,6 +130,14 @@ struct TerrainViewport {
     half_fov_rad: f64,
 }
 
+#[derive(Default)]
+struct TerrainStreamingCadence {
+    last_reconcile_at_s: f64,
+    focus_direction: Option<DVec3>,
+    camera_position_m: Option<DVec3>,
+    half_fov_rad: Option<f64>,
+}
+
 /// Streaming system: keep six root tiles available for the bound planet, refine
 /// the rocket-facing neighborhood by projected geometric error, generate
 /// deterministic geometry from the shared terrain source, and enforce the
@@ -137,11 +152,10 @@ pub fn stream_terrain_patches(
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
     config: Res<TerrainRenderConfig>,
     sim_time: Res<SimulationTime>,
+    time: Res<Time>,
     render_origin: Res<RenderOrigin>,
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
 ) {
-    streaming.manager.tick();
-
     // No rocket yet: keep the manager tidy and return.
     let Some((binding, rocket)) = rocket_query.iter().next() else {
         let active_planet = streaming.active_planet.take();
@@ -221,6 +235,24 @@ pub fn stream_terrain_patches(
         .as_ref()
         .map(|viewport| viewport.position_m)
         .unwrap_or(position_bf);
+
+    if !should_reconcile_terrain(
+        &streaming.cadence,
+        time.elapsed_secs_f64(),
+        focus_direction,
+        lod_camera_position_m,
+        viewport.as_ref().map(|viewport| viewport.half_fov_rad),
+        completed_batch_count > 0,
+    ) {
+        return;
+    }
+    streaming.manager.tick();
+    streaming.cadence = TerrainStreamingCadence {
+        last_reconcile_at_s: time.elapsed_secs_f64(),
+        focus_direction: Some(focus_direction),
+        camera_position_m: Some(lod_camera_position_m),
+        half_fov_rad: viewport.as_ref().map(|viewport| viewport.half_fov_rad),
+    };
 
     // Blend ground and orbital camera distance before evaluating projected
     // error. The selection itself remains a pure f64 domain calculation.
@@ -490,6 +522,35 @@ fn generation_capacity(roots_ready: bool, worker_count: usize, inflight_count: u
     }
 }
 
+fn should_reconcile_terrain(
+    cadence: &TerrainStreamingCadence,
+    now_s: f64,
+    focus_direction: DVec3,
+    camera_position_m: DVec3,
+    half_fov_rad: Option<f64>,
+    completed_generation: bool,
+) -> bool {
+    if completed_generation || cadence.focus_direction.is_none() {
+        return true;
+    }
+    if now_s - cadence.last_reconcile_at_s >= STREAM_RECONCILE_INTERVAL_S {
+        return true;
+    }
+    if cadence
+        .focus_direction
+        .is_some_and(|previous| previous.dot(focus_direction) < FOCUS_RECONCILE_ANGLE_RAD.cos())
+    {
+        return true;
+    }
+    if cadence.camera_position_m.is_some_and(|previous| {
+        previous.distance(camera_position_m)
+            > previous.length().max(1.0) * VIEWPORT_POSITION_RECONCILE_RATIO
+    }) {
+        return true;
+    }
+    cadence.half_fov_rad != half_fov_rad
+}
+
 fn terrain_viewport(
     camera_query: &Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
     render_origin: &RenderOrigin,
@@ -708,6 +769,7 @@ fn clear_terrain_cache(streaming: &mut TerrainStreamingResource) -> Vec<TerrainP
     let evicted = streaming.generated.keys().copied().collect();
     streaming.generated.clear();
     streaming.published.clear();
+    streaming.cadence = TerrainStreamingCadence::default();
     evicted
 }
 
@@ -964,6 +1026,49 @@ mod tests {
             .into_iter()
             .all(|child| requested.contains(&child)));
         assert!(requested.contains(&parent));
+    }
+
+    #[test]
+    fn cadence_skips_unchanged_frames_but_reacts_to_camera_or_job_changes() {
+        let cadence = TerrainStreamingCadence {
+            last_reconcile_at_s: 10.0,
+            focus_direction: Some(DVec3::Z),
+            camera_position_m: Some(DVec3::Z * 6_371_100.0),
+            half_fov_rad: Some(0.5),
+        };
+
+        assert!(!should_reconcile_terrain(
+            &cadence,
+            10.01,
+            DVec3::Z,
+            DVec3::Z * 6_371_100.0,
+            Some(0.5),
+            false,
+        ));
+        assert!(should_reconcile_terrain(
+            &cadence,
+            10.01,
+            DVec3::X,
+            DVec3::Z * 6_371_100.0,
+            Some(0.5),
+            false,
+        ));
+        assert!(should_reconcile_terrain(
+            &cadence,
+            10.01,
+            DVec3::Z,
+            DVec3::Z * 6_371_100.0,
+            Some(0.5),
+            true,
+        ));
+        assert!(should_reconcile_terrain(
+            &cadence,
+            10.05,
+            DVec3::Z,
+            DVec3::Z * 6_371_100.0,
+            Some(0.5),
+            false,
+        ));
     }
 
     #[test]

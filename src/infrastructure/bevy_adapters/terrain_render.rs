@@ -27,8 +27,12 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 use bevy::time::Fixed;
 use bevy_mesh::{Indices, PrimitiveTopology};
+use std::collections::VecDeque;
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
+/// Spreading texture creation and GPU asset uploads across frames prevents a
+/// completed terrain batch from stalling camera and HUD presentation.
+const MAX_PATCH_UPLOADS_PER_FRAME: usize = 1;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 struct TerrainSurfaceExtension {
@@ -75,6 +79,12 @@ struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
 }
+
+/// Ready patches wait here until their CPU-to-GPU asset creation budget is
+/// available. Messages expire after two frames, so the queue owns every pending
+/// upload instead of relying on a delayed message read.
+#[derive(Resource, Default)]
+struct PendingTerrainPatchUploads(VecDeque<TerrainPatchReady>);
 
 /// Resource for the floating render origin (AGENTS.md section 13).
 /// When the camera moves far from the origin, we re-center to avoid f32
@@ -141,6 +151,7 @@ impl Plugin for TerrainRenderPlugin {
         app.init_resource::<RenderOrigin>()
             .init_resource::<TerrainRenderConfig>()
             .init_resource::<TerrainRenderAssets>()
+            .init_resource::<PendingTerrainPatchUploads>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
@@ -165,6 +176,7 @@ impl Plugin for TerrainRenderPlugin {
 fn spawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchReady>,
+    mut pending_uploads: ResMut<PendingTerrainPatchUploads>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
@@ -179,7 +191,17 @@ fn spawn_patch_mesh_system(
     planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
     existing_patches: Query<&TerrainPatchRenderState>,
 ) {
-    for event in events.read() {
+    pending_uploads.0.extend(events.read().cloned());
+    for _ in 0..MAX_PATCH_UPLOADS_PER_FRAME {
+        let Some(event) = pending_uploads.0.pop_front() else {
+            break;
+        };
+        // A patch can leave the viewport while waiting in the upload queue.
+        // Do not make an obsolete ready message visible after its cache event
+        // has already been handled.
+        if !streaming.published.contains(&event.patch) {
+            continue;
+        }
         if existing_patches
             .iter()
             .any(|state| state.patch == event.patch && state.planet_entity == event.planet_entity)
@@ -912,6 +934,25 @@ mod tests {
             Visibility::Visible
         );
         assert!(app.world().get_entity(entity).is_ok());
+    }
+
+    #[test]
+    fn pending_uploads_retain_ready_patches_beyond_one_frame_budget() {
+        let planet_entity = Entity::PLACEHOLDER;
+        let patches = [
+            TerrainPatch::for_direction(DVec3::X, 2),
+            TerrainPatch::for_direction(DVec3::Y, 2),
+            TerrainPatch::for_direction(DVec3::Z, 2),
+        ];
+        let mut pending = PendingTerrainPatchUploads::default();
+        pending.0.extend(patches.map(|patch| TerrainPatchReady {
+            patch,
+            planet_entity,
+        }));
+
+        assert_eq!(pending.0.pop_front().unwrap().patch, patches[0]);
+        assert_eq!(pending.0.len(), 2);
+        assert_eq!(pending.0.front().unwrap().patch, patches[1]);
     }
 
     #[test]
