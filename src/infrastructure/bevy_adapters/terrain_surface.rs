@@ -125,12 +125,22 @@ pub fn build_patch_surfaces(
             let zone = source.zone_lat(la);
 
             // Slope from neighboring texels (central difference, clamped edges).
-            let il = if i > 0 { idx - 1 } else { idx };
-            let ir = if i < res - 1 { idx + 1 } else { idx };
-            let ju = if j > 0 { idx - res } else { idx };
-            let jd = if j < res - 1 { idx + res } else { idx };
-            let dhdu = (h[ir] - h[il]) / (2.0 * texel_m);
-            let dhdv = (h[jd] - h[ju]) / (2.0 * texel_m);
+            let (dhdu, dhdv) = (
+                if i == 0 {
+                    (h[idx + 1] - hi) / texel_m
+                } else if i + 1 == res {
+                    (hi - h[idx - 1]) / texel_m
+                } else {
+                    (h[idx + 1] - h[idx - 1]) / (2.0 * texel_m)
+                },
+                if j == 0 {
+                    (h[idx + res] - hi) / texel_m
+                } else if j + 1 == res {
+                    (hi - h[idx - res]) / texel_m
+                } else {
+                    (h[idx + res] - h[idx - res]) / (2.0 * texel_m)
+                },
+            );
             let slope = (dhdu.hypot(dhdv)).atan().to_degrees();
 
             let appearance = surface_appearance(hi, moisture, zone, slope);
@@ -158,7 +168,7 @@ pub fn build_patch_surfaces(
                 (((nx * inv) * 0.5 + 0.5) * 255.0) as u8,
                 (((ny * inv) * 0.5 + 0.5) * 255.0) as u8,
                 (((nz * inv) * 0.5 + 0.5) * 255.0) as u8,
-                255,
+                (appearance.roughness.clamp(0.0, 1.0) * 255.0).round() as u8,
             ]);
         }
     }
@@ -172,7 +182,7 @@ pub fn build_patch_surfaces(
         extent,
         TextureDimension::D2,
         albedo,
-        TextureFormat::Rgba8UnormSrgb,
+        TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
     let normal_img = Image::new(
@@ -458,10 +468,7 @@ mod tests {
         assert_eq!(albedo.width(), SURFACE_TEX_RES);
         assert_eq!(albedo.height(), SURFACE_TEX_RES);
         assert_eq!(normal.width(), SURFACE_TEX_RES);
-        assert_eq!(
-            albedo.texture_descriptor.format,
-            TextureFormat::Rgba8UnormSrgb
-        );
+        assert_eq!(albedo.texture_descriptor.format, TextureFormat::Rgba8Unorm);
         // 4 channels per texel.
         assert_eq!(
             albedo.data.as_ref().unwrap().len(),

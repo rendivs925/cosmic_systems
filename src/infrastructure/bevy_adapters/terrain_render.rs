@@ -39,6 +39,12 @@ const MAX_PATCH_UPLOADS_PER_FRAME: usize = 1;
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
 
+/// Cached parents stay visible until every visible descendant has a render
+/// entity. CPU streaming readiness alone is not sufficient: asset creation is
+/// deliberately spread across frames.
+#[derive(Resource, Default)]
+struct PendingTerrainPatchHides(HashSet<TerrainPatchRenderKey>);
+
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 struct TerrainSurfaceExtension {
     #[texture(100)]
@@ -210,6 +216,7 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainRenderConfig>()
             .init_resource::<TerrainRenderAssets>()
             .init_resource::<PendingTerrainPatchUploads>()
+            .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_message::<TerrainPatchReady>()
@@ -223,9 +230,9 @@ impl Plugin for TerrainRenderPlugin {
                 Update,
                 (
                     update_patch_transforms,
-                    hide_cached_patch_mesh_system,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
+                    hide_cached_patch_mesh_system,
                     despawn_patch_mesh_system,
                 )
                     .chain()
@@ -426,21 +433,49 @@ fn spawn_patch_mesh_system(
 /// The ready handler restores these entities instead of rebuilding them.
 fn hide_cached_patch_mesh_system(
     mut events: MessageReader<TerrainPatchCached>,
+    mut pending_hides: ResMut<PendingTerrainPatchHides>,
+    streaming: Res<TerrainStreamingResource>,
     mut render_index: ResMut<TerrainPatchRenderIndex>,
     mut render_query: Query<&mut Visibility>,
 ) {
     for event in events.read() {
-        let key = TerrainPatchRenderKey {
+        pending_hides.0.insert(TerrainPatchRenderKey {
             planet_entity: event.planet_entity,
             patch: event.patch,
-        };
+        });
+    }
+
+    let pending: Vec<_> = pending_hides.0.iter().copied().collect();
+    for key in pending {
+        // A departing tile with no visible descendant can disappear now. A
+        // refinement parent must remain visible until its complete replacement
+        // cover has reached the renderer, not merely the CPU geometry cache.
+        let replacements: Vec<_> = streaming
+            .published
+            .iter()
+            .copied()
+            .filter(|patch| key.patch.is_ancestor_of(patch))
+            .collect();
+        if !replacements.is_empty()
+            && !replacements.iter().all(|patch| {
+                render_index.0.contains_key(&TerrainPatchRenderKey {
+                    planet_entity: key.planet_entity,
+                    patch: *patch,
+                })
+            })
+        {
+            continue;
+        }
         let Some(entity) = render_index.0.get(&key).copied() else {
+            pending_hides.0.remove(&key);
             continue;
         };
         if let Ok(mut visibility) = render_query.get_mut(entity) {
             *visibility = Visibility::Hidden;
+            pending_hides.0.remove(&key);
         } else {
             render_index.0.remove(&key);
+            pending_hides.0.remove(&key);
         }
     }
 }
@@ -537,7 +572,7 @@ fn fallback_surface_maps(
                 extent,
                 TextureDimension::D2,
                 &[255, 255, 255, 255],
-                TextureFormat::Rgba8UnormSrgb,
+                TextureFormat::Rgba8Unorm,
                 RenderAssetUsages::RENDER_WORLD,
             ));
             let normal = images.add(Image::new_fill(
@@ -983,7 +1018,9 @@ mod tests {
         app.insert_resource(SimulationTime::default())
             .insert_resource(RenderOrigin::default())
             .insert_resource(Time::<Fixed>::default())
+            .insert_resource(TerrainStreamingResource::default())
             .init_resource::<TerrainPatchRenderIndex>()
+            .init_resource::<PendingTerrainPatchHides>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchReady>()
             .add_systems(
@@ -1081,6 +1118,42 @@ mod tests {
             Visibility::Visible
         );
         assert!(app.world().get_entity(entity).is_ok());
+
+        // A CPU-published child without a render entity must not hide the
+        // parent. This is the async upload race that previously created gaps.
+        let child = patch.children()[0];
+        app.world_mut()
+            .resource_mut::<TerrainStreamingResource>()
+            .published
+            .insert(child);
+        app.world_mut()
+            .resource_mut::<Messages<TerrainPatchCached>>()
+            .write(TerrainPatchCached {
+                patch,
+                planet_entity,
+            });
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(entity).unwrap(),
+            Visibility::Visible
+        );
+
+        let child_entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<TerrainPatchRenderIndex>()
+            .0
+            .insert(
+                TerrainPatchRenderKey {
+                    planet_entity,
+                    patch: child,
+                },
+                child_entity,
+            );
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(entity).unwrap(),
+            Visibility::Hidden
+        );
     }
 
     #[test]

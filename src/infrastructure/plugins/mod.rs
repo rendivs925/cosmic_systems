@@ -210,9 +210,15 @@ impl Plugin for SharedSimulationPlugin {
         app.add_systems(Update, apply_pending_material_textures);
 
         // Performance and quality systems
-        app.add_systems(Update, update_performance_stats);
-        app.add_systems(Update, log_performance_stats);
-        app.add_systems(Update, adaptive_quality_system);
+        app.add_systems(
+            Update,
+            (
+                update_performance_stats,
+                adaptive_quality_system,
+                log_performance_stats,
+            )
+                .chain(),
+        );
 
         // Vulkan compute (native only)
         #[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]

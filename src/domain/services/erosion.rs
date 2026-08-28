@@ -370,6 +370,17 @@ fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
     (value, edge)
 }
 
+/// Return how much of an erosion raster contributes at an edge-factor value.
+/// `sample` reports 0 at tile center and 1 at the boundary. The configured
+/// feather is measured as a fraction of the full tile width, so the simulated
+/// terrain occupies the interior and only blends to the analytic source near
+/// the actual tile edge.
+fn erosion_weight(edge_factor: f64, edge_feather: f64) -> f64 {
+    let distance_from_edge = (1.0 - edge_factor.clamp(0.0, 1.0)) * 0.5;
+    let t = (distance_from_edge / edge_feather.max(f64::EPSILON)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// A [`TerrainSource`] that samples erosion rasters. Tiles are generated
 /// lazily on first access, cached with a cap, and feathered back to the base
 /// analytic source near tile boundaries so independent tiles stay continuous.
@@ -490,15 +501,12 @@ impl TerrainSource for ErodedTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let tile = self.get_tile(latitude_deg, longitude_deg);
         let (eroded, edge) = sample(&tile, latitude_deg, longitude_deg);
-        if edge > 0.0 {
-            let feather = (edge / self.cfg.edge_feather).clamp(0.0, 1.0);
-            // At the tile boundary the eroded value blends fully to the base
-            // analytic terrain so neighbouring independently-eroded tiles meet
-            // seamlessly.
-            let base_h = self.base.height_m(latitude_deg, longitude_deg);
-            eroded + (base_h - eroded) * feather
-        } else {
+        let weight = erosion_weight(edge, self.cfg.edge_feather);
+        if weight == 1.0 {
             eroded
+        } else {
+            let base_h = self.base.height_m(latitude_deg, longitude_deg);
+            base_h + (eroded - base_h) * weight
         }
     }
 
@@ -519,7 +527,15 @@ impl TerrainSource for ErodedTerrainSource {
         let at = |x: usize, y: usize| tile.moisture[y * w + x] as f64;
         let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * dx;
         let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * dx;
-        (top + (bottom - top) * dy).clamp(0.0, 1.0)
+        let eroded = (top + (bottom - top) * dy).clamp(0.0, 1.0);
+        let edge_factor = sample(&tile, latitude_deg, longitude_deg).1;
+        let weight = erosion_weight(edge_factor, self.cfg.edge_feather);
+        if weight == 1.0 {
+            eroded
+        } else {
+            let base = self.base.moisture(latitude_deg, longitude_deg);
+            base + (eroded - base) * weight
+        }
     }
 
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -710,6 +726,17 @@ mod tests {
 
         assert_eq!(sample(&raster, 11.0, 21.0).1, 0.0);
         assert_eq!(sample(&raster, 10.0, 21.0).1, 1.0);
+    }
+
+    #[test]
+    fn erosion_weight_only_fades_inside_the_configured_edge_band() {
+        assert_eq!(erosion_weight(1.0, 0.12), 0.0);
+        assert_eq!(erosion_weight(0.0, 0.12), 1.0);
+        // `edge_factor` of 0.5 is one quarter of a tile width from its edge,
+        // safely outside a 12%-wide transition band.
+        assert_eq!(erosion_weight(0.5, 0.12), 1.0);
+        assert!(erosion_weight(0.9, 0.12) > 0.0);
+        assert!(erosion_weight(0.9, 0.12) < 1.0);
     }
 
     #[derive(Debug, Default)]

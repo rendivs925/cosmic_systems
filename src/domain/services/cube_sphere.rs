@@ -783,12 +783,24 @@ fn build_patch_geometry_with_height_sampler(
     }
 
     // Skirt quads: one quad per boundary segment (grid vertex → skirt vertex).
-    // Same winding rule: flip on reversed faces so the skirts face outward.
-    let push_quad = |indices: &mut Vec<u32>, a: u32, b: u32, c: u32, d: u32| {
-        if reversed {
-            indices.extend_from_slice(&[a, c, b, c, d, b]);
-        } else {
+    // Opposing edges need opposite winding. Select it from the geometric
+    // outward direction instead of applying one face-wide winding rule, which
+    // back-face culled two of the four skirt walls.
+    let patch_center = face_uv_to_direction(patch.face, (u0 + u1) * 0.5, (v0 + v1) * 0.5);
+    let push_skirt_quad = |indices: &mut Vec<u32>, a: u32, b: u32, c: u32, d: u32| {
+        let a_position = DVec3::from_array(positions[a as usize]);
+        let b_position = DVec3::from_array(positions[b as usize]);
+        let c_position = DVec3::from_array(positions[c as usize]);
+        let edge_midpoint = (a_position + b_position).normalize();
+        let outward =
+            (edge_midpoint - patch_center * edge_midpoint.dot(patch_center)).normalize_or_zero();
+        let triangle_normal = (b_position - a_position)
+            .cross(c_position - a_position)
+            .normalize_or_zero();
+        if triangle_normal.dot(outward) >= 0.0 {
             indices.extend_from_slice(&[a, b, c, c, b, d]);
+        } else {
+            indices.extend_from_slice(&[a, c, b, c, d, b]);
         }
     };
     let skirt = |i: usize| skirt_index[i].expect("boundary vertex must have a skirt");
@@ -796,26 +808,26 @@ fn build_patch_geometry_with_height_sampler(
     for i in 0..res - 1 {
         let a = i;
         let b = i + 1;
-        push_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
+        push_skirt_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
     }
     // Top edge (j = res-1), left→right.
     let top = (res - 1) * res;
     for i in 0..res - 1 {
         let a = top + i;
         let b = top + i + 1;
-        push_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
+        push_skirt_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
     }
     // Left edge.
     for j in 0..res - 1 {
         let a = j * res;
         let b = (j + 1) * res;
-        push_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
+        push_skirt_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
     }
     // Right edge.
     for j in 0..res - 1 {
         let a = j * res + res - 1;
         let b = (j + 1) * res + res - 1;
-        push_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
+        push_skirt_quad(&mut indices, a as u32, b as u32, skirt(b), skirt(a));
     }
 
     PatchGeometry {

@@ -522,14 +522,11 @@ pub fn stream_terrain_patches(
     }
 }
 
-/// Keep every available asynchronous terrain worker busy without allowing
-/// refinement to delay completion of the complete root fallback cover.
-fn generation_capacity(roots_ready: bool, worker_count: usize, inflight_count: usize) -> usize {
-    if !roots_ready {
-        TerrainPatch::roots().len().saturating_sub(inflight_count)
-    } else {
-        worker_count.saturating_sub(inflight_count)
-    }
+/// Keep terrain generation within the explicit async-worker budget. Root tiles
+/// retain priority, but submitting more jobs than workers only queues expensive
+/// bakes and starves the render/simulation task pools on a cold start.
+fn generation_capacity(_roots_ready: bool, worker_count: usize, inflight_count: usize) -> usize {
+    worker_count.saturating_sub(inflight_count)
 }
 
 fn should_reconcile_terrain(
@@ -1242,7 +1239,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_capacity_completes_roots_before_filling_all_available_workers() {
+    fn generation_capacity_prioritizes_roots_without_oversubscribing_workers() {
         let roots = TerrainPatch::roots().to_vec();
         let mut manager = TerrainPatchManager::new();
         for patch in &roots {
@@ -1256,7 +1253,7 @@ mod tests {
             &generated,
             generation_capacity(false, 4, 0),
         );
-        assert_eq!(bootstrap_batch, roots);
+        assert_eq!(bootstrap_batch, roots[..4].to_vec());
 
         let mut generated = HashMap::new();
         let focus = TerrainPatch::root(CubeFace::PosZ);
@@ -1285,8 +1282,8 @@ mod tests {
         assert_eq!(later_batch.len(), 4);
         assert_ne!(later_batch, vec![focus]);
 
-        assert_eq!(generation_capacity(false, 4, 4), 2);
-        assert_eq!(generation_capacity(false, 8, 6), 0);
+        assert_eq!(generation_capacity(false, 4, 4), 0);
+        assert_eq!(generation_capacity(false, 8, 6), 2);
         assert_eq!(generation_capacity(true, 8, 3), 5);
     }
 }

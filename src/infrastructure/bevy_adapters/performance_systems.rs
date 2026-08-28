@@ -325,7 +325,7 @@ pub fn adaptive_quality_system(
     mut perf_stats: ResMut<PerformanceStats>,
     mut quality_adapter: ResMut<QualityAdaptationResource>,
 ) {
-    if !quality_adapter.enabled {
+    if !perf_stats.adaptive_enabled || !quality_adapter.enabled {
         return;
     }
 
@@ -354,7 +354,6 @@ pub fn adaptive_quality_system(
 pub fn update_performance_stats(
     _time: Res<Time>,
     mut performance_stats: ResMut<PerformanceStats>,
-    mut solar_params: ResMut<SolarSystemParameters>,
     chrome: Option<Res<ChromeOptimizations>>,
 ) {
     // PRODUCTION-GRADE FRAME TIME MEASUREMENT
@@ -445,45 +444,6 @@ pub fn update_performance_stats(
     performance_stats.frame_history.push_back(fps_raw_copy);
     if performance_stats.frame_history.len() > performance_stats.history_len {
         performance_stats.frame_history.pop_front();
-    }
-
-    // AUTOMATIC QUALITY ADJUSTMENT (based on frame time, not FPS)
-    if performance_stats.adaptive_enabled {
-        adjust_quality_based_on_performance(&mut performance_stats, &mut solar_params);
-    }
-}
-
-// Automatic quality adjustment based on performance metrics
-fn adjust_quality_based_on_performance(
-    performance_stats: &mut PerformanceStats,
-    solar_params: &mut SolarSystemParameters,
-) {
-    let target_fps = performance_stats.target_fps.max(1.0);
-    let avg_fps = performance_stats.average_fps;
-    let rate = performance_stats.adaptation_rate;
-
-    let mut new_quality_level = performance_stats.quality_level;
-    if avg_fps < target_fps * (1.0 - rate) {
-        new_quality_level = match performance_stats.quality_level {
-            QualityLevel::Ultra => QualityLevel::High,
-            QualityLevel::High => QualityLevel::Medium,
-            QualityLevel::Medium => QualityLevel::Low,
-            QualityLevel::Low => QualityLevel::Minimal,
-            QualityLevel::Minimal => QualityLevel::Minimal,
-        };
-    } else if avg_fps > target_fps * (1.0 + rate) {
-        new_quality_level = match performance_stats.quality_level {
-            QualityLevel::Ultra => QualityLevel::Ultra,
-            QualityLevel::High => QualityLevel::Ultra,
-            QualityLevel::Medium => QualityLevel::High,
-            QualityLevel::Low => QualityLevel::Medium,
-            QualityLevel::Minimal => QualityLevel::Low,
-        };
-    }
-
-    if new_quality_level != performance_stats.quality_level {
-        performance_stats.quality_level = new_quality_level;
-        apply_quality_settings(new_quality_level, solar_params, avg_fps);
     }
 }
 

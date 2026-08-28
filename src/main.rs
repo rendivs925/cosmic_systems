@@ -50,13 +50,13 @@ fn validate_vehicle_selection(selection: &Option<String>) {
 
 fn rocket_task_pool_options() -> TaskPoolOptions {
     let mut options = TaskPoolOptions::default();
-    // Root terrain bakes are independent, CPU-bound work. The default async
-    // pool caps at four threads, leaving two of the six cube faces queued on
-    // machines with enough cores to build the complete fallback cover at once.
+    // Terrain bakes are CPU-bound. Reserve cores for Bevy's render, IO, and
+    // simulation pools so a cold terrain cache cannot lower presentation FPS
+    // by saturating every logical core during root generation.
     options.async_compute = TaskPoolThreadAssignmentPolicy {
         min_threads: 1,
-        max_threads: 8,
-        percent: 0.5,
+        max_threads: 4,
+        percent: 0.25,
         on_thread_spawn: None,
         on_thread_destroy: None,
     };
@@ -138,9 +138,9 @@ mod tests {
     use super::rocket_task_pool_options;
 
     #[test]
-    fn rocket_mode_allows_all_root_terrain_bakes_to_run_concurrently() {
+    fn rocket_mode_reserves_cpu_capacity_for_presentation_during_terrain_bakes() {
         let options = rocket_task_pool_options();
-        assert_eq!(options.async_compute.max_threads, 8);
-        assert_eq!(options.async_compute.percent, 0.5);
+        assert_eq!(options.async_compute.max_threads, 4);
+        assert_eq!(options.async_compute.percent, 0.25);
     }
 }
