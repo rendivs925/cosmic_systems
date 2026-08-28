@@ -406,7 +406,11 @@ fn spawn_patch_mesh_system(
                     MeshMaterial3d(vegetation_material),
                     Transform::from_translation(
                         (body_to_inertial * anchor - render_origin.origin).as_vec3(),
-                    ),
+                    )
+                    // Vegetation vertices are body-fixed offsets from `anchor`.
+                    // Rotate those offsets into the same inertial frame as the
+                    // terrain patch before the parent applies later pose updates.
+                    .with_rotation(body_to_inertial.as_quat()),
                     Name::new(format!(
                         "Vegetation_{:?}_{}_{}_{}",
                         patch.face, patch.level, patch.tile_x, patch.tile_y
@@ -757,6 +761,26 @@ mod tests {
         rotation * baked_position + translation
     }
 
+    fn vegetation_position_in_render_frame(
+        body_fixed_offset_m: DVec3,
+        anchor_body_fixed_m: DVec3,
+        body_to_inertial_at_spawn: DQuat,
+        render_origin_at_spawn: DVec3,
+        body_to_inertial: DQuat,
+        render_origin: DVec3,
+    ) -> DVec3 {
+        let (patch_rotation, patch_translation) = patch_transform_components(
+            body_to_inertial_at_spawn,
+            render_origin_at_spawn,
+            body_to_inertial,
+            render_origin,
+        );
+        let child_translation =
+            body_to_inertial_at_spawn * anchor_body_fixed_m - render_origin_at_spawn;
+        patch_rotation * (body_to_inertial_at_spawn * body_fixed_offset_m + child_translation)
+            + patch_translation
+    }
+
     #[test]
     fn patch_geometry_emits_skirt_ring_for_crack_free_lod() {
         // Spec scenario "skirt geometry stitches edges": adjacent patches at
@@ -853,6 +877,30 @@ mod tests {
         assert!(translation.abs_diff_eq(DVec3::ZERO, 1e-12));
         assert!(terrain_position
             .abs_diff_eq(body_to_inertial * surface_position_m - render_origin, 1e-7));
+    }
+
+    #[test]
+    fn vegetation_offsets_follow_the_same_body_rotation_as_terrain() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let body_to_inertial_at_spawn = body_fixed_to_inertial_rotation(&earth, 0.1);
+        let body_to_inertial = body_fixed_to_inertial_rotation(&earth, 0.6);
+        let render_origin_at_spawn = DVec3::new(100.0, -200.0, 300.0);
+        let render_origin = DVec3::new(-400.0, 500.0, -600.0);
+        let anchor_body_fixed_m = DVec3::new(earth.radius_km as f64 * 1_000.0, 0.0, 0.0);
+        let body_fixed_offset_m = DVec3::new(850.0, -425.0, 5.0);
+
+        let vegetation_position = vegetation_position_in_render_frame(
+            body_fixed_offset_m,
+            anchor_body_fixed_m,
+            body_to_inertial_at_spawn,
+            render_origin_at_spawn,
+            body_to_inertial,
+            render_origin,
+        );
+        let expected =
+            body_to_inertial * (anchor_body_fixed_m + body_fixed_offset_m) - render_origin;
+
+        assert!(vegetation_position.abs_diff_eq(expected, 1e-7));
     }
 
     #[test]

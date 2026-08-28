@@ -583,20 +583,16 @@ impl Plugin for RocketModePlugin {
         app.add_systems(
             FixedUpdate,
             (
-                guidance_system.in_set(RocketSet::Guidance),
-                update_drone_ship_landing_targets
-                    .in_set(RocketSet::Recovery)
-                    .before(guidance_system),
-                station_keep_drone_ships
-                    .in_set(RocketSet::Recovery)
-                    .before(update_drone_ship_landing_targets),
+                refresh_flight_conditions.in_set(RocketSet::Atmosphere),
+                station_keep_drone_ships.in_set(RocketSet::Recovery),
+                update_drone_ship_landing_targets.in_set(RocketSet::Recovery),
                 apply_relaunch_requests
                     .in_set(RocketSet::Guidance)
                     .before(guidance_system),
+                guidance_system.in_set(RocketSet::Guidance),
                 control_system.in_set(RocketSet::Control),
                 actuation_system.in_set(RocketSet::Actuation),
                 update_rocket_gravity.in_set(RocketSet::Gravity),
-                refresh_flight_conditions.in_set(RocketSet::Atmosphere),
                 spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
                 update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
                 check_fairing_separation.in_set(RocketSet::SpentStage),
@@ -691,11 +687,38 @@ impl Plugin for RocketModePlugin {
 
 #[cfg(test)]
 mod tests {
-    use super::shared_solar_presentation_requires_vulkan;
+    use super::*;
 
     #[test]
     fn vulkan_compute_is_not_required_for_rocket_presentation() {
         assert!(!shared_solar_presentation_requires_vulkan(true));
         assert!(shared_solar_presentation_requires_vulkan(false));
+    }
+
+    #[test]
+    fn atmosphere_recovery_and_guidance_schedule_initializes() {
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::default());
+        app.configure_sets(
+            FixedUpdate,
+            (
+                RocketSet::Atmosphere,
+                RocketSet::Recovery,
+                RocketSet::Guidance,
+            )
+                .chain(),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                refresh_flight_conditions.in_set(RocketSet::Atmosphere),
+                station_keep_drone_ships.in_set(RocketSet::Recovery),
+                update_drone_ship_landing_targets.in_set(RocketSet::Recovery),
+                guidance_system.in_set(RocketSet::Guidance),
+            )
+                .chain(),
+        );
+
+        app.world_mut().run_schedule(FixedUpdate);
     }
 }
