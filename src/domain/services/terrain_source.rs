@@ -531,7 +531,7 @@ impl TerrainSource for ProceduralTerrainSource {
 
         // Base rolling terrain, then power redistribution: flat plains with
         // sharp peaks instead of uniformly lumpy fBm.
-        let rolling01 = (self.noise.fbm(self.seed, p.x, p.y, p.z, 4)).clamp(-0.5, 0.5) + 0.5;
+        let rolling01 = self.noise.fbm(self.seed, p.x, p.y, p.z, 4).clamp(0.0, 1.0);
         let rolling = rolling01.powf(SHAPE_POWER) - 0.5;
         let mountains = self
             .noise

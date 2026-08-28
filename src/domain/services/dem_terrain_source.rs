@@ -318,10 +318,33 @@ pub fn load_hgt_tile(
             bytes.len()
         ));
     }
+    let valid_sum: f32 = bytes
+        .chunks_exact(2)
+        .map(|chunk| i16::from_be_bytes([chunk[0], chunk[1]]))
+        .filter(|height| *height != i16::MIN)
+        .map(f32::from)
+        .sum();
+    let valid_count = bytes
+        .chunks_exact(2)
+        .filter(|chunk| i16::from_be_bytes([chunk[0], chunk[1]]) != i16::MIN)
+        .count();
+    let void_fill_m = (valid_sum / valid_count.max(1) as f32).round();
+
+    // HGT rows run north-to-south, while DemTile rows run south-to-north so an
+    // increasing latitude maps to an increasing row index in bilinear_height.
+    // Replace SRTM's void sentinel with the tile's valid-post mean rather than
+    // introducing a 32 km artificial pit into render or collision terrain.
+    let row_bytes = grid as usize * 2;
     let mut data = Vec::with_capacity(posts);
-    for chunk in bytes.chunks_exact(2) {
-        let h = i16::from_be_bytes([chunk[0], chunk[1]]) as f32;
-        data.push(h);
+    for row in bytes.chunks_exact(row_bytes).rev() {
+        for chunk in row.chunks_exact(2) {
+            let height = i16::from_be_bytes([chunk[0], chunk[1]]);
+            data.push(if height == i16::MIN {
+                void_fill_m
+            } else {
+                f32::from(height)
+            });
+        }
     }
     Ok(DemTile {
         key: DemTileKey {
@@ -602,7 +625,8 @@ mod tests {
     #[cfg(feature = "dem")]
     #[test]
     fn hgt_tile_parses_big_endian_posts() {
-        // Write a 2×2 .hgt (8 bytes big-endian) and load it: posts 1,2,3,4.
+        // HGT writes north-to-south rows. The decoded tile stores south-to-north
+        // rows so geographic interpolation follows increasing latitude.
         let dir = std::env::temp_dir().join("dem_hgt_test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("sample.hgt");
@@ -615,7 +639,7 @@ mod tests {
         let tile = load_hgt_tile(path, -81, 28, DemDataset::Srtm3, 2).unwrap();
         assert_eq!(tile.width, 2);
         assert_eq!(tile.height, 2);
-        assert_eq!(tile.data, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(tile.data, vec![3.0, 4.0, 1.0, 2.0]);
         assert_eq!(tile.lat_min, 28.0);
         assert_eq!(tile.lat_max, 29.0);
         assert_eq!(tile.lon_min, -81.0);
@@ -634,6 +658,24 @@ mod tests {
             .data,
             tile.data
         );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn hgt_void_posts_are_replaced_with_plausible_tile_heights() {
+        let dir = std::env::temp_dir().join("dem_hgt_void_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.hgt");
+        let bytes: Vec<u8> = [100i16, i16::MIN, 300, 500]
+            .into_iter()
+            .flat_map(|height| height.to_be_bytes())
+            .collect();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let tile = load_hgt_tile(path, -81, 28, DemDataset::Srtm3, 2).unwrap();
+        assert!(tile.data.iter().all(|height| *height > -1_000.0));
+        assert!(tile.data.iter().all(|height| *height < 1_000.0));
         std::fs::remove_dir_all(dir).ok();
     }
 

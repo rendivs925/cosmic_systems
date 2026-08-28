@@ -80,17 +80,18 @@ pub fn surface_normal(
 }
 
 /// Radar altitude above the terrain along the radial direction for a
-/// planet-centered inertial position.
+/// planet-centered body-fixed position. TerrainSource coordinates are fixed to
+/// the rotating body, so callers must convert inertial simulation state first.
 pub fn radar_altitude_m(
     source: &dyn TerrainSource,
-    position_m: DVec3,
+    position_body_fixed_m: DVec3,
     planet_radius_m: f64,
 ) -> f64 {
-    let r = position_m.length();
+    let r = position_body_fixed_m.length();
     if r < 1e-6 {
         return 0.0;
     }
-    let dir = position_m / r;
+    let dir = position_body_fixed_m / r;
     let (lat, lon) = lat_lon_from_direction(dir);
     let surface_height_m = source.height_m(lat, lon);
     let surface_radius = planet_radius_m + surface_height_m;

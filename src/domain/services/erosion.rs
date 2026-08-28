@@ -359,12 +359,14 @@ fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
     // Distance to the nearest tile edge, in [0, 1].
     let fx_norm = (lon - raster.lon_min) / span_lon;
     let fy_norm = (lat - raster.lat_min) / span_lat;
-    let edge = 1.0
-        - fx_norm
-            .min(1.0 - fx_norm)
-            .min(fy_norm)
-            .min(1.0 - fy_norm)
-            .max(0.0);
+    let nearest_edge_distance = fx_norm
+        .min(1.0 - fx_norm)
+        .min(fy_norm)
+        .min(1.0 - fy_norm)
+        .max(0.0);
+    // The nearest-edge distance reaches 0.5 at the tile center. Normalize it
+    // so the feather is zero in the interior and one at every boundary.
+    let edge = (1.0 - 2.0 * nearest_edge_distance).clamp(0.0, 1.0);
     (value, edge)
 }
 
@@ -644,5 +646,23 @@ mod tests {
         // Moisture is normalized.
         let m = source.moisture(11.5, 21.5);
         assert!((0.0..=1.0).contains(&m));
+    }
+
+    #[test]
+    fn edge_factor_is_zero_at_tile_center_and_one_at_the_boundary() {
+        let raster = HeightRaster {
+            width: 2,
+            height: 2,
+            lat_min: 10.0,
+            lat_max: 12.0,
+            lon_min: 20.0,
+            lon_max: 22.0,
+            data: vec![0.0; 4],
+            moisture: vec![0.0; 4],
+            flow: vec![0.0; 4],
+        };
+
+        assert_eq!(sample(&raster, 11.0, 21.0).1, 0.0);
+        assert_eq!(sample(&raster, 10.0, 21.0).1, 1.0);
     }
 }

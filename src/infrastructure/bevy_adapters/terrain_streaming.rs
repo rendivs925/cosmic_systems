@@ -246,10 +246,9 @@ pub fn stream_terrain_patches(
         },
     );
 
-    // Geometry caches include the stitch index pattern. Discard a cached or
-    // unpublished variant when its desired neighboring LOD changes; the
-    // selection below falls back to its ready parent until the replacement is
-    // generated.
+    // Geometry caches include the stitch index pattern. Discard an obsolete
+    // variant whenever its desired neighboring LOD changes; the selection below
+    // falls back to its ready parent until the replacement is generated.
     let stale_stitch_variants = stale_cached_stitch_variants(&streaming, &selection.target_leaves);
     let invalidated_stitch_variants = !stale_stitch_variants.is_empty();
     for patch in stale_stitch_variants {
@@ -660,11 +659,10 @@ fn stale_cached_stitch_variants(
     target_leaves
         .iter()
         .copied()
-        .filter(|patch| !streaming.published.contains(patch))
         .filter(|patch| {
             matches!(
                 streaming.manager.state_of(patch),
-                Some(PatchState::Ready | PatchState::Cached)
+                Some(PatchState::Ready | PatchState::Visible | PatchState::Cached)
             )
         })
         .filter(|patch| {
@@ -809,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_geometry_is_regenerated_when_its_stitch_pattern_changes() {
+    fn visible_geometry_is_regenerated_when_its_stitch_pattern_changes() {
         let patch = TerrainPatch {
             face: CubeFace::PosZ,
             level: 2,
@@ -821,7 +819,7 @@ mod tests {
         let mut streaming = TerrainStreamingResource::default();
         streaming.manager.request(patch, 1);
         streaming.manager.mark_ready(&patch);
-        streaming.manager.mark_cached(&patch);
+        streaming.manager.mark_visible(&patch);
         streaming.generated.insert(
             patch,
             CachedTerrainGeometry {
@@ -838,6 +836,7 @@ mod tests {
                 )),
             },
         );
+        streaming.published.insert(patch);
 
         assert_eq!(
             stale_cached_stitch_variants(&streaming, &BTreeSet::from([patch, coarser_neighbor])),

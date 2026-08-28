@@ -10,6 +10,8 @@
 use crate::components::rocket::*;
 use crate::domain::events::FairingSeparatedEvent;
 use crate::domain::services::aerodynamics::drag_force_body;
+use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::radar_altitude_m;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
@@ -127,9 +129,10 @@ pub fn update_spent_stage_lifecycle(
     mut commands: Commands,
     planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
     debris_query: Query<(Entity, &RocketPlanetBinding, &RocketPhysicsState), With<SpentStage>>,
+    sim_time: Res<SimulationTime>,
 ) {
     for (entity, binding, debris) in debris_query.iter() {
-        let Some((_, planet_terrain)) = planet_query
+        let Some((planet, planet_terrain)) = planet_query
             .iter()
             .find(|(planet, _)| planet.matches_body(&binding.planet_name))
         else {
@@ -139,11 +142,12 @@ pub fn update_spent_stage_lifecycle(
         if radius_m <= 0.0 {
             continue;
         }
-        let agl_m = radar_altitude_m(
-            &*planet_terrain.source,
+        let position_body_fixed_m = planet_inertial_to_body_fixed(
             debris.dynamics.position_m,
-            radius_m,
+            &planet.domain_planet,
+            (sim_time.sim_time_s / 86_400.0) as f32,
         );
+        let agl_m = radar_altitude_m(&*planet_terrain.source, position_body_fixed_m, radius_m);
         if agl_m > SPENT_STAGE_DESPAWN_AGL_M {
             continue;
         }
