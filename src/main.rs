@@ -1,3 +1,4 @@
+use bevy::app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use bevy::asset::AssetPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
@@ -47,6 +48,21 @@ fn validate_vehicle_selection(selection: &Option<String>) {
     }
 }
 
+fn rocket_task_pool_options() -> TaskPoolOptions {
+    let mut options = TaskPoolOptions::default();
+    // Root terrain bakes are independent, CPU-bound work. The default async
+    // pool caps at four threads, leaving two of the six cube faces queued on
+    // machines with enough cores to build the complete fallback cover at once.
+    options.async_compute = TaskPoolThreadAssignmentPolicy {
+        min_threads: 1,
+        max_threads: 8,
+        percent: 0.5,
+        on_thread_spawn: None,
+        on_thread_destroy: None,
+    };
+    options
+}
+
 fn main() {
     let options = parse_launch_options(env::args());
 
@@ -76,6 +92,13 @@ fn main() {
                 .to_string(),
             ..default()
         });
+    let plugins = if matches!(options.mode, Mode::Rocket) {
+        plugins.set(TaskPoolPlugin {
+            task_pool_options: rocket_task_pool_options(),
+        })
+    } else {
+        plugins
+    };
 
     let mut app = App::new();
     // GizmoPlugin ships inside DefaultPlugins (bevy_gizmos feature); no
@@ -108,4 +131,16 @@ fn main() {
     }
 
     app.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rocket_task_pool_options;
+
+    #[test]
+    fn rocket_mode_allows_all_root_terrain_bakes_to_run_concurrently() {
+        let options = rocket_task_pool_options();
+        assert_eq!(options.async_compute.max_threads, 8);
+        assert_eq!(options.async_compute.percent, 0.5);
+    }
 }

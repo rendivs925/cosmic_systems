@@ -16,7 +16,7 @@
 
 use crate::domain::services::terrain_source::TerrainSource;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// A deterministic xorshift64 PRNG so droplet erosion is fully reproducible
 /// without pulling in a PRNG dependency or depending on `rand`'s version.
@@ -379,6 +379,16 @@ pub struct ErodedTerrainSource {
     cfg: ErosionConfig,
     cache: Mutex<HashMap<(i64, i64), Arc<HeightRaster>>>,
     order: Mutex<Vec<(i64, i64)>>,
+    in_flight: Mutex<HashMap<(i64, i64), Arc<TileBuild>>>,
+}
+
+/// Shared completion state for one tile bake. It prevents concurrent geometry
+/// jobs from simulating identical terrain while allowing distinct tiles to bake
+/// independently.
+#[derive(Debug, Default)]
+struct TileBuild {
+    tile: Mutex<Option<Arc<HeightRaster>>>,
+    completed: Condvar,
 }
 
 impl ErodedTerrainSource {
@@ -388,6 +398,7 @@ impl ErodedTerrainSource {
             cfg,
             cache: Mutex::new(HashMap::new()),
             order: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(HashMap::new()),
         }
     }
 
@@ -415,7 +426,28 @@ impl ErodedTerrainSource {
             }
         }
 
-        // Generate (deterministic per tile).
+        let (build, generates_tile) = {
+            let mut in_flight = self.in_flight.lock().expect("erosion in-flight lock");
+            match in_flight.get(&(tx, ty)) {
+                Some(build) => (Arc::clone(build), false),
+                None => {
+                    let build = Arc::new(TileBuild::default());
+                    in_flight.insert((tx, ty), Arc::clone(&build));
+                    (build, true)
+                }
+            }
+        };
+
+        if !generates_tile {
+            let mut tile = build.tile.lock().expect("erosion tile build lock");
+            while tile.is_none() {
+                tile = build.completed.wait(tile).expect("erosion tile build wait");
+            }
+            return Arc::clone(tile.as_ref().expect("completed erosion tile"));
+        }
+
+        // Generate (deterministic per tile) without holding the cache lock so
+        // independent tiles continue to generate in parallel.
         let lat_min = ty as f64 * tile_deg;
         let lat_max = lat_min + tile_deg;
         let lon_min = tx as f64 * tile_deg;
@@ -440,6 +472,16 @@ impl ErodedTerrainSource {
         }
         cache.insert((tx, ty), Arc::clone(&tile));
         order.push((tx, ty));
+
+        {
+            let mut completed_tile = build.tile.lock().expect("erosion tile build lock");
+            *completed_tile = Some(Arc::clone(&tile));
+            build.completed.notify_all();
+        }
+        self.in_flight
+            .lock()
+            .expect("erosion in-flight lock")
+            .remove(&(tx, ty));
         tile
     }
 }
@@ -501,6 +543,10 @@ impl TerrainSource for ErodedTerrainSource {
 mod tests {
     use super::*;
     use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Barrier;
+    use std::thread;
+    use std::time::Duration;
 
     fn base() -> ProceduralTerrainSource {
         ProceduralTerrainSource::new(7, 2_000.0, 1_200.0, 0)
@@ -664,5 +710,52 @@ mod tests {
 
         assert_eq!(sample(&raster, 11.0, 21.0).1, 0.0);
         assert_eq!(sample(&raster, 10.0, 21.0).1, 1.0);
+    }
+
+    #[derive(Debug, Default)]
+    struct CountingTerrain {
+        height_samples: AtomicUsize,
+    }
+
+    impl TerrainSource for CountingTerrain {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.height_samples.fetch_add(1, Ordering::Relaxed);
+            // Keep the first bake in progress long enough for every worker to
+            // observe the shared in-flight entry.
+            thread::sleep(Duration::from_millis(1));
+            0.0
+        }
+    }
+
+    #[test]
+    fn concurrent_queries_bake_a_tile_once() {
+        let base = Arc::new(CountingTerrain::default());
+        let source = Arc::new(ErodedTerrainSource::new(
+            base.clone(),
+            ErosionConfig {
+                resolution: 16,
+                droplets: 0,
+                thermal_iterations: 0,
+                ..cfg()
+            },
+        ));
+        let barrier = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let source = Arc::clone(&source);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    source.height_m(11.0, 21.0)
+                })
+            })
+            .collect();
+
+        let heights: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("erosion worker must complete"))
+            .collect();
+        assert!(heights.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(base.height_samples.load(Ordering::Relaxed), 16 * 16);
     }
 }

@@ -687,8 +687,15 @@ fn build_patch_geometry_with_height_sampler(
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
     let mut grid = vec![[0.0f64; 3]; res * res];
+    let mut normals = vec![[0.0f64; 3]; res * res];
     let mut uvs = vec![[0.0f32; 2]; res * res];
     let mut local_uvs = vec![[0.0f32; 2]; res * res];
+    let surface_point = |direction: DVec3| {
+        let direction = direction.normalize();
+        let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
+        direction * (planet_radius_m + height_at(latitude_deg, longitude_deg))
+    };
+    let normal_sample_angle = NORMAL_SAMPLE_DISTANCE_M / planet_radius_m;
     for j in 0..res {
         for i in 0..res {
             let u = u0 + (u1 - u0) * i as f64 / (res - 1) as f64;
@@ -696,28 +703,20 @@ fn build_patch_geometry_with_height_sampler(
             let dir = face_uv_to_direction(patch.face, u, v);
             let (lat, lon) = direction_to_lat_lon(dir);
             let h = height_at(lat, lon);
-            grid[j * res + i] = (dir * (planet_radius_m + h)).to_array();
+            let idx = j * res + i;
+            let p = dir * (planet_radius_m + h);
+            grid[idx] = p.to_array();
             // Global imagery uses geographic coordinates, not a tile-local
             // projection, so every level shares one continuous Earth albedo.
-            uvs[j * res + i] = [
+            uvs[idx] = [
                 ((lon + 180.0) / 360.0) as f32,
                 ((90.0 - lat) / 180.0) as f32,
             ];
-            local_uvs[j * res + i] = [i as f32 / (res - 1) as f32, j as f32 / (res - 1) as f32];
-        }
-    }
+            local_uvs[idx] = [i as f32 / (res - 1) as f32, j as f32 / (res - 1) as f32];
 
-    let surface_point = |direction: DVec3| {
-        let direction = direction.normalize();
-        let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
-        direction * (planet_radius_m + height_at(latitude_deg, longitude_deg))
-    };
-    let normal_sample_angle = NORMAL_SAMPLE_DISTANCE_M / planet_radius_m;
-    let mut normals = vec![[0.0f64; 3]; res * res];
-    for j in 0..res {
-        for i in 0..res {
-            let idx = j * res + i;
-            let p = DVec3::from_array(grid[idx]);
+            // Sample normals immediately after the vertex position. Eroded
+            // terrain tiles are then reused while still resident instead of
+            // being regenerated in a later full-mesh normal pass.
             let radial = p.normalize();
             let reference_axis = if radial.y.abs() < 0.9 {
                 DVec3::Y
@@ -733,8 +732,7 @@ fn build_patch_geometry_with_height_sampler(
             let n = (east_plus - east_minus)
                 .cross(north_plus - north_minus)
                 .normalize_or_zero();
-            let n = if n.dot(p) < 0.0 { -n } else { n };
-            normals[idx] = n.to_array();
+            normals[idx] = if n.dot(p) < 0.0 { -n } else { n }.to_array();
         }
     }
 
@@ -855,10 +853,44 @@ pub fn direction_to_lat_lon(dir: DVec3) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use crate::domain::services::terrain_source::{central_angle_deg, ProceduralTerrainSource};
+    use std::sync::Mutex;
 
     fn source() -> ProceduralTerrainSource {
         ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0)
+    }
+
+    #[derive(Debug, Default)]
+    struct SampleTraceSource {
+        samples: Mutex<Vec<(f64, f64)>>,
+    }
+
+    impl TerrainSource for SampleTraceSource {
+        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+            self.samples
+                .lock()
+                .expect("sample trace lock")
+                .push((latitude_deg, longitude_deg));
+            0.0
+        }
+    }
+
+    #[test]
+    fn geometry_samples_each_vertex_and_normal_probe_together() {
+        let source = SampleTraceSource::default();
+        let patch = TerrainPatch::root(CubeFace::PosZ);
+        build_patch_geometry(&patch, &source, 6_371_000.0, 3, 40.0);
+
+        let samples = source.samples.lock().expect("sample trace lock");
+        assert_eq!(samples.len(), 3 * 3 * 5);
+        let (latitude_deg, longitude_deg) = samples[0];
+        assert!(samples[1..5].iter().all(|(lat, lon)| {
+            central_angle_deg(latitude_deg, longitude_deg, *lat, *lon) < 0.01
+        }));
+        assert!(
+            central_angle_deg(latitude_deg, longitude_deg, samples[5].0, samples[5].1) > 1.0,
+            "the next vertex must follow the first vertex's four normal probes"
+        );
     }
 
     #[test]

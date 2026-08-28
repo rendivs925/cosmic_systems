@@ -307,7 +307,17 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
-    let mut generation_order: Vec<_> = requested.into_iter().collect();
+    let roots_ready = TerrainPatch::roots()
+        .into_iter()
+        .all(|root| streaming.generated.contains_key(&root));
+    let mut generation_order: Vec<_> = if roots_ready {
+        requested.into_iter().collect()
+    } else {
+        // Do not let refinement contend with the complete root fallback. Until
+        // every face is available, the root cover is the only useful geometry
+        // and gives the asynchronous workers a bounded, high-priority batch.
+        TerrainPatch::roots().to_vec()
+    };
     generation_order.sort_by_key(|patch| {
         let center = patch.center_direction();
         let distance_key = ((1.0 - center.dot(dir)).max(0.0) * 1_000_000.0) as u64;
@@ -321,7 +331,7 @@ pub fn stream_terrain_patches(
     });
     let task_pool = AsyncComputeTaskPool::get();
     let generation_limit = generation_capacity(
-        streaming.generated.is_empty() && streaming.inflight.is_empty(),
+        roots_ready,
         task_pool.thread_num(),
         streaming.inflight.len(),
     );
@@ -419,12 +429,11 @@ pub fn stream_terrain_patches(
     }
 }
 
-/// Keep every available asynchronous terrain worker busy without creating a
-/// backlog that would delay higher-priority camera movement. Root requests are
-/// submitted together to establish complete authoritative coverage promptly.
-fn generation_capacity(cache_is_empty: bool, worker_count: usize, inflight_count: usize) -> usize {
-    if cache_is_empty {
-        TerrainPatch::roots().len()
+/// Keep every available asynchronous terrain worker busy without allowing
+/// refinement to delay completion of the complete root fallback cover.
+fn generation_capacity(roots_ready: bool, worker_count: usize, inflight_count: usize) -> usize {
+    if !roots_ready {
+        TerrainPatch::roots().len().saturating_sub(inflight_count)
     } else {
         worker_count.saturating_sub(inflight_count)
     }
@@ -845,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_capacity_queues_roots_then_fills_all_available_workers() {
+    fn generation_capacity_completes_roots_before_filling_all_available_workers() {
         let roots = TerrainPatch::roots().to_vec();
         let mut manager = TerrainPatchManager::new();
         for patch in &roots {
@@ -857,7 +866,7 @@ mod tests {
             &roots,
             &manager,
             &generated,
-            generation_capacity(generated.is_empty(), 4, 0),
+            generation_capacity(false, 4, 0),
         );
         assert_eq!(bootstrap_batch, roots);
 
@@ -883,12 +892,13 @@ mod tests {
             &roots,
             &manager,
             &generated,
-            generation_capacity(generated.is_empty(), 4, 0),
+            generation_capacity(true, 4, 0),
         );
         assert_eq!(later_batch.len(), 4);
         assert_ne!(later_batch, vec![focus]);
 
-        assert_eq!(generation_capacity(false, 4, 4), 0);
-        assert_eq!(generation_capacity(false, 8, 3), 5);
+        assert_eq!(generation_capacity(false, 4, 4), 2);
+        assert_eq!(generation_capacity(false, 8, 6), 0);
+        assert_eq!(generation_capacity(true, 8, 3), 5);
     }
 }

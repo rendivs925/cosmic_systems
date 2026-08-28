@@ -9,11 +9,11 @@ struct TerrainSurfaceExtension {
     local_detail_weight: f32,
 }
 
-@group(2) @binding(100) var terrain_local_albedo: texture_2d<f32>;
-@group(2) @binding(101) var terrain_local_albedo_sampler: sampler;
-@group(2) @binding(102) var terrain_local_normal: texture_2d<f32>;
-@group(2) @binding(103) var terrain_local_normal_sampler: sampler;
-@group(2) @binding(104) var<uniform> terrain_surface: TerrainSurfaceExtension;
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var terrain_local_albedo_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var terrain_local_normal: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var terrain_local_normal_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> terrain_surface: TerrainSurfaceExtension;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
