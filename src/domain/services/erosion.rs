@@ -447,7 +447,10 @@ impl ErodedTerrainSource {
         {
             let cache = self.cache.lock().expect("erosion cache lock");
             if let Some(t) = cache.get(&(tx, ty)) {
-                return Arc::clone(t);
+                let tile = Arc::clone(t);
+                drop(cache);
+                self.touch((tx, ty));
+                return tile;
             }
         }
 
@@ -509,11 +512,35 @@ impl ErodedTerrainSource {
             .remove(&(tx, ty));
         tile
     }
+
+    fn cached_tile(&self, lat: f64, lon: f64) -> Option<Arc<HeightRaster>> {
+        let key = Self::tile_key(lat, lon, self.cfg.tile_deg);
+        let tile = self
+            .cache
+            .lock()
+            .expect("erosion cache lock")
+            .get(&key)
+            .cloned();
+        if tile.is_some() {
+            self.touch(key);
+        }
+        tile
+    }
+
+    fn touch(&self, key: (i64, i64)) {
+        let mut order = self.order.lock().expect("erosion order lock");
+        if let Some(index) = order.iter().position(|candidate| *candidate == key) {
+            order.remove(index);
+            order.push(key);
+        }
+    }
 }
 
 impl TerrainSource for ErodedTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let tile = self.get_tile(latitude_deg, longitude_deg);
+        let Some(tile) = self.cached_tile(latitude_deg, longitude_deg) else {
+            return self.base.height_m(latitude_deg, longitude_deg);
+        };
         let (eroded, edge) = sample(&tile, latitude_deg, longitude_deg);
         let weight = erosion_weight(edge, self.cfg.edge_feather);
         if weight == 1.0 {
@@ -524,8 +551,15 @@ impl TerrainSource for ErodedTerrainSource {
         }
     }
 
+    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        self.base.prepare_sample(latitude_deg, longitude_deg);
+        self.get_tile(latitude_deg, longitude_deg);
+    }
+
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let tile = self.get_tile(latitude_deg, longitude_deg);
+        let Some(tile) = self.cached_tile(latitude_deg, longitude_deg) else {
+            return self.base.moisture(latitude_deg, longitude_deg);
+        };
         let w = tile.width as usize;
         let hgt = tile.height as usize;
         let span_lat = (tile.lat_max - tile.lat_min).abs().max(1e-12);
@@ -787,6 +821,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 thread::spawn(move || {
                     barrier.wait();
+                    source.prepare_sample(11.0, 21.0);
                     source.height_m(11.0, 21.0)
                 })
             })
@@ -798,5 +833,49 @@ mod tests {
             .collect();
         assert!(heights.windows(2).all(|pair| pair[0] == pair[1]));
         assert_eq!(base.height_samples.load(Ordering::Relaxed), 16 * 16);
+    }
+
+    #[test]
+    fn uncached_fixed_step_height_uses_base_without_baking() {
+        let base = Arc::new(CountingTerrain::default());
+        let source = ErodedTerrainSource::new(
+            base.clone(),
+            ErosionConfig {
+                resolution: 16,
+                droplets: 0,
+                thermal_iterations: 0,
+                ..cfg()
+            },
+        );
+
+        assert_eq!(source.height_m(11.0, 21.0), 0.0);
+        assert_eq!(
+            base.height_samples.load(Ordering::Relaxed),
+            1,
+            "height_m must not synchronously generate a 16x16 erosion raster"
+        );
+    }
+
+    #[test]
+    fn cached_tiles_are_touched_before_lru_eviction() {
+        let source = ErodedTerrainSource::new(
+            Arc::new(base()),
+            ErosionConfig {
+                resolution: 4,
+                droplets: 0,
+                thermal_iterations: 0,
+                cache_max_tiles: 2,
+                ..cfg()
+            },
+        );
+        source.prepare_sample(10.5, 20.5);
+        source.prepare_sample(10.5, 22.5);
+        let _ = source.height_m(10.5, 20.5); // Refresh the first tile.
+        source.prepare_sample(10.5, 24.5);
+
+        let cache = source.cache.lock().expect("erosion cache lock");
+        assert!(cache.contains_key(&(10, 5)));
+        assert!(!cache.contains_key(&(11, 5)));
+        assert!(cache.contains_key(&(12, 5)));
     }
 }

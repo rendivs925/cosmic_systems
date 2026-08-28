@@ -9,6 +9,13 @@ pub fn calculate_planet_rotation(planet: &Planet, time_days: f32) -> f32 {
     2.0 * std::f32::consts::PI * time_hours / planet.rotation_period_hours
 }
 
+/// High-precision counterpart for physical reference-frame consumers. Solar
+/// presentation retains the f32 API above; flight epochs must not lose phase
+/// precision when simulation time reaches long mission durations.
+pub fn calculate_planet_rotation_f64(planet: &Planet, time_days: f64) -> f64 {
+    std::f64::consts::TAU * time_days * 24.0 / planet.rotation_period_hours as f64
+}
+
 /// Calculate the visual radius for a planet/moon based on actual astronomical sizes with correct relative proportions
 pub fn calculate_visual_radius(planet: &Planet, solar_params: &SolarSystemParameters) -> f32 {
     // Astronomical radii in kilometers (actual values)

@@ -153,7 +153,17 @@ pub fn apply_orbit_mesh_results(
 /// Initialize Vulkan compute solver for native builds
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 pub fn init_vulkan_solver(mut perf_stats: ResMut<PerformanceStats>) {
-    // Vulkan compilation test removed
+    // Device creation blocks on adapter/device requests. The CPU SIMD path is
+    // already the default, so native Vulkan compute must be explicitly enabled
+    // instead of stalling the first rendered frame on every installation.
+    if !vulkan_compute_enabled_from_env(
+        std::env::var("COSMIC_ENABLE_VULKAN_COMPUTE")
+            .ok()
+            .as_deref(),
+    ) {
+        return;
+    }
+
     // Only initialize once
     if perf_stats.vulkan_solver.is_some() || perf_stats.vulkan_initialized {
         return;
@@ -171,6 +181,11 @@ pub fn init_vulkan_solver(mut perf_stats: ResMut<PerformanceStats>) {
             perf_stats.vulkan_enabled = false;
         }
     }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
+fn vulkan_compute_enabled_from_env(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 /// Initialize Vulkan compute pipeline
@@ -200,3 +215,16 @@ use bevy_mesh::Indices;
 use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "ash"))]
+mod tests {
+    use super::vulkan_compute_enabled_from_env;
+
+    #[test]
+    fn vulkan_compute_requires_explicit_opt_in() {
+        assert!(!vulkan_compute_enabled_from_env(None));
+        assert!(!vulkan_compute_enabled_from_env(Some("0")));
+        assert!(vulkan_compute_enabled_from_env(Some("1")));
+        assert!(vulkan_compute_enabled_from_env(Some("true")));
+    }
+}

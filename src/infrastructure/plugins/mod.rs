@@ -5,8 +5,9 @@
 // shared solar-system plugin plus mode-specific plugins, keeping mode-specific
 // behavior isolated per AGENTS.md sections 5, 35, and 66.
 
-use bevy::app::App;
+use bevy::app::{App, RunFixedMainLoop, RunFixedMainLoopSystems};
 use bevy::prelude::*;
+use bevy::time::TimeSystems;
 
 use crate::application::craft_startup::spawn_craft;
 use crate::application::craft_startup::spawn_craft_model;
@@ -23,8 +24,8 @@ use crate::domain::events::{
     StageSeparatedEvent,
 };
 use crate::domain::services::simulation_time::{
-    advance_fixed_simulation_time, advance_real_time, handle_time_acceleration_input,
-    sync_fixed_timestep, SimulationTime,
+    accrue_time_warp, advance_fixed_simulation_time, handle_time_acceleration_input,
+    run_bounded_fixed_main_schedule, sync_fixed_timestep, SimulationTime,
 };
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
@@ -37,7 +38,7 @@ use crate::infrastructure::bevy_adapters::craft_components::{
 };
 use crate::infrastructure::bevy_adapters::craft_effects::update_craft_visuals;
 use crate::infrastructure::bevy_adapters::craft_systems::{
-    handle_craft_input, update_craft_camera, update_craft_physics,
+    handle_craft_input, sync_craft_transform, update_craft_camera, update_craft_physics,
 };
 use crate::infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use crate::infrastructure::bevy_adapters::education_systems::register_education_systems;
@@ -45,7 +46,7 @@ use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
 use crate::infrastructure::bevy_adapters::performance_systems::{
-    cap_fixed_overstep, request_screenshot_input, take_pending_screenshot,
+    request_screenshot_input, take_pending_screenshot,
 };
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
@@ -140,6 +141,12 @@ fn simulation_unpaused(sim_time: Res<SimulationTime>) -> bool {
     !sim_time.paused
 }
 
+/// Rocket time warp owns fixed-loop execution so high warp cannot make Bevy
+/// exhaust an unbounded fixed-time backlog before it renders another frame.
+fn never_run_default_fixed_loop() -> bool {
+    false
+}
+
 /// The native Kepler solver serves the solar-system presentation, not rocket
 /// flight's fixed-step dynamics. Avoid its costly device setup in rocket mode.
 #[cfg(any(
@@ -187,9 +194,10 @@ impl Plugin for SharedSimulationPlugin {
         // Startup systems
         app.add_systems(Startup, setup_space);
 
-        // Physics systems run on Update for display-synced updates (eliminates FixedUpdate jitter)
+        // Celestial state is fixed-step and camera-independent. Rendering reads
+        // the resulting transforms during Update.
         app.add_systems(
-            Update,
+            FixedUpdate,
             (
                 update_planet_positions,
                 update_planet_rotations,
@@ -289,10 +297,14 @@ impl Plugin for CraftModePlugin {
         app.add_systems(Startup, spawn_craft);
         app.add_systems(Startup, spawn_craft_ui);
         app.add_systems(
+            FixedUpdate,
+            update_craft_physics.after(update_planet_positions),
+        );
+        app.add_systems(
             Update,
             (
-                update_craft_physics,
                 handle_craft_input,
+                sync_craft_transform,
                 update_craft_camera,
                 spawn_craft_model,
                 update_craft_visuals,
@@ -439,12 +451,14 @@ impl Plugin for RocketModePlugin {
         // Compact body-fixed terrain map and trajectory overlays.
         app.add_plugins(RocketTerrainMapPlugin);
 
-        // Wall-clock time is updated per rendered frame; simulation time is
-        // advanced only by completed fixed physics ticks below.
-        app.add_systems(Update, advance_real_time);
-
-        // Cap fixed timestep overstep (runs in Update).
-        app.add_systems(Update, cap_fixed_overstep);
+        // Time warp accrues demand from real time, while the replacement fixed
+        // runner below consumes a bounded deterministic batch each frame.
+        app.add_systems(First, accrue_time_warp.after(TimeSystems));
+        app.configure_sets(
+            RunFixedMainLoop,
+            RunFixedMainLoopSystems::FixedMainLoop.run_if(never_run_default_fixed_loop),
+        );
+        app.add_systems(RunFixedMainLoop, run_bounded_fixed_main_schedule);
 
         // Rocket camera systems (run in Update for smooth rendering).
         app.add_systems(
@@ -540,10 +554,10 @@ impl Plugin for RocketModePlugin {
                 RocketSet::AeroTorque,
                 RocketSet::PropulsionThrust,
                 RocketSet::PropulsionGimbal,
-                RocketSet::PropulsionConsumption,
-                RocketSet::PropulsionStaging,
                 RocketSet::AccumulateForces,
                 RocketSet::Integrate,
+                RocketSet::PropulsionConsumption,
+                RocketSet::PropulsionStaging,
                 RocketSet::AdvanceTime,
                 RocketSet::OrbitalElements,
             )
@@ -592,7 +606,8 @@ impl Plugin for RocketModePlugin {
                 compute_parachute_forces.in_set(RocketSet::EntryPhysics),
                 compute_retro_propulsion.in_set(RocketSet::EntryPhysics),
                 deploy_landing_legs.in_set(RocketSet::EntryPhysics),
-            ),
+            )
+                .chain(),
         );
         app.add_systems(
             FixedUpdate,
@@ -601,10 +616,10 @@ impl Plugin for RocketModePlugin {
                 aerodynamic_torque.in_set(RocketSet::AeroTorque),
                 propulsion_thrust.in_set(RocketSet::PropulsionThrust),
                 propulsion_gimbal.in_set(RocketSet::PropulsionGimbal),
-                propulsion_consumption.in_set(RocketSet::PropulsionConsumption),
-                propulsion_staging.in_set(RocketSet::PropulsionStaging),
                 accumulate_forces.in_set(RocketSet::AccumulateForces),
                 integrate_6dof.in_set(RocketSet::Integrate),
+                propulsion_consumption.in_set(RocketSet::PropulsionConsumption),
+                propulsion_staging.in_set(RocketSet::PropulsionStaging),
                 advance_fixed_simulation_time.in_set(RocketSet::AdvanceTime),
                 update_orbital_elements.in_set(RocketSet::OrbitalElements),
                 resolve_ground_contact.in_set(RocketSet::GroundContact),

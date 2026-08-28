@@ -378,11 +378,8 @@ fn update_terrain_map_panel(
     };
     let body_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
     let to_map = |position_m: DVec3, at_time_s: f64| {
-        let position_bf = planet_inertial_to_body_fixed(
-            position_m,
-            &planet.domain_planet,
-            (at_time_s / 86_400.0) as f32,
-        );
+        let position_bf =
+            planet_inertial_to_body_fixed(position_m, &planet.domain_planet, at_time_s / 86_400.0);
         let direction = position_bf.normalize_or_zero();
         if direction.length_squared() <= 1e-12 {
             return None;
@@ -529,7 +526,7 @@ fn map_recorded_entry(
     planet: &crate::domain::entities::planet::Planet,
 ) -> Option<TerrainMapPoint> {
     let position_bf =
-        planet_inertial_to_body_fixed(entry.position_m, planet, (entry.time_s / 86_400.0) as f32);
+        planet_inertial_to_body_fixed(entry.position_m, planet, entry.time_s / 86_400.0);
     let direction = position_bf.normalize_or_zero();
     (direction.length_squared() > 1e-12)
         .then(|| {
@@ -556,7 +553,7 @@ fn prediction_track(
             let position_bf = planet_inertial_to_body_fixed(
                 *position_m,
                 planet,
-                ((start_time_s + relative_time_s) / 86_400.0) as f32,
+                (start_time_s + relative_time_s) / 86_400.0,
             );
             let direction = position_bf.normalize_or_zero();
             (direction.length_squared() > 1e-12).then(|| {

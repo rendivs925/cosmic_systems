@@ -147,6 +147,46 @@ pub fn rocket_inertia_tensor(
     )
 }
 
+/// Inertia and center of mass for the active vehicle including attached
+/// payload hardware and TPS mass already ablated away. Payload is modeled as a
+/// compact nose-mounted mass; ablation is removed from the dry cylindrical
+/// structure. This geometric approximation keeps mass, COM, and inertia based
+/// on the same currently attached mass inventory.
+pub fn rocket_inertia_tensor_with_mass_adjustments(
+    dry_mass_kg: f64,
+    fuel_mass_kg: f64,
+    attached_payload_kg: f64,
+    ablated_mass_kg: f64,
+    radius_m: f64,
+    height_m: f64,
+) -> (DMat3, DVec3) {
+    let dry_mass_kg = (dry_mass_kg - ablated_mass_kg.max(0.0)).max(0.0);
+    let payload_mass_kg = attached_payload_kg.max(0.0);
+    let fuel_mass_kg = fuel_mass_kg.max(0.0);
+    let fuel_height = height_m * 0.5;
+    let fuel_center_y = -height_m * 0.25;
+    let payload_center_y = height_m * 0.4;
+    let total = (dry_mass_kg + fuel_mass_kg + payload_mass_kg).max(1e-9);
+    let com_y = (fuel_mass_kg * fuel_center_y + payload_mass_kg * payload_center_y) / total;
+
+    let (dry_t, dry_l) = cylinder_inertia(dry_mass_kg, radius_m, height_m);
+    let (fuel_t, fuel_l) = cylinder_inertia(fuel_mass_kg, radius_m, fuel_height);
+    // A compact fairing/payload approximation. Its axial radius is negligible
+    // relative to the vehicle envelope; transverse inertia is its offset term.
+    let payload_t = payload_mass_kg * (payload_center_y - com_y).powi(2);
+    let transverse = dry_t
+        + dry_mass_kg * com_y.powi(2)
+        + fuel_t
+        + fuel_mass_kg * (fuel_center_y - com_y).powi(2)
+        + payload_t;
+    let longitudinal = dry_l + fuel_l;
+
+    (
+        DMat3::from_diagonal(DVec3::new(transverse, longitudinal, transverse)),
+        DVec3::new(0.0, com_y, 0.0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +368,32 @@ mod tests {
         assert!(empty_t < full_t);
         // Rolling inertia scales with mass.
         assert!(empty_i.y_axis.y < full_i.y_axis.y);
+    }
+
+    #[test]
+    fn payload_and_ablation_update_mass_com_and_inertia_together() {
+        let dry = 1_000.0;
+        let fuel = 500.0;
+        let payload = 100.0;
+        let ablated = 25.0;
+        let (inertia, com) =
+            rocket_inertia_tensor_with_mass_adjustments(dry, fuel, payload, ablated, 1.0, 10.0);
+        let (without_payload, com_without_payload) =
+            rocket_inertia_tensor_with_mass_adjustments(dry, fuel, 0.0, 0.0, 1.0, 10.0);
+        let (without_ablation, _) =
+            rocket_inertia_tensor_with_mass_adjustments(dry, fuel, payload, 0.0, 1.0, 10.0);
+        assert!(inertia.x_axis.x.is_finite() && inertia.y_axis.y.is_finite());
+        assert!(
+            com.y > com_without_payload.y,
+            "nose payload must shift COM upward"
+        );
+        assert!(
+            inertia.x_axis.x < without_ablation.x_axis.x,
+            "ablated mass must reduce transverse inertia"
+        );
+        assert!(
+            inertia.x_axis.x > without_payload.x_axis.x,
+            "attached payload must contribute transverse inertia"
+        );
     }
 }

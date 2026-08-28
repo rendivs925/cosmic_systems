@@ -787,6 +787,20 @@ pub fn target_attitude_for_phase(
     }
 }
 
+/// Hold the longitudinal axis along `direction` and roll the vehicle about
+/// that same body +Y axis by a reentry-bank command. Banking is attitude
+/// control, not a raw torque on an arbitrary body axis.
+pub fn banked_attitude_from_direction(direction: DVec3, bank_angle_rad: f64) -> DQuat {
+    attitude_from_direction(direction) * DQuat::from_rotation_y(bank_angle_rad)
+}
+
+/// Default landing point directly below a vehicle on a spherical body's mean
+/// surface. `position_m * altitude / radius` incorrectly targets a point near
+/// the center instead of the surface.
+pub fn default_surface_landing_target(position_m: DVec3, surface_radius_m: f64) -> DVec3 {
+    position_m.normalize_or_zero() * surface_radius_m.max(0.0)
+}
+
 /// Suicide burn / hover-slam terminal guidance.
 /// Computes the thrust vector and ignition time to land with zero terminal velocity.
 /// Uses the "constant deceleration" approximation: a = v² / (2h) for vertical, plus gravity.
@@ -1483,6 +1497,25 @@ mod tests {
         let config = DescentGuidanceConfig::default();
         let bank = reentry_bank_angle(50_000.0, 5000.0, 100_000.0, 2_000_000.0, 6.0, &config, 0.0);
         assert!((bank.abs() - 90.0_f64.to_radians()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn banked_attitude_rolls_about_the_longitudinal_axis() {
+        let direction = DVec3::new(0.2, 0.9, 0.3).normalize();
+        let bank = 30.0_f64.to_radians();
+        let attitude = banked_attitude_from_direction(direction, bank);
+        assert!((attitude * DVec3::Y).dot(direction) > 1.0 - 1e-12);
+        let unbanked = attitude_from_direction(direction) * DVec3::X;
+        let banked = attitude * DVec3::X;
+        assert!(unbanked.angle_between(banked) > 0.1);
+    }
+
+    #[test]
+    fn default_landing_target_is_on_surface_directly_below_vehicle() {
+        let position = DVec3::new(6_371_000.0 + 5_000.0, 0.0, 0.0);
+        let target = default_surface_landing_target(position, 6_371_000.0);
+        assert!((target.length() - 6_371_000.0).abs() < 1e-9);
+        assert!(target.normalize().dot(position.normalize()) > 1.0 - 1e-12);
     }
 
     #[test]

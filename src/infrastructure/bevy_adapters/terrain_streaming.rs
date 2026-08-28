@@ -11,10 +11,9 @@
 use crate::components::rocket::RocketMissionState;
 use crate::domain::entities::planet::Planet;
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, build_patch_overview_geometry_with_stitches,
-    face_uv_to_direction, lod_for_distance, projected_patch_error_px, select_quadtree_leaves,
-    CameraProjection, PatchEdge, PatchGeometricError, PatchGeometry, QuadtreePatchState,
-    QuadtreeSelectionConfig, TerrainPatch,
+    build_patch_geometry_with_stitches, direction_to_lat_lon, face_uv_to_direction,
+    projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge,
+    PatchGeometricError, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::reference_frames::{
     body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
@@ -30,8 +29,8 @@ use crate::infrastructure::bevy_adapters::terrain_render::{
 #[cfg(test)]
 use crate::infrastructure::bevy_adapters::terrain_surface::VEGETATION_MIN_PATCH_LEVEL;
 use crate::infrastructure::bevy_adapters::terrain_surface::{
-    supports_local_surfaces, supports_vegetation, LOCAL_SURFACE_MAP_BYTES,
-    MAX_VEGETATION_MESH_BYTES,
+    prepare_patch_surface, supports_local_surfaces, supports_vegetation, PreparedPatchSurface,
+    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -74,6 +73,7 @@ const MAX_TERRAIN_TASKS_PER_FRAME: usize = 1;
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
 const FOCUS_RECONCILE_ANGLE_RAD: f64 = 0.01;
 const VIEWPORT_POSITION_RECONCILE_RATIO: f64 = 0.01;
+const LOD_HYSTERESIS_RATIO: f64 = 0.2;
 /// Smooth `[0,1]` ramp used to blend the on-ground and orbital LOD distances so
 /// the terrain LOD level steps gradually rather than jumping several at once.
 fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
@@ -171,7 +171,7 @@ pub fn prebake_prelaunch_launchpad_patch(
     let position_bf = planet_inertial_to_body_fixed(
         rocket.dynamics.position_m,
         &planet.domain_planet,
-        (sim_time.sim_time_s / 86_400.0) as f32,
+        sim_time.sim_time_s / 86_400.0,
     );
     let Some(direction) = position_bf.try_normalize() else {
         return;
@@ -193,6 +193,8 @@ pub fn prebake_prelaunch_launchpad_patch(
     let skirt_depth_m = config.skirt_depth_m;
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let generation_started = Instant::now();
+        let (lat, lon) = direction_to_lat_lon(patch.center_direction());
+        source.prepare_sample(lat, lon);
         let geometry = build_streamed_patch_geometry(
             &patch,
             source.as_ref(),
@@ -201,8 +203,10 @@ pub fn prebake_prelaunch_launchpad_patch(
             skirt_depth_m,
             &[],
         );
+        let surface = prepare_patch_surface(source.as_ref(), &patch, &geometry, radius_m);
         GeneratedTerrainPatch {
             geometry,
+            surface,
             stitch_mask: 0,
             generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
         }
@@ -237,11 +241,13 @@ impl TerrainStreamingResource {
 /// T-junction cracks along the changed edge.
 pub struct CachedTerrainGeometry {
     pub geometry: PatchGeometry,
+    pub surface: Option<PreparedPatchSurface>,
     stitch_mask: u8,
 }
 
 struct GeneratedTerrainPatch {
     geometry: PatchGeometry,
+    surface: PreparedPatchSurface,
     stitch_mask: u8,
     generation_ms: f64,
 }
@@ -261,6 +267,7 @@ struct TerrainStreamingCadence {
     focus_direction: Option<DVec3>,
     camera_position_m: Option<DVec3>,
     half_fov_rad: Option<f64>,
+    max_focus_level: Option<u32>,
 }
 
 /// Streaming system: keep six root tiles available for the bound planet, refine
@@ -346,7 +353,7 @@ pub fn stream_terrain_patches(
     let position_bf = planet_inertial_to_body_fixed(
         position_m,
         &_planet.domain_planet,
-        (sim_time.sim_time_s / 86_400.0) as f32,
+        sim_time.sim_time_s / 86_400.0,
     );
     let dir = position_bf.normalize_or_zero();
     let viewport = terrain_viewport(
@@ -372,11 +379,13 @@ pub fn stream_terrain_patches(
         return;
     }
     streaming.manager.tick();
+    let previous_max_focus_level = streaming.cadence.max_focus_level;
     streaming.cadence = TerrainStreamingCadence {
         last_reconcile_at_s: time.elapsed_secs_f64(),
         focus_direction: Some(focus_direction),
         camera_position_m: Some(lod_camera_position_m),
         half_fov_rad: viewport.as_ref().map(|viewport| viewport.half_fov_rad),
+        max_focus_level: previous_max_focus_level,
     };
 
     // Blend ground and orbital camera distance before evaluating projected
@@ -391,14 +400,12 @@ pub fn stream_terrain_patches(
     let lod_distance_m =
         ground_distance_m + (orbital_distance_m.max(ground_distance_m) - ground_distance_m) * blend;
 
-    let max_focus_level = lod_for_distance(
+    let max_focus_level = lod_for_distance_with_hysteresis(
+        streaming.cadence.max_focus_level,
         lod_distance_m,
         radius_m,
-        FOV_RAD,
-        SCREEN_HEIGHT_PX,
-        SCREEN_ERROR_PX,
-        MAX_PATCH_LEVEL,
     );
+    streaming.cadence.max_focus_level = Some(max_focus_level);
     let errors = projected_errors_for_focus(
         focus_direction,
         max_focus_level,
@@ -479,6 +486,7 @@ pub fn stream_terrain_patches(
         streaming.inflight.remove(&patch);
         streaming.manager.cancel_pending(&patch);
     }
+    cancel_stale_requested(&mut streaming.manager, &requested);
 
     // A task may have completed just before the target changed. Keep that
     // geometry reusable, but make it eligible for budget eviction rather than
@@ -550,6 +558,9 @@ pub fn stream_terrain_patches(
         let skirt_depth_m = config.skirt_depth_m;
         let task = task_pool.spawn(async move {
             let generation_started = Instant::now();
+            // DEM loading and erosion baking are allowed only in this worker.
+            let (lat, lon) = direction_to_lat_lon(patch.center_direction());
+            source.prepare_sample(lat, lon);
             let geometry = build_streamed_patch_geometry(
                 &patch,
                 source.as_ref(),
@@ -558,8 +569,10 @@ pub fn stream_terrain_patches(
                 skirt_depth_m,
                 &stitch_edges,
             );
+            let surface = prepare_patch_surface(source.as_ref(), &patch, &geometry, radius_m);
             GeneratedTerrainPatch {
                 geometry,
+                surface,
                 stitch_mask,
                 generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
             }
@@ -641,27 +654,61 @@ fn build_streamed_patch_geometry(
     skirt_depth_m: f64,
     stitched_edges: &[PatchEdge],
 ) -> PatchGeometry {
-    if patch.level == 0 {
-        // Root tiles are visual fallback coverage. Avoiding expensive local
-        // terrain caches here keeps the first flight frame responsive; all
-        // refinements retain the authoritative source height field.
-        build_patch_overview_geometry_with_stitches(
-            patch,
-            source,
+    // Roots and refinements always use the same source field. Cold-start work
+    // remains asynchronous and throttled by the caller.
+    build_patch_geometry_with_stitches(
+        patch,
+        source,
+        radius_m,
+        resolution,
+        skirt_depth_m,
+        stitched_edges,
+    )
+}
+
+fn lod_for_distance_with_hysteresis(previous: Option<u32>, distance_m: f64, radius_m: f64) -> u32 {
+    let Some(mut level) = previous else {
+        return crate::domain::services::cube_sphere::lod_for_distance(
+            distance_m,
             radius_m,
-            resolution,
-            skirt_depth_m,
-            stitched_edges,
-        )
-    } else {
-        build_patch_geometry_with_stitches(
-            patch,
-            source,
-            radius_m,
-            resolution,
-            skirt_depth_m,
-            stitched_edges,
-        )
+            FOV_RAD,
+            SCREEN_HEIGHT_PX,
+            SCREEN_ERROR_PX,
+            MAX_PATCH_LEVEL,
+        );
+    };
+    while level < MAX_PATCH_LEVEL
+        && crate::domain::services::cube_sphere::screen_space_error_m(
+            crate::domain::services::cube_sphere::patch_world_size_m(level, radius_m),
+            distance_m,
+            FOV_RAD,
+            SCREEN_HEIGHT_PX,
+        ) > SCREEN_ERROR_PX * (1.0 + LOD_HYSTERESIS_RATIO)
+    {
+        level += 1;
+    }
+    while level > 0
+        && crate::domain::services::cube_sphere::screen_space_error_m(
+            crate::domain::services::cube_sphere::patch_world_size_m(level - 1, radius_m),
+            distance_m,
+            FOV_RAD,
+            SCREEN_HEIGHT_PX,
+        ) <= SCREEN_ERROR_PX * (1.0 - LOD_HYSTERESIS_RATIO)
+    {
+        level -= 1;
+    }
+    level
+}
+
+fn cancel_stale_requested(manager: &mut TerrainPatchManager, requested: &BTreeSet<TerrainPatch>) {
+    let stale: Vec<_> = manager
+        .patch_states()
+        .filter_map(|(patch, state)| {
+            (state == PatchState::Requested && !requested.contains(&patch)).then_some(patch)
+        })
+        .collect();
+    for patch in stale {
+        manager.cancel_pending(&patch);
     }
 }
 
@@ -720,7 +767,7 @@ fn terrain_viewport(
         .map(|size| (size.x / size.y) as f64)
         .unwrap_or(16.0 / 9.0);
     let horizontal_fov_rad = 2.0 * ((vertical_fov_rad * 0.5).tan() * aspect_ratio).atan();
-    let body_to_inertial = body_fixed_to_inertial_rotation(planet, (sim_time_s / 86_400.0) as f32);
+    let body_to_inertial = body_fixed_to_inertial_rotation(planet, sim_time_s / 86_400.0);
     let camera_position_inertial = render_origin.origin + transform.translation().as_dvec3();
     let forward_inertial = transform.compute_transform().forward().as_vec3().as_dvec3();
 
@@ -870,6 +917,7 @@ fn collect_completed_generation(streaming: &mut TerrainStreamingResource) -> (us
             patch,
             CachedTerrainGeometry {
                 geometry: generated.geometry,
+                surface: Some(generated.surface),
                 stitch_mask: generated.stitch_mask,
             },
         );
@@ -1068,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    fn root_fallback_uses_overview_while_refinement_uses_authoritative_height() {
+    fn root_fallback_and_refinement_use_authoritative_height() {
         let source = DivergentOverviewSource;
         let root = TerrainPatch::for_direction(DVec3::Z, 0);
         let child = TerrainPatch::for_direction(DVec3::Z, 1);
@@ -1078,11 +1126,50 @@ mod tests {
             build_streamed_patch_geometry(&child, &source, 6_371_000.0, 3, 5.0, &[]);
 
         assert!(root_geometry.positions.iter().take(9).all(|position| {
-            (DVec3::from_array(*position).length() - 6_370_750.0).abs() < 1e-6
+            (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6
         }));
         assert!(child_geometry.positions.iter().take(9).all(|position| {
             (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6
         }));
+    }
+
+    #[test]
+    fn lod_hysteresis_holds_level_inside_transition_band() {
+        let radius_m = 6_371_000.0;
+        let level = MAX_PATCH_LEVEL;
+        let distance_m = 1_300_000.0;
+        let direct = crate::domain::services::cube_sphere::lod_for_distance(
+            distance_m,
+            radius_m,
+            FOV_RAD,
+            SCREEN_HEIGHT_PX,
+            SCREEN_ERROR_PX,
+            MAX_PATCH_LEVEL,
+        );
+        let held = lod_for_distance_with_hysteresis(Some(level), distance_m, radius_m);
+
+        assert!(
+            direct < level,
+            "test distance must cross the raw LOD threshold"
+        );
+        assert_eq!(
+            held, level,
+            "small threshold oscillations must not churn LOD"
+        );
+    }
+
+    #[test]
+    fn stale_requested_patches_are_removed_before_generation() {
+        let keep = TerrainPatch::root(CubeFace::PosZ);
+        let stale = TerrainPatch::root(CubeFace::NegZ);
+        let mut manager = TerrainPatchManager::new();
+        manager.request(keep, 1);
+        manager.request(stale, 1);
+
+        cancel_stale_requested(&mut manager, &BTreeSet::from([keep]));
+
+        assert_eq!(manager.state_of(&keep), Some(PatchState::Requested));
+        assert_eq!(manager.state_of(&stale), None);
     }
 
     #[test]
@@ -1206,6 +1293,7 @@ mod tests {
             focus_direction: Some(DVec3::Z),
             camera_position_m: Some(DVec3::Z * 6_371_100.0),
             half_fov_rad: Some(0.5),
+            max_focus_level: None,
         };
 
         assert!(!should_reconcile_terrain(
@@ -1259,6 +1347,7 @@ mod tests {
                     local_uvs: Vec::new(),
                     indices: Vec::new(),
                 },
+                surface: None,
                 stitch_mask: 0,
             },
         );
@@ -1357,6 +1446,7 @@ mod tests {
                     local_uvs: Vec::new(),
                     indices: Vec::new(),
                 },
+                surface: None,
                 stitch_mask: stitch_mask(&stitch_edges_for(
                     patch,
                     &BTreeSet::from([patch, equal_neighbor]),
@@ -1432,6 +1522,7 @@ mod tests {
                     local_uvs: Vec::new(),
                     indices: Vec::new(),
                 },
+                surface: None,
                 stitch_mask: 0,
             },
         );

@@ -9,7 +9,13 @@ pub struct CraftComponent {
     pub dc_field: f32,
     pub pulse_resonance: f32,
     pub camera_mode: CraftCameraMode,
+    /// Authoritative flight position. `Transform` is presentation-only.
+    pub position: Vec3,
+    /// Authoritative flight attitude. `Transform` is presentation-only.
+    pub orientation: Quat,
     pub angular_velocity: Vec3,
+    /// Input angular acceleration, integrated by fixed-step physics.
+    pub angular_input: Vec3,
     pub linear_velocity: Vec3,
     pub move_input: Vec2,
     pub speed_mode: SpeedMode,
@@ -23,7 +29,10 @@ impl CraftComponent {
             dc_field: 0.0,
             pulse_resonance: 0.0,
             camera_mode: CraftCameraMode::Chase,
+            position: Vec3::ZERO,
+            orientation: Quat::IDENTITY,
             angular_velocity: Vec3::ZERO,
+            angular_input: Vec3::ZERO,
             linear_velocity: Vec3::ZERO,
             move_input: Vec2::ZERO,
             speed_mode: SpeedMode::Cruise,

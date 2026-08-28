@@ -15,11 +15,11 @@
 //! independent of frame rate or spawn order (AGENTS.md 26, 44).
 
 use crate::domain::services::cube_sphere::{
-    direction_to_lat_lon, face_uv_to_direction, patch_world_size_m, TerrainPatch,
+    direction_to_lat_lon, face_uv_to_direction, patch_world_size_m, PatchGeometry, TerrainPatch,
 };
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use bevy::asset::RenderAssetUsages;
-use bevy::math::{DQuat, DVec3};
+use bevy::math::DVec3;
 use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
@@ -51,6 +51,83 @@ pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
 
 pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
     patch_level >= LOCAL_SURFACE_MIN_PATCH_LEVEL
+}
+
+/// Source-derived patch data built by the streaming worker and consumed once by
+/// the render upload path. Keeping it here prevents asset upload from sampling
+/// a DEM, triggering erosion, or generating scatter on the presentation thread.
+pub(crate) struct PreparedPatchSurface {
+    pub vertex_colors: Vec<[f32; 4]>,
+    pub roughness: f32,
+    pub metallic: f32,
+    pub local_surfaces: Option<(Image, Image)>,
+    pub vegetation: Option<(Mesh, DVec3)>,
+}
+
+pub(crate) fn prepare_patch_surface(
+    source: &dyn TerrainSource,
+    patch: &TerrainPatch,
+    geometry: &PatchGeometry,
+    radius_m: f64,
+) -> PreparedPatchSurface {
+    let detail = ((patch.level as f32 - 5.0) / 3.0).clamp(0.0, 1.0);
+    let vertex_colors = if detail == 0.0 {
+        vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()]
+    } else {
+        geometry
+            .positions
+            .iter()
+            .zip(&geometry.normals)
+            .map(|(position, normal)| {
+                let position = DVec3::from_array(*position);
+                let (lat, lon) = direction_to_lat_lon(position);
+                let radial = position.normalize();
+                let slope_deg = DVec3::from_array(*normal)
+                    .normalize()
+                    .dot(radial)
+                    .clamp(-1.0, 1.0)
+                    .acos()
+                    .to_degrees();
+                let appearance = surface_appearance(
+                    position.length() - radius_m,
+                    source.moisture(lat, lon),
+                    source.zone_lat(lat),
+                    slope_deg,
+                );
+                [
+                    1.0 + (appearance.albedo[0] - 1.0) * detail * 0.25,
+                    1.0 + (appearance.albedo[1] - 1.0) * detail * 0.25,
+                    1.0 + (appearance.albedo[2] - 1.0) * detail * 0.25,
+                    1.0,
+                ]
+            })
+            .collect()
+    };
+
+    let center = patch.center_direction();
+    let (lat, lon) = direction_to_lat_lon(center);
+    let height_m = source.height_m(lat, lon);
+    let appearance = surface_appearance(
+        height_m,
+        source.moisture(lat, lon),
+        source.zone_lat(lat),
+        slope_deg_at(source, lat, lon),
+    );
+    let local_surfaces =
+        supports_local_surfaces(patch.level).then(|| build_patch_surfaces(source, patch, radius_m));
+    let vegetation_anchor = center * (radius_m + height_m);
+    let vegetation = supports_vegetation(patch.level)
+        .then(|| build_vegetation_mesh(source, patch, radius_m, &vegetation_anchor))
+        .flatten()
+        .map(|mesh| (mesh, vegetation_anchor));
+
+    PreparedPatchSurface {
+        vertex_colors,
+        roughness: appearance.roughness,
+        metallic: appearance.metallic,
+        local_surfaces,
+        vegetation,
+    }
 }
 
 /// Conservative maximum allocation for one merged vegetation mesh. The
@@ -333,8 +410,7 @@ pub fn build_vegetation_mesh(
     source: &dyn TerrainSource,
     patch: &TerrainPatch,
     radius_m: f64,
-    render_origin: &DVec3,
-    body_to_inertial: DQuat,
+    mesh_origin_body_fixed: &DVec3,
 ) -> Option<Mesh> {
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
@@ -385,10 +461,9 @@ pub fn build_vegetation_mesh(
         if local_slope > 34.0 {
             continue;
         }
-        let planet_pos = body_to_inertial * (dir * (radius_m + h));
-        let flight = planet_pos - *render_origin;
-        let up = body_to_inertial * dir; // radial up (terrain normal ~ radial for gentle slopes)
-                                         // Vary tree size a little.
+        let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
+        let up = dir; // radial up (terrain normal ~ radial for gentle slopes)
+                      // Vary tree size a little.
         let scale = 0.7 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.9;
         let trunk_h = 2.2 * scale;
         let trunk_r = 0.18 * scale;
@@ -437,12 +512,11 @@ pub fn build_vegetation_mesh(
         if h < 0.5 {
             continue;
         }
-        let planet_pos = body_to_inertial * (dir * (radius_m + h));
-        let flight = planet_pos - *render_origin;
+        let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
         let radius = 0.4 + hash01(k as u64, patch.tile_x as u64, 3) * 0.9;
         accum.push_boulder(
             flight,
-            body_to_inertial * dir,
+            dir,
             radius,
             0x1234_5678 ^ (k as u64 * 2_654_355_561),
         );
@@ -480,8 +554,8 @@ mod tests {
     fn vegetation_respects_source_and_is_deterministic() {
         let src = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
-        let a = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO, DQuat::IDENTITY);
-        let b = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO, DQuat::IDENTITY);
+        let a = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO);
+        let b = build_vegetation_mesh(&src, &patch, 6_371_000.0, &DVec3::ZERO);
         assert_eq!(a.is_some(), b.is_some());
 
         // Some patch on this planet must be vegetated (green land exists), and
@@ -501,9 +575,7 @@ mod tests {
             for t in 0..8u32 {
                 let dir = face_uv_to_direction(face, t as f64 / 8.0, 0.5);
                 let p = TerrainPatch::for_direction(dir, 2);
-                if let Some(mesh) =
-                    build_vegetation_mesh(&src, &p, 6_371_000.0, &DVec3::ZERO, DQuat::IDENTITY)
-                {
+                if let Some(mesh) = build_vegetation_mesh(&src, &p, 6_371_000.0, &DVec3::ZERO) {
                     assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
                     found_veg = true;
                     break;

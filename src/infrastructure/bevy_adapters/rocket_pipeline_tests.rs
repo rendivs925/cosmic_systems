@@ -252,7 +252,7 @@ mod ground_contact_tests {
         let world = app.world_mut();
         let rocket = world.get::<RocketPhysicsState>(entity).unwrap();
         let position_bf =
-            planet_inertial_to_body_fixed(rocket.dynamics.position_m, &earth, time_days as f32);
+            planet_inertial_to_body_fixed(rocket.dynamics.position_m, &earth, time_days);
         let expected_direction_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize();
         let expected_surface_velocity =
             surface_velocity_in_planet_inertial(rocket.dynamics.position_m, &earth);
@@ -1529,7 +1529,7 @@ mod ascent_pipeline_tests {
 
         // Stage 1 drains in ~119 s; run well past that at bounded timesteps.
         for _ in 0..9_000 {
-            app.update();
+            app.world_mut().run_schedule(FixedUpdate);
         }
 
         let world = app.world_mut();
@@ -1577,7 +1577,7 @@ mod ascent_pipeline_tests {
             // ~119 s first-stage drain. Each fixed tick advances by DT.
             let steps = (140.0 / DT).ceil() as usize + 2;
             for _ in 0..steps {
-                app.update();
+                app.world_mut().run_schedule(FixedUpdate);
             }
 
             let world = app.world_mut();
@@ -1806,17 +1806,15 @@ mod render_interpolation_tests {
 /// - proves the whole recording is bitwise reproducible across two fresh runs
 ///   (the deterministic-regression guarantee, AGENTS.md section 44/46).
 ///
-/// Set `REGRESSION_RECORD=1` to (re)write the baseline fixture from the
-/// current code. The audit trail is filled by the harness so the recorded
-/// baseline is signed-off by construction.
+/// Baseline recording is intentionally outside this test module so changing a
+/// fixture always requires an explicit reviewed audit trail.
 #[cfg(test)]
 mod determinism_regression_tests {
     use super::ascent_pipeline_tests::ascent_app;
     use crate::components::rocket::{RocketMissionState, RocketPhysicsState};
     use crate::domain::entities::rocket::RocketMissionState as DomainMission;
     use crate::domain::services::regression::{
-        load_baseline_ron, save_baseline_ron, BaselineJustification, FlightBaseline,
-        RegressionConfig, RocketStateSample,
+        load_baseline_ron, RegressionConfig, RocketStateSample,
     };
     use bevy::prelude::*;
 
@@ -1890,59 +1888,24 @@ mod determinism_regression_tests {
         samples
     }
 
-    fn current_git_commit() -> String {
-        std::process::Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    fn signed_audit() -> BaselineJustification {
-        BaselineJustification {
-            change_description: "canonical electron-class ascent baseline (LSOC)".into(),
-            expected_improvement: "pins the full Guidance→Control→Forces→Integrate chain bitwise"
-                .into(),
-            numerical_tradeoffs: "semi-implicit Euler; f64; single fixed step 1/64 s".into(),
-            affected_scenarios: vec!["ascent".into()],
-            reviewer_approved: true,
-            recorded_by: "opencode-determinism".into(),
-        }
-    }
-
     /// The CI gate: the freshly simulated ascent must match the committed
-    /// baseline bit-for-bit within the documented per-variable tolerances. If
-    /// the fixture is absent (fresh checkout) or `REGRESSION_RECORD=1`, it is
-    /// (re)recorded first, then compared, so the fixture is self-bootstrapping.
+    /// baseline within the documented per-variable tolerances. Baselines are
+    /// deliberately immutable in tests: recording requires an explicit,
+    /// reviewed maintenance workflow outside CI.
     #[test]
     fn ascent_matches_committed_baseline_within_tolerances() {
         let path = default_baseline_path();
-        let should_record = std::env::var("REGRESSION_RECORD").as_deref() == Ok("1");
+        assert!(
+            path.exists(),
+            "committed ascent baseline is missing; record and review it outside the test suite"
+        );
+        let ron = std::fs::read_to_string(&path).expect("baseline readable");
+        let baseline = load_baseline_ron(&ron).expect("baseline RON valid");
 
-        let baseline = if !path.exists() || should_record {
-            let baseline = FlightBaseline::record(
-                "ascent",
-                current_git_commit(),
-                signed_audit(),
-                record_ascent_samples(),
-            )
-            .expect("signed-off ascent baseline records");
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("baseline dir creatable");
-            }
-            std::fs::write(
-                &path,
-                save_baseline_ron(&baseline).expect("baseline serializes"),
-            )
-            .expect("baseline writable");
-            baseline
-        } else {
-            let ron = std::fs::read_to_string(&path).expect("baseline readable");
-            load_baseline_ron(&ron).expect("baseline RON valid")
-        };
+        assert!(
+            baseline.audit.is_signed_off(),
+            "committed baseline audit trail is incomplete or unapproved"
+        );
 
         assert!(
             baseline.hash_chain_consistent(),

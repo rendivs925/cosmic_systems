@@ -1,7 +1,8 @@
 use crate::components::rocket::*;
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::guidance::{
-    advance_ascent_phase, advance_descent_phase, attitude_from_direction, boostback_guidance,
+    advance_ascent_phase, advance_descent_phase, attitude_from_direction,
+    banked_attitude_from_direction, boostback_guidance, default_surface_landing_target,
     gravity_turn_direction_gated, hover_slam_guidance, pitch_axis_from_reference,
     powered_descent_guidance_convex, prograde_attitude, reentry_bank_angle,
     reentry_bank_angle_enhanced, suicide_burn_guidance, transfer_burn_phase, AutopilotMode,
@@ -303,11 +304,10 @@ pub fn guidance_system(
                     reference_bank,
                 );
 
-                // Apply bank angle via RCS torque command (roll axis).
-                commands.rcs_torque_cmd_body = DVec3::new(0.0, 0.0, bank_angle);
-
-                // Hold angle of attack (nose up).
-                commands.target_attitude = attitude_from_direction(up_dir);
+                // Hold angle of attack then bank about body +Y, the documented
+                // longitudinal/roll axis. Control turns this attitude command
+                // into RCS/gimbal torque without discarding the bank request.
+                commands.target_attitude = banked_attitude_from_direction(up_dir, bank_angle);
 
                 // Transition to powered descent when slow enough.
                 if speed < 500.0 && altitude_m < descent_config.powered_descent_altitude_m {
@@ -320,7 +320,8 @@ pub fn guidance_system(
                 let target_pos = autopilot.target_landing_position_m;
                 if target_pos.length() < 1.0 {
                     // Default to point below current position.
-                    autopilot.target_landing_position_m = position_m * (altitude_m / radius);
+                    autopilot.target_landing_position_m =
+                        default_surface_landing_target(position_m, radius_m);
                 }
 
                 let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
@@ -473,7 +474,7 @@ pub fn guidance_system(
                 &descent_config,
                 crossrange,
             );
-            commands.rcs_torque_cmd_body = DVec3::new(0.0, 0.0, bank_angle);
+            commands.target_attitude = banked_attitude_from_direction(up_dir, bank_angle);
         }
     }
 }

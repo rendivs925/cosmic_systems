@@ -8,7 +8,7 @@
 
 use crate::domain::entities::rocket::{EngineState, RocketEngine, RocketStage};
 use crate::domain::services::atmosphere::SEA_LEVEL_PRESSURE_PA;
-use crate::domain::services::rocket_dynamics::rocket_inertia_tensor;
+use crate::domain::services::rocket_dynamics::rocket_inertia_tensor_with_mass_adjustments;
 use bevy::math::{DMat3, DQuat, DVec3};
 
 /// Standard gravity, m/s².
@@ -127,6 +127,15 @@ pub fn consume_propellant(propellant_kg: f32, mass_flow_kg_s: f64, dt: f64) -> (
     (remaining, consumed)
 }
 
+/// Duration for which a stage can actually produce thrust during one fixed
+/// step. A nearly empty tank cannot deliver a full-step impulse.
+pub fn burn_duration_s(propellant_kg: f32, mass_flow_kg_s: f64, dt: f64) -> f64 {
+    if propellant_kg <= 0.0 || mass_flow_kg_s <= 0.0 || dt <= 0.0 {
+        return 0.0;
+    }
+    (propellant_kg as f64 / mass_flow_kg_s).min(dt)
+}
+
 /// Clamp a gimbal deflection to the engine's mechanical range.
 pub fn clamp_gimbal(deflection_rad: f32, gimbal_range_deg: f32) -> f32 {
     let range_rad = gimbal_range_deg.to_radians();
@@ -144,11 +153,23 @@ pub fn gimbal_torque_body(
     gimbal_pitch_rad: f64,
     gimbal_yaw_rad: f64,
 ) -> DVec3 {
-    let deflected = DQuat::from_rotation_x(gimbal_pitch_rad)
-        * DQuat::from_rotation_z(gimbal_yaw_rad)
-        * thrust_dir_body;
+    let deflected =
+        gimbaled_thrust_direction_body(thrust_dir_body, gimbal_pitch_rad, gimbal_yaw_rad);
     let offset = engine_position_m - center_of_mass_m;
     offset.cross(deflected * thrust_n)
+}
+
+/// The physical thrust axis after pitch/yaw gimbal deflection, in body frame.
+/// Force and torque consumers must use this same direction.
+pub fn gimbaled_thrust_direction_body(
+    thrust_dir_body: DVec3,
+    gimbal_pitch_rad: f64,
+    gimbal_yaw_rad: f64,
+) -> DVec3 {
+    (DQuat::from_rotation_x(gimbal_pitch_rad)
+        * DQuat::from_rotation_z(gimbal_yaw_rad)
+        * thrust_dir_body)
+        .normalize_or_zero()
 }
 
 /// Map a commanded body-frame torque into gimbal pitch/yaw deflections for the
@@ -269,12 +290,14 @@ pub fn active_vehicle_mass_with_payload(
 }
 
 /// Inertia tensor and center of mass for the active vehicle, using the shared
-/// geometric rocket model with the active stages' total dry and propellant
-/// mass. Updates as propellant is consumed.
+/// geometric rocket model with active stages, attached payload, and accumulated
+/// ablation mass loss. Updates as the attached mass inventory changes.
 pub fn active_vehicle_inertia(
     stages: &[RocketStage],
     propellant_remaining_kg: &[f32],
     active_stage: usize,
+    attached_payload_kg: f32,
+    ablation_mass_loss_kg: f64,
     radius_m: f64,
     height_m: f64,
 ) -> (DMat3, DVec3) {
@@ -288,7 +311,14 @@ pub fn active_vehicle_inertia(
         .skip(active_stage)
         .map(|p| *p as f64)
         .sum();
-    rocket_inertia_tensor(dry, propellant, radius_m, height_m)
+    rocket_inertia_tensor_with_mass_adjustments(
+        dry,
+        propellant,
+        attached_payload_kg as f64,
+        ablation_mass_loss_kg,
+        radius_m,
+        height_m,
+    )
 }
 
 /// The mass shed by separating the current stage (its dry mass plus remaining
@@ -334,6 +364,32 @@ pub fn stage_thrust_body(
     (force, mass_flow)
 }
 
+/// Running-engine thrust with the actual shared gimbal deflection applied.
+pub fn stage_gimbaled_thrust_body(
+    engines: &[RocketEngine],
+    throttle: f32,
+    ambient_pressure_pa: f64,
+    gimbal_pitch_rad: f64,
+    gimbal_yaw_rad: f64,
+) -> (DVec3, f64) {
+    let throttle = throttle.clamp(0.0, 1.0);
+    let mut force = DVec3::ZERO;
+    let mut mass_flow = 0.0;
+    for engine in engines {
+        if engine.state != EngineState::Running {
+            continue;
+        }
+        let point = EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa);
+        force += gimbaled_thrust_direction_body(
+            engine.thrust_axis.as_dvec3(),
+            clamp_gimbal(gimbal_pitch_rad as f32, engine.gimbal_range_deg) as f64,
+            clamp_gimbal(gimbal_yaw_rad as f32, engine.gimbal_range_deg) as f64,
+        ) * point.thrust_n;
+        mass_flow += point.mass_flow_kg_s;
+    }
+    (force, mass_flow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +416,13 @@ mod tests {
         let (remaining, consumed) = consume_propellant(100.0, 250.0, 2.0);
         assert_eq!(remaining, 0.0);
         assert!((consumed - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn final_partial_step_only_delivers_available_burn_impulse() {
+        assert_eq!(burn_duration_s(0.0, 10.0, 1.0), 0.0);
+        assert!((burn_duration_s(5.0, 10.0, 1.0) - 0.5).abs() < 1e-12);
+        assert!((burn_duration_s(50.0, 10.0, 1.0) - 1.0).abs() < 1e-12);
     }
 
     #[test]
@@ -544,6 +607,31 @@ mod tests {
         assert!((sea_level_thrust.y - 1_000_000.0).abs() < 1e-6);
         assert!(vacuum_thrust.y > sea_level_thrust.y);
         assert!((vacuum_flow - sea_level_flow).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gimbaled_force_and_torque_share_the_same_deflected_axis() {
+        let engine = RocketEngine {
+            position_m: bevy::math::Vec3::new(0.0, -2.0, 0.0),
+            gimbal_range_deg: 10.0,
+            ..engine_with_throttle(0.0, 1.0)
+        };
+        let pitch = 0.1;
+        let (force, _) = stage_gimbaled_thrust_body(&[engine.clone()], 1.0, 0.0, pitch, 0.0);
+        let direction = gimbaled_thrust_direction_body(DVec3::Y, pitch, 0.0);
+        assert!(force.normalize().dot(direction) > 1.0 - 1e-12);
+        let torque = gimbal_torque_body(
+            engine.position_m.as_dvec3(),
+            DVec3::ZERO,
+            DVec3::Y,
+            force.length(),
+            pitch,
+            0.0,
+        );
+        assert!(
+            torque.length() > 0.0,
+            "deflected thrust must produce torque"
+        );
     }
 
     #[test]
@@ -759,8 +847,15 @@ mod tests {
     #[test]
     fn consumption_updates_dynamics_mass() {
         let rocket = Rocket::falcon9();
-        let (inertia, com) =
-            active_vehicle_inertia(&rocket.stages, &[90_000.0, 30_000.0], 0, 1.85, 70.0);
+        let (inertia, com) = active_vehicle_inertia(
+            &rocket.stages,
+            &[90_000.0, 30_000.0],
+            0,
+            0.0,
+            0.0,
+            1.85,
+            70.0,
+        );
         let mut state = RocketDynamicsState::new(
             DVec3::new(6_371_000.0, 0.0, 0.0),
             DVec3::ZERO,

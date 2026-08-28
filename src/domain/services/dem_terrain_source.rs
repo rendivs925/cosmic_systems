@@ -57,21 +57,28 @@ pub struct DemTile {
     pub last_access_frame: u64,
 }
 
+#[cfg(feature = "dem")]
+fn normalize_longitude(longitude_deg: f64) -> f64 {
+    (longitude_deg + 180.0).rem_euclid(360.0) - 180.0
+}
+
 /// LRU cache for DEM tiles, integrated with terrain streaming memory budget.
 #[cfg(feature = "dem")]
 #[derive(Debug, Clone)]
 pub struct DemTileCache {
     tiles: HashMap<DemTileKey, DemTile>,
-    max_tiles: usize,
+    max_bytes: u64,
+    resident_bytes: u64,
     frame: u64,
 }
 
 #[cfg(feature = "dem")]
 impl DemTileCache {
-    pub fn new(max_tiles: usize) -> Self {
+    pub fn new(max_bytes: u64) -> Self {
         Self {
             tiles: HashMap::new(),
-            max_tiles,
+            max_bytes,
+            resident_bytes: 0,
             frame: 0,
         }
     }
@@ -90,10 +97,22 @@ impl DemTileCache {
     }
 
     pub fn insert(&mut self, tile: DemTile) {
-        if self.tiles.len() >= self.max_tiles {
+        let bytes = tile.data.len() as u64 * std::mem::size_of::<f32>() as u64;
+        if bytes > self.max_bytes {
+            return;
+        }
+        while self.resident_bytes.saturating_add(bytes) > self.max_bytes {
+            if self.tiles.is_empty() {
+                return;
+            }
             self.evict_lru();
         }
-        self.tiles.insert(tile.key, tile);
+        if let Some(previous) = self.tiles.insert(tile.key, tile) {
+            self.resident_bytes = self
+                .resident_bytes
+                .saturating_sub(previous.data.len() as u64 * std::mem::size_of::<f32>() as u64);
+        }
+        self.resident_bytes = self.resident_bytes.saturating_add(bytes);
     }
 
     fn evict_lru(&mut self) {
@@ -103,12 +122,20 @@ impl DemTileCache {
             .min_by_key(|(_, t)| t.last_access_frame)
             .map(|(k, _)| *k)
         {
-            self.tiles.remove(&lru_key);
+            if let Some(tile) = self.tiles.remove(&lru_key) {
+                self.resident_bytes = self
+                    .resident_bytes
+                    .saturating_sub(tile.data.len() as u64 * std::mem::size_of::<f32>() as u64);
+            }
         }
     }
 
     pub fn len(&self) -> usize {
         self.tiles.len()
+    }
+
+    pub fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
     }
 }
 
@@ -116,7 +143,9 @@ impl DemTileCache {
 #[cfg(feature = "dem")]
 #[derive(Debug, Clone)]
 pub struct DemTerrainConfig {
-    pub cache_max_tiles: usize,
+    /// Byte budget shared conceptually with terrain streaming residency. DEM
+    /// posts are f32, so a 1201x1201 SRTM3 tile uses about 5.5 MiB.
+    pub cache_max_bytes: u64,
     pub fallback_to_procedural: bool,
     /// Directory of local DEM tiles (SRTM `.hgt` etc.). `None` disables
     /// on-disk loading and falls back to procedural generation.
@@ -129,7 +158,7 @@ pub struct DemTerrainConfig {
 impl Default for DemTerrainConfig {
     fn default() -> Self {
         Self {
-            cache_max_tiles: 256,
+            cache_max_bytes: 64 * 1024 * 1024,
             fallback_to_procedural: true,
             data_dir: None,
             dataset: DemDataset::Srtm3,
@@ -156,12 +185,12 @@ pub struct DemTerrainSource {
 #[cfg(feature = "dem")]
 impl DemTerrainSource {
     pub fn new(config: DemTerrainConfig) -> Self {
-        let cache_max_tiles = config.cache_max_tiles;
+        let cache_max_bytes = config.cache_max_bytes;
         let procedural_fallback = ProceduralTerrainSource::new(0xDEAD, 2500.0, 1200.0, 0);
 
         Self {
             config,
-            cache: Mutex::new(DemTileCache::new(cache_max_tiles)),
+            cache: Mutex::new(DemTileCache::new(cache_max_bytes)),
             procedural_fallback,
             #[cfg(test)]
             tile_loads: AtomicUsize::new(0),
@@ -170,7 +199,11 @@ impl DemTerrainSource {
 
     /// The tile coordinates (`dataset`, `tile_x`, `tile_y`) covering a lat/lon.
     fn cover_tile(&self, lat: f64, lon: f64) -> (DemDataset, i32, i32) {
-        let (tile_x, tile_y) = self.lat_lon_to_tile_xy(self.config.dataset, lat, lon);
+        let (tile_x, tile_y) = self.lat_lon_to_tile_xy(
+            self.config.dataset,
+            lat.clamp(-90.0, 90.0 - f64::EPSILON),
+            normalize_longitude(lon),
+        );
         (self.config.dataset, tile_x, tile_y)
     }
 
@@ -366,6 +399,7 @@ pub fn load_hgt_tile(
 #[cfg(feature = "dem")]
 impl TerrainSource for DemTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let longitude_deg = normalize_longitude(longitude_deg);
         let (dataset, tile_x, tile_y) = self.cover_tile(latitude_deg, longitude_deg);
         let key = DemTileKey {
             dataset,
@@ -380,21 +414,7 @@ impl TerrainSource for DemTerrainSource {
                 .and_then(|t| Self::height_from_tile(t, latitude_deg, longitude_deg))
         };
 
-        let height = cached_height.or_else(|| {
-            // Loading occurs only after a cache miss. Re-locking also handles a
-            // concurrent insertion without replacing its resident tile.
-            let loaded = self.load_tile(dataset, tile_x, tile_y)?;
-            let mut cache = self.cache.lock().expect("dem cache lock");
-            cache.tick();
-            if cache.get(key).is_none() {
-                cache.insert(loaded);
-            }
-            cache
-                .get(key)
-                .and_then(|t| Self::height_from_tile(t, latitude_deg, longitude_deg))
-        });
-
-        match height {
+        match cached_height {
             Some(h) => h,
             None => {
                 if self.config.fallback_to_procedural {
@@ -404,6 +424,32 @@ impl TerrainSource for DemTerrainSource {
                     0.0
                 }
             }
+        }
+    }
+
+    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        let longitude_deg = normalize_longitude(longitude_deg);
+        let (dataset, tile_x, tile_y) = self.cover_tile(latitude_deg, longitude_deg);
+        let key = DemTileKey {
+            dataset,
+            tile_x,
+            tile_y,
+        };
+        if self
+            .cache
+            .lock()
+            .expect("dem cache lock")
+            .get(key)
+            .is_some()
+        {
+            return;
+        }
+        let Some(tile) = self.load_tile(dataset, tile_x, tile_y) else {
+            return;
+        };
+        let mut cache = self.cache.lock().expect("dem cache lock");
+        if cache.get(key).is_none() {
+            cache.insert(tile);
         }
     }
 
@@ -455,7 +501,7 @@ mod tests {
     #[cfg(feature = "dem")]
     #[test]
     fn dem_tile_cache_lru_eviction() {
-        let mut cache = DemTileCache::new(2);
+        let mut cache = DemTileCache::new(8);
         cache.tick();
 
         let key1 = DemTileKey {
@@ -476,7 +522,7 @@ mod tests {
 
         cache.insert(DemTile {
             key: key1,
-            data: vec![],
+            data: vec![0.0],
             width: 1,
             height: 1,
             lat_min: 0.0,
@@ -487,7 +533,7 @@ mod tests {
         });
         cache.insert(DemTile {
             key: key2,
-            data: vec![],
+            data: vec![0.0],
             width: 1,
             height: 1,
             lat_min: 1.0,
@@ -503,7 +549,7 @@ mod tests {
         cache.tick();
         cache.insert(DemTile {
             key: key3,
-            data: vec![],
+            data: vec![0.0],
             width: 1,
             height: 1,
             lat_min: 2.0,
@@ -527,6 +573,45 @@ mod tests {
             key1_exists || key2_exists,
             "at least one of key1 or key2 should remain"
         );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn dem_cache_evicts_by_byte_budget_and_touches_reads() {
+        let mut cache = DemTileCache::new(8);
+        let key = |tile_x| DemTileKey {
+            dataset: DemDataset::Srtm3,
+            tile_x,
+            tile_y: 0,
+        };
+        let tile = |tile_x| DemTile {
+            key: key(tile_x),
+            data: vec![0.0],
+            width: 1,
+            height: 1,
+            lat_min: 0.0,
+            lat_max: 1.0,
+            lon_min: tile_x as f64,
+            lon_max: tile_x as f64 + 1.0,
+            last_access_frame: 0,
+        };
+
+        cache.tick();
+        cache.insert(tile(0));
+        cache.tick();
+        cache.insert(tile(1));
+        cache.tick();
+        let _ = cache.get(key(0));
+        cache.tick();
+        cache.insert(tile(2));
+
+        assert_eq!(cache.resident_bytes(), 8);
+        assert!(
+            cache.get(key(0)).is_some(),
+            "read tile must become most recent"
+        );
+        assert!(cache.get(key(2)).is_some());
+        assert!(cache.get(key(1)).is_none());
     }
 
     /// Build a small synthetic tile covering a known 1°×1° cell.
@@ -572,7 +657,7 @@ mod tests {
         // the result must be stable across calls and differ between two
         // distinct points.
         let source = DemTerrainSource::new(DemTerrainConfig {
-            cache_max_tiles: 4,
+            cache_max_bytes: 1_024,
             fallback_to_procedural: true,
             data_dir: None,
             dataset: DemDataset::Srtm3,
@@ -608,7 +693,7 @@ mod tests {
         let dir = std::env::temp_dir().join("dem_overview_test");
         std::fs::create_dir_all(&dir).unwrap();
         let source = DemTerrainSource::new(DemTerrainConfig {
-            cache_max_tiles: 4,
+            cache_max_bytes: 1_024,
             fallback_to_procedural: true,
             data_dir: Some(dir.clone()),
             dataset: DemDataset::Srtm3,
@@ -620,6 +705,39 @@ mod tests {
 
         assert_eq!(source.tile_load_count(), 0);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn height_sampling_is_nonblocking_until_worker_prepares_tile() {
+        let dir = std::env::temp_dir().join("dem_nonblocking_height_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = DemTerrainSource::new(DemTerrainConfig {
+            cache_max_bytes: 1_024,
+            fallback_to_procedural: true,
+            data_dir: Some(dir.clone()),
+            dataset: DemDataset::Srtm3,
+        });
+
+        let _ = source.height_m(28.5, -80.5);
+
+        assert_eq!(source.tile_load_count(), 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn antimeridian_queries_use_the_same_fallback_tile() {
+        let source = DemTerrainSource::new(DemTerrainConfig {
+            cache_max_bytes: 1_024,
+            ..DemTerrainConfig::default()
+        });
+        let mut tile = sample_tile(-180, 0, 2, 2);
+        tile.data.fill(321.0);
+        source.insert_tile(tile);
+
+        assert_eq!(source.height_m(0.5, -180.0), 321.0);
+        assert_eq!(source.height_m(0.5, 180.0), 321.0);
     }
 
     #[cfg(feature = "dem")]
@@ -681,7 +799,7 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
-    fn height_m_loads_hgt_tile_from_data_dir() {
+    fn worker_preparation_loads_hgt_tile_from_data_dir() {
         // Real SRTM-processed flow: data_dir + a full 1201×1201 .hgt for the
         // tile covering KSC; the query serves the DEM-pinned height (all posts
         // at 1500 m ⇒ any query returns ~1500) rather than procedural.
@@ -698,11 +816,14 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
 
         let source = DemTerrainSource::new(DemTerrainConfig {
-            cache_max_tiles: 4,
+            cache_max_bytes: 16 * 1024 * 1024,
             fallback_to_procedural: true,
             data_dir: Some(dir.clone()),
             dataset: DemDataset::Srtm3,
         });
+        // Fixed-step height queries never read disk. Preparation is performed
+        // by the terrain worker before its authoritative bake.
+        source.prepare_sample(28.5, -80.5);
         // Query inside tile (-81..-80, 28..29).
         let h = source.height_m(28.5, -80.5);
         assert!(

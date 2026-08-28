@@ -257,7 +257,7 @@ pub fn resolve_ground_contact(
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
         let position_m = rocket.dynamics.position_m;
-        let time_days = (sim_time.sim_time_s / 86_400.0) as f32;
+        let time_days = sim_time.sim_time_s / 86_400.0;
         let rotating_surface = access.launch_site.is_some();
         let position_bf = if rotating_surface {
             planet_inertial_to_body_fixed(position_m, &planet.domain_planet, time_days)

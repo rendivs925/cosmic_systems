@@ -27,7 +27,7 @@
 //! mapping flows exclusively through [`PhysicalScale`].
 
 use crate::domain::entities::planet::Planet;
-use crate::domain::services::physics_utils::calculate_planet_rotation;
+use crate::domain::services::physics_utils::calculate_planet_rotation_f64;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
@@ -89,13 +89,13 @@ pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoord
 
 /// Rotate a body-fixed position into the planet-centered inertial frame,
 /// applying planet spin (about +Y) then axial tilt (about +Z).
-pub fn body_fixed_to_planet_inertial(pos_bf: DVec3, planet: &Planet, time_days: f32) -> DVec3 {
+pub fn body_fixed_to_planet_inertial(pos_bf: DVec3, planet: &Planet, time_days: f64) -> DVec3 {
     let rot = body_fixed_to_inertial_rotation(planet, time_days);
     rot * pos_bf
 }
 
 /// Rotate a planet-centered inertial position back into the body-fixed frame.
-pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, planet: &Planet, time_days: f32) -> DVec3 {
+pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, planet: &Planet, time_days: f64) -> DVec3 {
     let rot = body_fixed_to_inertial_rotation(planet, time_days);
     rot.inverse() * pos_pci
 }
@@ -103,8 +103,8 @@ pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, planet: &Planet, time_days:
 /// The single authoritative body-fixed → inertial rotation for a planet.
 /// Rotation that maps body-fixed vectors into the planet-centered inertial
 /// frame at the supplied simulation epoch.
-pub fn body_fixed_to_inertial_rotation(planet: &Planet, time_days: f32) -> DQuat {
-    let spin_rad = calculate_planet_rotation(planet, time_days) as f64;
+pub fn body_fixed_to_inertial_rotation(planet: &Planet, time_days: f64) -> DQuat {
+    let spin_rad = calculate_planet_rotation_f64(planet, time_days);
     let tilt_rad = planet.axial_tilt_deg as f64;
     DQuat::from_rotation_z(tilt_rad.to_radians()) * DQuat::from_rotation_y(spin_rad)
 }
@@ -462,5 +462,18 @@ mod tests {
             * (ksc().latitude_deg as f64).to_radians().cos();
         assert!((velocity.length() - expected).abs() < 1.0);
         assert!(velocity.dot(pos_pci).abs() < 1e-5 * pos_pci.length());
+    }
+
+    #[test]
+    fn long_epoch_rotation_preserves_f64_phase() {
+        let planet = earth();
+        let epoch_days = 100_000_000.125_f64;
+        let precise = body_fixed_to_inertial_rotation(&planet, epoch_days);
+        let narrowed = body_fixed_to_inertial_rotation(&planet, epoch_days as f32 as f64);
+
+        assert!(
+            precise.dot(narrowed).abs() < 1.0 - 1e-6,
+            "reference-frame epoch was narrowed before rotation"
+        );
     }
 }

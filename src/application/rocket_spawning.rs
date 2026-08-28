@@ -5,7 +5,9 @@ use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
     body_fixed_to_inertial_rotation, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
 };
-use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
+use crate::domain::services::rocket_dynamics::{
+    rocket_inertia_tensor_with_mass_adjustments, RocketDynamicsState,
+};
 use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
@@ -98,9 +100,11 @@ pub fn spawn_rockets(
     // input of the geometric inertia model (documented approximation).
     let total_mass_kg = (rocket.total_mass_kg() + attached_payload_kg) as f64;
     let radius_m = (rocket.diameter_m / 2.0) as f64;
-    let (inertia, com) = rocket_inertia_tensor(
-        (rocket.total_dry_mass_kg() + attached_payload_kg) as f64,
+    let (inertia, com) = rocket_inertia_tensor_with_mass_adjustments(
+        rocket.total_dry_mass_kg() as f64,
         rocket.total_propellant_mass_kg() as f64,
+        attached_payload_kg as f64,
+        0.0,
         radius_m,
         rocket.height_m as f64,
     );

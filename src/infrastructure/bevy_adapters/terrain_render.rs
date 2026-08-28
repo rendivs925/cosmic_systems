@@ -6,18 +6,12 @@
 
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::domain::entities::planet::Planet;
-use crate::domain::services::cube_sphere::{
-    direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
-};
+use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
     stream_terrain_patches, TerrainStreamingResource,
-};
-use crate::infrastructure::bevy_adapters::terrain_surface::{
-    build_patch_surfaces, build_vegetation_mesh, supports_local_surfaces, supports_vegetation,
 };
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
@@ -254,12 +248,12 @@ fn spawn_patch_mesh_system(
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     asset_server: Res<AssetServer>,
-    streaming: Res<TerrainStreamingResource>,
+    mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
     time: Res<Time<Fixed>>,
-    planet_query: Query<(&PlanetTerrain, &PlanetComponent)>,
+    planet_query: Query<&PlanetComponent>,
 ) {
     let active_planet = streaming.active_planet();
     pending_uploads.retain_published_for_planet(active_planet, &streaming.published);
@@ -301,14 +295,15 @@ fn spawn_patch_mesh_system(
         if render_index.0.contains_key(&key) {
             continue;
         }
-        let Ok((planet_terrain, planet)) = planet_query.get(event.planet_entity) else {
+        let Ok(planet) = planet_query.get(event.planet_entity) else {
             continue;
         };
-        let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-        let source = planet_terrain.source.as_ref();
 
         let patch = event.patch;
-        let Some(cached_geometry) = streaming.generated.get(&patch) else {
+        let Some(cached_geometry) = streaming.generated.get_mut(&patch) else {
+            continue;
+        };
+        let Some(surface) = cached_geometry.surface.take() else {
             continue;
         };
         let geometry = &cached_geometry.geometry;
@@ -326,20 +321,17 @@ fn spawn_patch_mesh_system(
             geometry,
             &render_origin.origin,
             body_to_inertial,
-            source,
-            patch.level,
-            radius_m,
+            &surface.vertex_colors,
         );
         let mesh_handle = meshes.add(mesh);
 
-        let mut base_material = patch_material(&patch, source);
+        let mut base_material = patch_material(surface.roughness, surface.metallic);
         base_material.base_color_texture = load_texture(
             &asset_server,
             get_planet_textures(&planet.domain_planet.name).albedo,
         );
         let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
-            if supports_local_surfaces(patch.level) {
-                let (albedo, normal) = build_patch_surfaces(source, &patch, radius_m);
+            if let Some((albedo, normal)) = surface.local_surfaces {
                 let albedo = images.add(albedo);
                 let normal = images.add(normal);
                 (albedo.clone(), normal.clone(), 1.0, Some((albedo, normal)))
@@ -360,18 +352,10 @@ fn spawn_patch_mesh_system(
         // at the origin (the rocket's render position).
         let transform = Transform::IDENTITY;
 
-        let vegetation_mesh_handle = if supports_vegetation(patch.level) {
-            build_vegetation_mesh(
-                source,
-                &patch,
-                radius_m,
-                &render_origin.origin,
-                body_to_inertial,
-            )
-            .map(|mesh| meshes.add(mesh))
-        } else {
-            None
-        };
+        let vegetation = surface.vegetation;
+        let vegetation_mesh_handle = vegetation
+            .as_ref()
+            .map(|(mesh, _)| meshes.add(mesh.clone()));
         let vegetation_material = vegetation_mesh_handle.as_ref().map(|_| {
             render_assets
                 .vegetation_material
@@ -411,14 +395,18 @@ fn spawn_patch_mesh_system(
 
         // Merged vegetation + scatter (trees, rocks) is one child draw and
         // shares an immutable material across every terrain tile.
-        if let (Some(vegetation_mesh_handle), Some(vegetation_material)) =
-            (vegetation_mesh_handle.clone(), vegetation_material)
-        {
+        if let (Some(vegetation_mesh_handle), Some(vegetation_material), Some((_, anchor))) = (
+            vegetation_mesh_handle.clone(),
+            vegetation_material,
+            vegetation,
+        ) {
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
                     Mesh3d(vegetation_mesh_handle),
                     MeshMaterial3d(vegetation_material),
-                    Transform::IDENTITY,
+                    Transform::from_translation(
+                        (body_to_inertial * anchor - render_origin.origin).as_vec3(),
+                    ),
                     Name::new(format!(
                         "Vegetation_{:?}_{}_{}_{}",
                         patch.face, patch.level, patch.tile_x, patch.tile_y
@@ -595,9 +583,7 @@ fn patch_geometry_to_mesh(
     geometry: &PatchGeometry,
     render_origin: &DVec3,
     body_to_inertial: bevy::math::DQuat,
-    source: &dyn TerrainSource,
-    patch_level: u32,
-    planet_radius_m: f64,
+    vertex_colors: &[[f32; 4]],
 ) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -631,61 +617,12 @@ fn patch_geometry_to_mesh(
     let uvs = geometry.uvs.to_vec();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, geometry.local_uvs.clone());
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_COLOR,
-        terrain_vertex_colors(geometry, source, patch_level, planet_radius_m),
-    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors.to_vec());
 
     // Indices.
     mesh.insert_indices(Indices::U32(geometry.indices.clone()));
 
     mesh
-}
-
-/// Blend procedural biome tint in only after close-range refinement. Global
-/// imagery remains the base layer at every level; vertex colors provide a
-/// stable renderer-supported fallback until terrain uses a custom material.
-fn terrain_vertex_colors(
-    geometry: &PatchGeometry,
-    source: &dyn TerrainSource,
-    patch_level: u32,
-    planet_radius_m: f64,
-) -> Vec<[f32; 4]> {
-    let detail = ((patch_level as f32 - 5.0) / 3.0).clamp(0.0, 1.0);
-    if detail == 0.0 {
-        return vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()];
-    }
-    geometry
-        .positions
-        .iter()
-        .zip(&geometry.normals)
-        .map(|(position, normal)| {
-            let (lat, lon) = direction_to_lat_lon(DVec3::from_array(*position));
-            // Geometry was sampled from this same surface already. Reuse its
-            // radial height and normal-derived slope instead of repeating five
-            // terrain-source calls for every render vertex.
-            let radial = DVec3::from_array(*position).normalize();
-            let height_m = DVec3::from_array(*position).length() - planet_radius_m;
-            let slope_deg = DVec3::from_array(*normal)
-                .normalize()
-                .dot(radial)
-                .clamp(-1.0, 1.0)
-                .acos()
-                .to_degrees();
-            let appearance = surface_appearance(
-                height_m,
-                source.moisture(lat, lon),
-                source.zone_lat(lat),
-                slope_deg,
-            );
-            [
-                1.0 + (appearance.albedo[0] - 1.0) * detail * 0.25,
-                1.0 + (appearance.albedo[1] - 1.0) * detail * 0.25,
-                1.0 + (appearance.albedo[2] - 1.0) * detail * 0.25,
-                1.0,
-            ]
-        })
-        .collect()
 }
 
 /// Shift only presentation coordinates when the rocket has moved far enough
@@ -762,8 +699,8 @@ fn interpolated_body_to_inertial_rotation(
     alpha: f64,
 ) -> DQuat {
     let previous_time_s = (sim_time.sim_time_s - sim_time.fixed_timestep()).max(0.0);
-    let previous = body_fixed_to_inertial_rotation(planet, (previous_time_s / 86_400.0) as f32);
-    let current = body_fixed_to_inertial_rotation(planet, (sim_time.sim_time_s / 86_400.0) as f32);
+    let previous = body_fixed_to_inertial_rotation(planet, previous_time_s / 86_400.0);
+    let current = body_fixed_to_inertial_rotation(planet, sim_time.sim_time_s / 86_400.0);
     previous.slerp(current, alpha)
 }
 
@@ -784,24 +721,11 @@ fn patch_transform_components(
 /// patch by `build_patch_surfaces` (set by the caller); this only provides the
 /// representative roughness from the shared `surface_appearance` law (AGENTS.md
 /// 50: one authoritative appearance law).
-fn patch_material(patch: &TerrainPatch, source: &dyn TerrainSource) -> StandardMaterial {
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let u_mid = (u0 + u1) * 0.5;
-    let v_mid = (v0 + v1) * 0.5;
-    let dir = face_uv_to_direction(patch.face, u_mid, v_mid);
-    let (lat, lon) = direction_to_lat_lon(dir);
-    let (height, moisture, slope) = (
-        source.height_m(lat, lon),
-        source.moisture(lat, lon),
-        slope_deg_at(source, lat, lon),
-    );
-    let zone = source.zone_lat(lat);
-    let appearance = surface_appearance(height, moisture, zone, slope);
-
+fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
-        perceptual_roughness: appearance.roughness,
-        metallic: appearance.metallic,
+        perceptual_roughness: roughness,
+        metallic,
         unlit: false,
         ..default()
     }
@@ -814,38 +738,6 @@ mod tests {
     use crate::domain::services::planet_factory::PlanetFactory;
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[derive(Debug, Default)]
-    struct CountingTerrainSource {
-        authoritative_height_calls: AtomicUsize,
-        overview_height_calls: AtomicUsize,
-    }
-
-    impl TerrainSource for CountingTerrainSource {
-        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            self.authoritative_height_calls
-                .fetch_add(1, Ordering::Relaxed);
-            0.0
-        }
-
-        fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            self.overview_height_calls.fetch_add(1, Ordering::Relaxed);
-            0.0
-        }
-
-        fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            0.5
-        }
-
-        fn overview_moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            0.5
-        }
-
-        fn overview_slope_deg(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            0.0
-        }
-    }
 
     fn terrain_position_in_render_frame(
         body_fixed_position_m: DVec3,
@@ -912,7 +804,7 @@ mod tests {
         let body_to_inertial_at_spawn = body_fixed_to_inertial_rotation(&earth, 0.1);
         let render_origin_at_spawn = DVec3::new(100.0, -200.0, 300.0);
         let current_body_to_inertial =
-            body_fixed_to_inertial_rotation(&earth, (sim_time.sim_time_s / 86_400.0) as f32);
+            body_fixed_to_inertial_rotation(&earth, sim_time.sim_time_s / 86_400.0);
         let render_origin = current_body_to_inertial * surface_position_m;
 
         for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
@@ -970,46 +862,36 @@ mod tests {
         );
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
         let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 5, 40.0);
-        let coarse = terrain_vertex_colors(&geometry, &source, 0, 6_371_000.0);
-        let fine = terrain_vertex_colors(&geometry, &source, 8, 6_371_000.0);
+        let coarse = crate::infrastructure::bevy_adapters::terrain_surface::prepare_patch_surface(
+            &source,
+            &TerrainPatch::for_direction(DVec3::Z, 0),
+            &geometry,
+            6_371_000.0,
+        );
+        let fine = crate::infrastructure::bevy_adapters::terrain_surface::prepare_patch_surface(
+            &source,
+            &TerrainPatch::for_direction(DVec3::Z, 8),
+            &geometry,
+            6_371_000.0,
+        );
 
-        assert!(coarse.iter().all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
-        assert!(fine.iter().any(|color| *color != [1.0, 1.0, 1.0, 1.0]));
+        assert!(coarse
+            .vertex_colors
+            .iter()
+            .all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
+        assert!(fine
+            .vertex_colors
+            .iter()
+            .any(|color| *color != [1.0, 1.0, 1.0, 1.0]));
         assert_eq!(geometry.uvs.len(), geometry.local_uvs.len());
 
         let mesh = patch_geometry_to_mesh(
             &geometry,
             &DVec3::ZERO,
             DQuat::IDENTITY,
-            &source,
-            12,
-            6_371_000.0,
+            &fine.vertex_colors,
         );
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
-    }
-
-    #[test]
-    fn vertex_colors_reuse_geometry_without_resampling_height_or_slope() {
-        let source = CountingTerrainSource::default();
-        let geometry = PatchGeometry {
-            positions: vec![(DVec3::X * 6_371_000.0).to_array()],
-            normals: vec![DVec3::X.to_array()],
-            uvs: vec![[0.0, 0.0]],
-            local_uvs: vec![[0.0, 0.0]],
-            indices: Vec::new(),
-        };
-
-        terrain_vertex_colors(&geometry, &source, 0, 6_371_000.0);
-        assert_eq!(
-            source.authoritative_height_calls.load(Ordering::Relaxed),
-            0,
-            "vertex colors must reuse the height stored in patch geometry"
-        );
-        assert_eq!(source.overview_height_calls.load(Ordering::Relaxed), 0);
-
-        terrain_vertex_colors(&geometry, &source, 8, 6_371_000.0);
-        assert_eq!(source.authoritative_height_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(source.overview_height_calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]

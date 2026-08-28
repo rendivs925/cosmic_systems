@@ -433,7 +433,9 @@ fn drone_ship_lifecycle_is_restorable(
             .all(|snapshot| drone_ships.get(snapshot.entity).is_ok())
 }
 
-/// Restore replay frames while keeping the authoritative live clock monotonic.
+/// Restore replay frames together with the frame's authoritative simulation
+/// epoch. Planet rotation, terrain and all reference-frame consumers must see
+/// the same epoch as the restored vehicle state.
 pub fn apply_replay_actions_system(
     mut commands: Commands,
     mut actions: MessageReader<ReplayAction>,
@@ -484,6 +486,7 @@ pub fn apply_replay_actions_system(
                     selected_frame: frame_index,
                 });
                 sim_time.paused = true;
+                sim_time.sim_time_s = frame.timestamp_s;
                 restore_frame(&mut commands, &frame, &mut state.p1());
                 restore_spent_stages(&frame, &mut state.p3());
                 restore_drone_ships(&frame, &mut state.p5());
@@ -508,6 +511,7 @@ pub fn apply_replay_actions_system(
                     .as_mut()
                     .expect("replay checked above")
                     .selected_frame = frame_index;
+                sim_time.sim_time_s = frame.timestamp_s;
                 restore_frame(&mut commands, &frame, &mut state.p1());
                 restore_spent_stages(&frame, &mut state.p3());
                 restore_drone_ships(&frame, &mut state.p5());
@@ -519,6 +523,7 @@ pub fn apply_replay_actions_system(
                 restore_frame(&mut commands, &session.live_rockets, &mut state.p1());
                 restore_spent_stages(&session.live_rockets, &mut state.p3());
                 restore_drone_ships(&session.live_rockets, &mut state.p5());
+                sim_time.sim_time_s = session.live_rockets.timestamp_s;
                 sim_time.time_acceleration = session.live_time_acceleration;
                 sim_time.paused = session.live_was_paused;
             }
@@ -551,12 +556,10 @@ mod tests {
 
     fn app_with_snapshot_state() -> (App, Entity) {
         let mut app = App::new();
-        app.insert_resource(SimulationTime {
-            sim_time_s: 100.0,
-            time_acceleration: 10.0,
-            paused: false,
-            ..SimulationTime::new(0.25)
-        });
+        let mut simulation_time = SimulationTime::new(0.25);
+        simulation_time.sim_time_s = 100.0;
+        simulation_time.time_acceleration = 10.0;
+        app.insert_resource(simulation_time);
         app.insert_resource(ReplaySnapshotStream::new(4));
         app.add_message::<ReplayAction>();
         app.add_systems(FixedUpdate, record_replay_snapshot_system);
@@ -991,13 +994,16 @@ mod tests {
     }
 
     #[test]
-    fn seek_never_rewinds_the_live_simulation_clock() {
+    fn seek_restores_the_selected_simulation_epoch_and_resume_restores_live_epoch() {
         let (mut app, _) = app_with_snapshot_state();
         app.world_mut().run_schedule(FixedUpdate);
         app.world_mut()
             .resource_mut::<ReplaySnapshotStream>()
             .frames[0]
             .timestamp_s = 1.0;
+        app.world_mut()
+            .resource_mut::<ReplaySnapshotStream>()
+            .push(empty_frame(2.0));
         app.world_mut()
             .resource_mut::<Messages<ReplayAction>>()
             .write(ReplayAction::BeginLatest);
@@ -1008,7 +1014,7 @@ mod tests {
         app.update();
 
         let sim_time = app.world().resource::<SimulationTime>();
-        assert_eq!(sim_time.sim_time_s, 100.0);
+        assert_eq!(sim_time.sim_time_s, 1.0);
         assert!(sim_time.paused);
 
         app.world_mut()

@@ -129,6 +129,8 @@ pub fn apply_relaunch_requests(
                 &propulsion.vehicle.stages,
                 &propulsion.propellant_remaining_kg,
                 0,
+                propulsion.attached_payload_kg,
+                0.0,
                 geometry.radius_m as f64,
                 geometry.height_m as f64,
             );

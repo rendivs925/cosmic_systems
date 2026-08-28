@@ -283,7 +283,7 @@ pub fn update_rocket_planets(
             {
                 transform.rotation = body_fixed_to_inertial_rotation(
                     &planet.domain_planet,
-                    (sim_time.sim_time_s / 86_400.0) as f32,
+                    sim_time.sim_time_s / 86_400.0,
                 )
                 .as_quat();
             }
@@ -370,10 +370,9 @@ mod tests {
         app.insert_resource(solar.clone());
         app.insert_resource(scale.clone());
         app.insert_resource(RenderOrigin::default());
-        app.insert_resource(SimulationTime {
-            sim_time_s,
-            ..SimulationTime::default()
-        });
+        let mut simulation_time = SimulationTime::default();
+        simulation_time.sim_time_s = sim_time_s;
+        app.insert_resource(simulation_time);
         app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
         app.world_mut().spawn(RocketPhysicsState {
             dynamics: RocketDynamicsState::new(

@@ -8,10 +8,11 @@ use crate::components::rocket::{
 use crate::domain::entities::rocket::{EngineState, RocketStage};
 use crate::domain::events::StageSeparatedEvent;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed, clamp_gimbal,
-    consume_propellant, gimbal_torque_body, ignition_allowed_during_ullage, separation_impulse,
-    shed_stage, stage_thrust_body, EngineOperatingPoint, MIN_SEPARATION_CLEARANCE_M,
-    SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
+    active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed, burn_duration_s,
+    clamp_gimbal, consume_propellant, gimbal_torque_body, ignition_allowed_during_ullage,
+    separation_impulse, shed_stage, stage_gimbaled_thrust_body, stage_thrust_body,
+    EngineOperatingPoint, MIN_SEPARATION_CLEARANCE_M, SEPARATION_UPPER_DV_MPS,
+    SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
@@ -46,7 +47,7 @@ fn ignitable_stage(propulsion: &RocketPropulsion) -> Option<(&RocketStage, f32)>
     Some((stage, throttle))
 }
 
-/// Separate an empty, thrusting stage and refresh the surviving vehicle mass.
+/// Separate an empty stage and refresh the surviving vehicle mass.
 /// The spent stage receives the domain separation impulse and is spawned as
 /// independent debris; the upper stage must settle propellant before restart.
 pub fn propulsion_staging(
@@ -76,7 +77,7 @@ pub fn propulsion_staging(
             .get(propulsion.active_stage)
             .copied()
             .unwrap_or(0.0);
-        if remaining > 0.0 || propulsion.throttle.clamp(0.0, 1.0) <= 0.0 {
+        if remaining > 0.0 {
             continue;
         }
         let Some((next, shed)) = shed_stage(
@@ -113,6 +114,8 @@ pub fn propulsion_staging(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
+            propulsion.attached_payload_kg,
+            ablation_mass_loss_kg,
             geometry.radius_m as f64,
             geometry.height_m as f64,
         );
@@ -159,6 +162,7 @@ pub fn propulsion_staging(
 
 /// Add pressure-corrected engine thrust in the inertial frame.
 pub fn propulsion_thrust(
+    sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &RocketFlightConditions,
@@ -171,9 +175,18 @@ pub fn propulsion_thrust(
         let Some((stage, throttle)) = ignitable_stage(propulsion) else {
             continue;
         };
-        let (thrust_body, _) =
-            stage_thrust_body(&stage.engines, throttle, conditions.ambient_pressure_pa);
-        force_accum.0 += rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier;
+        let (thrust_body, mass_flow_kg_s) = stage_gimbaled_thrust_body(
+            &stage.engines,
+            throttle,
+            conditions.ambient_pressure_pa,
+            propulsion.gimbal_pitch_rad as f64,
+            propulsion.gimbal_yaw_rad as f64,
+        );
+        let remaining = propulsion.propellant_remaining_kg[propulsion.active_stage];
+        let burn_fraction = burn_duration_s(remaining, mass_flow_kg_s, sim_time.fixed_timestep())
+            / sim_time.fixed_timestep();
+        force_accum.0 +=
+            rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction;
     }
 }
 
@@ -217,6 +230,8 @@ pub fn propulsion_consumption(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             active_stage,
+            propulsion.attached_payload_kg,
+            ablation_mass_loss_kg,
             geometry.radius_m as f64,
             geometry.height_m as f64,
         );
@@ -227,6 +242,7 @@ pub fn propulsion_consumption(
 
 /// Add pressure-corrected gimbal torque from each running active-stage engine.
 pub fn propulsion_gimbal(
+    sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &RocketFlightConditions,
@@ -238,6 +254,13 @@ pub fn propulsion_gimbal(
         let Some((stage, throttle)) = ignitable_stage(propulsion) else {
             continue;
         };
+        let (_, stage_mass_flow_kg_s) =
+            stage_thrust_body(&stage.engines, throttle, conditions.ambient_pressure_pa);
+        let burn_fraction = burn_duration_s(
+            propulsion.propellant_remaining_kg[propulsion.active_stage],
+            stage_mass_flow_kg_s,
+            sim_time.fixed_timestep(),
+        ) / sim_time.fixed_timestep();
         for engine in &stage.engines {
             if engine.state != EngineState::Running {
                 continue;
@@ -251,7 +274,7 @@ pub fn propulsion_gimbal(
                 operating_point.thrust_n,
                 clamp_gimbal(propulsion.gimbal_pitch_rad, engine.gimbal_range_deg) as f64,
                 clamp_gimbal(propulsion.gimbal_yaw_rad, engine.gimbal_range_deg) as f64,
-            );
+            ) * burn_fraction;
         }
     }
 }

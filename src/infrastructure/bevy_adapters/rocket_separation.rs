@@ -11,6 +11,9 @@ use crate::components::rocket::*;
 use crate::domain::events::FairingSeparatedEvent;
 use crate::domain::services::aerodynamics::drag_force_body;
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
+use crate::domain::services::rocket_propulsion::{
+    active_vehicle_inertia, active_vehicle_mass_with_payload,
+};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::radar_altitude_m;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -148,7 +151,7 @@ pub fn update_spent_stage_lifecycle(
         let position_body_fixed_m = planet_inertial_to_body_fixed(
             debris.dynamics.position_m,
             &planet.domain_planet,
-            (sim_time.sim_time_s / 86_400.0) as f32,
+            sim_time.sim_time_s / 86_400.0,
         );
         let agl_m = radar_altitude_m(&*planet_terrain.source, position_body_fixed_m, radius_m);
         if agl_m > SPENT_STAGE_DESPAWN_AGL_M {
@@ -184,26 +187,54 @@ pub fn check_fairing_separation(
         Entity,
         &RocketPlanetBinding,
         &mut RocketPhysicsState,
+        &RocketGeometry,
         &RocketFlightConditions,
         &mut RocketMass,
         &mut RocketPropulsion,
         &PayloadFairing,
+        Option<&AblationState>,
     )>,
 ) {
-    for (entity, binding, mut rocket, conditions, mut mass, mut propulsion, fairing) in
-        rocket_query.iter_mut()
+    for (
+        entity,
+        binding,
+        mut rocket,
+        geometry,
+        conditions,
+        mut mass,
+        mut propulsion,
+        fairing,
+        ablation,
+    ) in rocket_query.iter_mut()
     {
         if conditions.altitude_m < FAIRING_JETTISON_ALTITUDE_M {
             continue;
         }
 
-        // Drop the mass from the authoritative state first (single source),
-        // then clear the payload tracker so consumption/staging recomputes
-        // agree with the dropped mass.
-        let new_mass = (mass.0 - fairing.dry_mass_kg as f64).max(1.0);
-        rocket.dynamics.mass_kg = new_mass;
-        mass.0 = new_mass;
+        // Remove the payload from the shared mass inventory before rebuilding
+        // mass, COM, and inertia together.
         propulsion.attached_payload_kg = 0.0;
+        let ablation_mass_loss_kg = ablation.map_or(0.0, |state| state.mass_loss_kg);
+        let new_mass = (active_vehicle_mass_with_payload(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+            propulsion.attached_payload_kg,
+        ) - ablation_mass_loss_kg)
+            .max(1.0);
+        let (inertia, center_of_mass_m) = active_vehicle_inertia(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+            propulsion.attached_payload_kg,
+            ablation_mass_loss_kg,
+            geometry.radius_m as f64,
+            geometry.height_m as f64,
+        );
+        rocket.dynamics.mass_kg = new_mass;
+        rocket.dynamics.inertia_body = inertia;
+        rocket.dynamics.center_of_mass_m = center_of_mass_m;
+        mass.0 = new_mass;
         commands.entity(entity).remove::<PayloadFairing>();
 
         // Two halves pushed apart along the body ±X axis.

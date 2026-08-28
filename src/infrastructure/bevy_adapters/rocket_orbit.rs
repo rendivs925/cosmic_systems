@@ -9,7 +9,7 @@
 //! planet-centred points to the flight frame and draws them.
 
 use crate::components::rocket::{
-    GroundRest, PlannedManeuver, RocketMissionState, RocketPlanetBinding, RocketRenderState,
+    GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
     TerrainCollisionState,
 };
 use crate::domain::services::gravity::gravitational_parameter;
@@ -51,6 +51,21 @@ pub struct OrbitPrediction {
 pub struct OrbitPredictionCache {
     prediction: OrbitPrediction,
     prediction_start_sim_time_s: f64,
+    key: Option<OrbitPredictionKey>,
+}
+
+/// Exact invalidation input for the presentation-only propagated path. It uses
+/// authoritative fixed-step state, rather than interpolated render state, so a
+/// static render frame cannot cause a fresh allocation or propagation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrbitPredictionKey {
+    position_m_bits: [u64; 3],
+    velocity_mps_bits: [u64; 3],
+    planet_mass_kg_bits: u64,
+    surface_radius_m_bits: u64,
+    prediction_start_sim_time_bits: u64,
+    allowed: bool,
+    maneuver: Option<([u64; 3], u64)>,
 }
 
 impl Default for OrbitPredictionCache {
@@ -58,6 +73,7 @@ impl Default for OrbitPredictionCache {
         Self {
             prediction: OrbitPrediction::empty(),
             prediction_start_sim_time_s: 0.0,
+            key: None,
         }
     }
 }
@@ -69,6 +85,11 @@ impl OrbitPredictionCache {
 
     pub fn prediction_start_sim_time_s(&self) -> f64 {
         self.prediction_start_sim_time_s
+    }
+
+    fn clear(&mut self) {
+        self.prediction = OrbitPrediction::empty();
+        self.key = None;
     }
 }
 
@@ -299,34 +320,35 @@ impl Plugin for RocketOrbitPlugin {
     }
 }
 
-/// Refresh the shared prediction from the current interpolated flight state.
+/// Refresh the shared prediction only when its authoritative input changes.
 /// The terrain map consumes this same result, so this remains the only
-/// presentation propagation path without allowing the flight line to lag behind
-/// a fast-moving or time-warped vehicle.
+/// presentation propagation path without allowing render FPS to determine
+/// propagation work.
 #[allow(clippy::type_complexity)]
 pub fn update_orbit_prediction_cache(
     planet_query: Query<&PlanetComponent>,
     rocket_query: Query<(
         &RocketPlanetBinding,
-        &RocketRenderState,
+        &RocketPhysicsState,
         &RocketMissionState,
         &TerrainCollisionState,
         &GroundRest,
         Option<&PlannedManeuver>,
     )>,
-    fixed_time: Res<Time<Fixed>>,
     sim_time: Res<SimulationTime>,
     mut cache: ResMut<OrbitPredictionCache>,
 ) {
-    let Some((binding, render, mission, collision, ground_rest, planned_maneuver)) =
+    let Some((binding, rocket, mission, collision, ground_rest, planned_maneuver)) =
         rocket_query.iter().next()
     else {
+        cache.clear();
         return;
     };
     let Some(planet) = planet_query
         .iter()
         .find(|planet| planet.matches_body(&binding.planet_name))
     else {
+        cache.clear();
         return;
     };
 
@@ -338,15 +360,8 @@ pub fn update_orbit_prediction_cache(
     );
     let planet_mass_kg = planet.domain_planet.mass_kg;
     let surface_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-    let alpha = fixed_time.overstep_fraction() as f64;
-    let position_m = render
-        .prev
-        .position_m
-        .lerp(render.current.position_m, alpha);
-    let velocity_mps = render
-        .prev
-        .velocity_mps
-        .lerp(render.current.velocity_mps, alpha);
+    let position_m = rocket.dynamics.position_m;
+    let velocity_mps = rocket.dynamics.velocity_mps;
     let maneuver = planned_maneuver.and_then(|planned| {
         let execute_after_s = planned.execute_at_sim_time_s - sim_time.sim_time_s;
         (execute_after_s > 0.0 && execute_after_s.is_finite() && planned.delta_v_mps.is_finite())
@@ -355,6 +370,24 @@ pub fn update_orbit_prediction_cache(
                 delta_v_mps: planned.delta_v_mps,
             })
     });
+
+    let key = OrbitPredictionKey {
+        position_m_bits: dvec3_bits(position_m),
+        velocity_mps_bits: dvec3_bits(velocity_mps),
+        planet_mass_kg_bits: planet_mass_kg.to_bits(),
+        surface_radius_m_bits: surface_radius_m.to_bits(),
+        prediction_start_sim_time_bits: sim_time.sim_time_s.to_bits(),
+        allowed,
+        maneuver: maneuver.map(|maneuver| {
+            (
+                dvec3_bits(maneuver.delta_v_mps),
+                maneuver.execute_after_s.to_bits(),
+            )
+        }),
+    };
+    if cache.key.as_ref() == Some(&key) {
+        return;
+    }
 
     cache.prediction = if allowed {
         predicted_orbit_with_maneuver(
@@ -368,6 +401,11 @@ pub fn update_orbit_prediction_cache(
         OrbitPrediction::empty()
     };
     cache.prediction_start_sim_time_s = sim_time.sim_time_s;
+    cache.key = Some(key);
+}
+
+fn dvec3_bits(value: DVec3) -> [u64; 3] {
+    [value.x.to_bits(), value.y.to_bits(), value.z.to_bits()]
 }
 
 /// Draw the predicted trajectory (and apoapsis/periapsis markers) in the
@@ -646,5 +684,23 @@ mod tests {
             &scale,
         );
         assert_eq!(point, Vec3::new(50.0, 10.0, -5.0));
+    }
+
+    #[test]
+    fn prediction_cache_key_changes_only_with_authoritative_inputs() {
+        let base = OrbitPredictionKey {
+            position_m_bits: dvec3_bits(DVec3::new(1.0, 2.0, 3.0)),
+            velocity_mps_bits: dvec3_bits(DVec3::new(4.0, 5.0, 6.0)),
+            planet_mass_kg_bits: EARTH_MASS_KG.to_bits(),
+            surface_radius_m_bits: EARTH_RADIUS_M.to_bits(),
+            prediction_start_sim_time_bits: 10.0_f64.to_bits(),
+            allowed: true,
+            maneuver: None,
+        };
+        assert_eq!(base, base.clone());
+
+        let mut after_fixed_step = base.clone();
+        after_fixed_step.prediction_start_sim_time_bits = 10.1_f64.to_bits();
+        assert_ne!(base, after_fixed_step);
     }
 }

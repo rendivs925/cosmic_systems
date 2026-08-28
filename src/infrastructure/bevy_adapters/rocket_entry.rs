@@ -9,6 +9,9 @@ use crate::domain::services::entry_physics::{
     radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_recession_rate_mps,
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
+use crate::domain::services::rocket_propulsion::{
+    active_vehicle_inertia, active_vehicle_mass_with_payload,
+};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::GroundContact;
 use crate::infrastructure::bevy_adapters::components::EntryPhysicsConfig;
@@ -56,13 +59,17 @@ pub fn compute_ablation(
     config: Res<EntryPhysicsConfig>,
     mut rocket_query: Query<(
         &mut RocketPhysicsState,
+        &crate::components::rocket::RocketGeometry,
+        &RocketPropulsion,
         &ThermalState,
         &mut AblationState,
         &mut RocketMass,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut rocket, thermal, mut ablation, mut mass) in rocket_query.iter_mut() {
+    for (mut rocket, geometry, propulsion, thermal, mut ablation, mut mass) in
+        rocket_query.iter_mut()
+    {
         let q_total = thermal.total_heat_flux_w_m2;
         if q_total <= 0.0 {
             continue;
@@ -90,9 +97,27 @@ pub fn compute_ablation(
         ablation.tps_thickness_remaining_m =
             (config.tps_initial_thickness_m - ablation.recession_depth_m).max(0.0);
 
-        // Update vehicle mass
-        let new_mass = rocket.dynamics.mass_kg - mass_loss;
+        // Rebuild all rigid-body quantities from the same attached mass
+        // inventory. Incremental subtraction left COM/inertia stale.
+        let new_mass = (active_vehicle_mass_with_payload(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+            propulsion.attached_payload_kg,
+        ) - ablation.mass_loss_kg)
+            .max(1.0);
+        let (inertia, center_of_mass_m) = active_vehicle_inertia(
+            &propulsion.vehicle.stages,
+            &propulsion.propellant_remaining_kg,
+            propulsion.active_stage,
+            propulsion.attached_payload_kg,
+            ablation.mass_loss_kg,
+            geometry.radius_m as f64,
+            geometry.height_m as f64,
+        );
         rocket.dynamics.mass_kg = new_mass;
+        rocket.dynamics.inertia_body = inertia;
+        rocket.dynamics.center_of_mass_m = center_of_mass_m;
         mass.0 = new_mass;
     }
 }

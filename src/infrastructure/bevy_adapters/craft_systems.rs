@@ -20,15 +20,15 @@ const CRAFT_CRUISE_SPEED_UNITS: f32 = 40_000.0;
 const CHASE_CAMERA_HEIGHT: f32 = 4.0;
 const CHASE_CAMERA_LOOK_HEIGHT: f32 = 1.0;
 pub fn update_craft_physics(
-    time: Res<Time>,
+    fixed_time: Res<Time<Fixed>>,
     control: Res<CraftControlState>,
     solar_params: Res<SolarSystemParameters>,
     mut travel_target: ResMut<CraftTravelTarget>,
-    planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
-    mut craft_query: Query<(&mut CraftComponent, &mut Transform)>,
+    planet_query: Query<&PlanetComponent>,
+    mut craft_query: Query<&mut CraftComponent>,
 ) {
-    let dt = time.delta_secs().min(0.05);
-    for (mut craft, mut transform) in craft_query.iter_mut() {
+    let dt = fixed_time.delta_secs();
+    for mut craft in craft_query.iter_mut() {
         let dc = control.dc_current;
         let pulse = control.pulse_current;
         craft.dc_field = dc;
@@ -36,11 +36,19 @@ pub fn update_craft_physics(
         let domain_craft = craft.craft.clone();
         craft_physics::compute_physics(&domain_craft, &mut craft.physics, dc, pulse, dt);
 
-        craft.angular_velocity *= 1.0 - 4.0 * dt;
+        let angular_input = craft.angular_input;
+        craft.angular_velocity += angular_input * dt;
+        craft.angular_velocity = craft.angular_velocity.clamp_length_max(6.0);
+        let angular_damping = if craft.speed_mode == SpeedMode::Hover {
+            6.0
+        } else {
+            4.0
+        };
+        craft.angular_velocity *= (1.0 - angular_damping * dt).max(0.0);
         let rot = Quat::from_axis_angle(Vec3::X, craft.angular_velocity.x * dt)
             * Quat::from_axis_angle(Vec3::Y, craft.angular_velocity.y * dt)
             * Quat::from_axis_angle(Vec3::Z, craft.angular_velocity.z * dt);
-        transform.rotation = (transform.rotation * rot).normalize();
+        craft.orientation = (craft.orientation * rot).normalize();
 
         let speed_mul = match craft.speed_mode {
             SpeedMode::Hover => 0.0,
@@ -48,11 +56,19 @@ pub fn update_craft_physics(
             SpeedMode::Sprint => 3.0,
         };
         let max_speed = CRAFT_CRUISE_SPEED_UNITS * dc * speed_mul;
-        let accel = if max_speed > 0.01 { 3.0 } else { 3.0 };
+        let accel = 3.0;
         let mut autopilot_position = None;
         if let Some(target_entity) = travel_target.entity {
-            if let Ok((planet, planet_transform)) = planet_query.get(target_entity) {
-                autopilot_position = Some((planet, planet_transform.translation()));
+            if let Ok(planet) = planet_query.get(target_entity) {
+                autopilot_position = Some((
+                    planet,
+                    catalog_planet_position(
+                        planet,
+                        fixed_time.elapsed_secs(),
+                        &solar_params,
+                        &planet_query,
+                    ),
+                ));
             } else {
                 travel_target.entity = None;
                 travel_target.name = None;
@@ -67,7 +83,7 @@ pub fn update_craft_physics(
             } else {
                 physics::calculate_visual_radius(&planet.domain_planet, &solar_params)
             };
-            let away_from_target = (transform.translation - target_position).normalize_or_zero();
+            let away_from_target = (craft.position - target_position).normalize_or_zero();
             let approach_direction = if away_from_target.length_squared() > 0.0 {
                 away_from_target
             } else {
@@ -79,23 +95,26 @@ pub fn update_craft_physics(
             // renderer never sees an instantaneous teleport onto a body. Exponential decay
             // decelerates near arrival and a hard step cap prevents any single-frame jump,
             // which is what triggered GPU device loss when snapping to the Sun.
-            let to_destination = destination - transform.translation;
+            let to_destination = destination - craft.position;
             let distance = to_destination.length();
             let approach_step = (1.0 - (-1.2 * dt).exp()).clamp(0.001, 1.0);
             let max_step = 500_000.0;
             let step = (distance * approach_step).min(max_step);
 
             if step < 1.0 {
-                transform.translation = destination;
+                craft.position = destination;
                 travel_target.entity = None;
                 travel_target.name = None;
             } else {
-                transform.translation += to_destination.normalize() * step;
+                craft.position += to_destination.normalize() * step;
                 craft.linear_velocity = Vec3::ZERO;
             }
-            transform.look_at(target_position, Vec3::Y);
+            let look_direction = (target_position - craft.position).normalize_or_zero();
+            if look_direction.length_squared() > 0.0 {
+                craft.orientation = Quat::from_rotation_arc(Vec3::NEG_Z, look_direction);
+            }
             craft.physics.vertical_velocity = 0.0;
-            craft.physics.vertical_position = transform.translation.y;
+            craft.physics.vertical_position = craft.position.y;
         } else {
             let move_input = craft.move_input.clamp_length_max(1.0);
             let magnitude = move_input.length();
@@ -104,7 +123,7 @@ pub fn update_craft_physics(
             } else {
                 Vec3::ZERO
             };
-            let world_dir = transform.rotation * local_dir;
+            let world_dir = craft.orientation * local_dir;
             let target_vel = world_dir * magnitude * max_speed;
             craft.linear_velocity = craft
                 .linear_velocity
@@ -119,11 +138,63 @@ pub fn update_craft_physics(
             craft.linear_velocity.y = craft.physics.vertical_velocity;
         }
 
-        transform.translation += craft.linear_velocity * dt;
-        craft.physics.vertical_position = transform.translation.y;
+        let linear_velocity = craft.linear_velocity;
+        craft.position += linear_velocity * dt;
+        craft.physics.vertical_position = craft.position.y;
         if autopilot_active {
             craft.physics.vertical_velocity = craft.linear_velocity.y;
         }
+    }
+}
+
+/// Derive a travel target from the same orbital catalog used for solar motion.
+/// This keeps autopilot independent of render-transform propagation.
+fn catalog_planet_position(
+    planet: &PlanetComponent,
+    time_seconds: f32,
+    solar_params: &SolarSystemParameters,
+    planets: &Query<&PlanetComponent>,
+) -> Vec3 {
+    let time_days = solar_params.time_to_days(time_seconds);
+    let (parent_position, parent_tilt) = planet
+        .domain_planet
+        .parent_entity
+        .as_ref()
+        .and_then(|parent_name| {
+            planets
+                .iter()
+                .find(|candidate| candidate.domain_planet.name == *parent_name)
+                .map(|parent| {
+                    (
+                        physics::calculate_planet_position(
+                            &parent.domain_planet,
+                            time_days,
+                            solar_params,
+                            Vec3::ZERO,
+                            None,
+                        ),
+                        Some(parent.domain_planet.axial_tilt_deg),
+                    )
+                })
+        })
+        .unwrap_or((Vec3::ZERO, None));
+
+    physics::calculate_planet_position(
+        &planet.domain_planet,
+        time_days,
+        solar_params,
+        parent_position,
+        parent_tilt,
+    )
+}
+
+/// Copy authoritative craft state to its render transform. Register this in
+/// `Update` after fixed physics so cameras and visuals never feed back into
+/// flight integration.
+pub fn sync_craft_transform(mut craft_query: Query<(&CraftComponent, &mut Transform)>) {
+    for (craft, mut transform) in craft_query.iter_mut() {
+        transform.translation = craft.position;
+        transform.rotation = craft.orientation;
     }
 }
 
@@ -191,11 +262,7 @@ pub fn handle_craft_input(
     }
 
     let mouse_down = mouse_buttons.pressed(MouseButton::Left);
-    if mouse_down {
-        cam_state.locked = false;
-    } else {
-        cam_state.locked = true;
-    }
+    cam_state.locked = !mouse_down;
 
     for (mut craft, _) in craft_query.iter_mut() {
         let mut move_x = 0.0;
@@ -214,28 +281,13 @@ pub fn handle_craft_input(
         }
         craft.move_input = Vec2::new(move_x, move_z);
 
-        let yaw_rate = 2.5;
-        let pitch_rate = 2.0;
-        let roll_rate = 3.0;
-        if keyboard.pressed(KeyCode::KeyQ) {
-            craft.angular_velocity.z += roll_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyE) {
-            craft.angular_velocity.z -= roll_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyK) {
-            craft.angular_velocity.x += pitch_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyJ) {
-            craft.angular_velocity.x -= pitch_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyH) {
-            craft.angular_velocity.y += yaw_rate * dt;
-        }
-        if keyboard.pressed(KeyCode::KeyL) {
-            craft.angular_velocity.y -= yaw_rate * dt;
-        }
-        craft.angular_velocity = craft.angular_velocity.clamp_length_max(6.0);
+        let roll =
+            (keyboard.pressed(KeyCode::KeyQ) as i8 - keyboard.pressed(KeyCode::KeyE) as i8) as f32;
+        let pitch =
+            (keyboard.pressed(KeyCode::KeyK) as i8 - keyboard.pressed(KeyCode::KeyJ) as i8) as f32;
+        let yaw =
+            (keyboard.pressed(KeyCode::KeyH) as i8 - keyboard.pressed(KeyCode::KeyL) as i8) as f32;
+        craft.angular_input = Vec3::new(pitch * 2.0, yaw * 2.5, roll * 3.0);
 
         if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
             craft.speed_mode = SpeedMode::Sprint;
@@ -249,7 +301,6 @@ pub fn handle_craft_input(
         if craft.speed_mode == SpeedMode::Hover {
             craft.move_input = Vec2::ZERO;
             craft.linear_velocity = Vec3::ZERO;
-            craft.angular_velocity *= 1.0 - 6.0 * dt;
         }
     }
 }
@@ -257,7 +308,7 @@ pub fn handle_craft_input(
 pub fn update_craft_camera(
     time: Res<Time>,
     mut mouse_motion: MessageReader<MouseMotion>,
-    craft_query: Query<(&CraftComponent, &Transform)>,
+    craft_query: Query<&CraftComponent>,
     mut cam_state: ResMut<CraftCameraState>,
     mut camera_query: Query<
         (&mut Transform, &mut Projection),
@@ -272,14 +323,14 @@ pub fn update_craft_camera(
         mouse_delta += motion.delta;
     }
 
-    let Ok((craft, craft_transform)) = craft_query.single() else {
+    let Ok(craft) = craft_query.single() else {
         return;
     };
     let Ok((mut camera_transform, mut projection)) = camera_query.single_mut() else {
         return;
     };
 
-    let target = craft_transform.translation;
+    let target = craft.position;
     let look_target = target + Vec3::Y * CHASE_CAMERA_LOOK_HEIGHT;
 
     let speed = craft.linear_velocity.length();
@@ -309,7 +360,7 @@ pub fn update_craft_camera(
             let pitch = cam_state.orbit_pitch;
             let chase_offset = Vec3::new(0.0, height_offset + pitch.sin() * dist, dist);
             let mut desired_pos =
-                target + craft_transform.rotation * Quat::from_rotation_y(yaw) * chase_offset;
+                target + craft.orientation * Quat::from_rotation_y(yaw) * chase_offset;
             if parametric {
                 let shake_amp = 0.02 + (zpe / 1250.0) * 0.04;
                 desired_pos += Vec3::new(
@@ -419,5 +470,29 @@ pub fn update_craft_camera(
         if proj.near >= proj.far {
             proj.near = proj.far * 0.01;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentation_sync_copies_but_does_not_source_craft_pose() {
+        let mut app = App::new();
+        let mut craft = CraftComponent::saucer();
+        craft.position = Vec3::new(12.0, 34.0, 56.0);
+        craft.orientation = Quat::from_rotation_y(0.5);
+        let entity = app
+            .world_mut()
+            .spawn((craft, Transform::from_xyz(-1.0, -2.0, -3.0)))
+            .id();
+        app.add_systems(Update, sync_craft_transform);
+
+        app.update();
+
+        let transform = app.world().get::<Transform>(entity).unwrap();
+        assert_eq!(transform.translation, Vec3::new(12.0, 34.0, 56.0));
+        assert_eq!(transform.rotation, Quat::from_rotation_y(0.5));
     }
 }

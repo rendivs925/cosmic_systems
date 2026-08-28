@@ -21,7 +21,7 @@ use wasm_bindgen_futures::spawn_local;
 // System to update planet/moon positions in their orbits (optimized for performance with parallel processing)
 #[cfg(target_arch = "wasm32")]
 pub fn update_planet_positions(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
     camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
@@ -87,7 +87,10 @@ pub fn update_planet_positions(
                 (Vec3::ZERO, None)
             };
 
-        let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
+        // Orbital state must not vary with camera distance. Camera distance still
+        // prioritizes web-worker delivery below, but every authoritative solve
+        // uses the calculator's standard convergence budget.
+        let kepler_iterations = 8;
         let is_moon = planet_comp.domain_planet.parent_entity.is_some();
 
         let new_position = physics::calculate_planet_position_with_quality(
@@ -251,9 +254,8 @@ pub fn update_planet_positions(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn update_planet_positions(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
@@ -263,53 +265,10 @@ pub fn update_planet_positions(
     let elapsed_seconds = time.elapsed_secs();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
-    let camera_pos = camera_query.single().unwrap().translation();
-
-    // Build parent position and tilt lookup maps
-    let mut parent_positions = std::collections::HashMap::new();
-    let mut parent_tilts = std::collections::HashMap::new();
-
-    // First pass: collect all planet positions for moon calculations
-    for (_entity, transform, planet_comp) in query.iter() {
-        if planet_comp.domain_planet.parent_entity.is_none() {
-            // This is a planet orbiting the Sun
-            parent_positions.insert(
-                planet_comp.domain_planet.name.clone(),
-                transform.translation,
-            );
-            parent_tilts.insert(
-                planet_comp.domain_planet.name.clone(),
-                Some(planet_comp.domain_planet.axial_tilt_deg),
-            );
-        }
-    }
-
-    #[cfg(feature = "parallel")]
-    {
-        // Parallel implementation
-        update_planet_positions_parallel(
-            time_days,
-            solar_params,
-            camera_pos,
-            &parent_positions,
-            &parent_tilts,
-            &mut query,
-            &mut perf_stats,
-        );
-    }
-
-    #[cfg(not(feature = "parallel"))]
-    {
-        // Fallback sequential implementation
-        update_planet_positions_sequential(
-            time_days,
-            solar_params,
-            camera_pos,
-            &parent_positions,
-            &parent_tilts,
-            &mut query,
-        );
-    }
+    // This small catalog has a dependency between each moon and its parent.
+    // Solve it in deterministic parent-then-moon order rather than selecting
+    // numerical precision or a compute backend from the presentation camera.
+    update_planet_positions_sequential(time_days, solar_params, &mut query);
 
     // Record physics timing
     let physics_duration = physics_start.elapsed();
@@ -473,13 +432,9 @@ fn update_planet_positions_parallel(
 }
 
 /// Fallback sequential implementation for when parallel features are disabled
-#[cfg(not(feature = "parallel"))]
 fn update_planet_positions_sequential(
     time_days: f32,
     solar_params: Res<SolarSystemParameters>,
-    camera_pos: Vec3,
-    _parent_positions: &std::collections::HashMap<String, Vec3>,
-    _parent_tilts: &std::collections::HashMap<String, Option<f32>>,
     query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
     // First pass: update only planets (Sun-orbiting bodies)
@@ -487,15 +442,13 @@ fn update_planet_positions_sequential(
         if planet_comp.domain_planet.parent_entity.is_some() {
             continue;
         }
-        let distance_to_camera = camera_pos.distance(transform.translation);
-        let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
         let new_position = physics::calculate_planet_position_with_quality(
             &planet_comp.domain_planet,
             time_days,
             &solar_params,
             Vec3::ZERO,
             None,
-            kepler_iterations,
+            8,
         );
         transform.translation = new_position;
     }
@@ -523,20 +476,18 @@ fn update_planet_positions_sequential(
         if planet_comp.domain_planet.parent_entity.is_none() {
             continue;
         }
-        let distance_to_camera = camera_pos.distance(transform.translation);
         let parent_name = planet_comp.domain_planet.parent_entity.as_ref().unwrap();
         let parent_position = *updated_parent_positions
             .get(parent_name)
             .unwrap_or(&Vec3::ZERO);
         let parent_tilt = updated_parent_tilts.get(parent_name).copied().flatten();
-        let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
         let new_position = physics::calculate_planet_position_with_quality(
             &planet_comp.domain_planet,
             time_days,
             &solar_params,
             parent_position,
             parent_tilt,
-            kepler_iterations,
+            8,
         );
         transform.translation = new_position;
     }
@@ -544,7 +495,7 @@ fn update_planet_positions_sequential(
 
 // System to update planet rotations
 pub fn update_planet_rotations(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut Transform, &PlanetComponent)>,
 ) {

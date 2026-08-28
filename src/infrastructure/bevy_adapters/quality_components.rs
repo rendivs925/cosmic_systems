@@ -79,7 +79,9 @@ impl AdaptiveQualityController {
         let mut new_quality_index = self.current_quality_index;
 
         // Critical performance degradation
-        if avg_fps < self.target_fps * 0.7 || system_metrics.memory_pressure > 0.9 {
+        if avg_fps < self.target_fps * 0.7
+            || system_metrics.memory_pressure.is_finite() && system_metrics.memory_pressure > 0.9
+        {
             new_quality_index = new_quality_index.saturating_sub(2); // Drop 2 levels
         }
         // Significant performance degradation
@@ -88,8 +90,8 @@ impl AdaptiveQualityController {
         }
         // Performance improving
         else if avg_fps > self.target_fps * 1.1
-            && system_metrics.gpu_utilization < 0.7
-            && system_metrics.memory_pressure < 0.5
+            && (!system_metrics.gpu_utilization.is_finite() || system_metrics.gpu_utilization < 0.7)
+            && (!system_metrics.memory_pressure.is_finite() || system_metrics.memory_pressure < 0.5)
             && fps_variance < 2.0
         {
             new_quality_index = (new_quality_index + 1).min(self.quality_levels.len() - 1);
@@ -99,12 +101,11 @@ impl AdaptiveQualityController {
         if new_quality_index != self.current_quality_index {
             self.current_quality_index = new_quality_index;
             self.last_adaptation = now;
+            // GPU and memory collectors are optional. Do not format absent
+            // instrumentation as a plausible-looking zero-percent reading.
             println!(
-                "Adaptive Quality: {} FPS -> {:?} (GPU: {:.1}%, Mem: {:.1}%)",
-                avg_fps as i32,
-                self.quality_levels[new_quality_index],
-                system_metrics.gpu_utilization * 100.0,
-                system_metrics.memory_pressure * 100.0
+                "Adaptive Quality: {} FPS -> {:?}",
+                avg_fps as i32, self.quality_levels[new_quality_index],
             );
             return Some(self.quality_levels[new_quality_index]);
         }
@@ -176,24 +177,22 @@ impl QualityAdaptationSystem {
             perf_stats.frame_time_variance = variance;
         }
 
-        // Estimate GPU utilization based on frame times and Vulkan activity
-        if perf_stats.vulkan_enabled && perf_stats.vulkan_kepler_calls > 0 {
-            // GPU is active, estimate utilization
-            let gpu_frame_time_ratio = perf_stats.gpu_frame_time_ms / perf_stats.frame_time_ms;
-            perf_stats.gpu_utilization = (gpu_frame_time_ratio * 0.8).min(1.0); // Conservative estimate
-        } else {
-            perf_stats.gpu_utilization = 0.0;
-        }
+        // GPU utilization requires device instrumentation. Do not infer it
+        // from frame time or the presence of a compute solver.
+        perf_stats.gpu_utilization = f32::NAN;
 
         // Estimate CPU utilization (simplified)
         let physics_ratio = perf_stats.physics_update_time / perf_stats.frame_time_ms;
         perf_stats.cpu_utilization = (physics_ratio * 1.5).min(1.0); // Physics is CPU intensive
 
-        // Estimate memory pressure (simplified - could be enhanced with actual system memory monitoring)
-        perf_stats.memory_pressure = (perf_stats.memory_usage_mb / 16000.0).min(1.0); // Assume 16GB system
+        // Memory pressure is unknown until a platform collector supplies both
+        // process use and an actual memory limit.
+        perf_stats.memory_pressure = f32::NAN;
 
         // Update adaptation confidence based on stability
-        if perf_stats.frame_time_variance < 1.0 && perf_stats.gpu_utilization < 0.9 {
+        if perf_stats.frame_time_variance < 1.0
+            && (!perf_stats.gpu_utilization.is_finite() || perf_stats.gpu_utilization < 0.9)
+        {
             perf_stats.adaptive_confidence = (perf_stats.adaptive_confidence + 0.05).min(1.0);
         } else {
             perf_stats.adaptive_confidence = (perf_stats.adaptive_confidence - 0.1).max(0.0);

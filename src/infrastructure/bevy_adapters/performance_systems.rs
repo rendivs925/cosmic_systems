@@ -419,11 +419,13 @@ pub fn update_performance_stats(
         performance_stats.frame_time_99th = percentile;
     }
 
-    // GPU TIMING (when available - Vulkan/WebGPU)
-    // For now, assume GPU time ≈ CPU time (simplified)
-    // TODO: Add actual GPU timestamp queries for Vulkan/WebGPU
-    performance_stats.gpu_frame_time_ms = frame_time_ms; // Placeholder
-    performance_stats.cpu_gpu_frame_time = frame_time_ms.max(performance_stats.gpu_frame_time_ms);
+    // GPU timestamp queries and native process-memory collection are not
+    // registered in this application. Keep these unknown instead of reporting
+    // wall-clock time as GPU time or a fabricated memory budget as telemetry.
+    performance_stats.gpu_frame_time_ms = f32::NAN;
+    performance_stats.cpu_gpu_frame_time = frame_time_ms;
+    performance_stats.memory_usage_mb = f32::NAN;
+    performance_stats.peak_memory_mb = f32::NAN;
 
     // LEGACY COMPATIBILITY (deprecated fields)
     performance_stats.frame_time = performance_stats.frame_time_ms;
@@ -491,5 +493,20 @@ mod tests {
     fn percentile_uses_in_place_selection() {
         let mut samples = (1..=100).map(|value| value as f32).collect::<Vec<_>>();
         assert_eq!(percentile_99th(&mut samples), Some(99.0));
+    }
+
+    #[test]
+    fn unavailable_gpu_and_memory_metrics_are_not_reported_as_measurements() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(PerformanceStats::default());
+        app.add_systems(Update, update_performance_stats);
+        app.update();
+
+        let stats = app.world().resource::<PerformanceStats>();
+        assert!(stats.gpu_frame_time_ms.is_nan());
+        assert!(stats.memory_usage_mb.is_nan());
+        assert!(stats.peak_memory_mb.is_nan());
+        assert!(stats.cpu_gpu_frame_time.is_finite());
     }
 }

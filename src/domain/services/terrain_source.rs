@@ -45,6 +45,11 @@ const SEED_MOISTURE: u64 = 0x4C3A_2B19_08F7_E6D5;
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
 
+    /// Prepare expensive, deterministic data for a sample. This is invoked only
+    /// by terrain worker tasks; fixed-step collision queries must use `height_m`
+    /// without causing I/O or a terrain bake.
+    fn prepare_sample(&self, _latitude_deg: f64, _longitude_deg: f64) {}
+
     /// Coarse, non-authoritative height for whole-body presentation such as the
     /// rocket overview map. Sources with expensive local detail should expose a
     /// cheap base value here; physics, collision, and terrain meshes must keep
@@ -268,6 +273,19 @@ impl TerrainSource for LayeredTerrainSource {
             height_m += layer.source.height_m(latitude_deg, longitude_deg);
         }
         height_m
+    }
+
+    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        self.base.source.prepare_sample(latitude_deg, longitude_deg);
+        if let Some(layer) = &self.macro_elevation {
+            layer.source.prepare_sample(latitude_deg, longitude_deg);
+        }
+        if let Some(layer) = &self.dem_elevation {
+            layer.source.prepare_sample(latitude_deg, longitude_deg);
+        }
+        if let Some(layer) = &self.procedural_detail {
+            layer.source.prepare_sample(latitude_deg, longitude_deg);
+        }
     }
 
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -611,6 +629,10 @@ impl TerrainSource for LocalDetailTerrainSource {
         self.base.height_m(latitude_deg, longitude_deg) + self.detail_m(latitude_deg, longitude_deg)
     }
 
+    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        self.base.prepare_sample(latitude_deg, longitude_deg);
+    }
+
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.base.moisture(latitude_deg, longitude_deg)
     }
@@ -722,6 +744,10 @@ impl TerrainSource for SiteAwareTerrainSource {
             }
         }
         self.base.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        self.base.prepare_sample(latitude_deg, longitude_deg);
     }
 
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {

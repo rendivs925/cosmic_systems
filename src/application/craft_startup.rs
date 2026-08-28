@@ -133,6 +133,7 @@ pub fn spawn_craft_model(
 
     let mut craft = CraftComponent::saucer();
     craft.physics.vertical_position = load.spawn_position.y;
+    craft.position = load.spawn_position;
 
     let bubble_mesh = meshes.add(Mesh::from(Sphere::new(5.0)));
     let ring_mesh = meshes.add(Mesh::from(Torus::new(4.5, 0.2)));

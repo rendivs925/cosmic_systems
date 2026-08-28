@@ -27,9 +27,10 @@ pub struct PerformanceStats {
     pub frame_time_min: f32,      // Minimum frame time this session
     pub frame_time_max: f32,      // Maximum frame time this session
 
-    // GPU timing (when available - Vulkan/WebGPU)
-    pub gpu_frame_time_ms: f32,  // GPU execution time (if measurable)
-    pub cpu_gpu_frame_time: f32, // Max(CPU, GPU) time = true frame rate limiter
+    // GPU timing. `NaN` means no timestamp-query instrumentation is available.
+    pub gpu_frame_time_ms: f32,
+    // Wall-clock frame time when GPU timing is unavailable; otherwise the max.
+    pub cpu_gpu_frame_time: f32,
 
     // High-precision timing infrastructure
     pub last_frame_time: std::time::Instant, // Monotonic high-res clock timestamp
@@ -73,9 +74,9 @@ pub struct PerformanceStats {
     pub cpu_cores_used: usize,  // Number of CPU cores utilized
     pub vector_width: usize,    // SIMD vector width (128, 256, 512 bits)
 
-    // Memory usage
-    pub memory_usage_mb: f32, // Current memory usage in MB
-    pub peak_memory_mb: f32,  // Peak memory usage in MB
+    // Process memory metrics. `NaN` means this platform has no collector.
+    pub memory_usage_mb: f32,
+    pub peak_memory_mb: f32,
 
     // GPU acceleration
     pub vulkan_enabled: bool, // Whether Vulkan compute is available and active
@@ -125,9 +126,9 @@ impl Default for PerformanceStats {
             frame_time_min: 16.67,      // Min frame time
             frame_time_max: 16.67,      // Max frame time
 
-            // GPU timing (initially same as CPU)
-            gpu_frame_time_ms: 16.67,  // GPU time (if available)
-            cpu_gpu_frame_time: 16.67, // Max of CPU/GPU time
+            // No GPU timestamp-query implementation is registered yet.
+            gpu_frame_time_ms: f32::NAN,
+            cpu_gpu_frame_time: 16.67,
 
             // High-precision timing
             last_frame_time: std::time::Instant::now(),
@@ -171,9 +172,9 @@ impl Default for PerformanceStats {
             cpu_cores_used: 1,
             vector_width: 128,
 
-            // Memory usage
-            memory_usage_mb: 0.0,
-            peak_memory_mb: 0.0,
+            // No native process-memory collector is registered yet.
+            memory_usage_mb: f32::NAN,
+            peak_memory_mb: f32::NAN,
 
             // GPU acceleration
             vulkan_enabled: false,
@@ -189,9 +190,9 @@ impl Default for PerformanceStats {
             benchmark_total_time: 0.0,
 
             // Advanced Quality Adaptation System
-            gpu_utilization: 0.0,     // GPU utilization (0.0-1.0)
-            cpu_utilization: 0.0,     // CPU utilization (0.0-1.0)
-            memory_pressure: 0.0,     // Memory pressure (0.0-1.0)
+            gpu_utilization: f32::NAN,
+            cpu_utilization: 0.0, // CPU utilization (0.0-1.0)
+            memory_pressure: f32::NAN,
             frame_time_variance: 0.0, // Frame time variance (ms²)
             adaptive_confidence: 0.5, // Initial confidence
             quality_trend: QualityTrend::Stable,
