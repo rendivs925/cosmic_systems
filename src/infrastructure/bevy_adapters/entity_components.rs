@@ -62,8 +62,6 @@ pub struct OrbitComponent {
     pub spin_speed: f32,
     pub phase: f32,
     pub distance_rank: f32,
-    /// Origin used when the heliocentric ribbon was last projected to f32 mesh vertices.
-    pub mesh_origin_units: DVec3,
 }
 
 /// Authoritative solar-map position in f64 display units. `Transform` is only

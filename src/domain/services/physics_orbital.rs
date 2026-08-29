@@ -1,5 +1,4 @@
 use crate::domain::entities::planet::Planet;
-use crate::domain::services::physics_kepler::solve_kepler_adaptive;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::math::{DVec3, Quat, Vec3};
 
@@ -27,25 +26,6 @@ pub struct OrbitShape {
     pub arg_periapsis_rad: f32,
 }
 
-/// Calculate a deterministic J2000 two-body Keplerian position. The solar map
-/// uses display units, while Rocket flight keeps its separate f64 local frame.
-pub fn calculate_planet_position(
-    planet: &Planet,
-    time_days: f32,
-    solar_params: &SolarSystemParameters,
-    parent_position: Vec3,
-    parent_axial_tilt_deg: Option<f32>,
-) -> Vec3 {
-    calculate_planet_position_with_quality(
-        planet,
-        time_days,
-        solar_params,
-        parent_position,
-        parent_axial_tilt_deg,
-        8,
-    )
-}
-
 /// Evaluate a solar-map position in f64 display units. Outer moons are added
 /// to their parent before the final camera-relative f32 render projection.
 pub fn calculate_planet_position_f64(
@@ -59,42 +39,12 @@ pub fn calculate_planet_position_f64(
         return DVec3::ZERO;
     }
 
-    let relative_position = if planet.parent_entity.is_some() {
-        if let Some(elements) = get_moon_orbital_elements(planet) {
-            orbital_position_f64(
-                elements.semi_major_axis_au as f64
-                    * solar_params.scale_factor as f64
-                    * MOON_ORBIT_SCALE as f64,
-                elements.eccentricity as f64,
-                elements.inclination_rad as f64,
-                elements.long_asc_node_rad as f64,
-                elements.arg_periapsis_rad as f64,
-                (elements.mean_anomaly_rad as f64
-                    + std::f64::consts::TAU * time_days / planet.orbital_period_days as f64)
-                    .rem_euclid(std::f64::consts::TAU),
-            )
-        } else {
-            let angle = std::f64::consts::TAU * time_days / planet.orbital_period_days as f64;
-            let distance = calculate_orbit_radius_units(planet, solar_params) as f64;
-            DVec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
-        }
-    } else if let Some(elements) = get_orbital_elements(&planet.name) {
-        let semi_major_axis_au = elements.semi_major_axis_au as f64;
-        let mean_motion = (2.959_122_082_855_909_3e-4_f64 / semi_major_axis_au.powi(3)).sqrt();
-        orbital_position_f64(
-            semi_major_axis_au * solar_params.scale_factor as f64,
-            elements.eccentricity as f64,
-            elements.inclination_rad as f64,
-            elements.long_asc_node_rad as f64,
-            elements.arg_periapsis_rad as f64,
-            (elements.mean_anomaly_rad as f64 + mean_motion * time_days)
-                .rem_euclid(std::f64::consts::TAU),
-        )
-    } else {
-        let angle = std::f64::consts::TAU * time_days / planet.orbital_period_days as f64;
-        let distance = calculate_orbit_radius_units(planet, solar_params) as f64;
-        DVec3::new(distance * angle.cos(), 0.0, distance * angle.sin())
-    };
+    // Bodies and their ribbons sample this single orbital shape. Rendering only
+    // projects the result into the camera-relative frame; it never owns a
+    // second orbital geometry calculation.
+    let orbit_shape = orbit_shape_for(planet, solar_params);
+    let eccentric_anomaly = orbital_eccentric_anomaly(planet, &orbit_shape, time_days);
+    let relative_position = orbit_point_f64(&orbit_shape, eccentric_anomaly);
 
     let relative_position = if planet.parent_entity.is_some() {
         parent_axial_tilt_deg.map_or(relative_position, |tilt_deg| {
@@ -126,22 +76,25 @@ pub fn orbit_point_f64(orbit_shape: &OrbitShape, eccentric_anomaly: f64) -> DVec
     )
 }
 
-fn orbital_position_f64(
-    semi_major_axis_units: f64,
-    eccentricity: f64,
-    inclination_rad: f64,
-    long_asc_node_rad: f64,
-    arg_periapsis_rad: f64,
-    mean_anomaly_rad: f64,
-) -> DVec3 {
-    let eccentric_anomaly = solve_kepler_f64(mean_anomaly_rad, eccentricity.clamp(0.0, 0.99));
-    let semi_minor = semi_major_axis_units * (1.0 - eccentricity * eccentricity).sqrt();
-    transform_orbital_point_f64(
-        semi_major_axis_units * (eccentric_anomaly.cos() - eccentricity),
-        semi_minor * eccentric_anomaly.sin(),
-        inclination_rad,
-        long_asc_node_rad,
-        arg_periapsis_rad,
+fn orbital_eccentric_anomaly(planet: &Planet, orbit_shape: &OrbitShape, time_days: f64) -> f64 {
+    let mean_anomaly = orbital_elements_for(planet).map_or_else(
+        || std::f64::consts::TAU * time_days / planet.orbital_period_days as f64,
+        |elements| {
+            if planet.parent_entity.is_some() {
+                elements.mean_anomaly_rad as f64
+                    + std::f64::consts::TAU * time_days / planet.orbital_period_days as f64
+            } else {
+                let semi_major_axis_au = elements.semi_major_axis_au as f64;
+                let mean_motion =
+                    (2.959_122_082_855_909_3e-4_f64 / semi_major_axis_au.powi(3)).sqrt();
+                elements.mean_anomaly_rad as f64 + mean_motion * time_days
+            }
+        },
+    );
+
+    solve_kepler_f64(
+        mean_anomaly.rem_euclid(std::f64::consts::TAU),
+        orbit_shape.eccentricity.clamp(0.0, 0.99) as f64,
     )
 }
 
@@ -158,98 +111,6 @@ fn solve_kepler_f64(mean_anomaly_rad: f64, eccentricity: f64) -> f64 {
         eccentric_anomaly -= residual / derivative;
     }
     eccentric_anomaly
-}
-
-/// Calculate the position of a planet/moon with configurable quality/performance
-fn calculate_planet_position_with_quality(
-    planet: &Planet,
-    time_days: f32,
-    solar_params: &SolarSystemParameters,
-    parent_position: Vec3,
-    parent_axial_tilt_deg: Option<f32>,
-    kepler_iterations: u32,
-) -> Vec3 {
-    if planet.name == "Sun" {
-        // Sun is at the origin
-        return Vec3::ZERO;
-    }
-
-    // Calculate angle based on orbital period
-    let angle = 2.0 * std::f32::consts::PI * time_days / planet.orbital_period_days;
-
-    let mut relative_pos = if planet.parent_entity.is_some() {
-        // Moons - use real orbital elements for accurate position calculation
-        if let Some(elements) = get_moon_orbital_elements(planet) {
-            let mean_motion = mean_motion_from_period_days(planet.orbital_period_days);
-            let mean_anomaly =
-                normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-            let eccentric_anomaly =
-                solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
-            let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
-            let radius_au = elements.semi_major_axis_au
-                * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
-            let r = solar_params.au_to_units(radius_au) * MOON_ORBIT_SCALE;
-
-            // Position in orbital plane (periapsis at +X)
-            let x_orbital = r * true_anomaly.cos();
-            let z_orbital = r * true_anomaly.sin();
-
-            // Transform to 3D space using same method as orbit mesh
-            transform_orbital_point(
-                x_orbital,
-                z_orbital,
-                elements.inclination_rad,
-                elements.long_asc_node_rad,
-                elements.arg_periapsis_rad,
-            )
-        } else {
-            // Fallback to simple circular orbit for moons without defined elements
-            // Use 3D transformation for consistency (no inclination/nodes for fallback)
-            let distance = calculate_orbit_radius_units(planet, solar_params);
-            let x_orbital = distance * angle.cos();
-            let z_orbital = distance * angle.sin();
-            transform_orbital_point(x_orbital, z_orbital, 0.0, 0.0, 0.0)
-        }
-    } else if let Some(elements) = get_orbital_elements(&planet.name) {
-        let mean_motion = mean_motion_rad_per_day(elements.semi_major_axis_au);
-        let mean_anomaly = normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
-        let eccentric_anomaly =
-            solve_kepler_adaptive(mean_anomaly, elements.eccentricity, kepler_iterations);
-        let true_anomaly = true_anomaly(eccentric_anomaly, elements.eccentricity);
-        let radius_au =
-            elements.semi_major_axis_au * (1.0 - elements.eccentricity * eccentric_anomaly.cos());
-        let r = solar_params.au_to_units(radius_au);
-
-        // Position in orbital plane (periapsis at +X)
-        let x_orbital = r * true_anomaly.cos();
-        let z_orbital = r * true_anomaly.sin();
-
-        // Transform to 3D space using same method as orbit mesh
-        transform_orbital_point(
-            x_orbital,
-            z_orbital,
-            elements.inclination_rad,
-            elements.long_asc_node_rad,
-            elements.arg_periapsis_rad,
-        )
-    } else {
-        // Fallback to a circular orbit when no elements are defined
-        // Use 3D transformation for consistency (no inclination/nodes for fallback)
-        let distance = calculate_orbit_radius_units(planet, solar_params);
-        let x_orbital = distance * angle.cos();
-        let z_orbital = distance * angle.sin();
-        transform_orbital_point(x_orbital, z_orbital, 0.0, 0.0, 0.0)
-    };
-
-    if planet.parent_entity.is_some() {
-        if let Some(tilt_deg) = parent_axial_tilt_deg {
-            let tilt = Quat::from_rotation_z(tilt_deg.to_radians());
-            relative_pos = tilt * relative_pos;
-        }
-    }
-
-    // Add parent position to get absolute position
-    parent_position + relative_pos
 }
 
 pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemParameters) -> f32 {
@@ -567,34 +428,13 @@ fn elements_from_degrees(
     }
 }
 
+#[cfg(test)]
 fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
     let cos_e = eccentric_anomaly.cos();
     let sin_e = eccentric_anomaly.sin();
     let numerator = (1.0 - eccentricity * eccentricity).sqrt() * sin_e;
     let denominator = cos_e - eccentricity;
     numerator.atan2(denominator)
-}
-
-fn mean_motion_rad_per_day(semi_major_axis_au: f32) -> f32 {
-    // Kepler's third law: n = sqrt(GM/a^3)
-    // For solar system, GM_sun ≈ 1.327 × 10^20 m^3 s^-2
-    // Convert to radians per day
-    let mu = 2.9591220828559093e-4; // AU^3 / day^2 (solar gravitational parameter)
-    (mu / (semi_major_axis_au.powi(3))).sqrt()
-}
-
-fn mean_motion_from_period_days(period_days: f32) -> f32 {
-    2.0 * std::f32::consts::PI / period_days
-}
-
-fn normalize_radians(angle: f32) -> f32 {
-    let two_pi = 2.0 * std::f32::consts::PI;
-    let normalized = angle % two_pi;
-    if normalized < 0.0 {
-        normalized + two_pi
-    } else {
-        normalized
-    }
 }
 
 pub fn transform_orbital_point_f64(
@@ -632,13 +472,14 @@ pub fn calculate_terrain_orbital_position(
     solar_params: &SolarSystemParameters,
 ) -> Vec3 {
     // First, get planet's orbital position
-    let planet_position = calculate_planet_position(
+    let planet_position = calculate_planet_position_f64(
         planet,
-        time_days,
+        time_days as f64,
         solar_params,
-        Vec3::ZERO, // Sun at origin
-        None,       // No parent for Earth
-    );
+        DVec3::ZERO, // Sun at origin
+        None,        // No parent for Earth
+    )
+    .as_vec3();
 
     // Calculate Earth's rotation at this time
     let earth_rotation_angle = if planet.name == "Earth" {
@@ -1236,6 +1077,67 @@ mod tests {
             absolute_error > rebased_error * 100.0,
             "absolute error {absolute_error} was not materially worse than rebased error {rebased_error}"
         );
+    }
+
+    #[test]
+    fn propagated_bodies_sample_the_same_orbit_geometry_as_ribbons() {
+        let solar = SolarSystemParameters::for_visualization();
+        let time_days = 123.456_789;
+
+        for planet in PlanetFactory::get_planets()
+            .into_iter()
+            .filter(|planet| planet.name != "Sun")
+        {
+            let orbit_shape = orbit_shape_for(&planet, &solar);
+            let expected = orbit_point_f64(
+                &orbit_shape,
+                orbital_eccentric_anomaly(&planet, &orbit_shape, time_days),
+            );
+            let propagated =
+                calculate_planet_position_f64(&planet, time_days, &solar, DVec3::ZERO, None);
+
+            assert!(
+                propagated.distance(expected) < 1e-9,
+                "{} departed from its ribbon geometry",
+                planet.name
+            );
+        }
+
+        for moon in PlanetFactory::get_moons() {
+            let parent = PlanetFactory::create_by_name(
+                moon.parent_entity
+                    .as_deref()
+                    .expect("moon catalog entries have a parent"),
+            )
+            .expect("moon parent exists in the catalog");
+            let parent_position =
+                calculate_planet_position_f64(&parent, time_days, &solar, DVec3::ZERO, None);
+            let orbit_shape = orbit_shape_for(&moon, &solar);
+            let local_orbit_point = orbit_point_f64(
+                &orbit_shape,
+                orbital_eccentric_anomaly(&moon, &orbit_shape, time_days),
+            );
+            let tilt_rad = (parent.axial_tilt_deg as f64).to_radians();
+            let expected = parent_position
+                + DVec3::new(
+                    local_orbit_point.x * tilt_rad.cos() - local_orbit_point.y * tilt_rad.sin(),
+                    local_orbit_point.x * tilt_rad.sin() + local_orbit_point.y * tilt_rad.cos(),
+                    local_orbit_point.z,
+                );
+            let propagated = calculate_planet_position_f64(
+                &moon,
+                time_days,
+                &solar,
+                parent_position,
+                Some(parent.axial_tilt_deg),
+            );
+
+            assert!(
+                propagated.distance(expected) < 1e-9,
+                "{} departed from its parent-relative ribbon geometry",
+                moon.name
+            );
+        }
     }
 
     #[test]

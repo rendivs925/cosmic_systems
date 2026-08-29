@@ -149,7 +149,7 @@ pub fn rebase_solar_presentation(
     *previous_selected = selected_planet.entity;
 
     for (position, mut transform) in planet_query.iter_mut() {
-        transform.translation = (position.0 - origin.position_units).as_vec3();
+        transform.translation = solar_map_render_translation(position.0, origin.position_units);
     }
 
     // The sunlight source belongs at solar-inertial origin, never at the
@@ -223,21 +223,35 @@ fn solar_light_render_position(render_origin_units: DVec3) -> Vec3 {
     (-render_origin_units).as_vec3()
 }
 
-/// Move moon orbit presentation with its parent body. The mesh itself remains in
-/// its parent-relative orbital frame and does not participate in simulation.
-pub fn update_moon_orbit_positions(
-    mut moon_orbit_query: Query<(&mut Transform, &OrbitComponent), With<MoonOrbit>>,
+/// Project local orbit meshes into the shared camera-relative solar-map frame.
+/// Mesh vertices remain parent-relative (moons) or heliocentric (planets), so
+/// rebasing never requires regenerating static orbital geometry.
+pub fn update_orbit_positions(
+    mut orbit_query: Query<(&mut Transform, &OrbitComponent, Has<MoonOrbit>)>,
     planet_query: Query<(&SolarMapPosition, &PlanetComponent), Without<MoonOrbit>>,
     origin: Res<SolarMapRenderOrigin>,
 ) {
-    for (mut orbit_transform, orbit_comp) in moon_orbit_query.iter_mut() {
-        let Ok((parent_transform, parent_comp)) = planet_query.get(orbit_comp.planet_entity) else {
-            continue;
+    for (mut orbit_transform, orbit_comp, is_moon) in orbit_query.iter_mut() {
+        let (orbit_center, orbit_rotation) = if is_moon {
+            let Ok((parent_position, parent_comp)) = planet_query.get(orbit_comp.planet_entity)
+            else {
+                continue;
+            };
+            (
+                parent_position.0,
+                Quat::from_rotation_z(parent_comp.domain_planet.axial_tilt_deg.to_radians()),
+            )
+        } else {
+            (DVec3::ZERO, Quat::IDENTITY)
         };
-        orbit_transform.translation = (parent_transform.0 - origin.position_units).as_vec3();
-        orbit_transform.rotation =
-            Quat::from_rotation_z(parent_comp.domain_planet.axial_tilt_deg.to_radians());
+        orbit_transform.translation =
+            solar_map_render_translation(orbit_center, origin.position_units);
+        orbit_transform.rotation = orbit_rotation;
     }
+}
+
+fn solar_map_render_translation(position_units: DVec3, render_origin_units: DVec3) -> Vec3 {
+    (position_units - render_origin_units).as_vec3()
 }
 
 #[cfg(test)]
@@ -258,6 +272,16 @@ mod tests {
         assert_eq!(
             solar_light_render_position(DVec3::new(1_500_000.0, -25.0, 800.0)),
             Vec3::new(-1_500_000.0, 25.0, -800.0),
+        );
+    }
+
+    #[test]
+    fn orbit_and_body_projection_share_the_same_render_origin() {
+        let origin = DVec3::new(1_500_000.0, -25.0, 800.0);
+
+        assert_eq!(
+            solar_map_render_translation(DVec3::ZERO, origin),
+            solar_light_render_position(origin)
         );
     }
 

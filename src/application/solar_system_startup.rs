@@ -427,7 +427,6 @@ fn spawn_celestial_body(
                 ORBIT_LINE_COLOR,
                 moon_thickness,
                 moon_segments,
-                DVec3::ZERO,
             );
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
@@ -460,7 +459,6 @@ fn spawn_celestial_body(
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
                     distance_rank: 0.5,
-                    mesh_origin_units: DVec3::ZERO,
                 })
                 .insert(MoonOrbit)
                 .insert(Name::new(format!(
@@ -479,7 +477,6 @@ fn spawn_celestial_body(
             orbit_base_color,
             planet_thickness,
             planet_segments,
-            DVec3::ZERO,
         );
         let orbit_material = create_orbit_material(
             orbit_base_color,
@@ -510,7 +507,6 @@ fn spawn_celestial_body(
                 spin_speed: orbit_motion.spin_speed,
                 phase: orbit_motion.phase,
                 distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
-                mesh_origin_units: DVec3::ZERO,
             })
             .insert(Name::new(format!("Orbit {}", planet.name)));
     }

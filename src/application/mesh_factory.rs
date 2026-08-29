@@ -105,7 +105,6 @@ pub fn create_orbit_ribbon_mesh(
     orbit_color: Color,
     thickness: f32,
     segments: usize,
-    mesh_origin_units: DVec3,
 ) -> Handle<Mesh> {
     // Uniform eccentric-anomaly samples keep high-eccentricity ellipses smooth
     // near periapsis without changing their shared orbital-element geometry.
@@ -121,10 +120,7 @@ pub fn create_orbit_ribbon_mesh(
     let mut orbit_positions: Vec<Vec3> = Vec::with_capacity(segments);
     for i in 0..segments {
         let eccentric_anomaly = (i as f64 / segments as f64) * std::f64::consts::TAU;
-        orbit_positions.push(
-            (physics::orbit_point_f64(orbit_shape, eccentric_anomaly) - mesh_origin_units)
-                .as_vec3(),
-        );
+        orbit_positions.push(physics::orbit_point_f64(orbit_shape, eccentric_anomaly).as_vec3());
     }
 
     // Use edge vectors so moving the render origin never changes the plane normal.

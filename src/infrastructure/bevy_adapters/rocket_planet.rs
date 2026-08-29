@@ -12,7 +12,7 @@ use crate::application::material_factory::{create_planet_material, PlanetMateria
 use crate::application::mesh_factory::create_flight_globe_mesh;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
-use crate::domain::services::physics::calculate_planet_position;
+use crate::domain::services::physics::calculate_planet_position_f64;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
@@ -22,6 +22,7 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::ecs::system::ParamSet;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 
 /// Component marking a planet entity managed by the rocket planet system.
@@ -262,12 +263,12 @@ pub fn update_rocket_planets(
         return;
     };
 
-    let time_days = (sim_time.sim_time_s / 86_400.0) as f32;
-    let bound_planet_pos = calculate_planet_position(
+    let time_days = sim_time.sim_time_s / 86_400.0;
+    let bound_planet_pos = calculate_planet_position_f64(
         &bound_planet.domain_planet,
         time_days,
         &solar_params,
-        Vec3::ZERO,
+        DVec3::ZERO,
         None,
     );
     // Conversion: solar display units -> meters
@@ -296,17 +297,17 @@ pub fn update_rocket_planets(
                 .iter()
                 .find(|planet| planet.domain_planet.name == "Sun")
                 .map(|planet| {
-                    calculate_planet_position(
+                    calculate_planet_position_f64(
                         &planet.domain_planet,
                         time_days,
                         &solar_params,
-                        Vec3::ZERO,
+                        DVec3::ZERO,
                         None,
                     )
                 });
 
             if let Some(sun_pos) = sun_solar {
-                let rel = (sun_pos - bound_planet_pos).as_dvec3() * display_to_meters;
+                let rel = (sun_pos - bound_planet_pos) * display_to_meters;
                 transform.translation = (planet_center_flight.as_dvec3() + rel).as_vec3();
             }
         }
@@ -319,7 +320,7 @@ pub fn update_rocket_planets(
                 .iter()
                 .find(|planet| planet.domain_planet.name == rocket_moon.name)
                 .map(|planet| {
-                    calculate_planet_position(
+                    calculate_planet_position_f64(
                         &planet.domain_planet,
                         time_days,
                         &solar_params,
@@ -331,8 +332,8 @@ pub fn update_rocket_planets(
             if let Some(moon_pos) = moon_solar {
                 // Shared solar presentation intentionally exaggerates moon
                 // orbits. Flight proxies must undo that visual-only scale.
-                let rel = (moon_pos - bound_planet_pos).as_dvec3()
-                    * (display_to_meters / MOON_ORBIT_SCALE as f64);
+                let rel =
+                    (moon_pos - bound_planet_pos) * (display_to_meters / MOON_ORBIT_SCALE as f64);
                 transform.translation = (planet_center_flight.as_dvec3() + rel).as_vec3();
             }
         }
@@ -342,7 +343,7 @@ pub fn update_rocket_planets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::physics::calculate_planet_position;
+    use crate::domain::services::physics::calculate_planet_position_f64;
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
@@ -364,7 +365,7 @@ mod tests {
         let solar = SolarSystemParameters::for_visualization();
         let scale = PhysicalScale::from_solar_parameters(&solar);
         let sim_time_s = 86_400.0;
-        let time_days = (sim_time_s / 86_400.0) as f32;
+        let time_days = sim_time_s / 86_400.0;
         let earth = PlanetFactory::create_by_name("Earth").unwrap();
         let moon = PlanetFactory::create_by_name("Moon").unwrap();
         let sun = PlanetFactory::create_by_name("Sun").unwrap();
@@ -439,17 +440,16 @@ mod tests {
 
         app.update();
 
-        let earth_pos = calculate_planet_position(&earth, time_days, &solar, Vec3::ZERO, None);
-        let expected_sun =
-            (-earth_pos.as_dvec3() * scale.solar_meters_per_display_unit as f64).as_vec3();
-        let moon_pos = calculate_planet_position(
+        let earth_pos = calculate_planet_position_f64(&earth, time_days, &solar, DVec3::ZERO, None);
+        let expected_sun = (-earth_pos * scale.solar_meters_per_display_unit as f64).as_vec3();
+        let moon_pos = calculate_planet_position_f64(
             &moon,
             time_days,
             &solar,
             earth_pos,
             Some(earth.axial_tilt_deg),
         );
-        let expected_moon = ((moon_pos - earth_pos).as_dvec3()
+        let expected_moon = ((moon_pos - earth_pos)
             * (scale.solar_meters_per_display_unit as f64 / MOON_ORBIT_SCALE as f64))
             .as_vec3();
 

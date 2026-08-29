@@ -6,6 +6,7 @@ use crate::infrastructure::bevy_adapters::craft_ui::*;
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::gltf::Gltf;
+use bevy::math::DVec3;
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 
@@ -243,7 +244,8 @@ fn craft_spawn_position() -> Vec3 {
     };
 
     let earth_position =
-        physics::calculate_planet_position(&earth, 0.0, &solar_params, Vec3::ZERO, None);
+        physics::calculate_planet_position_f64(&earth, 0.0, &solar_params, DVec3::ZERO, None)
+            .as_vec3();
     let earth_radius = physics::calculate_visual_radius(&earth, &solar_params);
 
     earth_position + Vec3::new(earth_radius + 50.0, 5.0, 0.0)

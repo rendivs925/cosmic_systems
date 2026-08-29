@@ -166,26 +166,17 @@ pub fn update_orbit_thickness(
             visual_radius_units(&reference_body.domain_planet, &solar_params),
             orbit_comp.radius,
         );
-        let mesh_origin_units = if is_moon {
-            DVec3::ZERO
-        } else {
-            origin.position_units
-        };
-
         if (new_thickness - orbit_comp.thickness).abs()
             > orbit_comp.thickness.max(ORBIT_RIBBON_NEAR_WIDTH_UNITS) * ORBIT_RIBBON_REBUILD_RATIO
-            || orbit_comp.mesh_origin_units.distance(mesh_origin_units) > 0.1
         {
             let previous_mesh = mesh3d.0.clone();
             orbit_comp.thickness = new_thickness;
-            orbit_comp.mesh_origin_units = mesh_origin_units;
             let new_mesh = create_orbit_ribbon_mesh(
                 &mut meshes,
                 &orbit_comp.orbit_shape,
                 ORBIT_LINE_COLOR,
                 new_thickness,
                 orbit_comp.segments,
-                mesh_origin_units,
             );
             mesh3d.0 = new_mesh;
             meshes.remove(previous_mesh.id());

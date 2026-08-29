@@ -212,12 +212,14 @@ impl Plugin for SharedSimulationPlugin {
             Update,
             update_orbit_visuals
                 .after(auto_inspect_selected_planet)
+                .after(update_orbit_positions)
                 .run_if(solar_presentation_enabled),
         );
         app.add_systems(
             Update,
             update_orbit_thickness
                 .after(auto_inspect_selected_planet)
+                .after(update_orbit_positions)
                 .run_if(solar_presentation_enabled),
         );
         app.add_systems(
@@ -229,7 +231,7 @@ impl Plugin for SharedSimulationPlugin {
             (
                 interpolate_planet_transforms,
                 rebase_solar_presentation,
-                update_moon_orbit_positions,
+                update_orbit_positions,
             )
                 .chain()
                 .after(handle_planet_selection)

@@ -8,7 +8,7 @@
 //!
 //! - **Solar-inertial**: origin at the Sun, axes aligned with the solar
 //!   system's orbital rendering frame (the space returned by
-//!   [`calculate_planet_position`]), right-handed Y-up, display units.
+//!   [`calculate_planet_position_f64`]), right-handed Y-up, display units.
 //! - **Planet-centered inertial**: origin at a planet's center, axes parallel
 //!   to solar-inertial, real meters (f64).
 //! - **Planet body-fixed**: rotates with the planet. Geodetic
@@ -17,7 +17,7 @@
 //!   lon +90°. Body-fixed → inertial applies the planet spin about +Y
 //!   (via [`calculate_planet_rotation`]) followed by the axial tilt about +Z
 //!   (via [`Planet::axial_tilt_deg`]), matching the existing tilt convention
-//!   used in [`calculate_planet_position`].
+//!   used in [`calculate_planet_position_f64`].
 //! - **Local tangent**: East-North-Up (ENU) triad at a geodetic reference
 //!   point, real meters.
 //! - **Rocket-body**: the vehicle's own orientation (`DQuat`).

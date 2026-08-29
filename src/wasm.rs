@@ -102,11 +102,15 @@ pub fn main() {
     app.add_systems(Update, spawn_bodies_progressively);
     app.add_systems(
         Update,
-        update_orbit_visuals.after(auto_inspect_selected_planet),
+        update_orbit_visuals
+            .after(auto_inspect_selected_planet)
+            .after(update_orbit_positions),
     );
     app.add_systems(
         Update,
-        update_orbit_thickness.after(auto_inspect_selected_planet),
+        update_orbit_thickness
+            .after(auto_inspect_selected_planet)
+            .after(update_orbit_positions),
     );
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(
@@ -114,7 +118,7 @@ pub fn main() {
         (
             interpolate_planet_transforms,
             rebase_solar_presentation,
-            update_moon_orbit_positions,
+            update_orbit_positions,
         )
             .chain()
             .after(handle_planet_selection)
