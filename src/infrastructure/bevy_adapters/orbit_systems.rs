@@ -3,41 +3,49 @@ use crate::application::material_factory::ORBIT_LINE_COLOR;
 use crate::application::mesh_factory::{create_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS};
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use std::f32::consts::TAU;
 
 const DISTANT_ORBIT_LINE_PIXELS: f32 = 2.5;
 const ORBIT_OVERVIEW_DISTANCE_AU: f32 = 10.0;
 const ORBIT_RIBBON_REBUILD_RATIO: f32 = 0.05;
 const NEAR_ORBIT_OPACITY: f32 = 0.16;
 const DISTANT_ORBIT_OPACITY: f32 = 0.28;
-const ORBIT_PATH_DISTANCE_SAMPLES: usize = 128;
 
 // System to update stable orbit opacity from the camera's distance to the path.
 pub(crate) fn update_orbit_visuals(
     camera_query: Query<&Transform, With<CameraController>>,
     solar_params: Res<SolarSystemParameters>,
+    origin: Res<SolarMapRenderOrigin>,
     selected_planet: Res<SelectedPlanet>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    orbit_query: Query<(&OrbitComponent, &Transform)>,
+    planet_positions: Query<&SolarMapPosition>,
+    orbit_query: Query<(&OrbitComponent, &Transform, Has<MoonOrbit>)>,
 ) {
     let Ok(camera) = camera_query.single() else {
         return;
     };
-    let camera_pos = camera.translation;
+    let camera_pos = origin.position_units + DVec3::from(camera.translation);
 
-    for (orbit_comp, orbit_transform) in orbit_query.iter() {
+    for (orbit_comp, orbit_transform, is_moon) in orbit_query.iter() {
         if let Some(material) = materials.get_mut(&orbit_comp.material) {
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
             let linear_color: LinearRgba = ORBIT_LINE_COLOR.into();
 
-            let distance_to_path =
-                camera_distance_to_orbit_path(camera_pos, &orbit_comp.orbit_shape, orbit_transform);
+            let orbit_center =
+                orbit_center_units(is_moon, orbit_comp.planet_entity, &planet_positions);
+            let distance_to_path = camera_distance_to_orbit_path(
+                camera_pos,
+                &orbit_comp.orbit_shape,
+                orbit_center,
+                orbit_transform.rotation,
+                orbit_comp.segments,
+            );
             let overview_progress = (distance_to_path
-                / (solar_params.scale_factor * ORBIT_OVERVIEW_DISTANCE_AU))
+                / (solar_params.scale_factor as f64 * ORBIT_OVERVIEW_DISTANCE_AU as f64))
                 .clamp(0.0, 1.0);
             let base_opacity = NEAR_ORBIT_OPACITY
-                + (DISTANT_ORBIT_OPACITY - NEAR_ORBIT_OPACITY) * overview_progress;
+                + (DISTANT_ORBIT_OPACITY - NEAR_ORBIT_OPACITY) * overview_progress as f32;
             let final_base_opacity = if is_selected {
                 (base_opacity * 2.0).min(0.55)
             } else {
@@ -115,8 +123,10 @@ pub fn update_planet_reflections(
 pub fn update_orbit_thickness(
     camera_query: Query<(&Camera, &Transform, &Projection), With<CameraController>>,
     solar_params: Res<SolarSystemParameters>,
+    origin: Res<SolarMapRenderOrigin>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d, &Transform)>,
+    planet_positions: Query<&SolarMapPosition>,
+    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d, &Transform, Has<MoonOrbit>)>,
 ) {
     let Ok((camera, camera_transform, projection)) = camera_query.single() else {
         return;
@@ -131,29 +141,43 @@ pub fn update_orbit_thickness(
     let Projection::Perspective(perspective) = projection else {
         return;
     };
-    let camera_pos = camera_transform.translation;
+    let camera_pos = origin.position_units + DVec3::from(camera_transform.translation);
 
-    for (mut orbit_comp, mut mesh3d, orbit_transform) in orbit_query.iter_mut() {
-        let distance_to_path =
-            camera_distance_to_orbit_path(camera_pos, &orbit_comp.orbit_shape, orbit_transform);
+    for (mut orbit_comp, mut mesh3d, orbit_transform, is_moon) in orbit_query.iter_mut() {
+        let orbit_center = orbit_center_units(is_moon, orbit_comp.planet_entity, &planet_positions);
+        let distance_to_path = camera_distance_to_orbit_path(
+            camera_pos,
+            &orbit_comp.orbit_shape,
+            orbit_center,
+            orbit_transform.rotation,
+            orbit_comp.segments,
+        );
         let new_thickness = orbit_ribbon_thickness_units(
             distance_to_path,
             perspective.fov,
             viewport_height_px,
             solar_params.scale_factor,
         );
+        let mesh_origin_units = if is_moon {
+            DVec3::ZERO
+        } else {
+            origin.position_units
+        };
 
         if (new_thickness - orbit_comp.thickness).abs()
             > orbit_comp.thickness.max(ORBIT_RIBBON_NEAR_WIDTH_UNITS) * ORBIT_RIBBON_REBUILD_RATIO
+            || orbit_comp.mesh_origin_units.distance(mesh_origin_units) > 0.1
         {
             let previous_mesh = mesh3d.0.clone();
             orbit_comp.thickness = new_thickness;
+            orbit_comp.mesh_origin_units = mesh_origin_units;
             let new_mesh = create_orbit_ribbon_mesh(
                 &mut meshes,
                 &orbit_comp.orbit_shape,
                 ORBIT_LINE_COLOR,
                 new_thickness,
                 orbit_comp.segments,
+                mesh_origin_units,
             );
             mesh3d.0 = new_mesh;
             meshes.remove(previous_mesh.id());
@@ -162,51 +186,95 @@ pub fn update_orbit_thickness(
 }
 
 fn camera_distance_to_orbit_path(
-    camera_position: Vec3,
+    camera_position: DVec3,
     orbit_shape: &physics::OrbitShape,
-    orbit_transform: &Transform,
-) -> f32 {
-    (0..ORBIT_PATH_DISTANCE_SAMPLES)
-        .map(|index| {
-            let eccentric_anomaly = index as f32 / ORBIT_PATH_DISTANCE_SAMPLES as f32 * TAU;
-            orbit_transform
-                .to_matrix()
-                .transform_point3(orbit_point(orbit_shape, eccentric_anomaly))
-                .distance(camera_position)
-        })
-        .fold(f32::INFINITY, f32::min)
+    orbit_center: DVec3,
+    orbit_rotation: Quat,
+    segments: usize,
+) -> f64 {
+    let segments = segments.max(crate::application::mesh_factory::ORBIT_RIBBON_SEGMENTS);
+    let mut closest_distance_squared = f64::INFINITY;
+    let mut previous = orbit_point_world(
+        orbit_shape,
+        std::f64::consts::TAU * (segments - 1) as f64 / segments as f64,
+        orbit_center,
+        orbit_rotation,
+    );
+
+    for index in 0..segments {
+        let current = orbit_point_world(
+            orbit_shape,
+            std::f64::consts::TAU * index as f64 / segments as f64,
+            orbit_center,
+            orbit_rotation,
+        );
+        closest_distance_squared = closest_distance_squared.min(point_segment_distance_squared(
+            camera_position,
+            previous,
+            current,
+        ));
+        previous = current;
+    }
+
+    closest_distance_squared.sqrt()
 }
 
-fn orbit_point(orbit_shape: &physics::OrbitShape, eccentric_anomaly: f32) -> Vec3 {
-    let eccentricity = orbit_shape.eccentricity.clamp(0.0, 0.99);
-    let semi_minor = orbit_shape.semi_major_axis_units * (1.0 - eccentricity * eccentricity).sqrt();
-    let x_orbital = orbit_shape.semi_major_axis_units * (eccentric_anomaly.cos() - eccentricity);
-    let z_orbital = semi_minor * eccentric_anomaly.sin();
+fn orbit_center_units(
+    is_moon: bool,
+    parent_entity: Entity,
+    planet_positions: &Query<&SolarMapPosition>,
+) -> DVec3 {
+    if is_moon {
+        planet_positions
+            .get(parent_entity)
+            .map_or(DVec3::ZERO, |position| position.0)
+    } else {
+        DVec3::ZERO
+    }
+}
 
-    physics::transform_orbital_point(
-        x_orbital,
-        z_orbital,
-        orbit_shape.inclination_rad,
-        orbit_shape.long_asc_node_rad,
-        orbit_shape.arg_periapsis_rad,
-    )
+fn orbit_point_world(
+    orbit_shape: &physics::OrbitShape,
+    eccentric_anomaly: f64,
+    orbit_center: DVec3,
+    orbit_rotation: Quat,
+) -> DVec3 {
+    let rotation = DQuat::from_xyzw(
+        orbit_rotation.x as f64,
+        orbit_rotation.y as f64,
+        orbit_rotation.z as f64,
+        orbit_rotation.w as f64,
+    );
+    orbit_center + rotation * physics::orbit_point_f64(orbit_shape, eccentric_anomaly)
+}
+
+fn point_segment_distance_squared(point: DVec3, start: DVec3, end: DVec3) -> f64 {
+    let segment = end - start;
+    let length_squared = segment.length_squared();
+    if length_squared == 0.0 {
+        return point.distance_squared(start);
+    }
+    let t = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    point.distance_squared(start + segment * t)
 }
 
 fn orbit_ribbon_thickness_units(
-    distance_to_path_units: f32,
+    distance_to_path_units: f64,
     vertical_fov_rad: f32,
     viewport_height_px: f32,
     scale_factor: f32,
 ) -> f32 {
-    let units_per_pixel = 2.0 * distance_to_path_units.max(0.001) * (vertical_fov_rad * 0.5).tan()
-        / viewport_height_px.max(1.0);
+    let units_per_pixel =
+        2.0 * distance_to_path_units.max(0.001) * (vertical_fov_rad as f64 * 0.5).tan()
+            / viewport_height_px.max(1.0) as f64;
     let overview_progress = (distance_to_path_units
-        / (scale_factor * ORBIT_OVERVIEW_DISTANCE_AU).max(0.001))
+        / (scale_factor as f64 * ORBIT_OVERVIEW_DISTANCE_AU as f64).max(0.001))
     .clamp(0.0, 1.0);
-    let overview_width = units_per_pixel * DISTANT_ORBIT_LINE_PIXELS;
+    let overview_width = units_per_pixel * DISTANT_ORBIT_LINE_PIXELS as f64;
 
-    ORBIT_RIBBON_NEAR_WIDTH_UNITS
-        + (overview_width - ORBIT_RIBBON_NEAR_WIDTH_UNITS).max(0.0) * overview_progress
+    (ORBIT_RIBBON_NEAR_WIDTH_UNITS as f64
+        + (overview_width - ORBIT_RIBBON_NEAR_WIDTH_UNITS as f64).max(0.0) * overview_progress)
+        as f32
 }
 
 #[cfg(test)]
@@ -244,13 +312,14 @@ mod tests {
             long_asc_node_rad: 0.0,
             arg_periapsis_rad: 0.0,
         };
-        assert_eq!(
+        assert!(
             camera_distance_to_orbit_path(
-                Vec3::new(100.0, 0.0, 0.0),
+                DVec3::new(100.0, 0.0, 0.0),
                 &orbit,
-                &Transform::default(),
-            ),
-            0.0
+                DVec3::ZERO,
+                Quat::IDENTITY,
+                1024,
+            ) < 1e-9
         );
     }
 
@@ -264,15 +333,48 @@ mod tests {
             arg_periapsis_rad: 0.2,
         };
         let sample_index = 37;
-        let eccentric_anomaly = sample_index as f32 / ORBIT_PATH_DISTANCE_SAMPLES as f32 * TAU;
-        let transform = Transform::from_rotation(Quat::from_rotation_z(0.3));
-        let camera_position = transform
-            .to_matrix()
-            .transform_point3(orbit_point(&orbit, eccentric_anomaly));
+        let rotation = Quat::from_rotation_z(0.3);
+        let camera_position = orbit_point_world(
+            &orbit,
+            sample_index as f64 / 1024.0 * std::f64::consts::TAU,
+            DVec3::new(2_000_000.0, -500_000.0, 100_000.0),
+            rotation,
+        );
 
+        assert!(
+            camera_distance_to_orbit_path(
+                camera_position,
+                &orbit,
+                DVec3::new(2_000_000.0, -500_000.0, 100_000.0),
+                rotation,
+                1024,
+            ) < 1e-9
+        );
+    }
+
+    #[test]
+    fn neptune_midpoint_does_not_inflate_orbit_width() {
+        let orbit = physics::OrbitShape {
+            semi_major_axis_units: 30.06 * 75_000.0,
+            eccentricity: 0.0,
+            inclination_rad: 0.0,
+            long_asc_node_rad: 0.0,
+            arg_periapsis_rad: 0.0,
+        };
+        // This point falls midway between the previous 128-point distance samples.
+        let camera_position = physics::orbit_point_f64(&orbit, std::f64::consts::TAU * 0.5 / 128.0);
+        let distance = camera_distance_to_orbit_path(
+            camera_position,
+            &orbit,
+            DVec3::ZERO,
+            Quat::IDENTITY,
+            1024,
+        );
+
+        assert!(distance < 3.0, "distance was {distance}");
         assert_eq!(
-            camera_distance_to_orbit_path(camera_position, &orbit, &transform),
-            0.0
+            orbit_ribbon_thickness_units(distance, std::f32::consts::FRAC_PI_3, 720.0, 75_000.0,),
+            ORBIT_RIBBON_NEAR_WIDTH_UNITS,
         );
     }
 }

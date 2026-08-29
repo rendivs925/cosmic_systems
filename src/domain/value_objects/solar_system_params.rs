@@ -49,4 +49,10 @@ impl SolarSystemParameters {
         let scale = self.time_scale.max(0.0001); // never let simulation stall
         time_seconds * scale / 86400.0
     }
+
+    /// Convert elapsed presentation time to simulation days without losing the
+    /// sub-unit orbital movement of outer-system bodies.
+    pub fn time_to_days_f64(&self, time_seconds: f64) -> f64 {
+        time_seconds * self.time_scale.max(0.0001) as f64 / 86400.0
+    }
 }

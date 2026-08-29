@@ -12,6 +12,7 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::math::DVec3;
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -35,6 +36,7 @@ pub fn setup_space(
     // Insert solar system parameters as a resource
     let solar_params = SolarSystemParameters::for_visualization();
     commands.insert_resource(solar_params.clone());
+    commands.insert_resource(SolarMapRenderOrigin::default());
 
     // Central physical scale (meters <-> display units) derived from the
     // authoritative solar-system parameters. Reused by all rocket/terrain
@@ -125,7 +127,7 @@ pub fn setup_space(
     let all_celestial_bodies = [planets, moons].concat();
 
     let mut entity_map: HashMap<String, Entity> = HashMap::new();
-    let mut position_map: HashMap<String, Vec3> = HashMap::new();
+    let mut position_map: HashMap<String, DVec3> = HashMap::new();
     let mut axial_tilts: HashMap<String, f32> = HashMap::new();
     for planet in &all_celestial_bodies {
         axial_tilts.insert(planet.name.clone(), planet.axial_tilt_deg);
@@ -168,7 +170,7 @@ pub fn setup_space(
 pub(crate) struct SpawnQueue {
     pending: VecDeque<Planet>,
     entity_map: HashMap<String, Entity>,
-    position_map: HashMap<String, Vec3>,
+    position_map: HashMap<String, DVec3>,
     axial_tilts: HashMap<String, f32>,
     enable_earth_flight_environment: bool,
     spawn_per_frame: usize,
@@ -220,7 +222,7 @@ fn spawn_celestial_body(
     asset_server: &AssetServer,
     solar_params: &SolarSystemParameters,
     entity_map: &mut HashMap<String, Entity>,
-    position_map: &mut HashMap<String, Vec3>,
+    position_map: &mut HashMap<String, DVec3>,
     axial_tilts: &HashMap<String, f32>,
     earth_terrain: Option<&crate::application::terrain_config::EarthTerrainConfig>,
     enable_earth_flight_environment: bool,
@@ -235,12 +237,12 @@ fn spawn_celestial_body(
         .parent_entity
         .as_ref()
         .and_then(|parent_name| position_map.get(parent_name).copied())
-        .unwrap_or(Vec3::ZERO);
+        .unwrap_or(DVec3::ZERO);
     let parent_tilt = planet
         .parent_entity
         .as_ref()
         .and_then(|parent_name| axial_tilts.get(parent_name).copied());
-    let initial_position = physics::calculate_planet_position(
+    let initial_position = physics::calculate_planet_position_f64(
         &planet,
         0.0,
         solar_params,
@@ -344,7 +346,8 @@ fn spawn_celestial_body(
     let mut planet_commands = commands.spawn((
         Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
         MeshMaterial3d(material_handle.clone()),
-        Transform::from_translation(initial_position),
+        Transform::from_translation(initial_position.as_vec3()),
+        SolarMapPosition(initial_position),
     ));
     planet_commands
         .insert(PlanetComponent {
@@ -397,6 +400,7 @@ fn spawn_celestial_body(
                 ORBIT_LINE_COLOR,
                 moon_thickness,
                 moon_segments,
+                DVec3::ZERO,
             );
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
@@ -429,6 +433,7 @@ fn spawn_celestial_body(
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
                     distance_rank: 0.5,
+                    mesh_origin_units: DVec3::ZERO,
                 })
                 .insert(MoonOrbit)
                 .insert(Name::new(format!(
@@ -447,6 +452,7 @@ fn spawn_celestial_body(
             orbit_base_color,
             planet_thickness,
             planet_segments,
+            DVec3::ZERO,
         );
         let orbit_material = create_orbit_material(
             orbit_base_color,
@@ -477,6 +483,7 @@ fn spawn_celestial_body(
                 spin_speed: orbit_motion.spin_speed,
                 phase: orbit_motion.phase,
                 distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
+                mesh_origin_units: DVec3::ZERO,
             })
             .insert(Name::new(format!("Orbit {}", planet.name)));
     }

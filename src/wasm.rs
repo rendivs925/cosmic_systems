@@ -99,7 +99,6 @@ pub fn main() {
     // Physics systems run on FixedUpdate for consistent simulation
     app.add_systems(FixedUpdate, update_planet_positions);
     app.add_systems(FixedUpdate, update_planet_rotations);
-    app.add_systems(FixedUpdate, update_moon_orbit_positions);
     app.add_systems(Update, spawn_bodies_progressively);
     app.add_systems(
         Update,
@@ -112,8 +111,14 @@ pub fn main() {
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(
         Update,
-        (interpolate_planet_transforms, update_moon_orbit_positions)
+        (
+            interpolate_planet_transforms,
+            rebase_solar_presentation,
+            update_moon_orbit_positions,
+        )
             .chain()
+            .after(handle_planet_selection)
+            .after(handle_mouse_planet_selection)
             .before(update_camera_controller),
     );
     app.add_systems(Update, update_planet_reflections);

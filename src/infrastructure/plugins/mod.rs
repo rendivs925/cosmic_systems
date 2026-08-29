@@ -202,11 +202,7 @@ impl Plugin for SharedSimulationPlugin {
         // the resulting transforms during Update.
         app.add_systems(
             FixedUpdate,
-            (
-                update_planet_positions,
-                update_planet_rotations,
-                update_moon_orbit_positions,
-            )
+            (update_planet_positions, update_planet_rotations)
                 .chain()
                 .run_if(solar_presentation_enabled),
         );
@@ -230,8 +226,14 @@ impl Plugin for SharedSimulationPlugin {
         );
         app.add_systems(
             Update,
-            (interpolate_planet_transforms, update_moon_orbit_positions)
+            (
+                interpolate_planet_transforms,
+                rebase_solar_presentation,
+                update_moon_orbit_positions,
+            )
                 .chain()
+                .after(handle_planet_selection)
+                .after(handle_mouse_planet_selection)
                 .before(update_camera_controller)
                 .before(update_craft_camera)
                 .run_if(solar_presentation_enabled),

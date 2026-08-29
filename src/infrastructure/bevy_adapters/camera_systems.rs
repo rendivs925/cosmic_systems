@@ -478,8 +478,9 @@ pub fn auto_inspect_selected_planet(
     let lerp_factor = 1.0 - (-5.5 * time.delta_secs()).exp();
     camera_transform.translation = camera_transform.translation.lerp(target_pos, lerp_factor);
 
-    // Look at the focus point to frame moon + parent when applicable
-    camera_transform.look_at(state.smooth_focus, Vec3::Y);
+    // Keep the selected body centered while its smoothed camera pose catches up.
+    // The focus point is the current camera-relative solar-map projection.
+    camera_transform.look_at(focus_point, Vec3::Y);
 
     // Adaptive near/far planes: keep the depth range proportional to the framing distance
     // so the near:far ratio stays bounded when inspecting a massive body like the Sun.

@@ -72,16 +72,13 @@ pub fn handle_planet_selection(
 // System to handle mouse clicking for planet selection
 pub fn handle_mouse_planet_selection(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    camera_query: Query<
-        (&Camera, &GlobalTransform),
-        Or<(With<CameraController>, With<CraftCameraTag>)>,
-    >,
+    camera_query: Query<(&Camera, &Transform), Or<(With<CameraController>, With<CraftCameraTag>)>>,
     windows: Query<&Window>,
     solar_params: Res<SolarSystemParameters>,
     ui_state: Res<UiPointerState>,
     mut selected_planet: ResMut<SelectedPlanet>,
     mut craft_target: Option<ResMut<CraftTravelTarget>>,
-    mut selectable_query: Query<(Entity, &mut Selectable, &PlanetComponent, &GlobalTransform)>,
+    mut selectable_query: Query<(Entity, &mut Selectable, &PlanetComponent, &Transform)>,
 ) {
     // Only handle left mouse button clicks
     if !mouse_buttons.just_pressed(MouseButton::Left) {
@@ -103,7 +100,8 @@ pub fn handle_mouse_planet_selection(
         Some(pos) => pos,
         None => return,
     };
-    let ray = match camera.viewport_to_world(camera_transform, cursor_pos) {
+    let camera_global = GlobalTransform::from(*camera_transform);
+    let ray = match camera.viewport_to_world(&camera_global, cursor_pos) {
         Ok(ray) => ray,
         Err(_) => return,
     };
@@ -118,7 +116,7 @@ pub fn handle_mouse_planet_selection(
         } else {
             physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
         };
-        let center = transform.translation();
+        let center = transform.translation;
         let oc = ray.origin - center;
         let b = 2.0 * oc.dot(*ray.direction);
         let c = oc.length_squared() - radius * radius;
@@ -186,14 +184,14 @@ pub fn handle_mouse_planet_selection(
 
 // System to update visual feedback for selected planets (optimized)
 pub fn update_planet_selection_visuals(
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
-    mut query: Query<(&Selectable, &mut Transform, &GlobalTransform)>,
+    camera_query: Query<&Transform, With<CameraController>>,
+    mut query: Query<(&Selectable, &mut Transform)>,
 ) {
-    let camera_pos = camera_query.single().unwrap().translation();
+    let camera_pos = camera_query.single().unwrap().translation;
 
-    for (_selectable, mut transform, global_transform) in query.iter_mut() {
+    for (_selectable, mut transform) in query.iter_mut() {
         // Distance culling for visual updates
-        let distance_to_camera = (global_transform.translation() - camera_pos).length();
+        let distance_to_camera = (transform.translation - camera_pos).length();
         let max_visual_distance = 30000.0; // Only update visuals for reasonably close objects
 
         if distance_to_camera > max_visual_distance {
@@ -214,7 +212,7 @@ pub fn handle_solar_system_input(
     mut perf_stats: ResMut<PerformanceStats>,
     mut camera_query: Query<(&mut CameraController, &mut Transform)>,
     selected_planet: Res<SelectedPlanet>,
-    planet_query: Query<(&PlanetComponent, &GlobalTransform)>,
+    planet_query: Query<(&PlanetComponent, &Transform)>,
     mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
     mut camera_input_state: ResMut<CameraInputState>,
 ) {
@@ -341,7 +339,7 @@ pub fn handle_solar_system_input(
                             camera_input_state.earth_terrain_active = true;
                             controller.mode = CameraMode::TerrainView;
                             // Position camera above the current Earth position for terrain view
-                            let earth_pos = planet_transform.translation();
+                            let earth_pos = planet_transform.translation;
                             let terrain_height_above_earth = 6371.0 + 100.0; // Earth radius + 100m above surface
                             transform.translation =
                                 earth_pos + Vec3::new(0.0, terrain_height_above_earth, 0.0);
@@ -354,7 +352,7 @@ pub fn handle_solar_system_input(
                         }
                     } else {
                         // Normal focus on planet
-                        let planet_pos = planet_transform.translation();
+                        let planet_pos = planet_transform.translation;
                         let radius = physics::calculate_visual_radius(
                             &planet_comp.domain_planet,
                             &solar_params,

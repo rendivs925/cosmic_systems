@@ -105,6 +105,7 @@ pub fn create_orbit_ribbon_mesh(
     orbit_color: Color,
     thickness: f32,
     segments: usize,
+    mesh_origin_units: DVec3,
 ) -> Handle<Mesh> {
     // Uniform eccentric-anomaly samples keep high-eccentricity ellipses smooth
     // near periapsis without changing their shared orbital-element geometry.
@@ -116,28 +117,19 @@ pub fn create_orbit_ribbon_mesh(
     let mut colors = Vec::with_capacity(vertex_count);
     let mut indices = Vec::with_capacity(segments * 6);
 
-    let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
-    let semi_minor = orbit_shape.semi_major_axis_units * (1.0 - e * e).sqrt();
-
     // Compute all orbit positions first
     let mut orbit_positions: Vec<Vec3> = Vec::with_capacity(segments);
     for i in 0..segments {
-        let eccentric_anomaly = (i as f32 / segments as f32) * TAU;
-        let x_orbital = orbit_shape.semi_major_axis_units * (eccentric_anomaly.cos() - e);
-        let z_orbital = semi_minor * eccentric_anomaly.sin();
-        let pos_3d = physics::transform_orbital_point(
-            x_orbital,
-            z_orbital,
-            orbit_shape.inclination_rad,
-            orbit_shape.long_asc_node_rad,
-            orbit_shape.arg_periapsis_rad,
+        let eccentric_anomaly = (i as f64 / segments as f64) * std::f64::consts::TAU;
+        orbit_positions.push(
+            (physics::orbit_point_f64(orbit_shape, eccentric_anomaly) - mesh_origin_units)
+                .as_vec3(),
         );
-        orbit_positions.push(pos_3d);
     }
 
-    // Compute orbit plane normal from two non-collinear points on the orbit
-    let orbit_normal = orbit_positions[0]
-        .cross(orbit_positions[segments / 4])
+    // Use edge vectors so moving the render origin never changes the plane normal.
+    let orbit_normal = (orbit_positions[segments / 4] - orbit_positions[0])
+        .cross(orbit_positions[segments / 2] - orbit_positions[0])
         .normalize_or_zero();
 
     // Camera-relative sizing is calculated by the presentation system. Preserve

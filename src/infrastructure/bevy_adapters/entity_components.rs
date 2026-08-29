@@ -62,6 +62,20 @@ pub struct OrbitComponent {
     pub spin_speed: f32,
     pub phase: f32,
     pub distance_rank: f32,
+    /// Origin used when the heliocentric ribbon was last projected to f32 mesh vertices.
+    pub mesh_origin_units: DVec3,
+}
+
+/// Authoritative solar-map position in f64 display units. `Transform` is only
+/// the camera-relative rendering projection of this state.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct SolarMapPosition(pub DVec3);
+
+/// Solar-map render origin in display units. This is intentionally separate
+/// from rocket `RenderOrigin`, whose coordinates are physical meters.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct SolarMapRenderOrigin {
+    pub position_units: DVec3,
 }
 
 // Component for velocity trail particle system
