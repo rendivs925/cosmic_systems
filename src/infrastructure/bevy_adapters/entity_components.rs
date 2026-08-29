@@ -78,6 +78,10 @@ pub struct SolarMapRenderOrigin {
     pub position_units: DVec3,
 }
 
+/// Presentation light whose source is fixed at the Sun in solar-map coordinates.
+#[derive(Component)]
+pub struct SolarMapLight;
+
 // Component for velocity trail particle system
 #[derive(Component)]
 pub struct VelocityTrailComponent {

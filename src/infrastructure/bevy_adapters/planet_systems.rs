@@ -118,6 +118,15 @@ pub fn rebase_solar_presentation(
     positions: Query<&SolarMapPosition>,
     mut camera_query: Query<&mut Transform, (With<CameraController>, Without<PlanetComponent>)>,
     mut planet_query: Query<(&SolarMapPosition, &mut Transform), With<PlanetComponent>>,
+    mut solar_light_query: Query<
+        &mut Transform,
+        (
+            With<SolarMapLight>,
+            Without<CameraController>,
+            Without<PlanetComponent>,
+        ),
+    >,
+    mut previous_selected: Local<Option<Entity>>,
 ) {
     let next_origin = selected_planet
         .entity
@@ -125,16 +134,29 @@ pub fn rebase_solar_presentation(
         .map_or(DVec3::ZERO, |position| position.0);
     let rebase_delta = (origin.position_units - next_origin).as_vec3();
 
-    if rebase_delta != Vec3::ZERO {
+    // A selected-body follow camera is already expressed in the moving local
+    // frame. Shifting it every presentation update introduces visible jitter.
+    if *previous_selected != selected_planet.entity && rebase_delta != Vec3::ZERO {
         for mut camera_transform in camera_query.iter_mut() {
             camera_transform.translation += rebase_delta;
         }
     }
     origin.position_units = next_origin;
+    *previous_selected = selected_planet.entity;
 
     for (position, mut transform) in planet_query.iter_mut() {
         transform.translation = (position.0 - origin.position_units).as_vec3();
     }
+
+    // The sunlight source belongs at solar-inertial origin, never at the
+    // selected body's render origin.
+    for mut light_transform in solar_light_query.iter_mut() {
+        light_transform.translation = solar_light_render_position(origin.position_units);
+    }
+}
+
+fn solar_light_render_position(render_origin_units: DVec3) -> Vec3 {
+    (-render_origin_units).as_vec3()
 }
 
 /// Move moon orbit presentation with its parent body. The mesh itself remains in
@@ -165,5 +187,13 @@ mod tests {
         let presentation_seconds = fixed_seconds + 0.25;
 
         assert!(solar.time_to_days(presentation_seconds) > solar.time_to_days(fixed_seconds));
+    }
+
+    #[test]
+    fn solar_light_remains_at_solar_origin_after_rebasing() {
+        assert_eq!(
+            solar_light_render_position(DVec3::new(1_500_000.0, -25.0, 800.0)),
+            Vec3::new(-1_500_000.0, 25.0, -800.0),
+        );
     }
 }

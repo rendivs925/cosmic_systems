@@ -22,6 +22,17 @@ use std::collections::VecDeque;
 #[derive(Resource)]
 pub struct SolarCameraEnabled(pub bool);
 
+/// Direct normal illuminance from the Sun at Earth's mean orbital distance,
+/// before atmospheric attenuation.
+const SUN_ILLUMINANCE_AT_EARTH_LUX: f32 = 127_000.0;
+
+fn solar_light_luminous_power_lm(solar_params: &SolarSystemParameters) -> f32 {
+    // Bevy point lights use total luminous power (lm). At one rendered AU this
+    // yields the measured top-of-atmosphere solar illuminance: E = Phi / 4pi r^2.
+    let earth_orbit_units = solar_params.au_to_units(1.0);
+    4.0 * std::f32::consts::PI * SUN_ILLUMINANCE_AT_EARTH_LUX * earth_orbit_units.powi(2)
+}
+
 // Setup scene for solar system simulation
 pub fn setup_space(
     mut commands: Commands,
@@ -99,16 +110,20 @@ pub fn setup_space(
         },
     ));
 
-    // Sun as the main light source with enormous intensity for massive astronomical distances
+    // The Sun is an isotropic point emitter at solar-map scale. Its luminous
+    // power is calibrated to direct sunlight at one rendered AU.
     commands.spawn((
         PointLight {
-            intensity: 500000000.0, // Enormous intensity for massive astronomical-scale illumination
+            intensity: solar_light_luminous_power_lm(&solar_params),
             shadows_enabled: false, // Disable shadows for better performance
             color: Color::srgb(1.0, 1.0, 0.98), // Pure sunlight
             range: 4000000.0, // Extended range to reach outer planets with correct sun-facing light
+            // Preserve the Sun's apparent diameter in specular highlights.
+            radius: physics::calculate_sun_visual_radius(&solar_params),
             ..default()
         },
         Transform::from_xyz(0.0, 0.0, 0.0),
+        SolarMapLight,
     ));
 
     spawn_starfield(
@@ -613,6 +628,16 @@ fn spawn_celestial_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn solar_light_matches_top_of_atmosphere_illuminance_at_one_au() {
+        let solar_params = SolarSystemParameters::for_visualization();
+        let one_au_units = solar_params.au_to_units(1.0);
+        let illuminance_lux = solar_light_luminous_power_lm(&solar_params)
+            / (4.0 * std::f32::consts::PI * one_au_units.powi(2));
+
+        assert!((illuminance_lux - SUN_ILLUMINANCE_AT_EARTH_LUX).abs() < 0.1);
+    }
 
     #[test]
     fn every_catalog_body_except_the_sun_has_a_spawnable_orbit() {

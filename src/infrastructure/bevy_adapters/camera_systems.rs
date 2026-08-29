@@ -349,7 +349,6 @@ pub fn auto_inspect_selected_planet(
 
     let planet_pos = (planet_position.0 - origin.position_units).as_vec3();
     let mut focus_point = planet_pos;
-    let mut target_distance = planet_radius * 2.4;
     let mut context_radius = planet_radius;
     let mut moon_axis: Option<Vec3> = None;
     let mut moon_up: Option<Vec3> = None;
@@ -363,6 +362,7 @@ pub fn auto_inspect_selected_planet(
         let half_fov = (fov_y * 0.5 * fill).max(0.05);
         radius / half_fov.sin()
     };
+    let mut target_distance = fit_body_distance(planet_radius, fov_y);
     if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
         for (other_comp, other_position) in planet_query.iter() {
             if other_comp.domain_planet.name == *parent_name {
@@ -373,26 +373,17 @@ pub fn auto_inspect_selected_planet(
                 } else {
                     Vec3::Z
                 };
-                let mut lateral = axis_dir.cross(Vec3::Y);
-                if lateral.length_squared() < 1e-4 {
-                    lateral = axis_dir.cross(Vec3::X);
-                }
-                let lateral = lateral.normalize();
-                let up = lateral.cross(axis_dir).normalize();
-
-                moon_axis = Some(axis_dir);
-                moon_up = Some(up);
-
                 let parent_radius = if other_comp.domain_planet.name == "Sun" {
                     physics::calculate_sun_visual_radius(&solar_params)
                 } else {
                     physics::calculate_visual_radius(&other_comp.domain_planet, &solar_params)
                 };
-                context_radius = context_radius.max(axis.length() + parent_radius);
                 let size_ratio = (parent_radius / planet_radius).clamp(1.2, 50.0);
                 let fill = (0.78 - size_ratio.log10() * 0.04).clamp(0.62, 0.78);
-                let desired_distance = fit_radius(planet_radius, fill);
-                target_distance = desired_distance.max(planet_radius * 2.4);
+                context_radius = context_radius.max(axis.length() + parent_radius);
+                target_distance = fit_radius(planet_radius, fill).max(planet_radius * 3.5);
+                moon_axis = Some(axis_dir);
+                moon_up = Some(axis_dir.cross(Vec3::Y).normalize_or_zero());
                 moon_distance = Some(target_distance);
                 break;
             }
@@ -402,8 +393,8 @@ pub fn auto_inspect_selected_planet(
     // Initialize or reset state when selection changes
     if state.selected != Some(selected_entity) {
         state.selected = Some(selected_entity);
-        state.orbit_angle = 0.0;
-        // Start with a nice 3/4 view angle
+        state.orbit_angle = 0.7;
+        // Start with a stable 3/4 view angle.
         state.orbit_elevation = 0.3; // 30 degrees up
         state.smooth_axis = Vec3::ZERO;
         state.smooth_up = Vec3::ZERO;
@@ -411,11 +402,9 @@ pub fn auto_inspect_selected_planet(
         state.smooth_offset = Vec3::ZERO;
     }
 
-    // Cinematic orbit for all bodies
-    state.orbit_angle += time.delta_secs() * 0.15;
-
     if let (Some(axis_dir), Some(up)) = (moon_axis, moon_up) {
-        // Frame the moon large in the foreground with the parent in the background.
+        // Keep a fixed local angle while the moon moves through its orbit. The
+        // smoothed parent axis follows authoritative motion without camera spin.
         let distance = moon_distance.unwrap_or(target_distance);
         let smooth_lerp = 1.0 - (-5.5 * time.delta_secs()).exp();
         state.smooth_axis = if state.smooth_axis.length_squared() > 0.0 {
@@ -440,9 +429,7 @@ pub fn auto_inspect_selected_planet(
         }
         let smooth_lateral = smooth_lateral.normalize();
 
-        let rotation = Quat::from_axis_angle(smooth_axis, state.orbit_angle * 0.5);
-        let side_offset =
-            rotation * (smooth_up * (distance * 0.35) + smooth_lateral * (distance * 0.12));
+        let side_offset = smooth_up * (distance * 0.35) + smooth_lateral * (distance * 0.12);
         state.offset = (-smooth_axis * distance) + side_offset;
         focus_point = planet_pos;
     } else {
@@ -509,6 +496,11 @@ fn inspection_far_plane(
         .max(near_plane_units * 1_000.0)
 }
 
+fn fit_body_distance(visual_radius_units: f32, vertical_fov_rad: f32) -> f32 {
+    let half_fov = (vertical_fov_rad * 0.25).max(0.05);
+    (visual_radius_units / half_fov.sin()).max(visual_radius_units * 3.5)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +514,11 @@ mod tests {
 
         assert!(near < 0.001);
         assert!(far > 6.5);
+    }
+
+    #[test]
+    fn body_framing_keeps_the_camera_outside_the_close_orbit_range() {
+        assert!(fit_body_distance(10.0, std::f32::consts::FRAC_PI_3) >= 35.0);
     }
 }
 
