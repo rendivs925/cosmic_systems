@@ -1239,6 +1239,38 @@ mod tests {
     }
 
     #[test]
+    fn time_warp_changes_do_not_teleport_earth_or_the_moon() {
+        let mut solar = SolarSystemParameters::for_visualization();
+        let elapsed_seconds = 12_345.678_9;
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let moon = PlanetFactory::create_by_name("Moon").unwrap();
+        let positions_at = |params: &SolarSystemParameters| {
+            let time_days = params.time_to_days_f64(elapsed_seconds);
+            let earth_position =
+                calculate_planet_position_f64(&earth, time_days, params, DVec3::ZERO, None);
+            let moon_position = calculate_planet_position_f64(
+                &moon,
+                time_days,
+                params,
+                earth_position,
+                Some(earth.axial_tilt_deg),
+            );
+            (earth_position, moon_position)
+        };
+
+        let (earth_before, moon_before) = positions_at(&solar);
+        solar.set_time_scale_at(elapsed_seconds, 1.0);
+        let (earth_realtime, moon_realtime) = positions_at(&solar);
+        solar.set_time_scale_at(elapsed_seconds, 10_000.0);
+        let (earth_high_warp, moon_high_warp) = positions_at(&solar);
+
+        assert!((earth_realtime - earth_before).length() < 1e-8);
+        assert!((moon_realtime - moon_before).length() < 1e-8);
+        assert!((earth_high_warp - earth_before).length() < 1e-8);
+        assert!((moon_high_warp - moon_before).length() < 1e-8);
+    }
+
+    #[test]
     fn every_moon_clears_its_parent_at_periapsis_on_the_solar_map() {
         let solar = SolarSystemParameters::for_visualization();
 

@@ -240,6 +240,13 @@ impl Plugin for SharedSimulationPlugin {
         );
         app.add_systems(
             Update,
+            preserve_sun_disc_at_overview_distances
+                .after(rebase_solar_presentation)
+                .before(update_camera_controller)
+                .run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
             update_planet_reflections.run_if(solar_presentation_enabled),
         );
         app.add_systems(Update, apply_pending_material_textures);

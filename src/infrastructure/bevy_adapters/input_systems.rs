@@ -194,6 +194,7 @@ pub fn update_planet_selection_visuals(mut query: Query<(&Selectable, &mut Trans
 // System to handle solar system controls (time scale, etc.)
 pub fn handle_solar_system_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    fixed_time: Res<Time<Fixed>>,
     mut solar_params: ResMut<SolarSystemParameters>,
     mut perf_stats: ResMut<PerformanceStats>,
     mut camera_query: Query<(&mut CameraController, &mut Transform)>,
@@ -203,6 +204,7 @@ pub fn handle_solar_system_input(
     mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
     mut camera_input_state: ResMut<CameraInputState>,
 ) {
+    let fixed_elapsed_seconds = fixed_time.elapsed_secs_f64();
     if keyboard.just_pressed(KeyCode::KeyZ) {
         zen_mode.enabled = !zen_mode.enabled;
         println!("Zen mode: {}", if zen_mode.enabled { "ON" } else { "OFF" });
@@ -213,35 +215,45 @@ pub fn handle_solar_system_input(
         && keyboard.pressed(KeyCode::ShiftLeft)
     {
         // Exponential increase: 10x
-        solar_params.time_scale = (solar_params.time_scale * 10.0).min(10000000.0);
-        println!("Time scale: {:.0}x (10x increase)", solar_params.time_scale);
+        let target_scale = (solar_params.time_scale() * 10.0).min(10_000_000.0);
+        solar_params.set_time_scale_at(fixed_elapsed_seconds, target_scale);
+        println!(
+            "Time scale: {:.0}x (10x increase)",
+            solar_params.time_scale()
+        );
     } else if keyboard.just_pressed(KeyCode::KeyT) && keyboard.pressed(KeyCode::ControlLeft) {
         // Gradual increase: 10%
-        solar_params.time_scale = (solar_params.time_scale * 1.1).max(0.0001);
-        println!("Time scale: {:.1}x", solar_params.time_scale);
+        let target_scale = (solar_params.time_scale() * 1.1).max(0.0001);
+        solar_params.set_time_scale_at(fixed_elapsed_seconds, target_scale);
+        println!("Time scale: {:.1}x", solar_params.time_scale());
     }
 
     if keyboard.just_pressed(KeyCode::KeyR)
         && keyboard.pressed(KeyCode::ControlLeft)
         && keyboard.pressed(KeyCode::ShiftLeft)
-        && solar_params.time_scale > 0.1
+        && solar_params.time_scale() > 0.1
     {
         // Exponential decrease: 10x
-        solar_params.time_scale = (solar_params.time_scale / 10.0).max(0.0001);
-        println!("Time scale: {:.0}x (10x decrease)", solar_params.time_scale);
+        let target_scale = (solar_params.time_scale() / 10.0).max(0.0001);
+        solar_params.set_time_scale_at(fixed_elapsed_seconds, target_scale);
+        println!(
+            "Time scale: {:.0}x (10x decrease)",
+            solar_params.time_scale()
+        );
     } else if keyboard.just_pressed(KeyCode::KeyR)
         && keyboard.pressed(KeyCode::ControlLeft)
-        && solar_params.time_scale > 0.1
+        && solar_params.time_scale() > 0.1
     {
         // Gradual decrease: 10%
-        solar_params.time_scale = (solar_params.time_scale / 1.1).max(0.0001);
-        println!("Time scale: {:.1}x", solar_params.time_scale);
+        let target_scale = (solar_params.time_scale() / 1.1).max(0.0001);
+        solar_params.set_time_scale_at(fixed_elapsed_seconds, target_scale);
+        println!("Time scale: {:.1}x", solar_params.time_scale());
     }
 
     // Reset time scale
     if keyboard.just_pressed(KeyCode::KeyY) && keyboard.pressed(KeyCode::ControlLeft) {
-        solar_params.time_scale = 1.0;
-        println!("Time scale reset to: {:.1}x", solar_params.time_scale);
+        solar_params.set_time_scale_at(fixed_elapsed_seconds, 1.0);
+        println!("Time scale reset to: {:.1}x", solar_params.time_scale());
     }
 
     // Toggle automatic quality adaptation

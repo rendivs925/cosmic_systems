@@ -4,7 +4,10 @@ use bevy::prelude::*;
 pub struct SolarSystemParameters {
     pub sun_radius_km: f32,
     pub scale_factor: f32, // For visualization (e.g., 1 AU = 100 units)
-    pub time_scale: f32,   // Simulation speed multiplier
+    time_scale: f32,
+    /// Simulation epoch accumulated before the current time-scale segment.
+    /// This keeps a warp change from retroactively rescaling elapsed time.
+    epoch_offset_days: f64,
     pub show_orbits: bool,
     /// Uniform visual multiplier. Keep this at 1.0 for physically scaled bodies.
     pub planet_scale: f32,
@@ -22,6 +25,7 @@ impl SolarSystemParameters {
             sun_radius_km: 696342.0,
             scale_factor: 100.0, // For visualization (e.g., 1 AU = 100 units)
             time_scale: 1.0,     // Simulation speed multiplier
+            epoch_offset_days: 0.0,
             show_orbits: true,
             planet_scale: 1.0, // No additional scaling initially
         }
@@ -33,6 +37,7 @@ impl SolarSystemParameters {
             sun_radius_km: 696342.0,
             scale_factor: 75000.0, // 1 AU = 75,000 simulation units
             time_scale: 3000.0,    // Time scale: 3000.0x
+            epoch_offset_days: 0.0,
             show_orbits: true,
             // Bodies and orbital distances share this same physical AU scale.
             planet_scale: 1.0,
@@ -44,15 +49,63 @@ impl SolarSystemParameters {
         au * self.scale_factor
     }
 
-    /// Convert simulation time to days
+    /// Current solar-map time acceleration relative to the fixed clock.
+    pub fn time_scale(&self) -> f32 {
+        self.time_scale
+    }
+
+    /// Change time acceleration without changing the simulated epoch at
+    /// `elapsed_seconds`. The caller supplies the same fixed-clock elapsed time
+    /// consumed by the ephemeris evaluator.
+    pub fn set_time_scale_at(&mut self, elapsed_seconds: f64, time_scale: f32) {
+        let elapsed_seconds = elapsed_seconds.max(0.0);
+        let epoch_days = self.time_to_days_f64(elapsed_seconds);
+        self.time_scale = time_scale.max(0.0001);
+        self.epoch_offset_days = epoch_days - elapsed_seconds * self.time_scale as f64 / 86_400.0;
+    }
+
+    /// Convert fixed-clock elapsed time to the phase-continuous solar epoch.
     pub fn time_to_days(&self, time_seconds: f32) -> f32 {
-        let scale = self.time_scale.max(0.0001); // never let simulation stall
-        time_seconds * scale / 86400.0
+        self.time_to_days_f64(time_seconds as f64) as f32
     }
 
     /// Convert elapsed presentation time to simulation days without losing the
     /// sub-unit orbital movement of outer-system bodies.
     pub fn time_to_days_f64(&self, time_seconds: f64) -> f64 {
-        time_seconds * self.time_scale.max(0.0001) as f64 / 86400.0
+        self.epoch_offset_days + time_seconds.max(0.0) * self.time_scale as f64 / 86_400.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_scale_changes_preserve_the_solar_epoch() {
+        let mut solar = SolarSystemParameters::for_visualization();
+        let transition_seconds = 12_345.678_9;
+        let epoch_before = solar.time_to_days_f64(transition_seconds);
+
+        solar.set_time_scale_at(transition_seconds, 1.0);
+        assert!((solar.time_to_days_f64(transition_seconds) - epoch_before).abs() < 1e-12);
+
+        solar.set_time_scale_at(transition_seconds, 10_000.0);
+        assert!((solar.time_to_days_f64(transition_seconds) - epoch_before).abs() < 1e-12);
+
+        solar.set_time_scale_at(transition_seconds, 1.0);
+        assert!((solar.time_to_days_f64(transition_seconds) - epoch_before).abs() < 1e-12);
+    }
+
+    #[test]
+    fn time_scale_change_only_affects_future_epoch_progression() {
+        let mut solar = SolarSystemParameters::for_visualization();
+        let transition_seconds = 300.0;
+        let epoch_before = solar.time_to_days_f64(transition_seconds);
+
+        solar.set_time_scale_at(transition_seconds, 10.0);
+        let future_seconds = transition_seconds + 60.0;
+        let expected_days = epoch_before + 60.0 * 10.0 / 86_400.0;
+
+        assert!((solar.time_to_days_f64(future_seconds) - expected_days).abs() < 1e-12);
     }
 }

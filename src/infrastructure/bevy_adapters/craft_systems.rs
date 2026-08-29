@@ -4,6 +4,7 @@ use crate::domain::services::craft_physics;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::CursorGrabMode;
 use bevy::window::CursorOptions;
@@ -64,7 +65,7 @@ pub fn update_craft_physics(
                     planet,
                     catalog_planet_position(
                         planet,
-                        fixed_time.elapsed_secs(),
+                        fixed_time.elapsed_secs_f64(),
                         &solar_params,
                         &planet_query,
                     ),
@@ -151,11 +152,11 @@ pub fn update_craft_physics(
 /// This keeps autopilot independent of render-transform propagation.
 fn catalog_planet_position(
     planet: &PlanetComponent,
-    time_seconds: f32,
+    time_seconds: f64,
     solar_params: &SolarSystemParameters,
     planets: &Query<&PlanetComponent>,
 ) -> Vec3 {
-    let time_days = solar_params.time_to_days(time_seconds);
+    let time_days = solar_params.time_to_days_f64(time_seconds);
     let (parent_position, parent_tilt) = planet
         .domain_planet
         .parent_entity
@@ -166,26 +167,28 @@ fn catalog_planet_position(
                 .find(|candidate| candidate.domain_planet.name == *parent_name)
                 .map(|parent| {
                     (
-                        physics::calculate_planet_position(
+                        physics::calculate_planet_position_f64(
                             &parent.domain_planet,
                             time_days,
                             solar_params,
-                            Vec3::ZERO,
+                            DVec3::ZERO,
                             None,
-                        ),
+                        )
+                        .as_vec3(),
                         Some(parent.domain_planet.axial_tilt_deg),
                     )
                 })
         })
         .unwrap_or((Vec3::ZERO, None));
 
-    physics::calculate_planet_position(
+    physics::calculate_planet_position_f64(
         &planet.domain_planet,
         time_days,
         solar_params,
-        parent_position,
+        DVec3::from(parent_position),
         parent_tilt,
     )
+    .as_vec3()
 }
 
 /// Copy authoritative craft state to its render transform. Register this in

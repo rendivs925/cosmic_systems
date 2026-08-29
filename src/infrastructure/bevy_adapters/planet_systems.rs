@@ -4,6 +4,10 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+/// An unresolved HDR point expands through bloom as the post-process kernel,
+/// which is visibly rectangular. Resolve a small circular Sun disc first.
+const MIN_SUN_PRESENTATION_RADIUS_PX: f32 = 5.0;
+
 /// Update the solar map from the fixed simulation clock. This path intentionally
 /// has no camera, worker, or GPU dependency so every platform evaluates the
 /// same catalog and Kepler solver at a given simulation time.
@@ -155,6 +159,66 @@ pub fn rebase_solar_presentation(
     }
 }
 
+/// Keep the rendered solar disc large enough to remain circular at overview
+/// distances. This changes only the presentation mesh scale: `SolarMapPosition`,
+/// the physical solar radius, and the calibrated point light remain authoritative.
+pub fn preserve_sun_disc_at_overview_distances(
+    camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<CameraController>>,
+    solar_params: Res<SolarSystemParameters>,
+    mut planet_query: Query<(&PlanetComponent, &mut Transform)>,
+) {
+    let Some((camera, camera_transform, Projection::Perspective(projection))) =
+        camera_query.iter().find(|(camera, _, _)| camera.is_active)
+    else {
+        return;
+    };
+    let Some(viewport_size) = camera.logical_viewport_size() else {
+        return;
+    };
+
+    let physical_radius_units = physics::calculate_sun_visual_radius(&solar_params);
+    for (planet, mut transform) in &mut planet_query {
+        if planet.domain_planet.name != "Sun" {
+            continue;
+        }
+
+        let distance_units = camera_transform
+            .translation()
+            .distance(transform.translation);
+        let scale = sun_presentation_scale(
+            distance_units,
+            projection.fov,
+            viewport_size.y,
+            physical_radius_units,
+        );
+        transform.scale = Vec3::splat(scale);
+    }
+}
+
+fn sun_presentation_scale(
+    distance_units: f32,
+    vertical_fov_rad: f32,
+    viewport_height_px: f32,
+    physical_radius_units: f32,
+) -> f32 {
+    if !distance_units.is_finite()
+        || !vertical_fov_rad.is_finite()
+        || !viewport_height_px.is_finite()
+        || !physical_radius_units.is_finite()
+        || distance_units <= 0.0
+        || vertical_fov_rad <= 0.0
+        || viewport_height_px <= 0.0
+        || physical_radius_units <= 0.0
+    {
+        return 1.0;
+    }
+
+    let units_per_pixel =
+        2.0 * distance_units * (vertical_fov_rad * 0.5).tan() / viewport_height_px;
+    let minimum_radius_units = units_per_pixel * MIN_SUN_PRESENTATION_RADIUS_PX;
+    (minimum_radius_units / physical_radius_units).max(1.0)
+}
+
 fn solar_light_render_position(render_origin_units: DVec3) -> Vec3 {
     (-render_origin_units).as_vec3()
 }
@@ -195,5 +259,19 @@ mod tests {
             solar_light_render_position(DVec3::new(1_500_000.0, -25.0, 800.0)),
             Vec3::new(-1_500_000.0, 25.0, -800.0),
         );
+    }
+
+    #[test]
+    fn distant_sun_uses_a_minimum_resolved_disc() {
+        let scale = sun_presentation_scale(1_500_000.0, 1.0, 1_000.0, 350.0);
+
+        assert!(scale > 1.0);
+        let displayed_radius_px = scale * 350.0 / (2.0 * 1_500_000.0 * 0.5_f32.tan()) * 1_000.0;
+        assert!((displayed_radius_px - MIN_SUN_PRESENTATION_RADIUS_PX).abs() < 1e-5);
+    }
+
+    #[test]
+    fn resolved_sun_keeps_its_physical_radius() {
+        assert_eq!(sun_presentation_scale(1_000.0, 1.0, 1_000.0, 350.0), 1.0);
     }
 }
