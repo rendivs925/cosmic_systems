@@ -116,7 +116,7 @@ pub fn rebase_solar_presentation(
     selected_planet: Res<SelectedPlanet>,
     mut origin: ResMut<SolarMapRenderOrigin>,
     positions: Query<&SolarMapPosition>,
-    mut camera_query: Query<&mut Transform, With<CameraController>>,
+    mut camera_query: Query<&mut Transform, (With<CameraController>, Without<PlanetComponent>)>,
     mut planet_query: Query<(&SolarMapPosition, &mut Transform), With<PlanetComponent>>,
 ) {
     let next_origin = selected_planet
