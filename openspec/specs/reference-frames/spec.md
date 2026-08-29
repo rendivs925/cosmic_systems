@@ -34,6 +34,13 @@ The system SHALL provide one authoritative implementation for each frame convers
 - **WHEN** the reference-frame module is used
 - **THEN** it supports solar-inertial, planet-centered, planet body-fixed, local tangent (lat/lon/alt), and rocket-body frames
 
+#### Scenario: Physical solar-inertial ephemeris boundary
+
+- **WHEN** a primary-body ephemeris crosses from AU and AU/day into flight
+  physics
+- **THEN** its position and velocity are converted once to f64 solar-inertial
+  meters and meters-per-second through the shared reference-frame module
+
 ### Requirement: High-precision dynamics with render boundary
 
 The rocket dynamics SHALL be computed in f64 precision, and only converted to f32 render coordinates at the presentation boundary.

@@ -13,7 +13,8 @@ N-body or DE/SPICE fidelity.
 The system SHALL evaluate the Sun and eight planets from days relative to JD
 TDB 2451545.0. States SHALL remain f64 heliocentric J2000 ecliptic values in
 astronomical units and AU/day until a presentation consumer applies its visual
-scale.
+scale or a physical consumer adapts them through the authoritative
+solar-inertial AU-to-meter conversion.
 
 #### Scenario: Startup epoch
 
@@ -31,6 +32,12 @@ scale.
 - **WHEN** rocket-mode Sun geometry or directional lighting is updated
 - **THEN** it consumes the same f64 state at `SimulationTime` rather than a
   solar-map transform or an artistic day/night orbit
+
+#### Scenario: Physical primary-body state
+
+- **WHEN** a future solar-system flight feature needs a primary-body state
+- **THEN** it receives f64 heliocentric solar-inertial meters and
+  meters-per-second derived from the shared AU/AU-day ephemeris
 
 ### Requirement: Primary bodies use one published secular-element authority
 

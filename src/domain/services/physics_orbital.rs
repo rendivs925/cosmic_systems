@@ -1,4 +1,7 @@
 use crate::domain::entities::planet::Planet;
+use crate::domain::services::reference_frames::{
+    heliocentric_au_per_day_to_solar_inertial_mps, heliocentric_au_to_solar_inertial_m,
+};
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::math::{DVec3, Quat, Vec3};
 
@@ -33,6 +36,16 @@ pub struct OrbitShape {
 pub struct HeliocentricEclipticState {
     pub position_au: DVec3,
     pub velocity_au_per_day: DVec3,
+}
+
+/// A primary body's heliocentric J2000 state in the physical solar-inertial
+/// frame. Position is meters and velocity is meters per second; this is the
+/// shared handoff for future solar-system vehicle dynamics, not a rendered
+/// transform or a second ephemeris model.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeliocentricInertialState {
+    pub position_m: DVec3,
+    pub velocity_mps: DVec3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,6 +182,21 @@ pub fn heliocentric_ecliptic_state_f64(
     Some(HeliocentricEclipticState {
         position_au,
         velocity_au_per_day,
+    })
+}
+
+/// Evaluate a primary body in the physical solar-inertial frame. This adapts
+/// the authoritative AU/AU-day ephemeris through the reference-frame module;
+/// moons remain unavailable until their parent-relative model has a physical
+/// state and velocity contract.
+pub fn heliocentric_inertial_state_m(
+    planet: &Planet,
+    days_from_j2000_tdb: f64,
+) -> Option<HeliocentricInertialState> {
+    let state = heliocentric_ecliptic_state_f64(planet, days_from_j2000_tdb)?;
+    Some(HeliocentricInertialState {
+        position_m: heliocentric_au_to_solar_inertial_m(state.position_au),
+        velocity_mps: heliocentric_au_per_day_to_solar_inertial_mps(state.velocity_au_per_day),
     })
 }
 
@@ -1128,6 +1156,7 @@ mod tests {
     use super::*;
     use crate::domain::services::physics_utils::calculate_visual_radius;
     use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::value_objects::physical_scale::AU_IN_METERS;
     use bevy::math::DVec3;
 
     const EARTH_MU: f64 = 3.986004418e14; // m^3/s^2
@@ -1326,6 +1355,24 @@ mod tests {
             state
                 .velocity_au_per_day
                 .distance(horizons_velocity_au_per_day)
+        );
+    }
+
+    #[test]
+    fn primary_ephemeris_exposes_a_physical_solar_inertial_state() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let ecliptic = heliocentric_ecliptic_state_f64(&earth, 0.0).unwrap();
+        let physical = heliocentric_inertial_state_m(&earth, 0.0).unwrap();
+
+        assert_eq!(physical.position_m, ecliptic.position_au * AU_IN_METERS);
+        assert_eq!(
+            physical.velocity_mps,
+            ecliptic.velocity_au_per_day * (AU_IN_METERS / 86_400.0)
+        );
+        assert!(
+            (29_000.0..31_000.0).contains(&physical.velocity_mps.length()),
+            "Earth heliocentric speed was {} m/s",
+            physical.velocity_mps.length()
         );
     }
 

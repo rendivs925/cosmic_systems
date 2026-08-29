@@ -6,9 +6,13 @@
 //!
 //! # Frame conventions
 //!
-//! - **Solar-inertial**: origin at the Sun, axes aligned with the solar
+//! - **Solar-inertial display**: origin at the Sun, axes aligned with the
 //!   system's orbital rendering frame (the space returned by
 //!   [`calculate_planet_position_f64`]), right-handed Y-up, display units.
+//! - **Solar-inertial physical**: the same origin and axes, expressed as f64
+//!   meters and meters-per-second. Primary-body ephemerides cross into this
+//!   frame through the AU conversion helpers in this module before any future
+//!   vehicle force model consumes them.
 //! - **Planet-centered inertial**: origin at a planet's center, axes parallel
 //!   to solar-inertial, real meters (f64).
 //! - **Planet body-fixed**: rotates with the planet. Geodetic
@@ -30,7 +34,7 @@ use crate::domain::entities::planet::Planet;
 use crate::domain::services::physics_utils::calculate_planet_rotation_f64;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
+use crate::domain::value_objects::physical_scale::{PhysicalScale, AU_IN_METERS};
 use bevy::math::{DQuat, DVec3, Vec3};
 use bevy::transform::components::Transform;
 
@@ -169,6 +173,20 @@ pub fn planet_inertial_to_solar(
         scale.solar_meters_to_units(pos_pci_m.z),
     );
     (planet_solar_units.as_dvec3() + units).as_vec3()
+}
+
+/// Convert a heliocentric J2000 ecliptic position from astronomical units to
+/// the physical solar-inertial frame in meters. The application already maps
+/// the ecliptic plane to X/Z and the north ecliptic pole to +Y, so no axis
+/// rotation is required at this unit boundary.
+pub fn heliocentric_au_to_solar_inertial_m(position_au: DVec3) -> DVec3 {
+    position_au * AU_IN_METERS
+}
+
+/// Convert a heliocentric J2000 ecliptic velocity from AU/day to the physical
+/// solar-inertial frame in meters per second.
+pub fn heliocentric_au_per_day_to_solar_inertial_mps(velocity_au_per_day: DVec3) -> DVec3 {
+    velocity_au_per_day * (AU_IN_METERS / 86_400.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +351,20 @@ mod tests {
             "solar round trip off by {} m",
             (pci_back - pci).length()
         );
+    }
+
+    #[test]
+    fn heliocentric_ephemeris_units_convert_to_physical_solar_inertial() {
+        let position_m = heliocentric_au_to_solar_inertial_m(DVec3::new(1.0, -2.0, 0.5));
+        let velocity_mps = heliocentric_au_per_day_to_solar_inertial_mps(DVec3::X);
+
+        assert_eq!(
+            position_m,
+            DVec3::new(AU_IN_METERS, -2.0 * AU_IN_METERS, 0.5 * AU_IN_METERS)
+        );
+        assert!((velocity_mps.x - AU_IN_METERS / 86_400.0).abs() < 1e-9);
+        assert_eq!(velocity_mps.y, 0.0);
+        assert_eq!(velocity_mps.z, 0.0);
     }
 
     #[test]
