@@ -33,6 +33,14 @@ fn solar_light_luminous_power_lm(solar_params: &SolarSystemParameters) -> f32 {
     4.0 * std::f32::consts::PI * SUN_ILLUMINANCE_AT_EARTH_LUX * earth_orbit_units.powi(2)
 }
 
+fn solar_surface_luminance_nits(solar_params: &SolarSystemParameters) -> f32 {
+    // A uniformly radiating sphere has Phi = 4pi^2 r^2 L. Derive the visible
+    // surface luminance from the same luminous power used by the point source.
+    let radius_units = physics::calculate_sun_visual_radius(solar_params);
+    solar_light_luminous_power_lm(solar_params)
+        / (4.0 * std::f32::consts::PI.powi(2) * radius_units.powi(2))
+}
+
 // Setup scene for solar system simulation
 pub fn setup_space(
     mut commands: Commands,
@@ -272,6 +280,7 @@ fn spawn_celestial_body(
     #[cfg(not(target_arch = "wasm32"))]
     let emissive_handle = load_texture(asset_server, textures.emissive);
 
+    let is_sun = planet.name == "Sun";
     let base_color = planet.color;
 
     let (metallic, reflectance, perceptual_roughness) = match planet.name.as_str() {
@@ -287,8 +296,9 @@ fn spawn_celestial_body(
         _ => (0.0, 0.5, 0.7),
     };
 
-    let emissive = if planet.name == "Sun" {
-        LinearRgba::new(1.0, 1.0, 0.8, 1.0)
+    let emissive = if is_sun {
+        let luminance_nits = solar_surface_luminance_nits(solar_params);
+        LinearRgba::new(luminance_nits, luminance_nits, luminance_nits, 1.0)
     } else if has_albedo {
         LinearRgba::new(0.35, 0.35, 0.35, 1.0)
     } else {
@@ -296,14 +306,14 @@ fn spawn_celestial_body(
     };
 
     #[cfg(not(target_arch = "wasm32"))]
-    let emissive_texture = if planet.name == "Sun" || has_albedo {
+    let emissive_texture = if is_sun || has_albedo {
         albedo_handle.clone()
     } else {
         emissive_handle.clone()
     };
 
     #[cfg(target_arch = "wasm32")]
-    let emissive_path = if planet.name == "Sun" {
+    let emissive_path = if is_sun {
         textures.albedo
     } else if has_albedo {
         textures.albedo
@@ -318,7 +328,8 @@ fn spawn_celestial_body(
         emissive_texture: None,
         base_color,
         emissive,
-        unlit: planet.name == "Sun",
+        // Emissive output is evaluated only on the lit material path in Bevy.
+        unlit: false,
         metallic,
         reflectance,
         perceptual_roughness,
@@ -330,7 +341,8 @@ fn spawn_celestial_body(
         emissive_texture: emissive_texture.clone(),
         base_color,
         emissive,
-        unlit: planet.name == "Sun",
+        // Emissive output is evaluated only on the lit material path in Bevy.
+        unlit: false,
         metallic,
         reflectance,
         perceptual_roughness,
@@ -637,6 +649,21 @@ mod tests {
             / (4.0 * std::f32::consts::PI * one_au_units.powi(2));
 
         assert!((illuminance_lux - SUN_ILLUMINANCE_AT_EARTH_LUX).abs() < 0.1);
+    }
+
+    #[test]
+    fn solar_surface_emission_matches_the_calibrated_luminous_power() {
+        let solar_params = SolarSystemParameters::for_visualization();
+        let radius_units = physics::calculate_sun_visual_radius(&solar_params);
+        let reconstructed_power_lm = 4.0
+            * std::f32::consts::PI.powi(2)
+            * radius_units.powi(2)
+            * solar_surface_luminance_nits(&solar_params);
+
+        assert!(
+            (reconstructed_power_lm - solar_light_luminous_power_lm(&solar_params)).abs()
+                < solar_light_luminous_power_lm(&solar_params) * 1e-6
+        );
     }
 
     #[test]
