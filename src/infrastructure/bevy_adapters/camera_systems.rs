@@ -284,6 +284,9 @@ pub fn auto_inspect_selected_planet(
     mut state: Local<AutoInspectState>,
 ) {
     let Some(selected_entity) = selected_planet.entity else {
+        state.selected = None;
+        input_state.last_selected_entity = None;
+        input_state.suppress_auto_inspect_for = None;
         return;
     };
 
@@ -325,9 +328,11 @@ pub fn auto_inspect_selected_planet(
     //     return;
     // }
 
-    // Always reset suppression when a planet is selected (makes it idempotent)
-    if selected_planet.entity.is_some() {
-        input_state.last_selected_entity = selected_planet.entity;
+    // A selection change starts a new framing transition. Do not clear this on
+    // every frame: user input must be allowed to take control without the
+    // inspection camera immediately overwriting it again.
+    if input_state.last_selected_entity != Some(selected_entity) {
+        input_state.last_selected_entity = Some(selected_entity);
         input_state.suppress_auto_inspect_for = None;
     }
 

@@ -289,10 +289,18 @@ impl Plugin for SolarSystemModePlugin {
         );
         app.add_systems(Update, update_cursor_icon);
 
-        // Camera and controls
-        app.add_systems(Update, update_camera_controller);
-        app.add_systems(Update, apply_camera_transform);
-        app.add_systems(Update, auto_inspect_selected_planet);
+        // Camera input and selected-body framing consume the interpolated
+        // celestial presentation state in a defined order.
+        app.add_systems(
+            Update,
+            (
+                update_camera_controller,
+                apply_camera_transform,
+                auto_inspect_selected_planet,
+            )
+                .chain()
+                .after(interpolate_planet_transforms),
+        );
 
         // Selection visuals
         app.add_systems(

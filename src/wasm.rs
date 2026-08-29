@@ -104,6 +104,7 @@ pub fn main() {
     app.add_systems(FixedUpdate, update_moon_orbit_positions);
     app.add_systems(Update, spawn_bodies_progressively);
     app.add_systems(Update, update_orbit_visuals);
+    app.add_systems(Update, update_orbit_thickness);
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(
         Update,
@@ -143,9 +144,16 @@ pub fn main() {
         update_ui_hover_state.before(update_camera_controller),
     );
     app.add_systems(Update, take_pending_screenshot);
-    app.add_systems(Update, update_camera_controller);
-    app.add_systems(Update, apply_camera_transform);
-    app.add_systems(Update, auto_inspect_selected_planet);
+    app.add_systems(
+        Update,
+        (
+            update_camera_controller,
+            apply_camera_transform,
+            auto_inspect_selected_planet,
+        )
+            .chain()
+            .after(interpolate_planet_transforms),
+    );
 
     prepare_dom_for_wasm();
 

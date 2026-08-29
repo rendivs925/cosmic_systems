@@ -682,3 +682,43 @@ fn spawn_celestial_body(
 }
 
 // Functions moved to texture_config.rs, terrain_spawning.rs, and rocket_spawning.rs
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_catalog_body_except_the_sun_has_a_spawnable_orbit() {
+        let solar_params = SolarSystemParameters::for_visualization();
+        let planets = PlanetFactory::get_planets();
+        let moons = PlanetFactory::get_moons();
+
+        for moon in &moons {
+            let parent_name = moon.parent_entity.as_deref().unwrap();
+            assert!(
+                planets.iter().any(|planet| planet.name == parent_name),
+                "{} has no spawnable parent {}",
+                moon.name,
+                parent_name
+            );
+        }
+
+        let bodies_with_orbits = planets
+            .iter()
+            .chain(moons.iter())
+            .filter(|planet| planet.name != "Sun");
+        for planet in bodies_with_orbits {
+            let orbit = physics::orbit_shape_for(planet, &solar_params);
+            assert!(
+                orbit.semi_major_axis_units.is_finite() && orbit.semi_major_axis_units > 0.0,
+                "{} has no valid orbit radius",
+                planet.name
+            );
+            assert!(
+                orbit.eccentricity.is_finite(),
+                "{} has invalid eccentricity",
+                planet.name
+            );
+        }
+    }
+}
