@@ -389,7 +389,7 @@ fn spawn_celestial_body(
     if let Some(parent_name) = &planet.parent_entity {
         if let Some(parent_ent) = entity_map.get(parent_name).copied() {
             let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
-            let moon_thickness = orbit_shape.semi_major_axis_units * 0.0001;
+            let moon_thickness = ORBIT_RIBBON_NEAR_WIDTH_UNITS;
             let moon_segments = ORBIT_RIBBON_SEGMENTS;
             #[cfg(not(target_arch = "wasm32"))]
             let orbit_mesh = create_orbit_ribbon_mesh(
@@ -422,7 +422,7 @@ fn spawn_celestial_body(
                     base_color: ORBIT_LINE_COLOR,
                     body_class: BodyClass::Moon,
                     orbit_shape,
-                    thickness: orbit_shape.semi_major_axis_units * 0.0001,
+                    thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
                     segments: ORBIT_RIBBON_SEGMENTS,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,
@@ -453,7 +453,7 @@ fn spawn_celestial_body(
                         base_color: ORBIT_LINE_COLOR,
                         body_class: BodyClass::Moon,
                         orbit_shape,
-                        thickness: orbit_shape.semi_major_axis_units * 0.0001,
+                        thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
                         segments: ORBIT_RIBBON_SEGMENTS,
                         tilt: orbit_motion.tilt,
                         wobble_speed: orbit_motion.wobble_speed,
@@ -481,7 +481,7 @@ fn spawn_celestial_body(
     } else if planet.name != "Sun" {
         let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
         let orbit_base_color = ORBIT_LINE_COLOR;
-        let planet_thickness = orbit_shape.semi_major_axis_units * 0.0001;
+        let planet_thickness = ORBIT_RIBBON_NEAR_WIDTH_UNITS;
         let planet_segments = ORBIT_RIBBON_SEGMENTS;
         #[cfg(not(target_arch = "wasm32"))]
         let orbit_mesh = create_orbit_ribbon_mesh(
@@ -512,7 +512,7 @@ fn spawn_celestial_body(
                 base_color: orbit_base_color,
                 body_class: planet.body_class,
                 orbit_shape,
-                thickness: orbit_shape.semi_major_axis_units * 0.0001,
+                thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
                 segments: ORBIT_RIBBON_SEGMENTS,
                 tilt: orbit_motion.tilt,
                 wobble_speed: orbit_motion.wobble_speed,
@@ -539,7 +539,7 @@ fn spawn_celestial_body(
                     base_color: orbit_base_color,
                     body_class: planet.body_class,
                     orbit_shape,
-                    thickness: orbit_shape.semi_major_axis_units * 0.0001,
+                    thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
                     segments: ORBIT_RIBBON_SEGMENTS,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,

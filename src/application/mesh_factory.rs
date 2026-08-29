@@ -10,6 +10,7 @@ use crate::domain::services::physics;
 /// Static solar-system orbit geometry uses a fixed high-fidelity tessellation.
 /// Adaptive frame quality must not change an ellipse into visible chords.
 pub const ORBIT_RIBBON_SEGMENTS: usize = 1024;
+pub const ORBIT_RIBBON_NEAR_WIDTH_UNITS: f32 = 0.0001;
 
 pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
     #[cfg(target_arch = "wasm32")]
@@ -139,7 +140,7 @@ pub fn create_orbit_ribbon_mesh(
 
     // Camera-relative sizing is calculated by the presentation system. Preserve
     // its sub-unit near-body widths instead of imposing a world-scale minimum.
-    let thickness = thickness.max(0.0001);
+    let thickness = thickness.max(ORBIT_RIBBON_NEAR_WIDTH_UNITS);
 
     let linear_color: LinearRgba = orbit_color.into();
     let color_arr = [

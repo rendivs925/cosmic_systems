@@ -1,10 +1,9 @@
 use super::components::*;
 use crate::application::material_factory::ORBIT_LINE_COLOR;
-use crate::application::mesh_factory::create_orbit_ribbon_mesh;
+use crate::application::mesh_factory::{create_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS};
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
 
-const NEAR_ORBIT_LINE_PIXELS: f32 = 0.75;
 const DISTANT_ORBIT_LINE_PIXELS: f32 = 2.5;
 const ORBIT_OVERVIEW_DISTANCE_AU: f32 = 10.0;
 const ORBIT_RIBBON_REBUILD_RATIO: f32 = 0.05;
@@ -107,8 +106,9 @@ pub fn update_planet_reflections(
     }
 }
 
-// Keep orbit paths thin when the camera is close to a body and give them a
-// legible screen-space width when viewing the solar system as a whole.
+// Keep every orbit at the same narrow width nearby, then make it legible at a
+// solar-system overview. The camera-to-path distance avoids making a nearby
+// planetary orbit wider than a nearby moon orbit merely because its center is far away.
 pub fn update_orbit_thickness(
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<CameraController>>,
     solar_params: Res<SolarSystemParameters>,
@@ -132,12 +132,9 @@ pub fn update_orbit_thickness(
 
     for (mut orbit_comp, mut mesh3d, orbit_transform) in orbit_query.iter_mut() {
         let orbit_center = orbit_transform.translation();
-        let distance_to_center = camera_pos.distance(orbit_center);
         let distance_to_path =
             camera_distance_to_orbit_path(camera_pos, orbit_center, orbit_comp.radius);
         let new_thickness = orbit_ribbon_thickness_units(
-            orbit_comp.radius,
-            distance_to_center,
             distance_to_path,
             perspective.fov,
             viewport_height_px,
@@ -165,22 +162,20 @@ fn camera_distance_to_orbit_path(camera_position: Vec3, orbit_center: Vec3, radi
 }
 
 fn orbit_ribbon_thickness_units(
-    orbit_radius_units: f32,
-    camera_distance_units: f32,
     distance_to_path_units: f32,
     vertical_fov_rad: f32,
     viewport_height_px: f32,
     scale_factor: f32,
 ) -> f32 {
-    let units_per_pixel = 2.0 * camera_distance_units.max(0.001) * (vertical_fov_rad * 0.5).tan()
+    let units_per_pixel = 2.0 * distance_to_path_units.max(0.001) * (vertical_fov_rad * 0.5).tan()
         / viewport_height_px.max(1.0);
     let overview_progress = (distance_to_path_units
         / (scale_factor * ORBIT_OVERVIEW_DISTANCE_AU).max(0.001))
     .clamp(0.0, 1.0);
-    let target_pixels = NEAR_ORBIT_LINE_PIXELS
-        + (DISTANT_ORBIT_LINE_PIXELS - NEAR_ORBIT_LINE_PIXELS) * overview_progress;
+    let overview_width = units_per_pixel * DISTANT_ORBIT_LINE_PIXELS;
 
-    (units_per_pixel * target_pixels).clamp(0.0001, orbit_radius_units.max(0.001) * 0.15)
+    ORBIT_RIBBON_NEAR_WIDTH_UNITS
+        + (overview_width - ORBIT_RIBBON_NEAR_WIDTH_UNITS).max(0.0) * overview_progress
 }
 
 #[cfg(test)]
@@ -189,17 +184,9 @@ mod tests {
 
     #[test]
     fn orbit_ribbon_grows_for_a_solar_system_overview() {
-        let near = orbit_ribbon_thickness_units(
-            75_000.0,
-            75_000.0,
-            0.0,
-            std::f32::consts::FRAC_PI_3,
-            1_080.0,
-            75_000.0,
-        );
+        let near =
+            orbit_ribbon_thickness_units(0.0, std::f32::consts::FRAC_PI_3, 1_080.0, 75_000.0);
         let overview = orbit_ribbon_thickness_units(
-            75_000.0,
-            1_500_000.0,
             1_425_000.0,
             std::f32::consts::FRAC_PI_3,
             1_080.0,
@@ -207,6 +194,14 @@ mod tests {
         );
 
         assert!(overview > near);
+    }
+
+    #[test]
+    fn nearby_orbits_use_the_shared_near_width() {
+        assert_eq!(
+            orbit_ribbon_thickness_units(0.0, std::f32::consts::FRAC_PI_3, 1_080.0, 75_000.0),
+            ORBIT_RIBBON_NEAR_WIDTH_UNITS
+        );
     }
 
     #[test]
