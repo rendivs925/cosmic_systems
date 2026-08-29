@@ -159,6 +159,20 @@ pub fn predict_patched_conics(
     horizon_s: f64,
     step_s: f64,
 ) -> TrajectoryPrediction {
+    predict_patched_conics_until_radius(bodies, position_m, velocity_mps, horizon_s, step_s, None)
+}
+
+/// Propagate patched conics until the horizon or the first sample at or below
+/// an optional central-body radius. The caller retains responsibility for
+/// interpolating the exact surface crossing between the final two samples.
+pub fn predict_patched_conics_until_radius(
+    bodies: &[GravityBody],
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    horizon_s: f64,
+    step_s: f64,
+    stop_radius_m: Option<f64>,
+) -> TrajectoryPrediction {
     assert!(
         !bodies.is_empty(),
         "patched-conics prediction requires at least one gravity body"
@@ -188,6 +202,9 @@ pub fn predict_patched_conics(
         r = r_next;
         v = v_next;
         points.push(make_point(s as f64 * step_s, r, v, current_body, bodies));
+        if stop_radius_m.is_some_and(|radius_m| r.length() <= radius_m) {
+            break;
+        }
     }
 
     TrajectoryPrediction {

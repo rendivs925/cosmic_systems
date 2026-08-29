@@ -11,16 +11,16 @@
 use crate::application::material_factory::{create_orbit_material, ORBIT_LINE_COLOR};
 use crate::application::mesh_factory::create_polyline_ribbon_mesh;
 use crate::components::rocket::{
-    GroundRest, PlannedManeuver, RocketGeometry, RocketMissionState, RocketPhysicsState,
-    RocketPlanetBinding, TerrainCollisionState,
+    GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
+    TerrainCollisionState,
 };
 use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::GroundContact;
 use crate::domain::services::trajectory::{
-    predict_patched_conics, predict_patched_conics_with_impulse, GravityBody, ManeuverImpulse,
-    ManeuverPrediction,
+    predict_patched_conics, predict_patched_conics_until_radius,
+    predict_patched_conics_with_impulse, GravityBody, ManeuverImpulse, ManeuverPrediction,
 };
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
@@ -53,6 +53,7 @@ pub struct OrbitPrediction {
 pub struct OrbitPredictionCache {
     prediction: OrbitPrediction,
     prediction_start_sim_time_s: f64,
+    revision: u64,
     key: Option<OrbitPredictionKey>,
 }
 
@@ -65,7 +66,6 @@ struct OrbitPredictionKey {
     velocity_mps_bits: [u64; 3],
     planet_mass_kg_bits: u64,
     surface_radius_m_bits: u64,
-    prediction_start_sim_time_bits: u64,
     allowed: bool,
     maneuver: Option<([u64; 3], u64)>,
 }
@@ -75,6 +75,7 @@ impl Default for OrbitPredictionCache {
         Self {
             prediction: OrbitPrediction::empty(),
             prediction_start_sim_time_s: 0.0,
+            revision: 0,
             key: None,
         }
     }
@@ -90,14 +91,20 @@ impl OrbitPredictionCache {
     }
 
     fn clear(&mut self) {
+        if self.prediction.planet_frame_points.is_empty() && self.key.is_none() {
+            return;
+        }
         self.prediction = OrbitPrediction::empty();
         self.key = None;
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
 /// Minimum radar altitude before a projected trajectory is meaningful flight
 /// presentation. Near-surface ballistic arcs are not reliable orbit guidance.
 pub const MIN_ORBIT_PREDICTION_ALTITUDE_M: f64 = 1_000.0;
+const IMPACT_PREDICTION_HORIZON_S: f64 = 1_800.0;
+const IMPACT_PREDICTION_MAX_STEP_S: f64 = 0.5;
 
 /// Shared presentation policy for the flight-frame orbit line and terrain-map
 /// prediction track. This reads contact/lifecycle state but never changes it.
@@ -184,7 +191,11 @@ pub fn predicted_orbit_with_maneuver(
     let semi_major = if inv_a > 1e-12 { 1.0 / inv_a } else { f64::NAN };
     let is_bound = semi_major.is_finite() && semi_major > 0.0;
 
-    let horizon = if is_bound {
+    let reaches_surface =
+        trajectory_reaches_surface(position_m, velocity_mps, mu, surface_radius_m);
+    let horizon = if reaches_surface {
+        IMPACT_PREDICTION_HORIZON_S
+    } else if is_bound {
         // One orbital period plus a small margin so the loop closes.
         2.0 * std::f64::consts::PI * (semi_major.powi(3) / mu).sqrt() * 1.05
     } else {
@@ -193,10 +204,14 @@ pub fn predicted_orbit_with_maneuver(
         4.0 * 3600.0
     }
     .max(60.0);
-    // Keep path chords short near the ground and during high-curvature arcs.
-    // The old 90-second sub-orbital samples made a ballistic path visibly kink.
+    // Keep short impact-path chords so near-surface ballistic arcs do not
+    // collapse into a single straight segment before terrain interception.
     let sample_count = if is_bound { 512.0 } else { 720.0 };
-    let step = (horizon / sample_count).max(0.25);
+    let step = if reaches_surface {
+        (horizon / sample_count).min(IMPACT_PREDICTION_MAX_STEP_S)
+    } else {
+        (horizon / sample_count).max(0.25)
+    };
     if !horizon.is_finite() || !step.is_finite() {
         return OrbitPrediction::empty();
     }
@@ -214,6 +229,14 @@ pub fn predicted_orbit_with_maneuver(
             Ok(prediction) => prediction,
             Err(_) => return OrbitPrediction::empty(),
         },
+        None if reaches_surface => predict_patched_conics_until_radius(
+            &[body],
+            position_m,
+            velocity_mps,
+            horizon,
+            step,
+            Some(surface_radius_m),
+        ),
         None => predict_patched_conics(&[body], position_m, velocity_mps, horizon, step),
     };
 
@@ -273,6 +296,23 @@ pub fn predicted_orbit_with_maneuver(
     }
 }
 
+fn trajectory_reaches_surface(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    mu: f64,
+    surface_radius_m: f64,
+) -> bool {
+    let radius_m = position_m.length();
+    let angular_momentum = position_m.cross(velocity_mps);
+    if angular_momentum.length_squared() <= f64::EPSILON {
+        let escape_speed_mps = (2.0 * mu / radius_m).sqrt();
+        return velocity_mps.length() < escape_speed_mps;
+    }
+
+    apsis_endpoints_from_state(position_m, velocity_mps, mu)
+        .is_some_and(|apsides| apsides.periapsis_position_m.length() <= surface_radius_m)
+}
+
 /// Find the first intersection between an outside trajectory chord and the
 /// planet's spherical visual surface. Both endpoints may be outside when a
 /// coarse propagator would otherwise draw a chord through the surface.
@@ -311,6 +351,7 @@ struct OrbitPredictionRender {
     entity: Option<Entity>,
     mesh: Option<Handle<Mesh>>,
     material: Option<Handle<StandardMaterial>>,
+    prediction_revision: u64,
 }
 
 /// Plugin that draws the always-on orbit prediction line in rocket mode.
@@ -386,7 +427,6 @@ pub fn update_orbit_prediction_cache(
         velocity_mps_bits: dvec3_bits(velocity_mps),
         planet_mass_kg_bits: planet_mass_kg.to_bits(),
         surface_radius_m_bits: surface_radius_m.to_bits(),
-        prediction_start_sim_time_bits: sim_time.sim_time_s.to_bits(),
         allowed,
         maneuver: maneuver.map(|maneuver| {
             (
@@ -412,20 +452,20 @@ pub fn update_orbit_prediction_cache(
     };
     cache.prediction_start_sim_time_s = sim_time.sim_time_s;
     cache.key = Some(key);
+    cache.revision = cache.revision.wrapping_add(1);
 }
 
 fn dvec3_bits(value: DVec3) -> [u64; 3] {
     [value.x.to_bits(), value.y.to_bits(), value.z.to_bits()]
 }
 
-/// Draw the predicted trajectory (and apoapsis/periapsis markers) in the
-/// flight frame. The planet centre in flight units (meters) is at
-/// `-render_origin.origin`, because the render origin tracks the rocket's
-/// physics position in planet-centred inertial frame.
+/// Draw the predicted trajectory from the interpolated rocket position in the
+/// flight frame. Mesh vertices remain relative to the authoritative prediction
+/// start, while the entity transform follows each render-frame interpolation.
 fn draw_orbit_prediction(
     physical_scale: Res<PhysicalScale>,
     prediction_cache: Res<OrbitPredictionCache>,
-    rocket_query: Query<(&Transform, &RocketGeometry)>,
+    rocket_query: Query<&Transform, With<RocketPhysicsState>>,
     mut render: ResMut<OrbitPredictionRender>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -437,22 +477,15 @@ fn draw_orbit_prediction(
             commands.entity(entity).despawn();
         }
         render.mesh = None;
+        render.prediction_revision = prediction_cache.revision;
         return;
     }
-    let Some((rocket_transform, geometry)) = rocket_query.iter().next() else {
+    let Some(rocket_transform) = rocket_query.iter().next() else {
         return;
     };
 
-    let start = pred.planet_frame_points[0];
-    let scale = physical_scale.flight_display_units_per_meter;
-    let points: Vec<_> = pred
-        .planet_frame_points
-        .iter()
-        .map(|point| ((*point - start) * scale as f64).as_vec3())
-        .collect();
-    let mesh = create_polyline_ribbon_mesh(&points, ORBIT_LINE_COLOR, 0.75);
-    let nose = rocket_transform.translation
-        + rocket_transform.rotation * Vec3::Y * geometry.height_m * scale;
+    let requires_mesh_update =
+        render.mesh.is_none() || render.prediction_revision != prediction_cache.revision;
 
     let material = render
         .material
@@ -464,28 +497,38 @@ fn draw_orbit_prediction(
             ))
         })
         .clone();
-    if let Some(mesh_handle) = &render.mesh {
-        if let Some(existing) = meshes.get_mut(mesh_handle) {
-            *existing = mesh;
+    if requires_mesh_update {
+        let start = pred.planet_frame_points[0];
+        let scale = physical_scale.flight_display_units_per_meter;
+        let points: Vec<_> = pred
+            .planet_frame_points
+            .iter()
+            .map(|point| ((*point - start) * scale as f64).as_vec3())
+            .collect();
+        let mesh = create_polyline_ribbon_mesh(&points, ORBIT_LINE_COLOR, 0.75);
+        if let Some(mesh_handle) = &render.mesh {
+            if let Some(existing) = meshes.get_mut(mesh_handle) {
+                *existing = mesh;
+            }
+        } else {
+            let mesh_handle = meshes.add(mesh);
+            let entity = commands
+                .spawn((
+                    Mesh3d(mesh_handle.clone()),
+                    MeshMaterial3d(material),
+                    Transform::from_translation(rocket_transform.translation),
+                    Name::new("Rocket orbit prediction"),
+                ))
+                .id();
+            render.mesh = Some(mesh_handle);
+            render.entity = Some(entity);
         }
-    } else {
-        let mesh_handle = meshes.add(mesh);
-        let entity = commands
-            .spawn((
-                Mesh3d(mesh_handle.clone()),
-                MeshMaterial3d(material),
-                Transform::from_translation(nose),
-                Name::new("Rocket orbit prediction"),
-            ))
-            .id();
-        render.mesh = Some(mesh_handle);
-        render.entity = Some(entity);
-        return;
+        render.prediction_revision = prediction_cache.revision;
     }
     if let Some(entity) = render.entity {
         commands
             .entity(entity)
-            .insert(Transform::from_translation(nose));
+            .insert(Transform::from_translation(rocket_transform.translation));
     }
 }
 
@@ -705,6 +748,27 @@ mod tests {
     }
 
     #[test]
+    fn impact_prediction_retains_intermediate_ballistic_samples() {
+        let pred = predicted_orbit(
+            DVec3::new(EARTH_RADIUS_M + 2_000.0, 0.0, 0.0),
+            DVec3::new(-100.0, 0.0, 0.0),
+            EARTH_MASS_KG,
+            EARTH_RADIUS_M,
+        );
+
+        assert!(
+            pred.planet_frame_points.len() > 10,
+            "short impact paths must not collapse to one chord"
+        );
+        assert!(
+            pred.planet_frame_times_s.windows(2).all(|times| {
+                (times[1] - times[0]) <= IMPACT_PREDICTION_MAX_STEP_S + f64::EPSILON
+            }),
+            "impact samples must use the bounded propagation step"
+        );
+    }
+
+    #[test]
     fn surface_crossing_chord_stops_at_its_first_surface_intersection() {
         let start = DVec3::new(EARTH_RADIUS_M + 100.0, 0.0, 0.0);
         let end = DVec3::new(-EARTH_RADIUS_M - 100.0, 0.0, 0.0);
@@ -732,20 +796,19 @@ mod tests {
     }
 
     #[test]
-    fn prediction_cache_key_changes_only_with_authoritative_inputs() {
+    fn prediction_cache_key_changes_with_authoritative_state() {
         let base = OrbitPredictionKey {
             position_m_bits: dvec3_bits(DVec3::new(1.0, 2.0, 3.0)),
             velocity_mps_bits: dvec3_bits(DVec3::new(4.0, 5.0, 6.0)),
             planet_mass_kg_bits: EARTH_MASS_KG.to_bits(),
             surface_radius_m_bits: EARTH_RADIUS_M.to_bits(),
-            prediction_start_sim_time_bits: 10.0_f64.to_bits(),
             allowed: true,
             maneuver: None,
         };
         assert_eq!(base, base.clone());
 
         let mut after_fixed_step = base.clone();
-        after_fixed_step.prediction_start_sim_time_bits = 10.1_f64.to_bits();
+        after_fixed_step.velocity_mps_bits = dvec3_bits(DVec3::new(4.0, 5.1, 6.0));
         assert_ne!(base, after_fixed_step);
     }
 }
