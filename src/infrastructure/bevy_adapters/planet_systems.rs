@@ -1,6 +1,11 @@
 use super::components::*;
+use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics;
+use crate::domain::services::reference_frames::barycentric_to_solar_inertial_state;
+use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -12,15 +17,23 @@ const MIN_SUN_PRESENTATION_RADIUS_PX: f32 = 5.0;
 /// has no camera, worker, or GPU dependency so every platform evaluates the
 /// same catalog and Kepler solver at a given simulation time.
 pub fn update_planet_positions(
-    time: Res<Time<Fixed>>,
+    simulation_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    physical_scale: Res<PhysicalScale>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut SolarMapPosition, &PlanetComponent)>,
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
     let physics_start = std::time::Instant::now();
-    let time_days = solar_params.time_to_days_f64(time.elapsed_secs_f64());
+    let time_days = simulation_time.sim_time_s / 86_400.0;
 
-    update_planet_positions_sequential(time_days, &solar_params, &mut query);
+    update_planet_positions_sequential(
+        time_days,
+        &ephemeris_snapshot,
+        &physical_scale,
+        &solar_params,
+        &mut query,
+    );
 
     perf_stats.physics_update_time = physics_start.elapsed().as_secs_f32() * 1000.0;
     perf_stats.simd_enabled = false;
@@ -30,6 +43,8 @@ pub fn update_planet_positions(
 
 fn update_planet_positions_sequential(
     time_days: f64,
+    ephemeris_snapshot: &EphemerisSnapshot,
+    physical_scale: &PhysicalScale,
     solar_params: &SolarSystemParameters,
     query: &mut Query<(&mut SolarMapPosition, &PlanetComponent)>,
 ) {
@@ -39,13 +54,13 @@ fn update_planet_positions_sequential(
         if planet_comp.domain_planet.parent_entity.is_some() {
             continue;
         }
-        position.0 = physics::calculate_planet_position_f64(
-            &planet_comp.domain_planet,
-            time_days,
-            solar_params,
-            DVec3::ZERO,
-            None,
-        );
+        if let Some(ephemeris_position) = solar_map_position_from_snapshot(
+            ephemeris_snapshot,
+            &planet_comp.domain_planet.name,
+            physical_scale,
+        ) {
+            position.0 = ephemeris_position;
+        }
     }
 
     let mut parent_positions = std::collections::HashMap::new();
@@ -64,6 +79,14 @@ fn update_planet_positions_sequential(
         let Some(parent_name) = planet_comp.domain_planet.parent_entity.as_ref() else {
             continue;
         };
+        if let Some(ephemeris_position) = solar_map_position_from_snapshot(
+            ephemeris_snapshot,
+            &planet_comp.domain_planet.name,
+            physical_scale,
+        ) {
+            position.0 = ephemeris_position;
+            continue;
+        }
         let Some(parent_position) = parent_positions.get(parent_name).copied() else {
             continue;
         };
@@ -92,13 +115,38 @@ pub fn update_planet_rotations(
 /// Evaluate solar-map presentation at the fixed schedule's fractional overstep.
 /// Authoritative fixed state remains independent from this visual smoothing.
 pub fn interpolate_planet_transforms(
-    time: Res<Time<Fixed>>,
+    simulation_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    physical_scale: Res<PhysicalScale>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut SolarMapPosition, &PlanetComponent)>,
 ) {
-    let presentation_days =
-        solar_params.time_to_days_f64(time.elapsed_secs_f64() + time.overstep().as_secs_f64());
-    update_planet_positions_sequential(presentation_days, &solar_params, &mut query);
+    update_planet_positions_sequential(
+        simulation_time.sim_time_s / 86_400.0,
+        &ephemeris_snapshot,
+        &physical_scale,
+        &solar_params,
+        &mut query,
+    );
+}
+
+/// Project a snapshot's SSB/ICRF state into the existing heliocentric
+/// solar-map frame. The f64 meter-to-display conversion remains solely at this
+/// presentation boundary.
+fn solar_map_position_from_snapshot(
+    ephemeris_snapshot: &EphemerisSnapshot,
+    catalog_name: &str,
+    physical_scale: &PhysicalScale,
+) -> Option<DVec3> {
+    let target = NaifBodyId::for_catalog_name(catalog_name)?;
+    let target_state = ephemeris_snapshot.state(target)?;
+    let sun_state = ephemeris_snapshot.state(NaifBodyId::SUN)?;
+    let solar_state = barycentric_to_solar_inertial_state(target_state, sun_state).ok()?;
+    Some(DVec3::new(
+        physical_scale.solar_meters_to_units(solar_state.position_m.x),
+        physical_scale.solar_meters_to_units(solar_state.position_m.y),
+        physical_scale.solar_meters_to_units(solar_state.position_m.z),
+    ))
 }
 
 fn update_planet_rotations_at(
@@ -257,6 +305,8 @@ fn solar_map_render_translation(position_units: DVec3, render_origin_units: DVec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
+    use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 
     #[test]
     fn presentation_time_advances_through_fixed_overstep() {
@@ -265,6 +315,37 @@ mod tests {
         let presentation_seconds = fixed_seconds + 0.25;
 
         assert!(solar.time_to_days(presentation_seconds) > solar.time_to_days(fixed_seconds));
+    }
+
+    #[test]
+    fn snapshot_primary_position_uses_the_solar_display_boundary() {
+        let epoch = TdbEpoch::j2000();
+        let snapshot = EphemerisSnapshot::from_states(vec![
+            BodyState {
+                target: NaifBodyId::SUN,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: DVec3::ZERO,
+                velocity_mps: DVec3::ZERO,
+            },
+            BodyState {
+                target: NaifBodyId::EARTH,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: DVec3::X * crate::domain::value_objects::physical_scale::AU_IN_METERS,
+                velocity_mps: DVec3::ZERO,
+            },
+        ]);
+        let scale = PhysicalScale::default();
+
+        let position = solar_map_position_from_snapshot(&snapshot, "Earth", &scale).unwrap();
+
+        assert!(
+            (position.x - scale.solar_scale_factor as f64).abs()
+                < scale.solar_scale_factor as f64 * 1.0e-6
+        );
+        assert!(position.y.abs() < 1.0e-9);
+        assert!(position.z.abs() < 1.0e-9);
     }
 
     #[test]
