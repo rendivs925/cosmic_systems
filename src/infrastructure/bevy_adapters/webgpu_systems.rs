@@ -70,90 +70,6 @@ pub fn update_wasm_memory_stats(
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-pub fn queue_orbit_mesh_tasks(
-    mut worker_pool: NonSendMut<OrbitMeshWorkerPool>,
-    pending_query: Query<(Entity, &PendingOrbitMesh)>,
-) {
-    if worker_pool.worker_count() == 0 {
-        return;
-    }
-
-    for (entity, pending) in pending_query.iter() {
-        let task = OrbitMeshTask {
-            task_id: task_id_from_entity(entity),
-            segments: pending.segments as u32,
-            orbit_shape: OrbitShapeData {
-                semi_major_axis_units: pending.orbit_shape.semi_major_axis_units,
-                eccentricity: pending.orbit_shape.eccentricity,
-                inclination_rad: pending.orbit_shape.inclination_rad,
-                long_asc_node_rad: pending.orbit_shape.long_asc_node_rad,
-                arg_periapsis_rad: pending.orbit_shape.arg_periapsis_rad,
-            },
-        };
-        worker_pool.request(task);
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn apply_orbit_mesh_results(
-    mut commands: Commands,
-    mut worker_pool: NonSendMut<OrbitMeshWorkerPool>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut pending_query: Query<&mut PendingOrbitMesh>,
-) {
-    for result in worker_pool.take_results() {
-        let entity = entity_from_task_id(result.task_id);
-        let Ok(pending) = pending_query.get_mut(entity) else {
-            worker_pool.mark_complete(result.task_id);
-            continue;
-        };
-
-        let segments = pending.segments;
-        if segments == 0 {
-            worker_pool.mark_complete(result.task_id);
-            commands.entity(entity).remove::<PendingOrbitMesh>();
-            continue;
-        }
-
-        let mut positions = Vec::with_capacity(segments);
-        let mut normals = Vec::with_capacity(segments);
-        let mut uvs = Vec::with_capacity(segments);
-        let mut colors = Vec::with_capacity(segments);
-        let mut indices = Vec::with_capacity(segments * 2);
-        let color: LinearRgba = pending.color.into();
-        let color = [color.red, color.green, color.blue, color.alpha];
-
-        let coords = result.positions;
-        if coords.len() != segments * 3 || !coords.iter().all(|coordinate| coordinate.is_finite()) {
-            worker_pool.mark_complete(result.task_id);
-            continue;
-        }
-        for i in 0..segments {
-            let idx = i * 3;
-            positions.push([coords[idx], coords[idx + 1], coords[idx + 2]]);
-            normals.push([0.0, 1.0, 0.0]);
-            uvs.push([i as f32 / segments as f32, 0.5]);
-            colors.push(color);
-            indices.push(i as u32);
-            indices.push(((i + 1) % segments) as u32);
-        }
-
-        let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-        mesh.insert_indices(Indices::U32(indices));
-
-        worker_pool.mark_complete(result.task_id);
-        commands
-            .entity(entity)
-            .insert(Mesh3d(meshes.add(mesh)))
-            .remove::<PendingOrbitMesh>();
-    }
-}
-
 /// Initialize Vulkan compute solver for native builds
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash"))]
 pub fn init_vulkan_solver(mut perf_stats: ResMut<PerformanceStats>) {
@@ -208,15 +124,7 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::performance_systems::apply_quality_settings;
 #[cfg(target_arch = "wasm32")]
 use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::web_workers::orbit_mesh_worker::{
-    entity_from_task_id, task_id_from_entity, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData,
-};
-#[cfg(target_arch = "wasm32")]
-use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use bevy_mesh::{Indices, PrimitiveTopology};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]

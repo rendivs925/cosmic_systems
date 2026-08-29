@@ -10,7 +10,9 @@ use crate::domain::services::physics;
 /// Static solar-system orbit geometry uses a fixed high-fidelity tessellation.
 /// Adaptive frame quality must not change an ellipse into visible chords.
 pub const ORBIT_RIBBON_SEGMENTS: usize = 1024;
-pub const ORBIT_RIBBON_NEAR_WIDTH_UNITS: f32 = 0.0001;
+/// Shared close-range width for every planet and moon orbit in solar-map units.
+/// It must remain large enough to rasterize as a visible ribbon at local scales.
+pub const ORBIT_RIBBON_NEAR_WIDTH_UNITS: f32 = 0.2;
 
 pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
     #[cfg(target_arch = "wasm32")]

@@ -391,7 +391,6 @@ fn spawn_celestial_body(
             let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
             let moon_thickness = ORBIT_RIBBON_NEAR_WIDTH_UNITS;
             let moon_segments = ORBIT_RIBBON_SEGMENTS;
-            #[cfg(not(target_arch = "wasm32"))]
             let orbit_mesh = create_orbit_ribbon_mesh(
                 meshes,
                 &orbit_shape,
@@ -409,9 +408,9 @@ fn spawn_celestial_body(
             );
             let moon_material_handle = materials.add(moon_material);
 
-            #[cfg(target_arch = "wasm32")]
-            let orbit_entity = commands
+            commands
                 .spawn((
+                    Mesh3d(orbit_mesh),
                     MeshMaterial3d(moon_material_handle.clone()),
                     Transform::default(),
                 ))
@@ -435,55 +434,13 @@ fn spawn_celestial_body(
                 .insert(Name::new(format!(
                     "Orbit {} around {}",
                     planet.name, parent_name
-                )))
-                .id();
-
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                commands
-                    .spawn((
-                        Mesh3d(orbit_mesh.clone()),
-                        MeshMaterial3d(moon_material_handle.clone()),
-                        Transform::default(),
-                    ))
-                    .insert(OrbitComponent {
-                        radius: orbit_shape.semi_major_axis_units,
-                        planet_entity: parent_ent,
-                        material: moon_material_handle.clone(),
-                        base_color: ORBIT_LINE_COLOR,
-                        body_class: BodyClass::Moon,
-                        orbit_shape,
-                        thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
-                        segments: ORBIT_RIBBON_SEGMENTS,
-                        tilt: orbit_motion.tilt,
-                        wobble_speed: orbit_motion.wobble_speed,
-                        wobble_amount: orbit_motion.wobble_amount,
-                        spin_speed: orbit_motion.spin_speed,
-                        phase: orbit_motion.phase,
-                        distance_rank: 0.5,
-                    })
-                    .insert(MoonOrbit)
-                    .insert(Name::new(format!(
-                        "Orbit {} around {}",
-                        planet.name, parent_name
-                    )));
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                commands.entity(orbit_entity).insert(PendingOrbitMesh {
-                    orbit_shape,
-                    color: ORBIT_LINE_COLOR,
-                    segments: ORBIT_RIBBON_SEGMENTS,
-                });
-            }
+                )));
         }
     } else if planet.name != "Sun" {
         let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
         let orbit_base_color = ORBIT_LINE_COLOR;
         let planet_thickness = ORBIT_RIBBON_NEAR_WIDTH_UNITS;
         let planet_segments = ORBIT_RIBBON_SEGMENTS;
-        #[cfg(not(target_arch = "wasm32"))]
         let orbit_mesh = create_orbit_ribbon_mesh(
             meshes,
             &orbit_shape,
@@ -499,9 +456,9 @@ fn spawn_celestial_body(
         let orbit_material_handle = materials.add(orbit_material);
         let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, false);
 
-        #[cfg(target_arch = "wasm32")]
-        let orbit_entity = commands
+        commands
             .spawn((
+                Mesh3d(orbit_mesh),
                 MeshMaterial3d(orbit_material_handle.clone()),
                 Transform::default(),
             ))
@@ -521,44 +478,7 @@ fn spawn_celestial_body(
                 phase: orbit_motion.phase,
                 distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
             })
-            .insert(Name::new(format!("Orbit {}", planet.name)))
-            .id();
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            commands
-                .spawn((
-                    Mesh3d(orbit_mesh.clone()),
-                    MeshMaterial3d(orbit_material_handle.clone()),
-                    Transform::default(),
-                ))
-                .insert(OrbitComponent {
-                    radius: orbit_shape.semi_major_axis_units,
-                    planet_entity,
-                    material: orbit_material_handle.clone(),
-                    base_color: orbit_base_color,
-                    body_class: planet.body_class,
-                    orbit_shape,
-                    thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
-                    segments: ORBIT_RIBBON_SEGMENTS,
-                    tilt: orbit_motion.tilt,
-                    wobble_speed: orbit_motion.wobble_speed,
-                    wobble_amount: orbit_motion.wobble_amount,
-                    spin_speed: orbit_motion.spin_speed,
-                    phase: orbit_motion.phase,
-                    distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
-                })
-                .insert(Name::new(format!("Orbit {}", planet.name)));
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            commands.entity(orbit_entity).insert(PendingOrbitMesh {
-                orbit_shape,
-                color: orbit_base_color,
-                segments: ORBIT_RIBBON_SEGMENTS,
-            });
-        }
+            .insert(Name::new(format!("Orbit {}", planet.name)));
     }
 
     if planet.name == "Saturn" {

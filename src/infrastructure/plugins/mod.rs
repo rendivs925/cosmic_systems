@@ -207,17 +207,22 @@ impl Plugin for SharedSimulationPlugin {
                 update_planet_rotations,
                 update_moon_orbit_positions,
             )
-                .chain(),
+                .chain()
+                .run_if(solar_presentation_enabled),
         );
 
         // Visual and interaction systems
         app.add_systems(
             Update,
-            update_orbit_visuals.run_if(solar_presentation_enabled),
+            update_orbit_visuals
+                .after(auto_inspect_selected_planet)
+                .run_if(solar_presentation_enabled),
         );
         app.add_systems(
             Update,
-            update_orbit_thickness.run_if(solar_presentation_enabled),
+            update_orbit_thickness
+                .after(auto_inspect_selected_planet)
+                .run_if(solar_presentation_enabled),
         );
         app.add_systems(
             Update,

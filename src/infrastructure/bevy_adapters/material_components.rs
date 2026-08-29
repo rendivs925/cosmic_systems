@@ -12,11 +12,3 @@ pub struct PendingMaterialTextures {
     pub emissive_path: Option<&'static str>,
     pub eager: bool,
 }
-
-// Component for pending orbit mesh generation
-#[derive(Component)]
-pub struct PendingOrbitMesh {
-    pub orbit_shape: crate::domain::services::physics::OrbitShape,
-    pub color: Color,
-    pub segments: usize,
-}

@@ -1,49 +1,52 @@
 use super::components::*;
 use crate::application::material_factory::ORBIT_LINE_COLOR;
 use crate::application::mesh_factory::{create_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS};
+use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::prelude::*;
+use std::f32::consts::TAU;
 
 const DISTANT_ORBIT_LINE_PIXELS: f32 = 2.5;
 const ORBIT_OVERVIEW_DISTANCE_AU: f32 = 10.0;
 const ORBIT_RIBBON_REBUILD_RATIO: f32 = 0.05;
+const NEAR_ORBIT_OPACITY: f32 = 0.16;
+const DISTANT_ORBIT_OPACITY: f32 = 0.28;
+const ORBIT_PATH_DISTANCE_SAMPLES: usize = 128;
 
 // System to update stable orbit opacity from the camera's distance to the path.
 pub(crate) fn update_orbit_visuals(
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
+    camera_query: Query<&Transform, With<CameraController>>,
     solar_params: Res<SolarSystemParameters>,
     selected_planet: Res<SelectedPlanet>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    orbit_query: Query<(&OrbitComponent, &GlobalTransform)>,
+    orbit_query: Query<(&OrbitComponent, &Transform)>,
 ) {
     let Ok(camera) = camera_query.single() else {
         return;
     };
-    let camera_pos = camera.translation();
+    let camera_pos = camera.translation;
 
     for (orbit_comp, orbit_transform) in orbit_query.iter() {
         if let Some(material) = materials.get_mut(&orbit_comp.material) {
             let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
             let linear_color: LinearRgba = ORBIT_LINE_COLOR.into();
 
-            let distance_to_path = camera_distance_to_orbit_path(
-                camera_pos,
-                orbit_transform.translation(),
-                orbit_comp.radius,
-            );
+            let distance_to_path =
+                camera_distance_to_orbit_path(camera_pos, &orbit_comp.orbit_shape, orbit_transform);
             let overview_progress = (distance_to_path
                 / (solar_params.scale_factor * ORBIT_OVERVIEW_DISTANCE_AU))
                 .clamp(0.0, 1.0);
-            let base_opacity = 0.025 + 0.05 * overview_progress;
+            let base_opacity = NEAR_ORBIT_OPACITY
+                + (DISTANT_ORBIT_OPACITY - NEAR_ORBIT_OPACITY) * overview_progress;
             let final_base_opacity = if is_selected {
-                (base_opacity * 2.5).min(0.18)
+                (base_opacity * 2.0).min(0.55)
             } else {
                 base_opacity
             };
 
             material.base_color = ORBIT_LINE_COLOR.with_alpha(final_base_opacity);
 
-            let emissive_intensity = if is_selected { 0.06 } else { 0.03 };
+            let emissive_intensity = if is_selected { 0.12 } else { 0.06 };
             material.emissive = LinearRgba::new(
                 linear_color.red * emissive_intensity,
                 linear_color.green * emissive_intensity,
@@ -107,13 +110,13 @@ pub fn update_planet_reflections(
 }
 
 // Keep every orbit at the same narrow width nearby, then make it legible at a
-// solar-system overview. The camera-to-path distance avoids making a nearby
-// planetary orbit wider than a nearby moon orbit merely because its center is far away.
+// solar-system overview. The width follows the nearest sampled ellipse point,
+// so inclination and eccentricity do not distort the presentation response.
 pub fn update_orbit_thickness(
-    camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<CameraController>>,
+    camera_query: Query<(&Camera, &Transform, &Projection), With<CameraController>>,
     solar_params: Res<SolarSystemParameters>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d, &GlobalTransform)>,
+    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d, &Transform)>,
 ) {
     let Ok((camera, camera_transform, projection)) = camera_query.single() else {
         return;
@@ -128,12 +131,11 @@ pub fn update_orbit_thickness(
     let Projection::Perspective(perspective) = projection else {
         return;
     };
-    let camera_pos = camera_transform.translation();
+    let camera_pos = camera_transform.translation;
 
     for (mut orbit_comp, mut mesh3d, orbit_transform) in orbit_query.iter_mut() {
-        let orbit_center = orbit_transform.translation();
         let distance_to_path =
-            camera_distance_to_orbit_path(camera_pos, orbit_center, orbit_comp.radius);
+            camera_distance_to_orbit_path(camera_pos, &orbit_comp.orbit_shape, orbit_transform);
         let new_thickness = orbit_ribbon_thickness_units(
             distance_to_path,
             perspective.fov,
@@ -142,8 +144,9 @@ pub fn update_orbit_thickness(
         );
 
         if (new_thickness - orbit_comp.thickness).abs()
-            > orbit_comp.thickness.max(0.0001) * ORBIT_RIBBON_REBUILD_RATIO
+            > orbit_comp.thickness.max(ORBIT_RIBBON_NEAR_WIDTH_UNITS) * ORBIT_RIBBON_REBUILD_RATIO
         {
+            let previous_mesh = mesh3d.0.clone();
             orbit_comp.thickness = new_thickness;
             let new_mesh = create_orbit_ribbon_mesh(
                 &mut meshes,
@@ -153,12 +156,40 @@ pub fn update_orbit_thickness(
                 orbit_comp.segments,
             );
             mesh3d.0 = new_mesh;
+            meshes.remove(previous_mesh.id());
         }
     }
 }
 
-fn camera_distance_to_orbit_path(camera_position: Vec3, orbit_center: Vec3, radius: f32) -> f32 {
-    (camera_position.distance(orbit_center) - radius.max(0.0)).abs()
+fn camera_distance_to_orbit_path(
+    camera_position: Vec3,
+    orbit_shape: &physics::OrbitShape,
+    orbit_transform: &Transform,
+) -> f32 {
+    (0..ORBIT_PATH_DISTANCE_SAMPLES)
+        .map(|index| {
+            let eccentric_anomaly = index as f32 / ORBIT_PATH_DISTANCE_SAMPLES as f32 * TAU;
+            orbit_transform
+                .to_matrix()
+                .transform_point3(orbit_point(orbit_shape, eccentric_anomaly))
+                .distance(camera_position)
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn orbit_point(orbit_shape: &physics::OrbitShape, eccentric_anomaly: f32) -> Vec3 {
+    let eccentricity = orbit_shape.eccentricity.clamp(0.0, 0.99);
+    let semi_minor = orbit_shape.semi_major_axis_units * (1.0 - eccentricity * eccentricity).sqrt();
+    let x_orbital = orbit_shape.semi_major_axis_units * (eccentric_anomaly.cos() - eccentricity);
+    let z_orbital = semi_minor * eccentric_anomaly.sin();
+
+    physics::transform_orbital_point(
+        x_orbital,
+        z_orbital,
+        orbit_shape.inclination_rad,
+        orbit_shape.long_asc_node_rad,
+        orbit_shape.arg_periapsis_rad,
+    )
 }
 
 fn orbit_ribbon_thickness_units(
@@ -206,8 +237,41 @@ mod tests {
 
     #[test]
     fn orbit_path_distance_is_zero_for_a_camera_on_a_circular_path() {
+        let orbit = physics::OrbitShape {
+            semi_major_axis_units: 100.0,
+            eccentricity: 0.0,
+            inclination_rad: 0.0,
+            long_asc_node_rad: 0.0,
+            arg_periapsis_rad: 0.0,
+        };
         assert_eq!(
-            camera_distance_to_orbit_path(Vec3::new(100.0, 0.0, 0.0), Vec3::ZERO, 100.0),
+            camera_distance_to_orbit_path(
+                Vec3::new(100.0, 0.0, 0.0),
+                &orbit,
+                &Transform::default(),
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn orbit_path_distance_handles_inclined_eccentric_orbits() {
+        let orbit = physics::OrbitShape {
+            semi_major_axis_units: 100.0,
+            eccentricity: 0.4,
+            inclination_rad: 0.5,
+            long_asc_node_rad: 0.7,
+            arg_periapsis_rad: 0.2,
+        };
+        let sample_index = 37;
+        let eccentric_anomaly = sample_index as f32 / ORBIT_PATH_DISTANCE_SAMPLES as f32 * TAU;
+        let transform = Transform::from_rotation(Quat::from_rotation_z(0.3));
+        let camera_position = transform
+            .to_matrix()
+            .transform_point3(orbit_point(&orbit, eccentric_anomaly));
+
+        assert_eq!(
+            camera_distance_to_orbit_path(camera_position, &orbit, &transform),
             0.0
         );
     }

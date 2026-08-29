@@ -1,5 +1,4 @@
 use crate::infrastructure::bevy_adapters::components::{ChromeOptimizations, PerformanceStats};
-use crate::infrastructure::web_workers::orbit_mesh_worker::OrbitMeshWorkerPool;
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
@@ -90,7 +89,6 @@ pub fn main() {
         worker_target: 0,
     });
     app.insert_non_send_resource(TextureDecodeWorker::new());
-    app.insert_non_send_resource(OrbitMeshWorkerPool::new());
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     let fixed_hz = if is_chrome { 120.0 } else { 60.0 };
@@ -103,8 +101,14 @@ pub fn main() {
     app.add_systems(FixedUpdate, update_planet_rotations);
     app.add_systems(FixedUpdate, update_moon_orbit_positions);
     app.add_systems(Update, spawn_bodies_progressively);
-    app.add_systems(Update, update_orbit_visuals);
-    app.add_systems(Update, update_orbit_thickness);
+    app.add_systems(
+        Update,
+        update_orbit_visuals.after(auto_inspect_selected_planet),
+    );
+    app.add_systems(
+        Update,
+        update_orbit_thickness.after(auto_inspect_selected_planet),
+    );
     app.add_systems(Update, update_orbit_visibility);
     app.add_systems(
         Update,
@@ -121,8 +125,6 @@ pub fn main() {
         Update,
         apply_texture_worker_results.before(apply_pending_material_textures),
     );
-    app.add_systems(Update, queue_orbit_mesh_tasks);
-    app.add_systems(Update, apply_orbit_mesh_results);
     app.add_systems(Update, update_wasm_memory_stats);
     app.add_systems(Update, apply_pending_material_textures);
     app.add_systems(Update, handle_solar_system_input);
