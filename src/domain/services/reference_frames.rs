@@ -31,6 +31,7 @@
 //! mapping flows exclusively through [`PhysicalScale`].
 
 use crate::domain::entities::planet::Planet;
+use crate::domain::services::ephemeris::{BodyState, NaifBodyId};
 use crate::domain::services::physics_utils::calculate_planet_rotation_f64;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -41,11 +42,78 @@ use bevy::transform::components::Transform;
 /// The frames supported by the reference-frame module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFrame {
+    SolarSystemBarycentric,
     SolarInertial,
     PlanetCenteredInertial,
     PlanetBodyFixed,
     LocalTangent,
     RocketBody,
+}
+
+/// Reasons two scientific body states cannot form a physical relative state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelativeStateError {
+    NonBarycentricInput,
+    EpochMismatch,
+}
+
+/// Derive a target state relative to another body from two SSB-centered states.
+/// Position and velocity are subtracted at one exact TDB epoch, preserving the
+/// inertial axes and f64 SI units required by flight and rendering boundaries.
+pub fn barycentric_to_relative_state(
+    target_barycentric: BodyState,
+    center_barycentric: BodyState,
+) -> Result<BodyState, RelativeStateError> {
+    if target_barycentric.center != NaifBodyId::SOLAR_SYSTEM_BARYCENTER
+        || center_barycentric.center != NaifBodyId::SOLAR_SYSTEM_BARYCENTER
+    {
+        return Err(RelativeStateError::NonBarycentricInput);
+    }
+    if target_barycentric.epoch != center_barycentric.epoch {
+        return Err(RelativeStateError::EpochMismatch);
+    }
+
+    Ok(BodyState {
+        target: target_barycentric.target,
+        center: center_barycentric.target,
+        epoch: target_barycentric.epoch,
+        position_m: target_barycentric.position_m - center_barycentric.position_m,
+        velocity_mps: target_barycentric.velocity_mps - center_barycentric.velocity_mps,
+    })
+}
+
+/// J2000 mean obliquity, in radians. This is the fixed ICRF-equatorial to
+/// J2000-ecliptic rotation used by the existing solar-map/flight inertial
+/// convention, whose axes are +X, +ecliptic-north, +ecliptic-Y.
+const J2000_OBLIQUITY_RAD: f64 = 84_381.448_f64.to_radians() / 3_600.0;
+
+/// Rotate an ICRF/J2000 vector into the project's solar-inertial axes.
+///
+/// The source is right-handed ICRF equatorial (+X, +Y, +Z). The destination is
+/// right-handed J2000 ecliptic display/flight axes (+X, +ecliptic north,
+/// +ecliptic Y), in the input vector's units. This function is intentionally
+/// unit-preserving and applies equally to positions and velocities.
+pub fn icrf_j2000_to_solar_inertial(vector_icrf: DVec3) -> DVec3 {
+    let sin_obliquity = J2000_OBLIQUITY_RAD.sin();
+    let cos_obliquity = J2000_OBLIQUITY_RAD.cos();
+    let ecliptic_y = cos_obliquity * vector_icrf.y + sin_obliquity * vector_icrf.z;
+    let ecliptic_z = -sin_obliquity * vector_icrf.y + cos_obliquity * vector_icrf.z;
+    DVec3::new(vector_icrf.x, ecliptic_z, ecliptic_y)
+}
+
+/// Derive a target's heliocentric state in the project's solar-inertial axes
+/// from two same-epoch SSB ICRF states. Positions remain meters and velocities
+/// remain meters per second.
+pub fn barycentric_to_solar_inertial_state(
+    target_barycentric: BodyState,
+    sun_barycentric: BodyState,
+) -> Result<BodyState, RelativeStateError> {
+    let relative = barycentric_to_relative_state(target_barycentric, sun_barycentric)?;
+    Ok(BodyState {
+        position_m: icrf_j2000_to_solar_inertial(relative.position_m),
+        velocity_mps: icrf_j2000_to_solar_inertial(relative.velocity_mps),
+        ..relative
+    })
 }
 
 /// Planet radius in meters for a [`Planet`].
@@ -319,6 +387,16 @@ mod tests {
     }
 
     #[test]
+    fn icrf_j2000_rotation_preserves_length_and_maps_equatorial_y() {
+        let converted = icrf_j2000_to_solar_inertial(DVec3::Y);
+
+        assert!((converted.length() - 1.0).abs() < 1.0e-15);
+        assert!(converted.x.abs() < 1.0e-15);
+        assert!(converted.y < 0.0);
+        assert!(converted.z > 0.0);
+    }
+
+    #[test]
     fn equatorial_reference_axes_follow_axial_tilt() {
         let planet = earth();
         let spin_axis = planet_inertial_spin_axis(&planet);
@@ -365,6 +443,54 @@ mod tests {
         assert!((velocity_mps.x - AU_IN_METERS / 86_400.0).abs() < 1e-9);
         assert_eq!(velocity_mps.y, 0.0);
         assert_eq!(velocity_mps.z, 0.0);
+    }
+
+    #[test]
+    fn barycentric_states_derive_a_same_epoch_relative_state() {
+        let epoch = crate::domain::services::ephemeris::TdbEpoch::j2000();
+        let target = BodyState {
+            target: NaifBodyId::EARTH,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: DVec3::new(10.0, -5.0, 2.0),
+            velocity_mps: DVec3::new(3.0, 4.0, -2.0),
+        };
+        let center = BodyState {
+            target: NaifBodyId::SUN,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: DVec3::new(1.0, -2.0, 8.0),
+            velocity_mps: DVec3::new(1.0, -1.0, 0.5),
+        };
+
+        let relative = barycentric_to_relative_state(target, center).unwrap();
+        assert_eq!(relative.center, NaifBodyId::SUN);
+        assert_eq!(relative.position_m, DVec3::new(9.0, -3.0, -6.0));
+        assert_eq!(relative.velocity_mps, DVec3::new(2.0, 5.0, -2.5));
+    }
+
+    #[test]
+    fn relative_state_rejects_mixed_epochs() {
+        let target = BodyState {
+            target: NaifBodyId::EARTH,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch: crate::domain::services::ephemeris::TdbEpoch::j2000(),
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+        };
+        let center = BodyState {
+            target: NaifBodyId::SUN,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch: crate::domain::services::ephemeris::TdbEpoch::from_seconds_since_j2000(1.0)
+                .unwrap(),
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+        };
+
+        assert_eq!(
+            barycentric_to_relative_state(target, center),
+            Err(RelativeStateError::EpochMismatch)
+        );
     }
 
     #[test]

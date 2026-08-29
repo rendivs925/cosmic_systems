@@ -1,9 +1,5 @@
+pub use crate::domain::services::ephemeris::J2000_JULIAN_DATE_TDB;
 use bevy::prelude::*;
-
-/// Julian ephemeris date of the J2000.0 epoch. Solar-system propagation uses
-/// elapsed days from this epoch as a TDB approximation until a full time-scale
-/// service is introduced.
-pub const J2000_JULIAN_DATE_TDB: f64 = 2_451_545.0;
 
 #[derive(Resource, Clone, Debug)]
 pub struct SolarSystemParameters {

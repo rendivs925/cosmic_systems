@@ -1,0 +1,40 @@
+(
+    id: "naif-de440-primary-v1",
+    kernel_root: "../../large_files/kernels/de440",
+    // The manifest intentionally advertises a conservative subset of DE440s.
+    // Requests outside this range fail rather than silently extrapolating.
+    coverage: (
+        start_julian_date_tdb: 2415020.5,
+        end_julian_date_tdb: 2469807.5,
+    ),
+    kernels: [
+        (
+            file_name: "de440s.bsp",
+            kind: Spk,
+            sha256: "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
+            expected_size_bytes: 32726016,
+            source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp",
+        ),
+        (
+            file_name: "pck00011.tpc",
+            kind: TextPck,
+            sha256: "3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1",
+            expected_size_bytes: 131226,
+            source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
+        ),
+        (
+            file_name: "gm_de440.tpc",
+            kind: TextPck,
+            sha256: "924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140",
+            expected_size_bytes: 12406,
+            source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc",
+        ),
+        (
+            file_name: "naif0012.tls",
+            kind: LeapSeconds,
+            sha256: "678e32bdb5a744117a467cd9601cd6b373f0e9bc9bbde1371d5eee39600a039b",
+            expected_size_bytes: 5257,
+            source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls",
+        ),
+    ],
+)

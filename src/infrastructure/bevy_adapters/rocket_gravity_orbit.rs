@@ -4,24 +4,24 @@ use crate::components::rocket::{
     GravityAcceleration, OrbitalElements, RocketMissionState, RocketPhysicsState,
     RocketPlanetBinding,
 };
+use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::gravity::{
     differential_gravitational_acceleration, gravitational_acceleration, gravitational_parameter,
 };
-use crate::domain::services::physics_orbital::{
-    heliocentric_inertial_state_m, orbital_elements_from_state_in_reference_frame,
-};
+use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
-    planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+    barycentric_to_solar_inertial_state, planet_equatorial_reference_x_axis,
+    planet_inertial_spin_axis,
 };
-use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::math::DVec3;
 use bevy::prelude::{Query, Res};
 
 /// Compute the authoritative gravitational acceleration from each rocket's
 /// typed dominant-body binding.
 pub fn update_rocket_gravity(
-    simulation_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         &RocketPlanetBinding,
@@ -47,20 +47,24 @@ pub fn update_rocket_gravity(
         // only its acceleration relative to the bound planet. Adding the Sun's
         // full heliocentric acceleration here would double-count the frame
         // origin's own acceleration and eject local flights incorrectly.
-        let time_days = simulation_time.sim_time_s / 86_400.0;
-        let sun = planet_query
+        let bound_body = NaifBodyId::for_catalog_name(binding.planet_name.as_str());
+        let bound_state = bound_body.and_then(|body| ephemeris_snapshot.state(body));
+        let sun_state = ephemeris_snapshot.state(NaifBodyId::SUN);
+        let sun_mass_kg = planet_query
             .iter()
-            .find(|candidate| candidate.domain_planet.name == "Sun");
-        if let (Some(bound_state), Some(sun)) = (
-            heliocentric_inertial_state_m(&planet.domain_planet, time_days),
-            sun,
-        ) {
-            if let Some(sun_state) = heliocentric_inertial_state_m(&sun.domain_planet, time_days) {
+            .find(|candidate| candidate.domain_planet.name == "Sun")
+            .map(|sun| sun.domain_planet.mass_kg);
+        if let (Some(bound_state), Some(sun_state), Some(sun_mass_kg)) =
+            (bound_state, sun_state, sun_mass_kg)
+        {
+            if let Ok(sun_relative_to_bound) =
+                barycentric_to_solar_inertial_state(sun_state, bound_state)
+            {
                 acceleration += differential_gravitational_acceleration(
-                    sun.domain_planet.mass_kg,
+                    sun_mass_kg,
                     rocket.dynamics.position_m,
                     DVec3::ZERO,
-                    sun_state.position_m - bound_state.position_m,
+                    sun_relative_to_bound.position_m,
                 );
             }
         }
@@ -115,10 +119,11 @@ pub fn update_orbital_elements(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
-    use crate::domain::services::simulation_time::SimulationTime;
     use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+    use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
     use bevy::math::{DMat3, DQuat};
     use bevy::prelude::{default, App, Update};
 
@@ -138,7 +143,22 @@ mod tests {
         let sun = PlanetFactory::create_by_name("Sun").unwrap();
         let rocket_position_m = DVec3::X * (earth.radius_km as f64 * 1_000.0 + 400_000.0);
         let mut app = App::new();
-        app.insert_resource(SimulationTime::default());
+        let epoch = TdbEpoch::j2000();
+        let earth_state = BodyState {
+            target: NaifBodyId::EARTH,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+        };
+        let sun_state = BodyState {
+            target: NaifBodyId::SUN,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: -DVec3::X * 149_597_870_700.0,
+            velocity_mps: DVec3::ZERO,
+        };
+        app.insert_resource(EphemerisSnapshot::from_states(vec![earth_state, sun_state]));
         app.world_mut().spawn(planet_component("Earth"));
         app.world_mut().spawn(planet_component("Sun"));
         let rocket = app
@@ -164,8 +184,6 @@ mod tests {
 
         app.update();
 
-        let earth_state = heliocentric_inertial_state_m(&earth, 0.0).unwrap();
-        let sun_state = heliocentric_inertial_state_m(&sun, 0.0).unwrap();
         let expected = gravitational_acceleration(earth.mass_kg, rocket_position_m, DVec3::ZERO)
             + differential_gravitational_acceleration(
                 sun.mass_kg,

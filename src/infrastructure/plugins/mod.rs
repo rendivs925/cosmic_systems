@@ -42,6 +42,7 @@ use crate::infrastructure::bevy_adapters::craft_systems::{
 };
 use crate::infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use crate::infrastructure::bevy_adapters::education_systems::register_education_systems;
+use crate::infrastructure::bevy_adapters::ephemeris::{EphemerisPlugin, EphemerisSet};
 use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
@@ -172,6 +173,10 @@ pub struct SharedSimulationPlugin;
 
 impl Plugin for SharedSimulationPlugin {
     fn build(&self, app: &mut App) {
+        // Shared clock and ephemeris authority are initialized once for all
+        // modes before mode-specific plugins register consumers.
+        app.init_resource::<SimulationTime>();
+        app.add_plugins(EphemerisPlugin);
         app.insert_resource(SelectedPlanet {
             entity: None,
             name: None,
@@ -204,6 +209,13 @@ impl Plugin for SharedSimulationPlugin {
             FixedUpdate,
             (update_planet_positions, update_planet_rotations)
                 .chain()
+                .after(EphemerisSet::RefreshAfterTimeAdvance)
+                .run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            FixedUpdate,
+            advance_fixed_simulation_time
+                .before(EphemerisSet::RefreshAfterTimeAdvance)
                 .run_if(solar_presentation_enabled),
         );
 
@@ -460,8 +472,7 @@ impl Plugin for RocketModePlugin {
         // Rocket planet system resource.
         app.init_resource::<RocketBoundPlanet>();
 
-        // Simulation time resource for fixed-timestep physics and time acceleration.
-        app.insert_resource(SimulationTime::default());
+        // Shared simulation time already exists in `SharedSimulationPlugin`.
         // Configure the first fixed tick as well as later time-warp changes.
         app.add_systems(Startup, sync_fixed_timestep);
 
@@ -601,6 +612,7 @@ impl Plugin for RocketModePlugin {
                 RocketSet::PropulsionConsumption,
                 RocketSet::PropulsionStaging,
                 RocketSet::AdvanceTime,
+                EphemerisSet::RefreshAfterTimeAdvance,
                 RocketSet::OrbitalElements,
             )
                 .chain()
@@ -620,6 +632,10 @@ impl Plugin for RocketModePlugin {
         app.configure_sets(
             FixedUpdate,
             RocketSet::OrbitalElements.before(RocketSet::GroundContact),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            EphemerisSet::EvaluateForTick.before(RocketSet::Gravity),
         );
 
         app.add_systems(

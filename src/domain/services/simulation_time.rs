@@ -6,6 +6,8 @@
 use bevy::app::FixedMain;
 use bevy::prelude::*;
 
+use crate::domain::services::ephemeris::{EphemerisError, TdbEpoch};
+
 /// Upper bound on authoritative physics ticks run during one render-loop pass.
 /// Unprocessed time remains queued, rather than being discarded.
 pub const MAX_FIXED_STEPS_PER_RENDER_FRAME: u32 = 32;
@@ -62,6 +64,12 @@ impl SimulationTime {
     /// simulation time, never by shrinking the fixed physics timestep.
     pub fn fixed_update_hz(&self) -> f64 {
         1.0 / self.fixed_timestep_s
+    }
+
+    /// Convert completed authoritative simulation time to the shared TDB epoch.
+    /// This deliberately has no dependency on wall-clock or render-frame time.
+    pub fn tdb_epoch(&self) -> Result<TdbEpoch, EphemerisError> {
+        TdbEpoch::from_seconds_since_j2000(self.sim_time_s)
     }
 
     /// Set time acceleration factor. Pausing is controlled separately.
@@ -266,6 +274,16 @@ mod tests {
 
         assert_eq!(sim.real_time_s, 0.0025);
         assert_eq!(sim.sim_time_s, 0.25);
+    }
+
+    #[test]
+    fn completed_fixed_time_maps_to_tdb_epoch() {
+        let mut sim = SimulationTime::new(60.0);
+        sim.advance_fixed_step();
+
+        let epoch = sim.tdb_epoch().unwrap();
+        assert_eq!(epoch.seconds_since_j2000(), 60.0);
+        assert_eq!(epoch.julian_date(), 2_451_545.0 + 60.0 / 86_400.0);
     }
 
     #[test]

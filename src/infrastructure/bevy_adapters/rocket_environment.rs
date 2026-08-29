@@ -1,6 +1,6 @@
-use crate::domain::services::physics_orbital::heliocentric_direction_to_sun_f64;
-use crate::domain::services::simulation_time::SimulationTime;
-use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::domain::services::ephemeris::NaifBodyId;
+use crate::domain::services::reference_frames::barycentric_to_solar_inertial_state;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -10,23 +10,20 @@ use bevy::prelude::*;
 /// fixed direction to produce the physical day/night cycle.
 pub fn setup_rocket_sun_light(
     mut commands: Commands,
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    planet_query: Query<&PlanetComponent>,
 ) {
-    let sun_direction = bound_planet
+    let Some(sun_direction) = bound_planet
         .0
         .as_deref()
-        .and_then(|name| {
-            planet_query
-                .iter()
-                .find(|planet| planet.domain_planet.name == name)
-        })
-        .and_then(|planet| {
-            heliocentric_direction_to_sun_f64(&planet.domain_planet, sim_time.sim_time_s / 86_400.0)
-        })
-        .unwrap_or(bevy::math::DVec3::NEG_Z)
-        .as_vec3();
+        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
+    else {
+        bevy::log::error!(
+            "cannot initialize rocket sunlight without a bound-planet ephemeris state"
+        );
+        return;
+    };
+    let sun_direction = sun_direction.as_vec3();
 
     // Sky-blue ambient fill so shadowed faces read as sky-lit instead of black.
     commands.insert_resource(bevy::light::AmbientLight {
@@ -78,19 +75,14 @@ pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
 /// proxy. Planet and terrain rotation, rather than an artificial light orbit,
 /// produces the local day/night cycle.
 pub fn update_sun_day_night_cycle(
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    planet_query: Query<&PlanetComponent>,
     mut sun_query: Query<&mut Transform, With<SunLight>>,
 ) {
-    let Some(planet) = planet_query
-        .iter()
-        .find(|planet| bound_planet.0.as_deref() == Some(planet.domain_planet.name.as_str()))
-    else {
-        return;
-    };
-    let Some(sun_direction) =
-        heliocentric_direction_to_sun_f64(&planet.domain_planet, sim_time.sim_time_s / 86_400.0)
+    let Some(sun_direction) = bound_planet
+        .0
+        .as_deref()
+        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
     else {
         return;
     };
@@ -101,38 +93,53 @@ pub fn update_sun_day_night_cycle(
     }
 }
 
+/// Direction from the bound planet toward the Sun in the existing
+/// planet-centered inertial axes. The input snapshot is SSB/ICRF; the reference
+/// frame service performs the one explicit ICRF-to-solar-inertial conversion.
+fn sun_direction_for_bound_planet(
+    ephemeris_snapshot: &EphemerisSnapshot,
+    bound_planet_name: &str,
+) -> Option<bevy::math::DVec3> {
+    let bound_body = NaifBodyId::for_catalog_name(bound_planet_name)?;
+    let sun_state = ephemeris_snapshot.state(NaifBodyId::SUN)?;
+    let bound_state = ephemeris_snapshot.state(bound_body)?;
+    let direction = barycentric_to_solar_inertial_state(sun_state, bound_state)
+        .ok()?
+        .position_m;
+    let length = direction.length();
+    (length.is_finite() && length > 0.0).then_some(direction / length)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::planet_factory::PlanetFactory;
-    use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+    use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
+    use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+    use bevy::math::DVec3;
 
     #[test]
     fn rocket_sunlight_matches_the_shared_ephemeris_direction() {
-        let earth = PlanetFactory::create_by_name("Earth").unwrap();
-        let mut app = App::new();
-        let mut simulation_time = SimulationTime::default();
-        simulation_time.sim_time_s = 86_400.0;
-        app.insert_resource(simulation_time);
-        app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
-        app.world_mut().spawn(PlanetComponent {
-            domain_planet: earth.clone(),
-            material: default(),
-            has_texture: false,
-            base_reflectance: 0.0,
-            base_roughness: 0.0,
-        });
-        let light = app.world_mut().spawn((SunLight, Transform::default())).id();
-        app.add_systems(Update, update_sun_day_night_cycle);
+        let epoch = TdbEpoch::j2000();
+        let snapshot = EphemerisSnapshot::from_states(vec![
+            BodyState {
+                target: NaifBodyId::EARTH,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: DVec3::ZERO,
+                velocity_mps: DVec3::ZERO,
+            },
+            BodyState {
+                target: NaifBodyId::SUN,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: -DVec3::X,
+                velocity_mps: DVec3::ZERO,
+            },
+        ]);
 
-        app.update();
-
-        let expected = heliocentric_direction_to_sun_f64(&earth, 1.0)
-            .unwrap()
-            .as_vec3();
-        let transform = app.world().entity(light).get::<Transform>().unwrap();
-        let light_travel_direction = transform.rotation * -Vec3::Z;
-
-        assert!((-light_travel_direction).distance(expected) < 1e-6);
+        assert_eq!(
+            sun_direction_for_bound_planet(&snapshot, "Earth"),
+            Some(-DVec3::X)
+        );
     }
 }
