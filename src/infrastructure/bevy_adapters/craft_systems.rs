@@ -1,10 +1,9 @@
-use super::components::PlanetComponent;
+use super::components::{PlanetComponent, SolarMapPosition};
 use super::craft_components::*;
 use crate::domain::services::craft_physics;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::CursorGrabMode;
 use bevy::window::CursorOptions;
@@ -25,7 +24,7 @@ pub fn update_craft_physics(
     control: Res<CraftControlState>,
     solar_params: Res<SolarSystemParameters>,
     mut travel_target: ResMut<CraftTravelTarget>,
-    planet_query: Query<&PlanetComponent>,
+    planet_query: Query<(&PlanetComponent, &SolarMapPosition)>,
     mut craft_query: Query<&mut CraftComponent>,
 ) {
     let dt = fixed_time.delta_secs();
@@ -60,16 +59,8 @@ pub fn update_craft_physics(
         let accel = 3.0;
         let mut autopilot_position = None;
         if let Some(target_entity) = travel_target.entity {
-            if let Ok(planet) = planet_query.get(target_entity) {
-                autopilot_position = Some((
-                    planet,
-                    catalog_planet_position(
-                        planet,
-                        fixed_time.elapsed_secs_f64(),
-                        &solar_params,
-                        &planet_query,
-                    ),
-                ));
+            if let Ok((planet, position)) = planet_query.get(target_entity) {
+                autopilot_position = Some((planet, position.0.as_vec3()));
             } else {
                 travel_target.entity = None;
                 travel_target.name = None;
@@ -146,49 +137,6 @@ pub fn update_craft_physics(
             craft.physics.vertical_velocity = craft.linear_velocity.y;
         }
     }
-}
-
-/// Derive a travel target from the same orbital catalog used for solar motion.
-/// This keeps autopilot independent of render-transform propagation.
-fn catalog_planet_position(
-    planet: &PlanetComponent,
-    time_seconds: f64,
-    solar_params: &SolarSystemParameters,
-    planets: &Query<&PlanetComponent>,
-) -> Vec3 {
-    let time_days = solar_params.time_to_days_f64(time_seconds);
-    let (parent_position, parent_tilt) = planet
-        .domain_planet
-        .parent_entity
-        .as_ref()
-        .and_then(|parent_name| {
-            planets
-                .iter()
-                .find(|candidate| candidate.domain_planet.name == *parent_name)
-                .map(|parent| {
-                    (
-                        physics::calculate_planet_position_f64(
-                            &parent.domain_planet,
-                            time_days,
-                            solar_params,
-                            DVec3::ZERO,
-                            None,
-                        )
-                        .as_vec3(),
-                        Some(parent.domain_planet.axial_tilt_deg),
-                    )
-                })
-        })
-        .unwrap_or((Vec3::ZERO, None));
-
-    physics::calculate_planet_position_f64(
-        &planet.domain_planet,
-        time_days,
-        solar_params,
-        DVec3::from(parent_position),
-        parent_tilt,
-    )
-    .as_vec3()
 }
 
 /// Copy authoritative craft state to its render transform. Register this in
@@ -479,6 +427,8 @@ pub fn update_craft_camera(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::planet_factory::PlanetFactory;
+    use bevy::math::DVec3;
 
     #[test]
     fn presentation_sync_copies_but_does_not_source_craft_pose() {
@@ -497,5 +447,37 @@ mod tests {
         let transform = app.world().get::<Transform>(entity).unwrap();
         assert_eq!(transform.translation, Vec3::new(12.0, 34.0, 56.0));
         assert_eq!(transform.rotation, Quat::from_rotation_y(0.5));
+    }
+
+    #[test]
+    fn craft_travel_uses_the_target_solar_map_position() {
+        let mut app = App::new();
+        app.insert_resource(Time::<Fixed>::default());
+        app.insert_resource(CraftControlState::default());
+        app.insert_resource(SolarSystemParameters::default());
+        app.insert_resource(CraftTravelTarget::default());
+        app.add_systems(FixedUpdate, update_craft_physics);
+
+        let target = app
+            .world_mut()
+            .spawn((
+                PlanetComponent {
+                    domain_planet: PlanetFactory::create_by_name("Io").unwrap(),
+                    material: default(),
+                    has_texture: false,
+                    base_reflectance: 0.0,
+                    base_roughness: 0.0,
+                },
+                SolarMapPosition(DVec3::new(0.0, 1.0e12, 0.0)),
+            ))
+            .id();
+        let craft = app.world_mut().spawn(CraftComponent::saucer()).id();
+        app.world_mut().resource_mut::<CraftTravelTarget>().entity = Some(target);
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let craft = app.world().get::<CraftComponent>(craft).unwrap();
+        assert!(craft.position.y > 0.0);
+        assert!(craft.position.y.abs() > craft.position.x.abs());
     }
 }

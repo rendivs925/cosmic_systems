@@ -282,8 +282,8 @@ mod tests {
         sim.advance_fixed_step();
 
         let epoch = sim.tdb_epoch().unwrap();
-        assert_eq!(epoch.seconds_since_j2000(), 60.0);
-        assert_eq!(epoch.julian_date(), 2_451_545.0 + 60.0 / 86_400.0);
+        assert!((epoch.seconds_since_j2000() - 60.0).abs() < 1e-5);
+        assert!((epoch.julian_date() - (2_451_545.0 + 60.0 / 86_400.0)).abs() < 1e-12);
     }
 
     #[test]

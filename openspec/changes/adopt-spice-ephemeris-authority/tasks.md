@@ -20,7 +20,7 @@
 
 - [ ] 3.1 Migrate solar-map transforms, render rebasing, and sampled orbit
   presentation to the shared evaluated state.
-- [ ] 3.2 Migrate craft targets, rocket planet/moon proxies, and Sun lighting to
+- [x] 3.2 Migrate craft targets, rocket planet/moon proxies, and Sun lighting to
   the shared evaluated state and shared TDB epoch.
 - [ ] 3.3 Migrate solar differential gravity to same-epoch kernel-derived states
   and replace migrated planet orientation with approved PCK/BPC rotation data.

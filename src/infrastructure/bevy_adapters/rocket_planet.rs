@@ -6,8 +6,7 @@
 //! evaluated from the rocket simulation epoch rather than shared solar-map
 //! transforms, whose clock is intentionally wall-clock driven.
 //!
-//! Primary-body positions are evaluated directly in f64 AU and converted to
-//! meters. The existing display-scale conversion remains only for the current
+//! The existing display-scale conversion remains only for the current
 //! parent-relative moon approximation.
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
@@ -277,14 +276,6 @@ pub fn update_rocket_planets(
     let Some(bound_state) = ephemeris_snapshot.state(bound_body) else {
         return;
     };
-    let time_days = sim_time.sim_time_s / 86_400.0;
-    let bound_planet_pos = calculate_planet_position_f64(
-        &bound_planet.domain_planet,
-        time_days,
-        &solar_params,
-        DVec3::ZERO,
-        None,
-    );
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit as f64;
 
@@ -339,9 +330,9 @@ pub fn update_rocket_planets(
                 .map(|planet| {
                     calculate_planet_position_f64(
                         &planet.domain_planet,
-                        time_days,
+                        sim_time.sim_time_s / 86_400.0,
                         &solar_params,
-                        bound_planet_pos,
+                        DVec3::ZERO,
                         Some(bound_planet.domain_planet.axial_tilt_deg),
                     )
                 });
@@ -349,8 +340,7 @@ pub fn update_rocket_planets(
             if let Some(moon_pos) = moon_solar {
                 // Shared solar presentation intentionally exaggerates moon
                 // orbits. Flight proxies must undo that visual-only scale.
-                let rel =
-                    (moon_pos - bound_planet_pos) * (display_to_meters / MOON_ORBIT_SCALE as f64);
+                let rel = moon_pos * (display_to_meters / MOON_ORBIT_SCALE as f64);
                 transform.translation = (planet_center_flight.as_dvec3() + rel).as_vec3();
             }
         }
@@ -389,7 +379,7 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(solar.clone());
-        app.insert_resource(scale.clone());
+        app.insert_resource(scale);
         app.insert_resource(RenderOrigin::default());
         let mut simulation_time = SimulationTime::default();
         simulation_time.sim_time_s = sim_time_s;

@@ -517,6 +517,17 @@ mod tests {
         )
     }
 
+    fn fixture_root() -> std::path::PathBuf {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "cosmic-ephemeris-{}-{unique_suffix}",
+            std::process::id()
+        ))
+    }
+
     #[test]
     fn tdb_epoch_preserves_j2000_julian_date() {
         let epoch = TdbEpoch::from_seconds_since_j2000(86_400.0).unwrap();
@@ -543,7 +554,7 @@ mod tests {
 
     #[test]
     fn manifest_rejects_checksum_mismatch() {
-        let root = std::env::temp_dir().join(format!("cosmic-ephemeris-{}", std::process::id()));
+        let root = fixture_root();
         let kernel_root = root.join("kernels");
         fs::create_dir_all(&kernel_root).unwrap();
         fs::write(kernel_root.join("fixture.bsp"), b"abc").unwrap();
@@ -567,7 +578,7 @@ mod tests {
 
     #[test]
     fn manifest_reports_missing_kernel() {
-        let root = std::env::temp_dir().join(format!("cosmic-ephemeris-{}", std::process::id()));
+        let root = fixture_root();
         fs::create_dir_all(root.join("kernels")).unwrap();
         let manifest_path = root.join("manifest.ron");
         fs::write(
