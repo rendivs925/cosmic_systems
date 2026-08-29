@@ -14,14 +14,19 @@ use crate::application::material_factory::{create_planet_material, PlanetMateria
 use crate::application::mesh_factory::create_flight_globe_mesh;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
+use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
-use crate::domain::services::physics_orbital::{heliocentric_ecliptic_state_f64, MOON_ORBIT_SCALE};
+use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
+use crate::domain::services::reference_frames::{
+    barycentric_to_relative_state, barycentric_to_solar_inertial_state,
+    body_fixed_to_inertial_rotation, icrf_j2000_to_solar_inertial,
+};
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::value_objects::physical_scale::{PhysicalScale, AU_IN_METERS};
+use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::ecs::system::ParamSet;
 use bevy::math::DVec3;
@@ -244,6 +249,7 @@ pub fn update_rocket_planets(
     physical_scale: Res<PhysicalScale>,
     render_origin: Res<RenderOrigin>,
     sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     rocket_query: Query<(), With<RocketPhysicsState>>,
     planet_query: Query<&PlanetComponent, (Without<RocketPlanet>, Without<RocketMoon>)>,
     mut query_set: ParamSet<(
@@ -265,12 +271,13 @@ pub fn update_rocket_planets(
         return;
     };
 
-    let time_days = sim_time.sim_time_s / 86_400.0;
-    let Some(bound_planet_state) =
-        heliocentric_ecliptic_state_f64(&bound_planet.domain_planet, time_days)
-    else {
+    let Some(bound_body) = NaifBodyId::for_catalog_name(bound_planet_name) else {
         return;
     };
+    let Some(bound_state) = ephemeris_snapshot.state(bound_body) else {
+        return;
+    };
+    let time_days = sim_time.sim_time_s / 86_400.0;
     let bound_planet_pos = calculate_planet_position_f64(
         &bound_planet.domain_planet,
         time_days,
@@ -299,18 +306,14 @@ pub fn update_rocket_planets(
                 .as_quat();
             }
         } else if rocket_planet.is_sun {
-            // Primary-body state is already physical AU, so this path never
-            // round-trips through the f32 solar display scale.
-            let sun_solar = planet_query
-                .iter()
-                .find(|planet| planet.domain_planet.name == "Sun")
-                .and_then(|planet| {
-                    heliocentric_ecliptic_state_f64(&planet.domain_planet, time_days)
-                });
-
-            if let Some(sun_state) = sun_solar {
-                let rel = (sun_state.position_au - bound_planet_state.position_au) * AU_IN_METERS;
-                transform.translation = (planet_center_flight.as_dvec3() + rel).as_vec3();
+            if let Some(sun_state) = ephemeris_snapshot.state(NaifBodyId::SUN) {
+                if let Ok(sun_relative_to_bound) =
+                    barycentric_to_solar_inertial_state(sun_state, bound_state)
+                {
+                    transform.translation = (planet_center_flight.as_dvec3()
+                        + sun_relative_to_bound.position_m)
+                        .as_vec3();
+                }
             }
         }
     }
@@ -318,6 +321,18 @@ pub fn update_rocket_planets(
     // Moons: position relative to bound planet
     for (rocket_moon, mut transform) in query_set.p1().iter_mut() {
         if rocket_moon.parent_planet == *bound_planet_name {
+            if let Some(moon_state) = NaifBodyId::for_catalog_name(&rocket_moon.name)
+                .and_then(|body| ephemeris_snapshot.state(body))
+            {
+                if let Ok(moon_relative_to_bound) =
+                    barycentric_to_relative_state(moon_state, bound_state)
+                {
+                    transform.translation = (planet_center_flight.as_dvec3()
+                        + icrf_j2000_to_solar_inertial(moon_relative_to_bound.position_m))
+                    .as_vec3();
+                    continue;
+                }
+            }
             let moon_solar = planet_query
                 .iter()
                 .find(|planet| planet.domain_planet.name == rocket_moon.name)
@@ -345,14 +360,13 @@ pub fn update_rocket_planets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::physics::calculate_planet_position_f64;
-    use crate::domain::services::physics_orbital::heliocentric_ecliptic_state_f64;
+    use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
-    use crate::domain::value_objects::physical_scale::AU_IN_METERS;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
     use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+    use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
     use bevy::math::{DMat3, DQuat, DVec3};
 
     #[test]
@@ -369,7 +383,6 @@ mod tests {
         let solar = SolarSystemParameters::for_visualization();
         let scale = PhysicalScale::from_solar_parameters(&solar);
         let sim_time_s = 86_400.0;
-        let time_days = sim_time_s / 86_400.0;
         let earth = PlanetFactory::create_by_name("Earth").unwrap();
         let moon = PlanetFactory::create_by_name("Moon").unwrap();
         let sun = PlanetFactory::create_by_name("Sun").unwrap();
@@ -382,6 +395,30 @@ mod tests {
         simulation_time.sim_time_s = sim_time_s;
         app.insert_resource(simulation_time);
         app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
+        let epoch = TdbEpoch::j2000();
+        app.insert_resource(EphemerisSnapshot::from_states(vec![
+            BodyState {
+                target: NaifBodyId::EARTH,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: DVec3::ZERO,
+                velocity_mps: DVec3::ZERO,
+            },
+            BodyState {
+                target: NaifBodyId::SUN,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: -DVec3::X * 149_597_870_700.0,
+                velocity_mps: DVec3::ZERO,
+            },
+            BodyState {
+                target: NaifBodyId::MOON,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+                position_m: DVec3::X * 384_400_000.0,
+                velocity_mps: DVec3::ZERO,
+            },
+        ]));
         app.world_mut().spawn(RocketPhysicsState {
             dynamics: RocketDynamicsState::new(
                 DVec3::ZERO,
@@ -444,21 +481,8 @@ mod tests {
 
         app.update();
 
-        let earth_pos = calculate_planet_position_f64(&earth, time_days, &solar, DVec3::ZERO, None);
-        let earth_state = heliocentric_ecliptic_state_f64(&earth, time_days).unwrap();
-        let sun_state = heliocentric_ecliptic_state_f64(&sun, time_days).unwrap();
-        let expected_sun =
-            ((sun_state.position_au - earth_state.position_au) * AU_IN_METERS).as_vec3();
-        let moon_pos = calculate_planet_position_f64(
-            &moon,
-            time_days,
-            &solar,
-            earth_pos,
-            Some(earth.axial_tilt_deg),
-        );
-        let expected_moon = ((moon_pos - earth_pos)
-            * (scale.solar_meters_per_display_unit as f64 / MOON_ORBIT_SCALE as f64))
-            .as_vec3();
+        let expected_sun = (-DVec3::X * 149_597_870_700.0).as_vec3();
+        let expected_moon = (DVec3::X * 384_400_000.0).as_vec3();
 
         assert_eq!(
             app.world()
