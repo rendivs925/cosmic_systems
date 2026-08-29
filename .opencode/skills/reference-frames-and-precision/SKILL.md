@@ -1,6 +1,6 @@
 ---
 name: reference-frames-and-precision
-description: Use when changing coordinates, units, planet rotation, launch-site mapping, camera-relative rendering, orbital state, terrain positions, or f64/f32 boundaries in Cosmic Systems.
+description: Use when changing coordinates, units, SPICE/DE ephemeris frames, planet rotation, launch-site mapping, camera-relative rendering, orbital state, terrain positions, or f64/f32 boundaries in Cosmic Systems.
 ---
 
 # Reference Frames And Precision
@@ -11,7 +11,9 @@ between simulation and rendering precision.
 ## Single Authority
 
 `src/domain/services/reference_frames.rs` is the one authoritative conversion
-module. Read it before writing coordinate maths. Reuse:
+module. The solar ephemeris owns body states; this module owns the conversions
+between those states and local flight/presentation frames. Read both before
+writing coordinate maths. Reuse:
 
 - geodetic <-> planet body-fixed conversions;
 - body-fixed <-> planet-centered inertial rotations;
@@ -26,8 +28,9 @@ or a second floating-origin implementation.
 ## Defined Frames
 
 ```text
-solar inertial:             Sun origin, display units, right-handed Y-up
-planet-centered inertial:   planet origin, real meters, f64
+solar-system barycentric:   ICRF/J2000, Solar System Barycenter, f64 SI
+heliocentric display:       derived presentation frame, display units only
+planet-centered inertial:   planet origin, axes parallel to ICRF/J2000, f64 SI
 planet body-fixed:          rotating planet coordinates, real meters, f64
 local tangent:              East-North-Up at geodetic reference, real meters
 rocket body:                rocket-local orientation, DQuat
@@ -36,7 +39,11 @@ render:                     camera-relative Bevy Vec3/Transform only
 
 - Body-fixed axes are +Y north, +X longitude 0, +Z longitude +90 degrees.
 - Body-fixed -> inertial applies planetary spin about +Y then axial tilt about +Z.
-- Solar-inertial uses display units; every other physical flight frame uses real meters.
+- A SPICE/DE state is barycentric ICRF/J2000 at TDB. Do not relabel it as
+  heliocentric or use display units as an intermediary.
+- Heliocentric positions, planet-centered states, and render positions are
+  derived from authoritative barycentric states; they are never separate state
+  authorities.
 - The meter/display conversion flows exclusively through `PhysicalScale`.
 
 ## Precision Rules
@@ -54,10 +61,12 @@ render:                     camera-relative Bevy Vec3/Transform only
 ## Conversion Discipline
 
 1. Identify source frame, destination frame, units, and simulation epoch.
-2. Use an existing converter or extend `reference_frames.rs` with a tested pure function.
-3. Convert position and velocity separately where rotating frames are involved.
-4. Apply body rotation/surface velocity consistently for launch, atmosphere, and contact.
-5. Convert to render coordinates only after authoritative physics is complete.
+2. For ephemeris inputs, record the NAIF body IDs, kernel frame, center, and
+   TDB epoch before converting.
+3. Use an existing converter or extend `reference_frames.rs` with a tested pure function.
+4. Convert position and velocity separately where rotating frames are involved.
+5. Apply body rotation/surface velocity consistently for launch, atmosphere, and contact.
+6. Convert to render coordinates only after authoritative physics is complete.
 
 Do not use latitude/longitude as a generic world topology. They are geodetic
 representations at the body-fixed boundary. Terrain uses cube-sphere direction;
@@ -73,7 +82,10 @@ use the existing mapping between them.
 - Use ENU for local launch/landing/control interpretation, not as an unlabelled
   substitute for global inertial state.
 - Rocket visual planets are presentation proxies evaluated at simulation time;
-  shared solar map transforms are not flight authority.
+  neither shared solar-map transforms nor proxy meshes are ephemeris authority.
+- Preserve the current analytic heliocentric presentation path only until its
+  consumers migrate. Do not add new consumers to it once the SPICE/DE authority
+  is introduced.
 
 ## Tests
 
@@ -84,6 +96,9 @@ Add pure regression tests in `reference_frames.rs` for every new conversion:
 - geodetic launch-site consistency;
 - velocity correctness for a rotating surface;
 - precision boundary at solar-scale distances;
+- barycentric-to-heliocentric and barycentric-to-planet-centered position and
+  velocity subtraction at a recorded TDB epoch;
+- finite values and no f64-to-f32 loss before camera-relative rebasing;
 - finite values and valid normalized orientation/directions.
 
 Run the relevant terrain, rocket contact, rocket camera, and orbital tests after

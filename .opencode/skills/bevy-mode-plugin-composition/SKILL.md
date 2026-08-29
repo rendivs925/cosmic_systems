@@ -1,6 +1,6 @@
 ---
 name: bevy-mode-plugin-composition
-description: Use when changing Bevy plugins, application modes, ECS components/resources, system schedules, system sets, startup composition, or shared craft/rocket/solar infrastructure in Cosmic Systems.
+description: Use when changing Bevy plugins, application modes, SPICE/DE ephemeris resources, ECS components/resources, system schedules, system sets, startup composition, or shared craft/rocket/solar infrastructure in Cosmic Systems.
 ---
 
 # Bevy Mode And Plugin Composition
@@ -26,8 +26,9 @@ cargo run -- rocket   rocket flight simulation
 
 ## Composition Rules
 
-- Shared celestial bodies, physical scale, time, assets, coordinate conventions,
-  rendering base, and common presentation remain shared.
+- Shared celestial bodies, ephemeris kernel/state authority, physical scale,
+  time, assets, coordinate conventions, rendering base, and common presentation
+  remain shared.
 - Craft-specific and rocket-specific behaviour remain isolated in their mode
   plugins. Do not copy shared systems to make a mode work.
 - Add a plugin for a meaningful feature boundary, not every file or component.
@@ -35,6 +36,9 @@ cargo run -- rocket   rocket flight simulation
   composition. They are not service managers.
 - Reuse an existing plugin/resource first. Create new global state only when it
   is genuinely singular and shared.
+- A kernel-backed ephemeris may use one immutable shared resource for loaded
+  kernel metadata/handles and one shared evaluated-state resource. Do not create
+  an `EphemerisManager`, mode-local kernel loader, or per-consumer body cache.
 
 ## ECS Rules
 
@@ -52,7 +56,7 @@ cargo run -- rocket   rocket flight simulation
 
 ```text
 Startup:      setup, configuration validation, asset/bootstrap work
-FixedUpdate:  authoritative fixed simulation
+FixedUpdate:  authoritative fixed simulation and deterministic state evaluation
 Update:       input, UI, camera, streaming decisions, variable-rate presentation
 PostUpdate:   presentation synchronization where necessary
 ```
@@ -64,6 +68,9 @@ PostUpdate:   presentation synchronization where necessary
 - Keep input capture separate from fixed mutation and simulation separate from
   presentation interpolation.
 - Avoid serializing independent systems; explicit ordering is for real data flow.
+- If evaluated ephemeris state is cached in ECS/resources, update it before all
+  gravity, orbit, lighting, camera-target, and presentation consumers at the
+  same `SimulationTime` epoch. Consumers must not query kernels independently.
 
 ## Change Audit
 

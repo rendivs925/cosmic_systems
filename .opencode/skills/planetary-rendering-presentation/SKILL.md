@@ -1,6 +1,6 @@
 ---
 name: planetary-rendering-presentation
-description: Use when changing planet, terrain, atmosphere, ocean, cloud, camera, HUD, render origin, materials, meshes, or presentation synchronization in Cosmic Systems.
+description: Use when changing planet, SPICE/DE ephemeris presentation, terrain, atmosphere, ocean, cloud, camera, HUD, render origin, materials, meshes, or presentation synchronization in Cosmic Systems.
 ---
 
 # Planetary Rendering And Presentation
@@ -15,6 +15,8 @@ simulation; it does not define it.
 - `rocket_presentation.rs`: fixed-state capture and render interpolation.
 - `rocket_camera_systems.rs` and camera adapters: flight camera behaviour.
 - `rocket_environment.rs`, material/texture factories, and presentation UI modules.
+- The shared evaluated ephemeris state is the source for celestial transforms,
+  Sun direction, orbit paths, and camera targets once kernel migration begins.
 
 Read these before adding a renderer, camera coordinate conversion, planet proxy,
 material loader, or terrain visual fallback. Preserve the shared solar authority
@@ -36,6 +38,9 @@ authoritative f64 simulation state
 - Render interpolation may smooth fixed snapshots but must not write back to
   authoritative rocket/celestial state.
 - A rocket camera follows physical orientation; it does not steer the vehicle.
+- Planet, Moon, Sun, light, and orbit-ribbon presentation must sample one
+  evaluated ephemeris epoch. Do not mix a kernel state with a wall-clock orbit
+  transform, artistic light orbit, or separately propagated display position.
 
 ## Visual Systems
 
@@ -51,6 +56,9 @@ authoritative f64 simulation state
   triplanar terrain projection where appropriate to avoid cube-sphere seams.
 - Reuse asset handles and factory/configuration paths. Do not scatter asset paths
   or reload the same asset in unrelated systems.
+- Rebase f64 barycentric state against the selected render origin before the
+  final f32 conversion. Never place an absolute DE/SPICE-scale position in a
+  `Transform`.
 
 ## Camera Rules
 
@@ -65,7 +73,8 @@ authoritative f64 simulation state
 
 Test pure conversions and interpolation behaviour without opening a window. For
 render changes, verify asset/entity lifetime, planet swaps, render-origin rebasing,
-and terrain patch replacement/eviction. Run affected mode startups. Do not claim
+and terrain patch replacement/eviction. Verify all celestial visuals use the
+same recorded ephemeris epoch. Run affected mode startups. Do not claim
 visual correctness when the environment has no usable display; report logs and
 the limitation instead.
 
