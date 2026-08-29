@@ -59,8 +59,10 @@ range. No consumer SHALL maintain a separate primary-body Kepler table.
 ### Requirement: Model limitations remain explicit
 
 The system SHALL treat this model as an analytic, heliocentric approximation.
-It SHALL NOT be presented as a barycentric N-body, lunar, Earth-center, body
-orientation, or spacecraft force model.
+It SHALL NOT be presented as a barycentric N-body, lunar, Earth-center, or
+body-orientation model. Primary-bound rocket flight MAY consume the Sun as a
+differential third-body perturbation in its planet-centered inertial frame; it
+is not yet a general multi-body spacecraft force model.
 
 #### Scenario: Moon propagation
 
@@ -73,3 +75,10 @@ orientation, or spacecraft force model.
 - **WHEN** solar-system vehicle dynamics are introduced
 - **THEN** they consume a shared physical body-state authority rather than
   solar-map transforms or presentation proxies
+
+#### Scenario: Primary-bound solar perturbation
+
+- **WHEN** a rocket is bound to a primary body with a physical ephemeris state
+- **THEN** its gravity stage adds the Sun's differential acceleration between
+  the rocket and the bound-body origin, without changing the rocket's
+  planet-centered inertial coordinates

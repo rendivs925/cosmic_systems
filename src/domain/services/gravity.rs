@@ -47,6 +47,28 @@ pub fn gravitational_acceleration(
     -mu / r_sq * r.normalize()
 }
 
+/// Gravitational acceleration relative to an accelerating inertial-frame
+/// origin. All positions are meters in one inertial frame. This preserves a
+/// planet-centered inertial vehicle state while adding a perturbing body's
+/// tidal acceleration, rather than incorrectly applying that body's full
+/// heliocentric acceleration to the vehicle alone.
+pub fn differential_gravitational_acceleration(
+    perturbing_body_mass_kg: f64,
+    vehicle_position_m: DVec3,
+    reference_origin_position_m: DVec3,
+    perturbing_body_position_m: DVec3,
+) -> DVec3 {
+    gravitational_acceleration(
+        perturbing_body_mass_kg,
+        vehicle_position_m,
+        perturbing_body_position_m,
+    ) - gravitational_acceleration(
+        perturbing_body_mass_kg,
+        reference_origin_position_m,
+        perturbing_body_position_m,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +151,38 @@ mod tests {
         let a = gravitational_acceleration(EARTH_MASS_KG, r, body_pos);
         let to_body = body_pos - r;
         assert!(a.dot(to_body) > 0.0, "acceleration must point at the body");
+    }
+
+    #[test]
+    fn differential_gravity_is_zero_at_the_accelerating_origin() {
+        let perturbing_body_position_m = DVec3::new(1.5e11, -2.0e9, 5.0e8);
+        let reference_origin_position_m = DVec3::new(1.0e6, -2.0e6, 3.0e6);
+        let acceleration = differential_gravitational_acceleration(
+            1.9885e30,
+            reference_origin_position_m,
+            reference_origin_position_m,
+            perturbing_body_position_m,
+        );
+
+        assert_eq!(acceleration, DVec3::ZERO);
+    }
+
+    #[test]
+    fn differential_gravity_matches_the_difference_of_two_absolute_samples() {
+        let sun_mass_kg = 1.9885e30;
+        let earth_position_m = DVec3::new(-2.65e10, 0.0, 1.47e11);
+        let vehicle_position_m = earth_position_m + DVec3::new(6.771e6, 0.0, 0.0);
+        let expected = gravitational_acceleration(sun_mass_kg, vehicle_position_m, DVec3::ZERO)
+            - gravitational_acceleration(sun_mass_kg, earth_position_m, DVec3::ZERO);
+        let actual = differential_gravitational_acceleration(
+            sun_mass_kg,
+            vehicle_position_m,
+            earth_position_m,
+            DVec3::ZERO,
+        );
+
+        assert_eq!(actual, expected);
+        assert!(actual.length() > 1.0e-7 && actual.length() < 1.0e-5);
     }
 
     #[test]
