@@ -6,18 +6,20 @@
 //! evaluated from the rocket simulation epoch rather than shared solar-map
 //! transforms, whose clock is intentionally wall-clock driven.
 //!
-//! Conversion: solar system display units -> meters using PhysicalScale.
+//! Primary-body positions are evaluated directly in f64 AU and converted to
+//! meters. The existing display-scale conversion remains only for the current
+//! parent-relative moon approximation.
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
 use crate::application::mesh_factory::create_flight_globe_mesh;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::physics::calculate_planet_position_f64;
-use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
+use crate::domain::services::physics_orbital::{heliocentric_ecliptic_state_f64, MOON_ORBIT_SCALE};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
+use crate::domain::value_objects::physical_scale::{PhysicalScale, AU_IN_METERS};
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
@@ -264,6 +266,11 @@ pub fn update_rocket_planets(
     };
 
     let time_days = sim_time.sim_time_s / 86_400.0;
+    let Some(bound_planet_state) =
+        heliocentric_ecliptic_state_f64(&bound_planet.domain_planet, time_days)
+    else {
+        return;
+    };
     let bound_planet_pos = calculate_planet_position_f64(
         &bound_planet.domain_planet,
         time_days,
@@ -292,22 +299,17 @@ pub fn update_rocket_planets(
                 .as_quat();
             }
         } else if rocket_planet.is_sun {
-            // Sun position relative to the bound planet, converted to meters.
+            // Primary-body state is already physical AU, so this path never
+            // round-trips through the f32 solar display scale.
             let sun_solar = planet_query
                 .iter()
                 .find(|planet| planet.domain_planet.name == "Sun")
-                .map(|planet| {
-                    calculate_planet_position_f64(
-                        &planet.domain_planet,
-                        time_days,
-                        &solar_params,
-                        DVec3::ZERO,
-                        None,
-                    )
+                .and_then(|planet| {
+                    heliocentric_ecliptic_state_f64(&planet.domain_planet, time_days)
                 });
 
-            if let Some(sun_pos) = sun_solar {
-                let rel = (sun_pos - bound_planet_pos) * display_to_meters;
+            if let Some(sun_state) = sun_solar {
+                let rel = (sun_state.position_au - bound_planet_state.position_au) * AU_IN_METERS;
                 transform.translation = (planet_center_flight.as_dvec3() + rel).as_vec3();
             }
         }
@@ -344,9 +346,11 @@ pub fn update_rocket_planets(
 mod tests {
     use super::*;
     use crate::domain::services::physics::calculate_planet_position_f64;
+    use crate::domain::services::physics_orbital::heliocentric_ecliptic_state_f64;
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::value_objects::physical_scale::PhysicalScale;
+    use crate::domain::value_objects::physical_scale::AU_IN_METERS;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
     use crate::infrastructure::bevy_adapters::components::PlanetComponent;
     use bevy::math::{DMat3, DQuat, DVec3};
@@ -441,7 +445,10 @@ mod tests {
         app.update();
 
         let earth_pos = calculate_planet_position_f64(&earth, time_days, &solar, DVec3::ZERO, None);
-        let expected_sun = (-earth_pos * scale.solar_meters_per_display_unit as f64).as_vec3();
+        let earth_state = heliocentric_ecliptic_state_f64(&earth, time_days).unwrap();
+        let sun_state = heliocentric_ecliptic_state_f64(&sun, time_days).unwrap();
+        let expected_sun =
+            ((sun_state.position_au - earth_state.position_au) * AU_IN_METERS).as_vec3();
         let moon_pos = calculate_planet_position_f64(
             &moon,
             time_days,

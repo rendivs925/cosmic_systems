@@ -1,34 +1,32 @@
-use crate::components::rocket::*;
+use crate::domain::services::physics_orbital::heliocentric_direction_to_sun_f64;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
 use bevy::light::CascadeShadowConfigBuilder;
-use bevy::math::Vec3;
 use bevy::prelude::*;
 
-/// Spawns a directional sun light for rocket mode. The solar simulation uses
-/// a PointLight at the origin, but in the flight frame the sun should be a
-/// directional light at infinity. The sun is placed well above the LOCAL horizon
-/// (the rocket's radial up direction) so the pad and terrain are brightly lit:
-/// a fixed world-space direction would sit only a few degrees above the KSC
-/// horizon because the flight frame's axes are not the planet's local frame.
-pub fn setup_rocket_sun_light(mut commands: Commands, rocket_query: Query<&RocketPhysicsState>) {
-    // Radial up at the pad (the rocket's body +Y at spawn).
-    let up = rocket_query
-        .iter()
-        .next()
-        .map(|r| r.dynamics.position_m.normalize_or_zero().as_vec3())
-        .filter(|v| v.length_squared() > 0.5)
-        .unwrap_or(Vec3::Y);
-    // A fixed horizontal reference perpendicular to the local up.
-    let east = if up.z.abs() < 0.9 {
-        up.cross(Vec3::Z).normalize()
-    } else {
-        up.cross(Vec3::X).normalize()
-    };
-    // Sun ~20 deg above the local horizon (morning golden hour): long shadows
-    // and warm light like the launch-pad reference footage.
-    let sun_dir = (up * 0.342 + east * 0.94).normalize();
+/// Spawns a directional sunlight source. The Sun's inertial direction comes
+/// from the shared ephemeris; the rotating planet moves terrain through that
+/// fixed direction to produce the physical day/night cycle.
+pub fn setup_rocket_sun_light(
+    mut commands: Commands,
+    sim_time: Res<SimulationTime>,
+    bound_planet: Res<RocketBoundPlanet>,
+    planet_query: Query<&PlanetComponent>,
+) {
+    let sun_direction = bound_planet
+        .0
+        .as_deref()
+        .and_then(|name| {
+            planet_query
+                .iter()
+                .find(|planet| planet.domain_planet.name == name)
+        })
+        .and_then(|planet| {
+            heliocentric_direction_to_sun_f64(&planet.domain_planet, sim_time.sim_time_s / 86_400.0)
+        })
+        .unwrap_or(bevy::math::DVec3::NEG_Z)
+        .as_vec3();
 
     // Sky-blue ambient fill so shadowed faces read as sky-lit instead of black.
     commands.insert_resource(bevy::light::AmbientLight {
@@ -53,37 +51,16 @@ pub fn setup_rocket_sun_light(mut commands: Commands, rocket_query: Query<&Rocke
             ..default()
         }
         .build(),
-        // Light travels along the light's -Z toward the scene; orient it so the
-        // sun appears in the `sun_dir` direction.
-        Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_dir, Vec3::Y),
-        // Tag component so the day/night system can find and rotate this light.
+        // Light travels along local -Z toward the scene; orient it so the Sun
+        // appears in its ephemeris direction.
+        Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_direction, Vec3::Y),
         SunLight,
-        // Store the computed sun direction so the day/night rotation starts from
-        // the correct horizon angle (not a generic default).
-        SunLightState {
-            initial_direction: sun_dir,
-        },
     ));
 }
 
 /// Tag component marking the sun directional light for day/night rotation.
 #[derive(Component, Debug)]
 pub struct SunLight;
-
-/// Component storing the sun's initial direction so the day/night system can
-/// rotate it around the planet's north pole each frame.
-#[derive(Component, Debug)]
-pub struct SunLightState {
-    pub initial_direction: Vec3,
-}
-
-impl Default for SunLightState {
-    fn default() -> Self {
-        Self {
-            initial_direction: Vec3::new(0.0, 0.26, 0.97).normalize(), // ~15 deg above horizon
-        }
-    }
-}
 
 /// Space is the clear color. Atmospheric haze is applied only to local geometry
 /// through the camera fog; it must never turn the entire universe blue.
@@ -97,48 +74,65 @@ pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
     *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
 }
 
-/// Day/night cycle: rotates the sun light direction around the planet's rotation
-/// axis (Y in the flight frame) as simulation time advances. The planet's angular
-/// velocity comes from the bound planet definition. The sun makes one full
-/// revolution per bound-planet rotation period.
+/// Updates rocket-mode sunlight from the same ephemeris state used by the Sun
+/// proxy. Planet and terrain rotation, rather than an artificial light orbit,
+/// produces the local day/night cycle.
 pub fn update_sun_day_night_cycle(
     sim_time: Res<SimulationTime>,
     bound_planet: Res<RocketBoundPlanet>,
     planet_query: Query<&PlanetComponent>,
-    mut sun_query: Query<(&mut Transform, &SunLightState), With<SunLight>>,
+    mut sun_query: Query<&mut Transform, With<SunLight>>,
 ) {
-    // Use the flight body's rotation period, then compute angular velocity.
-    // omega = 2π / period_seconds.
-    let rotation_rad_s = planet_query
+    let Some(planet) = planet_query
         .iter()
         .find(|planet| bound_planet.0.as_deref() == Some(planet.domain_planet.name.as_str()))
-        .map(|p| {
-            let period_s = p.domain_planet.rotation_period_hours as f64 * 3600.0;
-            if period_s > 0.0 {
-                std::f64::consts::TAU / period_s
-            } else {
-                7.2921159e-5 // Earth sidereal rotation rate rad/s
-            }
-        })
-        .unwrap_or(7.2921159e-5_f64);
+    else {
+        return;
+    };
+    let Some(sun_direction) =
+        heliocentric_direction_to_sun_f64(&planet.domain_planet, sim_time.sim_time_s / 86_400.0)
+    else {
+        return;
+    };
+    let sun_direction = sun_direction.as_vec3();
 
-    let total_time_s = sim_time.sim_time_s;
-    let rotation_angle = (total_time_s * rotation_rad_s) as f32;
+    for mut light_transform in sun_query.iter_mut() {
+        *light_transform = Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_direction, Vec3::Y);
+    }
+}
 
-    for (mut light_transform, sun_state) in sun_query.iter_mut() {
-        // Rotate initial sun direction around the Y axis (planet rotation axis).
-        // The planet's north pole points along +Y in the flight frame.
-        let cos_a = rotation_angle.cos();
-        let sin_a = rotation_angle.sin();
-        let dir = sun_state.initial_direction;
-        let rotated = Vec3::new(
-            cos_a * dir.x - sin_a * dir.z,
-            dir.y,
-            sin_a * dir.x + cos_a * dir.z,
-        )
-        .normalize();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 
-        // Update the light's look-direction so the sun travels across the sky.
-        *light_transform = Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-rotated, Vec3::Y);
+    #[test]
+    fn rocket_sunlight_matches_the_shared_ephemeris_direction() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let mut app = App::new();
+        let mut simulation_time = SimulationTime::default();
+        simulation_time.sim_time_s = 86_400.0;
+        app.insert_resource(simulation_time);
+        app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth.clone(),
+            material: default(),
+            has_texture: false,
+            base_reflectance: 0.0,
+            base_roughness: 0.0,
+        });
+        let light = app.world_mut().spawn((SunLight, Transform::default())).id();
+        app.add_systems(Update, update_sun_day_night_cycle);
+
+        app.update();
+
+        let expected = heliocentric_direction_to_sun_f64(&earth, 1.0)
+            .unwrap()
+            .as_vec3();
+        let transform = app.world().entity(light).get::<Transform>().unwrap();
+        let light_travel_direction = transform.rotation * -Vec3::Z;
+
+        assert!((-light_travel_direction).distance(expected) < 1e-6);
     }
 }

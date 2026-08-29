@@ -26,6 +26,12 @@ scale.
 - **THEN** its f64 ephemeris state is converted to display units only at the
   presentation boundary
 
+#### Scenario: Flight-frame Sun presentation
+
+- **WHEN** rocket-mode Sun geometry or directional lighting is updated
+- **THEN** it consumes the same f64 state at `SimulationTime` rather than a
+  solar-map transform or an artistic day/night orbit
+
 ### Requirement: Primary bodies use one published secular-element authority
 
 The system SHALL evaluate primary-body positions from JPL approximate-position

@@ -690,8 +690,8 @@ impl Plugin for RocketModePlugin {
                 isolate_rocket_presentation,
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
-                setup_rocket_sun_light,
                 setup_rocket_planets,
+                setup_rocket_sun_light,
                 setup_rocket_sky_color,
             )
                 .chain()
@@ -705,8 +705,8 @@ impl Plugin for RocketModePlugin {
                 isolate_rocket_presentation,
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
-                setup_rocket_sun_light,
                 setup_rocket_planets,
+                setup_rocket_sun_light,
                 setup_rocket_sky_color,
             )
                 .chain()

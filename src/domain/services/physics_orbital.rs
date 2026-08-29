@@ -172,6 +172,18 @@ pub fn heliocentric_ecliptic_state_f64(
     })
 }
 
+/// Unit vector from a primary body toward the Sun in the J2000 ecliptic
+/// frame. Presentation consumers use this for physically consistent sunlight;
+/// it is not a replacement for a vehicle force model.
+pub fn heliocentric_direction_to_sun_f64(
+    planet: &Planet,
+    days_from_j2000_tdb: f64,
+) -> Option<DVec3> {
+    let state = heliocentric_ecliptic_state_f64(planet, days_from_j2000_tdb)?;
+    let direction = (-state.position_au).normalize_or_zero();
+    (direction != DVec3::ZERO).then_some(direction)
+}
+
 fn primary_position_au(elements: JplApproximateElements, days_from_j2000_tdb: f64) -> DVec3 {
     let elements = elements.evaluate(days_from_j2000_tdb);
     let eccentric_anomaly = solve_kepler_f64(
@@ -1315,6 +1327,16 @@ mod tests {
                 .velocity_au_per_day
                 .distance(horizons_velocity_au_per_day)
         );
+    }
+
+    #[test]
+    fn sunward_direction_is_normalized_and_opposes_the_heliocentric_state() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let state = heliocentric_ecliptic_state_f64(&earth, 0.0).unwrap();
+        let sunward = heliocentric_direction_to_sun_f64(&earth, 0.0).unwrap();
+
+        assert!((sunward.length() - 1.0).abs() < 1e-12);
+        assert!(sunward.dot(state.position_au.normalize()) < -0.999_999_999_999);
     }
 
     #[test]
