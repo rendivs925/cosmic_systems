@@ -3,7 +3,10 @@ use crate::domain::services::physics_kepler::solve_kepler_adaptive;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::math::{DVec3, Quat, Vec3};
 
-pub const MOON_ORBIT_SCALE: f32 = 60.0;
+/// Solar-map moon distances use the same display scale as planetary distances.
+/// The former 60x exaggeration made real eccentric moon paths appear as stray
+/// straight lines across the solar map.
+pub const MOON_ORBIT_SCALE: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct OrbitalElements {
@@ -24,9 +27,8 @@ pub struct OrbitShape {
     pub arg_periapsis_rad: f32,
 }
 
-/// Calculate the position of a planet/moon in its orbit at a given time
-/// Uses simplified circular orbit approximation (Kepler's first law)
-/// iterations parameter controls Kepler solver accuracy (default: 8)
+/// Calculate a deterministic J2000 two-body Keplerian position. The solar map
+/// uses display units, while Rocket flight keeps its separate f64 local frame.
 pub fn calculate_planet_position(
     planet: &Planet,
     time_days: f32,
@@ -346,33 +348,75 @@ fn moon_elements_from_degrees(
     )
 }
 
+#[allow(clippy::excessive_precision)] // Preserve the published J2000 source table values.
 fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {
-    // J2000 mean orbital elements (degrees) for a Keplerian baseline.
-    // Sources: NASA planetary fact sheets, JPL horizons
+    // J2000 heliocentric ecliptic elements (degrees). Parameters are semimajor
+    // axis, eccentricity, inclination, longitude of ascending node, longitude
+    // of periapsis, and mean longitude. Source: JPL approximate positions.
     match name {
         "Mercury" => Some(elements_from_degrees(
-            0.387098, 0.205630, 7.00487, 48.33167, 29.12478, 252.25167,
+            0.38709927,
+            0.20563593,
+            7.00497902,
+            48.33076593,
+            77.45779628,
+            252.25032350,
         )),
         "Venus" => Some(elements_from_degrees(
-            0.723332, 0.006772, 3.39471, 76.67984, 54.85229, 181.97973,
+            0.72333566,
+            0.00677672,
+            3.39467605,
+            76.67984255,
+            131.60246718,
+            181.97909950,
         )),
         "Earth" => Some(elements_from_degrees(
-            1.000000, 0.016708, 0.00005, 174.87317, 288.06405, 357.52911,
+            1.00000261,
+            0.01671123,
+            -0.00001531,
+            0.0,
+            102.93768193,
+            100.46457166,
         )),
         "Mars" => Some(elements_from_degrees(
-            1.523679, 0.093412, 1.85061, 49.57854, 286.5373, 355.4330,
+            1.52371034,
+            0.09339410,
+            1.84969142,
+            49.55953891,
+            -23.94362959,
+            -4.55343205,
         )),
         "Jupiter" => Some(elements_from_degrees(
-            5.204267, 0.048393, 1.30490, 100.46441, 273.86785, 34.35152,
+            5.20288700,
+            0.04838624,
+            1.30439695,
+            100.47390909,
+            14.72847983,
+            34.39644051,
         )),
         "Saturn" => Some(elements_from_degrees(
-            9.582026, 0.055723, 2.48599, 113.66550, 339.39265, 50.07744,
+            9.53667594,
+            0.05386179,
+            2.48599187,
+            113.66242448,
+            92.59887831,
+            49.95424423,
         )),
         "Uranus" => Some(elements_from_degrees(
-            19.191263, 0.047167, 0.77264, 74.00595, 96.99897, 314.05501,
+            19.18916464,
+            0.04725744,
+            0.77263783,
+            74.01692503,
+            170.95427630,
+            313.23810451,
         )),
         "Neptune" => Some(elements_from_degrees(
-            30.068963, 0.008586, 1.77004, 131.78423, 273.21967, 304.34867,
+            30.06992276,
+            0.00859048,
+            1.77004347,
+            131.78422574,
+            44.96476227,
+            -55.12002969,
         )),
         _ => None,
     }
@@ -411,8 +455,9 @@ fn elements_from_degrees(
 fn true_anomaly(eccentric_anomaly: f32, eccentricity: f32) -> f32 {
     let cos_e = eccentric_anomaly.cos();
     let sin_e = eccentric_anomaly.sin();
-    let tan_half = ((1.0 + eccentricity) / (1.0 - eccentricity)).sqrt() * (sin_e / (cos_e + 1.0));
-    2.0 * tan_half.atan()
+    let numerator = (1.0 - eccentricity * eccentricity).sqrt() * sin_e;
+    let denominator = cos_e - eccentricity;
+    numerator.atan2(denominator)
 }
 
 fn mean_motion_rad_per_day(semi_major_axis_au: f32) -> f32 {
@@ -857,6 +902,7 @@ pub fn circularize_and_plane_change_dv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::planet_factory::PlanetFactory;
     use bevy::math::DVec3;
 
     const EARTH_MU: f64 = 3.986004418e14; // m^3/s^2
@@ -1000,6 +1046,23 @@ mod tests {
         );
 
         assert!(elements.inclination_rad.abs() < 1e-12);
+    }
+
+    #[test]
+    fn highly_eccentric_true_anomaly_remains_finite_at_apoapsis() {
+        let anomaly = true_anomaly(std::f32::consts::PI, 0.7512);
+
+        assert!(anomaly.is_finite());
+        assert!((anomaly.abs() - std::f32::consts::PI).abs() < 1e-5);
+    }
+
+    #[test]
+    fn moon_orbit_shape_uses_unexaggerated_distance_scale() {
+        let solar = SolarSystemParameters::for_visualization();
+        let nereid = PlanetFactory::create_by_name("Nereid").unwrap();
+        let shape = orbit_shape_for(&nereid, &solar);
+
+        assert!((shape.semi_major_axis_units - 0.036915 * solar.scale_factor).abs() < 1e-3);
     }
 
     #[test]

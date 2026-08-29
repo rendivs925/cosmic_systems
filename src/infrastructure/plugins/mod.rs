@@ -221,10 +221,6 @@ impl Plugin for SharedSimulationPlugin {
         );
         app.add_systems(
             Update,
-            update_orbit_quality.run_if(solar_presentation_enabled),
-        );
-        app.add_systems(
-            Update,
             update_orbit_visibility.run_if(solar_presentation_enabled),
         );
         app.add_systems(

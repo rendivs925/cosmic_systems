@@ -137,13 +137,15 @@ fn create_worker() -> Result<Worker, JsValue> {
             const positions = new Float32Array(segments * 3);
 
             const eClamped = Math.max(0.0, Math.min(0.99, shape.eccentricity));
-            const semiLatus = shape.semi_major_axis_units * (1.0 - eClamped * eClamped);
+            const semiMinor = shape.semi_major_axis_units * Math.sqrt(1.0 - eClamped * eClamped);
 
             for (let i = 0; i < segments; i++) {
-                const trueAnomaly = (i / segments) * TAU;
-                const radius = semiLatus / (1.0 + eClamped * Math.cos(trueAnomaly));
-                const xOrb = radius * Math.cos(trueAnomaly);
-                const zOrb = radius * Math.sin(trueAnomaly);
+                // Match the native ribbon's eccentric-anomaly parameterization.
+                // Uniform true-anomaly samples leave visible long chords near
+                // apoapsis on highly eccentric orbits such as Nereid.
+                const eccentricAnomaly = (i / segments) * TAU;
+                const xOrb = shape.semi_major_axis_units * (Math.cos(eccentricAnomaly) - eClamped);
+                const zOrb = semiMinor * Math.sin(eccentricAnomaly);
                 const pos = transform_orbital_point(
                     xOrb,
                     zOrb,

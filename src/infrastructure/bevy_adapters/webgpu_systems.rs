@@ -125,9 +125,11 @@ pub fn apply_orbit_mesh_results(
         let color = [color.red, color.green, color.blue, color.alpha];
 
         let coords = result.positions;
-        let coord_count = coords.len() / 3;
-        let usable = coord_count.min(segments);
-        for i in 0..usable {
+        if coords.len() != segments * 3 || !coords.iter().all(|coordinate| coordinate.is_finite()) {
+            worker_pool.mark_complete(result.task_id);
+            continue;
+        }
+        for i in 0..segments {
             let idx = i * 3;
             positions.push([coords[idx], coords[idx + 1], coords[idx + 2]]);
             normals.push([0.0, 1.0, 0.0]);

@@ -5,9 +5,6 @@ use crate::application::mesh_factory::{
 };
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::performance_components::{
-    PerformanceStats, QualityLevel,
-};
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
 
@@ -80,7 +77,6 @@ pub(crate) fn update_orbit_visuals(
 // Orbits are now visible at all distances for better navigation
 pub fn update_orbit_visibility(
     solar_params: Res<SolarSystemParameters>,
-    selected_planet: Res<SelectedPlanet>,
     mut orbit_query: Query<(&OrbitComponent, &mut Visibility)>,
 ) {
     if !solar_params.show_orbits {
@@ -92,10 +88,7 @@ pub fn update_orbit_visibility(
     }
 
     // Show all orbits regardless of distance - always visible for navigation
-    for (orbit_comp, mut visibility) in orbit_query.iter_mut() {
-        let is_selected = selected_planet.entity == Some(orbit_comp.planet_entity);
-
-        // All orbits are visible, but selected ones are highlighted
+    for (_, mut visibility) in orbit_query.iter_mut() {
         *visibility = Visibility::Visible;
     }
 }
@@ -356,44 +349,6 @@ pub fn update_position_trackers(
     for (tracker, mut transform) in tracker_query.iter_mut() {
         if let Ok((_, planet_transform)) = planet_query.get(tracker.planet_entity) {
             transform.translation = planet_transform.translation;
-        }
-    }
-}
-
-// System to adapt orbit segment count and thickness based on quality level
-pub fn update_orbit_quality(
-    perf_stats: Res<PerformanceStats>,
-    mut last_quality: Local<Option<QualityLevel>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut orbit_query: Query<(&mut OrbitComponent, &mut Mesh3d)>,
-) {
-    let current_quality = perf_stats.quality_level;
-    if *last_quality == Some(current_quality) {
-        return;
-    }
-    *last_quality = Some(current_quality);
-
-    let (segments, thickness_mult) = match current_quality {
-        QualityLevel::Ultra => (512, 1.4),
-        QualityLevel::High => (256, 1.2),
-        QualityLevel::Medium => (128, 1.0),
-        QualityLevel::Low => (64, 0.7),
-        QualityLevel::Minimal => (32, 0.4),
-    };
-
-    for (mut orbit_comp, mut mesh3d) in orbit_query.iter_mut() {
-        if orbit_comp.segments != segments {
-            orbit_comp.segments = segments;
-            let new_thickness = orbit_comp.radius * 0.0001 * thickness_mult;
-            orbit_comp.thickness = new_thickness;
-            let new_mesh = create_orbit_ribbon_mesh(
-                &mut meshes,
-                &orbit_comp.orbit_shape,
-                ORBIT_LINE_COLOR,
-                new_thickness,
-                segments,
-            );
-            mesh3d.0 = new_mesh;
         }
     }
 }

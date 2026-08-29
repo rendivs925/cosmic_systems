@@ -7,6 +7,10 @@ use std::f32::consts::TAU;
 
 use crate::domain::services::physics;
 
+/// Static solar-system orbit geometry uses a fixed high-fidelity tessellation.
+/// Adaptive frame quality must not change an ellipse into visible chords.
+pub const ORBIT_RIBBON_SEGMENTS: usize = 1024;
+
 pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
     #[cfg(target_arch = "wasm32")]
     let (sectors, stacks) = (32, 16);
@@ -101,11 +105,7 @@ pub fn create_orbit_ribbon_mesh(
 ) -> Handle<Mesh> {
     // Uniform eccentric-anomaly samples keep high-eccentricity ellipses smooth
     // near periapsis without changing their shared orbital-element geometry.
-    let segments = segments.max(if orbit_shape.eccentricity > 0.5 {
-        128
-    } else {
-        64
-    });
+    let segments = segments.max(ORBIT_RIBBON_SEGMENTS);
     let vertex_count = segments * 2;
     let mut positions = Vec::with_capacity(vertex_count);
     let mut normals = Vec::with_capacity(vertex_count);
@@ -341,5 +341,10 @@ mod tests {
         let (sectors, stacks) = flight_globe_resolution();
         assert!(sectors >= 128);
         assert!(stacks >= 64);
+    }
+
+    #[test]
+    fn orbit_ribbons_never_degrade_below_the_scientific_render_resolution() {
+        assert_eq!(ORBIT_RIBBON_SEGMENTS, 1024);
     }
 }
