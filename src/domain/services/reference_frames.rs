@@ -118,10 +118,23 @@ pub fn surface_velocity_in_planet_inertial(pos_pci: DVec3, planet: &Planet) -> D
     if !period_s.is_finite() || period_s <= 0.0 {
         return DVec3::ZERO;
     }
-    let spin_axis_pci =
-        DQuat::from_rotation_z((planet.axial_tilt_deg as f64).to_radians()) * DVec3::Y;
+    let spin_axis_pci = planet_inertial_spin_axis(planet);
     let angular_velocity_rad_s = spin_axis_pci * (std::f64::consts::TAU / period_s);
     angular_velocity_rad_s.cross(pos_pci)
+}
+
+/// Unit normal of the planet's equatorial plane in planet-centered inertial
+/// coordinates. Orbital inclination for local flight is measured from this
+/// axis, not from the solar rendering frame's +Z axis.
+pub fn planet_inertial_spin_axis(planet: &Planet) -> DVec3 {
+    DQuat::from_rotation_z((planet.axial_tilt_deg as f64).to_radians()) * DVec3::Y
+}
+
+/// Inertial reference direction for right ascension within a planet's
+/// equatorial plane. Together with [`planet_inertial_spin_axis`], this defines
+/// the local orbital-element reference frame.
+pub fn planet_equatorial_reference_x_axis(planet: &Planet) -> DVec3 {
+    DQuat::from_rotation_z((planet.axial_tilt_deg as f64).to_radians()) * DVec3::X
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +298,18 @@ mod tests {
             "round trip off by {}",
             (back - bf).length()
         );
+    }
+
+    #[test]
+    fn equatorial_reference_axes_follow_axial_tilt() {
+        let planet = earth();
+        let spin_axis = planet_inertial_spin_axis(&planet);
+        let reference_x = planet_equatorial_reference_x_axis(&planet);
+
+        assert!((spin_axis.length() - 1.0).abs() < 1e-12);
+        assert!((reference_x.length() - 1.0).abs() < 1e-12);
+        assert!(spin_axis.dot(reference_x).abs() < 1e-12);
+        assert!((spin_axis - DVec3::Y).length() > 1e-3);
     }
 
     #[test]

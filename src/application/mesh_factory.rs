@@ -99,6 +99,13 @@ pub fn create_orbit_ribbon_mesh(
     thickness: f32,
     segments: usize,
 ) -> Handle<Mesh> {
+    // Uniform eccentric-anomaly samples keep high-eccentricity ellipses smooth
+    // near periapsis without changing their shared orbital-element geometry.
+    let segments = segments.max(if orbit_shape.eccentricity > 0.5 {
+        128
+    } else {
+        64
+    });
     let vertex_count = segments * 2;
     let mut positions = Vec::with_capacity(vertex_count);
     let mut normals = Vec::with_capacity(vertex_count);
@@ -107,15 +114,14 @@ pub fn create_orbit_ribbon_mesh(
     let mut indices = Vec::with_capacity(segments * 6);
 
     let e = orbit_shape.eccentricity.clamp(0.0, 0.99);
-    let semi_latus = orbit_shape.semi_major_axis_units * (1.0 - e * e);
+    let semi_minor = orbit_shape.semi_major_axis_units * (1.0 - e * e).sqrt();
 
     // Compute all orbit positions first
     let mut orbit_positions: Vec<Vec3> = Vec::with_capacity(segments);
     for i in 0..segments {
-        let true_anomaly = (i as f32 / segments as f32) * TAU;
-        let radius = semi_latus / (1.0 + e * true_anomaly.cos());
-        let x_orbital = radius * true_anomaly.cos();
-        let z_orbital = radius * true_anomaly.sin();
+        let eccentric_anomaly = (i as f32 / segments as f32) * TAU;
+        let x_orbital = orbit_shape.semi_major_axis_units * (eccentric_anomaly.cos() - e);
+        let z_orbital = semi_minor * eccentric_anomaly.sin();
         let pos_3d = physics::transform_orbital_point(
             x_orbital,
             z_orbital,
@@ -206,16 +212,31 @@ pub fn create_polyline_ribbon_mesh(points: &[Vec3], color: Color, thickness: f32
     ];
     let half_width = thickness.clamp(0.1, 15.0) * 0.5;
 
+    let first_tangent = (points[1] - points[0]).normalize_or_zero();
+    let first_reference = if first_tangent.y.abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let mut side = first_tangent.cross(first_reference).normalize_or_zero();
+
     for (index, point) in points.iter().copied().enumerate() {
         let previous = points[index.saturating_sub(1)];
         let next = points[(index + 1).min(points.len() - 1)];
         let tangent = (next - previous).normalize_or_zero();
-        let reference_axis = if tangent.y.abs() < 0.9 {
-            Vec3::Y
+        // Parallel transport avoids the discontinuous width flips caused by
+        // switching a global reference axis along a steep flight path.
+        let transported_side = (side - tangent * side.dot(tangent)).normalize_or_zero();
+        if transported_side != Vec3::ZERO {
+            side = transported_side;
         } else {
-            Vec3::X
-        };
-        let side = tangent.cross(reference_axis).normalize_or_zero();
+            let reference_axis = if tangent.y.abs() < 0.9 {
+                Vec3::Y
+            } else {
+                Vec3::X
+            };
+            side = tangent.cross(reference_axis).normalize_or_zero();
+        }
         let left = point - side * half_width;
         let right = point + side * half_width;
         let u = index as f32 / (points.len() - 1) as f32;
@@ -247,52 +268,6 @@ pub fn create_placeholder_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handl
     let indices = vec![0u32, 1u32];
 
     let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-    meshes.add(mesh)
-}
-
-pub fn create_orbital_plane_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
-    const SEGMENTS: usize = 32;
-    let mut positions = Vec::with_capacity(SEGMENTS + 1);
-    let mut normals = Vec::with_capacity(SEGMENTS + 1);
-    let mut uvs = Vec::with_capacity(SEGMENTS + 1);
-    let mut colors = Vec::with_capacity(SEGMENTS + 1);
-    let mut indices = Vec::with_capacity(SEGMENTS * 3);
-
-    // Center vertex
-    positions.push([0.0, 0.0, 0.0]);
-    normals.push([0.0, 1.0, 0.0]); // Pointing up in local space
-    uvs.push([0.5, 0.5]);
-    colors.push([0.82, 0.86, 0.90, 1.0]); // Cool white
-
-    // Outer ring vertices
-    for i in 0..SEGMENTS {
-        let angle = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
-        let x = angle.cos() * radius;
-        let z = angle.sin() * radius;
-
-        positions.push([x, 0.0, z]);
-        normals.push([0.0, 1.0, 0.0]);
-        uvs.push([0.5 + x / (radius * 2.0), 0.5 + z / (radius * 2.0)]);
-        colors.push([0.82, 0.86, 0.90, 0.8]); // Slightly more transparent at edges
-    }
-
-    // Create triangles from center to outer ring
-    for i in 0..SEGMENTS {
-        let next_i = (i + 1) % SEGMENTS;
-        indices.push(0); // Center
-        indices.push((i + 1) as u32); // Current outer vertex
-        indices.push((next_i + 1) as u32); // Next outer vertex
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);

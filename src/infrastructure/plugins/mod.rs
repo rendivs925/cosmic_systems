@@ -162,6 +162,10 @@ fn vulkan_solver_required(rocket_mode: Option<Res<RocketMode>>) -> bool {
     shared_solar_presentation_requires_vulkan(rocket_mode.is_some())
 }
 
+fn solar_presentation_enabled(rocket_mode: Option<Res<RocketMode>>) -> bool {
+    rocket_mode.is_none()
+}
+
 /// Shared solar-system world: resources, physics, orbit visuals, performance,
 /// Vulkan compute, screenshot/recording, terrain, and starfield.
 pub struct SharedSimulationPlugin;
@@ -207,15 +211,43 @@ impl Plugin for SharedSimulationPlugin {
         );
 
         // Visual and interaction systems
-        app.add_systems(Update, update_orbit_visuals);
-        app.add_systems(Update, update_orbit_thickness);
-        app.add_systems(Update, update_orbit_quality);
-        app.add_systems(Update, update_orbit_visibility);
-        app.add_systems(Update, spawn_position_trackers);
-        app.add_systems(Update, update_position_trackers);
-        app.add_systems(Update, update_planet_reflections);
-        app.add_systems(Update, update_orbital_planes);
-        app.add_systems(Update, update_eccentricity_markers);
+        app.add_systems(
+            Update,
+            update_orbit_visuals.run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
+            update_orbit_thickness.run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
+            update_orbit_quality.run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
+            update_orbit_visibility.run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
+            (
+                spawn_position_trackers,
+                interpolate_planet_transforms,
+                update_moon_orbit_positions,
+                update_position_trackers,
+            )
+                .chain()
+                .before(update_camera_controller)
+                .before(update_craft_camera)
+                .run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
+            update_planet_reflections.run_if(solar_presentation_enabled),
+        );
+        app.add_systems(
+            Update,
+            update_eccentricity_markers.run_if(solar_presentation_enabled),
+        );
         app.add_systems(Update, apply_pending_material_textures);
 
         // Performance and quality systems
@@ -252,8 +284,7 @@ impl Plugin for SolarSystemModePlugin {
     fn build(&self, app: &mut App) {
         // Startup systems
         app.add_systems(Startup, setup_ui);
-        app.add_systems(Startup, spawn_orbital_planes);
-        app.add_systems(Startup, spawn_eccentricity_markers);
+        app.add_systems(Startup, spawn_eccentricity_markers.after(setup_space));
 
         // Input handling
         app.add_systems(Update, handle_solar_system_input);

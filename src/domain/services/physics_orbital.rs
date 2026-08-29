@@ -527,6 +527,28 @@ impl LowEarthOrbitTarget {
         mu: f64,
         body_radius_m: f64,
     ) -> bool {
+        self.matches_state_in_reference_frame(
+            position_m,
+            velocity_mps,
+            mu,
+            body_radius_m,
+            DVec3::Z,
+            DVec3::X,
+        )
+    }
+
+    /// Evaluate the target against elements measured in an explicit inertial
+    /// reference plane. Planet-centered flight uses the body's equatorial
+    /// plane, while solar-map elements retain the conventional +Z plane.
+    pub fn matches_state_in_reference_frame(
+        self,
+        position_m: DVec3,
+        velocity_mps: DVec3,
+        mu: f64,
+        body_radius_m: f64,
+        reference_normal: DVec3,
+        reference_x_axis: DVec3,
+    ) -> bool {
         if !self.is_valid() || !body_radius_m.is_finite() || body_radius_m <= 0.0 {
             return false;
         }
@@ -538,7 +560,13 @@ impl LowEarthOrbitTarget {
             return false;
         }
 
-        let elements = orbital_elements_from_state(position_m, velocity_mps, mu);
+        let elements = orbital_elements_from_state_in_reference_frame(
+            position_m,
+            velocity_mps,
+            mu,
+            reference_normal,
+            reference_x_axis,
+        );
         let apoapsis_altitude_m = elements.apoapsis_m - body_radius_m;
         let periapsis_altitude_m = elements.periapsis_m - body_radius_m;
         if !apoapsis_altitude_m.is_finite()
@@ -645,15 +673,32 @@ pub fn orbital_elements_from_state(
     velocity_mps: DVec3,
     mu: f64,
 ) -> StateVectorOrbitalElements {
+    orbital_elements_from_state_in_reference_frame(position_m, velocity_mps, mu, DVec3::Z, DVec3::X)
+}
+
+/// Compute osculating orbital elements in an explicit inertial reference
+/// frame. `reference_normal` is the reference plane normal and
+/// `reference_x_axis` defines zero longitude within that plane.
+pub fn orbital_elements_from_state_in_reference_frame(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    mu: f64,
+    reference_normal: DVec3,
+    reference_x_axis: DVec3,
+) -> StateVectorOrbitalElements {
     let r = position_m;
     let v = velocity_mps;
+    let reference_normal = reference_normal.normalize_or_zero();
+    let reference_x_axis = (reference_x_axis
+        - reference_normal * reference_x_axis.dot(reference_normal))
+    .normalize_or_zero();
 
     // Specific angular momentum: h = r × v
     let h = r.cross(v);
     let h_mag = h.length();
 
-    // Node vector: n = k × h (k = [0, 0, 1] for equatorial plane reference)
-    let n = DVec3::new(-h.y, h.x, 0.0);
+    // Node vector: n = k × h, where k is the caller's reference-plane normal.
+    let n = reference_normal.cross(h);
     let n_mag = n.length();
 
     // Specific orbital energy: ε = v²/2 - μ/r
@@ -672,58 +717,34 @@ pub fn orbital_elements_from_state(
     let e_vec = v.cross(h) / mu - r / r_mag;
     let eccentricity = e_vec.length();
 
-    // Inclination: i = acos(h_z / |h|)
+    // Inclination: i = acos(h·k / |h|)
     let inclination = if h_mag > 1e-12 {
-        (h.z / h_mag).acos()
+        (h.dot(reference_normal) / h_mag).clamp(-1.0, 1.0).acos()
     } else {
         0.0
     };
 
-    // Longitude of ascending node: Ω = atan2(n_x, -n_y) or acos(n_x/|n|) with quadrant check
+    // Longitude of ascending node is measured from the supplied in-plane axis.
     let longitude_ascending_node = if n_mag > 1e-12 {
-        let cos_omega = n.x / n_mag;
-        let omega = cos_omega.clamp(-1.0, 1.0).acos();
-        if n.y >= 0.0 {
-            omega
-        } else {
-            2.0 * std::f64::consts::PI - omega
-        }
+        positive_angle(reference_x_axis, n, reference_normal)
     } else {
         0.0
     };
 
-    // Argument of periapsis: ω = acos(n·e / (|n||e|)) with quadrant check
+    // Argument of periapsis is measured from the ascending node around h.
     let argument_of_periapsis = if n_mag > 1e-12 && eccentricity > 1e-12 {
-        let cos_w = n.dot(e_vec) / (n_mag * eccentricity);
-        let w = cos_w.clamp(-1.0, 1.0).acos();
-        if e_vec.z >= 0.0 {
-            w
-        } else {
-            2.0 * std::f64::consts::PI - w
-        }
+        positive_angle(n, e_vec, h)
     } else {
         0.0
     };
 
-    // True anomaly: ν = acos(e·r / (|e||r|)) with quadrant check
+    // True anomaly is measured from periapsis around h.
     let true_anomaly = if eccentricity > 1e-12 {
-        let cos_nu = e_vec.dot(r) / (eccentricity * r_mag);
-        let nu = cos_nu.clamp(-1.0, 1.0).acos();
-        if r.dot(v) >= 0.0 {
-            nu
-        } else {
-            2.0 * std::f64::consts::PI - nu
-        }
+        positive_angle(e_vec, r, h)
     } else {
         // Circular orbit: use angle from ascending node
         if n_mag > 1e-12 {
-            let cos_lat = r.dot(n) / (r_mag * n_mag);
-            let lat = cos_lat.clamp(-1.0, 1.0).acos();
-            if r.z >= 0.0 {
-                lat
-            } else {
-                2.0 * std::f64::consts::PI - lat
-            }
+            positive_angle(n, r, h)
         } else {
             0.0
         }
@@ -776,6 +797,19 @@ pub fn orbital_elements_from_state(
         apoapsis_m: apoapsis,
         periapsis_m: periapsis,
     }
+}
+
+fn positive_angle(from: DVec3, to: DVec3, normal: DVec3) -> f64 {
+    let from = from.normalize_or_zero();
+    let to = to.normalize_or_zero();
+    let normal = normal.normalize_or_zero();
+    if from == DVec3::ZERO || to == DVec3::ZERO || normal == DVec3::ZERO {
+        return 0.0;
+    }
+    normal
+        .dot(from.cross(to))
+        .atan2(from.dot(to))
+        .rem_euclid(std::f64::consts::TAU)
 }
 
 /// Circularize burn delta-v at current altitude to achieve circular orbit.
@@ -945,6 +979,27 @@ mod tests {
         let elements = orbital_elements_from_state(pos, vel, EARTH_MU);
 
         assert!((elements.inclination_rad - inclination).abs() < 1e-4);
+    }
+
+    #[test]
+    fn local_equatorial_elements_respect_a_tilted_spin_axis() {
+        let radius_m = 6_771_000.0;
+        let circular_speed_mps = (EARTH_MU / radius_m).sqrt();
+        let tilt = 23.44_f64.to_radians();
+        let spin_axis = bevy::math::DQuat::from_rotation_z(tilt) * DVec3::Y;
+        let reference_x = bevy::math::DQuat::from_rotation_z(tilt) * DVec3::X;
+        let position_m = reference_x * radius_m;
+        let velocity_mps = spin_axis.cross(position_m).normalize() * circular_speed_mps;
+
+        let elements = orbital_elements_from_state_in_reference_frame(
+            position_m,
+            velocity_mps,
+            EARTH_MU,
+            spin_axis,
+            reference_x,
+        );
+
+        assert!(elements.inclination_rad.abs() < 1e-12);
     }
 
     #[test]

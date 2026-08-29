@@ -7,7 +7,10 @@ use crate::domain::services::guidance::{
     reentry_bank_angle_enhanced, terminal_landing_guidance, transfer_burn_phase, AutopilotMode,
     DescentGuidanceConfig, TransferBurnPhase,
 };
-use crate::domain::services::physics_orbital::orbital_elements_from_state;
+use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
+use crate::domain::services::reference_frames::{
+    planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+};
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{
@@ -120,10 +123,23 @@ pub fn guidance_system(
         let velocity = rocket.dynamics.velocity_mps;
         let speed = velocity.length();
         let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-        let state_elements = orbital_elements_from_state(position_m, velocity, mu);
-        let target_orbit_reached = autopilot
-            .target_orbit
-            .matches_state(position_m, velocity, mu, radius_m);
+        let reference_normal = planet_inertial_spin_axis(&planet.domain_planet);
+        let reference_x_axis = planet_equatorial_reference_x_axis(&planet.domain_planet);
+        let state_elements = orbital_elements_from_state_in_reference_frame(
+            position_m,
+            velocity,
+            mu,
+            reference_normal,
+            reference_x_axis,
+        );
+        let target_orbit_reached = autopilot.target_orbit.matches_state_in_reference_frame(
+            position_m,
+            velocity,
+            mu,
+            radius_m,
+            reference_normal,
+            reference_x_axis,
+        );
 
         // Update time since liftoff for time-based ascent guidance.
         if *mission_state != RocketMissionState::PreLaunch {

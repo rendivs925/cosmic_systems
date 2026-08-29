@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn test_planet_factory_get_moons() {
         let moons = PlanetFactory::get_moons();
-        assert_eq!(moons.len(), 25); // All moons
+        assert_eq!(moons.len(), 24); // All moons with simulated parent bodies
 
         // Check that moons have parent entities
         for moon in &moons {
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_planet_factory_get_available_names() {
         let names = PlanetFactory::get_available_names();
-        assert_eq!(names.len(), 34); // 9 planets + 25 moons
+        assert_eq!(names.len(), 33); // 9 planets + 24 moons
 
         assert!(names.contains(&"Earth"));
         assert!(names.contains(&"Moon"));

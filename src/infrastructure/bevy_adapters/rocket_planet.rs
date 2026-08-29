@@ -47,10 +47,17 @@ pub struct RocketBoundPlanet(pub Option<String>);
 /// hides their solar-scale presentation. Flight-frame proxy meshes are the only
 /// celestial visuals seen by the rocket camera.
 pub fn isolate_rocket_presentation(
-    mut planets: Query<&mut Visibility, With<PlanetComponent>>,
+    mut solar_presentation: Query<
+        &mut Visibility,
+        Or<(
+            With<PlanetComponent>,
+            With<OrbitComponent>,
+            With<PositionTracker>,
+        )>,
+    >,
     mut solar_lights: Query<&mut PointLight>,
 ) {
-    for mut visibility in planets.iter_mut() {
+    for mut visibility in solar_presentation.iter_mut() {
         *visibility = Visibility::Hidden;
     }
     for mut light in solar_lights.iter_mut() {

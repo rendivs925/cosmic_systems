@@ -258,3 +258,27 @@ pub fn load_texture(
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::services::planet_factory::PlanetFactory;
+
+    #[test]
+    fn every_catalog_body_has_a_real_albedo_asset() {
+        for body in PlanetFactory::get_planets()
+            .into_iter()
+            .chain(PlanetFactory::get_moons())
+        {
+            let textures = get_planet_textures(&body.name);
+            let path = textures
+                .albedo
+                .unwrap_or_else(|| panic!("{} has no albedo texture mapping", body.name));
+            assert!(
+                asset_exists(path),
+                "{} texture is missing: {path}",
+                body.name
+            );
+        }
+    }
+}

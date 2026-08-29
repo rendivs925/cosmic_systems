@@ -29,6 +29,7 @@ pub fn setup_space(
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
     solar_camera_enabled: Option<Res<SolarCameraEnabled>>,
+    rocket_mode: Option<Res<RocketMode>>,
     earth_terrain: Option<Res<crate::application::terrain_config::EarthTerrainConfig>>,
 ) {
     // Insert solar system parameters as a resource
@@ -137,6 +138,7 @@ pub fn setup_space(
             entity_map,
             position_map,
             axial_tilts,
+            enable_earth_flight_environment: rocket_mode.is_some(),
             spawn_per_frame: 1,
         });
         return;
@@ -156,6 +158,7 @@ pub fn setup_space(
             &mut position_map,
             &axial_tilts,
             earth_terrain.as_deref(),
+            rocket_mode.is_some(),
         );
     }
 }
@@ -167,6 +170,7 @@ pub(crate) struct SpawnQueue {
     entity_map: HashMap<String, Entity>,
     position_map: HashMap<String, Vec3>,
     axial_tilts: HashMap<String, f32>,
+    enable_earth_flight_environment: bool,
     spawn_per_frame: usize,
 }
 
@@ -184,6 +188,7 @@ pub fn spawn_bodies_progressively(
         entity_map,
         position_map,
         axial_tilts,
+        enable_earth_flight_environment,
         spawn_per_frame,
     } = &mut *queue;
 
@@ -202,6 +207,7 @@ pub fn spawn_bodies_progressively(
             position_map,
             axial_tilts,
             None,
+            *enable_earth_flight_environment,
         );
     }
 }
@@ -217,6 +223,7 @@ fn spawn_celestial_body(
     position_map: &mut HashMap<String, Vec3>,
     axial_tilts: &HashMap<String, f32>,
     earth_terrain: Option<&crate::application::terrain_config::EarthTerrainConfig>,
+    enable_earth_flight_environment: bool,
 ) {
     let visual_radius = if planet.name == "Sun" {
         physics::calculate_sun_visual_radius(solar_params)
@@ -316,25 +323,30 @@ fn spawn_celestial_body(
 
     let material_handle = materials.add(material);
 
+    // Terrain and atmosphere are flight simulation data, not solar-map layers.
+    // Earth is the only body configured for them while Rocket mode is active.
     #[cfg(feature = "dem")]
-    let terrain = PlanetTerrain::with_srtm_directory(
-        &planet.name,
-        earth_terrain
-            .as_deref()
-            .and_then(|config| config.srtm_dir.as_deref()),
-    );
+    let terrain = (enable_earth_flight_environment && planet.name == "Earth").then(|| {
+        PlanetTerrain::with_srtm_directory(
+            "Earth",
+            earth_terrain
+                .as_deref()
+                .and_then(|config| config.srtm_dir.as_deref()),
+        )
+    });
     #[cfg(not(feature = "dem"))]
     let terrain = {
         let _ = earth_terrain;
-        PlanetTerrain::default_for(&planet.name)
+        (enable_earth_flight_environment && planet.name == "Earth")
+            .then(|| PlanetTerrain::default_for("Earth"))
     };
 
-    let planet_entity = commands
-        .spawn((
-            Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
-            MeshMaterial3d(material_handle.clone()),
-            Transform::from_translation(initial_position),
-        ))
+    let mut planet_commands = commands.spawn((
+        Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
+        MeshMaterial3d(material_handle.clone()),
+        Transform::from_translation(initial_position),
+    ));
+    planet_commands
         .insert(PlanetComponent {
             domain_planet: planet.clone(),
             material: material_handle.clone(),
@@ -342,13 +354,17 @@ fn spawn_celestial_body(
             base_reflectance: reflectance,
             base_roughness: perceptual_roughness,
         })
-        .insert(PlanetAtmosphere::default_for(&planet.name))
-        .insert(terrain)
         .insert(Selectable {
             name: planet.name.clone(),
             selected: false,
-        })
-        .id();
+        });
+    if let Some(terrain) = terrain {
+        planet_commands.insert(terrain);
+    }
+    if enable_earth_flight_environment && planet.name == "Earth" {
+        planet_commands.insert(PlanetAtmosphere::default_for("Earth"));
+    }
+    let planet_entity = planet_commands.id();
 
     #[cfg(target_arch = "wasm32")]
     {

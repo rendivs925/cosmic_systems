@@ -64,18 +64,6 @@ pub struct OrbitComponent {
     pub distance_rank: f32,
 }
 
-// Component for orbital plane visualization with inclination-based effects
-#[derive(Component)]
-pub struct OrbitalPlaneComponent {
-    pub planet_entity: Entity,
-    pub inclination_rad: f32,
-    pub ascending_node_rad: f32,
-    pub semi_major_axis: f32,
-    pub eccentricity: f32,
-    pub material: Handle<StandardMaterial>,
-    pub opacity: f32,
-}
-
 // Component for apoapsis/periapsis markers showing orbit eccentricity
 #[derive(Component)]
 pub struct EccentricityMarkersComponent {

@@ -1,8 +1,7 @@
 use super::components::*;
 use crate::application::material_factory::ORBIT_LINE_COLOR;
 use crate::application::mesh_factory::{
-    create_eccentricity_marker_mesh, create_orbit_ribbon_mesh, create_orbital_plane_mesh,
-    create_uv_sphere_mesh,
+    create_eccentricity_marker_mesh, create_orbit_ribbon_mesh, create_uv_sphere_mesh,
 };
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -133,109 +132,6 @@ pub fn update_planet_reflections(
     }
 }
 
-// System to spawn orbital plane visualizations for inclined orbits
-pub fn spawn_orbital_planes(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    orbit_query: Query<(Entity, &OrbitComponent), Without<OrbitalPlaneComponent>>,
-) {
-    for (orbit_entity, orbit_comp) in orbit_query.iter() {
-        // Skip orbits with negligible inclination (mostly equatorial)
-        if orbit_comp.tilt.x.abs() < 0.1 {
-            // Less than ~6 degrees
-            continue;
-        }
-
-        // Get orbit shape for this planet
-        if commands.get_entity(orbit_comp.planet_entity).is_ok() {
-            // Create orbital plane mesh - a translucent circle/disk
-            let plane_radius = orbit_comp.radius * 1.2; // Slightly larger than orbit
-            let plane_mesh = create_orbital_plane_mesh(&mut meshes, plane_radius);
-
-            // Create material with inclination-based color and opacity
-            let inclination_factor = orbit_comp.tilt.x.abs() / (std::f32::consts::PI / 2.0); // 0-1 scale
-            let plane_color = Color::srgb(
-                0.75 + 0.15 * inclination_factor, // Red increases with inclination
-                0.82 + 0.08 * inclination_factor, // Green subtle increase
-                0.90 - 0.10 * inclination_factor, // Blue decreases with inclination
-            );
-            let plane_opacity = 0.08 + 0.12 * inclination_factor; // More inclined = more visible
-
-            let plane_material = StandardMaterial {
-                base_color: plane_color.with_alpha(plane_opacity),
-                emissive: LinearRgba::new(0.02, 0.025, 0.03, 1.0).with_alpha(plane_opacity * 0.5),
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                double_sided: true,
-                ..default()
-            };
-
-            let plane_material_handle = materials.add(plane_material);
-
-            // Spawn orbital plane entity as child of orbit
-            let plane_entity = commands
-                .spawn((
-                    Mesh3d(plane_mesh),
-                    MeshMaterial3d(plane_material_handle.clone()),
-                    Transform::from_rotation(Quat::from_euler(
-                        EulerRot::XYZ,
-                        orbit_comp.tilt.x, // Inclination
-                        orbit_comp.tilt.y, // Argument of periapsis approximation
-                        0.0,               // Ascending node (would need additional data)
-                    )),
-                    OrbitalPlaneComponent {
-                        planet_entity: orbit_comp.planet_entity,
-                        inclination_rad: orbit_comp.tilt.x,
-                        ascending_node_rad: orbit_comp.tilt.y,
-                        semi_major_axis: orbit_comp.radius,
-                        eccentricity: 0.0, // Would need access to orbit shape data
-                        material: plane_material_handle,
-                        opacity: plane_opacity,
-                    },
-                    Name::new(format!("Orbital Plane for {:?}", orbit_comp.planet_entity)),
-                ))
-                .id();
-
-            // Add as child of orbit entity
-            commands.entity(orbit_entity).add_child(plane_entity);
-        }
-    }
-}
-
-// System to update orbital plane materials with dynamic effects
-pub fn update_orbital_planes(
-    time: Res<Time>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut plane_query: Query<&mut OrbitalPlaneComponent>,
-) {
-    let frame_number = (time.elapsed_secs() * 60.0) as u32;
-    if !frame_number.is_multiple_of(15) {
-        // Less frequent updates for planes
-        return;
-    }
-
-    let elapsed = time.elapsed_secs();
-
-    for plane_comp in plane_query.iter_mut() {
-        if let Some(material) = materials.get_mut(&plane_comp.material) {
-            // Subtle pulsing effect based on inclination
-            let inclination_pulse =
-                0.02 * (elapsed * 0.3 + plane_comp.inclination_rad * 10.0).sin();
-            let dynamic_opacity = (plane_comp.opacity + inclination_pulse).clamp(0.03, 0.25);
-
-            material.base_color = material.base_color.with_alpha(dynamic_opacity);
-            material.emissive = LinearRgba::new(
-                0.02 + inclination_pulse * 0.01,
-                0.025 + inclination_pulse * 0.005,
-                0.03 - inclination_pulse * 0.005,
-                1.0,
-            )
-            .with_alpha(dynamic_opacity * 0.3);
-        }
-    }
-}
-
 // System to spawn eccentricity markers (apoapsis/periapsis points) for elliptical orbits
 pub fn spawn_eccentricity_markers(
     mut commands: Commands,
@@ -251,21 +147,21 @@ pub fn spawn_eccentricity_markers(
 
         let semi_major = orbit_comp.orbit_shape.semi_major_axis_units;
 
-        // Apoapsis at true anomaly = 0°, periapsis at true anomaly = π
+        // Periapsis is at true anomaly 0°; apoapsis is at π.
         let e = orbit_comp.orbit_shape.eccentricity.clamp(0.0, 0.99);
         let semi_latus = semi_major * (1.0 - e * e);
-        let apoapsis_r = semi_latus / (1.0 + e * 1.0);
-        let periapsis_r = semi_latus / (1.0 - e);
+        let periapsis_r = semi_latus / (1.0 + e);
+        let apoapsis_r = semi_latus / (1.0 - e);
 
         let apoapsis_pos = physics::transform_orbital_point(
-            apoapsis_r,
+            -apoapsis_r,
             0.0,
             orbit_comp.orbit_shape.inclination_rad,
             orbit_comp.orbit_shape.long_asc_node_rad,
             orbit_comp.orbit_shape.arg_periapsis_rad,
         );
         let periapsis_pos = physics::transform_orbital_point(
-            -periapsis_r,
+            periapsis_r,
             0.0,
             orbit_comp.orbit_shape.inclination_rad,
             orbit_comp.orbit_shape.long_asc_node_rad,
@@ -288,28 +184,33 @@ pub fn spawn_eccentricity_markers(
             ..default()
         });
 
-        commands.spawn((
-            Mesh3d(marker_mesh.clone()),
-            MeshMaterial3d(apoapsis_material.clone()),
-            Transform::from_translation(apoapsis_pos),
-            Name::new(format!(
-                "Apoapsis marker for {:?}",
-                orbit_comp.planet_entity
-            )),
-        ));
+        let apoapsis_entity = commands
+            .spawn((
+                Mesh3d(marker_mesh.clone()),
+                MeshMaterial3d(apoapsis_material.clone()),
+                Transform::from_translation(apoapsis_pos),
+                Name::new(format!(
+                    "Apoapsis marker for {:?}",
+                    orbit_comp.planet_entity
+                )),
+            ))
+            .id();
 
-        commands.spawn((
-            Mesh3d(marker_mesh),
-            MeshMaterial3d(periapsis_material.clone()),
-            Transform::from_translation(periapsis_pos),
-            Name::new(format!(
-                "Periapsis marker for {:?}",
-                orbit_comp.planet_entity
-            )),
-        ));
+        let periapsis_entity = commands
+            .spawn((
+                Mesh3d(marker_mesh),
+                MeshMaterial3d(periapsis_material.clone()),
+                Transform::from_translation(periapsis_pos),
+                Name::new(format!(
+                    "Periapsis marker for {:?}",
+                    orbit_comp.planet_entity
+                )),
+            ))
+            .id();
 
         commands
             .entity(orbit_entity)
+            .add_children(&[apoapsis_entity, periapsis_entity])
             .insert(EccentricityMarkersComponent {
                 planet_entity: orbit_comp.planet_entity,
                 apoapsis_position: apoapsis_pos,

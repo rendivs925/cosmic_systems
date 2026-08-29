@@ -933,14 +933,14 @@ pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg
     grad.atan().to_degrees()
 }
 
-/// The shared terrain source for a planet by name. Earth gets coarse erosion,
-/// seam-safe local relief, and pad-scale launch sites; other bodies retain
-/// their existing procedural sources.
+/// The shared terrain source for a planet by name. Earth is the only body with
+/// an active terrain/collision authority. Other catalog bodies are currently
+/// texture-backed presentation only, so callers receive a flat source rather
+/// than silently inventing procedural physical terrain for them.
 pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
     let base: std::sync::Arc<dyn TerrainSource> = match name {
         "Earth" => layered_earth_source(),
-        "Moon" => std::sync::Arc::new(ProceduralTerrainSource::new(0x4C55, 1_200.0, 500.0, 14)),
-        _ => std::sync::Arc::new(ProceduralTerrainSource::new(0x5117, 2_000.0, 900.0, 0)),
+        _ => std::sync::Arc::new(FlatTerrainSource),
     };
     with_sites(base, terrain_sites(name))
 }
@@ -1086,6 +1086,15 @@ mod tests {
         let a = source.height_m(12.34, -45.67);
         let b = source.height_m(12.34, -45.67);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn non_earth_bodies_do_not_receive_procedural_terrain() {
+        let mars = terrain_source_for("Mars");
+        let moon = terrain_source_for("Moon");
+
+        assert_eq!(mars.height_m(12.34, -45.67), 0.0);
+        assert_eq!(moon.height_m(12.34, -45.67), 0.0);
     }
 
     #[test]

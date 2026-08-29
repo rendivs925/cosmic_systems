@@ -963,6 +963,10 @@ mod ascent_pipeline_tests {
     use crate::domain::events::{SplashdownDetectedEvent, StageSeparatedEvent};
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
+    use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::services::reference_frames::{
+        planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+    };
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::simulation_time::SimulationTime;
     use crate::domain::services::terrain_collision::radial_direction;
@@ -1286,11 +1290,13 @@ mod ascent_pipeline_tests {
         let target = LowEarthOrbitTarget::default();
         let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
         let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
-        let circular_velocity_mps = DVec3::new(
-            0.0,
-            circular_speed_mps * target.target_inclination_rad.cos(),
-            circular_speed_mps * target.target_inclination_rad.sin(),
-        );
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let reference_normal = planet_inertial_spin_axis(&earth);
+        let reference_x_axis = planet_equatorial_reference_x_axis(&earth);
+        let position_m = reference_x_axis * radius_m;
+        let orbit_normal = reference_normal * target.target_inclination_rad.cos()
+            - reference_normal.cross(reference_x_axis) * target.target_inclination_rad.sin();
+        let circular_velocity_mps = orbit_normal.cross(position_m).normalize() * circular_speed_mps;
 
         let mut safe_app = ascent_app();
         let safe_entity = {
@@ -1301,7 +1307,7 @@ mod ascent_pipeline_tests {
         {
             let world = safe_app.world_mut();
             let mut rocket = world.get_mut::<RocketPhysicsState>(safe_entity).unwrap();
-            rocket.dynamics.position_m = DVec3::new(radius_m, 0.0, 0.0);
+            rocket.dynamics.position_m = position_m;
             rocket.dynamics.velocity_mps = circular_velocity_mps;
             *world.get_mut::<RocketMissionState>(safe_entity).unwrap() = RocketMissionState::Ascent;
         }
@@ -1333,7 +1339,7 @@ mod ascent_pipeline_tests {
         {
             let world = unsafe_app.world_mut();
             let mut rocket = world.get_mut::<RocketPhysicsState>(unsafe_entity).unwrap();
-            rocket.dynamics.position_m = DVec3::new(radius_m, 0.0, 0.0);
+            rocket.dynamics.position_m = position_m;
             rocket.dynamics.velocity_mps = circular_velocity_mps * 0.98;
             *world.get_mut::<RocketMissionState>(unsafe_entity).unwrap() =
                 RocketMissionState::Ascent;

@@ -453,17 +453,4 @@ pub const PLANET_CONFIGS: &[PlanetConfig] = &[
         parent_entity: Some("Neptune"),
         has_ocean: false,
     },
-    PlanetConfig {
-        name: "Charon",
-        radius_km: 603.6,
-        mass_kg: 1.59e21,
-        color: Color::srgb(0.5, 0.5, 0.5),
-        body_class: BodyClass::Moon,
-        orbital_distance_au: 1.0,
-        orbital_period_days: 6.39,
-        rotation_period_hours: 153.36,
-        axial_tilt_deg: 0.0,
-        parent_entity: Some("Pluto"),
-        has_ocean: false,
-    },
 ];

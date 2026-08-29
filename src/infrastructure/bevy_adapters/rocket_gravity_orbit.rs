@@ -5,7 +5,10 @@ use crate::components::rocket::{
     RocketPlanetBinding,
 };
 use crate::domain::services::gravity::{gravitational_acceleration, gravitational_parameter};
-use crate::domain::services::physics_orbital::orbital_elements_from_state;
+use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
+use crate::domain::services::reference_frames::{
+    planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+};
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 use bevy::math::DVec3;
 use bevy::prelude::Query;
@@ -13,7 +16,7 @@ use bevy::prelude::Query;
 /// Compute the authoritative gravitational acceleration from each rocket's
 /// typed dominant-body binding.
 pub fn update_rocket_gravity(
-    planet_query: Query<(&PlanetComponent, &bevy::prelude::Transform)>,
+    planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         &RocketPlanetBinding,
         &RocketPhysicsState,
@@ -21,9 +24,9 @@ pub fn update_rocket_gravity(
     )>,
 ) {
     for (binding, rocket, mut gravity) in rocket_query.iter_mut() {
-        let Some((planet, _)) = planet_query
+        let Some(planet) = planet_query
             .iter()
-            .find(|(planet, _)| planet.matches_body(&binding.planet_name))
+            .find(|planet| planet.matches_body(&binding.planet_name))
         else {
             continue;
         };
@@ -59,10 +62,12 @@ pub fn update_orbital_elements(
             continue;
         };
 
-        let state = orbital_elements_from_state(
+        let state = orbital_elements_from_state_in_reference_frame(
             rocket.dynamics.position_m,
             rocket.dynamics.velocity_mps,
             gravitational_parameter(planet.domain_planet.mass_kg),
+            planet_inertial_spin_axis(&planet.domain_planet),
+            planet_equatorial_reference_x_axis(&planet.domain_planet),
         );
         elements.semi_major_axis_m = state.semi_major_axis_m;
         elements.eccentricity = state.eccentricity;

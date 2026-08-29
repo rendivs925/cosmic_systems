@@ -268,7 +268,7 @@ pub fn update_planet_positions(
     // This small catalog has a dependency between each moon and its parent.
     // Solve it in deterministic parent-then-moon order rather than selecting
     // numerical precision or a compute backend from the presentation camera.
-    update_planet_positions_sequential(time_days, solar_params, &mut query);
+    update_planet_positions_sequential(time_days, &solar_params, &mut query);
 
     // Record physics timing
     let physics_duration = physics_start.elapsed();
@@ -434,7 +434,7 @@ fn update_planet_positions_parallel(
 /// Fallback sequential implementation for when parallel features are disabled
 fn update_planet_positions_sequential(
     time_days: f32,
-    solar_params: Res<SolarSystemParameters>,
+    solar_params: &SolarSystemParameters,
     query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
     // First pass: update only planets (Sun-orbiting bodies)
@@ -497,12 +497,34 @@ fn update_planet_positions_sequential(
 pub fn update_planet_rotations(
     time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
-    mut query: Query<(&mut Transform, &PlanetComponent)>,
+    mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
     let elapsed_seconds = time.elapsed_secs();
     let time_days = solar_params.time_to_days(elapsed_seconds);
 
-    for (mut transform, planet_comp) in query.iter_mut() {
+    update_planet_rotations_at(time_days, &mut query);
+}
+
+/// Evaluate solar-map presentation at the fixed schedule's fractional
+/// overstep. The celestial ephemeris stays camera-independent and fixed-step
+/// consumers keep their existing state, while normal and craft rendering no
+/// longer visibly jumps between fixed ticks.
+pub fn interpolate_planet_transforms(
+    time: Res<Time<Fixed>>,
+    solar_params: Res<SolarSystemParameters>,
+    mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
+) {
+    let elapsed_seconds = time.elapsed_secs() + time.overstep().as_secs_f32();
+    let time_days = solar_params.time_to_days(elapsed_seconds);
+    update_planet_positions_sequential(time_days, &solar_params, &mut query);
+    update_planet_rotations_at(time_days, &mut query);
+}
+
+fn update_planet_rotations_at(
+    time_days: f32,
+    query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
+) {
+    for (_, mut transform, planet_comp) in query.iter_mut() {
         let rotation_angle =
             physics::calculate_planet_rotation(&planet_comp.domain_planet, time_days);
         let tilt_rad = planet_comp.domain_planet.axial_tilt_deg.to_radians();
@@ -511,6 +533,22 @@ pub fn update_planet_rotations(
         let tilt = Quat::from_rotation_z(tilt_rad);
         let spin = Quat::from_rotation_y(rotation_angle);
         transform.rotation = tilt * spin;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentation_time_advances_through_fixed_overstep() {
+        let solar = SolarSystemParameters::for_visualization();
+        let fixed_seconds = 10.0;
+        let overstep_seconds = 0.25;
+        let fixed_days = solar.time_to_days(fixed_seconds);
+        let presentation_days = solar.time_to_days(fixed_seconds + overstep_seconds);
+
+        assert!(presentation_days > fixed_days);
     }
 }
 
