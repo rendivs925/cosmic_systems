@@ -10,8 +10,8 @@ use crate::domain::services::physics;
 /// Static solar-system orbit geometry uses a fixed high-fidelity tessellation.
 /// Adaptive frame quality must not change an ellipse into visible chords.
 pub const ORBIT_RIBBON_SEGMENTS: usize = 1024;
-/// Shared close-range width for every planet and moon orbit in solar-map units.
-/// It must remain large enough to rasterize as a visible ribbon at local scales.
+/// Initial orbit-ribbon width before the presentation system derives a
+/// body-relative width.
 pub const ORBIT_RIBBON_NEAR_WIDTH_UNITS: f32 = 0.2;
 
 pub fn create_uv_sphere_mesh(meshes: &mut ResMut<Assets<Mesh>>, radius: f32) -> Handle<Mesh> {
@@ -132,9 +132,9 @@ pub fn create_orbit_ribbon_mesh(
         .cross(orbit_positions[segments / 2] - orbit_positions[0])
         .normalize_or_zero();
 
-    // Camera-relative sizing is calculated by the presentation system. Preserve
-    // its sub-unit near-body widths instead of imposing a world-scale minimum.
-    let thickness = thickness.max(ORBIT_RIBBON_NEAR_WIDTH_UNITS);
+    // Presentation computes a physical-scale-aware width. Do not reintroduce a
+    // global minimum here: it would overwhelm small-body orbits such as Phobos.
+    let thickness = thickness.max(f32::EPSILON);
 
     let linear_color: LinearRgba = orbit_color.into();
     let color_arr = [

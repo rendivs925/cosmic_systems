@@ -306,7 +306,8 @@ impl Plugin for SolarSystemModePlugin {
                 auto_inspect_selected_planet,
             )
                 .chain()
-                .after(interpolate_planet_transforms),
+                .after(interpolate_planet_transforms)
+                .after(rebase_solar_presentation),
         );
 
         // Selection visuals

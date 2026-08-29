@@ -277,10 +277,11 @@ pub fn apply_camera_transform(
 pub fn auto_inspect_selected_planet(
     time: Res<Time>,
     solar_params: Res<SolarSystemParameters>,
+    origin: Res<SolarMapRenderOrigin>,
     selected_planet: Res<SelectedPlanet>,
     mut input_state: ResMut<CameraInputState>,
     mut camera_query: Query<(&mut CameraController, &mut Transform, &mut Projection)>,
-    planet_query: Query<(&PlanetComponent, &Transform), Without<CameraController>>,
+    planet_query: Query<(&PlanetComponent, &SolarMapPosition), Without<CameraController>>,
     mut state: Local<AutoInspectState>,
 ) {
     let Some(selected_entity) = selected_planet.entity else {
@@ -290,7 +291,7 @@ pub fn auto_inspect_selected_planet(
         return;
     };
 
-    let (planet_comp, planet_transform) = match planet_query.get(selected_entity) {
+    let (planet_comp, planet_position) = match planet_query.get(selected_entity) {
         Ok(data) => data,
         Err(_) => return,
     };
@@ -346,9 +347,10 @@ pub fn auto_inspect_selected_planet(
         physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
     };
 
-    let planet_pos = planet_transform.translation;
+    let planet_pos = (planet_position.0 - origin.position_units).as_vec3();
     let mut focus_point = planet_pos;
-    let mut target_distance = planet_radius * 5.0;
+    let mut target_distance = planet_radius * 2.4;
+    let mut context_radius = planet_radius;
     let mut moon_axis: Option<Vec3> = None;
     let mut moon_up: Option<Vec3> = None;
     let mut moon_distance: Option<f32> = None;
@@ -361,11 +363,10 @@ pub fn auto_inspect_selected_planet(
         let half_fov = (fov_y * 0.5 * fill).max(0.05);
         radius / half_fov.sin()
     };
-
     if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
-        for (other_comp, other_transform) in planet_query.iter() {
+        for (other_comp, other_position) in planet_query.iter() {
             if other_comp.domain_planet.name == *parent_name {
-                let parent_pos = other_transform.translation;
+                let parent_pos = (other_position.0 - origin.position_units).as_vec3();
                 let axis = parent_pos - planet_pos;
                 let axis_dir = if axis.length_squared() > 0.0 {
                     axis.normalize()
@@ -387,11 +388,11 @@ pub fn auto_inspect_selected_planet(
                 } else {
                     physics::calculate_visual_radius(&other_comp.domain_planet, &solar_params)
                 };
+                context_radius = context_radius.max(axis.length() + parent_radius);
                 let size_ratio = (parent_radius / planet_radius).clamp(1.2, 50.0);
                 let fill = (0.78 - size_ratio.log10() * 0.04).clamp(0.62, 0.78);
                 let desired_distance = fit_radius(planet_radius, fill);
-                let min_distance = (planet_radius * 3.2).max(120.0);
-                target_distance = desired_distance.max(min_distance);
+                target_distance = desired_distance.max(planet_radius * 2.4);
                 moon_distance = Some(target_distance);
                 break;
             }
@@ -482,20 +483,45 @@ pub fn auto_inspect_selected_planet(
     // The focus point is the current camera-relative solar-map projection.
     camera_transform.look_at(focus_point, Vec3::Y);
 
-    // Adaptive near/far planes: keep the depth range proportional to the framing distance
-    // so the near:far ratio stays bounded when inspecting a massive body like the Sun.
-    // An extreme ratio degrades depth precision and inflates the GPU render workload.
+    // The depth range follows the selected body's actual presentation scale and
+    // includes its parent/orbit context. A fixed 0.1-unit near plane clips
+    // physically scaled small moons such as Phobos.
     if let Projection::Perspective(proj) = projection.into_inner() {
-        let world_radius = target_distance.max(1.0);
-        let desired_far = (world_radius * 8.0).clamp(100_000.0, 10_000_000.0);
-        let desired_near = (desired_far * 0.00001).clamp(0.1, 1.0);
-        let far_lerp = 1.0 - (-2.0 * time.delta_secs()).exp();
-        let near_lerp = 1.0 - (-4.0 * time.delta_secs()).exp();
-        proj.far = proj.far.lerp(desired_far, far_lerp);
-        proj.near = proj.near.lerp(desired_near, near_lerp);
+        proj.near = inspection_near_plane(planet_radius);
+        proj.far = inspection_far_plane(target_distance, context_radius, proj.near);
         if proj.near >= proj.far {
             proj.near = proj.far * 0.01;
         }
+    }
+}
+
+fn inspection_near_plane(visual_radius_units: f32) -> f32 {
+    (visual_radius_units.abs() * 0.05).max(1e-5)
+}
+
+fn inspection_far_plane(
+    target_distance_units: f32,
+    context_radius_units: f32,
+    near_plane_units: f32,
+) -> f32 {
+    (target_distance_units * 8.0)
+        .max(context_radius_units * 4.0)
+        .max(near_plane_units * 1_000.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_moon_inspection_depth_range_keeps_the_body_and_parent_visible() {
+        // Phobos has a solar-map radius of approximately 0.0056 units at the
+        // authoritative visualization scale, while Mars is about 4.7 units away.
+        let near = inspection_near_plane(0.0056);
+        let far = inspection_far_plane(0.015, 6.5, near);
+
+        assert!(near < 0.001);
+        assert!(far > 6.5);
     }
 }
 
