@@ -17,13 +17,80 @@ pub struct OrbitalElements {
     pub mean_anomaly_rad: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OrbitShape {
     pub semi_major_axis_units: f32,
     pub eccentricity: f32,
     pub inclination_rad: f32,
     pub long_asc_node_rad: f32,
     pub arg_periapsis_rad: f32,
+}
+
+/// A heliocentric J2000 ecliptic state expressed in astronomical units and
+/// days. The application maps the ecliptic plane to X/Z and the north ecliptic
+/// pole to +Y, so this remains independent of f32 render projection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeliocentricEclipticState {
+    pub position_au: DVec3,
+    pub velocity_au_per_day: DVec3,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EvaluatedOrbitalElements {
+    semi_major_axis_au: f64,
+    eccentricity: f64,
+    inclination_rad: f64,
+    long_asc_node_rad: f64,
+    arg_periapsis_rad: f64,
+    mean_anomaly_rad: f64,
+}
+
+/// JPL approximate-position elements and rates. Values are relative to the
+/// mean ecliptic and equinox of J2000 and are valid from 1800 through 2050.
+/// See https://ssd.jpl.nasa.gov/planets/approx_pos.html.
+#[derive(Clone, Copy, Debug)]
+struct JplApproximateElements {
+    semi_major_axis_au: f64,
+    semi_major_axis_au_per_century: f64,
+    eccentricity: f64,
+    eccentricity_per_century: f64,
+    inclination_deg: f64,
+    inclination_deg_per_century: f64,
+    mean_longitude_deg: f64,
+    mean_longitude_deg_per_century: f64,
+    longitude_periapsis_deg: f64,
+    longitude_periapsis_deg_per_century: f64,
+    longitude_ascending_node_deg: f64,
+    longitude_ascending_node_deg_per_century: f64,
+}
+
+impl JplApproximateElements {
+    fn evaluate(self, days_from_j2000_tdb: f64) -> EvaluatedOrbitalElements {
+        let centuries = days_from_j2000_tdb / 36_525.0;
+        let semi_major_axis_au =
+            self.semi_major_axis_au + self.semi_major_axis_au_per_century * centuries;
+        let eccentricity = self.eccentricity + self.eccentricity_per_century * centuries;
+        let inclination_rad =
+            (self.inclination_deg + self.inclination_deg_per_century * centuries).to_radians();
+        let long_asc_node_rad = (self.longitude_ascending_node_deg
+            + self.longitude_ascending_node_deg_per_century * centuries)
+            .to_radians();
+        let longitude_periapsis_rad = (self.longitude_periapsis_deg
+            + self.longitude_periapsis_deg_per_century * centuries)
+            .to_radians();
+        let mean_longitude_rad = (self.mean_longitude_deg
+            + self.mean_longitude_deg_per_century * centuries)
+            .to_radians();
+
+        EvaluatedOrbitalElements {
+            semi_major_axis_au,
+            eccentricity,
+            inclination_rad,
+            long_asc_node_rad,
+            arg_periapsis_rad: longitude_periapsis_rad - long_asc_node_rad,
+            mean_anomaly_rad: mean_longitude_rad - longitude_periapsis_rad,
+        }
+    }
 }
 
 /// Evaluate a solar-map position in f64 display units. Outer moons are added
@@ -39,10 +106,16 @@ pub fn calculate_planet_position_f64(
         return DVec3::ZERO;
     }
 
-    // Bodies and their ribbons sample this single orbital shape. Rendering only
-    // projects the result into the camera-relative frame; it never owns a
-    // second orbital geometry calculation.
-    let orbit_shape = orbit_shape_for(planet, solar_params);
+    if planet.parent_entity.is_none() {
+        if let Some(state) = heliocentric_ecliptic_state_f64(planet, time_days) {
+            return state.position_au * solar_params.scale_factor as f64;
+        }
+    }
+
+    // Parent-relative moon propagation and ribbon generation share this shape.
+    // Primary bodies returned above retain their f64 ephemeris state until
+    // solar-map presentation projects them into render coordinates.
+    let orbit_shape = orbit_shape_for_at_time(planet, solar_params, time_days);
     let eccentric_anomaly = orbital_eccentric_anomaly(planet, &orbit_shape, time_days);
     let relative_position = orbit_point_f64(&orbit_shape, eccentric_anomaly);
 
@@ -62,6 +135,60 @@ pub fn calculate_planet_position_f64(
     parent_position + relative_position
 }
 
+/// Evaluate the primary-body ephemeris in the application's f64 J2000
+/// ecliptic frame. This is the authoritative analytic state for the Sun and
+/// eight planets; moons remain parent-relative Kepler approximations until a
+/// satellite ephemeris is introduced.
+pub fn heliocentric_ecliptic_state_f64(
+    planet: &Planet,
+    days_from_j2000_tdb: f64,
+) -> Option<HeliocentricEclipticState> {
+    if planet.name == "Sun" {
+        return Some(HeliocentricEclipticState {
+            position_au: DVec3::ZERO,
+            velocity_au_per_day: DVec3::ZERO,
+        });
+    }
+    if planet.parent_entity.is_some() {
+        return None;
+    }
+
+    let elements = jpl_approximate_elements(&planet.name)?;
+    let position_au = primary_position_au(elements, days_from_j2000_tdb);
+
+    // A symmetric fourth-order derivative includes the published secular
+    // element rates without creating a second velocity propagation model.
+    const VELOCITY_STEP_DAYS: f64 = 1.0e-3;
+    let velocity_au_per_day =
+        (primary_position_au(elements, days_from_j2000_tdb - 2.0 * VELOCITY_STEP_DAYS)
+            - primary_position_au(elements, days_from_j2000_tdb - VELOCITY_STEP_DAYS) * 8.0
+            + primary_position_au(elements, days_from_j2000_tdb + VELOCITY_STEP_DAYS) * 8.0
+            - primary_position_au(elements, days_from_j2000_tdb + 2.0 * VELOCITY_STEP_DAYS))
+            / (12.0 * VELOCITY_STEP_DAYS);
+
+    Some(HeliocentricEclipticState {
+        position_au,
+        velocity_au_per_day,
+    })
+}
+
+fn primary_position_au(elements: JplApproximateElements, days_from_j2000_tdb: f64) -> DVec3 {
+    let elements = elements.evaluate(days_from_j2000_tdb);
+    let eccentric_anomaly = solve_kepler_f64(
+        elements.mean_anomaly_rad.rem_euclid(std::f64::consts::TAU),
+        elements.eccentricity.clamp(0.0, 0.99),
+    );
+    let semi_minor_au =
+        elements.semi_major_axis_au * (1.0 - elements.eccentricity * elements.eccentricity).sqrt();
+    transform_orbital_point_f64(
+        elements.semi_major_axis_au * (eccentric_anomaly.cos() - elements.eccentricity),
+        semi_minor_au * eccentric_anomaly.sin(),
+        elements.inclination_rad,
+        elements.long_asc_node_rad,
+        elements.arg_periapsis_rad,
+    )
+}
+
 /// Sample the same eccentric-anomaly ellipse used by the orbit ribbon.
 pub fn orbit_point_f64(orbit_shape: &OrbitShape, eccentric_anomaly: f64) -> DVec3 {
     let eccentricity = orbit_shape.eccentricity.clamp(0.0, 0.99) as f64;
@@ -77,20 +204,20 @@ pub fn orbit_point_f64(orbit_shape: &OrbitShape, eccentric_anomaly: f64) -> DVec
 }
 
 fn orbital_eccentric_anomaly(planet: &Planet, orbit_shape: &OrbitShape, time_days: f64) -> f64 {
-    let mean_anomaly = orbital_elements_for(planet).map_or_else(
-        || std::f64::consts::TAU * time_days / planet.orbital_period_days as f64,
-        |elements| {
-            if planet.parent_entity.is_some() {
+    let mean_anomaly = if planet.parent_entity.is_none() {
+        jpl_approximate_elements(&planet.name).map_or_else(
+            || std::f64::consts::TAU * time_days / planet.orbital_period_days as f64,
+            |elements| elements.evaluate(time_days).mean_anomaly_rad,
+        )
+    } else {
+        orbital_elements_for(planet).map_or_else(
+            || std::f64::consts::TAU * time_days / planet.orbital_period_days as f64,
+            |elements| {
                 elements.mean_anomaly_rad as f64
                     + std::f64::consts::TAU * time_days / planet.orbital_period_days as f64
-            } else {
-                let semi_major_axis_au = elements.semi_major_axis_au as f64;
-                let mean_motion =
-                    (2.959_122_082_855_909_3e-4_f64 / semi_major_axis_au.powi(3)).sqrt();
-                elements.mean_anomaly_rad as f64 + mean_motion * time_days
-            }
-        },
-    );
+            },
+        )
+    };
 
     solve_kepler_f64(
         mean_anomaly.rem_euclid(std::f64::consts::TAU),
@@ -131,6 +258,17 @@ pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemP
 }
 
 pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) -> OrbitShape {
+    orbit_shape_for_at_time(planet, solar_params, 0.0)
+}
+
+/// Evaluate the presentation orbit shape at a J2000-relative TDB epoch. The
+/// f64 ephemeris state remains authoritative; this f32 shape exists only for
+/// ribbon mesh generation and must never feed physics.
+pub fn orbit_shape_for_at_time(
+    planet: &Planet,
+    solar_params: &SolarSystemParameters,
+    days_from_j2000_tdb: f64,
+) -> OrbitShape {
     if planet.parent_entity.is_some() {
         // Moon - use real orbital elements if available
         if let Some(elements) = get_moon_orbital_elements(planet) {
@@ -152,14 +290,14 @@ pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) ->
                 arg_periapsis_rad: 0.0,
             }
         }
-    } else if let Some(elements) = get_orbital_elements(&planet.name) {
-        // Planet - use real orbital elements
+    } else if let Some(elements) = jpl_approximate_elements(&planet.name) {
+        let elements = elements.evaluate(days_from_j2000_tdb);
         OrbitShape {
-            semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au),
-            eccentricity: elements.eccentricity,
-            inclination_rad: elements.inclination_rad,
-            long_asc_node_rad: elements.long_asc_node_rad,
-            arg_periapsis_rad: elements.arg_periapsis_rad,
+            semi_major_axis_units: solar_params.au_to_units_f64(elements.semi_major_axis_au) as f32,
+            eccentricity: elements.eccentricity as f32,
+            inclination_rad: elements.inclination_rad as f32,
+            long_asc_node_rad: elements.long_asc_node_rad as f32,
+            arg_periapsis_rad: elements.arg_periapsis_rad as f32,
         }
     } else {
         // Fallback for bodies without defined elements
@@ -213,8 +351,9 @@ pub fn orbital_elements_for(planet: &Planet) -> Option<OrbitalElements> {
 }
 
 // Real-world orbital elements for major moons. The shared celestial catalog is
-// the authority for semimajor axes; this table contains only the remaining
-// Keplerian elements. Sources: NASA planetary fact sheets, JPL Horizons.
+// the authority for their semimajor axes; this table contains only the
+// remaining parent-relative Keplerian elements. Sources: NASA planetary fact
+// sheets and JPL Horizons.
 fn get_moon_orbital_elements(planet: &Planet) -> Option<OrbitalElements> {
     // Orbital elements relative to planet's equator (degrees)
     match planet.name.as_str() {
@@ -324,78 +463,169 @@ fn moon_elements_from_degrees(
     )
 }
 
-#[allow(clippy::excessive_precision)] // Preserve the published J2000 source table values.
-fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {
-    // J2000 heliocentric ecliptic elements (degrees). Parameters are semimajor
-    // axis, eccentricity, inclination, longitude of ascending node, longitude
-    // of periapsis, and mean longitude. Source: JPL approximate positions.
+fn jpl_approximate_elements(name: &str) -> Option<JplApproximateElements> {
+    // JPL approximate-position table 1, with rates per Julian century. The
+    // Earth row is the Earth-Moon barycenter approximation supplied by JPL;
+    // the current Earth mesh remains its local visual proxy.
     match name {
-        "Mercury" => Some(elements_from_degrees(
+        "Mercury" => Some(jpl_elements(
             0.38709927,
+            0.00000037,
             0.20563593,
+            0.00001906,
             7.00497902,
-            48.33076593,
-            77.45779628,
+            -0.00594749,
             252.25032350,
+            149472.67411175,
+            77.45779628,
+            0.16047689,
+            48.33076593,
+            -0.12534081,
         )),
-        "Venus" => Some(elements_from_degrees(
+        "Venus" => Some(jpl_elements(
             0.72333566,
+            0.00000390,
             0.00677672,
+            -0.00004107,
             3.39467605,
-            76.67984255,
-            131.60246718,
+            -0.00078890,
             181.97909950,
+            58517.81538729,
+            131.60246718,
+            0.00268329,
+            76.67984255,
+            -0.27769418,
         )),
-        "Earth" => Some(elements_from_degrees(
+        "Earth" => Some(jpl_elements(
             1.00000261,
+            0.00000562,
             0.01671123,
+            -0.00004392,
             -0.00001531,
-            0.0,
-            102.93768193,
+            -0.01294668,
             100.46457166,
+            35999.37244981,
+            102.93768193,
+            0.32327364,
+            0.0,
+            0.0,
         )),
-        "Mars" => Some(elements_from_degrees(
+        "Mars" => Some(jpl_elements(
             1.52371034,
+            0.00001847,
             0.09339410,
+            0.00007882,
             1.84969142,
-            49.55953891,
-            -23.94362959,
+            -0.00813131,
             -4.55343205,
+            19140.30268499,
+            -23.94362959,
+            0.44441088,
+            49.55953891,
+            -0.29257343,
         )),
-        "Jupiter" => Some(elements_from_degrees(
+        "Jupiter" => Some(jpl_elements(
             5.20288700,
+            -0.00011607,
             0.04838624,
+            -0.00013253,
             1.30439695,
-            100.47390909,
-            14.72847983,
+            -0.00183714,
             34.39644051,
+            3034.74612775,
+            14.72847983,
+            0.21252668,
+            100.47390909,
+            0.20469106,
         )),
-        "Saturn" => Some(elements_from_degrees(
+        "Saturn" => Some(jpl_elements(
             9.53667594,
+            -0.00125060,
             0.05386179,
+            -0.00050991,
             2.48599187,
-            113.66242448,
-            92.59887831,
+            0.00193609,
             49.95424423,
+            1222.49362201,
+            92.59887831,
+            -0.41897216,
+            113.66242448,
+            -0.28867794,
         )),
-        "Uranus" => Some(elements_from_degrees(
+        "Uranus" => Some(jpl_elements(
             19.18916464,
+            -0.00196176,
             0.04725744,
+            -0.00004397,
             0.77263783,
-            74.01692503,
-            170.95427630,
+            -0.00242939,
             313.23810451,
+            428.48202785,
+            170.95427630,
+            0.40805281,
+            74.01692503,
+            0.04240589,
         )),
-        "Neptune" => Some(elements_from_degrees(
+        "Neptune" => Some(jpl_elements(
             30.06992276,
+            0.00026291,
             0.00859048,
+            0.00005105,
             1.77004347,
-            131.78422574,
-            44.96476227,
+            0.00035372,
             -55.12002969,
+            218.45945325,
+            44.96476227,
+            -0.32241464,
+            131.78422574,
+            -0.00508664,
         )),
         _ => None,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+const fn jpl_elements(
+    semi_major_axis_au: f64,
+    semi_major_axis_au_per_century: f64,
+    eccentricity: f64,
+    eccentricity_per_century: f64,
+    inclination_deg: f64,
+    inclination_deg_per_century: f64,
+    mean_longitude_deg: f64,
+    mean_longitude_deg_per_century: f64,
+    longitude_periapsis_deg: f64,
+    longitude_periapsis_deg_per_century: f64,
+    longitude_ascending_node_deg: f64,
+    longitude_ascending_node_deg_per_century: f64,
+) -> JplApproximateElements {
+    JplApproximateElements {
+        semi_major_axis_au,
+        semi_major_axis_au_per_century,
+        eccentricity,
+        eccentricity_per_century,
+        inclination_deg,
+        inclination_deg_per_century,
+        mean_longitude_deg,
+        mean_longitude_deg_per_century,
+        longitude_periapsis_deg,
+        longitude_periapsis_deg_per_century,
+        longitude_ascending_node_deg,
+        longitude_ascending_node_deg_per_century,
+    }
+}
+
+#[allow(clippy::excessive_precision)] // Preserve the published J2000 source table values.
+fn get_orbital_elements(name: &str) -> Option<OrbitalElements> {
+    let elements = jpl_approximate_elements(name)?.evaluate(0.0);
+    Some(OrbitalElements {
+        semi_major_axis_au: elements.semi_major_axis_au as f32,
+        eccentricity: elements.eccentricity as f32,
+        inclination_rad: elements.inclination_rad as f32,
+        long_asc_node_rad: elements.long_asc_node_rad as f32,
+        arg_periapsis_rad: elements.arg_periapsis_rad as f32,
+        mean_anomaly_rad: elements.mean_anomaly_rad as f32,
+    })
 }
 
 fn elements_from_degrees(
@@ -1052,6 +1282,60 @@ mod tests {
     }
 
     #[test]
+    fn earth_moon_barycenter_state_matches_jpl_horizons_at_j2000() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let state = heliocentric_ecliptic_state_f64(&earth, 0.0).unwrap();
+
+        // JPL Horizons DE441, Earth-Moon barycenter relative to the Sun at
+        // JD TDB 2451545.0. The JPL approximate model's published 1800-2050
+        // position accuracy bound for EM Bary is 6,000 km.
+        let horizons_position_au = DVec3::new(
+            -1.771_587_841_839_055e-1,
+            -1.139_275_508_446_145e-6,
+            9.672_193_524_609_504e-1,
+        );
+        let horizons_velocity_au_per_day = DVec3::new(
+            -1.720_310_905_522_688e-2,
+            2.424_167_134_816_753e-8,
+            -3.163_911_860_749_114e-3,
+        );
+
+        assert!(
+            state.position_au.distance(horizons_position_au) < 4.1e-5,
+            "position residual: {} AU",
+            state.position_au.distance(horizons_position_au)
+        );
+        assert!(
+            state
+                .velocity_au_per_day
+                .distance(horizons_velocity_au_per_day)
+                < 1.0e-5,
+            "velocity residual: {} AU/day",
+            state
+                .velocity_au_per_day
+                .distance(horizons_velocity_au_per_day)
+        );
+    }
+
+    #[test]
+    fn jpl_element_rates_change_the_evaluated_orbit_shape() {
+        let solar = SolarSystemParameters::for_visualization();
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let shape_at_j2000 = orbit_shape_for_at_time(&earth, &solar, 0.0);
+        let shape_one_century_later = orbit_shape_for_at_time(&earth, &solar, 36_525.0);
+
+        // Values are derived from the JPL Table 1 Earth-Moon barycenter rates.
+        assert!(
+            (shape_one_century_later.semi_major_axis_units as f64
+                - solar.au_to_units_f64(1.000_008_23))
+            .abs()
+                < 1e-3
+        );
+        assert!((shape_one_century_later.eccentricity as f64 - 0.016_667_31).abs() < 1e-7);
+        assert_ne!(shape_at_j2000, shape_one_century_later);
+    }
+
+    #[test]
     fn triton_parent_relative_projection_preserves_outer_moon_precision() {
         let solar = SolarSystemParameters::for_visualization();
         let neptune = PlanetFactory::create_by_name("Neptune").unwrap();
@@ -1080,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn propagated_bodies_sample_the_same_orbit_geometry_as_ribbons() {
+    fn primary_states_match_their_f32_epoch_shape_projection() {
         let solar = SolarSystemParameters::for_visualization();
         let time_days = 123.456_789;
 
@@ -1088,18 +1372,21 @@ mod tests {
             .into_iter()
             .filter(|planet| planet.name != "Sun")
         {
-            let orbit_shape = orbit_shape_for(&planet, &solar);
+            let orbit_shape = orbit_shape_for_at_time(&planet, &solar, time_days);
             let expected = orbit_point_f64(
                 &orbit_shape,
                 orbital_eccentric_anomaly(&planet, &orbit_shape, time_days),
             );
             let propagated =
                 calculate_planet_position_f64(&planet, time_days, &solar, DVec3::ZERO, None);
+            let projection_tolerance =
+                orbit_shape.semi_major_axis_units as f64 * f32::EPSILON as f64 * 4.0;
 
             assert!(
-                propagated.distance(expected) < 1e-9,
-                "{} departed from its ribbon geometry",
-                planet.name
+                propagated.distance(expected) < projection_tolerance,
+                "{} departed from its ribbon projection by {} display units",
+                planet.name,
+                propagated.distance(expected)
             );
         }
 
@@ -1112,7 +1399,7 @@ mod tests {
             .expect("moon parent exists in the catalog");
             let parent_position =
                 calculate_planet_position_f64(&parent, time_days, &solar, DVec3::ZERO, None);
-            let orbit_shape = orbit_shape_for(&moon, &solar);
+            let orbit_shape = orbit_shape_for_at_time(&moon, &solar, time_days);
             let local_orbit_point = orbit_point_f64(
                 &orbit_shape,
                 orbital_eccentric_anomaly(&moon, &orbit_shape, time_days),

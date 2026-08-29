@@ -1,5 +1,10 @@
 use bevy::prelude::*;
 
+/// Julian ephemeris date of the J2000.0 epoch. Solar-system propagation uses
+/// elapsed days from this epoch as a TDB approximation until a full time-scale
+/// service is introduced.
+pub const J2000_JULIAN_DATE_TDB: f64 = 2_451_545.0;
+
 #[derive(Resource, Clone, Debug)]
 pub struct SolarSystemParameters {
     pub sun_radius_km: f32,
@@ -49,6 +54,12 @@ impl SolarSystemParameters {
         au * self.scale_factor
     }
 
+    /// Convert astronomical units to solar-map display units without reducing
+    /// the propagated f64 position to render precision.
+    pub fn au_to_units_f64(&self, au: f64) -> f64 {
+        au * self.scale_factor as f64
+    }
+
     /// Current solar-map time acceleration relative to the fixed clock.
     pub fn time_scale(&self) -> f32 {
         self.time_scale
@@ -73,6 +84,11 @@ impl SolarSystemParameters {
     /// sub-unit orbital movement of outer-system bodies.
     pub fn time_to_days_f64(&self, time_seconds: f64) -> f64 {
         self.epoch_offset_days + time_seconds.max(0.0) * self.time_scale as f64 / 86_400.0
+    }
+
+    /// Convert the phase-continuous solar epoch to Julian date TDB.
+    pub fn time_to_julian_date_tdb(&self, time_seconds: f64) -> f64 {
+        J2000_JULIAN_DATE_TDB + self.time_to_days_f64(time_seconds)
     }
 }
 
@@ -107,5 +123,12 @@ mod tests {
         let expected_days = epoch_before + 60.0 * 10.0 / 86_400.0;
 
         assert!((solar.time_to_days_f64(future_seconds) - expected_days).abs() < 1e-12);
+    }
+
+    #[test]
+    fn solar_epoch_is_j2000_tdb_at_startup() {
+        let solar = SolarSystemParameters::for_visualization();
+
+        assert_eq!(solar.time_to_julian_date_tdb(0.0), J2000_JULIAN_DATE_TDB);
     }
 }
