@@ -225,12 +225,7 @@ impl Plugin for SharedSimulationPlugin {
         );
         app.add_systems(
             Update,
-            (
-                spawn_position_trackers,
-                interpolate_planet_transforms,
-                update_moon_orbit_positions,
-                update_position_trackers,
-            )
+            (interpolate_planet_transforms, update_moon_orbit_positions)
                 .chain()
                 .before(update_camera_controller)
                 .before(update_craft_camera)
@@ -239,10 +234,6 @@ impl Plugin for SharedSimulationPlugin {
         app.add_systems(
             Update,
             update_planet_reflections.run_if(solar_presentation_enabled),
-        );
-        app.add_systems(
-            Update,
-            update_eccentricity_markers.run_if(solar_presentation_enabled),
         );
         app.add_systems(Update, apply_pending_material_textures);
 
@@ -280,7 +271,6 @@ impl Plugin for SolarSystemModePlugin {
     fn build(&self, app: &mut App) {
         // Startup systems
         app.add_systems(Startup, setup_ui);
-        app.add_systems(Startup, spawn_eccentricity_markers.after(setup_space));
 
         // Input handling
         app.add_systems(Update, handle_solar_system_input);

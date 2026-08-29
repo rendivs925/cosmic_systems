@@ -28,19 +28,6 @@ pub fn detect_cpu_features() -> CpuFeatureLevel {
     }
 }
 
-pub fn get_kepler_iterations_for_distance(distance_to_camera: f32) -> u32 {
-    // Adaptive Kepler solver iterations based on distance to camera
-    // Wider hysteresis bands prevent iteration count toggling near camera-relative thresholds
-    // Close objects (including moons in camera focus) always get max iterations for consistency
-    if distance_to_camera < 5000.0 {
-        16 // High precision for close objects (covers typical moon camera framing)
-    } else if distance_to_camera < 50000.0 {
-        12
-    } else {
-        8 // Low precision for distant objects
-    }
-}
-
 /// Adaptive Kepler solver based on eccentricity
 pub fn solve_kepler_adaptive(mean_anomaly: f32, eccentricity: f32, max_iterations: u32) -> f32 {
     // For now, delegate to a simple implementation - will be replaced with SIMD versions

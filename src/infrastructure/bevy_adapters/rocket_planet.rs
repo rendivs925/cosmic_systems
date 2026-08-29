@@ -49,11 +49,7 @@ pub struct RocketBoundPlanet(pub Option<String>);
 pub fn isolate_rocket_presentation(
     mut solar_presentation: Query<
         &mut Visibility,
-        Or<(
-            With<PlanetComponent>,
-            With<OrbitComponent>,
-            With<PositionTracker>,
-        )>,
+        Or<(With<PlanetComponent>, With<OrbitComponent>)>,
     >,
     mut solar_lights: Query<&mut PointLight>,
 ) {

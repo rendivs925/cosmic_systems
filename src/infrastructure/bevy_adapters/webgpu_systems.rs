@@ -104,7 +104,7 @@ pub fn apply_orbit_mesh_results(
 ) {
     for result in worker_pool.take_results() {
         let entity = entity_from_task_id(result.task_id);
-        let Ok(mut pending) = pending_query.get_mut(entity) else {
+        let Ok(pending) = pending_query.get_mut(entity) else {
             worker_pool.mark_complete(result.task_id);
             continue;
         };
@@ -139,16 +139,18 @@ pub fn apply_orbit_mesh_results(
             indices.push(((i + 1) % segments) as u32);
         }
 
-        if let Some(mesh) = meshes.get_mut(&pending.mesh) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-            mesh.insert_indices(Indices::U32(indices));
-        }
+        let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        mesh.insert_indices(Indices::U32(indices));
 
         worker_pool.mark_complete(result.task_id);
-        commands.entity(entity).remove::<PendingOrbitMesh>();
+        commands
+            .entity(entity)
+            .insert(Mesh3d(meshes.add(mesh)))
+            .remove::<PendingOrbitMesh>();
     }
 }
 
@@ -210,9 +212,11 @@ use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
 use crate::infrastructure::web_workers::orbit_mesh_worker::{
     entity_from_task_id, task_id_from_entity, OrbitMeshTask, OrbitMeshWorkerPool, OrbitShapeData,
 };
+#[cfg(target_arch = "wasm32")]
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use bevy_mesh::Indices;
+use bevy_mesh::{Indices, PrimitiveTopology};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]

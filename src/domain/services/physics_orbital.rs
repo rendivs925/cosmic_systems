@@ -47,7 +47,7 @@ pub fn calculate_planet_position(
 }
 
 /// Calculate the position of a planet/moon with configurable quality/performance
-pub fn calculate_planet_position_with_quality(
+fn calculate_planet_position_with_quality(
     planet: &Planet,
     time_days: f32,
     solar_params: &SolarSystemParameters,
@@ -65,7 +65,7 @@ pub fn calculate_planet_position_with_quality(
 
     let mut relative_pos = if planet.parent_entity.is_some() {
         // Moons - use real orbital elements for accurate position calculation
-        if let Some(elements) = get_moon_orbital_elements(&planet.name) {
+        if let Some(elements) = get_moon_orbital_elements(planet) {
             let mean_motion = mean_motion_from_period_days(planet.orbital_period_days);
             let mean_anomaly =
                 normalize_radians(elements.mean_anomaly_rad + mean_motion * time_days);
@@ -158,7 +158,7 @@ pub fn calculate_orbit_radius_units(planet: &Planet, solar_params: &SolarSystemP
 pub fn orbit_shape_for(planet: &Planet, solar_params: &SolarSystemParameters) -> OrbitShape {
     if planet.parent_entity.is_some() {
         // Moon - use real orbital elements if available
-        if let Some(elements) = get_moon_orbital_elements(&planet.name) {
+        if let Some(elements) = get_moon_orbital_elements(planet) {
             OrbitShape {
                 semi_major_axis_units: solar_params.au_to_units(elements.semi_major_axis_au)
                     * MOON_ORBIT_SCALE,
@@ -231,99 +231,100 @@ pub fn transform_orbital_point(
 
 pub fn orbital_elements_for(planet: &Planet) -> Option<OrbitalElements> {
     if planet.parent_entity.is_some() {
-        get_moon_orbital_elements(&planet.name)
+        get_moon_orbital_elements(planet)
     } else {
         get_orbital_elements(&planet.name)
     }
 }
 
-// Real-world orbital elements for major moons
-fn get_moon_orbital_elements(name: &str) -> Option<OrbitalElements> {
+// Real-world orbital elements for major moons. The shared celestial catalog is
+// the authority for semimajor axes; this table contains only the remaining
+// Keplerian elements. Sources: NASA planetary fact sheets, JPL Horizons.
+fn get_moon_orbital_elements(planet: &Planet) -> Option<OrbitalElements> {
     // Orbital elements relative to planet's equator (degrees)
-    // Sources: NASA planetary fact sheets, JPL horizons
-    match name {
+    match planet.name.as_str() {
         // Earth
         "Moon" => Some(moon_elements_from_degrees(
-            0.002569, 0.0549, 5.145, 0.0, 318.15, 135.27,
+            planet, 0.0549, 5.145, 0.0, 318.15, 135.27,
         )),
 
         // Mars
         "Phobos" => Some(moon_elements_from_degrees(
-            0.000063, 0.0151, 1.08, 0.0, 0.0, 0.0,
+            planet, 0.0151, 1.08, 0.0, 0.0, 0.0,
         )),
         "Deimos" => Some(moon_elements_from_degrees(
-            0.000157, 0.0002, 1.79, 0.0, 0.0, 0.0,
+            planet, 0.0002, 1.79, 0.0, 0.0, 0.0,
         )),
 
         // Jupiter (Galilean moons)
         "Io" => Some(moon_elements_from_degrees(
-            0.002819, 0.0041, 0.05, 0.0, 0.0, 0.0,
+            planet, 0.0041, 0.05, 0.0, 0.0, 0.0,
         )),
         "Europa" => Some(moon_elements_from_degrees(
-            0.004485, 0.0094, 0.47, 0.0, 0.0, 0.0,
+            planet, 0.0094, 0.47, 0.0, 0.0, 0.0,
         )),
         "Ganymede" => Some(moon_elements_from_degrees(
-            0.007155, 0.0013, 0.20, 0.0, 0.0, 0.0,
+            planet, 0.0013, 0.20, 0.0, 0.0, 0.0,
         )),
         "Callisto" => Some(moon_elements_from_degrees(
-            0.012585, 0.0074, 0.51, 0.0, 0.0, 0.0,
+            planet, 0.0074, 0.51, 0.0, 0.0, 0.0,
         )),
 
         // Saturn
         "Mimas" => Some(moon_elements_from_degrees(
-            0.001239, 0.0196, 1.53, 0.0, 0.0, 0.0,
+            planet, 0.0196, 1.53, 0.0, 0.0, 0.0,
         )),
         "Enceladus" => Some(moon_elements_from_degrees(
-            0.001590, 0.0047, 0.00, 0.0, 0.0, 0.0,
+            planet, 0.0047, 0.00, 0.0, 0.0, 0.0,
         )),
         "Tethys" => Some(moon_elements_from_degrees(
-            0.001969, 0.0001, 1.12, 0.0, 0.0, 0.0,
+            planet, 0.0001, 1.12, 0.0, 0.0, 0.0,
         )),
         "Dione" => Some(moon_elements_from_degrees(
-            0.002522, 0.0022, 0.02, 0.0, 0.0, 0.0,
+            planet, 0.0022, 0.02, 0.0, 0.0, 0.0,
         )),
         "Rhea" => Some(moon_elements_from_degrees(
-            0.003521, 0.0010, 0.35, 0.0, 0.0, 0.0,
+            planet, 0.0010, 0.35, 0.0, 0.0, 0.0,
         )),
         "Titan" => Some(moon_elements_from_degrees(
-            0.008168, 0.0288, 0.33, 0.0, 0.0, 0.0,
+            planet, 0.0288, 0.33, 0.0, 0.0, 0.0,
         )),
         "Hyperion" => Some(moon_elements_from_degrees(
-            0.009893, 0.0274, 0.43, 0.0, 0.0, 0.0,
+            planet, 0.0274, 0.43, 0.0, 0.0, 0.0,
         )),
         "Iapetus" => Some(moon_elements_from_degrees(
-            0.023781, 0.0286, 15.47, 0.0, 0.0, 0.0,
+            planet, 0.0286, 15.47, 0.0, 0.0, 0.0,
         )),
 
         // Uranus
         "Miranda" => Some(moon_elements_from_degrees(
-            0.000867, 0.0013, 4.34, 0.0, 0.0, 0.0,
+            planet, 0.0013, 4.34, 0.0, 0.0, 0.0,
         )),
         "Ariel" => Some(moon_elements_from_degrees(
-            0.001276, 0.0012, 0.26, 0.0, 0.0, 0.0,
+            planet, 0.0012, 0.26, 0.0, 0.0, 0.0,
         )),
         "Umbriel" => Some(moon_elements_from_degrees(
-            0.001778, 0.0039, 0.13, 0.0, 0.0, 0.0,
+            planet, 0.0039, 0.13, 0.0, 0.0, 0.0,
         )),
         "Titania" => Some(moon_elements_from_degrees(
-            0.002914, 0.0011, 0.34, 0.0, 0.0, 0.0,
+            planet, 0.0011, 0.34, 0.0, 0.0, 0.0,
         )),
         "Oberon" => Some(moon_elements_from_degrees(
-            0.003898, 0.0014, 0.07, 0.0, 0.0, 0.0,
+            planet, 0.0014, 0.07, 0.0, 0.0, 0.0,
         )),
 
         // Neptune
         "Triton" => Some(moon_elements_from_degrees(
-            0.002371, 0.0000, 156.87, 0.0, 0.0, 0.0, // Retrograde orbit!
+            planet, 0.0000, 156.87, 0.0, 0.0, 0.0,
         )),
         "Proteus" => Some(moon_elements_from_degrees(
-            0.000787, 0.0005, 0.55, 0.0, 0.0, 0.0,
+            planet, 0.0005, 0.55, 0.0, 0.0, 0.0,
         )),
         "Nereid" => Some(moon_elements_from_degrees(
-            0.036915, 0.7512, 7.23, 0.0, 0.0, 0.0, // Highly eccentric!
+            planet, 0.7512, 7.23, 0.0, 0.0, 0.0,
         )),
         "Larissa" => Some(moon_elements_from_degrees(
-            0.000489, 0.0014, 0.20, 0.0, 0.0, 0.0,
+            planet, 0.0014, 0.20, 0.0, 0.0, 0.0,
         )),
 
         _ => None,
@@ -331,7 +332,7 @@ fn get_moon_orbital_elements(name: &str) -> Option<OrbitalElements> {
 }
 
 fn moon_elements_from_degrees(
-    a_au: f32,
+    planet: &Planet,
     e: f32,
     i_deg: f32,
     long_asc_node_deg: f32,
@@ -339,7 +340,7 @@ fn moon_elements_from_degrees(
     mean_longitude_deg: f32,
 ) -> OrbitalElements {
     elements_from_degrees(
-        a_au,
+        planet.orbital_distance_au,
         e,
         i_deg,
         long_asc_node_deg,
@@ -902,6 +903,7 @@ pub fn circularize_and_plane_change_dv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::physics_utils::calculate_visual_radius;
     use crate::domain::services::planet_factory::PlanetFactory;
     use bevy::math::DVec3;
 
@@ -1057,12 +1059,38 @@ mod tests {
     }
 
     #[test]
-    fn moon_orbit_shape_uses_unexaggerated_distance_scale() {
+    fn moon_orbit_shape_uses_the_catalog_semimajor_axis() {
         let solar = SolarSystemParameters::for_visualization();
         let nereid = PlanetFactory::create_by_name("Nereid").unwrap();
         let shape = orbit_shape_for(&nereid, &solar);
 
-        assert!((shape.semi_major_axis_units - 0.036915 * solar.scale_factor).abs() < 1e-3);
+        assert!(
+            (shape.semi_major_axis_units - nereid.orbital_distance_au * solar.scale_factor).abs()
+                < 1e-3
+        );
+    }
+
+    #[test]
+    fn every_moon_clears_its_parent_at_periapsis_on_the_solar_map() {
+        let solar = SolarSystemParameters::for_visualization();
+
+        for moon in PlanetFactory::get_moons() {
+            let parent_name = moon.parent_entity.as_deref().unwrap();
+            let parent = PlanetFactory::create_by_name(parent_name).unwrap();
+            let orbit = orbit_shape_for(&moon, &solar);
+            let periapsis_units = orbit.semi_major_axis_units * (1.0 - orbit.eccentricity);
+            let clearance_units = periapsis_units
+                - calculate_visual_radius(&parent, &solar)
+                - calculate_visual_radius(&moon, &solar);
+
+            assert!(
+                clearance_units > 0.0,
+                "{} intersects {} by {} solar-map units at periapsis",
+                moon.name,
+                parent.name,
+                -clearance_units
+            );
+        }
     }
 
     #[test]

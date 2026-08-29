@@ -16,7 +16,6 @@ pub struct PendingMaterialTextures {
 // Component for pending orbit mesh generation
 #[derive(Component)]
 pub struct PendingOrbitMesh {
-    pub mesh: Handle<Mesh>,
     pub orbit_shape: crate::domain::services::physics::OrbitShape,
     pub color: Color,
     pub segments: usize,

@@ -6,7 +6,8 @@ pub struct SolarSystemParameters {
     pub scale_factor: f32, // For visualization (e.g., 1 AU = 100 units)
     pub time_scale: f32,   // Simulation speed multiplier
     pub show_orbits: bool,
-    pub planet_scale: f32, // Additional scaling for planets to make them visible
+    /// Uniform visual multiplier. Keep this at 1.0 for physically scaled bodies.
+    pub planet_scale: f32,
 }
 
 impl Default for SolarSystemParameters {
@@ -33,12 +34,8 @@ impl SolarSystemParameters {
             scale_factor: 75000.0, // 1 AU = 75,000 simulation units
             time_scale: 3000.0,    // Time scale: 3000.0x
             show_orbits: true,
-            // TRUE SIZE RELATIONSHIPS between planets are preserved:
-            // - Sun is 109x larger than Earth
-            // - Jupiter is 28.6x larger than Earth
-            // But we scale ALL planets up together for visibility against orbits
-            // (In reality, planets would be invisible dots at true orbital scale)
-            planet_scale: 80.0, // Makes planets visible while keeping size ratios accurate
+            // Bodies and orbital distances share this same physical AU scale.
+            planet_scale: 1.0,
         }
     }
 

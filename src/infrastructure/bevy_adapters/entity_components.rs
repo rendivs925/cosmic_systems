@@ -64,17 +64,6 @@ pub struct OrbitComponent {
     pub distance_rank: f32,
 }
 
-// Component for apoapsis/periapsis markers showing orbit eccentricity
-#[derive(Component)]
-pub struct EccentricityMarkersComponent {
-    pub planet_entity: Entity,
-    pub apoapsis_position: Vec3,
-    pub periapsis_position: Vec3,
-    pub apoapsis_material: Handle<StandardMaterial>,
-    pub periapsis_material: Handle<StandardMaterial>,
-    pub eccentricity: f32,
-}
-
 // Component for velocity trail particle system
 #[derive(Component)]
 pub struct VelocityTrailComponent {
@@ -88,17 +77,6 @@ pub struct VelocityTrailComponent {
 
 #[derive(Component)]
 pub struct Starfield;
-
-// Component for the orbital position tracker marker (small dot on orbit at planet's position)
-#[derive(Component)]
-pub struct PositionTracker {
-    pub planet_entity: Entity,
-    pub planet_name: String,
-}
-
-// Marker spawned on orbit entities after their position tracker is created
-#[derive(Component)]
-pub struct TrackerSpawned;
 
 // Marker component for moon orbits (orbits that need to follow their parent planet)
 #[derive(Component)]

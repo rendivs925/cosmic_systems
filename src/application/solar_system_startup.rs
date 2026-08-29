@@ -399,8 +399,6 @@ fn spawn_celestial_body(
                 moon_thickness,
                 moon_segments,
             );
-            #[cfg(target_arch = "wasm32")]
-            let orbit_mesh = create_placeholder_orbit_mesh(meshes);
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
             // Create individual material for this moon orbit
@@ -414,7 +412,6 @@ fn spawn_celestial_body(
             #[cfg(target_arch = "wasm32")]
             let orbit_entity = commands
                 .spawn((
-                    Mesh3d(orbit_mesh.clone()),
                     MeshMaterial3d(moon_material_handle.clone()),
                     Transform::default(),
                 ))
@@ -475,7 +472,6 @@ fn spawn_celestial_body(
             #[cfg(target_arch = "wasm32")]
             {
                 commands.entity(orbit_entity).insert(PendingOrbitMesh {
-                    mesh: orbit_mesh,
                     orbit_shape,
                     color: ORBIT_LINE_COLOR,
                     segments: ORBIT_RIBBON_SEGMENTS,
@@ -495,8 +491,6 @@ fn spawn_celestial_body(
             planet_thickness,
             planet_segments,
         );
-        #[cfg(target_arch = "wasm32")]
-        let orbit_mesh = create_placeholder_orbit_mesh(meshes);
         let orbit_material = create_orbit_material(
             orbit_base_color,
             orbit_emissive(orbit_base_color, 0.04),
@@ -508,7 +502,6 @@ fn spawn_celestial_body(
         #[cfg(target_arch = "wasm32")]
         let orbit_entity = commands
             .spawn((
-                Mesh3d(orbit_mesh.clone()),
                 MeshMaterial3d(orbit_material_handle.clone()),
                 Transform::default(),
             ))
@@ -561,7 +554,6 @@ fn spawn_celestial_body(
         #[cfg(target_arch = "wasm32")]
         {
             commands.entity(orbit_entity).insert(PendingOrbitMesh {
-                mesh: orbit_mesh,
                 orbit_shape,
                 color: orbit_base_color,
                 segments: ORBIT_RIBBON_SEGMENTS,

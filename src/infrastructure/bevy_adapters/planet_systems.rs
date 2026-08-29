@@ -1,62 +1,50 @@
 use super::components::*;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::gpu_compute::webgpu_kepler::PlanetGpuInput;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::gpu_compute::webgpu_kepler::WebGpuKeplerSolver;
-#[cfg(target_arch = "wasm32")]
-use crate::infrastructure::web_workers::physics_worker::{PhysicsTask, PhysicsWorkerPool};
 use bevy::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use bevy_mesh::Indices;
 
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::spawn_local;
-
-// System to update planet/moon positions in their orbits (optimized for performance with parallel processing)
-#[cfg(target_arch = "wasm32")]
+/// Update the solar map from the fixed simulation clock. This path intentionally
+/// has no camera, worker, or GPU dependency so every platform evaluates the
+/// same catalog and Kepler solver at a given simulation time.
 pub fn update_planet_positions(
     time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
-    camera_query: Query<&GlobalTransform, With<CameraController>>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
-    mut worker_pool: NonSendMut<PhysicsWorkerPool>,
-    chrome: Option<Res<ChromeOptimizations>>,
-    mut webgpu_state: Option<NonSendMut<WebGpuKeplerState>>,
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
-    let elapsed_seconds = time.elapsed_secs();
-    let time_days = solar_params.time_to_days(elapsed_seconds);
+    let physics_start = std::time::Instant::now();
+    let time_days = solar_params.time_to_days(time.elapsed_secs());
 
-    let camera_pos = camera_query.single().unwrap().translation();
+    update_planet_positions_sequential(time_days, &solar_params, &mut query);
 
-    let webgpu_enabled = chrome.as_ref().is_some_and(|chrome| chrome.webgpu_enabled);
-    let solver_ready = webgpu_state
-        .as_ref()
-        .is_some_and(|state| state.solver.borrow().is_some());
-    let webgpu_active = webgpu_enabled && solver_ready;
+    perf_stats.physics_update_time = physics_start.elapsed().as_secs_f32() * 1000.0;
+    perf_stats.simd_enabled = false;
+    perf_stats.parallel_enabled = false;
+    perf_stats.cpu_cores_used = 1;
+}
 
-    if webgpu_active {
-        if let Some(state) = webgpu_state.as_mut() {
-            let mut results = state.results.borrow_mut();
-            if !results.is_empty() {
-                for (entity, position) in results.drain(..) {
-                    if let Ok((_, mut transform, _)) = query.get_mut(entity) {
-                        transform.translation = position;
-                    }
-                }
-            }
+fn update_planet_positions_sequential(
+    time_days: f32,
+    solar_params: &SolarSystemParameters,
+    query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
+) {
+    // Parent bodies must be evaluated before moons so moon positions always use
+    // the current fixed-step parent state.
+    for (_, mut transform, planet_comp) in query.iter_mut() {
+        if planet_comp.domain_planet.parent_entity.is_some() {
+            continue;
         }
+        transform.translation = physics::calculate_planet_position(
+            &planet_comp.domain_planet,
+            time_days,
+            solar_params,
+            Vec3::ZERO,
+            None,
+        );
     }
 
     let mut parent_positions = std::collections::HashMap::new();
     let mut parent_tilts = std::collections::HashMap::new();
-
     for (_, transform, planet_comp) in query.iter() {
         if planet_comp.domain_planet.parent_entity.is_none() {
             parent_positions.insert(
@@ -65,459 +53,48 @@ pub fn update_planet_positions(
             );
             parent_tilts.insert(
                 planet_comp.domain_planet.name.clone(),
-                Some(planet_comp.domain_planet.axial_tilt_deg),
+                planet_comp.domain_planet.axial_tilt_deg,
             );
         }
     }
 
-    let mut worker_tasks: Vec<(f32, PhysicsTask)> = Vec::new();
-    let mut gpu_inputs: Vec<PlanetGpuInput> = Vec::new();
-    let mut gpu_entities: Vec<Entity> = Vec::new();
-
-    for (entity, mut transform, planet_comp) in query.iter_mut() {
-        let distance_to_camera = camera_pos.distance(transform.translation);
-
-        let (parent_position, parent_tilt) =
-            if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
-                (
-                    *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
-                    parent_tilts.get(parent_name).copied().flatten(),
-                )
-            } else {
-                (Vec3::ZERO, None)
-            };
-
-        // Orbital state must not vary with camera distance. Camera distance still
-        // prioritizes web-worker delivery below, but every authoritative solve
-        // uses the calculator's standard convergence budget.
-        let kepler_iterations = 8;
-        let is_moon = planet_comp.domain_planet.parent_entity.is_some();
-
-        let new_position = physics::calculate_planet_position_with_quality(
+    for (_, mut transform, planet_comp) in query.iter_mut() {
+        let Some(parent_name) = planet_comp.domain_planet.parent_entity.as_ref() else {
+            continue;
+        };
+        let Some(parent_position) = parent_positions.get(parent_name).copied() else {
+            continue;
+        };
+        let parent_tilt = parent_tilts.get(parent_name).copied();
+        transform.translation = physics::calculate_planet_position(
             &planet_comp.domain_planet,
             time_days,
-            &solar_params,
+            solar_params,
             parent_position,
             parent_tilt,
-            kepler_iterations,
         );
-        transform.translation = new_position;
-
-        if webgpu_active && !is_moon && planet_comp.domain_planet.name != "Sun" {
-            let elements = physics::orbital_elements_for(&planet_comp.domain_planet);
-            let mean_anomaly_rad = if let Some(elements) = elements {
-                let mean_motion = 0.01720209895 / elements.semi_major_axis_au.powf(1.5);
-                elements.mean_anomaly_rad + mean_motion * time_days
-            } else if planet_comp.domain_planet.orbital_period_days > 0.0 {
-                std::f32::consts::TAU * (time_days / planet_comp.domain_planet.orbital_period_days)
-            } else {
-                0.0
-            };
-
-            let elements = elements.unwrap_or(crate::domain::services::physics::OrbitalElements {
-                semi_major_axis_au: planet_comp.domain_planet.orbital_distance_au,
-                eccentricity: 0.0,
-                inclination_rad: 0.0,
-                long_asc_node_rad: 0.0,
-                arg_periapsis_rad: 0.0,
-                mean_anomaly_rad: 0.0,
-            });
-
-            gpu_inputs.push(PlanetGpuInput {
-                semi_major_axis_au: elements.semi_major_axis_au,
-                eccentricity: elements.eccentricity,
-                inclination_rad: elements.inclination_rad,
-                long_asc_node_rad: elements.long_asc_node_rad,
-                arg_periapsis_rad: elements.arg_periapsis_rad,
-                mean_anomaly_rad,
-                scale_factor: solar_params.scale_factor,
-                moon_scale: physics::MOON_ORBIT_SCALE,
-                parent_x: parent_position.x,
-                parent_y: parent_position.y,
-                parent_z: parent_position.z,
-                parent_tilt_rad: parent_tilt.map(|deg| deg.to_radians()).unwrap_or(0.0),
-                iterations: kepler_iterations,
-                is_moon: 0,
-                has_parent_tilt: 0,
-                _pad: 0,
-            });
-            gpu_entities.push(entity);
-            continue;
-        }
-
-        let should_use_worker = worker_pool.worker_count() > 0
-            && planet_comp.domain_planet.name != "Sun"
-            && worker_pool.can_accept_tasks();
-
-        if should_use_worker {
-            let elements = physics::orbital_elements_for(&planet_comp.domain_planet);
-            let (has_elements, orbital_elements) = if let Some(elements) = elements {
-                (
-                    true,
-                    crate::infrastructure::web_workers::physics_worker::OrbitalElements {
-                        semi_major_axis_au: elements.semi_major_axis_au,
-                        eccentricity: elements.eccentricity,
-                        inclination_rad: elements.inclination_rad,
-                        long_asc_node_rad: elements.long_asc_node_rad,
-                        arg_periapsis_rad: elements.arg_periapsis_rad,
-                        mean_anomaly_rad: elements.mean_anomaly_rad,
-                    },
-                )
-            } else {
-                (
-                    false,
-                    crate::infrastructure::web_workers::physics_worker::OrbitalElements {
-                        semi_major_axis_au: 0.0,
-                        eccentricity: 0.0,
-                        inclination_rad: 0.0,
-                        long_asc_node_rad: 0.0,
-                        arg_periapsis_rad: 0.0,
-                        mean_anomaly_rad: 0.0,
-                    },
-                )
-            };
-
-            worker_tasks.push((
-                distance_to_camera,
-                PhysicsTask {
-                    worker_id: 0,
-                    entity_bits: entity.to_bits(),
-                    orbital_elements,
-                    has_elements,
-                    is_moon: planet_comp.domain_planet.parent_entity.is_some(),
-                    parent_position:
-                        crate::infrastructure::web_workers::physics_worker::WorkerVec3 {
-                            x: parent_position.x,
-                            y: parent_position.y,
-                            z: parent_position.z,
-                        },
-                    parent_tilt_deg: parent_tilt,
-                    orbital_distance_au: planet_comp.domain_planet.orbital_distance_au,
-                    orbital_period_days: planet_comp.domain_planet.orbital_period_days,
-                    time_days,
-                    kepler_iterations,
-                    scale_factor: solar_params.scale_factor,
-                    moon_orbit_scale: physics::MOON_ORBIT_SCALE,
-                },
-            ));
-            continue;
-        }
-
-        let new_position = physics::calculate_planet_position_with_quality(
-            &planet_comp.domain_planet,
-            time_days,
-            &solar_params,
-            parent_position,
-            parent_tilt,
-            kepler_iterations,
-        );
-        transform.translation = new_position;
-    }
-
-    if worker_pool.worker_count() > 0 && !worker_tasks.is_empty() {
-        worker_tasks.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let tasks = worker_tasks.into_iter().map(|(_, task)| task).collect();
-        worker_pool.queue_tasks(tasks);
-    }
-
-    for result in worker_pool.collect_results() {
-        if let Ok((_, mut transform, _)) = query.get_mut(result.entity) {
-            transform.translation = result.position;
-        }
-    }
-
-    if webgpu_active && !gpu_inputs.is_empty() {
-        if let Some(state) = webgpu_state.as_mut() {
-            if !*state.in_flight.borrow() {
-                let solver_ref = state.solver.clone();
-                let results_ref = state.results.clone();
-                let in_flight = state.in_flight.clone();
-                *in_flight.borrow_mut() = true;
-                let entities = gpu_entities.clone();
-                spawn_local(async move {
-                    let solver_opt = solver_ref.borrow_mut().take();
-                    if let Some(mut solver) = solver_opt {
-                        let result = solver.solve_positions(&gpu_inputs).await;
-                        *solver_ref.borrow_mut() = Some(solver);
-                        if let Ok(positions) = result {
-                            let mut results = results_ref.borrow_mut();
-                            results.clear();
-                            results.extend(entities.into_iter().zip(positions));
-                        }
-                    }
-                    *in_flight.borrow_mut() = false;
-                });
-            }
-        }
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn update_planet_positions(
-    time: Res<Time<Fixed>>,
-    solar_params: Res<SolarSystemParameters>,
-    mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
-    mut perf_stats: ResMut<PerformanceStats>,
-) {
-    // Start timing for physics update
-    let physics_start = std::time::Instant::now();
-
-    let elapsed_seconds = time.elapsed_secs();
-    let time_days = solar_params.time_to_days(elapsed_seconds);
-
-    // This small catalog has a dependency between each moon and its parent.
-    // Solve it in deterministic parent-then-moon order rather than selecting
-    // numerical precision or a compute backend from the presentation camera.
-    update_planet_positions_sequential(time_days, &solar_params, &mut query);
-
-    // Record physics timing
-    let physics_duration = physics_start.elapsed();
-    perf_stats.physics_update_time = physics_duration.as_secs_f32() * 1000.0;
-
-    // Update SIMD/parallel flags based on build configuration
-    perf_stats.simd_enabled = cfg!(feature = "simd");
-    perf_stats.parallel_enabled = cfg!(feature = "parallel");
-    perf_stats.cpu_cores_used = num_cpus::get();
-}
-
-/// Parallel optimized position updates
-#[cfg(feature = "parallel")]
-fn update_planet_positions_parallel(
-    time_days: f32,
-    solar_params: Res<SolarSystemParameters>,
-    camera_pos: Vec3,
-    parent_positions: &std::collections::HashMap<String, Vec3>,
-    parent_tilts: &std::collections::HashMap<String, Option<f32>>,
-    query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
-    perf_stats: &mut ResMut<PerformanceStats>,
-) {
-    // Collect planet data for batch processing
-    let planet_data: Vec<_> = query
-        .iter_mut()
-        .map(|(entity, transform, planet_comp)| {
-            let distance_to_camera = camera_pos.distance(transform.translation);
-            let kepler_iterations = physics::get_kepler_iterations_for_distance(distance_to_camera);
-
-            let (parent_position, parent_tilt) =
-                if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
-                    (
-                        *parent_positions.get(parent_name).unwrap_or(&Vec3::ZERO),
-                        parent_tilts.get(parent_name).copied().flatten(),
-                    )
-                } else {
-                    (Vec3::ZERO, None)
-                };
-
-            (
-                entity,
-                planet_comp.domain_planet.clone(),
-                parent_position,
-                parent_tilt,
-                kepler_iterations,
-                transform,
-            )
-        })
-        .collect();
-
-    // Hybrid GPU+CPU processing with batching and concurrent execution
-    let position_updates: Vec<(Entity, Vec3)> = if perf_stats.vulkan_enabled
-        && perf_stats.vulkan_solver.is_some()
-    {
-        // Separate planets from moons for optimal batching
-        let (planets_data, moons_data): (Vec<_>, Vec<_>) = planet_data
-            .into_iter()
-            .partition(|(_, planet, _, _, _, _)| planet.parent_entity.is_none());
-
-        let mut all_updates = Vec::new();
-
-        // Process planets and moons concurrently for maximum parallelization
-        let (planet_updates, moon_updates) = rayon::join(
-            || {
-                // Process planets via hybrid routing (GPU if available, SIMD fallback)
-                if !planets_data.is_empty() {
-                    let mut results = Vec::new();
-                    let mut simd_solver =
-                        crate::infrastructure::bevy_adapters::simd_kepler::SimdKeplerSolver::new();
-
-                    // Extract planets for batch processing - group into larger batches for GPU efficiency
-                    let planets: Vec<_> = planets_data
-                        .iter()
-                        .map(|(_, planet, _, _, _, _)| planet.clone())
-                        .collect();
-                    let planet_entities: Vec<_> = planets_data
-                        .iter()
-                        .map(|(entity, _, _, _, _, _)| *entity)
-                        .collect();
-
-                    // Process in batches of up to 100 planets for optimal GPU utilization
-                    for chunk in planets.chunks(100).zip(planet_entities.chunks(100)) {
-                        let (planet_chunk, entity_chunk) = chunk;
-
-                        // Batch process planets through hybrid compute
-                        let (positions, backend_used) = crate::infrastructure::bevy_adapters::components::process_hybrid_compute(
-                            planet_chunk,
-                            perf_stats.quality_level,
-                            time_days,
-                            solar_params.scale_factor,
-                            perf_stats.vulkan_enabled,
-                            &mut perf_stats.vulkan_solver,
-                            &mut simd_solver,
-                        );
-
-                        // Record GPU usage
-                        if matches!(backend_used, crate::infrastructure::bevy_adapters::components::ComputeBackendType::VulkanGpu) {
-                            perf_stats.vulkan_kepler_calls += planet_chunk.len() as u64;
-                        }
-
-                        // Combine entity IDs with positions
-                        for (entity, position) in entity_chunk.iter().zip(positions) {
-                            results.push((*entity, position));
-                        }
-                    }
-                    results
-                } else {
-                    Vec::new()
-                }
-            },
-            || {
-                // Process moons in parallel via SIMD
-                moons_data
-                    .into_par_iter()
-                    .map(
-                        |(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
-                            let position = physics::calculate_planet_position_with_quality(
-                                &planet,
-                                time_days,
-                                &solar_params,
-                                parent_pos,
-                                parent_tilt,
-                                kepler_iterations,
-                            );
-                            (entity, position)
-                        },
-                    )
-                    .collect::<Vec<(Entity, Vec3)>>()
-            },
-        );
-
-        all_updates.extend(planet_updates);
-        all_updates.extend(moon_updates);
-        all_updates
-    } else {
-        // Fallback to parallel SIMD processing when Vulkan is not available
-        planet_data
-            .into_par_iter()
-            .map(
-                |(entity, planet, parent_pos, parent_tilt, kepler_iterations, _)| {
-                    let position = physics::calculate_planet_position_with_quality(
-                        &planet,
-                        time_days,
-                        &solar_params,
-                        parent_pos,
-                        parent_tilt,
-                        kepler_iterations,
-                    );
-                    (entity, position)
-                },
-            )
-            .collect()
-    };
-
-    // Apply position updates
-    for (entity, new_position) in position_updates {
-        if let Ok((_, mut transform, _)) = query.get_mut(entity) {
-            transform.translation = new_position;
-        }
-    }
-}
-
-/// Fallback sequential implementation for when parallel features are disabled
-fn update_planet_positions_sequential(
-    time_days: f32,
-    solar_params: &SolarSystemParameters,
-    query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
-) {
-    // First pass: update only planets (Sun-orbiting bodies)
-    for (_entity, mut transform, planet_comp) in query.iter_mut() {
-        if planet_comp.domain_planet.parent_entity.is_some() {
-            continue;
-        }
-        let new_position = physics::calculate_planet_position_with_quality(
-            &planet_comp.domain_planet,
-            time_days,
-            &solar_params,
-            Vec3::ZERO,
-            None,
-            8,
-        );
-        transform.translation = new_position;
-    }
-
-    // Rebuild parent positions from just-updated planet transforms
-    let mut updated_parent_positions: std::collections::HashMap<String, Vec3> =
-        std::collections::HashMap::new();
-    let mut updated_parent_tilts: std::collections::HashMap<String, Option<f32>> =
-        std::collections::HashMap::new();
-    for (_entity, transform, planet_comp) in query.iter() {
-        if planet_comp.domain_planet.parent_entity.is_none() {
-            updated_parent_positions.insert(
-                planet_comp.domain_planet.name.clone(),
-                transform.translation,
-            );
-            updated_parent_tilts.insert(
-                planet_comp.domain_planet.name.clone(),
-                Some(planet_comp.domain_planet.axial_tilt_deg),
-            );
-        }
-    }
-
-    // Second pass: update moons using current parent positions
-    for (_entity, mut transform, planet_comp) in query.iter_mut() {
-        if planet_comp.domain_planet.parent_entity.is_none() {
-            continue;
-        }
-        let parent_name = planet_comp.domain_planet.parent_entity.as_ref().unwrap();
-        let parent_position = *updated_parent_positions
-            .get(parent_name)
-            .unwrap_or(&Vec3::ZERO);
-        let parent_tilt = updated_parent_tilts.get(parent_name).copied().flatten();
-        let new_position = physics::calculate_planet_position_with_quality(
-            &planet_comp.domain_planet,
-            time_days,
-            &solar_params,
-            parent_position,
-            parent_tilt,
-            8,
-        );
-        transform.translation = new_position;
-    }
-}
-
-// System to update planet rotations
 pub fn update_planet_rotations(
     time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
-    let elapsed_seconds = time.elapsed_secs();
-    let time_days = solar_params.time_to_days(elapsed_seconds);
-
-    update_planet_rotations_at(time_days, &mut query);
+    update_planet_rotations_at(solar_params.time_to_days(time.elapsed_secs()), &mut query);
 }
 
-/// Evaluate solar-map presentation at the fixed schedule's fractional
-/// overstep. The celestial ephemeris stays camera-independent and fixed-step
-/// consumers keep their existing state, while normal and craft rendering no
-/// longer visibly jumps between fixed ticks.
+/// Evaluate solar-map presentation at the fixed schedule's fractional overstep.
+/// Authoritative fixed state remains independent from this visual smoothing.
 pub fn interpolate_planet_transforms(
     time: Res<Time<Fixed>>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
-    let elapsed_seconds = time.elapsed_secs() + time.overstep().as_secs_f32();
-    let time_days = solar_params.time_to_days(elapsed_seconds);
-    update_planet_positions_sequential(time_days, &solar_params, &mut query);
-    update_planet_rotations_at(time_days, &mut query);
+    let presentation_days =
+        solar_params.time_to_days(time.elapsed_secs() + time.overstep().as_secs_f32());
+    update_planet_positions_sequential(presentation_days, &solar_params, &mut query);
+    update_planet_rotations_at(presentation_days, &mut query);
 }
 
 fn update_planet_rotations_at(
@@ -527,12 +104,24 @@ fn update_planet_rotations_at(
     for (_, mut transform, planet_comp) in query.iter_mut() {
         let rotation_angle =
             physics::calculate_planet_rotation(&planet_comp.domain_planet, time_days);
-        let tilt_rad = planet_comp.domain_planet.axial_tilt_deg.to_radians();
+        let tilt = Quat::from_rotation_z(planet_comp.domain_planet.axial_tilt_deg.to_radians());
+        transform.rotation = tilt * Quat::from_rotation_y(rotation_angle);
+    }
+}
 
-        // Apply axial tilt, then spin around the tilted local Y axis.
-        let tilt = Quat::from_rotation_z(tilt_rad);
-        let spin = Quat::from_rotation_y(rotation_angle);
-        transform.rotation = tilt * spin;
+/// Move moon orbit presentation with its parent body. The mesh itself remains in
+/// its parent-relative orbital frame and does not participate in simulation.
+pub fn update_moon_orbit_positions(
+    mut moon_orbit_query: Query<(&mut Transform, &OrbitComponent), With<MoonOrbit>>,
+    planet_query: Query<(&Transform, &PlanetComponent), Without<MoonOrbit>>,
+) {
+    for (mut orbit_transform, orbit_comp) in moon_orbit_query.iter_mut() {
+        let Ok((parent_transform, parent_comp)) = planet_query.get(orbit_comp.planet_entity) else {
+            continue;
+        };
+        orbit_transform.translation = parent_transform.translation;
+        orbit_transform.rotation =
+            Quat::from_rotation_z(parent_comp.domain_planet.axial_tilt_deg.to_radians());
     }
 }
 
@@ -544,26 +133,8 @@ mod tests {
     fn presentation_time_advances_through_fixed_overstep() {
         let solar = SolarSystemParameters::for_visualization();
         let fixed_seconds = 10.0;
-        let overstep_seconds = 0.25;
-        let fixed_days = solar.time_to_days(fixed_seconds);
-        let presentation_days = solar.time_to_days(fixed_seconds + overstep_seconds);
+        let presentation_seconds = fixed_seconds + 0.25;
 
-        assert!(presentation_days > fixed_days);
-    }
-}
-
-// System to update moon orbit positions to follow their parent planets
-pub fn update_moon_orbit_positions(
-    mut moon_orbit_query: Query<(&mut Transform, &OrbitComponent), With<MoonOrbit>>,
-    planet_query: Query<(&Transform, &PlanetComponent), Without<MoonOrbit>>,
-) {
-    for (mut orbit_transform, orbit_comp) in moon_orbit_query.iter_mut() {
-        // Get the parent planet's position
-        if let Ok((parent_transform, parent_comp)) = planet_query.get(orbit_comp.planet_entity) {
-            // Update orbit position and align the orbit plane with the parent axial tilt
-            orbit_transform.translation = parent_transform.translation;
-            orbit_transform.rotation =
-                Quat::from_rotation_z(parent_comp.domain_planet.axial_tilt_deg.to_radians());
-        }
+        assert!(solar.time_to_days(presentation_seconds) > solar.time_to_days(fixed_seconds));
     }
 }

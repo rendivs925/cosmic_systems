@@ -137,8 +137,9 @@ pub fn create_orbit_ribbon_mesh(
         .cross(orbit_positions[segments / 4])
         .normalize_or_zero();
 
-    // Clamp thickness for consistent elegant appearance
-    let thickness = thickness.clamp(1.0, 15.0);
+    // Camera-relative sizing is calculated by the presentation system. Preserve
+    // its sub-unit near-body widths instead of imposing a world-scale minimum.
+    let thickness = thickness.max(0.0001);
 
     let linear_color: LinearRgba = orbit_color.into();
     let color_arr = [
@@ -258,31 +259,6 @@ pub fn create_polyline_ribbon_mesh(points: &[Vec3], color: Color, thickness: f32
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh
-}
-
-pub fn create_placeholder_orbit_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
-    let positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
-    let normals = vec![[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
-    let uvs = vec![[0.0, 0.0], [1.0, 0.0]];
-    let colors = vec![[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
-    let indices = vec![0u32, 1u32];
-
-    let mut mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-    meshes.add(mesh)
-}
-
-pub fn create_eccentricity_marker_mesh(
-    meshes: &mut ResMut<Assets<Mesh>>,
-    radius: f32,
-) -> Handle<Mesh> {
-    // Create a simple glowing sphere for eccentricity markers
-    // Use UV sphere for better visual quality at small sizes
-    create_uv_sphere_mesh(meshes, radius)
 }
 
 pub fn create_ring_mesh(

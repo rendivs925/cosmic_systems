@@ -1,8 +1,5 @@
-use crate::infrastructure::bevy_adapters::components::{
-    ChromeOptimizations, PerformanceStats, WebGpuKeplerState,
-};
+use crate::infrastructure::bevy_adapters::components::{ChromeOptimizations, PerformanceStats};
 use crate::infrastructure::web_workers::orbit_mesh_worker::OrbitMeshWorkerPool;
-use crate::infrastructure::web_workers::physics_worker::{adapt_worker_pool, PhysicsWorkerPool};
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
@@ -86,20 +83,14 @@ pub fn main() {
     app.insert_resource(
         crate::infrastructure::bevy_adapters::components::WasmMemoryStats::default(),
     );
-    let worker_pool = PhysicsWorkerPool::new_dynamic();
-    let worker_target = worker_pool.worker_count();
     app.insert_resource(ChromeOptimizations {
         is_chrome,
         webgpu_supported,
         webgpu_enabled: is_chrome && webgpu_supported,
-        worker_target,
+        worker_target: 0,
     });
-    app.insert_non_send_resource(worker_pool);
     app.insert_non_send_resource(TextureDecodeWorker::new());
     app.insert_non_send_resource(OrbitMeshWorkerPool::new());
-    app.insert_non_send_resource(
-        crate::infrastructure::bevy_adapters::components::WebGpuKeplerState::default(),
-    );
     app.insert_resource(UiPointerState::default());
     app.insert_resource(CameraInputState::default());
     let fixed_hz = if is_chrome { 120.0 } else { 60.0 };
@@ -114,6 +105,12 @@ pub fn main() {
     app.add_systems(Update, spawn_bodies_progressively);
     app.add_systems(Update, update_orbit_visuals);
     app.add_systems(Update, update_orbit_visibility);
+    app.add_systems(
+        Update,
+        (interpolate_planet_transforms, update_moon_orbit_positions)
+            .chain()
+            .before(update_camera_controller),
+    );
     app.add_systems(Update, update_planet_reflections);
     app.add_systems(
         Update,
@@ -126,7 +123,6 @@ pub fn main() {
     app.add_systems(Update, queue_orbit_mesh_tasks);
     app.add_systems(Update, apply_orbit_mesh_results);
     app.add_systems(Update, update_wasm_memory_stats);
-    app.add_systems(Update, init_webgpu_solver);
     app.add_systems(Update, apply_pending_material_textures);
     app.add_systems(Update, handle_solar_system_input);
     app.add_systems(Update, handle_planet_selection);
@@ -139,7 +135,6 @@ pub fn main() {
     );
     app.add_systems(Update, update_performance_stats);
     app.add_systems(Update, log_performance_stats);
-    app.add_systems(Update, adapt_worker_pool);
     app.add_systems(Update, cap_fixed_overstep);
     app.add_systems(Update, update_info_card);
     app.add_systems(Update, update_notifications_ui);
@@ -155,13 +150,6 @@ pub fn main() {
     prepare_dom_for_wasm();
 
     log_webgpu_status(is_chrome, webgpu_supported);
-    if worker_target == 0 {
-        web_sys::console::log_1(&"Worker pool unavailable; running on main thread".into());
-    } else {
-        web_sys::console::log_1(
-            &format!("Worker pool initialized with {worker_target} workers").into(),
-        );
-    }
     web_sys::console::log_1(&"Cosmic Systems Simulator initialized successfully".into());
     app.run();
 }
