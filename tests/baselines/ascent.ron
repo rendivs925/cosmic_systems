@@ -8,6 +8,13 @@
         affected_scenarios: [
             "ascent",
         ],
+        affected_external_case_ids: [
+            ScientificReferenceCaseId("earth-ssb-j2000-de441"),
+        ],
+        intended_baseline_divergence: NoDivergence,
+        scientific_acceptance_output: Unverified(
+            reason: "The deterministic ascent fixture is not an external scientific-validation result; its affected DE440 case requires provisioned kernels.",
+        ),
         reviewer_approved: true,
         recorded_by: "opencode-determinism",
     ),

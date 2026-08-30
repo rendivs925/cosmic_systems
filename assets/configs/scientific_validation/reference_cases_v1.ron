@@ -1,0 +1,48 @@
+(
+    format_version: 1,
+    cases: [
+        BodyState((
+            header: (
+                metadata: (
+                    id: ScientificReferenceCaseId("earth-ssb-j2000-de441"),
+                    source: (
+                        provider: JplHorizons,
+                        url: "https://ssd.jpl.nasa.gov/api/horizons.api",
+                        source_version: "DE441",
+                    ),
+                    generation_command: "COMMAND='399' CENTER='500@0' EPHEM_TYPE='VECTORS' START_TIME='2000-01-01 12:00' STOP_TIME='2000-01-02 12:00' STEP_SIZE='1 d' OUT_UNITS='KM-S' REF_PLANE='FRAME' REF_SYSTEM='ICRF' VEC_CORR='NONE' TIME_TYPE='TDB' CSV_FORMAT='YES'",
+                    datasets: [(
+                        role: Ephemeris,
+                        identifier: "de441",
+                        version: "DE441",
+                        sha256: None,
+                    )],
+                ),
+                coordinate_system: (
+                    frame: SsbIcrfJ2000,
+                    center: SolarSystemBarycenter,
+                    time_scale: Tdb,
+                    units: SiMetersSeconds,
+                ),
+                julian_date: 2451545.0,
+            ),
+            target_naif_id: 399,
+            expected: (
+                position_m: (
+                    x: -2.756674048281145e10,
+                    y: 1.323613811535491e11,
+                    z: 5.741865328625385e10,
+                ),
+                velocity_mps: (
+                    x: -2.978494749851088e4,
+                    y: -5.029753814928081e3,
+                    z: -2.180645069035755e3,
+                ),
+            ),
+            budget: (
+                position_m: 100.0,
+                velocity_mps: 1.0e-3,
+            ),
+        )),
+    ],
+)

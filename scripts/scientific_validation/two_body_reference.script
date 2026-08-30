@@ -1,0 +1,48 @@
+% Independent GMAT reference generation for the documented TwoBody LEO case.
+% This file is a reproduction aid only; its output is not automatically accepted.
+
+Create Spacecraft TwoBodyLeo;
+GMAT TwoBodyLeo.DateFormat = UTCGregorian;
+GMAT TwoBodyLeo.Epoch = '01 Jan 2000 11:58:55.816';
+GMAT TwoBodyLeo.CoordinateSystem = EarthMJ2000Eq;
+GMAT TwoBodyLeo.DisplayStateType = Cartesian;
+GMAT TwoBodyLeo.X = 7000;
+GMAT TwoBodyLeo.Y = 0;
+GMAT TwoBodyLeo.Z = 0;
+GMAT TwoBodyLeo.VX = 0;
+GMAT TwoBodyLeo.VY = 7.546053290107542;
+GMAT TwoBodyLeo.VZ = 0;
+GMAT TwoBodyLeo.DryMass = 1000;
+GMAT TwoBodyLeo.Cd = 2.2;
+GMAT TwoBodyLeo.Cr = 1.8;
+GMAT TwoBodyLeo.DragArea = 15;
+GMAT TwoBodyLeo.SRPArea = 1;
+
+Create ForceModel TwoBodyForceModel;
+GMAT TwoBodyForceModel.CentralBody = Earth;
+GMAT TwoBodyForceModel.PrimaryBodies = {Earth};
+GMAT TwoBodyForceModel.PointMasses = {};
+GMAT TwoBodyForceModel.Drag = None;
+GMAT TwoBodyForceModel.SRP = Off;
+GMAT TwoBodyForceModel.RelativisticCorrection = Off;
+
+Create Propagator TwoBodyPropagator;
+GMAT TwoBodyPropagator.FM = TwoBodyForceModel;
+GMAT TwoBodyPropagator.Type = RungeKutta89;
+GMAT TwoBodyPropagator.InitialStepSize = 60;
+GMAT TwoBodyPropagator.Accuracy = 1e-12;
+GMAT TwoBodyPropagator.MinStep = 0.001;
+GMAT TwoBodyPropagator.MaxStep = 60;
+GMAT TwoBodyPropagator.MaxSteps = 1000000;
+
+Create ReportFile TwoBodyReport;
+GMAT TwoBodyReport.Filename = 'gmat_two_body_reference.txt';
+GMAT TwoBodyReport.Precision = 16;
+GMAT TwoBodyReport.WriteHeaders = true;
+GMAT TwoBodyReport.LeftJustify = On;
+GMAT TwoBodyReport.Add = {TwoBodyLeo.UTCGregorian, TwoBodyLeo.X, TwoBodyLeo.Y, TwoBodyLeo.Z, TwoBodyLeo.VX, TwoBodyLeo.VY, TwoBodyLeo.VZ};
+
+BeginMissionSequence;
+Report TwoBodyReport TwoBodyLeo.UTCGregorian TwoBodyLeo.X TwoBodyLeo.Y TwoBodyLeo.Z TwoBodyLeo.VX TwoBodyLeo.VY TwoBodyLeo.VZ;
+Propagate TwoBodyPropagator(TwoBodyLeo) {TwoBodyLeo.ElapsedDays = 1};
+Report TwoBodyReport TwoBodyLeo.UTCGregorian TwoBodyLeo.X TwoBodyLeo.Y TwoBodyLeo.Z TwoBodyLeo.VX TwoBodyLeo.VY TwoBodyLeo.VZ;

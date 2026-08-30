@@ -598,6 +598,47 @@ mod tests {
     }
 
     #[test]
+    fn third_body_states_subtract_at_one_epoch_before_flight_frame_rotation() {
+        let epoch = TdbEpoch::j2000();
+        let earth = BodyState {
+            target: NaifBodyId::EARTH,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: DVec3::new(-2.0e10, 1.2e11, 5.1e10),
+            velocity_mps: DVec3::new(-29_000.0, -5_000.0, -2_000.0),
+        };
+        let moon = BodyState {
+            target: NaifBodyId::MOON,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: earth.position_m + DVec3::new(3.8e8, -8.0e7, 1.2e8),
+            velocity_mps: earth.velocity_mps + DVec3::new(400.0, 800.0, -250.0),
+        };
+        let sun = BodyState {
+            target: NaifBodyId::SUN,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: DVec3::new(2.0e8, -4.0e8, 1.0e8),
+            velocity_mps: DVec3::new(12.0, -8.0, 3.0),
+        };
+
+        for third_body in [moon, sun] {
+            let relative = barycentric_to_solar_inertial_state(third_body, earth).unwrap();
+
+            assert_eq!(relative.center, NaifBodyId::EARTH);
+            assert_eq!(relative.epoch, epoch);
+            assert_eq!(
+                relative.position_m,
+                icrf_j2000_to_solar_inertial(third_body.position_m - earth.position_m)
+            );
+            assert_eq!(
+                relative.velocity_mps,
+                icrf_j2000_to_solar_inertial(third_body.velocity_mps - earth.velocity_mps)
+            );
+        }
+    }
+
+    #[test]
     fn relative_state_rejects_mixed_epochs() {
         let target = BodyState {
             target: NaifBodyId::EARTH,

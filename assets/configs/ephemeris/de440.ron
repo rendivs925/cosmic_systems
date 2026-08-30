@@ -1,5 +1,5 @@
 (
-    id: "naif-de440-primary-v1",
+    id: "naif-de440-egm2008-primary-v1",
     kernel_root: "../../large_files/kernels/de440",
     // The manifest intentionally advertises a conservative subset of DE440s.
     // Requests outside this range fail rather than silently extrapolating.
@@ -46,6 +46,19 @@
             sha256: "924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140",
             expected_size_bytes: 12406,
             source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc",
+            coverage: None,
+            frame: NotApplicable,
+            time_scale: NotApplicable,
+        ),
+        (
+            // EGM2008 degree-two extract. Its source record identifies the
+            // normalized C20 conversion and the model reference radius.
+            file_name: "egm2008_earth_j2.ron",
+            role: GravityHarmonics,
+            kind: GravityModel,
+            sha256: "c7ea04cd41460e52b5ef400f81164af6cf282ee024f2ee4e3cdf3e719512688a",
+            expected_size_bytes: 249,
+            source_url: "https://earth-info.nga.mil/index.php?dir=wgs84&action=egm2008",
             coverage: None,
             frame: NotApplicable,
             time_scale: NotApplicable,

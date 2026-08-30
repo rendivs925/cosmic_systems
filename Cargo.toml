@@ -4,10 +4,11 @@
 name = "cosmic_systems"
 version = "0.1.0"
 edition = "2021"
+default-run = "cosmic_systems"
 
 [lib]
 name = "cosmic_systems_wasm"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "cosmic_systems"

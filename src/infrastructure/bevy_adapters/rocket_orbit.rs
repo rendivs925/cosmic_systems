@@ -14,6 +14,11 @@ use crate::components::rocket::{
     GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
     TerrainCollisionState,
 };
+use crate::domain::services::ephemeris::NaifBodyId;
+use crate::domain::services::gravity::{ForceModelConfig, ForceModelTier};
+use crate::domain::services::long_arc_propagation::{
+    LongArcIntegrationSettings, LongArcPropagationRequest, LongArcState, TwoBodyAccelerationModel,
+};
 use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::GroundContact;
@@ -296,6 +301,86 @@ pub fn predicted_orbit_with_maneuver(
     }
 }
 
+/// Scientific two-body coast prediction for a kernel-mapped bound body.
+///
+/// This is presentation-only. It receives an owned copy of the current f64
+/// state and reports an explicit `TwoBody` provenance through the long-arc
+/// request; it cannot mutate rocket ECS state or replace the fixed flight
+/// pipeline. Planned impulses and possible surface impacts deliberately retain
+/// the existing patched-conics path until their respective long-arc force and
+/// event contracts are implemented.
+pub fn predicted_two_body_long_arc(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    planet_mu_m3_s2: f64,
+    surface_radius_m: f64,
+    central_body: NaifBodyId,
+) -> Option<OrbitPrediction> {
+    let speed = velocity_mps.length();
+    if !position_m.is_finite()
+        || !velocity_mps.is_finite()
+        || !planet_mu_m3_s2.is_finite()
+        || planet_mu_m3_s2 <= 0.0
+        || !surface_radius_m.is_finite()
+        || surface_radius_m <= 0.0
+        || !speed.is_finite()
+        || speed < 1.0
+        || position_m.length() <= surface_radius_m
+        || trajectory_reaches_surface(position_m, velocity_mps, planet_mu_m3_s2, surface_radius_m)
+    {
+        return None;
+    }
+
+    let radius_m = position_m.length();
+    let inverse_semi_major_axis = 2.0 / radius_m - speed * speed / planet_mu_m3_s2;
+    let semi_major_axis_m =
+        (inverse_semi_major_axis > 1.0e-12).then(|| 1.0 / inverse_semi_major_axis);
+    let horizon_s = semi_major_axis_m
+        .filter(|semi_major_axis_m| semi_major_axis_m.is_finite() && *semi_major_axis_m > 0.0)
+        .map(|semi_major_axis_m| {
+            std::f64::consts::TAU * (semi_major_axis_m.powi(3) / planet_mu_m3_s2).sqrt() * 1.05
+        })
+        .unwrap_or(4.0 * 3_600.0)
+        .max(60.0);
+    if !horizon_s.is_finite() {
+        return None;
+    }
+
+    const SAMPLE_COUNT: usize = 512;
+    let checkpoint_offsets_s = (1..=SAMPLE_COUNT)
+        .map(|index| horizon_s * index as f64 / SAMPLE_COUNT as f64)
+        .collect();
+    let request = LongArcPropagationRequest::new(
+        LongArcState::new(position_m, velocity_mps),
+        crate::domain::services::ephemeris::TdbEpoch::j2000(),
+        central_body,
+        ForceModelConfig::new(ForceModelTier::TwoBody),
+        LongArcIntegrationSettings::default(),
+        horizon_s,
+        checkpoint_offsets_s,
+    )
+    .ok()?;
+    let acceleration_model = TwoBodyAccelerationModel::new(planet_mu_m3_s2).ok()?;
+    let result = request.propagate_with(&acceleration_model).ok()?;
+
+    let mut planet_frame_points = Vec::with_capacity(result.checkpoints.len() + 1);
+    let mut planet_frame_times_s = Vec::with_capacity(result.checkpoints.len() + 1);
+    planet_frame_points.push(position_m);
+    planet_frame_times_s.push(0.0);
+    for checkpoint in result.checkpoints {
+        planet_frame_points.push(checkpoint.state.position_m);
+        planet_frame_times_s.push(checkpoint.offset_s);
+    }
+    let apsides = apsis_endpoints_from_state(position_m, velocity_mps, planet_mu_m3_s2);
+    Some(OrbitPrediction {
+        planet_frame_points,
+        planet_frame_times_s,
+        apoapsis: apsides.map(|apsides| apsides.apoapsis_position_m),
+        periapsis: apsides.map(|apsides| apsides.periapsis_position_m),
+        maneuver: None,
+    })
+}
+
 fn trajectory_reaches_surface(
     position_m: DVec3,
     velocity_mps: DVec3,
@@ -446,13 +531,36 @@ pub fn update_orbit_prediction_cache(
     }
 
     cache.prediction = if allowed {
-        predicted_orbit_with_maneuver(
-            position_m,
-            velocity_mps,
-            planet_mu_m3_s2,
-            surface_radius_m,
-            maneuver,
-        )
+        let central_body = NaifBodyId::for_catalog_name(&planet.domain_planet.name);
+        if maneuver.is_none() {
+            central_body
+                .and_then(|central_body| {
+                    predicted_two_body_long_arc(
+                        position_m,
+                        velocity_mps,
+                        planet_mu_m3_s2,
+                        surface_radius_m,
+                        central_body,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    predicted_orbit_with_maneuver(
+                        position_m,
+                        velocity_mps,
+                        planet_mu_m3_s2,
+                        surface_radius_m,
+                        None,
+                    )
+                })
+        } else {
+            predicted_orbit_with_maneuver(
+                position_m,
+                velocity_mps,
+                planet_mu_m3_s2,
+                surface_radius_m,
+                maneuver,
+            )
+        }
     } else {
         OrbitPrediction::empty()
     };
@@ -703,6 +811,43 @@ mod tests {
             EARTH_RADIUS_M,
         );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn long_arc_coast_prediction_is_deterministic_and_keeps_the_fixed_state_read_only() {
+        let radius_m = EARTH_RADIUS_M + 400_000.0;
+        let position_m = DVec3::X * radius_m;
+        let velocity_mps = DVec3::Y * (earth_mu_m3_s2() / radius_m).sqrt();
+
+        let first = predicted_two_body_long_arc(
+            position_m,
+            velocity_mps,
+            earth_mu_m3_s2(),
+            EARTH_RADIUS_M,
+            NaifBodyId::EARTH,
+        )
+        .expect("valid orbital coast has a long-arc prediction");
+        let second = predicted_two_body_long_arc(
+            position_m,
+            velocity_mps,
+            earth_mu_m3_s2(),
+            EARTH_RADIUS_M,
+            NaifBodyId::EARTH,
+        )
+        .expect("identical request remains valid");
+
+        assert_eq!(first, second);
+        assert_eq!(position_m, DVec3::X * radius_m);
+        assert_eq!(
+            velocity_mps,
+            DVec3::Y * (earth_mu_m3_s2() / radius_m).sqrt()
+        );
+        assert_eq!(first.planet_frame_points.len(), 513);
+        assert_eq!(first.planet_frame_times_s.len(), 513);
+        assert!(first
+            .planet_frame_points
+            .iter()
+            .all(|point| (point.length() - radius_m).abs() < 1.0e-2));
     }
 
     #[test]

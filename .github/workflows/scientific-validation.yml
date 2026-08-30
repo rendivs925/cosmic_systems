@@ -1,0 +1,48 @@
+name: Scientific validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  external-scientific-validation:
+    name: External scientific validation (provisioned)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Provision pinned scientific datasets
+        id: provision
+        shell: bash
+        run: |
+          if scripts/provision_de440_kernels.sh; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "provision_status=$status" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run external-reference validation
+        if: steps.provision.outputs.available == 'true'
+        run: cargo run --bin scientific_validation
+
+      - name: Report unavailable scientific validation
+        if: steps.provision.outputs.available != 'true'
+        shell: bash
+        run: |
+          message="Pinned scientific datasets could not be provisioned (status ${{ steps.provision.outputs.provision_status }}). External scientific validation is UNVERIFIED, not passed."
+          echo "::warning title=Scientific validation unverified::$message"
+          {
+            echo "## Scientific Validation: Unverified"
+            echo
+            echo "$message"
+            echo "Deterministic replay baselines are intentionally not run by this workflow and do not establish external scientific accuracy."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -10,6 +10,28 @@
 //! real `Planet.mass_kg` values.
 
 use bevy::math::DVec3;
+use serde::Deserialize;
+
+/// Validated degree-two Earth gravity-model parameters.
+///
+/// `j2` is dimensionless and `reference_radius_m` is the gravity model's
+/// documented equatorial reference radius, not a terrain or render radius.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct EarthJ2GravityModel {
+    pub model_id: String,
+    pub reference_radius_m: f64,
+    pub j2: f64,
+}
+
+impl EarthJ2GravityModel {
+    pub fn is_valid(&self) -> bool {
+        !self.model_id.trim().is_empty()
+            && self.reference_radius_m.is_finite()
+            && self.reference_radius_m > 0.0
+            && self.j2.is_finite()
+            && self.j2 > 0.0
+    }
+}
 
 /// Individually declared gravity terms in a named force-model tier.
 ///
@@ -150,6 +172,42 @@ pub fn gravitational_acceleration_from_mu(
         return DVec3::ZERO;
     }
     -mu_m3_s2 / r_sq * r.normalize()
+}
+
+/// Degree-two zonal-harmonic acceleration for Earth, in m/s².
+///
+/// `position_m` and the unit `spin_axis_inertial` are in the same
+/// planet-centered inertial frame. The model is axisymmetric, so its PCK
+/// orientation dependency is the shared instantaneous pole direction rather
+/// than a separately maintained prime-meridian rotation.
+pub fn earth_j2_acceleration(
+    mu_m3_s2: f64,
+    position_m: DVec3,
+    spin_axis_inertial: DVec3,
+    model: &EarthJ2GravityModel,
+) -> DVec3 {
+    let r_sq = position_m.length_squared();
+    let spin_axis_sq = spin_axis_inertial.length_squared();
+    if !mu_m3_s2.is_finite()
+        || mu_m3_s2 <= 0.0
+        || r_sq < 1.0
+        || !spin_axis_sq.is_finite()
+        || spin_axis_sq < f64::EPSILON
+        || !model.is_valid()
+    {
+        return DVec3::ZERO;
+    }
+
+    let spin_axis = spin_axis_inertial / spin_axis_sq.sqrt();
+    let z_m = position_m.dot(spin_axis);
+    let z_ratio_squared = z_m * z_m / r_sq;
+    let r_fifth_m5 = r_sq * r_sq * r_sq.sqrt();
+    let factor = 1.5 * model.j2 * mu_m3_s2 * model.reference_radius_m.powi(2) / r_fifth_m5;
+    if !factor.is_finite() {
+        return DVec3::ZERO;
+    }
+
+    factor * (position_m * (5.0 * z_ratio_squared - 1.0) - 2.0 * z_m * spin_axis)
 }
 
 /// Gravitational acceleration relative to an accelerating inertial-frame
@@ -311,6 +369,115 @@ mod tests {
     fn singularity_returns_zero() {
         let a = gravitational_acceleration(EARTH_MASS_KG, DVec3::ZERO, DVec3::ZERO);
         assert_eq!(a, DVec3::ZERO);
+    }
+
+    fn earth_j2_model() -> EarthJ2GravityModel {
+        EarthJ2GravityModel {
+            model_id: "test".to_string(),
+            reference_radius_m: 6_378_136.3,
+            j2: 1.082_626_173_852_222_7e-3,
+        }
+    }
+
+    #[test]
+    fn earth_j2_is_inward_at_the_equator_and_outward_at_the_pole() {
+        let model = earth_j2_model();
+        let mu_m3_s2 = 3.986_004_355_070_227e14;
+        let radius_m = 6_778_136.3;
+        let equatorial = earth_j2_acceleration(mu_m3_s2, DVec3::X * radius_m, DVec3::Z, &model);
+        let polar = earth_j2_acceleration(mu_m3_s2, DVec3::Z * radius_m, DVec3::Z, &model);
+
+        assert!(equatorial.x < 0.0);
+        assert!(equatorial.y.abs() < 1.0e-15 && equatorial.z.abs() < 1.0e-15);
+        assert!(polar.z > 0.0);
+        assert!(polar.x.abs() < 1.0e-15 && polar.y.abs() < 1.0e-15);
+    }
+
+    #[test]
+    fn earth_j2_uses_the_supplied_inertial_pole_direction() {
+        let model = earth_j2_model();
+        let acceleration = earth_j2_acceleration(
+            3.986_004_355_070_227e14,
+            DVec3::new(6_778_136.3, 0.0, 0.0),
+            DVec3::X,
+            &model,
+        );
+
+        assert!(acceleration.x > 0.0);
+        assert!(acceleration.y.abs() < 1.0e-15 && acceleration.z.abs() < 1.0e-15);
+    }
+
+    #[test]
+    fn earth_j2_equatorial_acceleration_matches_the_closed_form_magnitude() {
+        let model = earth_j2_model();
+        let mu_m3_s2 = 3.986_004_355_070_227e14;
+        let radius_m = 6_778_136.3;
+        let acceleration = earth_j2_acceleration(mu_m3_s2, DVec3::X * radius_m, DVec3::Z, &model);
+        let expected_magnitude_mps2 =
+            1.5 * model.j2 * mu_m3_s2 * model.reference_radius_m.powi(2) / radius_m.powi(4);
+
+        assert!(acceleration.x < 0.0);
+        assert!(
+            (acceleration.length() - expected_magnitude_mps2).abs()
+                < expected_magnitude_mps2 * 1.0e-14
+        );
+    }
+
+    #[test]
+    fn lunar_and_solar_differential_accelerations_are_additive_at_one_origin() {
+        let vehicle_position_m = DVec3::new(6_778_136.3, -125_000.0, 80_000.0);
+        let reference_origin_position_m = DVec3::ZERO;
+        let moon_position_m = DVec3::new(384_400_000.0, 10_000_000.0, -3_000_000.0);
+        let sun_position_m = DVec3::new(-149_597_870_700.0, 2_000_000_000.0, 5_000_000.0);
+        let lunar_mu_m3_s2 = 4.904_869_5e12;
+        let solar_mu_m3_s2 = 1.327_124_400_18e20;
+        let lunar = differential_gravitational_acceleration_from_mu(
+            lunar_mu_m3_s2,
+            vehicle_position_m,
+            reference_origin_position_m,
+            moon_position_m,
+        );
+        let solar = differential_gravitational_acceleration_from_mu(
+            solar_mu_m3_s2,
+            vehicle_position_m,
+            reference_origin_position_m,
+            sun_position_m,
+        );
+
+        assert!(lunar.is_finite() && solar.is_finite());
+        assert!(lunar.length() > 0.0 && solar.length() > 0.0);
+        let expected =
+            gravitational_acceleration_from_mu(lunar_mu_m3_s2, vehicle_position_m, moon_position_m)
+                - gravitational_acceleration_from_mu(
+                    lunar_mu_m3_s2,
+                    reference_origin_position_m,
+                    moon_position_m,
+                )
+                + gravitational_acceleration_from_mu(
+                    solar_mu_m3_s2,
+                    vehicle_position_m,
+                    sun_position_m,
+                )
+                - gravitational_acceleration_from_mu(
+                    solar_mu_m3_s2,
+                    reference_origin_position_m,
+                    sun_position_m,
+                );
+        assert!((lunar + solar).distance(expected) < 1.0e-18);
+        assert_eq!(
+            differential_gravitational_acceleration_from_mu(
+                lunar_mu_m3_s2,
+                reference_origin_position_m,
+                reference_origin_position_m,
+                moon_position_m,
+            ) + differential_gravitational_acceleration_from_mu(
+                solar_mu_m3_s2,
+                reference_origin_position_m,
+                reference_origin_position_m,
+                sun_position_m,
+            ),
+            DVec3::ZERO
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::services::body_orientation::BodyOrientation;
+use crate::domain::services::gravity::EarthJ2GravityModel;
 
 pub const J2000_JULIAN_DATE_TDB: f64 = 2_451_545.0;
 const KILOMETERS_TO_METERS: f64 = 1_000.0;
@@ -234,6 +235,7 @@ pub enum ScientificDatasetRole {
     LeapSeconds,
     Orientation,
     GravitationalParameters,
+    GravityHarmonics,
     EarthOrientation,
 }
 
@@ -244,6 +246,7 @@ impl fmt::Display for ScientificDatasetRole {
             Self::LeapSeconds => "leap-second",
             Self::Orientation => "orientation",
             Self::GravitationalParameters => "gravitational-parameter",
+            Self::GravityHarmonics => "gravity-harmonic",
             Self::EarthOrientation => "Earth-orientation",
         };
         formatter.write_str(role)
@@ -256,6 +259,7 @@ pub enum KernelKind {
     TextPck,
     LeapSeconds,
     EarthOrientation,
+    GravityModel,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -317,6 +321,12 @@ impl KernelFile {
             }
             ScientificDatasetRole::GravitationalParameters => {
                 self.kind == KernelKind::TextPck
+                    && self.coverage.is_none()
+                    && self.frame == ScientificDatasetFrame::NotApplicable
+                    && self.time_scale == ScientificDatasetTimeScale::NotApplicable
+            }
+            ScientificDatasetRole::GravityHarmonics => {
+                self.kind == KernelKind::GravityModel
                     && self.coverage.is_none()
                     && self.frame == ScientificDatasetFrame::NotApplicable
                     && self.time_scale == ScientificDatasetTimeScale::NotApplicable
@@ -402,6 +412,7 @@ pub struct ValidatedKernel {
 pub struct SpiceEphemeris {
     almanac: Almanac,
     provenance: KernelProvenance,
+    earth_j2_model: EarthJ2GravityModel,
 }
 
 impl SpiceEphemeris {
@@ -446,14 +457,46 @@ impl SpiceEphemeris {
             _ => return Err(EphemerisError::IncompleteOrientationDatasets),
         }
 
+        let earth_j2_dataset = provenance
+            .validated_kernels
+            .iter()
+            .find(|kernel| kernel.role == ScientificDatasetRole::GravityHarmonics)
+            .ok_or(EphemerisError::GravityHarmonicsUnavailable)?;
+        let earth_j2_contents = fs::read_to_string(&earth_j2_dataset.path).map_err(|error| {
+            EphemerisError::KernelLoad {
+                role: ScientificDatasetRole::GravityHarmonics,
+                path: earth_j2_dataset.path.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let earth_j2_model =
+            ron::from_str::<EarthJ2GravityModel>(&earth_j2_contents).map_err(|error| {
+                EphemerisError::GravityHarmonicsParse {
+                    path: earth_j2_dataset.path.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+        if !earth_j2_model.is_valid() {
+            return Err(EphemerisError::InvalidGravityHarmonics {
+                path: earth_j2_dataset.path.clone(),
+            });
+        }
+
         Ok(Self {
             almanac,
             provenance,
+            earth_j2_model,
         })
     }
 
     pub fn provenance(&self) -> &KernelProvenance {
         &self.provenance
+    }
+
+    /// Validated EGM2008 degree-two Earth gravity model. The coefficient and
+    /// reference radius remain distinct from DE440's gravitational parameter.
+    pub fn earth_j2_model(&self) -> &EarthJ2GravityModel {
+        &self.earth_j2_model
     }
 
     pub fn state(
@@ -765,6 +808,7 @@ pub enum EphemerisError {
     IncompleteOrientationDatasets,
     OrientationUnavailable,
     GravitationalParametersUnavailable,
+    GravityHarmonicsUnavailable,
     GravitationalParametersUnsupportedBody {
         target: NaifBodyId,
     },
@@ -776,6 +820,13 @@ pub enum EphemerisError {
         target: NaifBodyId,
         file_name: String,
         value_m3_s2: f64,
+    },
+    GravityHarmonicsParse {
+        path: PathBuf,
+        message: String,
+    },
+    InvalidGravityHarmonics {
+        path: PathBuf,
     },
     OrientationUnsupportedBody {
         target: NaifBodyId,
@@ -869,6 +920,9 @@ impl fmt::Display for EphemerisError {
             Self::GravitationalParametersUnavailable => {
                 formatter.write_str("no validated gravitational-parameter dataset is configured")
             }
+            Self::GravityHarmonicsUnavailable => {
+                formatter.write_str("no validated gravity-harmonic dataset is configured")
+            }
             Self::GravitationalParametersUnsupportedBody { target } => write!(
                 formatter,
                 "no gravitational-parameter mapping for NAIF {}",
@@ -887,6 +941,16 @@ impl fmt::Display for EphemerisError {
                 formatter,
                 "gravitational-parameter dataset {file_name} has invalid mu {value_m3_s2} m^3/s^2 for NAIF {}",
                 target.value()
+            ),
+            Self::GravityHarmonicsParse { path, message } => write!(
+                formatter,
+                "cannot parse gravity-harmonic dataset {}: {message}",
+                path.display()
+            ),
+            Self::InvalidGravityHarmonics { path } => write!(
+                formatter,
+                "gravity-harmonic dataset {} has invalid Earth J2 parameters",
+                path.display()
             ),
             Self::OrientationUnsupportedBody { target } => {
                 write!(formatter, "no IAU orientation mapping for NAIF {}", target.value())
@@ -1220,6 +1284,15 @@ mod tests {
 
         assert!(earth_mu_m3_s2.is_finite() && earth_mu_m3_s2 > 0.0);
         assert!(sun_mu_m3_s2 > earth_mu_m3_s2);
+    }
+
+    #[test]
+    fn provisioned_egm2008_j2_model_is_validated_with_the_manifest() {
+        let ephemeris = SpiceEphemeris::load("assets/configs/ephemeris/de440.ron").unwrap();
+        let model = ephemeris.earth_j2_model();
+
+        assert_eq!(model.model_id, "EGM2008");
+        assert!(model.is_valid());
     }
 
     #[derive(Clone, Copy)]

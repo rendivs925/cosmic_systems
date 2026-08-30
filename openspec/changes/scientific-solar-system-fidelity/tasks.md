@@ -61,47 +61,47 @@
 - [x] 5.2 Replace high-fidelity catalog mass-times-G calculations with validated
   GM constants from the active scientific dataset while retaining labelled
   catalog fallback only where necessary.
-- [ ] 5.3 Implement and validate Earth J2 acceleration in the planet-centered
+- [x] 5.3 Implement and validate Earth J2 acceleration in the planet-centered
   inertial frame using the shared orientation authority.
-- [ ] 5.4 Generalize the existing solar tidal term to same-epoch, configured
+- [x] 5.4 Generalize the existing solar tidal term to same-epoch, configured
   Moon and Sun differential third-body accelerations without duplicate gravity
   implementations.
-- [ ] 5.5 Add pure force, frame, and orbit regressions for point-mass, J2,
+- [x] 5.5 Add pure force, frame, and orbit regressions for point-mass, J2,
   Earth-Moon-Sun, and tier-selection behavior.
 
 ## 6. Long-Arc Propagation
 
-- [ ] 6.1 Define a pure read-only long-arc propagation API with initial state,
+- [x] 6.1 Define a pure read-only long-arc propagation API with initial state,
   epoch, force tier, integration settings, checkpoints, and result provenance.
-- [ ] 6.2 Implement deterministic bounded error-controlled long-arc integration
+- [x] 6.2 Implement deterministic bounded error-controlled long-arc integration
   without mutating the authoritative powered-flight/contact ECS state.
-- [ ] 6.3 Integrate the propagator into trajectory prediction and display only
+- [x] 6.3 Integrate the propagator into trajectory prediction and display only
   after its state, frame, and force-model boundaries are validated.
-- [ ] 6.4 Add scenario-specific LEO, J2-precessing, lunar-transfer, and escape
+- [x] 6.4 Add scenario-specific LEO, J2-precessing, lunar-transfer, and escape
   checkpoint regressions with published position and velocity error budgets.
 
 ## 7. External Scientific Validation
 
-- [ ] 7.1 Define the versioned machine-readable reference-case format with
+- [x] 7.1 Define the versioned machine-readable reference-case format with
   source, command, kernel/data versions, time scale, frame, center, units, and
   tolerance metadata.
 - [ ] 7.2 Record reproducible external cases for body state, orientation,
   launch-site state, Sun direction, gravity, and long-arc propagation.
-- [ ] 7.3 Implement an offline scientific-validation runner that reports each
+- [x] 7.3 Implement an offline scientific-validation runner that reports each
   residual and fails against the case's published budget.
-- [ ] 7.4 Integrate provisioned scientific validation into CI separately from
+- [x] 7.4 Integrate provisioned scientific validation into CI separately from
   deterministic replay baselines and report unavailable reference datasets as
   unverified rather than passing.
-- [ ] 7.5 Extend physics-change audit records with affected external cases,
+- [x] 7.5 Extend physics-change audit records with affected external cases,
   intentional baseline divergence, numerical trade-offs, and acceptance output.
 
 ## 8. Release And Migration Validation
 
-- [ ] 8.1 Document fidelity tiers, active datasets, coordinate conventions,
+- [x] 8.1 Document fidelity tiers, active datasets, coordinate conventions,
   supported epochs, validity coverage, known approximations, and published
   scenario budgets.
 - [ ] 8.2 Run formatting, compile, strict clippy, deterministic replay, external
   reference, and full test validation after each completed phase.
-- [ ] 8.3 Validate bounded startup and scientific dataset reporting for normal,
+- [x] 8.3 Validate bounded startup and scientific dataset reporting for normal,
   craft, and rocket modes; manually inspect presentation only after scientific
   checks pass.

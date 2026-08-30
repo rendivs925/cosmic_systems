@@ -30,6 +30,8 @@ use ron::de::from_str as from_ron;
 use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::services::scientific_validation::ScientificReferenceCaseId;
+
 /// FNV-1a offset basis and prime (64-bit). Chosen for speed and stability —
 /// it is not cryptographic; the goal is a cheap, deterministic fingerprint.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -421,6 +423,54 @@ pub fn compare_trajectory(
 /// without describing the expected improvement, the numerical trade-offs and
 /// the affected scenarios is rejected by [`FlightBaseline::validate_audit`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum IntendedBaselineDivergence {
+    /// The audit predates the external-scientific-validation requirement.
+    #[default]
+    Unspecified,
+    /// The re-record is expected to retain the previous deterministic state.
+    NoDivergence,
+    /// The deterministic change is intentional and has been reviewed.
+    Expected { description: String },
+}
+
+impl IntendedBaselineDivergence {
+    fn is_recorded(&self) -> bool {
+        match self {
+            Self::Unspecified => false,
+            Self::NoDivergence => true,
+            Self::Expected { description } => !description.trim().is_empty(),
+        }
+    }
+}
+
+/// Result recorded from the external scientific-validation gate.
+///
+/// A signed deterministic baseline may be marked `Unverified` when local data
+/// is unavailable. That status is deliberately not scientific acceptance.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum ScientificAcceptanceOutput {
+    /// The audit predates the external-scientific-validation requirement.
+    #[default]
+    NotRecorded,
+    /// All affected external cases met their published budgets.
+    Accepted { summary: String },
+    /// At least one affected external case exceeded its published budget.
+    Rejected { summary: String },
+    /// Required external data or tooling was unavailable; no accuracy claim is made.
+    Unverified { reason: String },
+}
+
+impl ScientificAcceptanceOutput {
+    fn is_recorded(&self) -> bool {
+        match self {
+            Self::NotRecorded => false,
+            Self::Accepted { summary } | Self::Rejected { summary } => !summary.trim().is_empty(),
+            Self::Unverified { reason } => !reason.trim().is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BaselineJustification {
     /// Free-text description of the physics/software change.
     pub change_description: String,
@@ -431,6 +481,16 @@ pub struct BaselineJustification {
     pub numerical_tradeoffs: String,
     /// The flight scenarios whose baselines are re-recorded.
     pub affected_scenarios: Vec<String>,
+    /// Versioned external cases affected by the change. These remain typed so
+    /// audit records cannot silently drift from the scientific-case identity.
+    #[serde(default)]
+    pub affected_external_case_ids: Vec<ScientificReferenceCaseId>,
+    /// Whether the new fixture is expected to diverge from its predecessor.
+    #[serde(default)]
+    pub intended_baseline_divergence: IntendedBaselineDivergence,
+    /// The external scientific-validation result associated with this update.
+    #[serde(default)]
+    pub scientific_acceptance_output: ScientificAcceptanceOutput,
     /// Reviewer sign-off. Baselines are immutable once approved; a new one
     /// requires a fresh approval.
     pub reviewer_approved: bool,
@@ -446,6 +506,13 @@ impl BaselineJustification {
             && !self.expected_improvement.trim().is_empty()
             && !self.numerical_tradeoffs.trim().is_empty()
             && !self.affected_scenarios.is_empty()
+            && !self.affected_external_case_ids.is_empty()
+            && self
+                .affected_external_case_ids
+                .iter()
+                .all(|case_id| !case_id.as_str().trim().is_empty())
+            && self.intended_baseline_divergence.is_recorded()
+            && self.scientific_acceptance_output.is_recorded()
     }
 }
 
@@ -655,6 +722,15 @@ mod tests {
             expected_improvement: "energy conservation".into(),
             numerical_tradeoffs: "2nd order error, no closed-form".into(),
             affected_scenarios: vec!["ascent".into(), "reentry".into()],
+            affected_external_case_ids: vec![ScientificReferenceCaseId::new(
+                "earth-ssb-j2000-de441",
+            )],
+            intended_baseline_divergence: IntendedBaselineDivergence::Expected {
+                description: "integration state changes at every post-update tick".into(),
+            },
+            scientific_acceptance_output: ScientificAcceptanceOutput::Accepted {
+                summary: "affected reference residuals are within their published budgets".into(),
+            },
             reviewer_approved: true,
             recorded_by: "opencode".into(),
         };
@@ -694,10 +770,47 @@ mod tests {
             expected_improvement: "y".into(),
             numerical_tradeoffs: "z".into(),
             affected_scenarios: vec!["a".into()],
+            affected_external_case_ids: vec![ScientificReferenceCaseId::new("case-a")],
+            intended_baseline_divergence: IntendedBaselineDivergence::NoDivergence,
+            scientific_acceptance_output: ScientificAcceptanceOutput::Unverified {
+                reason: "external data unavailable in this local audit".into(),
+            },
             reviewer_approved: true,
             recorded_by: "opencode".into(),
         };
         assert!(full.is_signed_off());
+    }
+
+    #[test]
+    fn legacy_baseline_ron_defaults_new_scientific_audit_fields() {
+        let legacy_ron = r#"
+(
+    name: "legacy",
+    git_commit: "abc",
+    audit: (
+        change_description: "legacy change",
+        expected_improvement: "legacy improvement",
+        numerical_tradeoffs: "legacy trade-off",
+        affected_scenarios: ["ascent"],
+        reviewer_approved: true,
+        recorded_by: "legacy",
+    ),
+    samples: [],
+    hash_chain: [],
+)
+"#;
+
+        let baseline = load_baseline_ron(legacy_ron).expect("legacy fixture remains readable");
+        assert!(baseline.audit.affected_external_case_ids.is_empty());
+        assert_eq!(
+            baseline.audit.intended_baseline_divergence,
+            IntendedBaselineDivergence::Unspecified
+        );
+        assert_eq!(
+            baseline.audit.scientific_acceptance_output,
+            ScientificAcceptanceOutput::NotRecorded
+        );
+        assert!(!baseline.audit.is_signed_off());
     }
 
     #[test]
@@ -710,6 +823,13 @@ mod tests {
             expected_improvement: "capture canonical reference".into(),
             numerical_tradeoffs: "none".into(),
             affected_scenarios: vec!["ascent".into()],
+            affected_external_case_ids: vec![ScientificReferenceCaseId::new(
+                "earth-ssb-j2000-de441",
+            )],
+            intended_baseline_divergence: IntendedBaselineDivergence::NoDivergence,
+            scientific_acceptance_output: ScientificAcceptanceOutput::Unverified {
+                reason: "the test fixture has no provisioned external datasets".into(),
+            },
             reviewer_approved: true,
             recorded_by: "opencode".into(),
         };

@@ -36,7 +36,12 @@ Thumbs.db
 *.log
 
 # Assets (if large)
-assets/large_files/
+assets/large_files/*
+!assets/large_files/kernels/
+assets/large_files/kernels/*
+!assets/large_files/kernels/de440/
+assets/large_files/kernels/de440/*
+!assets/large_files/kernels/de440/egm2008_earth_j2.ron
 
 # Temporary files
 *.tmp

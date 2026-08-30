@@ -9,6 +9,7 @@ use crate::domain::services::ephemeris::{
     BodyState, EphemerisError, NaifBodyId, ScientificDatasetAvailability, ScientificDatasetRole,
     ScientificDatasetStatus, SpiceEphemeris, TdbEpoch,
 };
+use crate::domain::services::gravity::EarthJ2GravityModel;
 use crate::domain::services::reference_frames::{
     barycentric_to_relative_state, barycentric_to_solar_inertial_state,
     icrf_j2000_to_solar_inertial,
@@ -74,6 +75,7 @@ pub struct EphemerisSnapshot {
     states: Vec<BodyState>,
     orientations: Vec<BodyOrientation>,
     gravitational_parameters_m3_s2: Vec<(NaifBodyId, f64)>,
+    earth_j2_model: Option<EarthJ2GravityModel>,
 }
 
 impl EphemerisSnapshot {
@@ -129,6 +131,11 @@ impl EphemerisSnapshot {
             .and_then(|target| self.gravitational_parameter_m3_s2(target))
     }
 
+    /// Validated Earth J2 model from the shared scientific dataset manifest.
+    pub fn earth_j2_model(&self) -> Option<&EarthJ2GravityModel> {
+        self.earth_j2_model.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn from_states(states: Vec<BodyState>) -> Self {
         Self {
@@ -136,6 +143,7 @@ impl EphemerisSnapshot {
             states,
             orientations: Vec::new(),
             gravitational_parameters_m3_s2: Vec::new(),
+            earth_j2_model: None,
         }
     }
 
@@ -149,6 +157,7 @@ impl EphemerisSnapshot {
             states,
             orientations: Vec::new(),
             gravitational_parameters_m3_s2,
+            earth_j2_model: None,
         }
     }
 
@@ -165,6 +174,7 @@ impl EphemerisSnapshot {
             states,
             orientations,
             gravitational_parameters_m3_s2: Vec::new(),
+            earth_j2_model: None,
         }
     }
 
@@ -182,7 +192,14 @@ impl EphemerisSnapshot {
             states,
             orientations,
             gravitational_parameters_m3_s2,
+            earth_j2_model: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_earth_j2_model(mut self, earth_j2_model: EarthJ2GravityModel) -> Self {
+        self.earth_j2_model = Some(earth_j2_model);
+        self
     }
 }
 
@@ -283,6 +300,8 @@ pub fn update_ephemeris_snapshot(
         return;
     }
 
+    let earth_j2_model = authority.0.earth_j2_model().clone();
+
     let mut states = Vec::new();
     let mut orientations = Vec::new();
     let mut gravitational_parameters_m3_s2 = Vec::new();
@@ -319,6 +338,7 @@ pub fn update_ephemeris_snapshot(
     snapshot.states = states;
     snapshot.orientations = orientations;
     snapshot.gravitational_parameters_m3_s2 = gravitational_parameters_m3_s2;
+    snapshot.earth_j2_model = Some(earth_j2_model);
 }
 
 /// Refresh the presentation snapshot after a completed fixed tick changes the
@@ -373,6 +393,7 @@ mod tests {
         for target in NaifBodyId::kernel_backed_catalog_targets() {
             assert!(snapshot.gravitational_parameter_m3_s2(target).is_some());
         }
+        assert_eq!(snapshot.earth_j2_model().unwrap().model_id, "EGM2008");
     }
 
     #[test]
