@@ -14,6 +14,7 @@ use crate::application::craft_startup::spawn_craft_model;
 use crate::application::craft_startup::spawn_craft_ui;
 use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
 #[cfg(target_arch = "wasm32")]
@@ -25,11 +26,13 @@ use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, RelaunchRequested, SplashdownDetectedEvent,
     StageSeparatedEvent,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::simulation_time::{
     accrue_time_warp, advance_fixed_simulation_time, handle_time_acceleration_input,
     run_bounded_fixed_main_schedule, sync_fixed_timestep, SimulationTime,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::infrastructure::bevy_adapters::components::{
@@ -45,8 +48,10 @@ use crate::infrastructure::bevy_adapters::craft_systems::{
 };
 use crate::infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use crate::infrastructure::bevy_adapters::education_systems::register_education_systems;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::ephemeris::{
-    update_ephemeris_snapshot, EphemerisPlugin, EphemerisSet, EphemerisSnapshot,
+    update_ephemeris_snapshot, EphemerisPlugin, EphemerisSet,
 };
 use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
@@ -118,9 +123,11 @@ use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
     recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::infrastructure::bevy_adapters::terrain_streaming::prebake_prelaunch_launchpad_patch;
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
-    collect_terrain_warmup_tasks, prebake_prelaunch_launchpad_patch, stream_terrain_patches,
-    warmup_terrain_system, TerrainStreamingResource, TerrainWarmupTasks,
+    collect_terrain_warmup_tasks, stream_terrain_patches, warmup_terrain_system,
+    TerrainStreamingResource, TerrainWarmupTasks,
 };
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
@@ -128,19 +135,6 @@ use crate::infrastructure::bevy_adapters::webgpu_systems::init_vulkan_solver;
 use crate::presentation::ui::*;
 use crate::presentation::ui_setup::setup_ui;
 use crate::systems::sets::RocketSet;
-
-/// Run condition for visual updates (every 3 frames).
-fn every_n_frames(n: usize) -> impl FnMut(Local<usize>) -> bool {
-    move |mut frame_count: Local<usize>| {
-        *frame_count += 1;
-        if *frame_count >= n {
-            *frame_count = 0;
-            true
-        } else {
-            false
-        }
-    }
-}
 
 /// A paused simulation must not keep advancing its fixed physics pipeline.
 fn simulation_unpaused(sim_time: Res<SimulationTime>) -> bool {
@@ -260,15 +254,12 @@ impl Plugin for SharedSimulationPlugin {
         );
         app.add_systems(
             Update,
-            (
-                interpolate_planet_transforms,
-                rebase_solar_presentation,
-                update_orbit_positions,
-            )
+            (rebase_solar_presentation, update_orbit_positions)
                 .chain()
                 .after(handle_planet_selection)
                 .after(handle_mouse_planet_selection)
                 .after(handle_solar_system_input)
+                .after(handle_nav_interactions)
                 .before(update_camera_controller)
                 .before(update_craft_camera)
                 .run_if(solar_presentation_enabled),
@@ -277,7 +268,8 @@ impl Plugin for SharedSimulationPlugin {
             Update,
             preserve_sun_disc_at_overview_distances
                 .after(rebase_solar_presentation)
-                .before(update_camera_controller)
+                .after(apply_camera_transform)
+                .after(auto_inspect_selected_planet)
                 .run_if(solar_presentation_enabled),
         );
         app.add_systems(
@@ -321,11 +313,18 @@ impl Plugin for SolarSystemModePlugin {
         // Startup systems
         app.add_systems(Startup, setup_ui);
 
-        // Input handling
-        app.add_systems(Update, handle_solar_system_input);
-        app.add_systems(Update, handle_planet_selection);
-        app.add_systems(Update, handle_mouse_planet_selection);
-        app.add_systems(Update, handle_nav_interactions);
+        // All selection writers run before render-origin rebasing and selected
+        // body framing, giving simultaneous input sources deterministic order.
+        app.add_systems(
+            Update,
+            (
+                handle_solar_system_input,
+                handle_planet_selection,
+                handle_mouse_planet_selection,
+                handle_nav_interactions,
+            )
+                .chain(),
+        );
 
         // UI systems
         app.add_systems(Update, update_ui_idle);
@@ -338,8 +337,8 @@ impl Plugin for SolarSystemModePlugin {
         );
         app.add_systems(Update, update_cursor_icon);
 
-        // Camera input and selected-body framing consume the interpolated
-        // celestial presentation state in a defined order.
+        // Camera input and selected-body framing consume the rebased celestial
+        // presentation state in a defined order.
         app.add_systems(
             Update,
             (
@@ -348,14 +347,7 @@ impl Plugin for SolarSystemModePlugin {
                 auto_inspect_selected_planet,
             )
                 .chain()
-                .after(interpolate_planet_transforms)
                 .after(rebase_solar_presentation),
-        );
-
-        // Selection visuals
-        app.add_systems(
-            Update,
-            update_planet_selection_visuals.run_if(every_n_frames(2)),
         );
     }
 }

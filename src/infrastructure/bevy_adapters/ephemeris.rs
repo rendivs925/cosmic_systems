@@ -2,12 +2,11 @@
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use std::fs;
 
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::ephemeris::{
-    BodyState, EphemerisError, NaifBodyId, ScientificDatasetAvailability, ScientificDatasetRole,
-    ScientificDatasetStatus, SpiceEphemeris, TdbEpoch,
+    BodyState, EphemerisError, NaifBodyId, ScientificDatasetAvailability, ScientificDatasetStatus,
+    SpiceEphemeris, TdbEpoch,
 };
 use crate::domain::services::gravity::EarthJ2GravityModel;
 use crate::domain::services::reference_frames::{
@@ -17,7 +16,11 @@ use crate::domain::services::reference_frames::{
 use crate::domain::services::simulation_epoch::LeapSecondTable;
 use crate::domain::services::simulation_time::SimulationTime;
 
-pub const DEFAULT_EPHEMERIS_MANIFEST_PATH: &str = "assets/configs/ephemeris/de440.ron";
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_EPHEMERIS_MANIFEST_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/configs/ephemeris/de440.ron"
+);
 
 /// States required by the shared snapshot. The Earth-Moon barycenter is not a
 /// catalog body but remains available for same-epoch lunar relative states.
@@ -41,6 +44,26 @@ impl EphemerisAuthority {
         period_seconds: f64,
         samples: usize,
     ) -> Result<Vec<DVec3>, EphemerisError> {
+        self.sample_relative_orbit_in_solar_inertial(
+            target,
+            NaifBodyId::SUN,
+            start_epoch,
+            period_seconds,
+            samples,
+        )
+    }
+
+    /// Sample target positions relative to a same-epoch center in the solar
+    /// presentation axes. This produces visual geometry only; it does not
+    /// create a second runtime body-state authority.
+    pub fn sample_relative_orbit_in_solar_inertial(
+        &self,
+        target: NaifBodyId,
+        center: NaifBodyId,
+        start_epoch: TdbEpoch,
+        period_seconds: f64,
+        samples: usize,
+    ) -> Result<Vec<DVec3>, EphemerisError> {
         let samples = samples.max(3);
         let mut path = Vec::with_capacity(samples);
         for index in 0..samples {
@@ -51,11 +74,11 @@ impl EphemerisAuthority {
             let target_state = self
                 .0
                 .state(target, NaifBodyId::SOLAR_SYSTEM_BARYCENTER, epoch)?;
-            let sun_state =
-                self.0
-                    .state(NaifBodyId::SUN, NaifBodyId::SOLAR_SYSTEM_BARYCENTER, epoch)?;
+            let center_state = self
+                .0
+                .state(center, NaifBodyId::SOLAR_SYSTEM_BARYCENTER, epoch)?;
             path.push(icrf_j2000_to_solar_inertial(
-                target_state.position_m - sun_state.position_m,
+                target_state.position_m - center_state.position_m,
             ));
         }
         Ok(path)
@@ -79,6 +102,13 @@ pub struct EphemerisSnapshot {
 }
 
 impl EphemerisSnapshot {
+    /// A snapshot may only be consumed for the exact scientific epoch it was
+    /// evaluated at. Retaining an older complete snapshot is useful for
+    /// diagnostics, but presenting it as a later simulation state is not.
+    pub fn is_current_at(&self, epoch: TdbEpoch) -> bool {
+        self.epoch == Some(epoch)
+    }
+
     pub fn state(&self, target: NaifBodyId) -> Option<BodyState> {
         self.states
             .iter()
@@ -218,30 +248,18 @@ pub enum EphemerisSet {
 
 impl Plugin for EphemerisPlugin {
     fn build(&self, app: &mut App) {
-        let authority = SpiceEphemeris::load(DEFAULT_EPHEMERIS_MANIFEST_PATH).unwrap_or_else(|error| {
+        #[cfg(not(target_arch = "wasm32"))]
+        let authority = SpiceEphemeris::load(DEFAULT_EPHEMERIS_MANIFEST_PATH);
+        #[cfg(target_arch = "wasm32")]
+        let authority = SpiceEphemeris::load_embedded();
+        let authority = authority.unwrap_or_else(|error| {
             panic!(
                 "cannot initialize the offline DE440 ephemeris: {error}. Run scripts/provision_de440_kernels.sh"
             )
         });
-        let leap_seconds_path = authority
-            .provenance()
-            .validated_kernels
-            .iter()
-            .find(|dataset| dataset.role == ScientificDatasetRole::LeapSeconds)
-            .map(|dataset| &dataset.path)
-            .unwrap_or_else(|| {
-                panic!("offline ephemeris manifest has no validated leap-second dataset")
-            });
-        let leap_seconds = fs::read_to_string(leap_seconds_path).unwrap_or_else(|error| {
+        let leap_seconds = LeapSecondTable::parse_lsk(authority.leap_seconds_lsk()).unwrap_or_else(|error| {
             panic!(
-                "cannot read validated leap-second dataset {}: {error}",
-                leap_seconds_path.display()
-            )
-        });
-        let leap_seconds = LeapSecondTable::parse_lsk(&leap_seconds).unwrap_or_else(|error| {
-            panic!(
-                "cannot parse validated leap-second dataset {}: {error}",
-                leap_seconds_path.display()
+                "cannot parse validated leap-second dataset from the offline DE440 authority: {error}"
             )
         });
         app.world_mut()
@@ -288,12 +306,13 @@ impl Plugin for EphemerisPlugin {
 /// Refresh the complete shared primary-body snapshot for the authoritative TDB
 /// epoch. A failed kernel query leaves the last complete snapshot intact.
 pub fn update_ephemeris_snapshot(
-    simulation_time: Res<SimulationTime>,
+    mut simulation_time: ResMut<SimulationTime>,
     authority: Res<EphemerisAuthority>,
     mut snapshot: ResMut<EphemerisSnapshot>,
 ) {
     let Ok(epoch) = simulation_time.tdb_epoch() else {
         bevy::log::error!("cannot evaluate ephemeris from an invalid simulation epoch");
+        invalidate_snapshot_and_pause(&mut snapshot, &mut simulation_time);
         return;
     };
     if snapshot.epoch == Some(epoch) {
@@ -313,6 +332,7 @@ pub fn update_ephemeris_snapshot(
             Ok(state) => states.push(state),
             Err(error) => {
                 bevy::log::error!("cannot evaluate shared ephemeris snapshot: {error}");
+                invalidate_snapshot_and_pause(&mut snapshot, &mut simulation_time);
                 return;
             }
         }
@@ -323,6 +343,7 @@ pub fn update_ephemeris_snapshot(
             Ok(mu_m3_s2) => gravitational_parameters_m3_s2.push((target, mu_m3_s2)),
             Err(error) => {
                 bevy::log::error!("cannot evaluate shared gravitational parameter: {error}");
+                invalidate_snapshot_and_pause(&mut snapshot, &mut simulation_time);
                 return;
             }
         }
@@ -330,6 +351,7 @@ pub fn update_ephemeris_snapshot(
             Ok(orientation) => orientations.push(orientation),
             Err(error) => {
                 bevy::log::error!("cannot evaluate shared body orientation snapshot: {error}");
+                invalidate_snapshot_and_pause(&mut snapshot, &mut simulation_time);
                 return;
             }
         }
@@ -341,10 +363,22 @@ pub fn update_ephemeris_snapshot(
     snapshot.earth_j2_model = Some(earth_j2_model);
 }
 
+fn invalidate_snapshot_and_pause(
+    snapshot: &mut EphemerisSnapshot,
+    simulation_time: &mut SimulationTime,
+) {
+    snapshot.epoch = None;
+    snapshot.states.clear();
+    snapshot.orientations.clear();
+    snapshot.gravitational_parameters_m3_s2.clear();
+    snapshot.earth_j2_model = None;
+    simulation_time.paused = true;
+}
+
 /// Refresh the presentation snapshot after a completed fixed tick changes the
 /// authoritative simulation epoch.
 fn update_ephemeris_snapshot_after_time_advance(
-    simulation_time: Res<SimulationTime>,
+    simulation_time: ResMut<SimulationTime>,
     authority: Res<EphemerisAuthority>,
     snapshot: ResMut<EphemerisSnapshot>,
 ) {
@@ -369,6 +403,23 @@ mod tests {
             .unwrap();
         assert_eq!(epoch.tdb_epoch(), TdbEpoch::j2000());
         assert_eq!(epoch.ut1_julian_date(), None);
+    }
+
+    #[test]
+    fn snapshot_rejects_a_different_simulation_epoch() {
+        let epoch = TdbEpoch::j2000();
+        let snapshot = EphemerisSnapshot::from_states(vec![BodyState {
+            target: NaifBodyId::SUN,
+            center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+            epoch,
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+        }]);
+
+        assert!(snapshot.is_current_at(epoch));
+        assert!(
+            !snapshot.is_current_at(TdbEpoch::from_seconds_since_j2000(1.0).expect("finite epoch"))
+        );
     }
 
     #[test]

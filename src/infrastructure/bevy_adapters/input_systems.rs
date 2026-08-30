@@ -194,14 +194,6 @@ pub fn handle_mouse_planet_selection(
     }
 }
 
-// System to update visual feedback for selected planets (optimized)
-pub fn update_planet_selection_visuals(mut query: Query<(&Selectable, &mut Transform)>) {
-    for (_selectable, mut transform) in query.iter_mut() {
-        // Keep scale fixed regardless of selection.
-        transform.scale = Vec3::ONE;
-    }
-}
-
 // System to handle solar system controls (time scale, etc.)
 #[expect(
     clippy::too_many_arguments,

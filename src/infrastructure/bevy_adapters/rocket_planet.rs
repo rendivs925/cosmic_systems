@@ -286,7 +286,7 @@ pub fn update_rocket_planets(
         return;
     };
     // Conversion: solar display units -> meters
-    let display_to_meters = physical_scale.solar_meters_per_display_unit as f64;
+    let display_to_meters = physical_scale.solar_meters_per_display_unit;
 
     // Bound planet and Sun: always at origin in flight frame (render_origin tracks rocket)
     // The planet center is at -render_origin.origin

@@ -7,13 +7,23 @@
 use anise::constants::frames::SSB_J2000;
 use anise::frames::Frame;
 use anise::naif::kpl::parser::convert_tpc;
+#[cfg(any(target_arch = "wasm32", test))]
+use anise::naif::kpl::parser::{convert_tpc_items, parse_bytes};
+#[cfg(any(target_arch = "wasm32", test))]
+use anise::naif::kpl::tpc::TPCItem;
+#[cfg(any(target_arch = "wasm32", test))]
+use anise::naif::SPK;
 use anise::prelude::Almanac;
 use anise::time::Epoch;
 use bevy::math::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+#[cfg(any(target_arch = "wasm32", test))]
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
+#[cfg(any(target_arch = "wasm32", test))]
+use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 
 use crate::domain::services::body_orientation::BodyOrientation;
@@ -413,6 +423,7 @@ pub struct SpiceEphemeris {
     almanac: Almanac,
     provenance: KernelProvenance,
     earth_j2_model: EarthJ2GravityModel,
+    leap_seconds_lsk: String,
 }
 
 impl SpiceEphemeris {
@@ -481,11 +492,153 @@ impl SpiceEphemeris {
                 path: earth_j2_dataset.path.clone(),
             });
         }
+        let leap_seconds_dataset = provenance
+            .validated_kernels
+            .iter()
+            .find(|kernel| kernel.role == ScientificDatasetRole::LeapSeconds)
+            .ok_or(EphemerisError::LeapSecondsUnavailable)?;
+        let leap_seconds_lsk = fs::read_to_string(&leap_seconds_dataset.path).map_err(|error| {
+            EphemerisError::KernelLoad {
+                role: ScientificDatasetRole::LeapSeconds,
+                path: leap_seconds_dataset.path.clone(),
+                message: error.to_string(),
+            }
+        })?;
 
         Ok(Self {
             almanac,
             provenance,
             earth_j2_model,
+            leap_seconds_lsk,
+        })
+    }
+
+    /// Load the same reviewed local kernel set from bytes embedded in the WASM
+    /// artifact. Browser environments have no synchronous filesystem, so this
+    /// preserves the single DE440 authority without a network fallback.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn load_embedded() -> Result<Self, EphemerisError> {
+        const MANIFEST_PATH: &str = "embedded:assets/configs/ephemeris/de440.ron";
+        let manifest = ron::from_str::<KernelManifest>(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/configs/ephemeris/de440.ron"
+        )))
+        .map_err(|error| EphemerisError::ManifestParse {
+            path: PathBuf::from(MANIFEST_PATH),
+            message: error.to_string(),
+        })?;
+        if !manifest_is_valid(&manifest) {
+            return Err(EphemerisError::InvalidManifest {
+                path: PathBuf::from(MANIFEST_PATH),
+            });
+        }
+
+        let mut validated_kernels = Vec::with_capacity(manifest.kernels.len());
+        for kernel in &manifest.kernels {
+            let path = PathBuf::from(format!("embedded:{}", kernel.file_name));
+            let bytes = embedded_kernel_bytes(&kernel.file_name).ok_or_else(|| {
+                EphemerisError::EmbeddedKernelMissing {
+                    file_name: kernel.file_name.clone(),
+                }
+            })?;
+            if bytes.len() as u64 != kernel.expected_size_bytes {
+                return Err(EphemerisError::KernelSize {
+                    role: kernel.role,
+                    path,
+                    expected: kernel.expected_size_bytes,
+                    actual: bytes.len() as u64,
+                });
+            }
+            let actual_sha256 = format!("{:x}", Sha256::digest(bytes));
+            if actual_sha256 != kernel.sha256 {
+                return Err(EphemerisError::KernelChecksum {
+                    role: kernel.role,
+                    path,
+                    expected: kernel.sha256.clone(),
+                    actual: actual_sha256,
+                });
+            }
+            validated_kernels.push(ValidatedKernel {
+                file_name: kernel.file_name.clone(),
+                role: kernel.role,
+                kind: kernel.kind,
+                sha256: kernel.sha256.clone(),
+                path: PathBuf::from(format!("embedded:{}", kernel.file_name)),
+                expected_size_bytes: kernel.expected_size_bytes,
+                source_url: kernel.source_url.clone(),
+                coverage: kernel.coverage,
+                frame: kernel.frame,
+                time_scale: kernel.time_scale,
+            });
+        }
+        let provenance = KernelProvenance {
+            manifest_id: manifest.id,
+            manifest_path: PathBuf::from(MANIFEST_PATH),
+            coverage: manifest.coverage,
+            validated_kernels,
+            unavailable_roles: manifest.unavailable_roles,
+        };
+
+        let translation_path =
+            embedded_dataset_path(&provenance, ScientificDatasetRole::Translation)?;
+        let translation = embedded_dataset_bytes(&provenance, ScientificDatasetRole::Translation)?;
+        let spk = SPK::parse(translation).map_err(|error| EphemerisError::KernelLoad {
+            role: ScientificDatasetRole::Translation,
+            path: translation_path,
+            message: error.to_string(),
+        })?;
+        let orientation_path =
+            embedded_dataset_path(&provenance, ScientificDatasetRole::Orientation)?;
+        let orientation = parse_embedded_tpc(&provenance, ScientificDatasetRole::Orientation)?;
+        let gravitational_parameters =
+            parse_embedded_tpc(&provenance, ScientificDatasetRole::GravitationalParameters)?;
+        let planetary_data =
+            convert_tpc_items(orientation, gravitational_parameters).map_err(|error| {
+                EphemerisError::KernelLoad {
+                    role: ScientificDatasetRole::Orientation,
+                    path: orientation_path,
+                    message: error.to_string(),
+                }
+            })?;
+        let earth_j2_dataset =
+            embedded_dataset_bytes(&provenance, ScientificDatasetRole::GravityHarmonics)?;
+        let earth_j2_path =
+            embedded_dataset_path(&provenance, ScientificDatasetRole::GravityHarmonics)?;
+        let earth_j2_contents =
+            std::str::from_utf8(earth_j2_dataset).map_err(|error| EphemerisError::KernelLoad {
+                role: ScientificDatasetRole::GravityHarmonics,
+                path: earth_j2_path.clone(),
+                message: error.to_string(),
+            })?;
+        let earth_j2_model =
+            ron::from_str::<EarthJ2GravityModel>(earth_j2_contents).map_err(|error| {
+                EphemerisError::GravityHarmonicsParse {
+                    path: earth_j2_path,
+                    message: error.to_string(),
+                }
+            })?;
+        if !earth_j2_model.is_valid() {
+            return Err(EphemerisError::InvalidGravityHarmonics {
+                path: embedded_dataset_path(&provenance, ScientificDatasetRole::GravityHarmonics)?,
+            });
+        }
+        let leap_seconds_bytes =
+            embedded_dataset_bytes(&provenance, ScientificDatasetRole::LeapSeconds)?;
+        let leap_seconds_path =
+            embedded_dataset_path(&provenance, ScientificDatasetRole::LeapSeconds)?;
+        let leap_seconds_lsk = std::str::from_utf8(leap_seconds_bytes)
+            .map_err(|error| EphemerisError::KernelLoad {
+                role: ScientificDatasetRole::LeapSeconds,
+                path: leap_seconds_path,
+                message: error.to_string(),
+            })?
+            .to_owned();
+
+        Ok(Self {
+            almanac: Almanac::from_spk(spk).with_planetary_data(planetary_data),
+            provenance,
+            earth_j2_model,
+            leap_seconds_lsk,
         })
     }
 
@@ -497,6 +650,11 @@ impl SpiceEphemeris {
     /// reference radius remain distinct from DE440's gravitational parameter.
     pub fn earth_j2_model(&self) -> &EarthJ2GravityModel {
         &self.earth_j2_model
+    }
+
+    /// Pinned NAIF LSK text validated with the active kernel manifest.
+    pub fn leap_seconds_lsk(&self) -> &str {
+        &self.leap_seconds_lsk
     }
 
     pub fn state(
@@ -643,6 +801,76 @@ impl SpiceEphemeris {
         }
         Ok(mu_m3_s2)
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn embedded_kernel_bytes(file_name: &str) -> Option<&'static [u8]> {
+    match file_name {
+        "de440s.bsp" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/large_files/kernels/de440/de440s.bsp"
+        ))),
+        "pck00011.tpc" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/large_files/kernels/de440/pck00011.tpc"
+        ))),
+        "gm_de440.tpc" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/large_files/kernels/de440/gm_de440.tpc"
+        ))),
+        "egm2008_earth_j2.ron" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/large_files/kernels/de440/egm2008_earth_j2.ron"
+        ))),
+        "naif0012.tls" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/large_files/kernels/de440/naif0012.tls"
+        ))),
+        _ => None,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn embedded_dataset_path(
+    provenance: &KernelProvenance,
+    role: ScientificDatasetRole,
+) -> Result<PathBuf, EphemerisError> {
+    provenance
+        .validated_kernels
+        .iter()
+        .find(|kernel| kernel.role == role)
+        .map(|kernel| kernel.path.clone())
+        .ok_or(EphemerisError::RequiredDatasetMissing { role })
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn embedded_dataset_bytes(
+    provenance: &KernelProvenance,
+    role: ScientificDatasetRole,
+) -> Result<&'static [u8], EphemerisError> {
+    let dataset = provenance
+        .validated_kernels
+        .iter()
+        .find(|kernel| kernel.role == role)
+        .ok_or(EphemerisError::RequiredDatasetMissing { role })?;
+    embedded_kernel_bytes(&dataset.file_name).ok_or_else(|| EphemerisError::EmbeddedKernelMissing {
+        file_name: dataset.file_name.clone(),
+    })
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_embedded_tpc(
+    provenance: &KernelProvenance,
+    role: ScientificDatasetRole,
+) -> Result<HashMap<i32, TPCItem>, EphemerisError> {
+    let path = embedded_dataset_path(provenance, role)?;
+    let bytes = embedded_dataset_bytes(provenance, role)?;
+    let mut reader = BufReader::new(Cursor::new(bytes));
+    parse_bytes::<_, TPCItem>(&mut reader, false).map_err(|error| EphemerisError::KernelLoad {
+        role,
+        path,
+        message: error.to_string(),
+    })
 }
 
 pub fn load_manifest(manifest_path: impl AsRef<Path>) -> Result<KernelManifest, EphemerisError> {
@@ -816,6 +1044,13 @@ pub enum EphemerisError {
     OrientationUnavailable,
     GravitationalParametersUnavailable,
     GravityHarmonicsUnavailable,
+    LeapSecondsUnavailable,
+    RequiredDatasetMissing {
+        role: ScientificDatasetRole,
+    },
+    EmbeddedKernelMissing {
+        file_name: String,
+    },
     GravitationalParametersUnsupportedBody {
         target: NaifBodyId,
     },
@@ -930,6 +1165,15 @@ impl fmt::Display for EphemerisError {
             Self::GravityHarmonicsUnavailable => {
                 formatter.write_str("no validated gravity-harmonic dataset is configured")
             }
+            Self::LeapSecondsUnavailable => {
+                formatter.write_str("no validated leap-second dataset is configured")
+            }
+            Self::RequiredDatasetMissing { role } => {
+                write!(formatter, "no validated {role} dataset is configured")
+            }
+            Self::EmbeddedKernelMissing { file_name } => {
+                write!(formatter, "embedded kernel bytes are missing for {file_name}")
+            }
             Self::GravitationalParametersUnsupportedBody { target } => write!(
                 formatter,
                 "no gravitational-parameter mapping for NAIF {}",
@@ -1009,6 +1253,7 @@ mod tests {
     use crate::domain::services::body_orientation::{
         OrientationBodyFixedFrame, OrientationDataSource, OrientationInertialFrame,
     };
+    use crate::domain::services::simulation_epoch::LeapSecondTable;
 
     fn fixture_manifest(kernel_root: &str, sha256: &str) -> String {
         format!(
@@ -1070,6 +1315,26 @@ mod tests {
 
         assert_eq!(state.position_m, DVec3::new(1_000.0, -2_000.0, 500.0));
         assert_eq!(state.velocity_mps, DVec3::new(3_000.0, -4_000.0, 250.0));
+    }
+
+    #[test]
+    fn embedded_kernel_set_matches_the_manifest_backed_authority() {
+        let ephemeris = SpiceEphemeris::load_embedded().unwrap();
+        let earth = ephemeris
+            .state(
+                NaifBodyId::EARTH,
+                NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                TdbEpoch::j2000(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            ephemeris.provenance().manifest_id,
+            "naif-de440-egm2008-primary-v1"
+        );
+        assert!(earth.position_m.is_finite());
+        assert!(earth.velocity_mps.is_finite());
+        assert!(LeapSecondTable::parse_lsk(ephemeris.leap_seconds_lsk()).is_ok());
     }
 
     #[test]

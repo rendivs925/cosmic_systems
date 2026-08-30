@@ -13,7 +13,9 @@ use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::{EphemerisAuthority, EphemerisSnapshot};
-use crate::infrastructure::bevy_adapters::planet_systems::solar_map_position_from_snapshot;
+use crate::infrastructure::bevy_adapters::planet_systems::{
+    solar_map_position_from_snapshot, solar_map_render_translation,
+};
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::math::DVec3;
@@ -55,12 +57,14 @@ pub fn setup_space(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    asset_server: Res<AssetServer>,
+    #[cfg(not(target_arch = "wasm32"))] asset_server: Res<AssetServer>,
     solar_camera_enabled: Option<Res<SolarCameraEnabled>>,
     rocket_mode: Option<Res<RocketMode>>,
-    earth_terrain: Option<Res<crate::application::terrain_config::EarthTerrainConfig>>,
-    ephemeris_authority: Res<EphemerisAuthority>,
-    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    #[cfg(not(target_arch = "wasm32"))] earth_terrain: Option<
+        Res<crate::application::terrain_config::EarthTerrainConfig>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] ephemeris_authority: Res<EphemerisAuthority>,
+    #[cfg(not(target_arch = "wasm32"))] ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
     // Insert solar system parameters as a resource
     let solar_params = SolarSystemParameters::for_visualization();
@@ -156,8 +160,17 @@ pub fn setup_space(
     // Combine planets and moons
     let all_celestial_bodies = [planets, moons].concat();
 
+    #[cfg(not(target_arch = "wasm32"))]
     let mut entity_map: HashMap<String, Entity> = HashMap::new();
+    #[cfg(target_arch = "wasm32")]
+    let entity_map: HashMap<String, Entity> = HashMap::new();
+    #[cfg(not(target_arch = "wasm32"))]
     let mut position_map: HashMap<String, DVec3> = HashMap::new();
+    #[cfg(target_arch = "wasm32")]
+    let position_map: HashMap<String, DVec3> = HashMap::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut axial_tilts: HashMap<String, f32> = HashMap::new();
+    #[cfg(target_arch = "wasm32")]
     let mut axial_tilts: HashMap<String, f32> = HashMap::new();
     for planet in &all_celestial_bodies {
         axial_tilts.insert(planet.name.clone(), planet.axial_tilt_deg);
@@ -184,16 +197,21 @@ pub fn setup_space(
             &mut commands,
             &mut meshes,
             &mut materials,
+            #[cfg(not(target_arch = "wasm32"))]
             &asset_server,
             &solar_params,
             &physical_scale,
+            #[cfg(not(target_arch = "wasm32"))]
             &ephemeris_authority,
+            #[cfg(not(target_arch = "wasm32"))]
             &ephemeris_snapshot,
             &mut entity_map,
             &mut position_map,
             &axial_tilts,
+            #[cfg(not(target_arch = "wasm32"))]
             earth_terrain.as_deref(),
             rocket_mode.is_some(),
+            DVec3::ZERO,
         );
     }
 }
@@ -210,14 +228,14 @@ pub(crate) struct SpawnQueue {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn spawn_bodies_progressively(
+pub(crate) fn spawn_bodies_progressively(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
     ephemeris_authority: Res<EphemerisAuthority>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
+    render_origin: Res<SolarMapRenderOrigin>,
     mut queue: ResMut<SpawnQueue>,
 ) {
     let SpawnQueue {
@@ -238,7 +256,6 @@ pub fn spawn_bodies_progressively(
             &mut commands,
             &mut meshes,
             &mut materials,
-            &asset_server,
             &solar_params,
             &PhysicalScale::from_solar_parameters(&solar_params),
             &ephemeris_authority,
@@ -246,8 +263,8 @@ pub fn spawn_bodies_progressively(
             entity_map,
             position_map,
             axial_tilts,
-            None,
             *enable_earth_flight_environment,
+            render_origin.position_units,
         );
     }
 }
@@ -261,7 +278,7 @@ fn spawn_celestial_body(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    asset_server: &AssetServer,
+    #[cfg(not(target_arch = "wasm32"))] asset_server: &AssetServer,
     solar_params: &SolarSystemParameters,
     physical_scale: &PhysicalScale,
     ephemeris_authority: &EphemerisAuthority,
@@ -269,8 +286,11 @@ fn spawn_celestial_body(
     entity_map: &mut HashMap<String, Entity>,
     position_map: &mut HashMap<String, DVec3>,
     axial_tilts: &HashMap<String, f32>,
-    earth_terrain: Option<&crate::application::terrain_config::EarthTerrainConfig>,
+    #[cfg(not(target_arch = "wasm32"))] earth_terrain: Option<
+        &crate::application::terrain_config::EarthTerrainConfig,
+    >,
     enable_earth_flight_environment: bool,
+    render_origin_units: DVec3,
 ) {
     let visual_radius = if planet.name == "Sun" {
         physics::calculate_sun_visual_radius(solar_params)
@@ -386,15 +406,16 @@ fn spawn_celestial_body(
 
     // Terrain and atmosphere are flight simulation data, not solar-map layers.
     // Earth is the only body configured for them while Rocket mode is active.
-    #[cfg(feature = "dem")]
+    #[cfg(all(feature = "dem", not(target_arch = "wasm32")))]
     let terrain = (enable_earth_flight_environment && planet.name == "Earth").then(|| {
         PlanetTerrain::with_srtm_directory(
             "Earth",
             earth_terrain.and_then(|config| config.srtm_dir.as_deref()),
         )
     });
-    #[cfg(not(feature = "dem"))]
+    #[cfg(any(not(feature = "dem"), target_arch = "wasm32"))]
     let terrain = {
+        #[cfg(not(target_arch = "wasm32"))]
         let _ = earth_terrain;
         (enable_earth_flight_environment && planet.name == "Earth")
             .then(|| PlanetTerrain::default_for("Earth"))
@@ -403,7 +424,10 @@ fn spawn_celestial_body(
     let mut planet_commands = commands.spawn((
         Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
         MeshMaterial3d(material_handle.clone()),
-        Transform::from_translation(initial_position.as_vec3()),
+        Transform::from_translation(solar_map_render_translation(
+            initial_position,
+            render_origin_units,
+        )),
         SolarMapPosition(initial_position),
     ));
     planet_commands
@@ -451,13 +475,66 @@ fn spawn_celestial_body(
             let orbit_shape = physics::orbit_shape_for(&planet, solar_params);
             let moon_thickness = ORBIT_RIBBON_NEAR_WIDTH_UNITS;
             let moon_segments = ORBIT_RIBBON_SEGMENTS;
-            let orbit_mesh = create_orbit_ribbon_mesh(
-                meshes,
-                &orbit_shape,
-                ORBIT_LINE_COLOR,
-                moon_thickness,
-                moon_segments,
-            );
+            let sampled_moon_orbit = match (
+                NaifBodyId::for_catalog_name(&planet.name),
+                NaifBodyId::for_catalog_name(parent_name),
+            ) {
+                (Some(target), Some(center)) => {
+                    let epoch = ephemeris_snapshot.epoch.unwrap_or_else(|| {
+                        panic!(
+                            "missing DE440 snapshot epoch while sampling {} orbit",
+                            planet.name
+                        )
+                    });
+                    let (sample_start, sample_span_seconds, sampled_path_closed) =
+                        orbit_sample_window(
+                            ephemeris_authority,
+                            epoch,
+                            planet.orbital_period_days as f64 * 86_400.0,
+                        );
+                    let sampled_path_units = ephemeris_authority
+                        .sample_relative_orbit_in_solar_inertial(
+                            target,
+                            center,
+                            sample_start,
+                            sample_span_seconds,
+                            moon_segments,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "cannot sample DE440 orbit ribbon for {}: {error}",
+                                planet.name
+                            )
+                        })
+                        .into_iter()
+                        .map(|position_m| physical_scale.solar_meters_to_units_vec3(position_m))
+                        .collect::<Vec<_>>();
+                    let render_anchor_units =
+                        sampled_orbit_render_anchor_units(&sampled_path_units);
+                    Some((sampled_path_units, render_anchor_units, sampled_path_closed))
+                }
+                _ => None,
+            };
+            let orbit_mesh = if let Some((sampled_path_units, render_anchor_units, closed)) =
+                &sampled_moon_orbit
+            {
+                create_sampled_orbit_ribbon_mesh(
+                    meshes,
+                    sampled_path_units,
+                    *render_anchor_units,
+                    ORBIT_LINE_COLOR,
+                    moon_thickness,
+                    *closed,
+                )
+            } else {
+                create_orbit_ribbon_mesh(
+                    meshes,
+                    &orbit_shape,
+                    ORBIT_LINE_COLOR,
+                    moon_thickness,
+                    moon_segments,
+                )
+            };
             let orbit_motion = orbit_motion_params(&planet.name, planet.orbital_distance_au, true);
 
             // Create individual material for this moon orbit
@@ -472,7 +549,12 @@ fn spawn_celestial_body(
                 .spawn((
                     Mesh3d(orbit_mesh),
                     MeshMaterial3d(moon_material_handle.clone()),
-                    Transform::default(),
+                    Transform::from_translation(solar_map_render_translation(
+                        *position_map
+                            .get(parent_name)
+                            .expect("moon parent must have a solar-map position"),
+                        render_origin_units,
+                    )),
                 ))
                 .insert(OrbitComponent {
                     radius: orbit_shape.semi_major_axis_units,
@@ -482,7 +564,11 @@ fn spawn_celestial_body(
                     body_class: BodyClass::Moon,
                     orbit_shape,
                     thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
-                    render_anchor_units: DVec3::ZERO,
+                    render_anchor_units: sampled_moon_orbit
+                        .as_ref()
+                        .map_or(DVec3::ZERO, |(_, render_anchor_units, _)| {
+                            *render_anchor_units
+                        }),
                     segments: ORBIT_RIBBON_SEGMENTS,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,
@@ -490,8 +576,12 @@ fn spawn_celestial_body(
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
                     distance_rank: 0.5,
-                    sampled_path_units: None,
-                    sampled_path_closed: false,
+                    sampled_path_units: sampled_moon_orbit
+                        .as_ref()
+                        .map(|(sampled_path_units, _, _)| sampled_path_units.clone()),
+                    sampled_path_closed: sampled_moon_orbit
+                        .as_ref()
+                        .is_some_and(|(_, _, sampled_path_closed)| *sampled_path_closed),
                 })
                 .insert(MoonOrbit)
                 .insert(Name::new(format!(
@@ -516,7 +606,7 @@ fn spawn_celestial_body(
                 planet.name
             )
         });
-        let (sample_start, sample_span_seconds, sampled_path_closed) = primary_orbit_sample_window(
+        let (sample_start, sample_span_seconds, sampled_path_closed) = orbit_sample_window(
             ephemeris_authority,
             epoch,
             planet.orbital_period_days as f64 * 86_400.0,
@@ -530,9 +620,7 @@ fn spawn_celestial_body(
                 )
             })
             .into_iter()
-            .map(|position_m| {
-                DVec3::splat(physical_scale.solar_display_units_per_meter as f64) * position_m
-            })
+            .map(|position_m| physical_scale.solar_meters_to_units_vec3(position_m))
             .collect();
         let render_anchor_units = sampled_orbit_render_anchor_units(&sampled_path_units);
         let orbit_mesh = create_sampled_orbit_ribbon_mesh(
@@ -555,7 +643,10 @@ fn spawn_celestial_body(
             .spawn((
                 Mesh3d(orbit_mesh),
                 MeshMaterial3d(orbit_material_handle.clone()),
-                Transform::default(),
+                Transform::from_translation(solar_map_render_translation(
+                    render_anchor_units,
+                    render_origin_units,
+                )),
             ))
             .insert(OrbitComponent {
                 radius: orbit_shape.semi_major_axis_units,
@@ -704,7 +795,7 @@ fn spawn_celestial_body(
 /// Choose a complete period centered on the active epoch when DE440s covers
 /// it. The current 1900-2050 dataset cannot cover Neptune's whole period, so
 /// its ribbon remains an honest open arc of the available authority data.
-fn primary_orbit_sample_window(
+fn orbit_sample_window(
     authority: &EphemerisAuthority,
     epoch: TdbEpoch,
     period_seconds: f64,
@@ -739,6 +830,8 @@ fn primary_orbit_sample_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::bevy_adapters::components::MoonOrbit;
+    use crate::infrastructure::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
 
     #[test]
     fn solar_light_matches_top_of_atmosphere_illuminance_at_one_au() {
@@ -802,9 +895,6 @@ mod tests {
 
     #[test]
     fn startup_samples_each_primary_orbit_from_de440() {
-        use crate::infrastructure::bevy_adapters::components::MoonOrbit;
-        use crate::infrastructure::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
-
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>();
@@ -828,5 +918,16 @@ mod tests {
             assert_eq!(path.len(), ORBIT_RIBBON_SEGMENTS);
             assert!(path.iter().all(|position| position.is_finite()));
         }
+
+        let sampled_moon_paths: Vec<_> = orbits
+            .iter(app.world())
+            .filter_map(|(orbit, is_moon)| is_moon.then_some(orbit))
+            .filter_map(|orbit| orbit.sampled_path_units.as_deref())
+            .collect();
+        assert_eq!(sampled_moon_paths.len(), 1);
+        assert_eq!(sampled_moon_paths[0].len(), ORBIT_RIBBON_SEGMENTS);
+        assert!(sampled_moon_paths[0]
+            .iter()
+            .all(|position| position.is_finite()));
     }
 }

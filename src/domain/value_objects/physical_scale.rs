@@ -1,4 +1,5 @@
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 
 /// One astronomical unit in meters (IAU definition).
@@ -26,9 +27,10 @@ pub struct PhysicalScale {
     /// Real meters per display unit at flight/vehicle scale.
     pub flight_meters_per_display_unit: f32,
     /// Display units per real meter at the solar/orbital rendering scale.
-    pub solar_display_units_per_meter: f32,
+    /// This remains f64 until an origin-relative render conversion.
+    pub solar_display_units_per_meter: f64,
     /// Real meters per display unit at the solar/orbital rendering scale.
-    pub solar_meters_per_display_unit: f32,
+    pub solar_meters_per_display_unit: f64,
     /// Solar-system visualization scale factor (display units per AU).
     pub solar_scale_factor: f32,
 }
@@ -45,7 +47,7 @@ impl PhysicalScale {
     /// display unit per real meter at the vehicle presentation boundary).
     pub fn from_solar_parameters(solar: &SolarSystemParameters) -> Self {
         let flight_display_units_per_meter = 1.0;
-        let solar_display_units_per_meter = (solar.scale_factor as f64 / AU_IN_METERS) as f32;
+        let solar_display_units_per_meter = solar.scale_factor as f64 / AU_IN_METERS;
         Self {
             flight_display_units_per_meter,
             flight_meters_per_display_unit: 1.0 / flight_display_units_per_meter,
@@ -67,12 +69,17 @@ impl PhysicalScale {
 
     /// Convert a distance in meters to display units at solar/orbital scale.
     pub fn solar_meters_to_units(&self, meters: f64) -> f64 {
-        meters * self.solar_display_units_per_meter as f64
+        meters * self.solar_display_units_per_meter
+    }
+
+    /// Convert an ICRF/solar-inertial vector in meters to f64 solar-map units.
+    pub fn solar_meters_to_units_vec3(&self, position_m: DVec3) -> DVec3 {
+        position_m * self.solar_display_units_per_meter
     }
 
     /// Convert a distance in display units to meters at solar/orbital scale.
     pub fn solar_units_to_meters(&self, units: f64) -> f64 {
-        units * self.solar_meters_per_display_unit as f64
+        units * self.solar_meters_per_display_unit
     }
 }
 
@@ -95,9 +102,8 @@ mod tests {
         let meters = 1.0;
         let units = scale.solar_meters_to_units(meters);
         let back = scale.solar_units_to_meters(units);
-        // f32 scale storage limits precision to ~1e-7 relative.
         assert!(
-            (meters - back).abs() < meters * 1e-6,
+            (meters - back).abs() < meters * 1e-12,
             "round trip off by {back}"
         );
     }
@@ -132,6 +138,17 @@ mod tests {
             (scale.solar_display_units_per_meter - expected).abs() < expected * 1e-6,
             "got {}",
             scale.solar_display_units_per_meter
+        );
+    }
+
+    #[test]
+    fn solar_vector_conversion_preserves_solar_scale_precision() {
+        let scale = PhysicalScale::default();
+        let position_m = DVec3::new(AU_IN_METERS, -2.0 * AU_IN_METERS, 0.5 * AU_IN_METERS);
+
+        assert_eq!(
+            scale.solar_meters_to_units_vec3(position_m),
+            DVec3::new(75_000.0, -150_000.0, 37_500.0)
         );
     }
 }

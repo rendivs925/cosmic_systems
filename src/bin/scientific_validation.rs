@@ -8,7 +8,10 @@ const REFERENCE_CASES_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/configs/scientific_validation/reference_cases_v1.ron"
 );
-const DEFAULT_EPHEMERIS_MANIFEST_PATH: &str = "assets/configs/ephemeris/de440.ron";
+const DEFAULT_EPHEMERIS_MANIFEST_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/configs/ephemeris/de440.ron"
+);
 
 fn main() -> ExitCode {
     let manifest_path = std::env::args()

@@ -25,7 +25,7 @@ num_cpus = "1.16"       # CPU core detection
 serde = { version = "1.0", features = ["derive"] }  # Serialization for Web Workers
 ron = "0.10"            # Rocket vehicle configuration files (assets/configs/rockets)
 async-trait = "0.1"     # Async trait definitions
-anise = "=0.10.6"       # Offline SPICE/DE ephemeris evaluation
+anise = { version = "=0.10.6", default-features = false } # Offline SPICE/DE ephemeris evaluation
 sha2 = "0.10"           # Kernel manifest checksum validation
 tokio = { version = "1.0", features = ["rt", "macros", "io-util", "time"] }  # Async runtime (wasm-compatible features)
 wgpu = "26"             # Match Bevy's rendering backend for standalone compute

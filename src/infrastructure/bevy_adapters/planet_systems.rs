@@ -31,6 +31,9 @@ pub fn update_planet_positions(
         bevy::log::error!("cannot update solar-map positions without a scientific epoch");
         return;
     };
+    if !ephemeris_snapshot.is_current_at(epoch) {
+        return;
+    }
     let time_days = epoch.seconds_since_j2000() / 86_400.0;
 
     update_planet_positions_sequential(
@@ -116,31 +119,12 @@ pub fn update_planet_rotations(
         bevy::log::error!("cannot update solar-map rotations without a scientific epoch");
         return;
     };
+    if !ephemeris_snapshot.is_current_at(epoch) {
+        return;
+    }
     update_planet_rotations_at(
         epoch.seconds_since_j2000() / 86_400.0,
         &ephemeris_snapshot,
-        &mut query,
-    );
-}
-
-/// Evaluate solar-map presentation at the fixed schedule's fractional overstep.
-/// Authoritative fixed state remains independent from this visual smoothing.
-pub fn interpolate_planet_transforms(
-    simulation_time: Res<SimulationTime>,
-    ephemeris_snapshot: Res<EphemerisSnapshot>,
-    physical_scale: Res<PhysicalScale>,
-    solar_params: Res<SolarSystemParameters>,
-    mut query: Query<(&mut SolarMapPosition, &PlanetComponent)>,
-) {
-    let Ok(epoch) = simulation_time.tdb_epoch() else {
-        bevy::log::error!("cannot interpolate solar-map positions without a scientific epoch");
-        return;
-    };
-    update_planet_positions_sequential(
-        epoch.seconds_since_j2000() / 86_400.0,
-        &ephemeris_snapshot,
-        &physical_scale,
-        &solar_params,
         &mut query,
     );
 }
@@ -155,11 +139,7 @@ pub(crate) fn solar_map_position_from_snapshot(
 ) -> Option<DVec3> {
     let target = NaifBodyId::for_catalog_name(catalog_name)?;
     let solar_state = ephemeris_snapshot.solar_inertial_relative_state(target, NaifBodyId::SUN)?;
-    Some(DVec3::new(
-        physical_scale.solar_meters_to_units(solar_state.position_m.x),
-        physical_scale.solar_meters_to_units(solar_state.position_m.y),
-        physical_scale.solar_meters_to_units(solar_state.position_m.z),
-    ))
+    Some(physical_scale.solar_meters_to_units_vec3(solar_state.position_m))
 }
 
 fn update_planet_rotations_at(
@@ -279,9 +259,9 @@ fn free_camera_solar_map_origin(current_origin: DVec3, camera_translation: Vec3)
 /// distances. This changes only the presentation mesh scale: `SolarMapPosition`,
 /// the physical solar radius, and the calibrated point light remain authoritative.
 pub fn preserve_sun_disc_at_overview_distances(
-    camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<CameraController>>,
+    camera_query: Query<(&Camera, &Transform, &Projection), With<CameraController>>,
     solar_params: Res<SolarSystemParameters>,
-    mut planet_query: Query<(&PlanetComponent, &mut Transform)>,
+    mut planet_query: Query<(&PlanetComponent, &mut Transform), Without<CameraController>>,
 ) {
     let Some((camera, camera_transform, Projection::Perspective(projection))) =
         camera_query.iter().find(|(camera, _, _)| camera.is_active)
@@ -298,9 +278,7 @@ pub fn preserve_sun_disc_at_overview_distances(
             continue;
         }
 
-        let distance_units = camera_transform
-            .translation()
-            .distance(transform.translation);
+        let distance_units = camera_transform.translation.distance(transform.translation);
         let scale = sun_presentation_scale(
             distance_units,
             projection.fov,
@@ -395,15 +373,6 @@ mod tests {
             max_speed: 50_000.0,
             zoom_sensitivity: 50.0,
         }
-    }
-
-    #[test]
-    fn presentation_time_advances_through_fixed_overstep() {
-        let solar = SolarSystemParameters::for_visualization();
-        let fixed_seconds = 10.0;
-        let presentation_seconds = fixed_seconds + 0.25;
-
-        assert!(solar.time_to_days(presentation_seconds) > solar.time_to_days(fixed_seconds));
     }
 
     #[test]
@@ -539,6 +508,39 @@ mod tests {
                 .translation,
             Vec3::ZERO
         );
+    }
+
+    #[test]
+    fn sun_disc_sizing_uses_disjoint_camera_and_planet_transforms() {
+        let mut app = App::new();
+        app.insert_resource(SolarSystemParameters::for_visualization());
+        app.world_mut().spawn((
+            Camera {
+                is_active: true,
+                ..default()
+            },
+            CameraController {
+                mode: CameraMode::FreeFlight,
+                ..free_flight_camera()
+            },
+            Projection::Perspective(PerspectiveProjection::default()),
+            Transform::from_xyz(0.0, 0.0, 1_500_000.0),
+        ));
+        let sun = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Sun")
+            .expect("Sun is in the catalog");
+        app.world_mut().spawn((
+            PlanetComponent {
+                domain_planet: sun,
+                material: Handle::default(),
+                has_texture: false,
+                base_reflectance: 0.0,
+                base_roughness: 0.0,
+            },
+            Transform::default(),
+        ));
+        app.add_systems(Update, preserve_sun_disc_at_overview_distances);
+
+        app.world_mut().run_schedule(Update);
     }
 
     #[test]
