@@ -4,7 +4,9 @@ use crate::domain::services::physics;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::PerformanceStats;
+use crate::infrastructure::bevy_adapters::planet_systems::solar_map_render_translation;
 use bevy::input::mouse::MouseButton;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 
 // System to handle planet selection
@@ -126,7 +128,7 @@ pub fn handle_mouse_planet_selection(
         } else {
             physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
         };
-        let center = (position.0 - origin.position_units).as_vec3();
+        let center = solar_map_render_translation(position.0, origin.position_units);
         let oc = ray.origin - center;
         let b = 2.0 * oc.dot(*ray.direction);
         let c = oc.length_squared() - radius * radius;
@@ -206,6 +208,7 @@ pub fn update_planet_selection_visuals(mut query: Query<(&Selectable, &mut Trans
     reason = "This input system mutates independent shared simulation resources."
 )]
 pub fn handle_solar_system_input(
+    time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut simulation_time: ResMut<SimulationTime>,
     mut solar_params: ResMut<SolarSystemParameters>,
@@ -214,6 +217,7 @@ pub fn handle_solar_system_input(
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<(&PlanetComponent, &SolarMapPosition)>,
     origin: Res<SolarMapRenderOrigin>,
+    mut camera_command: ResMut<SolarMapCameraCommand>,
     mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
     mut camera_input_state: ResMut<CameraInputState>,
 ) {
@@ -307,25 +311,19 @@ pub fn handle_solar_system_input(
 
     // Quick navigation shortcuts
     if let Ok((mut controller, mut transform)) = camera_query.single_mut() {
-        // GG (press G twice): Return to overview of entire solar system
-        static mut LAST_G_PRESS: Option<std::time::Instant> = None;
+        // GG (press G twice): Return to overview of entire solar system.
         if keyboard.just_pressed(KeyCode::KeyG) {
-            unsafe {
-                if let Some(last_press) = LAST_G_PRESS {
-                    // If pressed within 0.5 seconds, trigger action
-                    if last_press.elapsed().as_secs_f32() < 0.5 {
-                        transform.translation = Vec3::new(0.0, 120000.0, 1500000.0);
-                        transform.look_at(Vec3::ZERO, Vec3::Y);
-                        controller.velocity = Vec3::ZERO;
-                        controller.speed = 5000.0;
-                        println!("Returned to solar system overview (gg)");
-                        LAST_G_PRESS = None;
-                    } else {
-                        LAST_G_PRESS = Some(std::time::Instant::now());
-                    }
-                } else {
-                    LAST_G_PRESS = Some(std::time::Instant::now());
-                }
+            let is_double_press = camera_input_state
+                .last_overview_key_press_s
+                .is_some_and(|last_press_s| time.elapsed_secs() - last_press_s < 0.5);
+            camera_input_state.last_overview_key_press_s = Some(time.elapsed_secs());
+            if is_double_press {
+                camera_command.position_units = Some(DVec3::new(0.0, 120000.0, 1500000.0));
+                camera_command.look_at_units = Some(DVec3::ZERO);
+                controller.velocity = Vec3::ZERO;
+                controller.speed = 5000.0;
+                camera_input_state.last_overview_key_press_s = None;
+                println!("Returned to solar system overview (gg)");
             }
         }
 
@@ -355,7 +353,10 @@ pub fn handle_solar_system_input(
                             camera_input_state.earth_terrain_active = true;
                             controller.mode = CameraMode::TerrainView;
                             // Position camera above the current Earth position for terrain view
-                            let earth_pos = (planet_transform.0 - origin.position_units).as_vec3();
+                            let earth_pos = solar_map_render_translation(
+                                planet_transform.0,
+                                origin.position_units,
+                            );
                             let terrain_height_above_earth = 6371.0 + 100.0; // Earth radius + 100m above surface
                             transform.translation =
                                 earth_pos + Vec3::new(0.0, terrain_height_above_earth, 0.0);
@@ -368,17 +369,12 @@ pub fn handle_solar_system_input(
                         }
                     } else {
                         // Normal focus on planet
-                        let planet_pos = (planet_transform.0 - origin.position_units).as_vec3();
                         let radius = physics::calculate_visual_radius(
                             &planet_comp.domain_planet,
                             &solar_params,
                         );
 
-                        // Position camera to frame the planet nicely
-                        let distance = (radius * 10.0).clamp(5000.0, 500000.0);
-                        let offset = Vec3::new(distance * 0.7, distance * 0.5, distance * 0.7);
-                        transform.translation = planet_pos + offset;
-                        transform.look_at(planet_pos, Vec3::Y);
+                        // The selected-body presentation system owns framing.
                         controller.velocity = Vec3::ZERO;
 
                         // Adjust speed based on planet size

@@ -3,6 +3,7 @@ use super::craft_components::CraftCameraTag;
 use super::entity_components::Starfield;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::planet_systems::solar_map_render_translation;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 
@@ -355,7 +356,7 @@ pub fn auto_inspect_selected_planet(
         physics::calculate_visual_radius(&planet_comp.domain_planet, &solar_params)
     };
 
-    let planet_pos = (planet_position.0 - origin.position_units).as_vec3();
+    let planet_pos = solar_map_render_translation(planet_position.0, origin.position_units);
     let mut focus_point = planet_pos;
     let mut context_radius = planet_radius;
     let mut moon_axis: Option<Vec3> = None;
@@ -374,7 +375,8 @@ pub fn auto_inspect_selected_planet(
     if let Some(parent_name) = &planet_comp.domain_planet.parent_entity {
         for (other_comp, other_position) in planet_query.iter() {
             if other_comp.domain_planet.name == *parent_name {
-                let parent_pos = (other_position.0 - origin.position_units).as_vec3();
+                let parent_pos =
+                    solar_map_render_translation(other_position.0, origin.position_units);
                 let axis = parent_pos - planet_pos;
                 let axis_dir = if axis.length_squared() > 0.0 {
                     axis.normalize()

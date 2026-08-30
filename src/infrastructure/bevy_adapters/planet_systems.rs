@@ -186,9 +186,14 @@ fn update_planet_rotations_at(
     clippy::type_complexity,
     reason = "The solar-light query precisely selects the shared presentation light."
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This presentation system coordinates independent camera, origin, and celestial ECS state."
+)]
 pub fn rebase_solar_presentation(
     selected_planet: Res<SelectedPlanet>,
     mut origin: ResMut<SolarMapRenderOrigin>,
+    mut camera_command: ResMut<SolarMapCameraCommand>,
     positions: Query<&SolarMapPosition>,
     mut camera_query: Query<(&Camera, &CameraController, &mut Transform), Without<PlanetComponent>>,
     mut planet_query: Query<(&SolarMapPosition, &mut Transform), With<PlanetComponent>>,
@@ -202,27 +207,46 @@ pub fn rebase_solar_presentation(
     >,
     mut previous_selected: Local<Option<Entity>>,
 ) {
+    let command = camera_command.position_units.take().map(|position_units| {
+        (
+            position_units,
+            camera_command.look_at_units.take().unwrap_or(DVec3::ZERO),
+        )
+    });
     let selected_origin = selected_planet
         .entity
         .and_then(|entity| positions.get(entity).ok())
         .map(|position| position.0);
-    let next_origin = selected_origin.unwrap_or_else(|| {
-        camera_query
-            .iter()
-            .find(|(camera, controller, _)| {
-                camera.is_active && uses_camera_relative_solar_map_origin(controller.mode)
+    let next_origin = command.map_or_else(
+        || {
+            selected_origin.unwrap_or_else(|| {
+                camera_query
+                    .iter()
+                    .find(|(camera, controller, _)| {
+                        camera.is_active && uses_camera_relative_solar_map_origin(controller.mode)
+                    })
+                    .map_or(DVec3::ZERO, |(_, _, transform)| {
+                        free_camera_solar_map_origin(origin.position_units, transform.translation)
+                    })
             })
-            .map_or(DVec3::ZERO, |(_, _, transform)| {
-                free_camera_solar_map_origin(origin.position_units, transform.translation)
-            })
-    });
+        },
+        |(position_units, _)| position_units,
+    );
     let rebase_delta = (origin.position_units - next_origin).as_vec3();
 
-    // Free-flight cameras must be rebased every frame. Selected-body inspection
-    // stays in its local frame, only preserving position when selection changes.
+    // Commands establish a global camera pose atomically. Free-flight cameras
+    // otherwise rebase every frame, while selected inspection stays local.
     let preserve_camera_pose =
         selected_origin.is_none() || *previous_selected != selected_planet.entity;
-    if preserve_camera_pose && rebase_delta != Vec3::ZERO {
+    if let Some((_, look_at_units)) = command {
+        let local_look_at = solar_map_render_translation(look_at_units, next_origin);
+        for (camera, _, mut camera_transform) in camera_query.iter_mut() {
+            if camera.is_active {
+                camera_transform.translation = Vec3::ZERO;
+                camera_transform.look_at(local_look_at, Vec3::Y);
+            }
+        }
+    } else if preserve_camera_pose && rebase_delta != Vec3::ZERO {
         for (camera, _, mut camera_transform) in camera_query.iter_mut() {
             if camera.is_active {
                 camera_transform.translation += rebase_delta;
@@ -342,7 +366,10 @@ pub fn update_orbit_positions(
     }
 }
 
-fn solar_map_render_translation(position_units: DVec3, render_origin_units: DVec3) -> Vec3 {
+pub(crate) fn solar_map_render_translation(
+    position_units: DVec3,
+    render_origin_units: DVec3,
+) -> Vec3 {
     (position_units - render_origin_units).as_vec3()
 }
 
@@ -351,6 +378,24 @@ mod tests {
     use super::*;
     use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
     use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+
+    fn free_flight_camera() -> CameraController {
+        CameraController {
+            mode: CameraMode::FreeFlight,
+            speed: 5_000.0,
+            sensitivity: 0.0015,
+            velocity: Vec3::ZERO,
+            target_entity: None,
+            orbit_distance: 300.0,
+            orbit_angle: 0.0,
+            acceleration: 10.0,
+            deceleration: 8.0,
+            adaptive_speed_enabled: true,
+            min_speed: 50.0,
+            max_speed: 50_000.0,
+            zoom_sensitivity: 50.0,
+        }
+    }
 
     #[test]
     fn presentation_time_advances_through_fixed_overstep() {
@@ -444,6 +489,56 @@ mod tests {
         assert!(!uses_camera_relative_solar_map_origin(
             CameraMode::FollowPlanet
         ));
+    }
+
+    #[test]
+    fn global_camera_command_sets_a_local_camera_pose_atomically() {
+        let mut app = App::new();
+        app.insert_resource(SelectedPlanet {
+            entity: None,
+            name: None,
+        });
+        app.insert_resource(SolarMapRenderOrigin {
+            position_units: DVec3::new(500.0, 0.0, 0.0),
+        });
+        app.insert_resource(SolarMapCameraCommand {
+            position_units: Some(DVec3::new(2_000_000.0, 120_000.0, 1_500_000.0)),
+            look_at_units: Some(DVec3::ZERO),
+        });
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                free_flight_camera(),
+                Transform::IDENTITY,
+            ))
+            .id();
+        app.add_systems(Update, rebase_solar_presentation);
+
+        app.world_mut().run_schedule(Update);
+
+        assert_eq!(
+            app.world()
+                .resource::<SolarMapRenderOrigin>()
+                .position_units,
+            DVec3::new(2_000_000.0, 120_000.0, 1_500_000.0)
+        );
+        assert!(app
+            .world()
+            .resource::<SolarMapCameraCommand>()
+            .position_units
+            .is_none());
+        assert_eq!(
+            app.world()
+                .entity(camera)
+                .get::<Transform>()
+                .unwrap()
+                .translation,
+            Vec3::ZERO
+        );
     }
 
     #[test]

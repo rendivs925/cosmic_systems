@@ -82,6 +82,7 @@ pub struct CameraInputState {
     pub last_input_time: f32,
     pub suppress_auto_inspect_for: Option<Entity>,
     pub last_selected_entity: Option<Entity>,
+    pub last_overview_key_press_s: Option<f32>,
     pub earth_terrain_active: bool, // Track if Earth terrain view is currently active
 }
 
@@ -91,6 +92,7 @@ impl Default for CameraInputState {
             last_input_time: -1000.0,
             suppress_auto_inspect_for: None,
             last_selected_entity: None,
+            last_overview_key_press_s: None,
             earth_terrain_active: false,
         }
     }

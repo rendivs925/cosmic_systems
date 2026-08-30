@@ -16,6 +16,8 @@ use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
+#[cfg(target_arch = "wasm32")]
+use crate::application::solar_system_startup::spawn_bodies_progressively;
 #[cfg(feature = "dem")]
 use crate::application::terrain_config::EarthTerrainConfig;
 use crate::components::rocket::RocketMode;
@@ -194,6 +196,7 @@ impl Plugin for SharedSimulationPlugin {
             entity: None,
             name: None,
         });
+        app.init_resource::<SolarMapCameraCommand>();
         app.insert_resource(HoveredPlanet {
             name: None,
             info: None,
@@ -215,6 +218,10 @@ impl Plugin for SharedSimulationPlugin {
 
         // Startup systems
         app.add_systems(Startup, setup_space.after(update_ephemeris_snapshot));
+        // Browser startup amortizes body and mesh creation across frames. The
+        // queue is created by `setup_space`, while composition stays shared.
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Update, spawn_bodies_progressively);
 
         // Celestial state is fixed-step and camera-independent. Rendering reads
         // the resulting transforms during Update.
@@ -261,6 +268,7 @@ impl Plugin for SharedSimulationPlugin {
                 .chain()
                 .after(handle_planet_selection)
                 .after(handle_mouse_planet_selection)
+                .after(handle_solar_system_input)
                 .before(update_camera_controller)
                 .before(update_craft_camera)
                 .run_if(solar_presentation_enabled),

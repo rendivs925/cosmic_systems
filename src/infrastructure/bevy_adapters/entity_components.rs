@@ -83,6 +83,15 @@ pub struct SolarMapRenderOrigin {
     pub position_units: DVec3,
 }
 
+/// One-frame request for a solar-map camera pose expressed in global f64
+/// display units. The render-origin system consumes it before projecting to
+/// Bevy's local f32 camera transform.
+#[derive(Resource, Debug, Default)]
+pub struct SolarMapCameraCommand {
+    pub position_units: Option<DVec3>,
+    pub look_at_units: Option<DVec3>,
+}
+
 /// Presentation light whose source is fixed at the Sun in solar-map coordinates.
 #[derive(Component)]
 pub struct SolarMapLight;
