@@ -7,21 +7,21 @@
 //! # Frame conventions
 //!
 //! - **Solar-inertial display**: origin at the Sun, axes aligned with the
-//!   system's orbital rendering frame (the space returned by
-//!   [`calculate_planet_position_f64`]), right-handed Y-up, display units.
+//!   shared DE440 snapshot and orbit-ribbon rendering frame, right-handed Y-up,
+//!   display units.
 //! - **Solar-inertial physical**: the same origin and axes, expressed as f64
 //!   meters and meters-per-second. Primary-body ephemerides cross into this
-//!   frame through the AU conversion helpers in this module before any future
-//!   vehicle force model consumes them.
+//!   frame directly from ICRF/J2000 before any vehicle force model consumes
+//!   them.
 //! - **Planet-centered inertial**: origin at a planet's center, axes parallel
 //!   to solar-inertial, real meters (f64).
-//! - **Planet body-fixed**: rotates with the planet. Geodetic
-//!   latitude/longitude/altitude positions are expressed directly in this
-//!   frame: +Y toward the geographic north pole, +X toward lon 0, +Z toward
-//!   lon +90°. Body-fixed → inertial applies the planet spin about +Y
-//!   (via [`calculate_planet_rotation`]) followed by the axial tilt about +Z
-//!   (via [`Planet::axial_tilt_deg`]), matching the existing tilt convention
-//!   used in [`calculate_planet_position_f64`].
+//! - **Legacy terrain body-fixed**: the terrain and launch-site APIs retain
+//!   their established axes: +Y toward geographic north, +X toward lon 0, and
+//!   +Z toward lon +90°. This is not IAU body-fixed. The explicit compatibility
+//!   conversion below maps it to IAU (+Z north, +Y east) before applying a
+//!   kernel orientation.
+//! - **IAU body-fixed**: supplied by [`BodyOrientation`] in ICRF/J2000. It is
+//!   the authoritative physical orientation for high-fidelity consumers.
 //! - **Local tangent**: East-North-Up (ENU) triad at a geodetic reference
 //!   point, real meters.
 //! - **Rocket-body**: the vehicle's own orientation (`DQuat`).
@@ -31,12 +31,15 @@
 //! mapping flows exclusively through [`PhysicalScale`].
 
 use crate::domain::entities::planet::Planet;
+use crate::domain::services::body_orientation::BodyOrientation;
+#[cfg(test)]
+use crate::domain::services::ephemeris::TdbEpoch;
 use crate::domain::services::ephemeris::{BodyState, NaifBodyId};
 use crate::domain::services::physics_utils::calculate_planet_rotation_f64;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::domain::value_objects::physical_scale::{PhysicalScale, AU_IN_METERS};
-use bevy::math::{DQuat, DVec3, Vec3};
+use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 use bevy::transform::components::Transform;
 
 /// The frames supported by the reference-frame module.
@@ -101,6 +104,16 @@ pub fn icrf_j2000_to_solar_inertial(vector_icrf: DVec3) -> DVec3 {
     DVec3::new(vector_icrf.x, ecliptic_z, ecliptic_y)
 }
 
+/// Rotate the project's reflected solar-inertial axes back into ICRF/J2000.
+/// This is the inverse of [`icrf_j2000_to_solar_inertial`].
+pub fn solar_inertial_to_icrf_j2000(vector_solar: DVec3) -> DVec3 {
+    let sin_obliquity = J2000_OBLIQUITY_RAD.sin();
+    let cos_obliquity = J2000_OBLIQUITY_RAD.cos();
+    let icrf_y = -sin_obliquity * vector_solar.y + cos_obliquity * vector_solar.z;
+    let icrf_z = cos_obliquity * vector_solar.y + sin_obliquity * vector_solar.z;
+    DVec3::new(vector_solar.x, icrf_y, icrf_z)
+}
+
 /// Derive a target's heliocentric state in the project's solar-inertial axes
 /// from two same-epoch SSB ICRF states. Positions remain meters and velocities
 /// remain meters per second.
@@ -121,37 +134,122 @@ pub fn planet_radius_m(planet: &Planet) -> f64 {
     planet.radius_km as f64 * 1000.0
 }
 
+/// WGS-84 semi-major axis, in meters.
+pub const WGS84_SEMI_MAJOR_AXIS_M: f64 = 6_378_137.0;
+/// WGS-84 inverse flattening.
+pub const WGS84_INVERSE_FLATTENING: f64 = 298.257_223_563;
+
+/// Geodetic datum selected for a body's fixed surface coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GeodeticDatum {
+    Wgs84,
+    Spherical { radius_m: f64 },
+}
+
+/// Earth uses WGS-84. Bodies without an explicitly approved ellipsoid retain
+/// their catalog-radius spherical model.
+pub fn geodetic_datum(planet: &Planet) -> GeodeticDatum {
+    if planet.name == "Earth" {
+        GeodeticDatum::Wgs84
+    } else {
+        GeodeticDatum::Spherical {
+            radius_m: planet_radius_m(planet),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Geodetic (lat/lon/alt) <-> planet body-fixed
 // ---------------------------------------------------------------------------
 
-/// Map geodetic latitude/longitude/altitude to a planet body-fixed position
-/// in meters (spherical model, consistent with
-/// [`LaunchSiteCoordinates::to_planet_relative_position`]).
+/// Map geodetic latitude/longitude/ellipsoidal height to the legacy terrain
+/// body-fixed axes in meters. Earth uses WGS-84; all other bodies use their
+/// explicit spherical datum.
 pub fn geodetic_to_body_fixed(site: &LaunchSiteCoordinates, planet: &Planet) -> DVec3 {
-    let radius_m = planet_radius_m(planet);
     let lat_rad = (site.latitude_deg as f64).to_radians();
     let lon_rad = (site.longitude_deg as f64).to_radians();
-    let r = radius_m + site.altitude_m as f64;
-    DVec3::new(
-        r * lat_rad.cos() * lon_rad.cos(),
-        r * lat_rad.sin(),
-        r * lat_rad.cos() * lon_rad.sin(),
-    )
+    let height_m = site.altitude_m as f64;
+
+    match geodetic_datum(planet) {
+        GeodeticDatum::Wgs84 => {
+            let flattening = 1.0 / WGS84_INVERSE_FLATTENING;
+            let eccentricity_squared = flattening * (2.0 - flattening);
+            let prime_vertical_radius_m = WGS84_SEMI_MAJOR_AXIS_M
+                / (1.0 - eccentricity_squared * lat_rad.sin().powi(2)).sqrt();
+            let x = (prime_vertical_radius_m + height_m) * lat_rad.cos() * lon_rad.cos();
+            let east = (prime_vertical_radius_m + height_m) * lat_rad.cos() * lon_rad.sin();
+            let north =
+                (prime_vertical_radius_m * (1.0 - eccentricity_squared) + height_m) * lat_rad.sin();
+            // Terrain's established axes are x/lon0, y/north, z/east.
+            DVec3::new(x, north, east)
+        }
+        GeodeticDatum::Spherical { radius_m } => {
+            let radius_with_height_m = radius_m + height_m;
+            DVec3::new(
+                radius_with_height_m * lat_rad.cos() * lon_rad.cos(),
+                radius_with_height_m * lat_rad.sin(),
+                radius_with_height_m * lat_rad.cos() * lon_rad.sin(),
+            )
+        }
+    }
 }
 
-/// Map a planet body-fixed position (meters) back to geodetic coordinates.
+/// Map a legacy terrain body-fixed position (meters) back to its body's
+/// documented geodetic datum.
 pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoordinates {
-    let r = pos_bf.length();
-    let radius_m = planet_radius_m(planet);
-    let lat_rad = (pos_bf.y / r).clamp(-1.0, 1.0).asin();
-    let lon_rad = pos_bf.z.atan2(pos_bf.x);
+    let (lat_rad, lon_rad, height_m) = match geodetic_datum(planet) {
+        GeodeticDatum::Wgs84 => {
+            let x = pos_bf.x;
+            let east = pos_bf.z;
+            let north = pos_bf.y;
+            let semi_minor_axis_m =
+                WGS84_SEMI_MAJOR_AXIS_M * (1.0 - 1.0 / WGS84_INVERSE_FLATTENING);
+            let eccentricity_squared = 1.0
+                - (semi_minor_axis_m * semi_minor_axis_m)
+                    / (WGS84_SEMI_MAJOR_AXIS_M * WGS84_SEMI_MAJOR_AXIS_M);
+            let second_eccentricity_squared = (WGS84_SEMI_MAJOR_AXIS_M.powi(2)
+                - semi_minor_axis_m.powi(2))
+                / semi_minor_axis_m.powi(2);
+            let horizontal_m = x.hypot(east);
+            if horizontal_m < 1.0e-9 {
+                (
+                    north.signum() * std::f64::consts::FRAC_PI_2,
+                    0.0,
+                    north.abs() - semi_minor_axis_m,
+                )
+            } else {
+                let theta =
+                    (north * WGS84_SEMI_MAJOR_AXIS_M).atan2(horizontal_m * semi_minor_axis_m);
+                let lat_rad = (north
+                    + second_eccentricity_squared * semi_minor_axis_m * theta.sin().powi(3))
+                .atan2(
+                    horizontal_m
+                        - eccentricity_squared * WGS84_SEMI_MAJOR_AXIS_M * theta.cos().powi(3),
+                );
+                let prime_vertical_radius_m = WGS84_SEMI_MAJOR_AXIS_M
+                    / (1.0 - eccentricity_squared * lat_rad.sin().powi(2)).sqrt();
+                (
+                    lat_rad,
+                    east.atan2(x),
+                    horizontal_m / lat_rad.cos() - prime_vertical_radius_m,
+                )
+            }
+        }
+        GeodeticDatum::Spherical { radius_m } => {
+            let radius_with_height_m = pos_bf.length();
+            (
+                (pos_bf.y / radius_with_height_m).clamp(-1.0, 1.0).asin(),
+                pos_bf.z.atan2(pos_bf.x),
+                radius_with_height_m - radius_m,
+            )
+        }
+    };
     LaunchSiteCoordinates::new(
         CelestialBodyId::new(planet.name.clone())
             .expect("planet names are validated at catalog construction"),
         lat_rad.to_degrees() as f32,
         lon_rad.to_degrees() as f32,
-        (r - radius_m) as f32,
+        height_m as f32,
     )
 }
 
@@ -159,54 +257,73 @@ pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoord
 // Planet body-fixed <-> planet-centered inertial
 // ---------------------------------------------------------------------------
 
-/// Rotate a body-fixed position into the planet-centered inertial frame,
-/// applying planet spin (about +Y) then axial tilt (about +Z).
-pub fn body_fixed_to_planet_inertial(pos_bf: DVec3, planet: &Planet, time_days: f64) -> DVec3 {
-    let rot = body_fixed_to_inertial_rotation(planet, time_days);
-    rot * pos_bf
+/// Convert the terrain/geodetic body-fixed convention (+Y north, +Z east) to
+/// IAU body-fixed axes (+Z north, +Y east). This is the sole compatibility
+/// boundary for legacy terrain and launch-site coordinates.
+pub fn legacy_body_fixed_to_iau_body_fixed(pos_legacy_bf: DVec3) -> DVec3 {
+    DVec3::new(pos_legacy_bf.x, pos_legacy_bf.z, pos_legacy_bf.y)
 }
 
-/// Rotate a planet-centered inertial position back into the body-fixed frame.
-pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, planet: &Planet, time_days: f64) -> DVec3 {
-    let rot = body_fixed_to_inertial_rotation(planet, time_days);
-    rot.inverse() * pos_pci
+/// Convert IAU body-fixed axes (+Z north, +Y east) to the legacy terrain and
+/// geodetic convention (+Y north, +Z east).
+pub fn iau_body_fixed_to_legacy_body_fixed(pos_iau_bf: DVec3) -> DVec3 {
+    DVec3::new(pos_iau_bf.x, pos_iau_bf.z, pos_iau_bf.y)
 }
 
-/// The single authoritative body-fixed → inertial rotation for a planet.
-/// Rotation that maps body-fixed vectors into the planet-centered inertial
-/// frame at the supplied simulation epoch.
-pub fn body_fixed_to_inertial_rotation(planet: &Planet, time_days: f64) -> DQuat {
-    let spin_rad = calculate_planet_rotation_f64(planet, time_days);
-    let tilt_rad = planet.axial_tilt_deg as f64;
-    DQuat::from_rotation_z(tilt_rad.to_radians()) * DQuat::from_rotation_y(spin_rad)
+/// Convert a legacy terrain body-fixed position to the project planet-centered
+/// inertial frame through the shared IAU orientation snapshot.
+pub fn body_fixed_to_planet_inertial(pos_legacy_bf: DVec3, orientation: &BodyOrientation) -> DVec3 {
+    let pos_icrf =
+        orientation.body_fixed_to_inertial * legacy_body_fixed_to_iau_body_fixed(pos_legacy_bf);
+    icrf_j2000_to_solar_inertial(pos_icrf)
+}
+
+/// Convert a project planet-centered inertial position to the legacy terrain
+/// body-fixed convention through the shared IAU orientation snapshot.
+pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, orientation: &BodyOrientation) -> DVec3 {
+    let pos_iau_bf = orientation.inertial_to_body_fixed * solar_inertial_to_icrf_j2000(pos_pci);
+    iau_body_fixed_to_legacy_body_fixed(pos_iau_bf)
+}
+
+/// Rotation from legacy terrain body-fixed axes into project planet-centered
+/// inertial axes. IAU and solar mappings both reflect handedness, so their
+/// composition is a proper rotation suitable for `DQuat` presentation use.
+pub fn body_fixed_to_planet_inertial_rotation(orientation: &BodyOrientation) -> DQuat {
+    let x_axis = body_fixed_to_planet_inertial(DVec3::X, orientation);
+    let y_axis = body_fixed_to_planet_inertial(DVec3::Y, orientation);
+    let z_axis = body_fixed_to_planet_inertial(DVec3::Z, orientation);
+    DQuat::from_mat3(&DMat3::from_cols(x_axis, y_axis, z_axis))
 }
 
 /// Velocity of a point fixed to the rotating planetary surface, expressed in
-/// the planet-centered inertial frame. The spin axis includes the planet's
-/// axial tilt, so this can be used directly for launch state, ground contact,
-/// and atmosphere-relative velocity.
-pub fn surface_velocity_in_planet_inertial(pos_pci: DVec3, planet: &Planet) -> DVec3 {
-    let period_s = planet.rotation_period_hours as f64 * 3600.0;
-    if !period_s.is_finite() || period_s <= 0.0 {
-        return DVec3::ZERO;
-    }
-    let spin_axis_pci = planet_inertial_spin_axis(planet);
-    let angular_velocity_rad_s = spin_axis_pci * (std::f64::consts::TAU / period_s);
-    angular_velocity_rad_s.cross(pos_pci)
+/// project planet-centered inertial axes. The reflected solar mapping requires
+/// negating the transformed ICRF angular-velocity pseudovector.
+pub fn surface_velocity_in_planet_inertial(pos_pci: DVec3, orientation: &BodyOrientation) -> DVec3 {
+    let angular_velocity_solar =
+        -icrf_j2000_to_solar_inertial(orientation.angular_velocity_inertial_rad_s);
+    angular_velocity_solar.cross(pos_pci)
 }
 
-/// Unit normal of the planet's equatorial plane in planet-centered inertial
-/// coordinates. Orbital inclination for local flight is measured from this
-/// axis, not from the solar rendering frame's +Z axis.
-pub fn planet_inertial_spin_axis(planet: &Planet) -> DVec3 {
-    DQuat::from_rotation_z((planet.axial_tilt_deg as f64).to_radians()) * DVec3::Y
+/// Unit normal of the planet's equatorial plane in project planet-centered
+/// inertial coordinates. Orbital inclination for local flight is measured from
+/// this axis, not from the solar rendering frame's +Z axis.
+pub fn planet_inertial_spin_axis(orientation: &BodyOrientation) -> DVec3 {
+    body_fixed_to_planet_inertial_rotation(orientation) * DVec3::Y
 }
 
 /// Inertial reference direction for right ascension within a planet's
 /// equatorial plane. Together with [`planet_inertial_spin_axis`], this defines
 /// the local orbital-element reference frame.
-pub fn planet_equatorial_reference_x_axis(planet: &Planet) -> DVec3 {
-    DQuat::from_rotation_z((planet.axial_tilt_deg as f64).to_radians()) * DVec3::X
+pub fn planet_equatorial_reference_x_axis(orientation: &BodyOrientation) -> DVec3 {
+    body_fixed_to_planet_inertial_rotation(orientation) * DVec3::X
+}
+
+/// Legacy catalog spin retained only for presentation-only consumers that need
+/// arbitrary historical or predicted epochs unavailable in the shared snapshot.
+pub fn catalog_body_fixed_to_inertial_rotation(planet: &Planet, time_days: f64) -> DQuat {
+    let spin_rad = calculate_planet_rotation_f64(planet, time_days);
+    let tilt_rad = planet.axial_tilt_deg as f64;
+    DQuat::from_rotation_z(tilt_rad.to_radians()) * DQuat::from_rotation_y(spin_rad)
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +466,7 @@ impl RocketPhysicalState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::ephemeris::SpiceEphemeris;
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
@@ -358,6 +476,16 @@ mod tests {
 
     fn ksc() -> LaunchSiteCoordinates {
         predefined_sites::kennedy_space_center()
+    }
+
+    fn test_orientation() -> BodyOrientation {
+        BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "test-orientation".to_string(),
+            DQuat::IDENTITY,
+            DVec3::Z * (std::f64::consts::TAU / (23.934 * 3_600.0)),
+        )
     }
 
     #[test]
@@ -374,11 +502,11 @@ mod tests {
     #[test]
     fn body_fixed_round_trips_through_inertial() {
         let planet = earth();
+        let orientation = test_orientation();
         let site = ksc();
         let bf = geodetic_to_body_fixed(&site, &planet);
-        let time_days = 12.5;
-        let pci = body_fixed_to_planet_inertial(bf, &planet, time_days);
-        let back = planet_inertial_to_body_fixed(pci, &planet, time_days);
+        let pci = body_fixed_to_planet_inertial(bf, &orientation);
+        let back = planet_inertial_to_body_fixed(pci, &orientation);
         assert!(
             (back - bf).length() < 1e-3,
             "round trip off by {}",
@@ -397,26 +525,26 @@ mod tests {
     }
 
     #[test]
-    fn equatorial_reference_axes_follow_axial_tilt() {
-        let planet = earth();
-        let spin_axis = planet_inertial_spin_axis(&planet);
-        let reference_x = planet_equatorial_reference_x_axis(&planet);
+    fn orientation_reference_axes_follow_iau_pole() {
+        let orientation = test_orientation();
+        let spin_axis = planet_inertial_spin_axis(&orientation);
+        let reference_x = planet_equatorial_reference_x_axis(&orientation);
 
         assert!((spin_axis.length() - 1.0).abs() < 1e-12);
         assert!((reference_x.length() - 1.0).abs() < 1e-12);
         assert!(spin_axis.dot(reference_x).abs() < 1e-12);
-        assert!((spin_axis - DVec3::Y).length() > 1e-3);
+        assert!((spin_axis - icrf_j2000_to_solar_inertial(DVec3::Z)).length() < 1e-12);
     }
 
     #[test]
     fn solar_round_trips_through_planet_inertial() {
         let scale = PhysicalScale::default();
         let planet = earth();
+        let orientation = test_orientation();
         let site = ksc();
         let planet_solar_units = Vec3::new(75_000.0, 0.0, 0.0); // Earth at 1 AU
-        let time_days = 0.0;
         let bf = geodetic_to_body_fixed(&site, &planet);
-        let pci = body_fixed_to_planet_inertial(bf, &planet, time_days);
+        let pci = body_fixed_to_planet_inertial(bf, &orientation);
         let solar = planet_inertial_to_solar(pci, planet_solar_units, &scale);
         let pci_back = solar_to_planet_inertial(solar, planet_solar_units, &scale);
         // The solar-inertial frame is an f32 presentation frame. At 1 AU
@@ -447,7 +575,7 @@ mod tests {
 
     #[test]
     fn barycentric_states_derive_a_same_epoch_relative_state() {
-        let epoch = crate::domain::services::ephemeris::TdbEpoch::j2000();
+        let epoch = TdbEpoch::j2000();
         let target = BodyState {
             target: NaifBodyId::EARTH,
             center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
@@ -474,15 +602,14 @@ mod tests {
         let target = BodyState {
             target: NaifBodyId::EARTH,
             center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-            epoch: crate::domain::services::ephemeris::TdbEpoch::j2000(),
+            epoch: TdbEpoch::j2000(),
             position_m: DVec3::ZERO,
             velocity_mps: DVec3::ZERO,
         };
         let center = BodyState {
             target: NaifBodyId::SUN,
             center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-            epoch: crate::domain::services::ephemeris::TdbEpoch::from_seconds_since_j2000(1.0)
-                .unwrap(),
+            epoch: TdbEpoch::from_seconds_since_j2000(1.0).unwrap(),
             position_m: DVec3::ZERO,
             velocity_mps: DVec3::ZERO,
         };
@@ -518,15 +645,14 @@ mod tests {
     fn full_chain_round_trip_through_solar() {
         let scale = PhysicalScale::default();
         let planet = earth();
+        let orientation = test_orientation();
         let site = ksc();
         let planet_solar_units = Vec3::new(75_000.0, 0.0, 0.0);
-        let time_days = 6.25;
-
         let bf = geodetic_to_body_fixed(&site, &planet);
-        let pci = body_fixed_to_planet_inertial(bf, &planet, time_days);
+        let pci = body_fixed_to_planet_inertial(bf, &orientation);
         let solar = planet_inertial_to_solar(pci, planet_solar_units, &scale);
         let pci_back = solar_to_planet_inertial(solar, planet_solar_units, &scale);
-        let bf_back = planet_inertial_to_body_fixed(pci_back, &planet, time_days);
+        let bf_back = planet_inertial_to_body_fixed(pci_back, &orientation);
         let back = body_fixed_to_geodetic(bf_back, &planet);
 
         // Tolerances reflect the f32 solar-inertial presentation frame's
@@ -539,55 +665,79 @@ mod tests {
     #[test]
     fn ksc_maps_consistently_to_earth_body_fixed() {
         let planet = earth();
+        let orientation = test_orientation();
         let site = ksc();
         let bf = geodetic_to_body_fixed(&site, &planet);
 
-        // KSC sits at Earth's radius + 3 m altitude.
-        let expected_radius_m = planet_radius_m(&planet) + 3.0;
-        assert!(
-            (bf.length() - expected_radius_m).abs() < 1.0,
-            "radius {}",
-            bf.length()
-        );
+        let flattening = 1.0 / WGS84_INVERSE_FLATTENING;
+        let semi_minor_axis_m = WGS84_SEMI_MAJOR_AXIS_M * (1.0 - flattening);
+        assert!(bf.length() > semi_minor_axis_m, "radius {}", bf.length());
+        assert!(bf.length() < WGS84_SEMI_MAJOR_AXIS_M + 10.0);
 
-        // Latitude encodes y/r = sin(lat).
-        let lat_from_y = (bf.y / bf.length()).asin().to_degrees();
-        assert!((lat_from_y - site.latitude_deg as f64).abs() < 1e-9);
+        // The WGS-84 inverse returns the original geodetic latitude and longitude.
+        let back = body_fixed_to_geodetic(bf, &planet);
+        assert!((back.latitude_deg - site.latitude_deg).abs() < 1e-4);
+        assert!((back.longitude_deg - site.longitude_deg).abs() < 1e-4);
 
-        // Longitude encodes atan2(z, x) = lon.
-        let lon_from_xz = bf.z.atan2(bf.x).to_degrees();
-        assert!((lon_from_xz - site.longitude_deg as f64).abs() < 1e-9);
-
-        // Spin + tilt move the site in inertial space but preserve its radius.
-        let pci = body_fixed_to_planet_inertial(bf, &planet, 24.0);
+        // Kernel orientation moves the site in inertial space but preserves its radius.
+        let pci = body_fixed_to_planet_inertial(bf, &orientation);
         assert!((pci - bf).length() > 1.0, "rotation did not move the site");
         assert!(
-            (pci.length() - expected_radius_m).abs() < 1.0,
+            (pci.length() - bf.length()).abs() < 1.0,
             "rotation changed the radius"
         );
     }
 
     #[test]
-    fn matches_existing_launch_site_mapping() {
+    fn earth_uses_wgs84_axes_and_polar_radius() {
         let planet = earth();
-        let site = ksc();
-        let existing = site.to_planet_relative_position(&planet);
-        let authoritative = geodetic_to_body_fixed(&site, &planet);
-        // The existing mapping computes in f32; at Earth radius its ulp is ~0.8 m.
+        let equator = LaunchSiteCoordinates::new(CelestialBodyId::earth(), 0.0, 0.0, 0.0);
+        let north_pole = LaunchSiteCoordinates::new(CelestialBodyId::earth(), 90.0, 0.0, 0.0);
+
+        assert_eq!(geodetic_datum(&planet), GeodeticDatum::Wgs84);
         assert!(
-            authoritative.as_vec3().distance(existing) < 2.0,
-            "authoritative mapping diverges from LaunchSiteCoordinates by {} m",
-            authoritative.as_vec3().distance(existing)
+            (geodetic_to_body_fixed(&equator, &planet).x - WGS84_SEMI_MAJOR_AXIS_M).abs() < 1e-6
         );
+        assert!(
+            (geodetic_to_body_fixed(&north_pole, &planet).y
+                - WGS84_SEMI_MAJOR_AXIS_M * (1.0 - 1.0 / WGS84_INVERSE_FLATTENING))
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn non_earth_bodies_retain_explicit_spherical_geodesy() {
+        let mars = PlanetFactory::create_by_name("Mars").unwrap();
+        let site = LaunchSiteCoordinates::new(
+            CelestialBodyId::new("Mars".to_string()).unwrap(),
+            30.0,
+            45.0,
+            100.0,
+        );
+        let position = geodetic_to_body_fixed(&site, &mars);
+
+        assert_eq!(
+            geodetic_datum(&mars),
+            GeodeticDatum::Spherical {
+                radius_m: planet_radius_m(&mars)
+            }
+        );
+        assert!((position.length() - (planet_radius_m(&mars) + 100.0)).abs() < 1e-6);
+        let back = body_fixed_to_geodetic(position, &mars);
+        assert!((back.latitude_deg - site.latitude_deg).abs() < 1e-4);
+        assert!((back.longitude_deg - site.longitude_deg).abs() < 1e-4);
+        assert!((back.altitude_m - site.altitude_m).abs() < 1e-3);
     }
 
     #[test]
     fn render_boundary_avoids_f32_cancellation_at_solar_distances() {
         let scale = PhysicalScale::default();
         let planet = earth();
+        let orientation = test_orientation();
         let site = ksc();
         let pci =
-            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&site, &planet), &planet, 0.0);
+            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&site, &planet), &orientation);
 
         // The f64 dynamics core + local-origin rebasing preserves a 1 m change.
         let baseline = RocketPhysicalState::new(pci, DVec3::ZERO, DQuat::IDENTITY);
@@ -637,10 +787,11 @@ mod tests {
     #[test]
     fn earth_surface_velocity_matches_omega_cross_r() {
         let planet = earth();
+        let orientation = test_orientation();
         let pos_pci =
-            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&ksc(), &planet), &planet, 0.0);
-        let velocity = surface_velocity_in_planet_inertial(pos_pci, &planet);
-        let expected = std::f64::consts::TAU / (planet.rotation_period_hours as f64 * 3600.0)
+            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&ksc(), &planet), &orientation);
+        let velocity = surface_velocity_in_planet_inertial(pos_pci, &orientation);
+        let expected = orientation.angular_velocity_inertial_rad_s.length()
             * planet_radius_m(&planet)
             * (ksc().latitude_deg as f64).to_radians().cos();
         assert!((velocity.length() - expected).abs() < 1.0);
@@ -648,15 +799,91 @@ mod tests {
     }
 
     #[test]
-    fn long_epoch_rotation_preserves_f64_phase() {
+    fn legacy_terrain_axes_cross_the_explicit_iau_boundary() {
         let planet = earth();
-        let epoch_days = 100_000_000.125_f64;
-        let precise = body_fixed_to_inertial_rotation(&planet, epoch_days);
-        let narrowed = body_fixed_to_inertial_rotation(&planet, epoch_days as f32 as f64);
+        let site = ksc();
+        let legacy = geodetic_to_body_fixed(&site, &planet);
+        let iau = legacy_body_fixed_to_iau_body_fixed(legacy);
+
+        assert_eq!(iau, DVec3::new(legacy.x, legacy.z, legacy.y));
+        assert_eq!(iau_body_fixed_to_legacy_body_fixed(iau), legacy);
+    }
+
+    #[test]
+    fn pck_de440_j2000_preserves_earth_orientation_launch_site_and_sun_azimuth() {
+        // Recorded from the manifest-pinned NAIF pck00011.tpc and DE440s.bsp
+        // kernels at JD TDB 2451545.0. Task 7 will add independently generated
+        // external reference cases; this guards the shared frame boundary now.
+        let ephemeris = SpiceEphemeris::load("assets/configs/ephemeris/de440.ron").unwrap();
+        let epoch = TdbEpoch::j2000();
+        let orientation = ephemeris.orientation(NaifBodyId::EARTH, epoch).unwrap();
+        let earth_state = ephemeris
+            .state(
+                NaifBodyId::EARTH,
+                NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                epoch,
+            )
+            .unwrap();
+        let sun_state = ephemeris
+            .state(NaifBodyId::SUN, NaifBodyId::SOLAR_SYSTEM_BARYCENTER, epoch)
+            .unwrap();
+        let planet = earth();
+        let site = ksc();
+        let site_bf = geodetic_to_body_fixed(&site, &planet);
+        let site_pci = body_fixed_to_planet_inertial(site_bf, &orientation);
+        let sun_pci = icrf_j2000_to_solar_inertial(sun_state.position_m - earth_state.position_m);
+        let sun_bf = planet_inertial_to_body_fixed(sun_pci.normalize(), &orientation);
+        let (east, north, up) = enu_basis(site.latitude_deg, site.longitude_deg);
+        let azimuth_deg = east
+            .dot(sun_bf)
+            .atan2(north.dot(sun_bf))
+            .to_degrees()
+            .rem_euclid(360.0);
+        let altitude_deg = up.dot(sun_bf).asin().to_degrees();
+        let prime_meridian_icrf = orientation.body_fixed_to_inertial * DVec3::X;
+        let prime_meridian_angle_deg = prime_meridian_icrf
+            .y
+            .atan2(prime_meridian_icrf.x)
+            .to_degrees()
+            .rem_euclid(360.0);
+
+        let expected_orientation = DQuat::from_xyzw(
+            -1.068_819_057_268_670_1e-15,
+            1.277_092_378_309_780_7e-15,
+            0.641_804_414_405_553,
+            0.766_868_367_876_485_9,
+        );
+        assert!(
+            orientation
+                .inertial_to_body_fixed
+                .dot(expected_orientation)
+                .abs()
+                > 1.0 - 1.0e-14
+        );
+        assert!((prime_meridian_angle_deg - 280.146_995_789_738).abs() < 1.0e-9);
 
         assert!(
-            precise.dot(narrowed).abs() < 1.0 - 1e-6,
-            "reference-frame epoch was narrowed before rotation"
+            site_bf.distance(DVec3::new(
+                910_919.022_122_250_5,
+                3_032_338.193_143_711,
+                -5_531_170.882_283_327,
+            )) < 1.0e-6
         );
+        assert!(
+            site_pci.distance(DVec3::new(
+                -5_284_177.461_813_185,
+                3_526_405.040_215_295_7,
+                -510_524.980_672_725,
+            )) < 1.0e-6
+        );
+        assert!((azimuth_deg - 114.049_370_418_472).abs() < 1.0e-9);
+        assert!((altitude_deg - -4.111_889_453_097).abs() < 1.0e-9);
+
+        let round_trip_bf = planet_inertial_to_body_fixed(site_pci, &orientation);
+        assert!(round_trip_bf.distance(site_bf) < 1.0e-6);
+        let round_trip_site = body_fixed_to_geodetic(round_trip_bf, &planet);
+        assert!((round_trip_site.latitude_deg - site.latitude_deg).abs() < 1.0e-4);
+        assert!((round_trip_site.longitude_deg - site.longitude_deg).abs() < 1e-4);
+        assert!((round_trip_site.altitude_m - site.altitude_m).abs() < 0.1);
     }
 }

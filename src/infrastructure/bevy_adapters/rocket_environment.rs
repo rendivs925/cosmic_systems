@@ -1,5 +1,4 @@
 use crate::domain::services::ephemeris::NaifBodyId;
-use crate::domain::services::reference_frames::barycentric_to_solar_inertial_state;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
 use bevy::light::CascadeShadowConfigBuilder;
@@ -101,10 +100,8 @@ fn sun_direction_for_bound_planet(
     bound_planet_name: &str,
 ) -> Option<bevy::math::DVec3> {
     let bound_body = NaifBodyId::for_catalog_name(bound_planet_name)?;
-    let sun_state = ephemeris_snapshot.state(NaifBodyId::SUN)?;
-    let bound_state = ephemeris_snapshot.state(bound_body)?;
-    let direction = barycentric_to_solar_inertial_state(sun_state, bound_state)
-        .ok()?
+    let direction = ephemeris_snapshot
+        .solar_inertial_relative_state(NaifBodyId::SUN, bound_body)?
         .position_m;
     let length = direction.length();
     (length.is_finite() && length > 0.0).then_some(direction / length)

@@ -6,10 +6,9 @@ use crate::components::rocket::{
     RocketPlanetBinding, RocketPropulsion, TipOverState,
 };
 use crate::domain::events::SplashdownDetectedEvent;
-use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::reference_frames::{
-    body_fixed_to_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
+    body_fixed_to_planet_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
     surface_velocity_in_planet_inertial,
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
@@ -24,6 +23,7 @@ use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates
 use crate::infrastructure::bevy_adapters::components::{
     PlanetComponent, PlanetTerrain, TerrainCollisionState,
 };
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::ecs::query::QueryData;
 use bevy::log::info;
 use bevy::math::{DMat3, DQuat, DVec3};
@@ -216,6 +216,7 @@ pub fn deploy_landing_legs(
 /// touchdowns exactly as before.
 pub fn resolve_ground_contact(
     sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     surface_cache: Option<Res<TerrainSurfaceSampleCache>>,
     mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
@@ -255,12 +256,21 @@ pub fn resolve_ground_contact(
             continue;
         };
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+        let Some(mu_m3_s2) =
+            ephemeris_snapshot.gravitational_parameter_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
 
         let position_m = rocket.dynamics.position_m;
-        let time_days = sim_time.sim_time_s / 86_400.0;
         let rotating_surface = access.launch_site.is_some();
+        let orientation =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name);
+        if rotating_surface && orientation.is_none() {
+            continue;
+        }
         let position_bf = if rotating_surface {
-            planet_inertial_to_body_fixed(position_m, &planet.domain_planet, time_days)
+            planet_inertial_to_body_fixed(position_m, orientation.expect("checked above"))
         } else {
             position_m
         };
@@ -289,7 +299,7 @@ pub fn resolve_ground_contact(
         collision.over_water = planet.domain_planet.has_ocean && sample.height_m < 0.0;
 
         let body_to_inertial = if rotating_surface {
-            body_fixed_to_inertial_rotation(&planet.domain_planet, time_days)
+            body_fixed_to_planet_inertial_rotation(orientation.expect("checked above"))
         } else {
             DQuat::IDENTITY
         };
@@ -302,7 +312,7 @@ pub fn resolve_ground_contact(
             .angle_between(normal)
             .to_degrees();
         let surface_velocity = if rotating_surface {
-            surface_velocity_in_planet_inertial(position_m, &planet.domain_planet)
+            surface_velocity_in_planet_inertial(position_m, orientation.expect("checked above"))
         } else {
             DVec3::ZERO
         };
@@ -337,8 +347,10 @@ pub fn resolve_ground_contact(
                 let pad_normal = (body_to_inertial * pad_sample.normal).normalize_or_zero();
 
                 rocket.dynamics.position_m = pad_position_m;
-                rocket.dynamics.velocity_mps =
-                    surface_velocity_in_planet_inertial(pad_position_m, &planet.domain_planet);
+                rocket.dynamics.velocity_mps = surface_velocity_in_planet_inertial(
+                    pad_position_m,
+                    orientation.expect("checked above"),
+                );
                 rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
                 rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
                 rest.active = true;
@@ -360,8 +372,7 @@ pub fn resolve_ground_contact(
         };
 
         if rest.active {
-            let gravity_mps2 =
-                gravitational_parameter(planet.domain_planet.mass_kg) / position_m.length().powi(2);
+            let gravity_mps2 = mu_m3_s2 / position_m.length().powi(2);
             let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
             let upward_thrust_n = propulsion
                 .vehicle
@@ -623,6 +634,7 @@ mod tests {
 /// authoritative simulation state. This runs after contact resolution.
 pub fn advance_topple(
     sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         &RocketPlanetBinding,
@@ -643,6 +655,11 @@ pub fn advance_topple(
         else {
             continue;
         };
+        let Some(mu_m3_s2) =
+            ephemeris_snapshot.gravitational_parameter_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
         let radius_m = rocket.dynamics.position_m.length();
         if radius_m < 1.0 {
             continue;
@@ -654,7 +671,7 @@ pub fn advance_topple(
             continue;
         }
 
-        let gravity_mps2 = gravitational_parameter(planet.domain_planet.mass_kg) / radius_m.powi(2);
+        let gravity_mps2 = mu_m3_s2 / radius_m.powi(2);
         let fall = tip_over.fall.as_mut().expect("armed above");
         let completed = fall.advance(gravity_mps2, com_height_m, dt);
 

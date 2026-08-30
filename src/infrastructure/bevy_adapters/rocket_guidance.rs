@@ -1,5 +1,4 @@
 use crate::components::rocket::*;
-use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction,
     banked_attitude_from_direction, boostback_guidance, default_surface_landing_target,
@@ -16,6 +15,7 @@ use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{
     PlanetComponent, RocketAutopilot, RocketCommands,
 };
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::ecs::query::QueryData;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -67,6 +67,7 @@ pub struct GuidanceAccess {
 /// (AGENTS.md section 18).
 pub fn guidance_system(
     sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<GuidanceAccess>,
 ) {
@@ -108,6 +109,16 @@ pub fn guidance_system(
             continue;
         };
         let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+        let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
+        let Some(mu_m3_s2) =
+            ephemeris_snapshot.gravitational_parameter_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
         let position_m = rocket.dynamics.position_m;
         let radius = position_m.length();
         if radius < 1.0 {
@@ -122,9 +133,9 @@ pub fn guidance_system(
         };
         let velocity = rocket.dynamics.velocity_mps;
         let speed = velocity.length();
-        let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-        let reference_normal = planet_inertial_spin_axis(&planet.domain_planet);
-        let reference_x_axis = planet_equatorial_reference_x_axis(&planet.domain_planet);
+        let mu = mu_m3_s2;
+        let reference_normal = planet_inertial_spin_axis(orientation);
+        let reference_x_axis = planet_equatorial_reference_x_axis(orientation);
         let state_elements = orbital_elements_from_state_in_reference_frame(
             position_m,
             velocity,
@@ -375,8 +386,7 @@ pub fn guidance_system(
                 }
 
                 // Estimate gravity at current altitude.
-                let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-                let gravity_accel = mu / (radius * radius);
+                let gravity_accel = mu_m3_s2 / (radius * radius);
 
                 let (thrust_vec, thrust_att) = terminal_landing_guidance(
                     position_m,
@@ -407,8 +417,7 @@ pub fn guidance_system(
                             .length()
                     });
 
-                let mu = gravitational_parameter(planet.domain_planet.mass_kg);
-                let gravity_accel = mu / (radius * radius);
+                let gravity_accel = mu_m3_s2 / (radius * radius);
 
                 let (thrust_vec, thrust_att) = terminal_landing_guidance(
                     position_m,

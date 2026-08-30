@@ -4,7 +4,7 @@
 //! This system spawns and positions the bound planet (Earth), its moons, and the
 //! Sun in flight units using real textures. Their orbital presentation is
 //! evaluated from the rocket simulation epoch rather than shared solar-map
-//! transforms, whose clock is intentionally wall-clock driven.
+//! transforms, whose display scale is not an authoritative flight frame.
 //!
 //! The existing display-scale conversion remains only for the current
 //! parent-relative moon approximation.
@@ -17,10 +17,7 @@ use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::{
-    barycentric_to_relative_state, barycentric_to_solar_inertial_state,
-    body_fixed_to_inertial_rotation, icrf_j2000_to_solar_inertial,
-};
+use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -240,9 +237,9 @@ fn spawn_rocket_sun(
 
 /// Update rocket celestial proxies from the authoritative rocket simulation epoch.
 ///
-/// Shared solar-map transforms advance using display wall-clock time for normal
-/// and craft modes. Rocket proxies must not consume those transforms because
-/// replay, pause, and warp advance `SimulationTime` independently.
+/// Rocket proxies must not consume shared solar-map transforms because the
+/// flight presentation has a distinct meter-scale render origin. Both paths
+/// derive their celestial state from the same `SimulationTime` epoch.
 pub fn update_rocket_planets(
     solar_params: Res<SolarSystemParameters>,
     physical_scale: Res<PhysicalScale>,
@@ -273,7 +270,7 @@ pub fn update_rocket_planets(
     let Some(bound_body) = NaifBodyId::for_catalog_name(bound_planet_name) else {
         return;
     };
-    let Some(bound_state) = ephemeris_snapshot.state(bound_body) else {
+    let Some(bound_orientation) = ephemeris_snapshot.orientation(bound_body) else {
         return;
     };
     // Conversion: solar display units -> meters
@@ -286,25 +283,14 @@ pub fn update_rocket_planets(
         if rocket_planet.is_bound_planet {
             transform.translation = planet_center_flight;
             *visibility = Visibility::Visible;
-            if let Some(planet) = planet_query
-                .iter()
-                .find(|planet| planet.domain_planet.name == rocket_planet.name)
-            {
-                transform.rotation = body_fixed_to_inertial_rotation(
-                    &planet.domain_planet,
-                    sim_time.sim_time_s / 86_400.0,
-                )
-                .as_quat();
-            }
+            transform.rotation =
+                body_fixed_to_planet_inertial_rotation(bound_orientation).as_quat();
         } else if rocket_planet.is_sun {
-            if let Some(sun_state) = ephemeris_snapshot.state(NaifBodyId::SUN) {
-                if let Ok(sun_relative_to_bound) =
-                    barycentric_to_solar_inertial_state(sun_state, bound_state)
-                {
-                    transform.translation = (planet_center_flight.as_dvec3()
-                        + sun_relative_to_bound.position_m)
-                        .as_vec3();
-                }
+            if let Some(sun_relative_to_bound) =
+                ephemeris_snapshot.solar_inertial_relative_state(NaifBodyId::SUN, bound_body)
+            {
+                transform.translation =
+                    (planet_center_flight.as_dvec3() + sun_relative_to_bound.position_m).as_vec3();
             }
         }
     }
@@ -312,17 +298,12 @@ pub fn update_rocket_planets(
     // Moons: position relative to bound planet
     for (rocket_moon, mut transform) in query_set.p1().iter_mut() {
         if rocket_moon.parent_planet == *bound_planet_name {
-            if let Some(moon_state) = NaifBodyId::for_catalog_name(&rocket_moon.name)
-                .and_then(|body| ephemeris_snapshot.state(body))
+            if let Some(moon_relative_to_bound) = NaifBodyId::for_catalog_name(&rocket_moon.name)
+                .and_then(|body| ephemeris_snapshot.solar_inertial_relative_state(body, bound_body))
             {
-                if let Ok(moon_relative_to_bound) =
-                    barycentric_to_relative_state(moon_state, bound_state)
-                {
-                    transform.translation = (planet_center_flight.as_dvec3()
-                        + icrf_j2000_to_solar_inertial(moon_relative_to_bound.position_m))
-                    .as_vec3();
-                    continue;
-                }
+                transform.translation =
+                    (planet_center_flight.as_dvec3() + moon_relative_to_bound.position_m).as_vec3();
+                continue;
             }
             let moon_solar = planet_query
                 .iter()
@@ -350,6 +331,7 @@ pub fn update_rocket_planets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::body_orientation::BodyOrientation;
     use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
@@ -358,6 +340,16 @@ mod tests {
     use crate::infrastructure::bevy_adapters::components::PlanetComponent;
     use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
     use bevy::math::{DMat3, DQuat, DVec3};
+
+    fn earth_orientation(epoch: TdbEpoch) -> BodyOrientation {
+        BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            epoch,
+            "test-orientation".to_string(),
+            DQuat::IDENTITY,
+            DVec3::Z * (std::f64::consts::TAU / (23.934 * 3_600.0)),
+        )
+    }
 
     #[test]
     fn test_physical_scale_conversion() {
@@ -386,29 +378,32 @@ mod tests {
         app.insert_resource(simulation_time);
         app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
         let epoch = TdbEpoch::j2000();
-        app.insert_resource(EphemerisSnapshot::from_states(vec![
-            BodyState {
-                target: NaifBodyId::EARTH,
-                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-                epoch,
-                position_m: DVec3::ZERO,
-                velocity_mps: DVec3::ZERO,
-            },
-            BodyState {
-                target: NaifBodyId::SUN,
-                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-                epoch,
-                position_m: -DVec3::X * 149_597_870_700.0,
-                velocity_mps: DVec3::ZERO,
-            },
-            BodyState {
-                target: NaifBodyId::MOON,
-                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-                epoch,
-                position_m: DVec3::X * 384_400_000.0,
-                velocity_mps: DVec3::ZERO,
-            },
-        ]));
+        app.insert_resource(EphemerisSnapshot::from_states_and_orientations(
+            vec![
+                BodyState {
+                    target: NaifBodyId::EARTH,
+                    center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                    epoch,
+                    position_m: DVec3::ZERO,
+                    velocity_mps: DVec3::ZERO,
+                },
+                BodyState {
+                    target: NaifBodyId::SUN,
+                    center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                    epoch,
+                    position_m: -DVec3::X * 149_597_870_700.0,
+                    velocity_mps: DVec3::ZERO,
+                },
+                BodyState {
+                    target: NaifBodyId::MOON,
+                    center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                    epoch,
+                    position_m: DVec3::X * 384_400_000.0,
+                    velocity_mps: DVec3::ZERO,
+                },
+            ],
+            vec![earth_orientation(epoch)],
+        ));
         app.world_mut().spawn(RocketPhysicsState {
             dynamics: RocketDynamicsState::new(
                 DVec3::ZERO,

@@ -6,12 +6,13 @@ use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
 };
 use crate::domain::services::aerodynamics::{angle_of_attack, angle_of_sideslip};
-use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_mass_with_payload, stage_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, Selectable};
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::ActiveForceModel;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -28,7 +29,7 @@ pub trait TelemetryComputer<'a> {
 pub struct TelemetryContext<'a> {
     pub sim_time: f64,
     pub dt: f64,
-    pub planet_mass: f64,
+    pub planet_mu_m3_s2: f64,
     pub planet_radius_m: f64,
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
@@ -48,6 +49,7 @@ pub struct TelemetryContext<'a> {
     pub ablation: &'a AblationState,
     pub parachute: &'a ParachuteState,
     pub collision: &'a TerrainCollisionState,
+    pub force_model: crate::domain::services::gravity::ForceModelConfig,
 }
 
 impl<'a> TelemetryContext<'a> {
@@ -70,8 +72,7 @@ impl<'a> TelemetryContext<'a> {
         let mach = self.conditions.mach_number;
         let q = self.conditions.dynamic_pressure_pa;
 
-        let mu = gravitational_parameter(self.planet_mass);
-        let gravity_accel = mu / (radius * radius);
+        let gravity_accel = self.planet_mu_m3_s2 / (radius * radius);
         let weight = self.mass_kg * gravity_accel;
 
         let (thrust_body, isp_vac) = self.compute_thrust(self.conditions.ambient_pressure_pa);
@@ -274,6 +275,7 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
     let d = ctx.derived();
 
     RocketTelemetry {
+        force_model: ctx.force_model.validation_report(),
         altitude_agl_m: ctx.collision.radar_altitude_m,
         altitude_msl_m: d.altitude_m,
         velocity_total_mps: d.speed,
@@ -482,6 +484,8 @@ fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> 
 /// System: compute rocket telemetry and write to resource.
 pub fn compute_rocket_telemetry_system(
     sim_time: Res<SimulationTime>,
+    force_model: Res<ActiveForceModel>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     mut telemetry: ResMut<RocketTelemetry>,
     rocket_query: Query<(
@@ -531,11 +535,16 @@ pub fn compute_rocket_telemetry_system(
         else {
             continue;
         };
+        let Some(planet_mu_m3_s2) =
+            ephemeris_snapshot.gravitational_parameter_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
 
         let ctx = TelemetryContext {
             sim_time: current_time,
             dt,
-            planet_mass: planet.domain_planet.mass_kg,
+            planet_mu_m3_s2,
             planet_radius_m: planet.domain_planet.radius_km as f64 * 1000.0,
             position_m: rocket.dynamics.position_m,
             velocity_mps: rocket.dynamics.velocity_mps,
@@ -555,6 +564,7 @@ pub fn compute_rocket_telemetry_system(
             ablation,
             parachute,
             collision,
+            force_model: force_model.0,
         };
 
         *telemetry = compute_telemetry_from_context(&ctx);
@@ -584,6 +594,8 @@ pub fn compute_rocket_telemetry_system(
 /// tuples cap at 15 items; joining on Entity keeps it one logical record.
 pub fn record_flight_data_system(
     sim_time: Res<SimulationTime>,
+    force_model: Res<ActiveForceModel>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         Entity,
@@ -641,11 +653,16 @@ pub fn record_flight_data_system(
         else {
             continue;
         };
+        let Some(planet_mu_m3_s2) =
+            ephemeris_snapshot.gravitational_parameter_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
 
         let ctx = TelemetryContext {
             sim_time: current_time,
             dt,
-            planet_mass: planet.domain_planet.mass_kg,
+            planet_mu_m3_s2,
             planet_radius_m: planet.domain_planet.radius_km as f64 * 1000.0,
             position_m: rocket.dynamics.position_m,
             velocity_mps: rocket.dynamics.velocity_mps,
@@ -665,6 +682,7 @@ pub fn record_flight_data_system(
             ablation,
             parachute,
             collision,
+            force_model: force_model.0,
         };
 
         let entry = build_flight_log_entry(&ctx, current_time);
@@ -953,6 +971,7 @@ mod g_load_tests {
     use crate::domain::services::atmosphere::{
         AtmosphereSource, EarthAtmosphere, FlightConditions,
     };
+    use crate::domain::services::gravity::gravitational_parameter;
 
     const MASS_KG: f64 = 1_000.0;
     const EARTH_MASS_KG: f64 = 5.97237e24;
@@ -1041,7 +1060,7 @@ mod g_load_tests {
         let t = telemetry(&TelemetryContext {
             sim_time: 0.0,
             dt: 1.0 / 60.0,
-            planet_mass: EARTH_MASS_KG,
+            planet_mu_m3_s2: gravitational_parameter(EARTH_MASS_KG),
             planet_radius_m: EARTH_RADIUS_M,
             position_m: position,
             velocity_mps: velocity,
@@ -1061,8 +1080,13 @@ mod g_load_tests {
             ablation: &ablation,
             parachute: &parachute,
             collision: &collision,
+            force_model: crate::domain::services::gravity::ForceModelConfig::default(),
         });
 
+        assert_eq!(
+            t.force_model,
+            crate::domain::services::gravity::ForceModelConfig::default().validation_report()
+        );
         assert!(
             (t.g_load - 1.0).abs() < 1e-6,
             "hovering at weight must read 1 g, got {}",
@@ -1108,7 +1132,7 @@ mod g_load_tests {
         let t = telemetry(&TelemetryContext {
             sim_time: 0.0,
             dt: 1.0 / 60.0,
-            planet_mass: EARTH_MASS_KG,
+            planet_mu_m3_s2: gravitational_parameter(EARTH_MASS_KG),
             planet_radius_m: EARTH_RADIUS_M,
             position_m: DVec3::new(EARTH_RADIUS_M + 400_000.0, 0.0, 0.0),
             velocity_mps: DVec3::new(0.0, 0.0, speed_mps),
@@ -1128,6 +1152,7 @@ mod g_load_tests {
             ablation: &ablation,
             parachute: &parachute,
             collision: &collision,
+            force_model: crate::domain::services::gravity::ForceModelConfig::default(),
         });
 
         assert!(

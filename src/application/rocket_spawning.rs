@@ -1,9 +1,11 @@
 use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
 use crate::components::rocket::*;
+use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
-    body_fixed_to_inertial_rotation, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
+    body_fixed_to_planet_inertial_rotation, geodetic_to_body_fixed,
+    surface_velocity_in_planet_inertial,
 };
 use crate::domain::services::rocket_dynamics::{
     rocket_inertia_tensor_with_mass_adjustments, RocketDynamicsState,
@@ -33,6 +35,7 @@ pub fn spawn_rockets(
     catalog: &RocketCatalog,
     selected_key: Option<&str>,
     terrain_source: Option<&dyn TerrainSource>,
+    earth_orientation: &BodyOrientation,
 ) {
     let requested_key = selected_key.unwrap_or(DEFAULT_VEHICLE_KEY);
     let Some(vehicle) = catalog.get(requested_key) else {
@@ -82,9 +85,8 @@ pub fn spawn_rockets(
         ksc.longitude_deg,
         terrain_elevation_m as f32,
     );
-    let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
-        * (earth_radius_m + terrain_elevation_m);
-    let body_to_inertial = body_fixed_to_inertial_rotation(&earth, 0.0);
+    let position_bf = geodetic_to_body_fixed(&launch_site, &earth);
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
     let position_m = body_to_inertial * position_bf;
 
     // Stand vertical on the pad: body +Y aligned with the local up direction
@@ -94,7 +96,7 @@ pub fn spawn_rockets(
         .map(|sample| body_to_inertial * sample.normal)
         .unwrap_or_else(|| position_m.normalize());
     let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, launch_up);
-    let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, &earth);
+    let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, earth_orientation);
 
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).

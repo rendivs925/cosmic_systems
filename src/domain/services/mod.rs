@@ -1,6 +1,7 @@
 pub mod actuation;
 pub mod aerodynamics;
 pub mod atmosphere;
+pub mod body_orientation;
 pub mod control;
 pub mod craft_physics;
 pub mod cube_sphere;
@@ -24,6 +25,7 @@ pub mod regression;
 pub mod rocket_dynamics;
 pub mod rocket_propulsion;
 pub mod simd_processor;
+pub mod simulation_epoch;
 pub mod simulation_time;
 pub mod terrain_collision;
 pub mod terrain_patch_manager;

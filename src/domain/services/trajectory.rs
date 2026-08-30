@@ -18,7 +18,9 @@
 //! the other domain services) and unit-tested without an app.
 
 use crate::domain::services::cube_sphere::direction_to_lat_lon;
-use crate::domain::services::gravity::{gravitational_acceleration, gravitational_parameter};
+use crate::domain::services::gravity::{
+    gravitational_acceleration_from_mu, gravitational_parameter, GRAVITATIONAL_CONSTANT,
+};
 use bevy::math::DVec3;
 
 /// A gravity source (planet / moon / star) in the shared prediction frame.
@@ -36,6 +38,20 @@ impl GravityBody {
             name: name.into(),
             position_m,
             mass_kg,
+        }
+    }
+
+    /// Construct a prediction source from a validated standard gravitational
+    /// parameter while preserving the existing patched-conics data shape.
+    pub fn from_gravitational_parameter(
+        name: impl Into<String>,
+        position_m: DVec3,
+        mu_m3_s2: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            position_m,
+            mass_kg: mu_m3_s2 / GRAVITATIONAL_CONSTANT,
         }
     }
 
@@ -146,7 +162,7 @@ pub fn dominant_body(position_m: DVec3, bodies: &[GravityBody]) -> usize {
 /// Two-body acceleration at a point under a single central body.
 fn central_accel(position_m: DVec3, bodies: &[GravityBody], body_index: usize) -> DVec3 {
     let body = &bodies[body_index];
-    gravitational_acceleration(body.mass_kg, position_m, body.position_m)
+    gravitational_acceleration_from_mu(body.mu(), position_m, body.position_m)
 }
 
 /// Propagate under `bodies` with fixed-step RK4 patched conics, switching the

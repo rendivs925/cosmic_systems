@@ -1,7 +1,9 @@
 use super::components::*;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics;
-use crate::domain::services::reference_frames::barycentric_to_solar_inertial_state;
+use crate::domain::services::reference_frames::{
+    body_fixed_to_planet_inertial_rotation, catalog_body_fixed_to_inertial_rotation,
+};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -13,7 +15,7 @@ use bevy::prelude::*;
 /// which is visibly rectangular. Resolve a small circular Sun disc first.
 const MIN_SUN_PRESENTATION_RADIUS_PX: f32 = 5.0;
 
-/// Update the solar map from the fixed simulation clock. This path intentionally
+/// Update the solar map from the shared scientific epoch. This path intentionally
 /// has no camera, worker, or GPU dependency so every platform evaluates the
 /// same catalog and Kepler solver at a given simulation time.
 pub fn update_planet_positions(
@@ -25,7 +27,11 @@ pub fn update_planet_positions(
     mut perf_stats: ResMut<PerformanceStats>,
 ) {
     let physics_start = std::time::Instant::now();
-    let time_days = simulation_time.sim_time_s / 86_400.0;
+    let Ok(epoch) = simulation_time.tdb_epoch() else {
+        bevy::log::error!("cannot update solar-map positions without a scientific epoch");
+        return;
+    };
+    let time_days = epoch.seconds_since_j2000() / 86_400.0;
 
     update_planet_positions_sequential(
         time_days,
@@ -102,12 +108,17 @@ fn update_planet_positions_sequential(
 }
 
 pub fn update_planet_rotations(
-    time: Res<Time<Fixed>>,
-    solar_params: Res<SolarSystemParameters>,
+    simulation_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     mut query: Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
+    let Ok(epoch) = simulation_time.tdb_epoch() else {
+        bevy::log::error!("cannot update solar-map rotations without a scientific epoch");
+        return;
+    };
     update_planet_rotations_at(
-        solar_params.time_to_days_f64(time.elapsed_secs_f64()),
+        epoch.seconds_since_j2000() / 86_400.0,
+        &ephemeris_snapshot,
         &mut query,
     );
 }
@@ -121,8 +132,12 @@ pub fn interpolate_planet_transforms(
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut SolarMapPosition, &PlanetComponent)>,
 ) {
+    let Ok(epoch) = simulation_time.tdb_epoch() else {
+        bevy::log::error!("cannot interpolate solar-map positions without a scientific epoch");
+        return;
+    };
     update_planet_positions_sequential(
-        simulation_time.sim_time_s / 86_400.0,
+        epoch.seconds_since_j2000() / 86_400.0,
         &ephemeris_snapshot,
         &physical_scale,
         &solar_params,
@@ -133,15 +148,13 @@ pub fn interpolate_planet_transforms(
 /// Project a snapshot's SSB/ICRF state into the existing heliocentric
 /// solar-map frame. The f64 meter-to-display conversion remains solely at this
 /// presentation boundary.
-fn solar_map_position_from_snapshot(
+pub(crate) fn solar_map_position_from_snapshot(
     ephemeris_snapshot: &EphemerisSnapshot,
     catalog_name: &str,
     physical_scale: &PhysicalScale,
 ) -> Option<DVec3> {
     let target = NaifBodyId::for_catalog_name(catalog_name)?;
-    let target_state = ephemeris_snapshot.state(target)?;
-    let sun_state = ephemeris_snapshot.state(NaifBodyId::SUN)?;
-    let solar_state = barycentric_to_solar_inertial_state(target_state, sun_state).ok()?;
+    let solar_state = ephemeris_snapshot.solar_inertial_relative_state(target, NaifBodyId::SUN)?;
     Some(DVec3::new(
         physical_scale.solar_meters_to_units(solar_state.position_m.x),
         physical_scale.solar_meters_to_units(solar_state.position_m.y),
@@ -151,13 +164,18 @@ fn solar_map_position_from_snapshot(
 
 fn update_planet_rotations_at(
     time_days: f64,
+    ephemeris_snapshot: &EphemerisSnapshot,
     query: &mut Query<(Entity, &mut Transform, &PlanetComponent)>,
 ) {
     for (_, mut transform, planet_comp) in query.iter_mut() {
-        let rotation_angle =
-            physics::calculate_planet_rotation_f64(&planet_comp.domain_planet, time_days) as f32;
-        let tilt = Quat::from_rotation_z(planet_comp.domain_planet.axial_tilt_deg.to_radians());
-        transform.rotation = tilt * Quat::from_rotation_y(rotation_angle);
+        transform.rotation = ephemeris_snapshot
+            .orientation_for_catalog_body(&planet_comp.domain_planet.name)
+            .map(body_fixed_to_planet_inertial_rotation)
+            // Unmapped moons remain presentation-only catalog approximations.
+            .unwrap_or_else(|| {
+                catalog_body_fixed_to_inertial_rotation(&planet_comp.domain_planet, time_days)
+            })
+            .as_quat();
     }
 }
 

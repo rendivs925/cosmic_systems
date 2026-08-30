@@ -6,10 +6,14 @@ use crate::application::material_factory::*;
 use crate::application::mesh_factory::*;
 use crate::application::starfield::spawn_starfield;
 use crate::domain::entities::planet::{BodyClass, Planet};
+use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
 use crate::domain::services::physics;
 use crate::domain::services::planet_factory::PlanetFactory;
+use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::ephemeris::{EphemerisAuthority, EphemerisSnapshot};
+use crate::infrastructure::bevy_adapters::planet_systems::solar_map_position_from_snapshot;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::math::DVec3;
@@ -51,6 +55,8 @@ pub fn setup_space(
     solar_camera_enabled: Option<Res<SolarCameraEnabled>>,
     rocket_mode: Option<Res<RocketMode>>,
     earth_terrain: Option<Res<crate::application::terrain_config::EarthTerrainConfig>>,
+    ephemeris_authority: Res<EphemerisAuthority>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
     // Insert solar system parameters as a resource
     let solar_params = SolarSystemParameters::for_visualization();
@@ -60,11 +66,8 @@ pub fn setup_space(
     // Central physical scale (meters <-> display units) derived from the
     // authoritative solar-system parameters. Reused by all rocket/terrain
     // subsystems (AGENTS.md sections 15 and 39).
-    commands.insert_resource(
-        crate::domain::value_objects::physical_scale::PhysicalScale::from_solar_parameters(
-            &solar_params,
-        ),
-    );
+    let physical_scale = PhysicalScale::from_solar_parameters(&solar_params);
+    commands.insert_resource(physical_scale);
 
     // Set up dark space environment with restrained ambient light for premium contrast.
     commands.insert_resource(ClearColor(Color::srgb(0.005, 0.005, 0.01))); // Extremely dark space
@@ -179,6 +182,9 @@ pub fn setup_space(
             &mut materials,
             &asset_server,
             &solar_params,
+            &physical_scale,
+            &ephemeris_authority,
+            &ephemeris_snapshot,
             &mut entity_map,
             &mut position_map,
             &axial_tilts,
@@ -206,6 +212,8 @@ pub fn spawn_bodies_progressively(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
+    ephemeris_authority: Res<EphemerisAuthority>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     mut queue: ResMut<SpawnQueue>,
 ) {
     let SpawnQueue {
@@ -228,6 +236,9 @@ pub fn spawn_bodies_progressively(
             &mut materials,
             &asset_server,
             &solar_params,
+            &PhysicalScale::from_solar_parameters(&solar_params),
+            &ephemeris_authority,
+            &ephemeris_snapshot,
             entity_map,
             position_map,
             axial_tilts,
@@ -244,6 +255,9 @@ fn spawn_celestial_body(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     asset_server: &AssetServer,
     solar_params: &SolarSystemParameters,
+    physical_scale: &PhysicalScale,
+    ephemeris_authority: &EphemerisAuthority,
+    ephemeris_snapshot: &EphemerisSnapshot,
     entity_map: &mut HashMap<String, Entity>,
     position_map: &mut HashMap<String, DVec3>,
     axial_tilts: &HashMap<String, f32>,
@@ -265,13 +279,23 @@ fn spawn_celestial_body(
         .parent_entity
         .as_ref()
         .and_then(|parent_name| axial_tilts.get(parent_name).copied());
-    let initial_position = physics::calculate_planet_position_f64(
-        &planet,
-        0.0,
-        solar_params,
-        parent_position,
-        parent_tilt,
-    );
+    let initial_position = if planet.parent_entity.is_none() {
+        solar_map_position_from_snapshot(ephemeris_snapshot, &planet.name, physical_scale)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing DE440 solar-map state for primary body {} at startup",
+                    planet.name
+                )
+            })
+    } else {
+        physics::calculate_planet_position_f64(
+            &planet,
+            0.0,
+            solar_params,
+            parent_position,
+            parent_tilt,
+        )
+    };
     let textures = get_planet_textures(&planet.name);
     let has_albedo = textures.albedo.is_some();
 
@@ -459,6 +483,8 @@ fn spawn_celestial_body(
                     spin_speed: orbit_motion.spin_speed,
                     phase: orbit_motion.phase,
                     distance_rank: 0.5,
+                    sampled_path_units: None,
+                    sampled_path_closed: false,
                 })
                 .insert(MoonOrbit)
                 .insert(Name::new(format!(
@@ -471,12 +497,43 @@ fn spawn_celestial_body(
         let orbit_base_color = ORBIT_LINE_COLOR;
         let planet_thickness = ORBIT_RIBBON_NEAR_WIDTH_UNITS;
         let planet_segments = ORBIT_RIBBON_SEGMENTS;
-        let orbit_mesh = create_orbit_ribbon_mesh(
+        let target = NaifBodyId::for_catalog_name(&planet.name).unwrap_or_else(|| {
+            panic!(
+                "missing DE440 target mapping for primary body {}",
+                planet.name
+            )
+        });
+        let epoch = ephemeris_snapshot.epoch.unwrap_or_else(|| {
+            panic!(
+                "missing DE440 snapshot epoch while sampling {} orbit",
+                planet.name
+            )
+        });
+        let (sample_start, sample_span_seconds, sampled_path_closed) = primary_orbit_sample_window(
+            ephemeris_authority,
+            epoch,
+            planet.orbital_period_days as f64 * 86_400.0,
+        );
+        let sampled_path_units: Vec<Vec3> = ephemeris_authority
+            .sample_solar_inertial_orbit(target, sample_start, sample_span_seconds, planet_segments)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "cannot sample DE440 orbit ribbon for {}: {error}",
+                    planet.name
+                )
+            })
+            .into_iter()
+            .map(|position_m| {
+                DVec3::splat(physical_scale.solar_display_units_per_meter as f64) * position_m
+            })
+            .map(|position_units| position_units.as_vec3())
+            .collect();
+        let orbit_mesh = create_sampled_orbit_ribbon_mesh(
             meshes,
-            &orbit_shape,
+            &sampled_path_units,
             orbit_base_color,
             planet_thickness,
-            planet_segments,
+            sampled_path_closed,
         );
         let orbit_material = create_orbit_material(
             orbit_base_color,
@@ -507,6 +564,8 @@ fn spawn_celestial_body(
                 spin_speed: orbit_motion.spin_speed,
                 phase: orbit_motion.phase,
                 distance_rank: (orbit_shape.semi_major_axis_units / 15000.0).clamp(0.0, 1.0),
+                sampled_path_units: Some(sampled_path_units),
+                sampled_path_closed,
             })
             .insert(Name::new(format!("Orbit {}", planet.name)));
     }
@@ -633,6 +692,41 @@ fn spawn_celestial_body(
 
 // Functions moved to texture_config.rs, terrain_spawning.rs, and rocket_spawning.rs
 
+/// Choose a complete period centered on the active epoch when DE440s covers
+/// it. The current 1900-2050 dataset cannot cover Neptune's whole period, so
+/// its ribbon remains an honest open arc of the available authority data.
+fn primary_orbit_sample_window(
+    authority: &EphemerisAuthority,
+    epoch: TdbEpoch,
+    period_seconds: f64,
+) -> (TdbEpoch, f64, bool) {
+    let coverage = authority.0.provenance().coverage;
+    let coverage_start = TdbEpoch::from_julian_date(coverage.start_julian_date_tdb)
+        .expect("validated kernel coverage has a finite start epoch");
+    let coverage_end = TdbEpoch::from_julian_date(coverage.end_julian_date_tdb)
+        .expect("validated kernel coverage has a finite end epoch");
+    let coverage_start_seconds = coverage_start.seconds_since_j2000();
+    let coverage_end_seconds = coverage_end.seconds_since_j2000();
+    let centered_start_seconds = epoch.seconds_since_j2000() - period_seconds * 0.5;
+    let centered_end_seconds = centered_start_seconds + period_seconds;
+    if centered_start_seconds >= coverage_start_seconds
+        && centered_end_seconds <= coverage_end_seconds
+    {
+        return (
+            TdbEpoch::from_seconds_since_j2000(centered_start_seconds)
+                .expect("finite centered sample epoch"),
+            period_seconds,
+            true,
+        );
+    }
+
+    (
+        coverage_start,
+        coverage_end_seconds - coverage_start_seconds,
+        false,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +788,36 @@ mod tests {
                 "{} has invalid eccentricity",
                 planet.name
             );
+        }
+    }
+
+    #[test]
+    fn startup_samples_each_primary_orbit_from_de440() {
+        use crate::infrastructure::bevy_adapters::components::MoonOrbit;
+        use crate::infrastructure::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>();
+        app.init_asset::<StandardMaterial>();
+        app.init_asset::<Image>();
+        app.add_plugins((SharedSimulationPlugin, SolarSystemModePlugin));
+        app.world_mut().run_schedule(Startup);
+
+        let mut orbits = app.world_mut().query::<(&OrbitComponent, Has<MoonOrbit>)>();
+        let primary_paths: Vec<_> = orbits
+            .iter(app.world())
+            .filter_map(|(orbit, is_moon)| (!is_moon).then_some(orbit))
+            .collect();
+
+        assert_eq!(primary_paths.len(), 8);
+        for orbit in primary_paths {
+            let path = orbit
+                .sampled_path_units
+                .as_deref()
+                .expect("primary orbit uses the DE440 sampled presentation path");
+            assert_eq!(path.len(), ORBIT_RIBBON_SEGMENTS);
+            assert!(path.iter().all(|position| position.is_finite()));
         }
     }
 }

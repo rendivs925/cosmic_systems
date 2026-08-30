@@ -1,7 +1,13 @@
 #[cfg(test)]
 use crate::components::rocket::*;
 #[cfg(test)]
+use crate::domain::services::body_orientation::BodyOrientation;
+#[cfg(test)]
+use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+#[cfg(test)]
 use crate::domain::services::gravity::gravitational_parameter;
+#[cfg(test)]
+use crate::domain::services::planet_factory::PlanetFactory;
 #[cfg(test)]
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 #[cfg(test)]
@@ -10,11 +16,34 @@ use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(test)]
 use crate::infrastructure::bevy_adapters::components::{RocketAutopilot, RocketCommands};
+#[cfg(test)]
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 
 #[cfg(test)]
 use bevy::math::{DMat3, DQuat, DVec3};
 #[cfg(test)]
 use bevy::prelude::*;
+
+#[cfg(test)]
+fn test_earth_orientation() -> BodyOrientation {
+    BodyOrientation::from_kernel(
+        NaifBodyId::EARTH,
+        TdbEpoch::j2000(),
+        "test-orientation".to_string(),
+        DQuat::IDENTITY,
+        DVec3::Z * (std::f64::consts::TAU / (23.934 * 3_600.0)),
+    )
+}
+
+#[cfg(test)]
+fn test_ephemeris_snapshot() -> EphemerisSnapshot {
+    let earth_mass_kg = PlanetFactory::create_by_name("Earth").unwrap().mass_kg;
+    EphemerisSnapshot::from_states_orientations_and_gravitational_parameters(
+        Vec::new(),
+        vec![test_earth_orientation()],
+        vec![(NaifBodyId::EARTH, gravitational_parameter(earth_mass_kg))],
+    )
+}
 
 #[cfg(test)]
 mod ground_contact_tests {
@@ -84,6 +113,7 @@ mod ground_contact_tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<SplashdownDetectedEvent>();
         app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(test_ephemeris_snapshot());
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             DT,
         )));
@@ -248,14 +278,13 @@ mod ground_contact_tests {
 
         let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
             .unwrap();
-        let time_days = app.world().resource::<SimulationTime>().sim_time_s / 86_400.0;
+        let orientation = test_earth_orientation();
         let world = app.world_mut();
         let rocket = world.get::<RocketPhysicsState>(entity).unwrap();
-        let position_bf =
-            planet_inertial_to_body_fixed(rocket.dynamics.position_m, &earth, time_days);
+        let position_bf = planet_inertial_to_body_fixed(rocket.dynamics.position_m, &orientation);
         let expected_direction_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize();
         let expected_surface_velocity =
-            surface_velocity_in_planet_inertial(rocket.dynamics.position_m, &earth);
+            surface_velocity_in_planet_inertial(rocket.dynamics.position_m, &orientation);
 
         assert!(
             position_bf.normalize().dot(expected_direction_bf) > 1.0 - 1e-12,
@@ -712,6 +741,7 @@ mod recovery_pipeline_tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<SplashdownDetectedEvent>();
         app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(test_ephemeris_snapshot());
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             DT,
         )));
@@ -1044,6 +1074,7 @@ mod ascent_pipeline_tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<SplashdownDetectedEvent>();
         app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(test_ephemeris_snapshot());
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             DT,
         )));
@@ -1290,9 +1321,9 @@ mod ascent_pipeline_tests {
         let target = LowEarthOrbitTarget::default();
         let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
         let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
-        let earth = PlanetFactory::create_by_name("Earth").unwrap();
-        let reference_normal = planet_inertial_spin_axis(&earth);
-        let reference_x_axis = planet_equatorial_reference_x_axis(&earth);
+        let orientation = test_earth_orientation();
+        let reference_normal = planet_inertial_spin_axis(&orientation);
+        let reference_x_axis = planet_equatorial_reference_x_axis(&orientation);
         let position_m = reference_x_axis * radius_m;
         let orbit_normal = reference_normal * target.target_inclination_rad.cos()
             - reference_normal.cross(reference_x_axis) * target.target_inclination_rad.sin();

@@ -14,10 +14,10 @@ use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia, active_vehicle_mass_with_payload,
 };
-use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::radar_altitude_m;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -135,7 +135,7 @@ pub fn update_spent_stage_lifecycle(
     mut commands: Commands,
     planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
     debris_query: Query<(Entity, &RocketPlanetBinding, &RocketPhysicsState), With<SpentStage>>,
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
     for (entity, binding, debris) in debris_query.iter() {
         let Some((planet, planet_terrain)) = planet_query
@@ -148,11 +148,13 @@ pub fn update_spent_stage_lifecycle(
         if radius_m <= 0.0 {
             continue;
         }
-        let position_body_fixed_m = planet_inertial_to_body_fixed(
-            debris.dynamics.position_m,
-            &planet.domain_planet,
-            sim_time.sim_time_s / 86_400.0,
-        );
+        let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
+        let position_body_fixed_m =
+            planet_inertial_to_body_fixed(debris.dynamics.position_m, orientation);
         let agl_m = radar_altitude_m(&*planet_terrain.source, position_body_fixed_m, radius_m);
         if agl_m > SPENT_STAGE_DESPAWN_AGL_M {
             continue;

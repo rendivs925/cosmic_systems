@@ -62,6 +62,12 @@ pub struct OrbitComponent {
     pub spin_speed: f32,
     pub phase: f32,
     pub distance_rank: f32,
+    /// Primary-body orbit geometry sampled from the shared DE440 authority.
+    /// Moon paths retain their explicit parent-relative Kepler approximation.
+    pub sampled_path_units: Option<Vec<Vec3>>,
+    /// Whether this path spans a complete orbital period within the provisioned
+    /// kernel coverage.
+    pub sampled_path_closed: bool,
 }
 
 /// Authoritative solar-map position in f64 display units. `Transform` is only

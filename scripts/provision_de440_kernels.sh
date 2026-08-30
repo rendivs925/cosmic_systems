@@ -14,5 +14,5 @@ curl --fail --location --output "$kernel_dir/naif0012.tls" \
     "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls"
 
 # Runtime manifest validation verifies the pinned sizes and SHA-256 checksums.
-# Run the ignored DE440 integration regression after provisioning.
-cargo test de440_earth_state_matches_recorded_horizons_reference_at_j2000 -- --ignored
+# Run the ignored multi-epoch DE440 integration regression after provisioning.
+cargo test de440_states_match_recorded_horizons_references_across_epochs -- --ignored

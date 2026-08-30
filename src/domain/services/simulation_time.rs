@@ -6,7 +6,10 @@
 use bevy::app::FixedMain;
 use bevy::prelude::*;
 
-use crate::domain::services::ephemeris::{EphemerisError, TdbEpoch};
+use crate::domain::services::ephemeris::TdbEpoch;
+use crate::domain::services::simulation_epoch::{
+    LeapSecondTable, ScientificEpoch, SimulationEpochError, UtcDateTime,
+};
 
 /// Upper bound on authoritative physics ticks run during one render-loop pass.
 /// Unprocessed time remains queued, rather than being discarded.
@@ -31,6 +34,10 @@ pub struct SimulationTime {
     /// Simulated seconds accrued from wall time but not yet integrated. This
     /// permits a bounded fixed-step runner to catch up without losing time.
     pending_simulation_s: f64,
+    /// Versioned civil/dynamical-time conversion authority and the instant at
+    /// simulation time zero. Both are configured from the validated LSK.
+    leap_seconds: Option<LeapSecondTable>,
+    epoch_at_simulation_start: Option<ScientificEpoch>,
 }
 
 impl SimulationTime {
@@ -43,6 +50,8 @@ impl SimulationTime {
             paused: false,
             fixed_timestep_s,
             pending_simulation_s: 0.0,
+            leap_seconds: None,
+            epoch_at_simulation_start: None,
         }
     }
 
@@ -66,10 +75,54 @@ impl SimulationTime {
         1.0 / self.fixed_timestep_s
     }
 
-    /// Convert completed authoritative simulation time to the shared TDB epoch.
-    /// This deliberately has no dependency on wall-clock or render-frame time.
-    pub fn tdb_epoch(&self) -> Result<TdbEpoch, EphemerisError> {
-        TdbEpoch::from_seconds_since_j2000(self.sim_time_s)
+    /// Configure this clock from a validated local leap-second source. The
+    /// default simulation instant is J2000 TDB, preserving existing ephemeris
+    /// coverage while exposing its matching civil and dynamical time scales.
+    pub fn configure_scientific_epoch(
+        &mut self,
+        leap_seconds: LeapSecondTable,
+    ) -> Result<(), SimulationEpochError> {
+        let epoch_at_simulation_start = leap_seconds.epoch_from_tdb(TdbEpoch::j2000())?;
+        self.leap_seconds = Some(leap_seconds);
+        self.epoch_at_simulation_start = Some(epoch_at_simulation_start);
+        Ok(())
+    }
+
+    /// Select a UTC simulation start through the same versioned LSK authority.
+    /// The elapsed simulation clock is reset because it is measured relative to
+    /// this selected physical instant.
+    pub fn set_scientific_epoch_from_utc(
+        &mut self,
+        utc: UtcDateTime,
+    ) -> Result<(), SimulationEpochError> {
+        let leap_seconds = self
+            .leap_seconds
+            .as_ref()
+            .ok_or(SimulationEpochError::UnconfiguredAuthority)?;
+        self.epoch_at_simulation_start = Some(leap_seconds.epoch_from_utc(utc)?);
+        self.sim_time_s = 0.0;
+        Ok(())
+    }
+
+    /// The authoritative physical instant after completed fixed ticks. It has
+    /// no dependency on wall-clock or render-frame time.
+    pub fn scientific_epoch(&self) -> Result<ScientificEpoch, SimulationEpochError> {
+        let leap_seconds = self
+            .leap_seconds
+            .as_ref()
+            .ok_or(SimulationEpochError::UnconfiguredAuthority)?;
+        let epoch_at_simulation_start = self
+            .epoch_at_simulation_start
+            .ok_or(SimulationEpochError::UnconfiguredAuthority)?;
+        let tdb_epoch = TdbEpoch::from_seconds_since_j2000(
+            epoch_at_simulation_start.tdb_epoch().seconds_since_j2000() + self.sim_time_s,
+        )?;
+        leap_seconds.epoch_from_tdb(tdb_epoch)
+    }
+
+    /// Shared ephemeris input derived from [`Self::scientific_epoch`].
+    pub fn tdb_epoch(&self) -> Result<TdbEpoch, SimulationEpochError> {
+        Ok(self.scientific_epoch()?.tdb_epoch())
     }
 
     /// Set time acceleration factor. Pausing is controlled separately.
@@ -279,11 +332,54 @@ mod tests {
     #[test]
     fn completed_fixed_time_maps_to_tdb_epoch() {
         let mut sim = SimulationTime::new(60.0);
+        sim.configure_scientific_epoch(
+            LeapSecondTable::parse_lsk(include_str!(
+                "../../../assets/large_files/kernels/de440/naif0012.tls"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
         sim.advance_fixed_step();
 
         let epoch = sim.tdb_epoch().unwrap();
         assert!((epoch.seconds_since_j2000() - 60.0).abs() < 1e-5);
         assert!((epoch.julian_date() - (2_451_545.0 + 60.0 / 86_400.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn selected_utc_start_advances_only_after_completed_fixed_ticks() {
+        let mut sim = SimulationTime::new(60.0);
+        sim.configure_scientific_epoch(
+            LeapSecondTable::parse_lsk(include_str!(
+                "../../../assets/large_files/kernels/de440/naif0012.tls"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        sim.set_scientific_epoch_from_utc(UtcDateTime {
+            year: 2017,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0.0,
+        })
+        .unwrap();
+
+        let initial = sim.scientific_epoch().unwrap();
+        sim.accrue_warp(60.0);
+        assert_eq!(sim.scientific_epoch().unwrap(), initial);
+        sim.advance_fixed_step();
+        assert!(
+            (sim.scientific_epoch()
+                .unwrap()
+                .tdb_epoch()
+                .seconds_since_j2000()
+                - initial.tdb_epoch().seconds_since_j2000()
+                - 60.0)
+                .abs()
+                < 1.0e-5
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use super::components::{PlanetComponent, SolarMapPosition};
 use super::craft_components::*;
 use crate::domain::services::craft_physics;
 use crate::domain::services::physics;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
@@ -20,14 +21,14 @@ const CRAFT_CRUISE_SPEED_UNITS: f32 = 40_000.0;
 const CHASE_CAMERA_HEIGHT: f32 = 4.0;
 const CHASE_CAMERA_LOOK_HEIGHT: f32 = 1.0;
 pub fn update_craft_physics(
-    fixed_time: Res<Time<Fixed>>,
+    simulation_time: Res<SimulationTime>,
     control: Res<CraftControlState>,
     solar_params: Res<SolarSystemParameters>,
     mut travel_target: ResMut<CraftTravelTarget>,
     planet_query: Query<(&PlanetComponent, &SolarMapPosition)>,
     mut craft_query: Query<&mut CraftComponent>,
 ) {
-    let dt = fixed_time.delta_secs();
+    let dt = simulation_time.fixed_timestep_f32();
     for mut craft in craft_query.iter_mut() {
         let dc = control.dc_current;
         let pulse = control.pulse_current;
@@ -453,6 +454,7 @@ mod tests {
     fn craft_travel_uses_the_target_solar_map_position() {
         let mut app = App::new();
         app.insert_resource(Time::<Fixed>::default());
+        app.insert_resource(SimulationTime::default());
         app.insert_resource(CraftControlState::default());
         app.insert_resource(SolarSystemParameters::default());
         app.insert_resource(CraftTravelTarget::default());

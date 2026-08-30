@@ -5,11 +5,11 @@
 //! origin for precision at planetary scale.
 
 use crate::application::texture_config::{get_planet_textures, load_texture};
-use crate::domain::entities::planet::Planet;
+use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
-use crate::domain::services::reference_frames::body_fixed_to_inertial_rotation;
-use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain_streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
@@ -21,7 +21,6 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
-use bevy::time::Fixed;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -251,8 +250,7 @@ fn spawn_patch_mesh_system(
     mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
-    sim_time: Res<SimulationTime>,
-    time: Res<Time<Fixed>>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
 ) {
     let active_planet = streaming.active_planet();
@@ -298,6 +296,11 @@ fn spawn_patch_mesh_system(
         let Ok(planet) = planet_query.get(event.planet_entity) else {
             continue;
         };
+        let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
 
         let patch = event.patch;
         let Some(cached_geometry) = streaming.generated.get_mut(&patch) else {
@@ -312,11 +315,7 @@ fn spawn_patch_mesh_system(
         // geometry into the rocket-local flight frame so f32 mesh vertices stay
         // small near the camera (avoids precision loss at ~6371 km magnitudes
         // that degrades the sphere into a flat plane with broken triangles).
-        let body_to_inertial = interpolated_body_to_inertial_rotation(
-            &planet.domain_planet,
-            &sim_time,
-            time.overstep_fraction() as f64,
-        );
+        let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
         let mesh = patch_geometry_to_mesh(
             geometry,
             &render_origin.origin,
@@ -476,9 +475,8 @@ fn hide_cached_patch_mesh_system(
 /// assets. A cache hit therefore performs no mesh conversion or asset upload.
 fn reveal_cached_patch_mesh_system(
     mut events: MessageReader<TerrainPatchReady>,
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     render_origin: Res<RenderOrigin>,
-    time: Res<Time<Fixed>>,
     planet_query: Query<&PlanetComponent>,
     mut render_index: ResMut<TerrainPatchRenderIndex>,
     mut render_query: Query<(&TerrainPatchRenderState, &mut Transform, &mut Visibility)>,
@@ -490,14 +488,12 @@ fn reveal_cached_patch_mesh_system(
         };
         if let Ok((state, mut transform, mut visibility)) = render_query.get_mut(entity) {
             if let Ok(planet) = planet_query.get(state.planet_entity) {
-                update_patch_transform(
-                    &mut transform,
-                    state,
-                    &planet.domain_planet,
-                    &sim_time,
-                    time.overstep_fraction() as f64,
-                    render_origin.origin,
-                );
+                let Some(orientation) =
+                    ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+                else {
+                    continue;
+                };
+                update_patch_transform(&mut transform, state, orientation, render_origin.origin);
             }
             *visibility = Visibility::Visible;
         } else {
@@ -652,13 +648,11 @@ pub fn recenter_render_origin(
 /// Cached meshes are refreshed immediately before reveal, avoiding transform
 /// writes for geometry that is not currently rendered.
 fn update_patch_transforms(
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     render_origin: Res<RenderOrigin>,
-    time: Res<Time<Fixed>>,
     planet_query: Query<&PlanetComponent>,
     mut patch_query: Query<(&TerrainPatchRenderState, &mut Transform, &Visibility)>,
 ) {
-    let alpha = time.overstep_fraction() as f64;
     for (state, mut transform, visibility) in patch_query.iter_mut() {
         if *visibility == Visibility::Hidden {
             continue;
@@ -666,26 +660,22 @@ fn update_patch_transforms(
         let Ok(planet) = planet_query.get(state.planet_entity) else {
             continue;
         };
-        update_patch_transform(
-            &mut transform,
-            state,
-            &planet.domain_planet,
-            &sim_time,
-            alpha,
-            render_origin.origin,
-        );
+        let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
+        update_patch_transform(&mut transform, state, orientation, render_origin.origin);
     }
 }
 
 fn update_patch_transform(
     transform: &mut Transform,
     state: &TerrainPatchRenderState,
-    planet: &Planet,
-    sim_time: &SimulationTime,
-    alpha: f64,
+    orientation: &BodyOrientation,
     render_origin: DVec3,
 ) {
-    let body_to_inertial = interpolated_body_to_inertial_rotation(planet, sim_time, alpha);
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
     let (rotation, translation) = patch_transform_components(
         state.body_to_inertial_at_spawn,
         state.render_origin_at_spawn,
@@ -694,18 +684,6 @@ fn update_patch_transform(
     );
     transform.rotation = rotation.as_quat();
     transform.translation = translation.as_vec3();
-}
-
-/// Match the previous/current fixed-step body poses used by rocket presentation.
-fn interpolated_body_to_inertial_rotation(
-    planet: &Planet,
-    sim_time: &SimulationTime,
-    alpha: f64,
-) -> DQuat {
-    let previous_time_s = (sim_time.sim_time_s - sim_time.fixed_timestep()).max(0.0);
-    let previous = body_fixed_to_inertial_rotation(planet, previous_time_s / 86_400.0);
-    let current = body_fixed_to_inertial_rotation(planet, sim_time.sim_time_s / 86_400.0);
-    previous.slerp(current, alpha)
 }
 
 /// Return the presentation-only transform taking a baked terrain patch into the
@@ -740,6 +718,8 @@ mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::{build_patch_geometry, CubeFace};
     use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::services::reference_frames::catalog_body_fixed_to_inertial_rotation;
+    use crate::domain::services::simulation_time::SimulationTime;
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
 
@@ -825,14 +805,14 @@ mod tests {
         let mut sim_time = SimulationTime::new(0.25);
         sim_time.sim_time_s = 12_345.0;
         let surface_position_m = DVec3::new(earth.radius_km as f64 * 1_000.0, 0.0, 0.0);
-        let body_to_inertial_at_spawn = body_fixed_to_inertial_rotation(&earth, 0.1);
+        let body_to_inertial_at_spawn = catalog_body_fixed_to_inertial_rotation(&earth, 0.1);
         let render_origin_at_spawn = DVec3::new(100.0, -200.0, 300.0);
         let current_body_to_inertial =
-            body_fixed_to_inertial_rotation(&earth, sim_time.sim_time_s / 86_400.0);
+            catalog_body_fixed_to_inertial_rotation(&earth, sim_time.sim_time_s / 86_400.0);
         let render_origin = current_body_to_inertial * surface_position_m;
 
-        for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let body_to_inertial = interpolated_body_to_inertial_rotation(&earth, &sim_time, alpha);
+        for _alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let body_to_inertial = current_body_to_inertial;
             let terrain_position = terrain_position_in_render_frame(
                 surface_position_m,
                 body_to_inertial_at_spawn,
@@ -844,7 +824,7 @@ mod tests {
 
             assert!(
                 terrain_position.distance(rocket_position) < 1e-7,
-                "terrain diverged from a surface-fixed rocket at alpha {alpha}"
+                "terrain diverged from a surface-fixed rocket"
             );
         }
     }
@@ -855,7 +835,8 @@ mod tests {
         let mut sim_time = SimulationTime::new(0.25);
         sim_time.sim_time_s = 12_345.0;
         let alpha = 0.5;
-        let body_to_inertial = interpolated_body_to_inertial_rotation(&earth, &sim_time, alpha);
+        let body_to_inertial =
+            catalog_body_fixed_to_inertial_rotation(&earth, sim_time.sim_time_s / 86_400.0);
         let surface_position_m = DVec3::new(0.0, earth.radius_km as f64 * 1_000.0, 0.0);
         let render_origin = DVec3::new(10.0, 20.0, 30.0);
 
@@ -882,8 +863,8 @@ mod tests {
     #[test]
     fn vegetation_offsets_follow_the_same_body_rotation_as_terrain() {
         let earth = PlanetFactory::create_by_name("Earth").unwrap();
-        let body_to_inertial_at_spawn = body_fixed_to_inertial_rotation(&earth, 0.1);
-        let body_to_inertial = body_fixed_to_inertial_rotation(&earth, 0.6);
+        let body_to_inertial_at_spawn = catalog_body_fixed_to_inertial_rotation(&earth, 0.1);
+        let body_to_inertial = catalog_body_fixed_to_inertial_rotation(&earth, 0.6);
         let render_origin_at_spawn = DVec3::new(100.0, -200.0, 300.0);
         let render_origin = DVec3::new(-400.0, 500.0, -600.0);
         let anchor_body_fixed_m = DVec3::new(earth.radius_km as f64 * 1_000.0, 0.0, 0.0);
@@ -946,6 +927,7 @@ mod tests {
     fn cached_patch_reuses_its_render_entity_when_republished() {
         let mut app = App::new();
         app.insert_resource(SimulationTime::default())
+            .init_resource::<EphemerisSnapshot>()
             .insert_resource(RenderOrigin::default())
             .insert_resource(Time::<Fixed>::default())
             .insert_resource(TerrainStreamingResource::default())

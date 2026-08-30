@@ -1,12 +1,14 @@
 use crate::domain::services::{physics, planet_factory::PlanetFactory};
+use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::CameraController;
 use crate::infrastructure::bevy_adapters::craft_components::*;
 use crate::infrastructure::bevy_adapters::craft_ui::*;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::planet_systems::solar_map_position_from_snapshot;
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::gltf::Gltf;
-use bevy::math::DVec3;
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 
@@ -14,10 +16,11 @@ pub fn spawn_craft(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut solar_camera_query: Query<&mut Camera, With<CameraController>>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
     let gltf_handle: Handle<Gltf> =
         asset_server.load("models/ufo_flying_saucer_spaceship_ovni.glb");
-    let spawn_position = craft_spawn_position();
+    let spawn_position = craft_spawn_position(&ephemeris_snapshot);
     commands.insert_resource(CraftModelLoad {
         gltf_handle,
         done: false,
@@ -237,14 +240,16 @@ pub fn spawn_craft_model(
         });
 }
 
-fn craft_spawn_position() -> Vec3 {
+fn craft_spawn_position(ephemeris_snapshot: &EphemerisSnapshot) -> Vec3 {
     let solar_params = SolarSystemParameters::for_visualization();
     let Some(earth) = PlanetFactory::create_by_name("Earth") else {
         return Vec3::new(0.0, 5.0, 0.0);
     };
 
+    let physical_scale = PhysicalScale::from_solar_parameters(&solar_params);
     let earth_position =
-        physics::calculate_planet_position_f64(&earth, 0.0, &solar_params, DVec3::ZERO, None)
+        solar_map_position_from_snapshot(ephemeris_snapshot, "Earth", &physical_scale)
+            .unwrap_or_else(|| panic!("missing DE440 Earth state while spawning the craft"))
             .as_vec3();
     let earth_radius = physics::calculate_visual_radius(&earth, &solar_params);
 

@@ -6,17 +6,22 @@
 
 use anise::constants::frames::SSB_J2000;
 use anise::frames::Frame;
+use anise::naif::kpl::parser::convert_tpc;
 use anise::prelude::Almanac;
 use anise::time::Epoch;
-use bevy::math::DVec3;
+use bevy::math::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domain::services::body_orientation::BodyOrientation;
+
 pub const J2000_JULIAN_DATE_TDB: f64 = 2_451_545.0;
 const KILOMETERS_TO_METERS: f64 = 1_000.0;
+const KILOMETERS_CUBED_TO_METERS_CUBED: f64 =
+    KILOMETERS_TO_METERS * KILOMETERS_TO_METERS * KILOMETERS_TO_METERS;
 
 /// A NAIF celestial-body identifier used by the ephemeris contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -37,23 +42,61 @@ impl NaifBodyId {
     pub const EARTH: Self = Self(399);
     pub const MOON: Self = Self(301);
 
+    /// Catalog bodies whose translations are available from the provisioned
+    /// DE440s authority. Other catalog moons remain explicit approximations
+    /// until their required satellite kernels are added to the manifest.
+    pub const KERNEL_BACKED_CATALOG_BODIES: [(&str, Self); 10] = [
+        ("Sun", Self::SUN),
+        ("Mercury", Self::MERCURY_BARYCENTER),
+        ("Venus", Self::VENUS_BARYCENTER),
+        ("Earth", Self::EARTH),
+        ("Mars", Self::MARS_BARYCENTER),
+        ("Jupiter", Self::JUPITER_BARYCENTER),
+        ("Saturn", Self::SATURN_BARYCENTER),
+        ("Uranus", Self::URANUS_BARYCENTER),
+        ("Neptune", Self::NEPTUNE_BARYCENTER),
+        ("Moon", Self::MOON),
+    ];
+
+    /// Iterate the translation targets for every kernel-backed catalog body.
+    pub fn kernel_backed_catalog_targets() -> impl Iterator<Item = Self> {
+        Self::KERNEL_BACKED_CATALOG_BODIES
+            .into_iter()
+            .map(|(_, target)| target)
+    }
+
+    /// Maps translation targets to the physical body's IAU orientation target.
+    /// Major-planet translations use barycenters while PCK orientation uses the
+    /// body's conventional NAIF identifier.
+    pub const fn orientation_target(self) -> Option<Self> {
+        let target = match self {
+            Self::MERCURY_BARYCENTER => Self(199),
+            Self::VENUS_BARYCENTER => Self(299),
+            Self::MARS_BARYCENTER => Self(499),
+            Self::JUPITER_BARYCENTER => Self(599),
+            Self::SATURN_BARYCENTER => Self(699),
+            Self::URANUS_BARYCENTER => Self(799),
+            Self::NEPTUNE_BARYCENTER => Self(899),
+            Self::PLUTO_BARYCENTER => Self(999),
+            Self::SUN | Self::EARTH | Self::MOON => self,
+            _ => return None,
+        };
+        Some(target)
+    }
+
+    /// The physical body's NAIF identifier used by `gm_de440.tpc`. Translation
+    /// barycenters intentionally map to their corresponding physical bodies.
+    pub const fn gravitational_parameter_target(self) -> Option<Self> {
+        self.orientation_target()
+    }
+
     /// Map the current celestial catalog's kernel-backed bodies to their NAIF
     /// identifiers. Unmapped catalog moons remain presentation-only until
     /// their required kernel coverage is added to the curated manifest.
     pub fn for_catalog_name(name: &str) -> Option<Self> {
-        match name {
-            "Sun" => Some(Self::SUN),
-            "Mercury" => Some(Self::MERCURY_BARYCENTER),
-            "Venus" => Some(Self::VENUS_BARYCENTER),
-            "Earth" => Some(Self::EARTH),
-            "Mars" => Some(Self::MARS_BARYCENTER),
-            "Jupiter" => Some(Self::JUPITER_BARYCENTER),
-            "Saturn" => Some(Self::SATURN_BARYCENTER),
-            "Uranus" => Some(Self::URANUS_BARYCENTER),
-            "Neptune" => Some(Self::NEPTUNE_BARYCENTER),
-            "Moon" => Some(Self::MOON),
-            _ => None,
-        }
+        Self::KERNEL_BACKED_CATALOG_BODIES
+            .iter()
+            .find_map(|(catalog_name, target)| (*catalog_name == name).then_some(*target))
     }
 
     pub const fn new(value: i32) -> Self {
@@ -150,6 +193,8 @@ pub struct KernelManifest {
     pub kernel_root: PathBuf,
     pub coverage: KernelCoverage,
     pub kernels: Vec<KernelFile>,
+    #[serde(default)]
+    pub unavailable_roles: Vec<ScientificDatasetRole>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -173,10 +218,36 @@ impl KernelCoverage {
 #[derive(Clone, Debug, Deserialize)]
 pub struct KernelFile {
     pub file_name: String,
+    pub role: ScientificDatasetRole,
     pub kind: KernelKind,
     pub sha256: String,
     pub expected_size_bytes: u64,
     pub source_url: String,
+    pub coverage: Option<ScientificDatasetCoverage>,
+    pub frame: ScientificDatasetFrame,
+    pub time_scale: ScientificDatasetTimeScale,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash)]
+pub enum ScientificDatasetRole {
+    Translation,
+    LeapSeconds,
+    Orientation,
+    GravitationalParameters,
+    EarthOrientation,
+}
+
+impl fmt::Display for ScientificDatasetRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let role = match self {
+            Self::Translation => "translation",
+            Self::LeapSeconds => "leap-second",
+            Self::Orientation => "orientation",
+            Self::GravitationalParameters => "gravitational-parameter",
+            Self::EarthOrientation => "Earth-orientation",
+        };
+        formatter.write_str(role)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -184,6 +255,80 @@ pub enum KernelKind {
     Spk,
     TextPck,
     LeapSeconds,
+    EarthOrientation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub struct ScientificDatasetCoverage {
+    pub start_julian_date: f64,
+    pub end_julian_date: f64,
+}
+
+impl ScientificDatasetCoverage {
+    fn is_valid(self) -> bool {
+        self.start_julian_date.is_finite()
+            && self.end_julian_date.is_finite()
+            && self.start_julian_date <= self.end_julian_date
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub enum ScientificDatasetFrame {
+    SsbIcrfJ2000,
+    IauBodyFixed,
+    EarthFixed,
+    NotApplicable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub enum ScientificDatasetTimeScale {
+    Tdb,
+    Utc,
+    Tai,
+    Tt,
+    Ut1,
+    NotApplicable,
+}
+
+impl KernelFile {
+    fn metadata_is_valid(&self) -> bool {
+        if self.coverage.is_some_and(|coverage| !coverage.is_valid()) {
+            return false;
+        }
+
+        match self.role {
+            ScientificDatasetRole::Translation => {
+                self.kind == KernelKind::Spk
+                    && self.coverage.is_some()
+                    && self.frame == ScientificDatasetFrame::SsbIcrfJ2000
+                    && self.time_scale == ScientificDatasetTimeScale::Tdb
+            }
+            ScientificDatasetRole::LeapSeconds => {
+                self.kind == KernelKind::LeapSeconds
+                    && self.coverage.is_some()
+                    && self.frame == ScientificDatasetFrame::NotApplicable
+                    && self.time_scale == ScientificDatasetTimeScale::Utc
+            }
+            ScientificDatasetRole::Orientation => {
+                self.kind == KernelKind::TextPck
+                    && self.coverage.is_some()
+                    && self.frame == ScientificDatasetFrame::IauBodyFixed
+                    && self.time_scale == ScientificDatasetTimeScale::Tdb
+            }
+            ScientificDatasetRole::GravitationalParameters => {
+                self.kind == KernelKind::TextPck
+                    && self.coverage.is_none()
+                    && self.frame == ScientificDatasetFrame::NotApplicable
+                    && self.time_scale == ScientificDatasetTimeScale::NotApplicable
+            }
+            ScientificDatasetRole::EarthOrientation => {
+                self.kind == KernelKind::EarthOrientation
+                    && self.coverage.is_some()
+                    && self.frame == ScientificDatasetFrame::EarthFixed
+                    && self.time_scale == ScientificDatasetTimeScale::Ut1
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -192,14 +337,65 @@ pub struct KernelProvenance {
     pub manifest_path: PathBuf,
     pub coverage: KernelCoverage,
     pub validated_kernels: Vec<ValidatedKernel>,
+    pub unavailable_roles: Vec<ScientificDatasetRole>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl KernelProvenance {
+    pub fn dataset_statuses_at_tdb(&self, epoch: TdbEpoch) -> Vec<ScientificDatasetStatus> {
+        let mut statuses: Vec<_> = self
+            .validated_kernels
+            .iter()
+            .map(|dataset| ScientificDatasetStatus {
+                role: dataset.role,
+                file_name: Some(dataset.file_name.clone()),
+                availability: match (dataset.time_scale, dataset.coverage) {
+                    (ScientificDatasetTimeScale::Tdb, Some(coverage))
+                        if !(coverage.start_julian_date..=coverage.end_julian_date)
+                            .contains(&epoch.julian_date()) =>
+                    {
+                        ScientificDatasetAvailability::OutOfCoverage
+                    }
+                    _ => ScientificDatasetAvailability::Validated,
+                },
+            })
+            .collect();
+        statuses.extend(self.unavailable_roles.iter().copied().map(|role| {
+            ScientificDatasetStatus {
+                role,
+                file_name: None,
+                availability: ScientificDatasetAvailability::Unavailable,
+            }
+        }));
+        statuses
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScientificDatasetAvailability {
+    Validated,
+    Unavailable,
+    OutOfCoverage,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScientificDatasetStatus {
+    pub role: ScientificDatasetRole,
+    pub file_name: Option<String>,
+    pub availability: ScientificDatasetAvailability,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedKernel {
     pub file_name: String,
+    pub role: ScientificDatasetRole,
     pub kind: KernelKind,
     pub sha256: String,
     pub path: PathBuf,
+    pub expected_size_bytes: u64,
+    pub source_url: String,
+    pub coverage: Option<ScientificDatasetCoverage>,
+    pub frame: ScientificDatasetFrame,
+    pub time_scale: ScientificDatasetTimeScale,
 }
 
 /// Immutable evaluator loaded from one validated local manifest.
@@ -220,10 +416,34 @@ impl SpiceEphemeris {
                 almanac = almanac
                     .load(kernel.path.to_string_lossy().as_ref())
                     .map_err(|error| EphemerisError::KernelLoad {
+                        role: kernel.role,
                         path: kernel.path.clone(),
                         message: error.to_string(),
                     })?;
             }
+        }
+
+        match (
+            provenance
+                .validated_kernels
+                .iter()
+                .find(|kernel| kernel.role == ScientificDatasetRole::Orientation),
+            provenance
+                .validated_kernels
+                .iter()
+                .find(|kernel| kernel.role == ScientificDatasetRole::GravitationalParameters),
+        ) {
+            (Some(orientation), Some(gravitational_parameters)) => {
+                let planetary_data = convert_tpc(&orientation.path, &gravitational_parameters.path)
+                    .map_err(|error| EphemerisError::KernelLoad {
+                        role: ScientificDatasetRole::Orientation,
+                        path: orientation.path.clone(),
+                        message: error.to_string(),
+                    })?;
+                almanac = almanac.with_planetary_data(planetary_data);
+            }
+            (None, None) => {}
+            _ => return Err(EphemerisError::IncompleteOrientationDatasets),
         }
 
         Ok(Self {
@@ -281,6 +501,98 @@ impl SpiceEphemeris {
             ],
         )
     }
+
+    /// Evaluate an IAU body-fixed orientation from the validated local PCK at
+    /// one TDB epoch. There is no catalog fallback on this scientific path.
+    pub fn orientation(
+        &self,
+        target: NaifBodyId,
+        epoch: TdbEpoch,
+    ) -> Result<BodyOrientation, EphemerisError> {
+        if !self.provenance.coverage.contains(epoch) {
+            return Err(EphemerisError::EpochOutsideCoverage {
+                epoch,
+                coverage: self.provenance.coverage,
+            });
+        }
+        let orientation_dataset = self
+            .provenance
+            .validated_kernels
+            .iter()
+            .find(|kernel| kernel.role == ScientificDatasetRole::Orientation)
+            .ok_or(EphemerisError::OrientationUnavailable)?;
+        let orientation_target = target
+            .orientation_target()
+            .ok_or(EphemerisError::OrientationUnsupportedBody { target })?;
+        let inertial = Frame::from_ephem_j2000(orientation_target.value());
+        let body_fixed = Frame::new(orientation_target.value(), orientation_target.value());
+        let dcm = self
+            .almanac
+            .rotate(inertial, body_fixed, epoch.anise_epoch())
+            .map_err(|error| EphemerisError::OrientationEvaluation {
+                target,
+                epoch,
+                message: error.to_string(),
+            })?;
+        let angular_velocity = self
+            .almanac
+            .angular_velocity_wrt_j2000_rad_s(body_fixed, epoch.anise_epoch())
+            .map_err(|error| EphemerisError::OrientationEvaluation {
+                target,
+                epoch,
+                message: error.to_string(),
+            })?;
+        let matrix = dcm.rot_mat;
+        let inertial_to_body_fixed = DQuat::from_mat3(&DMat3::from_cols(
+            DVec3::new(matrix[(0, 0)], matrix[(1, 0)], matrix[(2, 0)]),
+            DVec3::new(matrix[(0, 1)], matrix[(1, 1)], matrix[(2, 1)]),
+            DVec3::new(matrix[(0, 2)], matrix[(1, 2)], matrix[(2, 2)]),
+        ));
+
+        Ok(BodyOrientation::from_kernel(
+            target,
+            epoch,
+            format!(
+                "{}:{}#{}",
+                self.provenance.manifest_id,
+                orientation_dataset.file_name,
+                orientation_dataset.sha256
+            ),
+            inertial_to_body_fixed,
+            DVec3::new(angular_velocity.x, angular_velocity.y, angular_velocity.z),
+        ))
+    }
+
+    /// Return a validated `gm_de440.tpc` standard gravitational parameter in
+    /// SI m³/s². Unlike catalog mass times a universal G, this is the exact
+    /// body constant supplied by the active scientific dataset.
+    pub fn gravitational_parameter_m3_s2(&self, target: NaifBodyId) -> Result<f64, EphemerisError> {
+        let gm_dataset = self
+            .provenance
+            .validated_kernels
+            .iter()
+            .find(|kernel| kernel.role == ScientificDatasetRole::GravitationalParameters)
+            .ok_or(EphemerisError::GravitationalParametersUnavailable)?;
+        let physical_target = target
+            .gravitational_parameter_target()
+            .ok_or(EphemerisError::GravitationalParametersUnsupportedBody { target })?;
+        let planetary_data = self
+            .almanac
+            .get_planetary_data_from_id(physical_target.value())
+            .map_err(|error| EphemerisError::GravitationalParameterEvaluation {
+                target,
+                message: error.to_string(),
+            })?;
+        let mu_m3_s2 = planetary_data.mu_km3_s2 * KILOMETERS_CUBED_TO_METERS_CUBED;
+        if !mu_m3_s2.is_finite() || mu_m3_s2 <= 0.0 {
+            return Err(EphemerisError::InvalidGravitationalParameter {
+                target,
+                file_name: gm_dataset.file_name.clone(),
+                value_m3_s2: mu_m3_s2,
+            });
+        }
+        Ok(mu_m3_s2)
+    }
 }
 
 pub fn load_manifest(manifest_path: impl AsRef<Path>) -> Result<KernelManifest, EphemerisError> {
@@ -296,13 +608,51 @@ pub fn load_manifest(manifest_path: impl AsRef<Path>) -> Result<KernelManifest, 
             message: error.to_string(),
         }
     })?;
-    if manifest.id.trim().is_empty() || !manifest.coverage.is_valid() || manifest.kernels.is_empty()
-    {
+    if !manifest_is_valid(&manifest) {
         return Err(EphemerisError::InvalidManifest {
             path: manifest_path.to_path_buf(),
         });
     }
     Ok(manifest)
+}
+
+fn manifest_is_valid(manifest: &KernelManifest) -> bool {
+    if manifest.id.trim().is_empty() || !manifest.coverage.is_valid() || manifest.kernels.is_empty()
+    {
+        return false;
+    }
+
+    let Some(translation_dataset) = manifest
+        .kernels
+        .iter()
+        .find(|dataset| dataset.role == ScientificDatasetRole::Translation)
+    else {
+        return false;
+    };
+    let Some(translation_coverage) = translation_dataset.coverage else {
+        return false;
+    };
+    if translation_coverage.start_julian_date != manifest.coverage.start_julian_date_tdb
+        || translation_coverage.end_julian_date != manifest.coverage.end_julian_date_tdb
+    {
+        return false;
+    }
+
+    let mut roles = std::collections::HashSet::with_capacity(
+        manifest.kernels.len() + manifest.unavailable_roles.len(),
+    );
+    if !manifest
+        .kernels
+        .iter()
+        .all(|dataset| roles.insert(dataset.role) && dataset.metadata_is_valid())
+    {
+        return false;
+    }
+
+    manifest
+        .unavailable_roles
+        .iter()
+        .all(|role| *role != ScientificDatasetRole::Translation && roles.insert(*role))
 }
 
 pub fn validate_manifest(
@@ -324,6 +674,7 @@ pub fn validate_manifest(
             || kernel.sha256.len() != 64
             || !kernel.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
             || kernel.source_url.trim().is_empty()
+            || !kernel.metadata_is_valid()
         {
             return Err(EphemerisError::InvalidManifest {
                 path: manifest_path.to_path_buf(),
@@ -331,11 +682,13 @@ pub fn validate_manifest(
         }
         let path = kernel_root.join(&kernel.file_name);
         let bytes = fs::read(&path).map_err(|source| EphemerisError::KernelRead {
+            role: kernel.role,
             path: path.clone(),
             source,
         })?;
         if bytes.len() as u64 != kernel.expected_size_bytes {
             return Err(EphemerisError::KernelSize {
+                role: kernel.role,
                 path,
                 expected: kernel.expected_size_bytes,
                 actual: bytes.len() as u64,
@@ -344,6 +697,7 @@ pub fn validate_manifest(
         let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
         if actual_sha256 != kernel.sha256 {
             return Err(EphemerisError::KernelChecksum {
+                role: kernel.role,
                 path,
                 expected: kernel.sha256.clone(),
                 actual: actual_sha256,
@@ -351,9 +705,15 @@ pub fn validate_manifest(
         }
         validated_kernels.push(ValidatedKernel {
             file_name: kernel.file_name.clone(),
+            role: kernel.role,
             kind: kernel.kind,
             sha256: kernel.sha256.clone(),
             path,
+            expected_size_bytes: kernel.expected_size_bytes,
+            source_url: kernel.source_url.clone(),
+            coverage: kernel.coverage,
+            frame: kernel.frame,
+            time_scale: kernel.time_scale,
         });
     }
 
@@ -362,6 +722,7 @@ pub fn validate_manifest(
         manifest_path: manifest_path.to_path_buf(),
         coverage: manifest.coverage,
         validated_kernels,
+        unavailable_roles: manifest.unavailable_roles.clone(),
     })
 }
 
@@ -380,21 +741,48 @@ pub enum EphemerisError {
         message: String,
     },
     KernelRead {
+        role: ScientificDatasetRole,
         path: PathBuf,
         source: std::io::Error,
     },
     KernelSize {
+        role: ScientificDatasetRole,
         path: PathBuf,
         expected: u64,
         actual: u64,
     },
     KernelChecksum {
+        role: ScientificDatasetRole,
         path: PathBuf,
         expected: String,
         actual: String,
     },
     KernelLoad {
+        role: ScientificDatasetRole,
         path: PathBuf,
+        message: String,
+    },
+    IncompleteOrientationDatasets,
+    OrientationUnavailable,
+    GravitationalParametersUnavailable,
+    GravitationalParametersUnsupportedBody {
+        target: NaifBodyId,
+    },
+    GravitationalParameterEvaluation {
+        target: NaifBodyId,
+        message: String,
+    },
+    InvalidGravitationalParameter {
+        target: NaifBodyId,
+        file_name: String,
+        value_m3_s2: f64,
+    },
+    OrientationUnsupportedBody {
+        target: NaifBodyId,
+    },
+    OrientationEvaluation {
+        target: NaifBodyId,
+        epoch: TdbEpoch,
         message: String,
     },
     EpochOutsideCoverage {
@@ -434,34 +822,85 @@ impl fmt::Display for EphemerisError {
                     path.display()
                 )
             }
-            Self::KernelRead { path, source } => {
-                write!(formatter, "cannot read kernel {}: {source}", path.display())
-            }
-            Self::KernelSize {
-                path,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "kernel {} has {actual} bytes; expected {expected}",
-                path.display()
-            ),
-            Self::KernelChecksum {
-                path,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "kernel {} checksum mismatch: expected {expected}, got {actual}",
-                path.display()
-            ),
-            Self::KernelLoad { path, message } => {
+            Self::KernelRead { role, path, source } => {
                 write!(
                     formatter,
-                    "cannot load kernel {}: {message}",
+                    "cannot read {role} dataset {}: {source}",
                     path.display()
                 )
             }
+            Self::KernelSize {
+                role,
+                path,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "{role} dataset {} has {actual} bytes; expected {expected}",
+                path.display()
+            ),
+            Self::KernelChecksum {
+                role,
+                path,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "{role} dataset {} checksum mismatch: expected {expected}, got {actual}",
+                path.display()
+            ),
+            Self::KernelLoad {
+                role,
+                path,
+                message,
+            } => {
+                write!(
+                    formatter,
+                    "cannot load {role} dataset {}: {message}",
+                    path.display()
+                )
+            }
+            Self::IncompleteOrientationDatasets => formatter.write_str(
+                "orientation requires both validated orientation and gravitational-parameter datasets",
+            ),
+            Self::OrientationUnavailable => {
+                formatter.write_str("no validated orientation dataset is configured")
+            }
+            Self::GravitationalParametersUnavailable => {
+                formatter.write_str("no validated gravitational-parameter dataset is configured")
+            }
+            Self::GravitationalParametersUnsupportedBody { target } => write!(
+                formatter,
+                "no gravitational-parameter mapping for NAIF {}",
+                target.value()
+            ),
+            Self::GravitationalParameterEvaluation { target, message } => write!(
+                formatter,
+                "cannot evaluate gravitational parameter for NAIF {}: {message}",
+                target.value()
+            ),
+            Self::InvalidGravitationalParameter {
+                target,
+                file_name,
+                value_m3_s2,
+            } => write!(
+                formatter,
+                "gravitational-parameter dataset {file_name} has invalid mu {value_m3_s2} m^3/s^2 for NAIF {}",
+                target.value()
+            ),
+            Self::OrientationUnsupportedBody { target } => {
+                write!(formatter, "no IAU orientation mapping for NAIF {}", target.value())
+            }
+            Self::OrientationEvaluation {
+                target,
+                epoch,
+                message,
+            } => write!(
+                formatter,
+                "cannot evaluate IAU orientation for NAIF {} at TDB JD {}: {message}",
+                target.value(),
+                epoch.julian_date()
+            ),
             Self::EpochOutsideCoverage { epoch, coverage } => write!(
                 formatter,
                 "TDB JD {} is outside kernel coverage {}..={}",
@@ -496,6 +935,9 @@ impl std::error::Error for EphemerisError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::body_orientation::{
+        OrientationBodyFixedFrame, OrientationDataSource, OrientationInertialFrame,
+    };
 
     fn fixture_manifest(kernel_root: &str, sha256: &str) -> String {
         format!(
@@ -508,10 +950,17 @@ mod tests {
                 ),
                 kernels: [(
                     file_name: "fixture.bsp",
+                    role: Translation,
                     kind: Spk,
                     sha256: "{sha256}",
                     expected_size_bytes: 3,
                     source_url: "https://example.invalid/fixture.bsp",
+                    coverage: Some((
+                        start_julian_date: 2451545.0,
+                        end_julian_date: 2451546.0,
+                    )),
+                    frame: SsbIcrfJ2000,
+                    time_scale: Tdb,
                 )],
             )"#
         )
@@ -553,6 +1002,47 @@ mod tests {
     }
 
     #[test]
+    fn manifest_retains_typed_dataset_provenance() {
+        let manifest = ron::from_str::<KernelManifest>(&fixture_manifest(
+            "kernels",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ))
+        .unwrap();
+
+        assert_eq!(manifest.kernels.len(), 1);
+        let dataset = &manifest.kernels[0];
+        assert_eq!(dataset.role, ScientificDatasetRole::Translation);
+        assert_eq!(dataset.kind, KernelKind::Spk);
+        assert_eq!(
+            dataset.coverage,
+            Some(ScientificDatasetCoverage {
+                start_julian_date: J2000_JULIAN_DATE_TDB,
+                end_julian_date: J2000_JULIAN_DATE_TDB + 1.0,
+            })
+        );
+        assert_eq!(dataset.frame, ScientificDatasetFrame::SsbIcrfJ2000);
+        assert_eq!(dataset.time_scale, ScientificDatasetTimeScale::Tdb);
+    }
+
+    #[test]
+    fn manifest_reports_explicitly_unavailable_dataset_role() {
+        let contents = fixture_manifest(
+            "kernels",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .replace(
+            "kernels: [(",
+            "unavailable_roles: [EarthOrientation],\n                kernels: [(",
+        );
+
+        let manifest = ron::from_str::<KernelManifest>(&contents).unwrap();
+        assert_eq!(
+            manifest.unavailable_roles,
+            vec![ScientificDatasetRole::EarthOrientation]
+        );
+    }
+
+    #[test]
     fn manifest_rejects_checksum_mismatch() {
         let root = fixture_root();
         let kernel_root = root.join("kernels");
@@ -571,7 +1061,10 @@ mod tests {
         let manifest = load_manifest(&manifest_path).unwrap();
         assert!(matches!(
             validate_manifest(&manifest_path, &manifest),
-            Err(EphemerisError::KernelChecksum { .. })
+            Err(EphemerisError::KernelChecksum {
+                role: ScientificDatasetRole::Translation,
+                ..
+            })
         ));
         fs::remove_dir_all(root).unwrap();
     }
@@ -581,20 +1074,106 @@ mod tests {
         let root = fixture_root();
         fs::create_dir_all(root.join("kernels")).unwrap();
         let manifest_path = root.join("manifest.ron");
-        fs::write(
-            &manifest_path,
-            fixture_manifest(
-                "kernels",
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            ),
+        let contents = fixture_manifest(
+            "kernels",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         )
-        .unwrap();
+        .replace(
+            "kernels: [(",
+            "unavailable_roles: [EarthOrientation],\n                kernels: [(",
+        );
+        fs::write(&manifest_path, contents).unwrap();
 
         let manifest = load_manifest(&manifest_path).unwrap();
         assert!(matches!(
             validate_manifest(&manifest_path, &manifest),
-            Err(EphemerisError::KernelRead { .. })
+            Err(EphemerisError::KernelRead {
+                role: ScientificDatasetRole::Translation,
+                ..
+            })
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_rejects_missing_translation_role() {
+        let root = fixture_root();
+        fs::create_dir_all(&root).unwrap();
+        let manifest_path = root.join("manifest.ron");
+        let contents = fixture_manifest(
+            "kernels",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .replace("role: Translation", "role: Orientation")
+        .replace("kind: Spk", "kind: TextPck")
+        .replace("frame: SsbIcrfJ2000", "frame: IauBodyFixed");
+        fs::write(&manifest_path, contents).unwrap();
+
+        assert!(matches!(
+            load_manifest(&manifest_path),
+            Err(EphemerisError::InvalidManifest { .. })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_rejects_translation_coverage_mismatch() {
+        let root = fixture_root();
+        fs::create_dir_all(&root).unwrap();
+        let manifest_path = root.join("manifest.ron");
+        let contents = fixture_manifest(
+            "kernels",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .replace(
+            "end_julian_date_tdb: 2451546.0",
+            "end_julian_date_tdb: 2451547.0",
+        );
+        fs::write(&manifest_path, contents).unwrap();
+
+        assert!(matches!(
+            load_manifest(&manifest_path),
+            Err(EphemerisError::InvalidManifest { .. })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provenance_reports_out_of_coverage_tdb_datasets() {
+        let root = fixture_root();
+        let kernel_root = root.join("kernels");
+        fs::create_dir_all(&kernel_root).unwrap();
+        fs::write(kernel_root.join("fixture.bsp"), b"abc").unwrap();
+        let manifest_path = root.join("manifest.ron");
+        let contents = fixture_manifest(
+            "kernels",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .replace(
+            "kernels: [(",
+            "unavailable_roles: [EarthOrientation],\n                kernels: [(",
+        );
+        fs::write(&manifest_path, contents).unwrap();
+
+        let manifest = load_manifest(&manifest_path).unwrap();
+        let provenance = validate_manifest(&manifest_path, &manifest).unwrap();
+        assert_eq!(
+            provenance.dataset_statuses_at_tdb(
+                TdbEpoch::from_julian_date(J2000_JULIAN_DATE_TDB + 2.0).unwrap()
+            ),
+            vec![
+                ScientificDatasetStatus {
+                    role: ScientificDatasetRole::Translation,
+                    file_name: Some("fixture.bsp".to_string()),
+                    availability: ScientificDatasetAvailability::OutOfCoverage,
+                },
+                ScientificDatasetStatus {
+                    role: ScientificDatasetRole::EarthOrientation,
+                    file_name: None,
+                    availability: ScientificDatasetAvailability::Unavailable,
+                }
+            ]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -610,41 +1189,245 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires scripts/provision_de440_kernels.sh"]
-    fn de440_earth_state_matches_recorded_horizons_reference_at_j2000() {
+    fn provisioned_pck_evaluates_earth_orientation_from_the_kernel_contract() {
         let ephemeris = SpiceEphemeris::load("assets/configs/ephemeris/de440.ron").unwrap();
+        let orientation = ephemeris
+            .orientation(NaifBodyId::EARTH, TdbEpoch::j2000())
+            .unwrap();
+
+        assert_eq!(orientation.provenance.source, OrientationDataSource::Kernel);
+        assert_eq!(
+            orientation.provenance.inertial_frame,
+            OrientationInertialFrame::IcrfJ2000
+        );
+        assert_eq!(
+            orientation.provenance.body_fixed_frame,
+            OrientationBodyFixedFrame::IauBodyFixed
+        );
+        assert!(orientation.inertial_to_body_fixed.is_finite());
+        assert!(orientation.angular_velocity_inertial_rad_s.is_finite());
+    }
+
+    #[test]
+    fn provisioned_gm_evaluates_kernel_backed_body_parameters_in_si() {
+        let ephemeris = SpiceEphemeris::load("assets/configs/ephemeris/de440.ron").unwrap();
+        let earth_mu_m3_s2 = ephemeris
+            .gravitational_parameter_m3_s2(NaifBodyId::EARTH)
+            .unwrap();
+        let sun_mu_m3_s2 = ephemeris
+            .gravitational_parameter_m3_s2(NaifBodyId::SUN)
+            .unwrap();
+
+        assert!(earth_mu_m3_s2.is_finite() && earth_mu_m3_s2 > 0.0);
+        assert!(sun_mu_m3_s2 > earth_mu_m3_s2);
+    }
+
+    #[derive(Clone, Copy)]
+    struct HorizonsStateReference {
+        name: &'static str,
+        target: NaifBodyId,
+        center: NaifBodyId,
+        julian_date_tdb: f64,
+        position_km: DVec3,
+        velocity_km_s: DVec3,
+    }
+
+    // These are geometric ICRF vectors from JPL Horizons DE441, retrieved on
+    // 2026-08-30 with `EPHEM_TYPE=VECTORS`, `TIME_TYPE=TDB`, `OUT_UNITS=KM-S`,
+    // `REF_PLANE=FRAME`, and `VEC_CORR=NONE`. DE440s is the provisioned runtime
+    // authority, so the budgets cover its documented small DE440/DE441 delta,
+    // not an analytic approximation or presentation-space rounding.
+    const DE440S_DE441_POSITION_BUDGET_M: f64 = 100.0;
+    const DE440S_DE441_VELOCITY_BUDGET_MPS: f64 = 1.0e-3;
+
+    fn assert_matches_horizons_reference(
+        ephemeris: &SpiceEphemeris,
+        reference: HorizonsStateReference,
+    ) {
+        let epoch = TdbEpoch::from_julian_date(reference.julian_date_tdb).unwrap();
         let state = ephemeris
-            .state(
-                NaifBodyId::EARTH,
-                NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-                TdbEpoch::j2000(),
-            )
+            .state(reference.target, reference.center, epoch)
             .unwrap();
+        let expected_position_m = reference.position_km * KILOMETERS_TO_METERS;
+        let expected_velocity_mps = reference.velocity_km_s * KILOMETERS_TO_METERS;
+        let position_residual_m = state.position_m.distance(expected_position_m);
+        let velocity_residual_mps = state.velocity_mps.distance(expected_velocity_mps);
 
-        // JPL Horizons DE441, Earth (399) relative to SSB (0), JD TDB
-        // 2451545.0, ICRF, geometric, KM-S. Retrieved 2026-08-30 from the
-        // Horizons API; DE440s is expected to differ from DE441 slightly.
-        let horizons_position_m = DVec3::new(
-            -2.756_674_048_281_145e10,
-            1.323_613_811_535_491e11,
-            5.741_865_328_625_385e10,
+        assert!(
+            position_residual_m <= DE440S_DE441_POSITION_BUDGET_M,
+            "{} at JD TDB {}: target {} relative to {} has position residual {} m; budget {} m (Horizons DE441 geometric ICRF)",
+            reference.name,
+            reference.julian_date_tdb,
+            reference.target.value(),
+            reference.center.value(),
+            position_residual_m,
+            DE440S_DE441_POSITION_BUDGET_M,
         );
-        let horizons_velocity_mps = DVec3::new(
-            -2.978_494_749_851_088e4,
-            -5.029_753_814_928_081e3,
-            -2.180_645_069_035_755e3,
+        assert!(
+            velocity_residual_mps <= DE440S_DE441_VELOCITY_BUDGET_MPS,
+            "{} at JD TDB {}: target {} relative to {} has velocity residual {} m/s; budget {} m/s (Horizons DE441 geometric ICRF)",
+            reference.name,
+            reference.julian_date_tdb,
+            reference.target.value(),
+            reference.center.value(),
+            velocity_residual_mps,
+            DE440S_DE441_VELOCITY_BUDGET_MPS,
         );
+    }
 
-        assert!(state.position_m.distance(horizons_position_m) < 100.0);
-        assert!(state.velocity_mps.distance(horizons_velocity_mps) < 1.0e-3);
+    #[test]
+    #[ignore = "requires scripts/provision_de440_kernels.sh"]
+    fn de440_states_match_recorded_horizons_references_across_epochs() {
+        let ephemeris = SpiceEphemeris::load("assets/configs/ephemeris/de440.ron").unwrap();
+        let references = [
+            HorizonsStateReference {
+                name: "Earth/SSB at J2000",
+                target: NaifBodyId::EARTH,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                julian_date_tdb: 2_451_545.0,
+                position_km: DVec3::new(
+                    -2.756_674_048_281_145e7,
+                    1.323_613_811_535_491e8,
+                    5.741_865_328_625_385e7,
+                ),
+                velocity_km_s: DVec3::new(
+                    -2.978_494_749_851_088e1,
+                    -5.029_753_814_928_081,
+                    -2.180_645_069_035_755,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Earth/SSB at 2020-01-01 TDB",
+                target: NaifBodyId::EARTH,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                julian_date_tdb: 2_458_849.5,
+                position_km: DVec3::new(
+                    -2.545_334_341_413_143e7,
+                    1.340_372_255_727_666e8,
+                    5.810_929_286_273_248e7,
+                ),
+                velocity_km_s: DVec3::new(
+                    -2.986_338_200_299_215e1,
+                    -4.740_000_899_098_53,
+                    -2.053_804_264_578_785,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Earth/SSB at 2030-01-01 TDB",
+                target: NaifBodyId::EARTH,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                julian_date_tdb: 2_462_502.5,
+                position_km: DVec3::new(
+                    -2.592_636_728_814_095e7,
+                    1.328_867_520_755_589e8,
+                    5.760_933_037_884_695e7,
+                ),
+                velocity_km_s: DVec3::new(
+                    -2.982_040_565_319_705e1,
+                    -4.921_880_284_757_354,
+                    -2.134_418_313_712_851,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Jupiter barycenter/SSB at J2000",
+                target: NaifBodyId::JUPITER_BARYCENTER,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                julian_date_tdb: 2_451_545.0,
+                position_km: DVec3::new(
+                    5.974_998_767_925_48e8,
+                    4.089_903_139_317_586e8,
+                    1.607_562_819_387_201e8,
+                ),
+                velocity_km_s: DVec3::new(
+                    -7.900_525_116_640_771,
+                    1.017_179_630_923_791e1,
+                    4.552_467_787_262_923,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Jupiter barycenter/SSB at 2020-01-01 TDB",
+                target: NaifBodyId::JUPITER_BARYCENTER,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                julian_date_tdb: 2_458_849.5,
+                position_km: DVec3::new(
+                    7.814_211_696_278_183e7,
+                    -7.134_231_711_509_035e8,
+                    -3.077_001_434_693_068e8,
+                ),
+                velocity_km_s: DVec3::new(
+                    1.284_045_161_930_421e1,
+                    1.888_435_760_560_088,
+                    4.969_311_071_956_998e-1,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Jupiter barycenter/SSB at 2030-01-01 TDB",
+                target: NaifBodyId::JUPITER_BARYCENTER,
+                center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
+                julian_date_tdb: 2_462_502.5,
+                position_km: DVec3::new(
+                    -6.009_939_337_897_289e8,
+                    -5.056_518_667_674_727e8,
+                    -2.020_966_454_330_997e8,
+                ),
+                velocity_km_s: DVec3::new(
+                    8.616_519_447_313_426,
+                    -8.267_349_456_967_262,
+                    -3.753_346_028_507_114,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Moon/Earth at J2000",
+                target: NaifBodyId::MOON,
+                center: NaifBodyId::EARTH,
+                julian_date_tdb: 2_451_545.0,
+                position_km: DVec3::new(
+                    -2.916_083_841_877_129e5,
+                    -2.667_168_338_540_655e5,
+                    -7.610_248_730_658_794e4,
+                ),
+                velocity_km_s: DVec3::new(
+                    6.435_313_889_889_519e-1,
+                    -6.660_876_829_565_195e-1,
+                    -3.013_257_046_610_932e-1,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Moon/Earth at 2020-01-01 TDB",
+                target: NaifBodyId::MOON,
+                center: NaifBodyId::EARTH,
+                julian_date_tdb: 2_458_849.5,
+                position_km: DVec3::new(
+                    3.901_856_393_400_028e5,
+                    -7.652_259_535_377_791e4,
+                    -7.072_465_410_445_34e4,
+                ),
+                velocity_km_s: DVec3::new(
+                    2.487_277_177_505_814e-1,
+                    8.724_607_189_917_472e-1,
+                    3.400_651_264_502e-1,
+                ),
+            },
+            HorizonsStateReference {
+                name: "Moon/Earth at 2030-01-01 TDB",
+                target: NaifBodyId::MOON,
+                center: NaifBodyId::EARTH,
+                julian_date_tdb: 2_462_502.5,
+                position_km: DVec3::new(
+                    -1.930_715_952_026_768e5,
+                    -2.772_423_478_014_667e5,
+                    -1.368_828_942_977_237e5,
+                ),
+                velocity_km_s: DVec3::new(
+                    9.140_320_609_081_021e-1,
+                    -5.532_798_398_327_774e-1,
+                    -1.432_625_780_408_247e-1,
+                ),
+            },
+        ];
 
-        let repeated = ephemeris
-            .state(
-                NaifBodyId::EARTH,
-                NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
-                TdbEpoch::j2000(),
-            )
-            .unwrap();
-        assert_eq!(state, repeated);
+        for reference in references {
+            assert_matches_horizons_reference(&ephemeris, reference);
+        }
     }
 }

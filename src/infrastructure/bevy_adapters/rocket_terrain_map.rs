@@ -9,11 +9,13 @@ use crate::components::rocket::{
     GroundRest, RocketAutopilot, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
     TerrainCollisionState,
 };
-use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
-use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::services::reference_frames::{
+    catalog_body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
+};
 use crate::domain::services::terrain_source::{surface_appearance, TerrainSource};
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_orbit::{
     update_orbit_prediction_cache, OrbitPrediction, OrbitPredictionCache,
 };
@@ -345,7 +347,7 @@ fn spawn_track_segment(
 
 #[allow(clippy::type_complexity)]
 fn update_terrain_map_panel(
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     real_time: Res<Time>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     rocket_query: Query<(
@@ -377,9 +379,10 @@ fn update_terrain_map_panel(
         return;
     };
     let body_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
-    let to_map = |position_m: DVec3, at_time_s: f64| {
-        let position_bf =
-            planet_inertial_to_body_fixed(position_m, &planet.domain_planet, at_time_s / 86_400.0);
+    let to_map = |position_m: DVec3| {
+        let orientation =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)?;
+        let position_bf = planet_inertial_to_body_fixed(position_m, orientation);
         let direction = position_bf.normalize_or_zero();
         if direction.length_squared() <= 1e-12 {
             return None;
@@ -389,7 +392,7 @@ fn update_terrain_map_panel(
         equirectangular_point(latitude_deg, longitude_deg, MAP_WIDTH_PX, MAP_HEIGHT_PX)
             .map(|point| (point, latitude_deg))
     };
-    let current = to_map(rocket.dynamics.position_m, sim_time.sim_time_s).map(|point| point.0);
+    let current = to_map(rocket.dynamics.position_m).map(|point| point.0);
     let launch = equirectangular_point(
         launch_site.latitude_deg as f64,
         launch_site.longitude_deg as f64,
@@ -397,7 +400,7 @@ fn update_terrain_map_panel(
         MAP_HEIGHT_PX,
     );
     let target = (autopilot.target_landing_position_m.length_squared() > 1.0)
-        .then(|| to_map(autopilot.target_landing_position_m, sim_time.sim_time_s))
+        .then(|| to_map(autopilot.target_landing_position_m))
         .flatten();
     if !terrain_map_update_due(&update_state, real_time.elapsed_secs()) {
         return;
@@ -447,7 +450,7 @@ fn update_terrain_map_panel(
 
     let prediction = prediction_cache.prediction();
     let impact = predicted_impact(&prediction, body_radius_m)
-        .and_then(|position| to_map(position, sim_time.sim_time_s).map(|point| point.0));
+        .and_then(|position| to_map(position).map(|point| point.0));
     let history = history_track(recorder, &planet.domain_planet);
     let predicted = prediction_track(
         prediction,
@@ -525,8 +528,12 @@ fn map_recorded_entry(
     entry: &FlightLogEntry,
     planet: &crate::domain::entities::planet::Planet,
 ) -> Option<TerrainMapPoint> {
-    let position_bf =
-        planet_inertial_to_body_fixed(entry.position_m, planet, entry.time_s / 86_400.0);
+    // Historical points have no matching snapshot orientation. This map is
+    // presentation-only, so it retains the labelled catalog approximation
+    // rather than performing per-sample kernel evaluation.
+    let position_bf = catalog_body_fixed_to_inertial_rotation(planet, entry.time_s / 86_400.0)
+        .inverse()
+        * entry.position_m;
     let direction = position_bf.normalize_or_zero();
     (direction.length_squared() > 1e-12)
         .then(|| {
@@ -545,16 +552,19 @@ fn prediction_track(
     planet: &crate::domain::entities::planet::Planet,
     start_time_s: f64,
 ) -> Vec<TerrainMapPoint> {
+    // Future predicted points likewise have no shared snapshot orientation;
+    // this non-authoritative overlay must not query kernels independently.
     prediction
         .planet_frame_points
         .iter()
         .zip(&prediction.planet_frame_times_s)
         .filter_map(|(position_m, relative_time_s)| {
-            let position_bf = planet_inertial_to_body_fixed(
-                *position_m,
+            let position_bf = catalog_body_fixed_to_inertial_rotation(
                 planet,
                 (start_time_s + relative_time_s) / 86_400.0,
-            );
+            )
+            .inverse()
+                * *position_m;
             let direction = position_bf.normalize_or_zero();
             (direction.length_squared() > 1e-12).then(|| {
                 equirectangular_point(

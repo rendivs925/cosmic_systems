@@ -9,19 +9,19 @@
 //! active viewport; only its camera neighborhood is refined.
 
 use crate::components::rocket::RocketMissionState;
-use crate::domain::entities::planet::Planet;
+use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{
     build_patch_geometry_with_stitches, direction_to_lat_lon, face_uv_to_direction,
     projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge,
     PatchGeometricError, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::reference_frames::{
-    body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
+    body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
 };
-use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_contact::TerrainSurfaceSampleCache;
 use crate::infrastructure::bevy_adapters::terrain_render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
@@ -152,7 +152,7 @@ pub fn prebake_prelaunch_launchpad_patch(
         Without<SpentStage>,
     >,
     config: Res<TerrainRenderConfig>,
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
     let Some((mission, binding, rocket)) = rocket_query.iter().next() else {
         return;
@@ -168,11 +168,12 @@ pub fn prebake_prelaunch_launchpad_patch(
     };
 
     let radius_m = planet.domain_planet.radius_km as f64 * 1_000.0;
-    let position_bf = planet_inertial_to_body_fixed(
-        rocket.dynamics.position_m,
-        &planet.domain_planet,
-        sim_time.sim_time_s / 86_400.0,
-    );
+    let Some(orientation) =
+        ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+    else {
+        return;
+    };
+    let position_bf = planet_inertial_to_body_fixed(rocket.dynamics.position_m, orientation);
     let Some(direction) = position_bf.try_normalize() else {
         return;
     };
@@ -283,7 +284,7 @@ pub fn stream_terrain_patches(
     mut cached_events: MessageWriter<TerrainPatchCached>,
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
     config: Res<TerrainRenderConfig>,
-    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     time: Res<Time>,
     render_origin: Res<RenderOrigin>,
     camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
@@ -350,18 +351,14 @@ pub fn stream_terrain_patches(
 
     // Terrain source coordinates are planet body-fixed geographic coordinates;
     // the rocket state remains planet-centered inertial everywhere else.
-    let position_bf = planet_inertial_to_body_fixed(
-        position_m,
-        &_planet.domain_planet,
-        sim_time.sim_time_s / 86_400.0,
-    );
+    let Some(orientation) =
+        ephemeris_snapshot.orientation_for_catalog_body(&_planet.domain_planet.name)
+    else {
+        return;
+    };
+    let position_bf = planet_inertial_to_body_fixed(position_m, orientation);
     let dir = position_bf.normalize_or_zero();
-    let viewport = terrain_viewport(
-        &camera_query,
-        &render_origin,
-        &_planet.domain_planet,
-        sim_time.sim_time_s,
-    );
+    let viewport = terrain_viewport(&camera_query, &render_origin, orientation);
     let focus_direction = viewport_focus_direction(viewport.as_ref(), radius_m, dir);
     let lod_camera_position_m = viewport
         .as_ref()
@@ -753,8 +750,7 @@ fn should_reconcile_terrain(
 fn terrain_viewport(
     camera_query: &Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
     render_origin: &RenderOrigin,
-    planet: &Planet,
-    sim_time_s: f64,
+    orientation: &BodyOrientation,
 ) -> Option<TerrainViewport> {
     let (camera, transform, projection) = camera_query.iter().next()?;
     let vertical_fov_rad = match projection {
@@ -767,7 +763,7 @@ fn terrain_viewport(
         .map(|size| (size.x / size.y) as f64)
         .unwrap_or(16.0 / 9.0);
     let horizontal_fov_rad = 2.0 * ((vertical_fov_rad * 0.5).tan() * aspect_ratio).atan();
-    let body_to_inertial = body_fixed_to_inertial_rotation(planet, sim_time_s / 86_400.0);
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
     let camera_position_inertial = render_origin.origin + transform.translation().as_dvec3();
     let forward_inertial = transform.compute_transform().forward().as_vec3().as_dvec3();
 

@@ -3,6 +3,7 @@
 
 use crate::domain::entities::rocket::{Rocket, RocketMissionState as DomainRocketMissionState};
 use crate::domain::services::atmosphere::FlightConditions;
+use crate::domain::services::gravity::ForceModelReport;
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::terrain_collision::GroundContact;
@@ -464,6 +465,8 @@ pub struct PlannedManeuver {
 /// All units are explicit per AGENTS.md section 15.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct RocketTelemetry {
+    /// Named gravity-model selection and its declared active terms.
+    pub force_model: ForceModelReport,
     /// Altitude above ground level (AGL) in meters.
     pub altitude_agl_m: f64,
     /// Altitude above mean sea level (MSL) in meters.

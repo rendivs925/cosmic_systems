@@ -11,6 +11,98 @@
 
 use bevy::math::DVec3;
 
+/// Individually declared gravity terms in a named force-model tier.
+///
+/// All terms operate on a vehicle state in planet-centered inertial meters.
+/// The tier declaration is intentionally separate from the fixed-pipeline
+/// adapter so future terms extend the existing gravity authority rather than
+/// introducing parallel force calculations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForceModelTerm {
+    BoundBodyPointMass,
+    EarthJ2,
+    LunarThirdBody,
+    SolarThirdBody,
+}
+
+/// Named deterministic gravity-model selections for flight and propagation.
+///
+/// `PlanetSun` documents the existing powered-flight model and is the default
+/// to preserve its point-mass plus solar-tide behavior. The remaining tiers
+/// declare the terms implemented by the following fidelity tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ForceModelTier {
+    TwoBody,
+    EarthJ2,
+    EarthMoonSun,
+    #[default]
+    PlanetSun,
+}
+
+impl ForceModelTier {
+    /// Terms selected by this tier, in stable reporting order.
+    pub const fn active_terms(self) -> &'static [ForceModelTerm] {
+        match self {
+            Self::TwoBody => &[ForceModelTerm::BoundBodyPointMass],
+            Self::EarthJ2 => &[ForceModelTerm::BoundBodyPointMass, ForceModelTerm::EarthJ2],
+            Self::EarthMoonSun => &[
+                ForceModelTerm::BoundBodyPointMass,
+                ForceModelTerm::LunarThirdBody,
+                ForceModelTerm::SolarThirdBody,
+            ],
+            Self::PlanetSun => &[
+                ForceModelTerm::BoundBodyPointMass,
+                ForceModelTerm::SolarThirdBody,
+            ],
+        }
+    }
+}
+
+/// Immutable domain configuration for the selected gravity model.
+///
+/// Systems consume this by shared reference. It owns no body states, frame
+/// conversions, or mutable simulation data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct ForceModelConfig {
+    tier: ForceModelTier,
+}
+
+impl ForceModelConfig {
+    pub const fn new(tier: ForceModelTier) -> Self {
+        Self { tier }
+    }
+
+    pub const fn tier(self) -> ForceModelTier {
+        self.tier
+    }
+
+    pub const fn active_terms(self) -> &'static [ForceModelTerm] {
+        self.tier.active_terms()
+    }
+
+    /// Stable value used by telemetry and scientific-validation consumers.
+    pub const fn validation_report(self) -> ForceModelReport {
+        ForceModelReport {
+            tier: self.tier,
+            active_terms: self.active_terms(),
+        }
+    }
+}
+
+/// Force-model metadata reported alongside authoritative telemetry and
+/// scientific-validation results. It contains no dynamic state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForceModelReport {
+    pub tier: ForceModelTier,
+    pub active_terms: &'static [ForceModelTerm],
+}
+
+impl Default for ForceModelReport {
+    fn default() -> Self {
+        ForceModelConfig::default().validation_report()
+    }
+}
+
 /// Newtonian gravitational constant, m³·kg⁻¹·s⁻² (CODATA 2018).
 ///
 /// This is the single authoritative definition; other modules reference it
@@ -38,13 +130,26 @@ pub fn gravitational_acceleration(
     position_m: DVec3,
     body_position_m: DVec3,
 ) -> DVec3 {
+    gravitational_acceleration_from_mu(
+        gravitational_parameter(body_mass_kg),
+        position_m,
+        body_position_m,
+    )
+}
+
+/// Gravitational acceleration from a validated standard gravitational
+/// parameter `mu_m3_s2`. All positions remain in one inertial meter frame.
+pub fn gravitational_acceleration_from_mu(
+    mu_m3_s2: f64,
+    position_m: DVec3,
+    body_position_m: DVec3,
+) -> DVec3 {
     let r = position_m - body_position_m;
     let r_sq = r.length_squared();
-    if r_sq < 1.0 {
+    if !mu_m3_s2.is_finite() || mu_m3_s2 <= 0.0 || r_sq < 1.0 {
         return DVec3::ZERO;
     }
-    let mu = gravitational_parameter(body_mass_kg);
-    -mu / r_sq * r.normalize()
+    -mu_m3_s2 / r_sq * r.normalize()
 }
 
 /// Gravitational acceleration relative to an accelerating inertial-frame
@@ -58,12 +163,29 @@ pub fn differential_gravitational_acceleration(
     reference_origin_position_m: DVec3,
     perturbing_body_position_m: DVec3,
 ) -> DVec3 {
-    gravitational_acceleration(
-        perturbing_body_mass_kg,
+    differential_gravitational_acceleration_from_mu(
+        gravitational_parameter(perturbing_body_mass_kg),
+        vehicle_position_m,
+        reference_origin_position_m,
+        perturbing_body_position_m,
+    )
+}
+
+/// Differential gravitational acceleration from a validated standard
+/// gravitational parameter. This preserves the existing planet-centered
+/// inertial-frame tide formulation.
+pub fn differential_gravitational_acceleration_from_mu(
+    perturbing_mu_m3_s2: f64,
+    vehicle_position_m: DVec3,
+    reference_origin_position_m: DVec3,
+    perturbing_body_position_m: DVec3,
+) -> DVec3 {
+    gravitational_acceleration_from_mu(
+        perturbing_mu_m3_s2,
         vehicle_position_m,
         perturbing_body_position_m,
-    ) - gravitational_acceleration(
-        perturbing_body_mass_kg,
+    ) - gravitational_acceleration_from_mu(
+        perturbing_mu_m3_s2,
         reference_origin_position_m,
         perturbing_body_position_m,
     )
@@ -199,6 +321,40 @@ mod tests {
         assert!((v - (mu / r).sqrt()).abs() < 1e-6);
         // 400 km LEO ≈ 7.67 km/s.
         assert!((v - 7_670.0).abs() < 60.0);
+    }
+
+    #[test]
+    fn force_model_tiers_declare_stable_term_sets() {
+        assert_eq!(
+            ForceModelTier::TwoBody.active_terms(),
+            &[ForceModelTerm::BoundBodyPointMass]
+        );
+        assert_eq!(
+            ForceModelTier::EarthJ2.active_terms(),
+            &[ForceModelTerm::BoundBodyPointMass, ForceModelTerm::EarthJ2]
+        );
+        assert_eq!(
+            ForceModelTier::EarthMoonSun.active_terms(),
+            &[
+                ForceModelTerm::BoundBodyPointMass,
+                ForceModelTerm::LunarThirdBody,
+                ForceModelTerm::SolarThirdBody,
+            ]
+        );
+    }
+
+    #[test]
+    fn default_force_model_reports_current_planet_sun_terms() {
+        let report = ForceModelConfig::default().validation_report();
+
+        assert_eq!(report.tier, ForceModelTier::PlanetSun);
+        assert_eq!(
+            report.active_terms,
+            &[
+                ForceModelTerm::BoundBodyPointMass,
+                ForceModelTerm::SolarThirdBody,
+            ]
+        );
     }
 
     /// Scenario `circular_orbit_drift` (Phase 17): a circular orbit integrated

@@ -1,6 +1,8 @@
 use super::components::*;
 use crate::application::material_factory::ORBIT_LINE_COLOR;
-use crate::application::mesh_factory::{create_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS};
+use crate::application::mesh_factory::{
+    create_orbit_ribbon_mesh, create_sampled_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS,
+};
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use bevy::math::{DQuat, DVec3};
@@ -36,12 +38,23 @@ pub(crate) fn update_orbit_visuals(
 
             let orbit_center =
                 orbit_center_units(is_moon, orbit_comp.planet_entity, &planet_positions);
-            let distance_to_path = camera_distance_to_orbit_path(
-                camera_pos,
-                &orbit_comp.orbit_shape,
-                orbit_center,
-                orbit_transform.rotation,
-                orbit_comp.segments,
+            let distance_to_path = orbit_comp.sampled_path_units.as_deref().map_or_else(
+                || {
+                    camera_distance_to_orbit_path(
+                        camera_pos,
+                        &orbit_comp.orbit_shape,
+                        orbit_center,
+                        orbit_transform.rotation,
+                        orbit_comp.segments,
+                    )
+                },
+                |path| {
+                    camera_distance_to_sampled_path(
+                        camera_pos,
+                        path,
+                        orbit_comp.sampled_path_closed,
+                    )
+                },
             );
             let overview_progress = (distance_to_path
                 / (solar_params.scale_factor as f64 * ORBIT_OVERVIEW_DISTANCE_AU as f64))
@@ -152,12 +165,19 @@ pub fn update_orbit_thickness(
             continue;
         };
         let orbit_center = orbit_center_units(is_moon, orbit_comp.planet_entity, &planet_positions);
-        let distance_to_path = camera_distance_to_orbit_path(
-            camera_pos,
-            &orbit_comp.orbit_shape,
-            orbit_center,
-            orbit_transform.rotation,
-            orbit_comp.segments,
+        let distance_to_path = orbit_comp.sampled_path_units.as_deref().map_or_else(
+            || {
+                camera_distance_to_orbit_path(
+                    camera_pos,
+                    &orbit_comp.orbit_shape,
+                    orbit_center,
+                    orbit_transform.rotation,
+                    orbit_comp.segments,
+                )
+            },
+            |path| {
+                camera_distance_to_sampled_path(camera_pos, path, orbit_comp.sampled_path_closed)
+            },
         );
         let new_thickness = orbit_ribbon_thickness_units(
             distance_to_path,
@@ -171,13 +191,23 @@ pub fn update_orbit_thickness(
         {
             let previous_mesh = mesh3d.0.clone();
             orbit_comp.thickness = new_thickness;
-            let new_mesh = create_orbit_ribbon_mesh(
-                &mut meshes,
-                &orbit_comp.orbit_shape,
-                ORBIT_LINE_COLOR,
-                new_thickness,
-                orbit_comp.segments,
-            );
+            let new_mesh = if let Some(path) = orbit_comp.sampled_path_units.as_deref() {
+                create_sampled_orbit_ribbon_mesh(
+                    &mut meshes,
+                    path,
+                    ORBIT_LINE_COLOR,
+                    new_thickness,
+                    orbit_comp.sampled_path_closed,
+                )
+            } else {
+                create_orbit_ribbon_mesh(
+                    &mut meshes,
+                    &orbit_comp.orbit_shape,
+                    ORBIT_LINE_COLOR,
+                    new_thickness,
+                    orbit_comp.segments,
+                )
+            };
             mesh3d.0 = new_mesh;
             meshes.remove(previous_mesh.id());
         }
@@ -215,6 +245,31 @@ fn camera_distance_to_orbit_path(
         previous = current;
     }
 
+    closest_distance_squared.sqrt()
+}
+
+fn camera_distance_to_sampled_path(camera_position: DVec3, path: &[Vec3], closed: bool) -> f64 {
+    if path.len() < 2 {
+        return f64::INFINITY;
+    }
+    let mut closest_distance_squared = f64::INFINITY;
+    let mut previous = DVec3::from(path[0]);
+    for point in path.iter().skip(1) {
+        let current = DVec3::from(*point);
+        closest_distance_squared = closest_distance_squared.min(point_segment_distance_squared(
+            camera_position,
+            previous,
+            current,
+        ));
+        previous = current;
+    }
+    if closed {
+        closest_distance_squared = closest_distance_squared.min(point_segment_distance_squared(
+            camera_position,
+            previous,
+            DVec3::from(path[0]),
+        ));
+    }
     closest_distance_squared.sqrt()
 }
 

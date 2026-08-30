@@ -252,6 +252,34 @@ pub fn create_polyline_ribbon_mesh(points: &[Vec3], color: Color, thickness: f32
     mesh
 }
 
+/// Build a presentation ribbon from authoritative sampled positions.
+/// Orbit paths are sampled in the solar frame, so this avoids reconstructing
+/// primary-body geometry from analytic orbital elements.
+pub fn create_sampled_orbit_ribbon_mesh(
+    meshes: &mut ResMut<Assets<Mesh>>,
+    points: &[Vec3],
+    color: Color,
+    thickness: f32,
+    closed: bool,
+) -> Handle<Mesh> {
+    if points.is_empty() {
+        return meshes.add(Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        ));
+    }
+    let mut closed_points = Vec::with_capacity(points.len() + 1);
+    closed_points.extend_from_slice(points);
+    if closed {
+        closed_points.push(points[0]);
+    }
+    meshes.add(create_polyline_ribbon_mesh(
+        &closed_points,
+        color,
+        thickness,
+    ))
+}
+
 pub fn create_ring_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     inner_radius: f32,

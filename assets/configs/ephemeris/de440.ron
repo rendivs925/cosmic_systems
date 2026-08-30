@@ -7,34 +7,62 @@
         start_julian_date_tdb: 2415020.5,
         end_julian_date_tdb: 2469807.5,
     ),
+    // Earth-orientation data is intentionally not fabricated. Until a pinned
+    // EOP dataset is provisioned, UT1 and polar-motion requests are unavailable.
+    unavailable_roles: [EarthOrientation],
     kernels: [
         (
             file_name: "de440s.bsp",
+            role: Translation,
             kind: Spk,
             sha256: "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
             expected_size_bytes: 32726016,
             source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp",
+            coverage: Some((
+                start_julian_date: 2415020.5,
+                end_julian_date: 2469807.5,
+            )),
+            frame: SsbIcrfJ2000,
+            time_scale: Tdb,
         ),
         (
             file_name: "pck00011.tpc",
+            role: Orientation,
             kind: TextPck,
             sha256: "3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1",
             expected_size_bytes: 131226,
             source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
+            coverage: Some((
+                start_julian_date: 2415020.5,
+                end_julian_date: 2469807.5,
+            )),
+            frame: IauBodyFixed,
+            time_scale: Tdb,
         ),
         (
             file_name: "gm_de440.tpc",
+            role: GravitationalParameters,
             kind: TextPck,
             sha256: "924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140",
             expected_size_bytes: 12406,
             source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc",
+            coverage: None,
+            frame: NotApplicable,
+            time_scale: NotApplicable,
         ),
         (
             file_name: "naif0012.tls",
+            role: LeapSeconds,
             kind: LeapSeconds,
             sha256: "678e32bdb5a744117a467cd9601cd6b373f0e9bc9bbde1371d5eee39600a039b",
             expected_size_bytes: 5257,
             source_url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls",
+            coverage: Some((
+                start_julian_date: 2441317.5,
+                end_julian_date: 2457754.5,
+            )),
+            frame: NotApplicable,
+            time_scale: Utc,
         ),
     ],
 )
