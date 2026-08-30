@@ -91,3 +91,9 @@ Known approximations: no provisioned EOP data, no full-degree gravity field,
 no tides, SRP, atmospheric climatology, live tracking, or online runtime data.
 Kernel-backed accuracy is bounded by the stated manifest coverage and each
 recorded external case's published residual budget.
+
+`reference_cases_v1.ron` records machine-readable JPL Horizons and CSPICE
+references. The current CSPICE set independently covers Earth orientation, KSC
+Earth-fixed position, Earth-to-Sun direction, DE440 Earth two-body gravity, and
+one-day two-body propagation. J2 and Earth-Moon-Sun long-arc comparisons remain
+unverified pending an approved independent propagator export.

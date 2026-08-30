@@ -30,7 +30,7 @@ fn main() -> ExitCode {
     for case in &report.cases {
         match case.residual {
             Some(residual) => println!(
-                "{:?} {} position={} m (budget {} m) velocity={} m/s (budget {} m/s): {}",
+                "{:?} {} primary_residual={} (budget {}) secondary_residual={} (budget {}): {}",
                 case.status,
                 case.case_id.as_str(),
                 residual.position_m,

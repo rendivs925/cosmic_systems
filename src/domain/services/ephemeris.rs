@@ -602,7 +602,14 @@ impl SpiceEphemeris {
                 orientation_dataset.sha256
             ),
             inertial_to_body_fixed,
-            DVec3::new(angular_velocity.x, angular_velocity.y, angular_velocity.z),
+            // ANISE reports the passive ICRF-to-body-fixed transform's frame
+            // angular velocity. `BodyOrientation` owns the body's active spin
+            // in ICRF, which has the opposite sign.
+            DVec3::new(
+                -angular_velocity.x,
+                -angular_velocity.y,
+                -angular_velocity.z,
+            ),
         ))
     }
 
@@ -1270,6 +1277,7 @@ mod tests {
         );
         assert!(orientation.inertial_to_body_fixed.is_finite());
         assert!(orientation.angular_velocity_inertial_rad_s.is_finite());
+        assert!(orientation.angular_velocity_inertial_rad_s.z > 0.0);
     }
 
     #[test]
@@ -1282,7 +1290,7 @@ mod tests {
             .gravitational_parameter_m3_s2(NaifBodyId::SUN)
             .unwrap();
 
-        assert!(earth_mu_m3_s2.is_finite() && earth_mu_m3_s2 > 0.0);
+        assert!((earth_mu_m3_s2 - 3.986_004_355_070_226e14).abs() < 1.0);
         assert!(sun_mu_m3_s2 > earth_mu_m3_s2);
     }
 

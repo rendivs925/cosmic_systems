@@ -44,5 +44,123 @@
                 velocity_mps: 1.0e-3,
             ),
         )),
+        Orientation((
+            header: (
+                metadata: (
+                    id: ScientificReferenceCaseId("earth-orientation-j2000-cspice"),
+                    source: (
+                        provider: NaifSpice,
+                        url: "https://naif.jpl.nasa.gov/naif/toolkit.html",
+                        source_version: "CSPICE_N0067 via SpiceyPy 8.2.0",
+                    ),
+                    generation_command: "PYTHONPATH=/tmp/opencode/spiceypy python3 scripts/scientific_validation/generate_spiceypy_reference_cases.py --case earth-orientation-j2000-cspice",
+                    datasets: [
+                        (role: Orientation, identifier: "pck00011.tpc", version: "N0067", sha256: None),
+                        (role: LeapSeconds, identifier: "naif0012.tls", version: "N0012", sha256: None),
+                    ],
+                ),
+                coordinate_system: (frame: IauBodyFixed, center: NaifBody(399), time_scale: Tdb, units: MixedSiAndRadians),
+                julian_date: 2451545.0,
+            ),
+            target_naif_id: 399,
+            inertial_to_body_fixed: (x: 0.0, y: 0.0, z: 6.418043862296834e-1, w: 7.668683914573213e-1),
+            angular_velocity_inertial_rad_s: (x: 1.0097419586828951e-28, y: 3.0805523657085508e-12, z: 7.2921150186816002e-5),
+            maximum_angular_residual_rad: 1.0e-7,
+        )),
+        LaunchSite((
+            header: (
+                metadata: (
+                    id: ScientificReferenceCaseId("ksc-earth-fixed-cspice"),
+                    source: (
+                        provider: NaifSpice,
+                        url: "https://naif.jpl.nasa.gov/naif/toolkit.html",
+                        source_version: "CSPICE_N0067 via SpiceyPy 8.2.0",
+                    ),
+                    generation_command: "PYTHONPATH=/tmp/opencode/spiceypy python3 scripts/scientific_validation/generate_spiceypy_reference_cases.py --case ksc-earth-fixed-cspice",
+                    datasets: [(role: Orientation, identifier: "pck00011.tpc", version: "N0067", sha256: None)],
+                ),
+                coordinate_system: (frame: EarthFixed, center: NaifBody(399), time_scale: Tdb, units: SiMetersSeconds),
+                julian_date: 2451545.0,
+            ),
+            latitude_rad: 4.986772192090718e-1,
+            longitude_rad: -1.407573135148387,
+            ellipsoidal_height_m: 3.0,
+            expected_position_m: (x: 9.109192161583311e5, y: -5.531170480320712e6, z: 3.0323380203891024e6),
+            maximum_position_residual_m: 1.0,
+        )),
+        SunDirection((
+            header: (
+                metadata: (
+                    id: ScientificReferenceCaseId("sun-from-earth-j2000-cspice"),
+                    source: (
+                        provider: NaifSpice,
+                        url: "https://naif.jpl.nasa.gov/naif/toolkit.html",
+                        source_version: "CSPICE_N0067 via SpiceyPy 8.2.0",
+                    ),
+                    generation_command: "PYTHONPATH=/tmp/opencode/spiceypy python3 scripts/scientific_validation/generate_spiceypy_reference_cases.py --case sun-from-earth-j2000-cspice",
+                    datasets: [
+                        (role: Ephemeris, identifier: "de440s.bsp", version: "DE440s", sha256: None),
+                        (role: LeapSeconds, identifier: "naif0012.tls", version: "N0012", sha256: None),
+                    ],
+                ),
+                coordinate_system: (frame: PlanetCenteredIcrfJ2000, center: NaifBody(399), time_scale: Tdb, units: UnitVector),
+                julian_date: 2451545.0,
+            ),
+            observer_naif_id: 399,
+            expected_direction: (x: 1.801384249413263e-1, y: -9.024748732245311e-1, z: -3.9126621507360443e-1),
+            maximum_angular_residual_rad: 1.0e-7,
+        )),
+        Gravity((
+            header: (
+                metadata: (
+                    id: ScientificReferenceCaseId("earth-two-body-7000km-cspice"),
+                    source: (
+                        provider: NaifSpice,
+                        url: "https://naif.jpl.nasa.gov/naif/toolkit.html",
+                        source_version: "CSPICE_N0067 via SpiceyPy 8.2.0",
+                    ),
+                    generation_command: "PYTHONPATH=/tmp/opencode/spiceypy python3 scripts/scientific_validation/generate_spiceypy_reference_cases.py --case earth-two-body-7000km-cspice",
+                    datasets: [(role: GravityModel, identifier: "gm_de440.tpc", version: "DE440", sha256: None)],
+                ),
+                coordinate_system: (frame: PlanetCenteredIcrfJ2000, center: NaifBody(399), time_scale: Tdb, units: SiMetersSeconds),
+                julian_date: 2451545.0,
+            ),
+            force_model: TwoBody,
+            vehicle_position_m: (x: 7.0e6, y: 0.0, z: 0.0),
+            expected_acceleration_mps2: (x: -8.13470276544944, y: 0.0, z: 0.0),
+            maximum_acceleration_residual_mps2: 1.0e-10,
+        )),
+        Propagation((
+            header: (
+                metadata: (
+                    id: ScientificReferenceCaseId("earth-two-body-leo-one-day-cspice"),
+                    source: (
+                        provider: NaifSpice,
+                        url: "https://naif.jpl.nasa.gov/naif/toolkit.html",
+                        source_version: "CSPICE_N0067 via SpiceyPy 8.2.0",
+                    ),
+                    generation_command: "PYTHONPATH=/tmp/opencode/spiceypy python3 scripts/scientific_validation/generate_spiceypy_reference_cases.py --case earth-two-body-leo-one-day-cspice",
+                    datasets: [
+                        (role: GravityModel, identifier: "gm_de440.tpc", version: "DE440", sha256: None),
+                        (role: LeapSeconds, identifier: "naif0012.tls", version: "N0012", sha256: None),
+                    ],
+                ),
+                coordinate_system: (frame: PlanetCenteredIcrfJ2000, center: NaifBody(399), time_scale: Tdb, units: SiMetersSeconds),
+                julian_date: 2451545.0,
+            ),
+            force_model: TwoBody,
+            initial_state: (
+                position_m: (x: 7.0e6, y: 0.0, z: 0.0),
+                velocity_mps: (x: 0.0, y: 7.546053230540193e3, z: 0.0),
+            ),
+            checkpoints: [(
+                offset_s: 86400.0,
+                expected: (
+                    position_m: (x: 3.1256490205490723e6, y: -6.263411067488758e6, z: 0.0),
+                    velocity_mps: (x: 6.752004760003534e3, y: 3.3694734127212995e3, z: 0.0),
+                ),
+                budget: (position_m: 1.0, velocity_mps: 1.0e-3),
+            )],
+        )),
     ],
 )
