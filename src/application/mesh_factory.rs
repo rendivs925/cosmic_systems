@@ -257,7 +257,8 @@ pub fn create_polyline_ribbon_mesh(points: &[Vec3], color: Color, thickness: f32
 /// primary-body geometry from analytic orbital elements.
 pub fn create_sampled_orbit_ribbon_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
-    points: &[Vec3],
+    points: &[DVec3],
+    render_anchor_units: DVec3,
     color: Color,
     thickness: f32,
     closed: bool,
@@ -269,15 +270,35 @@ pub fn create_sampled_orbit_ribbon_mesh(
         ));
     }
     let mut closed_points = Vec::with_capacity(points.len() + 1);
-    closed_points.extend_from_slice(points);
+    closed_points.extend(
+        points
+            .iter()
+            .map(|point| (*point - render_anchor_units).as_vec3()),
+    );
     if closed {
-        closed_points.push(points[0]);
+        closed_points.push((points[0] - render_anchor_units).as_vec3());
     }
     meshes.add(create_polyline_ribbon_mesh(
         &closed_points,
         color,
         thickness,
     ))
+}
+
+/// Returns the center of an orbit path's bounds so its mesh vertices remain
+/// close to zero after the presentation-only f64-to-f32 conversion.
+pub fn sampled_orbit_render_anchor_units(points: &[DVec3]) -> DVec3 {
+    let Some(&first) = points.first() else {
+        return DVec3::ZERO;
+    };
+
+    let (minimum, maximum) = points
+        .iter()
+        .copied()
+        .fold((first, first), |(min, max), point| {
+            (min.min(point), max.max(point))
+        });
+    (minimum + maximum) * 0.5
 }
 
 pub fn create_ring_mesh(
@@ -341,5 +362,19 @@ mod tests {
     #[test]
     fn orbit_ribbons_never_degrade_below_the_scientific_render_resolution() {
         assert_eq!(ORBIT_RIBBON_SEGMENTS, 1024);
+    }
+
+    #[test]
+    fn sampled_orbit_anchor_keeps_local_mesh_coordinates_small() {
+        let points = [
+            DVec3::new(2_000_000.0, -25.0, 500.0),
+            DVec3::new(2_000_100.0, 75.0, -500.0),
+        ];
+
+        let anchor = sampled_orbit_render_anchor_units(&points);
+
+        assert_eq!(anchor, DVec3::new(2_000_050.0, 25.0, 0.0));
+        assert!((points[0] - anchor).abs().max_element() <= 500.0);
+        assert!((points[1] - anchor).abs().max_element() <= 500.0);
     }
 }

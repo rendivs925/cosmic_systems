@@ -482,6 +482,7 @@ fn spawn_celestial_body(
                     body_class: BodyClass::Moon,
                     orbit_shape,
                     thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
+                    render_anchor_units: DVec3::ZERO,
                     segments: ORBIT_RIBBON_SEGMENTS,
                     tilt: orbit_motion.tilt,
                     wobble_speed: orbit_motion.wobble_speed,
@@ -520,7 +521,7 @@ fn spawn_celestial_body(
             epoch,
             planet.orbital_period_days as f64 * 86_400.0,
         );
-        let sampled_path_units: Vec<Vec3> = ephemeris_authority
+        let sampled_path_units: Vec<DVec3> = ephemeris_authority
             .sample_solar_inertial_orbit(target, sample_start, sample_span_seconds, planet_segments)
             .unwrap_or_else(|error| {
                 panic!(
@@ -532,11 +533,12 @@ fn spawn_celestial_body(
             .map(|position_m| {
                 DVec3::splat(physical_scale.solar_display_units_per_meter as f64) * position_m
             })
-            .map(|position_units| position_units.as_vec3())
             .collect();
+        let render_anchor_units = sampled_orbit_render_anchor_units(&sampled_path_units);
         let orbit_mesh = create_sampled_orbit_ribbon_mesh(
             meshes,
             &sampled_path_units,
+            render_anchor_units,
             orbit_base_color,
             planet_thickness,
             sampled_path_closed,
@@ -563,6 +565,7 @@ fn spawn_celestial_body(
                 body_class: planet.body_class,
                 orbit_shape,
                 thickness: ORBIT_RIBBON_NEAR_WIDTH_UNITS,
+                render_anchor_units,
                 segments: ORBIT_RIBBON_SEGMENTS,
                 tilt: orbit_motion.tilt,
                 wobble_speed: orbit_motion.wobble_speed,

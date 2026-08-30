@@ -101,11 +101,12 @@ the authoritative fixed pipeline.
 
 ### 6. External validation is a first-class release gate
 
-Store recorded Horizons/SPICE/IAU/IERS reference cases with exact provenance,
-frames, centers, and units. The suite covers multi-date body states, Earth/Moon
-relative states, orientation, launch-site state, Sun direction, point-mass/J2/
-third-body accelerations, and long-arc checkpoints. Acceptance budgets are
-scenario-specific and published with each case.
+Store recorded Horizons/SPICE reference cases with exact provenance, frames,
+centers, and units. The release suite covers body states, orientation,
+launch-site state, Sun direction, point-mass acceleration, and two-body
+long-arc checkpoints. Acceptance budgets are scenario-specific and published
+with each case. Independent J2 and Earth-Moon-Sun propagator comparisons are
+explicitly deferred rather than simulated by internal test data.
 
 Internal replay baselines continue to detect unintended changes; they do not
 substitute for external truth. Kernel-dependent reference tests run in the

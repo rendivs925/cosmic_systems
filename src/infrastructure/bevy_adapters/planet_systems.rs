@@ -180,8 +180,8 @@ fn update_planet_rotations_at(
 }
 
 /// Project f64 solar-map positions into an origin-relative render frame. The
-/// origin tracks the selected body, preserving the local motion of outer moons
-/// instead of subtracting multi-million-unit f32 coordinates on the GPU.
+/// origin tracks the selected body or free-flight camera, preserving local
+/// motion instead of subtracting multi-million-unit f32 coordinates on the GPU.
 #[expect(
     clippy::type_complexity,
     reason = "The solar-light query precisely selects the shared presentation light."
@@ -190,7 +190,7 @@ pub fn rebase_solar_presentation(
     selected_planet: Res<SelectedPlanet>,
     mut origin: ResMut<SolarMapRenderOrigin>,
     positions: Query<&SolarMapPosition>,
-    mut camera_query: Query<&mut Transform, (With<CameraController>, Without<PlanetComponent>)>,
+    mut camera_query: Query<(&Camera, &CameraController, &mut Transform), Without<PlanetComponent>>,
     mut planet_query: Query<(&SolarMapPosition, &mut Transform), With<PlanetComponent>>,
     mut solar_light_query: Query<
         &mut Transform,
@@ -202,17 +202,31 @@ pub fn rebase_solar_presentation(
     >,
     mut previous_selected: Local<Option<Entity>>,
 ) {
-    let next_origin = selected_planet
+    let selected_origin = selected_planet
         .entity
         .and_then(|entity| positions.get(entity).ok())
-        .map_or(DVec3::ZERO, |position| position.0);
+        .map(|position| position.0);
+    let next_origin = selected_origin.unwrap_or_else(|| {
+        camera_query
+            .iter()
+            .find(|(camera, controller, _)| {
+                camera.is_active && uses_camera_relative_solar_map_origin(controller.mode)
+            })
+            .map_or(DVec3::ZERO, |(_, _, transform)| {
+                free_camera_solar_map_origin(origin.position_units, transform.translation)
+            })
+    });
     let rebase_delta = (origin.position_units - next_origin).as_vec3();
 
-    // A selected-body follow camera is already expressed in the moving local
-    // frame. Shifting it every presentation update introduces visible jitter.
-    if *previous_selected != selected_planet.entity && rebase_delta != Vec3::ZERO {
-        for mut camera_transform in camera_query.iter_mut() {
-            camera_transform.translation += rebase_delta;
+    // Free-flight cameras must be rebased every frame. Selected-body inspection
+    // stays in its local frame, only preserving position when selection changes.
+    let preserve_camera_pose =
+        selected_origin.is_none() || *previous_selected != selected_planet.entity;
+    if preserve_camera_pose && rebase_delta != Vec3::ZERO {
+        for (camera, _, mut camera_transform) in camera_query.iter_mut() {
+            if camera.is_active {
+                camera_transform.translation += rebase_delta;
+            }
         }
     }
     origin.position_units = next_origin;
@@ -227,6 +241,14 @@ pub fn rebase_solar_presentation(
     for mut light_transform in solar_light_query.iter_mut() {
         light_transform.translation = solar_light_render_position(origin.position_units);
     }
+}
+
+fn uses_camera_relative_solar_map_origin(mode: CameraMode) -> bool {
+    matches!(mode, CameraMode::FreeFlight | CameraMode::TerrainView)
+}
+
+fn free_camera_solar_map_origin(current_origin: DVec3, camera_translation: Vec3) -> DVec3 {
+    current_origin + DVec3::from(camera_translation)
 }
 
 /// Keep the rendered solar disc large enough to remain circular at overview
@@ -312,7 +334,7 @@ pub fn update_orbit_positions(
                 Quat::from_rotation_z(parent_comp.domain_planet.axial_tilt_deg.to_radians()),
             )
         } else {
-            (DVec3::ZERO, Quat::IDENTITY)
+            (orbit_comp.render_anchor_units, Quat::IDENTITY)
         };
         orbit_transform.translation =
             solar_map_render_translation(orbit_center, origin.position_units);
@@ -386,6 +408,42 @@ mod tests {
             solar_map_render_translation(DVec3::ZERO, origin),
             solar_light_render_position(origin)
         );
+    }
+
+    #[test]
+    fn primary_orbit_anchor_rebases_without_large_render_coordinates() {
+        let origin = DVec3::new(2_000_000.0, 100.0, -500.0);
+        let anchor = DVec3::new(2_000_025.0, 75.0, 250.0);
+
+        assert_eq!(
+            solar_map_render_translation(anchor, origin),
+            Vec3::new(25.0, -25.0, 750.0)
+        );
+    }
+
+    #[test]
+    fn unselected_free_camera_advances_the_solar_map_origin() {
+        let current_origin = DVec3::new(2_000_000.0, -10.0, 500.0);
+        let local_camera_translation = Vec3::new(125.0, 25.0, -40.0);
+
+        assert_eq!(
+            free_camera_solar_map_origin(current_origin, local_camera_translation),
+            DVec3::new(2_000_125.0, 15.0, 460.0)
+        );
+    }
+
+    #[test]
+    fn only_free_flight_cameras_rebase_the_solar_map() {
+        assert!(uses_camera_relative_solar_map_origin(
+            CameraMode::FreeFlight
+        ));
+        assert!(uses_camera_relative_solar_map_origin(
+            CameraMode::TerrainView
+        ));
+        assert!(!uses_camera_relative_solar_map_origin(CameraMode::Orbit));
+        assert!(!uses_camera_relative_solar_map_origin(
+            CameraMode::FollowPlanet
+        ));
     }
 
     #[test]

@@ -62,7 +62,10 @@ pub struct OrbitComponent {
     pub distance_rank: f32,
     /// Primary-body orbit geometry sampled from the shared DE440 authority.
     /// Moon paths retain their explicit parent-relative Kepler approximation.
-    pub sampled_path_units: Option<Vec<Vec3>>,
+    pub sampled_path_units: Option<Vec<DVec3>>,
+    /// Stable solar-map point used to keep sampled primary-orbit mesh vertices
+    /// local before they cross the f64-to-f32 render boundary.
+    pub render_anchor_units: DVec3,
     /// Whether this path spans a complete orbital period within the provisioned
     /// kernel coverage.
     pub sampled_path_closed: bool,

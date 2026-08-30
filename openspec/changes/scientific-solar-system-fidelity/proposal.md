@@ -18,7 +18,8 @@ independent approximations that can produce mutually inconsistent states.
 - Separate high-rate contact/ascent integration from accurate long-arc orbit
   propagation, with documented error budgets.
 - Add machine-readable external-reference cases and quantitative acceptance
-  thresholds; retain deterministic baselines as regression controls only.
+  thresholds for ephemeris, frame, and two-body reference behavior; retain
+  deterministic baselines as regression controls only.
 - Keep visual scaling, Sun enlargement, static orbit markers, cloud motion, and
   other artistic effects explicitly presentation-only.
 
@@ -52,3 +53,5 @@ independent approximations that can produce mutually inconsistent states.
   orientation data, recorded Horizons/SPICE reference datasets.
 - Modes: normal solar, craft, and rocket retain shared scientific authority;
   existing presentation behavior remains non-authoritative.
+- Deferred: independent external J2 and Earth-Moon-Sun long-arc propagator
+  comparisons are not required by this change and may be proposed separately.

@@ -11,6 +11,7 @@ use bevy::prelude::*;
 const ORBIT_LINE_PIXELS: f32 = 1.5;
 const ORBIT_BODY_WIDTH_FRACTION: f32 = 0.008;
 const ORBIT_MAX_RELATIVE_WIDTH: f32 = 0.003;
+const ORBIT_MAX_VIEWPORT_WIDTH_MULTIPLIER: f32 = 4.0;
 const ORBIT_OVERVIEW_DISTANCE_AU: f32 = 10.0;
 const ORBIT_RIBBON_REBUILD_RATIO: f32 = 0.05;
 const NEAR_ORBIT_OPACITY: f32 = 0.16;
@@ -195,6 +196,7 @@ pub fn update_orbit_thickness(
                 create_sampled_orbit_ribbon_mesh(
                     &mut meshes,
                     path,
+                    orbit_comp.render_anchor_units,
                     ORBIT_LINE_COLOR,
                     new_thickness,
                     orbit_comp.sampled_path_closed,
@@ -248,14 +250,14 @@ fn camera_distance_to_orbit_path(
     closest_distance_squared.sqrt()
 }
 
-fn camera_distance_to_sampled_path(camera_position: DVec3, path: &[Vec3], closed: bool) -> f64 {
+fn camera_distance_to_sampled_path(camera_position: DVec3, path: &[DVec3], closed: bool) -> f64 {
     if path.len() < 2 {
         return f64::INFINITY;
     }
     let mut closest_distance_squared = f64::INFINITY;
-    let mut previous = DVec3::from(path[0]);
+    let mut previous = path[0];
     for point in path.iter().skip(1) {
-        let current = DVec3::from(*point);
+        let current = *point;
         closest_distance_squared = closest_distance_squared.min(point_segment_distance_squared(
             camera_position,
             previous,
@@ -267,7 +269,7 @@ fn camera_distance_to_sampled_path(camera_position: DVec3, path: &[Vec3], closed
         closest_distance_squared = closest_distance_squared.min(point_segment_distance_squared(
             camera_position,
             previous,
-            DVec3::from(path[0]),
+            path[0],
         ));
     }
     closest_distance_squared.sqrt()
@@ -325,8 +327,12 @@ fn orbit_ribbon_thickness_units(
     let body_relative_width =
         reference_body_radius_units.max(f32::EPSILON) * ORBIT_BODY_WIDTH_FRACTION;
     let viewport_width = units_per_pixel as f32 * ORBIT_LINE_PIXELS;
-    let maximum_width =
+    let geometry_limit =
         (orbit_radius_units.abs() * ORBIT_MAX_RELATIVE_WIDTH).max(body_relative_width);
+    // A world-space ribbon cannot safely grow without bound: a near, edge-on
+    // segment otherwise expands across the viewport as a distorted polygon.
+    let maximum_width =
+        geometry_limit.min(body_relative_width * ORBIT_MAX_VIEWPORT_WIDTH_MULTIPLIER);
 
     body_relative_width.max(viewport_width).min(maximum_width)
 }
@@ -370,6 +376,22 @@ mod tests {
 
         assert!(overview > near);
         assert!(overview <= 10_000.0 * ORBIT_MAX_RELATIVE_WIDTH);
+    }
+
+    #[test]
+    fn orbit_ribbon_width_is_bounded_by_its_reference_body() {
+        let body_radius = 10.0;
+        let width = orbit_ribbon_thickness_units(
+            10_000_000.0,
+            std::f32::consts::FRAC_PI_3,
+            1_080.0,
+            body_radius,
+            10_000_000.0,
+        );
+
+        assert!(
+            width <= body_radius * ORBIT_BODY_WIDTH_FRACTION * ORBIT_MAX_VIEWPORT_WIDTH_MULTIPLIER
+        );
     }
 
     #[test]

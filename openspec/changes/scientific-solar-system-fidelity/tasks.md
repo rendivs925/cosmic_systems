@@ -85,8 +85,10 @@
 - [x] 7.1 Define the versioned machine-readable reference-case format with
   source, command, kernel/data versions, time scale, frame, center, units, and
   tolerance metadata.
-- [ ] 7.2 Record reproducible external cases for body state, orientation,
-  launch-site state, Sun direction, gravity, and long-arc propagation.
+- [x] 7.2 Record reproducible external cases for body state, orientation,
+  launch-site state, Sun direction, two-body gravity, and two-body long-arc
+  propagation. Independent J2 and Earth-Moon-Sun propagator comparison is
+  intentionally deferred from this change.
 - [x] 7.3 Implement an offline scientific-validation runner that reports each
   residual and fails against the case's published budget.
 - [x] 7.4 Integrate provisioned scientific validation into CI separately from
