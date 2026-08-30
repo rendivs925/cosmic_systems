@@ -77,7 +77,7 @@ pub fn update_field_gradient(
     let dc = control.dc_current;
     let intensity = (dc * 2.0).min(1.0);
 
-    for (mut mat_handle, mut ring) in ring_query.iter_mut() {
+    for (mat_handle, mut ring) in ring_query.iter_mut() {
         ring.dc_field = dc;
         if let Some(mat) = materials.get_mut(&mat_handle.0) {
             let alpha = 0.05 + intensity * 0.25;

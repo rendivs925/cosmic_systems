@@ -436,7 +436,7 @@ mod tests {
         let before = active_vehicle_mass(&rocket.stages, &propellant, 0);
         let (next, shed) = shed_stage(&rocket.stages, &propellant, 0).unwrap();
         propellant[0] = 0.0; // simulate residual
-        let (next_empty, shed_empty) = shed_stage(&rocket.stages, &propellant, 0).unwrap();
+        let (_, shed_empty) = shed_stage(&rocket.stages, &propellant, 0).unwrap();
         let after = active_vehicle_mass(&rocket.stages, &propellant, next);
         assert_eq!(next, 1);
         assert!((shed - rocket.stages[0].total_mass_kg() as f64).abs() < 1e-6);
@@ -461,7 +461,7 @@ mod tests {
         let expected_dv = isp as f64 * g0 * (m0 / m1).ln();
 
         let mdot = mass_flow_from_thrust(thrust_n, isp);
-        let burn_time = propellant as f64 / mdot;
+        let burn_time = propellant / mdot;
         let dt = 0.01;
         let steps = (burn_time / dt).ceil() as u32;
 
@@ -601,7 +601,7 @@ mod tests {
     fn pressure_changes_thrust_without_changing_mass_flow() {
         let engine = engine_with_throttle(0.0, 1.0);
         let (sea_level_thrust, sea_level_flow) =
-            stage_thrust_body(&[engine.clone()], 1.0, SEA_LEVEL_PRESSURE_PA);
+            stage_thrust_body(std::slice::from_ref(&engine), 1.0, SEA_LEVEL_PRESSURE_PA);
         let (vacuum_thrust, vacuum_flow) = stage_thrust_body(&[engine], 1.0, 0.0);
 
         assert!((sea_level_thrust.y - 1_000_000.0).abs() < 1e-6);
@@ -617,7 +617,8 @@ mod tests {
             ..engine_with_throttle(0.0, 1.0)
         };
         let pitch = 0.1;
-        let (force, _) = stage_gimbaled_thrust_body(&[engine.clone()], 1.0, 0.0, pitch, 0.0);
+        let (force, _) =
+            stage_gimbaled_thrust_body(std::slice::from_ref(&engine), 1.0, 0.0, pitch, 0.0);
         let direction = gimbaled_thrust_direction_body(DVec3::Y, pitch, 0.0);
         assert!(force.normalize().dot(direction) > 1.0 - 1e-12);
         let torque = gimbal_torque_body(
@@ -641,7 +642,7 @@ mod tests {
         let mut shutdown = running.clone();
         shutdown.state = EngineState::Off;
 
-        let (thrust_on, flow_on) =
+        let (thrust_on, _) =
             stage_thrust_body(&[running.clone(), shutdown], 1.0, SEA_LEVEL_PRESSURE_PA);
         assert!(
             (thrust_on.y - 1_000_000.0).abs() < 1e-6,
@@ -790,7 +791,7 @@ mod tests {
         // Engine offset toward -Y, thrust +Y → torque about a transverse axis.
         let engine = DVec3::new(0.0, -30.0, 0.0);
         let com = DVec3::ZERO;
-        let torque = gimbal_torque_body(engine, com, DVec3::Y, 1_000_000.0, 0.0, 0.0);
+        let _torque = gimbal_torque_body(engine, com, DVec3::Y, 1_000_000.0, 0.0, 0.0);
         // r = (0,-30,0), F = (0,F,0) → r × F = (0,0, ...) = (-30*F in x? )
         // (0,-30,0) × (0,1e6,0) = ((-30*0 - 0*1e6), (0*0 - 0*0), (0*1e6 - (-30)*0)) = (0,0,0)?
         // Along the same axis offset produces zero torque; use a transverse offset.

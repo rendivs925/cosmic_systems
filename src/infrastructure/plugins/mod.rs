@@ -6,7 +6,6 @@
 // behavior isolated per AGENTS.md sections 5, 35, and 66.
 
 use bevy::app::{App, RunFixedMainLoop, RunFixedMainLoopSystems};
-use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::time::TimeSystems;
 
@@ -24,7 +23,7 @@ use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, RelaunchRequested, SplashdownDetectedEvent,
     StageSeparatedEvent,
 };
-use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::simulation_time::{
     accrue_time_warp, advance_fixed_simulation_time, handle_time_acceleration_input,
     run_bounded_fixed_main_schedule, sync_fixed_timestep, SimulationTime,
@@ -751,6 +750,7 @@ impl Plugin for RocketModePlugin {
 mod tests {
     use super::*;
     use crate::domain::services::ephemeris::NaifBodyId;
+    use crate::domain::services::ephemeris::TdbEpoch;
     use crate::domain::services::physics::calculate_planet_rotation_f64;
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::reference_frames::barycentric_to_solar_inertial_state;

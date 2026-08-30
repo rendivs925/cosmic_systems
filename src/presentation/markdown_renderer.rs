@@ -154,7 +154,7 @@ pub fn parse_markdown(text: &str) -> Vec<MdBlock> {
 pub fn spawn_markdown_blocks(parent: Entity, blocks: &[MdBlock], commands: &mut Commands) {
     let text_color = Color::srgb(0.75, 0.8, 0.85);
     let heading_color = Color::srgb(0.3, 0.6, 0.9);
-    let dim_color = Color::srgb(0.4, 0.45, 0.5);
+    let _dim_color = Color::srgb(0.4, 0.45, 0.5);
     let quote_color = Color::srgb(0.55, 0.62, 0.72);
     let code_bg = Color::srgba(0.04, 0.05, 0.07, 0.6);
 

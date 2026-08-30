@@ -49,18 +49,19 @@ fn validate_vehicle_selection(selection: &Option<String>) {
 }
 
 fn rocket_task_pool_options() -> TaskPoolOptions {
-    let mut options = TaskPoolOptions::default();
     // Terrain bakes are CPU-bound. Reserve cores for Bevy's render, IO, and
     // simulation pools so a cold terrain cache cannot lower presentation FPS
     // by saturating every logical core during root generation.
-    options.async_compute = TaskPoolThreadAssignmentPolicy {
-        min_threads: 1,
-        max_threads: 4,
-        percent: 0.25,
-        on_thread_spawn: None,
-        on_thread_destroy: None,
-    };
-    options
+    TaskPoolOptions {
+        async_compute: TaskPoolThreadAssignmentPolicy {
+            min_threads: 1,
+            max_threads: 4,
+            percent: 0.25,
+            on_thread_spawn: None,
+            on_thread_destroy: None,
+        },
+        ..Default::default()
+    }
 }
 
 fn main() {

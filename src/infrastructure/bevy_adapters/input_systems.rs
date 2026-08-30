@@ -71,6 +71,14 @@ pub fn handle_planet_selection(
 }
 
 // System to handle mouse clicking for planet selection
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This selection system receives independent ECS resources and queries."
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "The camera filter supports the shared solar and craft camera infrastructure."
+)]
 pub fn handle_mouse_planet_selection(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     camera_query: Query<(&Camera, &Transform), Or<(With<CameraController>, With<CraftCameraTag>)>>,
@@ -193,6 +201,10 @@ pub fn update_planet_selection_visuals(mut query: Query<(&Selectable, &mut Trans
 }
 
 // System to handle solar system controls (time scale, etc.)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This input system mutates independent shared simulation resources."
+)]
 pub fn handle_solar_system_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut simulation_time: ResMut<SimulationTime>,

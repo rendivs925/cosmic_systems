@@ -14,6 +14,10 @@ pub struct FlightLabel;
 #[derive(Component)]
 pub struct EffectsLabel;
 
+#[expect(
+    clippy::type_complexity,
+    reason = "The ParamSet keeps mutually exclusive HUD text queries borrow-safe."
+)]
 pub fn update_craft_ui(
     craft_query: Query<&CraftComponent>,
     control: Res<CraftControlState>,

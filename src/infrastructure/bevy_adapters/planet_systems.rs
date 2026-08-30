@@ -182,6 +182,10 @@ fn update_planet_rotations_at(
 /// Project f64 solar-map positions into an origin-relative render frame. The
 /// origin tracks the selected body, preserving the local motion of outer moons
 /// instead of subtracting multi-million-unit f32 coordinates on the GPU.
+#[expect(
+    clippy::type_complexity,
+    reason = "The solar-light query precisely selects the shared presentation light."
+)]
 pub fn rebase_solar_presentation(
     selected_planet: Res<SelectedPlanet>,
     mut origin: ResMut<SolarMapRenderOrigin>,

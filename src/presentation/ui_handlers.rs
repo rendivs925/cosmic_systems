@@ -11,9 +11,9 @@ use crate::infrastructure::bevy_adapters::craft_components::CraftTravelTarget;
 use crate::presentation::ui_components::*;
 use crate::presentation::ui_helpers::*;
 
-pub fn update_ui_idle(
-    mut cursor_moved: EventReader<CursorMoved>,
-    mut mouse_motion: EventReader<MouseMotion>,
+pub(crate) fn update_ui_idle(
+    mut cursor_moved: MessageReader<CursorMoved>,
+    mut mouse_motion: MessageReader<MouseMotion>,
     mut idle_state: ResMut<UiIdleState>,
     time: Res<Time>,
 ) {
@@ -22,7 +22,11 @@ pub fn update_ui_idle(
     }
 }
 
-pub fn handle_nav_interactions(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This Bevy system receives independent ECS queries and resources."
+)]
+pub(crate) fn handle_nav_interactions(
     interactions: Query<(&Interaction, &NavButton), Changed<Interaction>>,
     menu_interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
     info_card_interactions: Query<&Interaction, (Changed<Interaction>, With<InfoCardToggleButton>)>,
@@ -83,7 +87,15 @@ pub fn handle_nav_interactions(
     }
 }
 
-pub fn update_navbar(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This Bevy system receives independent ECS queries and resources."
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "The ParamSet keeps mutually exclusive UI queries borrow-safe."
+)]
+pub(crate) fn update_navbar(
     selected_planet: Res<SelectedPlanet>,
     solar_params: Res<SolarSystemParameters>,
     performance_stats: Res<PerformanceStats>,
@@ -202,7 +214,11 @@ pub fn update_navbar(
     }
 }
 
-pub fn update_info_card(
+#[expect(
+    clippy::type_complexity,
+    reason = "The ParamSet keeps mutually exclusive UI text queries borrow-safe."
+)]
+pub(crate) fn update_info_card(
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<&PlanetComponent>,
     menu_state: Res<UiMenuState>,
@@ -248,7 +264,7 @@ pub fn update_info_card(
     }
 }
 
-pub fn update_notifications_ui(
+pub(crate) fn update_notifications_ui(
     mut notifications: ResMut<NotificationQueue>,
     mut commands: Commands,
     roots: Res<UiRoots>,
@@ -311,7 +327,7 @@ pub fn update_notifications_ui(
         });
 }
 
-pub fn update_ui_hover_state(
+pub(crate) fn update_ui_hover_state(
     mut ui_state: ResMut<UiPointerState>,
     query: Query<&Interaction, With<UiCapture>>,
 ) {
@@ -320,7 +336,7 @@ pub fn update_ui_hover_state(
         .any(|interaction| matches!(interaction, Interaction::Hovered | Interaction::Pressed));
 }
 
-pub fn update_cursor_icon(
+pub(crate) fn update_cursor_icon(
     mut commands: Commands,
     mut last_cursor: Local<Option<SystemCursorIcon>>,
     windows: Query<Entity, With<Window>>,

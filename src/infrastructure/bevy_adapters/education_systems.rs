@@ -38,7 +38,7 @@ pub fn check_journal_unlocks(
     state.flight_time += time.delta_secs();
 
     let craft_exists = craft_query.single().is_ok();
-    let dc = control.dc_current;
+    let _dc = control.dc_current;
     let pulse = control.pulse_current;
 
     for (i, entry) in journal.entries.clone().iter().enumerate() {
@@ -53,18 +53,18 @@ pub fn check_journal_unlocks(
             UnlockCondition::AltitudeAbove(a) => craft_query
                 .single()
                 .ok()
-                .map_or(false, |c| c.physics.vertical_position > a),
+                .is_some_and(|c| c.physics.vertical_position > a),
             UnlockCondition::SpeedAbove(s) => craft_query
                 .single()
                 .ok()
-                .map_or(false, |c| c.linear_velocity.length() > s),
-            UnlockCondition::OrbitAchieved => craft_query.single().ok().map_or(false, |c| {
+                .is_some_and(|c| c.linear_velocity.length() > s),
+            UnlockCondition::OrbitAchieved => craft_query.single().ok().is_some_and(|c| {
                 c.physics.vertical_position > 500.0 && c.linear_velocity.length() > 500.0
             }),
             UnlockCondition::Landed => craft_query
                 .single()
                 .ok()
-                .map_or(false, |c| c.physics.vertical_position < 1.0),
+                .is_some_and(|c| c.physics.vertical_position < 1.0),
             UnlockCondition::TimeElapsed(t) => state.flight_time > t,
         };
 

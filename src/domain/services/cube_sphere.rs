@@ -1258,7 +1258,7 @@ mod tests {
         );
         let grid_index_count = 32 * 32 * 6;
         for index in geometry.indices.iter().take(grid_index_count) {
-            if (*index as usize) % 33 == 0 {
+            if (*index as usize).is_multiple_of(33) {
                 let row = *index as usize / 33;
                 assert_eq!(row % 2, 0, "stitched west edge used odd row {row}");
             }

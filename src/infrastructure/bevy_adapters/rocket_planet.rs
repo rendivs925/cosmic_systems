@@ -50,6 +50,10 @@ pub struct RocketBoundPlanet(pub Option<String>);
 /// Rocket Mode keeps shared celestial entities as the simulation authority, but
 /// hides their solar-scale presentation. Flight-frame proxy meshes are the only
 /// celestial visuals seen by the rocket camera.
+#[expect(
+    clippy::type_complexity,
+    reason = "The query selects both planet and orbit presentation entities."
+)]
 pub fn isolate_rocket_presentation(
     mut solar_presentation: Query<
         &mut Visibility,
@@ -151,7 +155,7 @@ fn spawn_rocket_moon(
     moon: &crate::domain::entities::planet::Planet,
 ) {
     let radius_m = moon.radius_km * 1000.0;
-    let mesh_handle = meshes.add(Sphere::new(radius_m as f32));
+    let mesh_handle = meshes.add(Sphere::new(radius_m));
 
     let textures = get_planet_textures(&moon.name);
     let albedo_handle = load_texture(asset_server, textures.albedo);
@@ -240,6 +244,14 @@ fn spawn_rocket_sun(
 /// Rocket proxies must not consume shared solar-map transforms because the
 /// flight presentation has a distinct meter-scale render origin. Both paths
 /// derive their celestial state from the same `SimulationTime` epoch.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This presentation system synchronizes independent shared and rocket-mode state."
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "The ParamSet keeps planet and moon presentation queries borrow-safe."
+)]
 pub fn update_rocket_planets(
     solar_params: Res<SolarSystemParameters>,
     physical_scale: Res<PhysicalScale>,

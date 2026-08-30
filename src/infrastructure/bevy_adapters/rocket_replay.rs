@@ -436,6 +436,10 @@ fn drone_ship_lifecycle_is_restorable(
 /// Restore replay frames together with the frame's authoritative simulation
 /// epoch. Planet rotation, terrain and all reference-frame consumers must see
 /// the same epoch as the restored vehicle state.
+#[expect(
+    clippy::type_complexity,
+    reason = "The ParamSet separates capture and restore access to replay state."
+)]
 pub fn apply_replay_actions_system(
     mut commands: Commands,
     mut actions: MessageReader<ReplayAction>,
@@ -575,9 +579,11 @@ mod tests {
             inertia_body: DMat3::IDENTITY,
             center_of_mass_m: DVec3::new(0.0, -2.0, 0.0),
         };
-        let mut conditions = FlightConditions::default();
-        conditions.altitude_m = 12_345.0;
-        conditions.dynamic_pressure_pa = 678.0;
+        let conditions = FlightConditions {
+            altitude_m: 12_345.0,
+            dynamic_pressure_pa: 678.0,
+            ..Default::default()
+        };
         let gear = LandingGear::new(
             LandingGearSpec {
                 count: 4,

@@ -527,65 +527,10 @@ impl SimdProcessor {
 
         results
     }
+}
 
-    // Fallback implementations for when SIMD is not available
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f")))]
-    fn solve_kepler_avx512_batch(
-        &self,
-        mean_anomalies: &[f32],
-        eccentricities: &[f32],
-        max_iterations: u32,
-    ) -> Vec<f32> {
-        self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f")))]
-    fn avx512_sin_approx_batch(&self, x: &[f32]) -> Vec<f32> {
-        x.iter().map(|&val| val.sin()).collect()
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx512f")))]
-    fn avx512_cos_approx_batch(&self, x: &[f32]) -> Vec<f32> {
-        x.iter().map(|&val| val.cos()).collect()
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2")))]
-    fn solve_kepler_avx2_batch(
-        &self,
-        mean_anomalies: &[f32],
-        eccentricities: &[f32],
-        max_iterations: u32,
-    ) -> Vec<f32> {
-        self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2")))]
-    fn avx2_sin_approx_batch(&self, x: &[f32]) -> Vec<f32> {
-        x.iter().map(|&val| val.sin()).collect()
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "avx2")))]
-    fn avx2_cos_approx_batch(&self, x: &[f32]) -> Vec<f32> {
-        x.iter().map(|&val| val.cos()).collect()
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1")))]
-    fn solve_kepler_sse4_batch(
-        &self,
-        mean_anomalies: &[f32],
-        eccentricities: &[f32],
-        max_iterations: u32,
-    ) -> Vec<f32> {
-        self.solve_kepler_scalar_batch(mean_anomalies, eccentricities, max_iterations)
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1")))]
-    fn sse4_sin_approx_batch(&self, x: &[f32]) -> Vec<f32> {
-        x.iter().map(|&val| val.sin()).collect()
-    }
-
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64", target_feature = "sse4.1")))]
-    fn sse4_cos_approx_batch(&self, x: &[f32]) -> Vec<f32> {
-        x.iter().map(|&val| val.cos()).collect()
+impl Default for SimdProcessor {
+    fn default() -> Self {
+        Self::new()
     }
 }

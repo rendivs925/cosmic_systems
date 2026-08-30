@@ -46,6 +46,10 @@ fn solar_surface_luminance_nits(solar_params: &SolarSystemParameters) -> f32 {
 }
 
 // Setup scene for solar system simulation
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This startup system receives independent Bevy resources required for scene composition."
+)]
 pub fn setup_space(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -79,7 +83,7 @@ pub fn setup_space(
 
     let solar_camera_active = solar_camera_enabled
         .as_deref()
-        .map_or(true, |enabled| enabled.0);
+        .is_none_or(|enabled| enabled.0);
 
     // Camera positioned to view the full set of orbits on load.
     // Craft mode keeps this controller for solar systems that query it, but disables rendering.
@@ -248,6 +252,10 @@ pub fn spawn_bodies_progressively(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Celestial spawning reuses the startup context without introducing a duplicate manager."
+)]
 fn spawn_celestial_body(
     planet: Planet,
     commands: &mut Commands,
@@ -382,9 +390,7 @@ fn spawn_celestial_body(
     let terrain = (enable_earth_flight_environment && planet.name == "Earth").then(|| {
         PlanetTerrain::with_srtm_directory(
             "Earth",
-            earth_terrain
-                .as_deref()
-                .and_then(|config| config.srtm_dir.as_deref()),
+            earth_terrain.and_then(|config| config.srtm_dir.as_deref()),
         )
     });
     #[cfg(not(feature = "dem"))]

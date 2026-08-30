@@ -40,6 +40,10 @@ pub fn station_keep_drone_ships(sim_time: Res<SimulationTime>, mut ships: Query<
 /// The contact verdict is entirely deck-relative: both velocity and lateral
 /// error are measured in the deck frame, then the normal constraint latches
 /// the authoritative rocket state to the vessel rather than terrain.
+#[expect(
+    clippy::type_complexity,
+    reason = "The recovery query combines cohesive rocket state for landing-target guidance."
+)]
 pub fn resolve_drone_ship_deck_contact(
     sim_time: Res<SimulationTime>,
     ships: Query<&DroneShip>,

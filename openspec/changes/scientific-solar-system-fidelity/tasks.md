@@ -100,7 +100,7 @@
 - [x] 8.1 Document fidelity tiers, active datasets, coordinate conventions,
   supported epochs, validity coverage, known approximations, and published
   scenario budgets.
-- [ ] 8.2 Run formatting, compile, strict clippy, deterministic replay, external
+- [x] 8.2 Run formatting, compile, strict clippy, deterministic replay, external
   reference, and full test validation after each completed phase.
 - [x] 8.3 Validate bounded startup and scientific dataset reporting for normal,
   craft, and rocket modes; manually inspect presentation only after scientific

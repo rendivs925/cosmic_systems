@@ -95,7 +95,7 @@ mod ground_contact_tests {
                     isp_sea_level: 250.0,
                     isp_vacuum: 300.0,
                     gimbal_range_deg: 0.0,
-                    max_thrust_kn: max_thrust_kn,
+                    max_thrust_kn,
                     throttle_min: 0.0,
                     throttle_max: 1.0,
                     restartable: true,
@@ -574,7 +574,6 @@ mod ground_contact_tests {
         );
         assert_eq!(*mission, RocketMissionState::Crashed);
         drop(q);
-        drop(world);
         // Once crashed it stays crashed (one-way transition).
         for _ in 0..64 {
             app.update();
@@ -993,7 +992,6 @@ mod ascent_pipeline_tests {
     use crate::domain::events::{SplashdownDetectedEvent, StageSeparatedEvent};
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
-    use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::reference_frames::{
         planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
     };

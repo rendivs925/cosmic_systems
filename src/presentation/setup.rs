@@ -340,7 +340,7 @@ fn spawn_menu_button(parent: &mut ChildSpawnerCommands, label: &str, action: Men
         });
 }
 
-fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, group: NavGroup) {
+fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, _group: NavGroup) {
     parent
         .spawn((
             Button,
@@ -352,10 +352,7 @@ fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, group: NavGro
             BackgroundColor(nav_button_color(false)),
             BorderColor::all(nav_button_border_color(false)),
             BorderRadius::all(Val::Px(3.0)),
-            NavButton {
-                name: name.to_string(),
-                group,
-            },
+        NavButton { name: name.to_string() },
             UiCapture,
         ))
         .with_children(|button| {

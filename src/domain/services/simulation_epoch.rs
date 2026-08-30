@@ -102,9 +102,7 @@ impl LeapSecondTable {
                 .ok_or(SimulationEpochError::InvalidLskEntry(trimmed.to_string()))?
                 .parse::<f64>()
                 .map_err(|_| SimulationEpochError::InvalidLskEntry(trimmed.to_string()))?;
-            let date = date
-                .trim()
-                .trim_end_matches(|character: char| character == ',' || character == ')');
+            let date = date.trim().trim_end_matches([',', ')']);
             entries.push(LeapSecondEntry {
                 effective_utc_jd: parse_lsk_date(date)?.julian_date()?,
                 tai_minus_utc_seconds: offset,

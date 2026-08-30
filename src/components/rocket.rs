@@ -61,6 +61,10 @@ pub struct RocketMass(pub f64);
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RocketMissionState(pub DomainRocketMissionState);
 
+#[expect(
+    non_upper_case_globals,
+    reason = "PascalCase aliases preserve the established mission-state component API."
+)]
 impl RocketMissionState {
     pub const PreLaunch: Self = Self(DomainRocketMissionState::PreLaunch);
     pub const Launch: Self = Self(DomainRocketMissionState::Launch);
@@ -690,9 +694,11 @@ mod camera_controller_tests {
 
     #[test]
     fn retargeting_clears_the_previous_transition_pose() {
-        let mut controller = RocketCameraController::default();
-        controller.transition_start_relative = Some(Transform::from_xyz(1.0, 2.0, 3.0));
-        controller.transition_progress = 0.5;
+        let mut controller = RocketCameraController {
+            transition_start_relative: Some(Transform::from_xyz(1.0, 2.0, 3.0)),
+            transition_progress: 0.5,
+            ..Default::default()
+        };
 
         controller.request_mode(RocketCameraMode::Cockpit);
 

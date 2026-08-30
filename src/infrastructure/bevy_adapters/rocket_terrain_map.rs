@@ -346,6 +346,10 @@ fn spawn_track_segment(
 }
 
 #[allow(clippy::type_complexity)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The terrain-map UI system combines independent ECS data sources."
+)]
 fn update_terrain_map_panel(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     real_time: Res<Time>,
@@ -449,7 +453,7 @@ fn update_terrain_map_panel(
     }
 
     let prediction = prediction_cache.prediction();
-    let impact = predicted_impact(&prediction, body_radius_m)
+    let impact = predicted_impact(prediction, body_radius_m)
         .and_then(|position| to_map(position).map(|point| point.0));
     let history = history_track(recorder, &planet.domain_planet);
     let predicted = prediction_track(

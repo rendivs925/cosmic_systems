@@ -128,6 +128,10 @@ impl PlanetBuilder {
 }
 
 impl Planet {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This public constructor preserves the established planet data contract."
+    )]
     pub fn new(
         name: String,
         radius_km: f32,

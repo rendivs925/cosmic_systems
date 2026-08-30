@@ -138,8 +138,8 @@ pub fn handle_rocket_camera_input(
 /// can position the camera deterministically from the current rocket state.
 pub fn handle_free_camera_input(
     mouse: Res<ButtonInput<MouseButton>>,
-    mut scroll: EventReader<MouseWheel>,
-    mut motion: EventReader<MouseMotion>,
+    mut scroll: MessageReader<MouseWheel>,
+    mut motion: MessageReader<MouseMotion>,
     mut controller_query: Query<&mut RocketCameraController>,
 ) {
     let mut dragging = false;
@@ -404,7 +404,7 @@ fn compute_chase_camera(
 
     // Frame the mid-body point along the vehicle's ACTUAL axis, so a pitched
     // rocket stays centered instead of drifting out of the viewport.
-    let half_len = (geometry.height_m * 0.5) as f32;
+    let half_len = geometry.height_m * 0.5;
     let look_point = rocket_pos + body_fwd * half_len;
 
     let rotation = safe_look_rotation(target_pos, look_point, &[up, body_fwd, horiz]);

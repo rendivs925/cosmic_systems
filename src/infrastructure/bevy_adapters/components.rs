@@ -23,4 +23,3 @@ pub use super::compute_components::*;
 pub use super::craft_components::*;
 
 // Rocket components
-pub use crate::components::rocket::*;

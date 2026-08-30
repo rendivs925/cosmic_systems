@@ -257,14 +257,14 @@ fn build_rocket_mesh(
     let mut indices: Vec<u32> = Vec::new();
 
     // Helper: add a cylinder section at base_y with given height and radius
-    let mut add_cylinder = |base_y: f32,
-                            height: f32,
-                            radius: f32,
-                            positions: &mut Vec<[f32; 3]>,
-                            normals: &mut Vec<[f32; 3]>,
-                            uvs: &mut Vec<[f32; 2]>,
-                            indices: &mut Vec<u32>,
-                            index_offset: &mut u32| {
+    let add_cylinder = |base_y: f32,
+                        height: f32,
+                        radius: f32,
+                        positions: &mut Vec<[f32; 3]>,
+                        normals: &mut Vec<[f32; 3]>,
+                        uvs: &mut Vec<[f32; 2]>,
+                        indices: &mut Vec<u32>,
+                        index_offset: &mut u32| {
         let rings = 16;
         let segments = 32;
         for ring in 0..=rings {
@@ -294,16 +294,16 @@ fn build_rocket_mesh(
     };
 
     // Helper: add a cone at (center_x, center_z) with base at base_y, apex at base_y + height
-    let mut add_cone = |center_x: f32,
-                        center_z: f32,
-                        base_y: f32,
-                        height: f32,
-                        radius: f32,
-                        positions: &mut Vec<[f32; 3]>,
-                        normals: &mut Vec<[f32; 3]>,
-                        uvs: &mut Vec<[f32; 2]>,
-                        indices: &mut Vec<u32>,
-                        index_offset: &mut u32| {
+    let add_cone = |center_x: f32,
+                    center_z: f32,
+                    base_y: f32,
+                    height: f32,
+                    radius: f32,
+                    positions: &mut Vec<[f32; 3]>,
+                    normals: &mut Vec<[f32; 3]>,
+                    uvs: &mut Vec<[f32; 2]>,
+                    indices: &mut Vec<u32>,
+                    index_offset: &mut u32| {
         let segments = 32;
         // Apex
         positions.push([center_x, base_y + height, center_z]);
@@ -448,7 +448,7 @@ fn spawn_landing_leg_meshes(
     meshes: &mut ResMut<Assets<Mesh>>,
     material: &Handle<StandardMaterial>,
     parent: Entity,
-    height_m: f32,
+    _height_m: f32,
     hull_radius_m: f32,
     spec: &LandingGearSpec,
 ) {

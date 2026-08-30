@@ -101,6 +101,7 @@ impl TextStyle {
 }
 
 /// Builder for HUD UI elements.
+#[derive(Default)]
 pub struct HudBuilder {
     colors: HudColors,
 }
@@ -130,28 +131,8 @@ impl HudBuilder {
         self.txt(text, TextStyle::new(10.0, self.colors.dim))
     }
 
-    fn value(&self, text: impl Into<String>) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(10.0, self.colors.bright))
-    }
-
-    fn value_large(&self, text: impl Into<String>) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(20.0, self.colors.bright))
-    }
-
-    fn value_medium(&self, text: impl Into<String>) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(16.0, self.colors.bright))
-    }
-
     fn title(&self, text: &str) -> (Text, TextFont, TextColor) {
         self.txt(text, TextStyle::new(12.0, self.colors.bright))
-    }
-}
-
-impl Default for HudBuilder {
-    fn default() -> Self {
-        Self {
-            colors: HudColors::default(),
-        }
     }
 }
 
@@ -409,37 +390,14 @@ fn spawn_field_with_style(
         });
 }
 
-/// Telemetry value formatter trait for type-driven formatting.
-trait TelemetryFormatter {
-    fn format(&self, telemetry: &RocketTelemetry, camera_mode: &RocketCameraMode) -> String;
-    fn color(&self, telemetry: &RocketTelemetry) -> Color;
-}
-
-/// Macro to implement formatter for simple fields.
-macro_rules! simple_formatter {
-    ($field:ident, $fmt:expr) => {
-        impl TelemetryFormatter for HudField {
-            fn format(
-                &self,
-                telemetry: &RocketTelemetry,
-                _camera_mode: &RocketCameraMode,
-            ) -> String {
-                match self {
-                    HudField::$field => format!($fmt, telemetry.$field),
-                    _ => String::new(),
-                }
-            }
-            fn color(&self, _telemetry: &RocketTelemetry) -> Color {
-                Color::WHITE
-            }
-        }
-    };
-}
-
 /// Formatter implementations for each field.
 struct FieldFormatters;
 
 impl FieldFormatters {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "HUD formatting combines the independent telemetry and presentation inputs for one field."
+    )]
     fn format_field(
         field: HudField,
         telemetry: &RocketTelemetry,
@@ -787,7 +745,11 @@ pub(crate) struct HudUpdateState {
 }
 
 /// System to update all HUD fields from telemetry.
-pub fn update_rocket_hud_system(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This HUD system receives independent telemetry, UI, and timing resources."
+)]
+pub(crate) fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
     time: Res<Time>,

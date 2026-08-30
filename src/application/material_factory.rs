@@ -47,6 +47,10 @@ pub fn create_planet_material(config: PlanetMaterialConfig) -> StandardMaterial 
 }
 
 // Keep the old function signature for backward compatibility
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This legacy public constructor preserves its established material input API."
+)]
 pub fn create_planet_material_legacy(
     base_color_texture: Option<Handle<Image>>,
     normal_map_texture: Option<Handle<Image>>,

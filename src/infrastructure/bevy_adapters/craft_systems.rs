@@ -150,6 +150,10 @@ pub fn sync_craft_transform(mut craft_query: Query<(&CraftComponent, &mut Transf
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This Bevy input system receives independent ECS resources and queries."
+)]
 pub fn handle_craft_input(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -257,6 +261,10 @@ pub fn handle_craft_input(
     }
 }
 
+#[expect(
+    clippy::type_complexity,
+    reason = "The camera filter excludes the craft while selecting its presentation camera."
+)]
 pub fn update_craft_camera(
     time: Res<Time>,
     mut mouse_motion: MessageReader<MouseMotion>,

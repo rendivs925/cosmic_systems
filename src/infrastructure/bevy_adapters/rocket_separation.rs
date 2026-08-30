@@ -180,6 +180,10 @@ fn planet_terrain_radius(
 /// the component, clears the propulsion payload tracker (so the shared
 /// mass authority stops counting it), spawns two short-lived halves as
 /// debris, and emits [`FairingSeparatedEvent`].
+#[expect(
+    clippy::type_complexity,
+    reason = "The separation query combines cohesive vehicle state for one staging transition."
+)]
 pub fn check_fairing_separation(
     mut commands: Commands,
     mut fairing_writer: MessageWriter<FairingSeparatedEvent>,
@@ -281,7 +285,6 @@ pub fn check_fairing_separation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::rocket::*;
     use crate::domain::services::gravity::gravitational_acceleration;
     use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
     use crate::domain::services::simulation_time::SimulationTime;

@@ -50,6 +50,10 @@ fn ignitable_stage(propulsion: &RocketPropulsion) -> Option<(&RocketStage, f32)>
 /// Separate an empty stage and refresh the surviving vehicle mass.
 /// The spent stage receives the domain separation impulse and is spawned as
 /// independent debris; the upper stage must settle propellant before restart.
+#[expect(
+    clippy::type_complexity,
+    reason = "The staging query combines cohesive rocket state required for one transition."
+)]
 pub fn propulsion_staging(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -191,6 +195,10 @@ pub fn propulsion_thrust(
 }
 
 /// Consume pressure-independent engine mass flow and refresh vehicle mass data.
+#[expect(
+    clippy::type_complexity,
+    reason = "The propulsion query combines cohesive rocket state for fixed-step consumption."
+)]
 pub fn propulsion_consumption(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(

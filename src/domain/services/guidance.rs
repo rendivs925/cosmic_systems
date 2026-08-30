@@ -311,7 +311,6 @@ impl DescentGuidanceConfig {
                 powered_descent_altitude_m: 2_000.0,
                 terminal_descent_altitude_m: 50.0,
                 touchdown_vertical_velocity_mps: -0.5,
-                ..Default::default()
             },
             "Mars" => Self {
                 entry_interface_altitude_m: 125_000.0,
@@ -321,7 +320,6 @@ impl DescentGuidanceConfig {
                 powered_descent_altitude_m: 3_000.0,
                 terminal_descent_altitude_m: 80.0,
                 touchdown_vertical_velocity_mps: -0.8,
-                ..Default::default()
             },
             _ => Self::default(),
         }
@@ -531,8 +529,8 @@ pub fn deorbit_burn_targeting(
 /// trajectory within g-load, dynamic pressure, and heat flux limits.
 /// Uses a simple bang-bang controller with predictor-corrector logic.
 pub fn reentry_bank_angle(
-    altitude_m: f64,
-    velocity_mps: f64,
+    _altitude_m: f64,
+    _velocity_mps: f64,
     dynamic_pressure_pa: f64,
     heat_flux_w_m2: f64,
     g_load: f64,
@@ -575,6 +573,10 @@ pub fn reentry_bank_angle(
 
 /// Powered descent guidance using lossless convexification (simplified).
 /// Computes thrust vector and attitude to land at target with minimum fuel.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The guidance API exposes physically distinct state and configuration inputs."
+)]
 pub fn powered_descent_guidance(
     position_m: DVec3,
     velocity_mps: DVec3,
@@ -582,7 +584,7 @@ pub fn powered_descent_guidance(
     mass_kg: f64,
     max_thrust_n: f64,
     max_thrust_angle_rad: f64,
-    dt: f64,
+    _dt: f64,
     config: &DescentGuidanceConfig,
 ) -> (DVec3, DQuat) {
     // Time-to-go estimate.
@@ -887,7 +889,7 @@ pub fn hover_slam_guidance(
     target_descent_rate_mps: f64,
 ) -> (DVec3, DQuat) {
     let up_dir = position_m.normalize_or_zero();
-    let altitude = (position_m - target_position_m).length();
+    let _altitude = (position_m - target_position_m).length();
     let vertical_vel = velocity_mps.dot(up_dir);
     let horizontal_vel_vec = velocity_mps - up_dir * vertical_vel;
 
@@ -980,6 +982,10 @@ pub fn terminal_landing_guidance(
 
 /// Enhanced powered descent guidance using lossless convexification.
 /// Solves minimum-fuel landing problem with thrust and pointing constraints.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The guidance API exposes physically distinct state and configuration inputs."
+)]
 pub fn powered_descent_guidance_convex(
     position_m: DVec3,
     velocity_mps: DVec3,
@@ -1101,10 +1107,14 @@ pub fn boostback_guidance(
 
 /// Enhanced reentry bank-angle guidance with predictor-corrector.
 /// Uses reference trajectory tracking for precise corridor management.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The reentry model accepts independent measured state and constraint inputs."
+)]
 pub fn reentry_bank_angle_enhanced(
-    altitude_m: f64,
-    velocity_mps: f64,
-    flight_path_angle_rad: f64,
+    _altitude_m: f64,
+    _velocity_mps: f64,
+    _flight_path_angle_rad: f64,
     dynamic_pressure_pa: f64,
     heat_flux_w_m2: f64,
     g_load: f64,

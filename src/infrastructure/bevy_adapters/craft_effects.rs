@@ -1,6 +1,10 @@
 use super::craft_components::*;
 use bevy::prelude::*;
 
+#[expect(
+    clippy::type_complexity,
+    reason = "The effect query updates optional craft effect components in one pass."
+)]
 pub fn update_craft_visuals(
     time: Res<Time>,
     craft_query: Query<(Entity, &CraftComponent)>,

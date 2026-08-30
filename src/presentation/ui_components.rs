@@ -13,7 +13,6 @@ pub(crate) struct UiRoots {
 #[derive(Component)]
 pub(crate) struct NavButton {
     pub name: String,
-    pub group: NavGroup,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -42,19 +41,10 @@ pub enum MenuAction {
 #[derive(Component)]
 pub(crate) struct SelectorPanelRoot;
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub(crate) struct UiMenuState {
     pub selector_open: bool,
     pub info_card_open: bool,
-}
-
-impl Default for UiMenuState {
-    fn default() -> Self {
-        Self {
-            selector_open: false,
-            info_card_open: false,
-        }
-    }
 }
 
 #[derive(Component)]

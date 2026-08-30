@@ -7,6 +7,10 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 
 // System to update camera controller based on input
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This Bevy input system receives independent ECS resources and queries."
+)]
 pub fn update_camera_controller(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -274,6 +278,10 @@ pub fn apply_camera_transform(
 }
 
 // System to auto-inspect a selected planet by smoothly framing it at a readable distance
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This Bevy presentation system receives independent ECS state."
+)]
 pub fn auto_inspect_selected_planet(
     time: Res<Time>,
     solar_params: Res<SolarSystemParameters>,
@@ -549,6 +557,10 @@ pub struct AutoInspectState {
 }
 
 // System to keep starfield positioned relative to camera for constant visibility
+#[expect(
+    clippy::type_complexity,
+    reason = "The camera filter expresses the two supported presentation camera types."
+)]
 pub fn update_starfield_position(
     camera_query: Query<
         (&Camera, &GlobalTransform),

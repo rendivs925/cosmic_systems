@@ -139,20 +139,16 @@ impl<'a> TelemetryContext<'a> {
         let plasma_blackout = self.comms.in_blackout;
 
         DerivedTelemetry {
-            up_dir,
             altitude_m,
             speed,
             vertical_speed,
             horizontal_speed,
             mach,
             q,
-            gravity_accel,
-            weight,
             total_thrust_n,
             isp_vac,
             tw_ratio,
             g_load,
-            dry_mass,
             propellant_fraction,
             delta_v,
             aoa,
@@ -229,20 +225,16 @@ impl<'a> TelemetryContext<'a> {
 /// Pre-computed derived telemetry values to avoid duplication.
 #[derive(Debug, Clone, Default)]
 struct DerivedTelemetry {
-    up_dir: DVec3,
     altitude_m: f64,
     speed: f64,
     vertical_speed: f64,
     horizontal_speed: f64,
     mach: f64,
     q: f64,
-    gravity_accel: f64,
-    weight: f64,
     total_thrust_n: f64,
     isp_vac: f64,
     tw_ratio: f64,
     g_load: f64,
-    dry_mass: f64,
     propellant_fraction: f64,
     delta_v: f64,
     aoa: f64,
@@ -261,7 +253,7 @@ impl<'a> TelemetryComputer<'a> for RealtimeTelemetryComputer {
     type Output = ();
 
     fn compute(&self, ctx: &TelemetryContext<'a>) -> Self::Output {
-        let d = ctx.derived();
+        let _d = ctx.derived();
 
         // Write to resource - this is the side effect
         // In a real system, this would be done via Bevy's ResMut in a system
@@ -482,6 +474,10 @@ fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> 
 }
 
 /// System: compute rocket telemetry and write to resource.
+#[expect(
+    clippy::type_complexity,
+    reason = "Telemetry derives values from cohesive authoritative rocket components."
+)]
 pub fn compute_rocket_telemetry_system(
     sim_time: Res<SimulationTime>,
     force_model: Res<ActiveForceModel>,
@@ -592,6 +588,10 @@ pub fn compute_rocket_telemetry_system(
 /// System: record flight data at intervals.
 /// The rocket state is split across two read-only queries because Bevy query
 /// tuples cap at 15 items; joining on Entity keeps it one logical record.
+#[expect(
+    clippy::type_complexity,
+    reason = "Flight recording queries the complete authoritative rocket state."
+)]
 pub fn record_flight_data_system(
     sim_time: Res<SimulationTime>,
     force_model: Res<ActiveForceModel>,
@@ -638,7 +638,7 @@ pub fn record_flight_data_system(
     {
         if !recorder_query
             .get_mut(entity)
-            .map(|mut r| r.should_record(current_time))
+            .map(|r| r.should_record(current_time))
             .unwrap_or(false)
         {
             continue;

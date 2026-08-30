@@ -242,7 +242,7 @@ impl TerrainStreamingResource {
 /// T-junction cracks along the changed edge.
 pub struct CachedTerrainGeometry {
     pub geometry: PatchGeometry,
-    pub surface: Option<PreparedPatchSurface>,
+    pub(crate) surface: Option<PreparedPatchSurface>,
     stitch_mask: u8,
 }
 
@@ -276,6 +276,10 @@ struct TerrainStreamingCadence {
 /// deterministic geometry from the shared terrain source, and enforce the
 /// memory budget. It only updates the streaming resource; it never writes
 /// rendered geometry or the rocket's state.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This streaming system coordinates independent ECS resources, events, and views."
+)]
 pub fn stream_terrain_patches(
     mut streaming: ResMut<TerrainStreamingResource>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,

@@ -115,7 +115,7 @@ pub fn spawn_education_panel(mut commands: Commands) {
                     TextColor(accent),
                 ));
 
-                let context_wrapper = card
+                let _context_wrapper = card
                     .spawn((
                         Node {
                             flex_direction: FlexDirection::Column,
@@ -180,7 +180,7 @@ fn build_context_markdown(craft: Option<&CraftComponent>, control: &CraftControl
         return "Spawn the craft (craft mode) to begin exploring vacuum physics.\n\nPress **B** to toggle this panel.".to_string();
     };
 
-    let dc = control.dc_current;
+    let _dc = control.dc_current;
     let pulse = control.pulse_current;
     let speed = craft.linear_velocity.length();
     let alt = craft.physics.vertical_position;
@@ -245,6 +245,14 @@ fn replace_wrapper(
     spawn_markdown_blocks(wrapper, blocks, commands);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This Bevy UI system receives independent resources and presentation queries."
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "The ParamSet keeps mutually exclusive education text queries borrow-safe."
+)]
 pub fn update_education_panel(
     craft_query: Query<&CraftComponent>,
     control: Res<CraftControlState>,
@@ -281,7 +289,7 @@ pub fn update_education_panel(
     }
 
     if let Ok(mut text) = text_queries.p0().single_mut() {
-        if let Ok(craft) = craft_query.single() {
+        if let Ok(_craft) = craft_query.single() {
             let lift = vacuum_physics::lift_force(control.dc_current);
             let zpe = vacuum_physics::zpe_power(control.pulse_current, control.dc_current);
             let gain = vacuum_physics::parametric_gain_active(control.pulse_current);

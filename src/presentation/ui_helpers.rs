@@ -46,7 +46,7 @@ pub fn spawn_menu_button(
         });
 }
 
-pub fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, group: NavGroup) {
+pub fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, _group: NavGroup) {
     parent
         .spawn((
             Button,
@@ -60,7 +60,6 @@ pub fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, group: Na
             BorderRadius::all(Val::Px(3.0)),
             NavButton {
                 name: name.to_string(),
-                group,
             },
             UiCapture,
         ))

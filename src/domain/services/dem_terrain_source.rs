@@ -134,6 +134,10 @@ impl DemTileCache {
         self.tiles.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.tiles.is_empty()
+    }
+
     pub fn resident_bytes(&self) -> u64 {
         self.resident_bytes
     }
@@ -352,13 +356,17 @@ pub fn load_hgt_tile(
         ));
     }
     let valid_sum: f32 = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| i16::from_be_bytes([chunk[0], chunk[1]]))
         .filter(|height| *height != i16::MIN)
         .map(f32::from)
         .sum();
     let valid_count = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .filter(|chunk| i16::from_be_bytes([chunk[0], chunk[1]]) != i16::MIN)
         .count();
     let void_fill_m = (valid_sum / valid_count.max(1) as f32).round();
@@ -370,7 +378,7 @@ pub fn load_hgt_tile(
     let row_bytes = grid as usize * 2;
     let mut data = Vec::with_capacity(posts);
     for row in bytes.chunks_exact(row_bytes).rev() {
-        for chunk in row.chunks_exact(2) {
+        for chunk in row.as_chunks::<2>().0 {
             let height = i16::from_be_bytes([chunk[0], chunk[1]]);
             data.push(if height == i16::MIN {
                 void_fill_m

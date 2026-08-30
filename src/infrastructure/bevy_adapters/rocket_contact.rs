@@ -554,6 +554,10 @@ pub fn resolve_ground_contact(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "Ground-contact regression tests are kept beside the contact resolver they exercise."
+)]
 mod tests {
     use super::*;
     use crate::components::rocket::RocketRenderState;

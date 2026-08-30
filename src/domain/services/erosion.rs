@@ -281,7 +281,7 @@ pub fn carve_rivers(
         }
         // Moisture grows sharply once flow exceeds the threshold.
         let river_boost = ((flow[i] / threshold).log2().max(0.0) * 0.3).min(0.7);
-        moisture[i] = (moisture[i] + river_boost as f32).clamp(0.0, 1.0);
+        moisture[i] = (moisture[i] + river_boost).clamp(0.0, 1.0);
     }
 }
 
@@ -326,7 +326,7 @@ pub fn erode_tile(
     );
     hydraulic_erode(&mut h, res, res, spacing_m, cfg.droplets, seed, cfg);
 
-    let mut flow = flow_accumulation(&h, res, res);
+    let flow = flow_accumulation(&h, res, res);
     carve_rivers(
         &mut h,
         &flow,
@@ -711,7 +711,7 @@ mod tests {
         let flow = flow_accumulation(&h, w, hgt);
         // The last column (lowest) must receive more accumulation than the first.
         let last_col: f32 = (0..hgt).map(|y| flow[y * w + (w - 1)]).sum();
-        let first_col: f32 = (0..hgt).map(|y| flow[y * w + 0]).sum();
+        let first_col: f32 = (0..hgt).map(|y| flow[y * w]).sum();
         assert!(last_col > first_col, "flow should accumulate downhill");
     }
 
@@ -720,7 +720,7 @@ mod tests {
         let w = 16;
         let hgt = 16;
         let mut h = vec![1000.0f32; w * hgt];
-        let mut flow = vec![100.0f32; w * hgt];
+        let flow = vec![100.0f32; w * hgt];
         let mut moisture = vec![0.2f32; w * hgt];
         carve_rivers(&mut h, &flow, &mut moisture, 50.0, 40.0);
         assert!(

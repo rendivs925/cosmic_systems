@@ -293,6 +293,10 @@ impl MeshAccum {
     /// Push a vertical prism (cylinder/cone) whose axis is `up` at `base`.
     /// `r0`/`r1` are bottom/top radii, `height` the axis length. `color` is the
     /// linear vertex color. `segments` controls tessellation.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The mesh helper accepts the complete prism geometry and material inputs."
+    )]
     fn push_prism(
         &mut self,
         base: DVec3,

@@ -236,6 +236,10 @@ impl Plugin for TerrainRenderPlugin {
 
 /// System that spawns Bevy mesh/material entities when a terrain patch
 /// becomes ready in the streaming lifecycle.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This renderer upload system coordinates independent terrain assets, events, and state."
+)]
 fn spawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchReady>,
@@ -834,7 +838,6 @@ mod tests {
         let earth = PlanetFactory::create_by_name("Earth").unwrap();
         let mut sim_time = SimulationTime::new(0.25);
         sim_time.sim_time_s = 12_345.0;
-        let alpha = 0.5;
         let body_to_inertial =
             catalog_body_fixed_to_inertial_rotation(&earth, sim_time.sim_time_s / 86_400.0);
         let surface_position_m = DVec3::new(0.0, earth.radius_km as f64 * 1_000.0, 0.0);

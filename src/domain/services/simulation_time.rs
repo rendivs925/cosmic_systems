@@ -311,8 +311,10 @@ mod tests {
 
     #[test]
     fn pause_stops_sim_time() {
-        let mut sim = SimulationTime::default();
-        sim.paused = true;
+        let mut sim = SimulationTime {
+            paused: true,
+            ..Default::default()
+        };
         sim.advance(1.0);
         assert_eq!(sim.sim_time_s, 0.0);
         assert_eq!(sim.real_time_s, 1.0);
