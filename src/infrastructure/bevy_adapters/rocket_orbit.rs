@@ -14,7 +14,6 @@ use crate::components::rocket::{
     GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
     TerrainCollisionState,
 };
-use crate::domain::services::gravity::gravitational_parameter;
 use crate::domain::services::physics_orbital::apsis_endpoints_from_state;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::GroundContact;
@@ -24,6 +23,7 @@ use crate::domain::services::trajectory::{
 };
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_presentation::interpolate_render_transform;
 use crate::infrastructure::bevy_adapters::terrain_render::recenter_render_origin;
 use bevy::math::DVec3;
@@ -64,7 +64,7 @@ pub struct OrbitPredictionCache {
 struct OrbitPredictionKey {
     position_m_bits: [u64; 3],
     velocity_mps_bits: [u64; 3],
-    planet_mass_kg_bits: u64,
+    planet_mu_m3_s2_bits: u64,
     surface_radius_m_bits: u64,
     allowed: bool,
     maneuver: Option<([u64; 3], u64)>,
@@ -143,13 +143,13 @@ impl OrbitPrediction {
 pub fn predicted_orbit(
     position_m: DVec3,
     velocity_mps: DVec3,
-    planet_mass_kg: f64,
+    planet_mu_m3_s2: f64,
     surface_radius_m: f64,
 ) -> OrbitPrediction {
     predicted_orbit_with_maneuver(
         position_m,
         velocity_mps,
-        planet_mass_kg,
+        planet_mu_m3_s2,
         surface_radius_m,
         None,
     )
@@ -159,15 +159,15 @@ pub fn predicted_orbit(
 pub fn predicted_orbit_with_maneuver(
     position_m: DVec3,
     velocity_mps: DVec3,
-    planet_mass_kg: f64,
+    planet_mu_m3_s2: f64,
     surface_radius_m: f64,
     maneuver: Option<ManeuverImpulse>,
 ) -> OrbitPrediction {
     let speed = velocity_mps.length();
     if !position_m.is_finite()
         || !velocity_mps.is_finite()
-        || !planet_mass_kg.is_finite()
-        || planet_mass_kg <= 0.0
+        || !planet_mu_m3_s2.is_finite()
+        || planet_mu_m3_s2 <= 0.0
         || !surface_radius_m.is_finite()
         || surface_radius_m <= 0.0
         || !speed.is_finite()
@@ -182,7 +182,7 @@ pub fn predicted_orbit_with_maneuver(
         return OrbitPrediction::empty();
     }
 
-    let mu = gravitational_parameter(planet_mass_kg);
+    let mu = planet_mu_m3_s2;
     let r = position_m.length();
     if !mu.is_finite() || mu <= 0.0 || !r.is_finite() {
         return OrbitPrediction::empty();
@@ -216,7 +216,7 @@ pub fn predicted_orbit_with_maneuver(
         return OrbitPrediction::empty();
     }
 
-    let body = GravityBody::new("central", DVec3::ZERO, planet_mass_kg);
+    let body = GravityBody::from_gravitational_parameter("central", DVec3::ZERO, mu);
     let pred = match maneuver {
         Some(maneuver) => match predict_patched_conics_with_impulse(
             &[body],
@@ -377,6 +377,7 @@ impl Plugin for RocketOrbitPlugin {
 /// propagation work.
 #[allow(clippy::type_complexity)]
 pub fn update_orbit_prediction_cache(
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     rocket_query: Query<(
         &RocketPlanetBinding,
@@ -409,7 +410,12 @@ pub fn update_orbit_prediction_cache(
         ground_rest.active,
         collision.radar_altitude_m,
     );
-    let planet_mass_kg = planet.domain_planet.mass_kg;
+    let Some(planet_mu_m3_s2) =
+        ephemeris_snapshot.gravitational_parameter_for_catalog_body(&planet.domain_planet.name)
+    else {
+        cache.clear();
+        return;
+    };
     let surface_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
     let position_m = rocket.dynamics.position_m;
     let velocity_mps = rocket.dynamics.velocity_mps;
@@ -425,7 +431,7 @@ pub fn update_orbit_prediction_cache(
     let key = OrbitPredictionKey {
         position_m_bits: dvec3_bits(position_m),
         velocity_mps_bits: dvec3_bits(velocity_mps),
-        planet_mass_kg_bits: planet_mass_kg.to_bits(),
+        planet_mu_m3_s2_bits: planet_mu_m3_s2.to_bits(),
         surface_radius_m_bits: surface_radius_m.to_bits(),
         allowed,
         maneuver: maneuver.map(|maneuver| {
@@ -443,7 +449,7 @@ pub fn update_orbit_prediction_cache(
         predicted_orbit_with_maneuver(
             position_m,
             velocity_mps,
-            planet_mass_kg,
+            planet_mu_m3_s2,
             surface_radius_m,
             maneuver,
         )
@@ -535,21 +541,25 @@ fn draw_orbit_prediction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::gravity::circular_orbit_speed_mps;
+    use crate::domain::services::gravity::gravitational_parameter;
 
     const EARTH_MASS_KG: f64 = 5.97237e24;
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+    fn earth_mu_m3_s2() -> f64 {
+        gravitational_parameter(EARTH_MASS_KG)
+    }
 
     #[test]
     fn circular_orbit_prediction_stays_near_radius() {
         // Circular LEO: the predicted one-period polyline stays at the orbit
         // radius and apoapsis ≈ periapsis ≈ radius.
         let r = EARTH_RADIUS_M + 200_000.0;
-        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
+        let v = (earth_mu_m3_s2() / r).sqrt();
         let pred = predicted_orbit(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
         assert!(pred.planet_frame_points.len() > 20);
@@ -570,11 +580,11 @@ mod tests {
         // eccentric orbit whose apoapsis is clearly above periapsis.
         let r = EARTH_RADIUS_M + 300_000.0;
         // ~10% above circular speed -> elliptical.
-        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r) * 1.10;
+        let v = (earth_mu_m3_s2() / r).sqrt() * 1.10;
         let pred = predicted_orbit(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
         let ap = pred.apoapsis.expect("apoapsis").length();
@@ -592,7 +602,7 @@ mod tests {
         let pred = predicted_orbit(
             DVec3::new(EARTH_RADIUS_M + 2.0, 0.0, 0.0),
             DVec3::ZERO,
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
         assert!(pred.planet_frame_points.is_empty());
@@ -605,13 +615,13 @@ mod tests {
             (
                 DVec3::new(f64::NAN, 0.0, 0.0),
                 DVec3::X,
-                EARTH_MASS_KG,
+                earth_mu_m3_s2(),
                 EARTH_RADIUS_M,
             ),
             (
                 DVec3::new(EARTH_RADIUS_M + 10_000.0, 0.0, 0.0),
                 DVec3::NAN,
-                EARTH_MASS_KG,
+                earth_mu_m3_s2(),
                 EARTH_RADIUS_M,
             ),
             (
@@ -623,14 +633,14 @@ mod tests {
             (
                 DVec3::new(EARTH_RADIUS_M + 10_000.0, 0.0, 0.0),
                 DVec3::X,
-                EARTH_MASS_KG,
+                earth_mu_m3_s2(),
                 0.0,
             ),
         ];
 
-        for (position, velocity, mass, radius) in invalid_states {
+        for (position, velocity, mu, radius) in invalid_states {
             assert_eq!(
-                predicted_orbit(position, velocity, mass, radius),
+                predicted_orbit(position, velocity, mu, radius),
                 OrbitPrediction::empty()
             );
         }
@@ -679,17 +689,17 @@ mod tests {
     #[test]
     fn prediction_is_deterministic() {
         let r = EARTH_RADIUS_M + 400_000.0;
-        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
+        let v = (earth_mu_m3_s2() / r).sqrt();
         let a = predicted_orbit(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
         let b = predicted_orbit(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
         assert_eq!(a, b);
@@ -698,17 +708,17 @@ mod tests {
     #[test]
     fn planned_prograde_impulse_marks_and_changes_the_prediction() {
         let r = EARTH_RADIUS_M + 400_000.0;
-        let v = circular_orbit_speed_mps(EARTH_MASS_KG, r);
+        let v = (earth_mu_m3_s2() / r).sqrt();
         let baseline = predicted_orbit(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
         let with_maneuver = predicted_orbit_with_maneuver(
             DVec3::new(r, 0.0, 0.0),
             DVec3::new(0.0, 0.0, v),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
             Some(ManeuverImpulse {
                 execute_after_s: 120.0,
@@ -732,7 +742,7 @@ mod tests {
         let pred = predicted_orbit(
             DVec3::new(EARTH_RADIUS_M + 100_000.0, 0.0, 0.0),
             DVec3::new(-2_000.0, 0.0, 0.0),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
 
@@ -752,7 +762,7 @@ mod tests {
         let pred = predicted_orbit(
             DVec3::new(EARTH_RADIUS_M + 2_000.0, 0.0, 0.0),
             DVec3::new(-100.0, 0.0, 0.0),
-            EARTH_MASS_KG,
+            earth_mu_m3_s2(),
             EARTH_RADIUS_M,
         );
 
@@ -800,7 +810,7 @@ mod tests {
         let base = OrbitPredictionKey {
             position_m_bits: dvec3_bits(DVec3::new(1.0, 2.0, 3.0)),
             velocity_mps_bits: dvec3_bits(DVec3::new(4.0, 5.0, 6.0)),
-            planet_mass_kg_bits: EARTH_MASS_KG.to_bits(),
+            planet_mu_m3_s2_bits: earth_mu_m3_s2().to_bits(),
             surface_radius_m_bits: EARTH_RADIUS_M.to_bits(),
             allowed: true,
             maneuver: None,

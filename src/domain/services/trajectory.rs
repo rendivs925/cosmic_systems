@@ -19,7 +19,7 @@
 
 use crate::domain::services::cube_sphere::direction_to_lat_lon;
 use crate::domain::services::gravity::{
-    gravitational_acceleration_from_mu, gravitational_parameter, GRAVITATIONAL_CONSTANT,
+    gravitational_acceleration_from_mu, gravitational_parameter,
 };
 use bevy::math::DVec3;
 
@@ -29,20 +29,22 @@ pub struct GravityBody {
     pub name: String,
     /// Body centre in the common inertial frame, meters.
     pub position_m: DVec3,
-    pub mass_kg: f64,
+    /// Standard gravitational parameter μ, in m³/s².
+    pub mu_m3_s2: f64,
 }
 
 impl GravityBody {
-    pub fn new(name: impl Into<String>, position_m: DVec3, mass_kg: f64) -> Self {
+    /// Construct an explicitly approximate prediction source from catalog mass.
+    pub fn from_catalog_mass(name: impl Into<String>, position_m: DVec3, mass_kg: f64) -> Self {
         Self {
             name: name.into(),
             position_m,
-            mass_kg,
+            mu_m3_s2: gravitational_parameter(mass_kg),
         }
     }
 
     /// Construct a prediction source from a validated standard gravitational
-    /// parameter while preserving the existing patched-conics data shape.
+    /// parameter.
     pub fn from_gravitational_parameter(
         name: impl Into<String>,
         position_m: DVec3,
@@ -51,13 +53,13 @@ impl GravityBody {
         Self {
             name: name.into(),
             position_m,
-            mass_kg: mu_m3_s2 / GRAVITATIONAL_CONSTANT,
+            mu_m3_s2,
         }
     }
 
     /// Standard gravitational parameter μ = G·M (m³·s⁻²).
     pub fn mu(&self) -> f64 {
-        gravitational_parameter(self.mass_kg)
+        self.mu_m3_s2
     }
 }
 
@@ -385,7 +387,15 @@ mod tests {
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
     fn earth_at_origin() -> GravityBody {
-        GravityBody::new("Earth", DVec3::ZERO, EARTH_MASS_KG)
+        GravityBody::from_catalog_mass("Earth", DVec3::ZERO, EARTH_MASS_KG)
+    }
+
+    #[test]
+    fn validated_gravity_body_preserves_its_gravitational_parameter() {
+        let mu_m3_s2 = gravitational_parameter(EARTH_MASS_KG);
+        let body = GravityBody::from_gravitational_parameter("Earth", DVec3::ZERO, mu_m3_s2);
+
+        assert_eq!(body.mu(), mu_m3_s2);
     }
 
     #[test]
@@ -437,7 +447,7 @@ mod tests {
     fn dominant_body_picks_strongest_local_gravity() {
         // A massive but distant body vs a light but close body: raw
         // acceleration (μ/r²) decides, so the close light body wins up close.
-        let sun = GravityBody::new("Sun", DVec3::new(-1e11, 0.0, 0.0), SUN_MASS_KG);
+        let sun = GravityBody::from_catalog_mass("Sun", DVec3::new(-1e11, 0.0, 0.0), SUN_MASS_KG);
         let earth = earth_at_origin();
         let bodies = [sun, earth];
         // Object 2 500 km from Earth's centre (well inside Earth's SOI).
@@ -452,8 +462,8 @@ mod tests {
     fn soi_crossing_switches_central_body() {
         // Spec "multi-body propagation": as the object moves from Earth toward
         // the Sun, the tracked central body must switch exactly once.
-        let sun = GravityBody::new("Sun", DVec3::new(-1.5e11, 0.0, 0.0), SUN_MASS_KG);
-        let earth = GravityBody::new("Earth", DVec3::ZERO, EARTH_MASS_KG);
+        let sun = GravityBody::from_catalog_mass("Sun", DVec3::new(-1.5e11, 0.0, 0.0), SUN_MASS_KG);
+        let earth = GravityBody::from_catalog_mass("Earth", DVec3::ZERO, EARTH_MASS_KG);
         let bodies = [sun, earth];
         // Start 2 000 km above Earth, moving directly away from the Sun.
         let r0 = DVec3::new(EARTH_RADIUS_M + 2_000_000.0, 0.0, 0.0);
@@ -483,7 +493,7 @@ mod tests {
 
     #[test]
     fn prediction_is_deterministic() {
-        let sun = GravityBody::new("Sun", DVec3::new(-1.5e11, 0.0, 0.0), SUN_MASS_KG);
+        let sun = GravityBody::from_catalog_mass("Sun", DVec3::new(-1.5e11, 0.0, 0.0), SUN_MASS_KG);
         let earth = earth_at_origin();
         let bodies = [sun, earth];
         let r0 = DVec3::new(EARTH_RADIUS_M + 300_000.0, 0.0, 0.0);

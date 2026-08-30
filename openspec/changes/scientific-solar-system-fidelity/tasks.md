@@ -58,7 +58,7 @@
 
 - [x] 5.1 Introduce a pure immutable force-model tier configuration and expose
   its active terms through telemetry and validation output.
-- [ ] 5.2 Replace high-fidelity catalog mass-times-G calculations with validated
+- [x] 5.2 Replace high-fidelity catalog mass-times-G calculations with validated
   GM constants from the active scientific dataset while retaining labelled
   catalog fallback only where necessary.
 - [ ] 5.3 Implement and validate Earth J2 acceleration in the planet-centered
