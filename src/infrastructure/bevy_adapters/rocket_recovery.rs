@@ -11,7 +11,7 @@ use crate::components::rocket::{
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
-    decompose_velocity, evaluate_touchdown, GroundContact, TouchdownCriteria, TOUCHDOWN_BAND_M,
+    decompose_velocity, evaluate_touchdown, GroundContact, TouchdownCriteria,
 };
 use crate::infrastructure::bevy_adapters::components::TerrainCollisionState;
 use crate::infrastructure::bevy_adapters::rocket_contact::record_scorecard;
@@ -87,13 +87,13 @@ pub fn resolve_drone_ship_deck_contact(
         if target.deck_contact {
             // The deck is a moving resting-contact frame. Remove normal motion
             // and damp lateral slip deterministically while following its drift.
-            if deck_altitude_m < 0.0 {
-                rocket.dynamics.position_m -= normal * deck_altitude_m;
-            }
+            rocket.dynamics.position_m -= normal * deck_altitude_m;
             let normal_speed_mps = relative_velocity_mps.dot(normal);
             let tangential_mps = relative_velocity_mps - normal * normal_speed_mps;
             rocket.dynamics.velocity_mps =
                 ship.state.velocity_mps + tangential_mps * (-12.0 * dt).exp();
+            rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+            rocket.dynamics.angular_acceleration_radps2 = DVec3::ZERO;
             rest.active = true;
             collision.radar_altitude_m = 0.0;
             collision.slope_deg = 0.0;
@@ -108,7 +108,7 @@ pub fn resolve_drone_ship_deck_contact(
             .max(deck_lateral_m.y.abs())
             .max(deck_lateral_m.z.abs())
             > ship.deck_half_extent_m
-            || deck_altitude_m > TOUCHDOWN_BAND_M
+            || deck_altitude_m > 0.0
         {
             continue;
         }
@@ -126,21 +126,35 @@ pub fn resolve_drone_ship_deck_contact(
                 .touchdown_criteria(TouchdownCriteria::default(), geometry.height_m as f64),
             None => TouchdownCriteria::default(),
         };
-        let verdict = evaluate_touchdown(
+        let mut verdict = evaluate_touchdown(
             -components.normal_mps,
             components.lateral_mps,
             0.0,
             tilt_deg,
             &criteria,
         );
+        if verdict == GroundContact::Landed
+            && legs.filter(|legs| legs.deployed()).is_some_and(|legs| {
+                !legs
+                    .gear
+                    .supports_touchdown(rocket.dynamics.mass_kg, (-components.normal_mps).max(0.0))
+            })
+        {
+            bevy::log::warn!(
+                "Landing gear capacity exceeded at drone-ship touchdown: mass {:.0} kg, descent {:.2} m/s",
+                rocket.dynamics.mass_kg,
+                -components.normal_mps
+            );
+            verdict = GroundContact::Crash;
+        }
         collision.ground_contact = verdict;
         match verdict {
             GroundContact::Landed => {
-                if deck_altitude_m < 0.0 {
-                    rocket.dynamics.position_m -= normal * deck_altitude_m;
-                }
+                rocket.dynamics.position_m -= normal * deck_altitude_m;
                 rocket.dynamics.velocity_mps = ship.state.velocity_mps + relative_velocity_mps
                     - normal * relative_velocity_mps.dot(normal);
+                rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+                rocket.dynamics.angular_acceleration_radps2 = DVec3::ZERO;
                 rest.active = true;
                 target.deck_contact = true;
                 collision.radar_altitude_m = 0.0;

@@ -1,15 +1,10 @@
-//! Always-on orbit prediction line (feature: orbit prediction).
+//! Rocket orbit prediction (feature: orbit prediction).
 //!
 //! Samples the patched-conics propagator ([`predict_patched_conics`], Phase 21)
-//! over one orbital period and draws it as a gizmo polyline with apoapsis /
-//! periapsis markers. Unlike the debug-only osculating-orbit gizmo, this runs
-//! in every rocket camera mode and works from the authoritative physics state.
-//! The prediction maths is a pure function ([`predicted_orbit`]) so it is
-//! unit-testable without a renderer; the Bevy system only converts the
-//! planet-centred points to the flight frame and draws them.
+//! over one orbital period. The prediction is presentation data for the HUD and
+//! terrain map, not a rendered flight-path claim. The pure
+//! [`predicted_orbit`] function remains independently testable.
 
-use crate::application::material_factory::{create_orbit_material, ORBIT_LINE_COLOR};
-use crate::application::mesh_factory::create_polyline_ribbon_mesh;
 use crate::components::rocket::{
     GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
     TerrainCollisionState,
@@ -26,11 +21,10 @@ use crate::domain::services::trajectory::{
     predict_patched_conics, predict_patched_conics_until_radius,
     predict_patched_conics_with_impulse, GravityBody, ManeuverImpulse, ManeuverPrediction,
 };
+#[cfg(test)]
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
-use crate::infrastructure::bevy_adapters::rocket_presentation::interpolate_render_transform;
-use crate::infrastructure::bevy_adapters::terrain_render::recenter_render_origin;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -431,28 +425,15 @@ fn planet_frame_to_flight(
     ((point_m - render_origin) * physical_scale.flight_display_units_per_meter as f64).as_vec3()
 }
 
-#[derive(Resource, Default)]
-struct OrbitPredictionRender {
-    entity: Option<Entity>,
-    mesh: Option<Handle<Mesh>>,
-    material: Option<Handle<StandardMaterial>>,
-    prediction_revision: u64,
-}
-
-/// Plugin that draws the always-on orbit prediction line in rocket mode.
+/// Plugin that maintains the shared prediction consumed by flight telemetry and
+/// the terrain map. The 3D line is intentionally disabled pending a validated
+/// visual trajectory design.
 pub struct RocketOrbitPlugin;
 
 impl Plugin for RocketOrbitPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OrbitPredictionCache>()
-            .init_resource::<OrbitPredictionRender>()
-            .add_systems(
-                Update,
-                (update_orbit_prediction_cache, draw_orbit_prediction)
-                    .chain()
-                    .after(interpolate_render_transform)
-                    .after(recenter_render_origin),
-            );
+            .add_systems(Update, update_orbit_prediction_cache);
     }
 }
 
@@ -571,79 +552,6 @@ pub fn update_orbit_prediction_cache(
 
 fn dvec3_bits(value: DVec3) -> [u64; 3] {
     [value.x.to_bits(), value.y.to_bits(), value.z.to_bits()]
-}
-
-/// Draw the predicted trajectory from the interpolated rocket position in the
-/// flight frame. Mesh vertices remain relative to the authoritative prediction
-/// start, while the entity transform follows each render-frame interpolation.
-fn draw_orbit_prediction(
-    physical_scale: Res<PhysicalScale>,
-    prediction_cache: Res<OrbitPredictionCache>,
-    rocket_query: Query<&Transform, With<RocketPhysicsState>>,
-    mut render: ResMut<OrbitPredictionRender>,
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let pred = prediction_cache.prediction();
-    if pred.planet_frame_points.len() < 2 {
-        if let Some(entity) = render.entity.take() {
-            commands.entity(entity).despawn();
-        }
-        render.mesh = None;
-        render.prediction_revision = prediction_cache.revision;
-        return;
-    }
-    let Some(rocket_transform) = rocket_query.iter().next() else {
-        return;
-    };
-
-    let requires_mesh_update =
-        render.mesh.is_none() || render.prediction_revision != prediction_cache.revision;
-
-    let material = render
-        .material
-        .get_or_insert_with(|| {
-            materials.add(create_orbit_material(
-                ORBIT_LINE_COLOR,
-                LinearRgba::new(0.035, 0.04, 0.05, 1.0),
-                0.16,
-            ))
-        })
-        .clone();
-    if requires_mesh_update {
-        let start = pred.planet_frame_points[0];
-        let scale = physical_scale.flight_display_units_per_meter;
-        let points: Vec<_> = pred
-            .planet_frame_points
-            .iter()
-            .map(|point| ((*point - start) * scale as f64).as_vec3())
-            .collect();
-        let mesh = create_polyline_ribbon_mesh(&points, ORBIT_LINE_COLOR, 0.75);
-        if let Some(mesh_handle) = &render.mesh {
-            if let Some(existing) = meshes.get_mut(mesh_handle) {
-                *existing = mesh;
-            }
-        } else {
-            let mesh_handle = meshes.add(mesh);
-            let entity = commands
-                .spawn((
-                    Mesh3d(mesh_handle.clone()),
-                    MeshMaterial3d(material),
-                    Transform::from_translation(rocket_transform.translation),
-                    Name::new("Rocket orbit prediction"),
-                ))
-                .id();
-            render.mesh = Some(mesh_handle);
-            render.entity = Some(entity);
-        }
-        render.prediction_revision = prediction_cache.revision;
-    }
-    if let Some(entity) = render.entity {
-        commands
-            .entity(entity)
-            .insert(Transform::from_translation(rocket_transform.translation));
-    }
 }
 
 #[cfg(test)]

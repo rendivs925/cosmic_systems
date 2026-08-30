@@ -214,6 +214,24 @@ impl LandingGear {
         kinetic_j <= capacity_j
     }
 
+    /// True when the actual touchdown mass is within the configured gear
+    /// rating. An omitted rating adds no explicit mass cap.
+    pub fn supports_landing_mass(&self, mass_kg: f64) -> bool {
+        mass_kg.is_finite()
+            && mass_kg > 0.0
+            && self
+                .spec
+                .max_landing_mass_kg
+                .is_none_or(|maximum_mass_kg| mass_kg <= maximum_mass_kg)
+    }
+
+    /// True when the configured mass rating and spring-work capacity can both
+    /// support this vertical touchdown condition.
+    pub fn supports_touchdown(&self, mass_kg: f64, vertical_speed_mps: f64) -> bool {
+        self.supports_landing_mass(mass_kg)
+            && self.absorbs_touchdown_energy(mass_kg, vertical_speed_mps)
+    }
+
     /// Resolve one fixed step of soft gear contact against flat ground whose
     /// surface normal is `surface_normal` (pointing away from the ground).
     ///
@@ -501,6 +519,18 @@ mod tests {
             !g.absorbs_touchdown_energy(DESIGN_MASS, capacity_speed * 1.1),
             "energy beyond spring capacity must not fit the stroke"
         );
+    }
+
+    #[test]
+    fn configured_landing_mass_rating_is_enforced() {
+        let g = gear();
+
+        assert!(g.supports_landing_mass(DESIGN_MASS));
+        assert!(!g.supports_landing_mass(DESIGN_MASS + 1.0));
+        assert!(!g.supports_landing_mass(0.0));
+        assert!(!g.supports_landing_mass(f64::NAN));
+        assert!(g.supports_touchdown(DESIGN_MASS, DESIGN_TOUCHDOWN_SPEED_MPS));
+        assert!(!g.supports_touchdown(DESIGN_MASS, DESIGN_TOUCHDOWN_SPEED_MPS * 2.0));
     }
 
     /// Gear-aware criteria widen only the lateral limit, proportionally to

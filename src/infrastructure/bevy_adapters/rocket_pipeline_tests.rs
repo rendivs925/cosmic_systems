@@ -363,8 +363,8 @@ mod ground_contact_tests {
                 )
             };
             // Start airborne 2 m above the pad, descending at 2 m/s, gear
-            // down, released from the pad hold: a true descent so the
-            // touchdown verdict fires.
+            // down, released from the pad hold. A terminal verdict must wait
+            // until this descent crosses the sampled contact plane.
             world.entity_mut(entity).insert(RocketPhysicsState {
                 dynamics: RocketDynamicsState::new(
                     up * (surface_r + 2.0),
@@ -376,6 +376,11 @@ mod ground_contact_tests {
                 ),
             });
             world.get_mut::<GroundRest>(entity).unwrap().active = false;
+            world
+                .get_mut::<RocketPhysicsState>(entity)
+                .unwrap()
+                .dynamics
+                .angular_velocity_radps = DVec3::new(0.03, -0.02, 0.01);
             // Gear down: pre-latch deployment (the latch itself is covered
             // by domain tests; this test exercises the contact path).
             let gear = LandingGear::new(
@@ -394,7 +399,24 @@ mod ground_contact_tests {
             app
         };
 
-        for _ in 0..512 {
+        // The first Update initializes the manual fixed clock; the second
+        // performs the first 1/64 s simulation tick.
+        app.update();
+        app.update();
+        {
+            let world = app.world_mut();
+            let mut q = world.query::<(&GroundRest, &LandingScorecard)>();
+            let (rest, scorecard) = q.single(world).unwrap();
+            assert!(
+                !rest.active,
+                "vehicle must not land while still above terrain"
+            );
+            assert!(
+                !scorecard.recorded,
+                "touchdown must wait for the contact plane"
+            );
+        }
+        for _ in 0..510 {
             app.update();
         }
 
@@ -412,8 +434,9 @@ mod ground_contact_tests {
         assert_ne!(*mission, RocketMissionState::Crashed);
         assert!(scorecard.recorded, "touchdown must be recorded");
         assert!(
-            (scorecard.touchdown_vertical_speed_mps - 2.0).abs() < 0.5,
-            "scorecard descent {} not near the 2 m/s drop",
+            scorecard.touchdown_vertical_speed_mps > 0.0
+                && scorecard.touchdown_vertical_speed_mps <= 5.0,
+            "scorecard descent {} exceeds the accepted gear touchdown limit",
             scorecard.touchdown_vertical_speed_mps
         );
         assert!(
@@ -438,6 +461,55 @@ mod ground_contact_tests {
             rocket.dynamics.velocity_mps.length() < 0.3,
             "not settled: {}",
             rocket.dynamics.velocity_mps.length()
+        );
+        assert!(
+            rocket.dynamics.angular_velocity_radps.length() < 1e-12,
+            "supported landing must not retain free angular motion"
+        );
+    }
+
+    #[test]
+    fn landing_gear_rating_failure_is_a_crash() {
+        let mut app = pad_app(0.0, 20.0);
+        let entity = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        let gear = LandingGear::new(
+            LandingGearSpec {
+                count: 4,
+                base_radius_m: 4.5,
+                stroke_m: 3.0,
+                max_landing_mass_kg: Some(500.0),
+                deploy_altitude_m: 100.0,
+            },
+            1_000.0,
+        );
+        let mut legs = LandingLegs::new(gear);
+        legs.deployment.deployed = true;
+        let world = app.world_mut();
+        world.entity_mut(entity).insert(legs);
+        *world.get_mut::<RocketMissionState>(entity).unwrap() = RocketMissionState::Landing;
+        world.get_mut::<GroundRest>(entity).unwrap().active = false;
+
+        // The first Update initializes the manual fixed clock; the second
+        // performs the first 1/64 s simulation tick.
+        app.update();
+        app.update();
+
+        let world = app.world();
+        assert_eq!(
+            *world.get::<RocketMissionState>(entity).unwrap(),
+            RocketMissionState::Crashed,
+            "a vehicle above its configured landing-gear mass rating must not land"
+        );
+        assert_eq!(
+            world
+                .get::<TerrainCollisionState>(entity)
+                .unwrap()
+                .ground_contact,
+            GroundContact::Crash
         );
     }
 
@@ -888,7 +960,7 @@ mod recovery_pipeline_tests {
         );
     }
 
-    fn droneship_outcome() -> (DVec3, DVec3, DVec3, LandingScorecard, bool) {
+    fn droneship_outcome() -> (DVec3, DVec3, DVec3, LandingScorecard, bool, f64, bool) {
         let (mut app, deck_center_m) = recovery_app(20.0);
         let ship = app
             .world_mut()
@@ -921,7 +993,16 @@ mod recovery_pipeline_tests {
                 deck_contact: false,
             });
 
-        for _ in 0..512 {
+        // Touchdown must wait for the physical deck plane rather than use the
+        // precontact band as a terminal-contact shortcut.
+        app.update();
+        app.update();
+        let latched_above_deck = app
+            .world()
+            .get::<DroneShipLandingTarget>(stage)
+            .unwrap()
+            .deck_contact;
+        for _ in 0..510 {
             app.update();
         }
         let world = app.world();
@@ -929,12 +1010,18 @@ mod recovery_pipeline_tests {
         let autopilot = world.get::<RocketAutopilot>(stage).unwrap();
         let scorecard = world.get::<LandingScorecard>(stage).unwrap().clone();
         let target = world.get::<DroneShipLandingTarget>(stage).unwrap();
+        let ship_state = &world.get::<DroneShip>(ship).unwrap().state;
+        let deck_normal = ship_state.position_m.normalize_or_zero();
+        let deck_separation_m =
+            (rocket.dynamics.position_m - ship_state.position_m).dot(deck_normal);
         (
             rocket.dynamics.position_m,
             rocket.dynamics.velocity_mps,
             autopilot.target_landing_position_m,
             scorecard,
             target.deck_contact,
+            deck_separation_m,
+            latched_above_deck,
         )
     }
 
@@ -952,6 +1039,15 @@ mod recovery_pipeline_tests {
             "deck touchdown must populate the landing scorecard"
         );
         assert!(first.3.touchdown_vertical_speed_mps <= 5.0);
+        assert!(
+            !first.6,
+            "stage must not latch to a drone-ship deck while still airborne"
+        );
+        assert!(
+            first.5.abs() < 1e-9,
+            "deck contact must project to the deck plane, separation {} m",
+            first.5
+        );
         assert!(
             first.2.y.abs() > 0.01,
             "guidance must consume the moving ship's predicted target, not its static origin"
@@ -976,6 +1072,7 @@ mod recovery_pipeline_tests {
             first.3.distance_to_target_m.to_bits(),
             second.3.distance_to_target_m.to_bits()
         );
+        assert_eq!(first.6, second.6);
     }
 }
 

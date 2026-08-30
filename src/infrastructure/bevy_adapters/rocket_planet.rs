@@ -11,6 +11,7 @@
 
 use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
 use crate::application::mesh_factory::create_flight_globe_mesh;
+use crate::application::solar_system_startup::solar_surface_luminance_nits;
 use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::ephemeris::NaifBodyId;
@@ -35,6 +36,16 @@ pub struct RocketPlanet {
     pub is_bound_planet: bool,
     pub is_sun: bool,
 }
+
+/// Marks the local visual representation of the Sun. Its transform is camera
+/// relative so the rocket camera retains its local depth range while the disc
+/// keeps the Sun's true angular diameter.
+#[derive(Component, Debug)]
+pub struct RocketSunDisc;
+
+const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
+const SUN_RADIUS_M: f64 = 696_340_000.0;
+const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
 
 /// Component marking a moon entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -75,6 +86,7 @@ pub fn setup_rocket_planets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
+    solar_params: Res<SolarSystemParameters>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
@@ -109,7 +121,13 @@ pub fn setup_rocket_planets(
     }
 
     // Spawn the Sun
-    spawn_rocket_sun(&mut commands, &mut meshes, &mut materials, &asset_server);
+    spawn_rocket_sun(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &asset_server,
+        &solar_params,
+    );
 }
 
 fn spawn_rocket_bound_planet(
@@ -206,10 +224,9 @@ fn spawn_rocket_sun(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     asset_server: &AssetServer,
+    solar_params: &SolarSystemParameters,
 ) {
-    // True Sun radius in meters
-    let sun_radius_m = 696_340_000.0;
-    let mesh_handle = meshes.add(Sphere::new(sun_radius_m as f32));
+    let mesh_handle = meshes.add(Sphere::new(1.0));
 
     let textures = get_planet_textures("Sun");
     let albedo_handle = load_texture(asset_server, textures.albedo);
@@ -219,8 +236,15 @@ fn spawn_rocket_sun(
         normal_map_texture: None,
         emissive_texture: albedo_handle,
         base_color: Color::srgb(1.0, 1.0, 0.98),
-        emissive: LinearRgba::new(1.0, 1.0, 0.8, 1.0),
-        unlit: true,
+        emissive: LinearRgba::new(
+            solar_surface_luminance_nits(solar_params),
+            solar_surface_luminance_nits(solar_params),
+            solar_surface_luminance_nits(solar_params),
+            1.0,
+        ),
+        // Match the solar-map material path so HDR emission participates in
+        // the same tone mapping and bloom presentation.
+        unlit: false,
         metallic: 0.0,
         reflectance: 0.0,
         perceptual_roughness: 0.0,
@@ -236,6 +260,7 @@ fn spawn_rocket_sun(
             is_bound_planet: false,
             is_sun: true,
         },
+        RocketSunDisc,
     ));
 }
 
@@ -288,7 +313,8 @@ pub fn update_rocket_planets(
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit;
 
-    // Bound planet and Sun: always at origin in flight frame (render_origin tracks rocket)
+    // The bound planet remains centered in the flight frame (render_origin
+    // tracks the rocket). The Sun disc is owned by update_rocket_sun_disc.
     // The planet center is at -render_origin.origin
     let planet_center_flight = -render_origin.origin.as_vec3();
     for (rocket_planet, mut transform, mut visibility) in query_set.p0().iter_mut() {
@@ -297,13 +323,6 @@ pub fn update_rocket_planets(
             *visibility = Visibility::Visible;
             transform.rotation =
                 body_fixed_to_planet_inertial_rotation(bound_orientation).as_quat();
-        } else if rocket_planet.is_sun {
-            if let Some(sun_relative_to_bound) =
-                ephemeris_snapshot.solar_inertial_relative_state(NaifBodyId::SUN, bound_body)
-            {
-                transform.translation =
-                    (planet_center_flight.as_dvec3() + sun_relative_to_bound.position_m).as_vec3();
-            }
         }
     }
 
@@ -340,6 +359,47 @@ pub fn update_rocket_planets(
     }
 }
 
+/// Keep the visual Sun inside the local rocket camera depth range while its
+/// direction comes from the evaluated ephemeris snapshot. This is presentation
+/// only; the directional light remains the illumination authority.
+pub fn update_rocket_sun_disc(
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    bound_planet: Res<RocketBoundPlanet>,
+    camera_query: Query<&Transform, (With<Camera3d>, Without<RocketSunDisc>)>,
+    mut sun_query: Query<(&mut Transform, &mut Visibility), With<RocketSunDisc>>,
+) {
+    let Some(bound_body) = bound_planet
+        .0
+        .as_deref()
+        .and_then(NaifBodyId::for_catalog_name)
+    else {
+        return;
+    };
+    let Some(sun_direction) = ephemeris_snapshot
+        .solar_inertial_relative_state(NaifBodyId::SUN, bound_body)
+        .map(|state| state.position_m.normalize_or_zero())
+        .filter(|direction| direction.length_squared() > 0.0)
+    else {
+        return;
+    };
+    let Some(camera) = camera_query.iter().next() else {
+        return;
+    };
+
+    let radius_m = rocket_sun_disc_radius_m(ROCKET_SUN_DISC_DISTANCE_M);
+    let translation =
+        camera.translation + sun_direction.as_vec3() * ROCKET_SUN_DISC_DISTANCE_M as f32;
+    for (mut transform, mut visibility) in sun_query.iter_mut() {
+        transform.translation = translation;
+        transform.scale = Vec3::splat(radius_m as f32);
+        *visibility = Visibility::Visible;
+    }
+}
+
+fn rocket_sun_disc_radius_m(distance_m: f64) -> f64 {
+    distance_m * (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,13 +433,12 @@ mod tests {
     }
 
     #[test]
-    fn rocket_proxies_follow_simulation_time_not_shared_transforms() {
+    fn rocket_moon_proxy_follows_simulation_time_not_shared_transforms() {
         let solar = SolarSystemParameters::for_visualization();
         let scale = PhysicalScale::from_solar_parameters(&solar);
         let sim_time_s = 86_400.0;
         let earth = PlanetFactory::create_by_name("Earth").unwrap();
         let moon = PlanetFactory::create_by_name("Moon").unwrap();
-        let sun = PlanetFactory::create_by_name("Sun").unwrap();
 
         let mut app = App::new();
         app.insert_resource(solar.clone());
@@ -440,30 +499,6 @@ mod tests {
             base_reflectance: 0.0,
             base_roughness: 0.0,
         });
-        // This deliberately incorrect shared-presentation transform must not
-        // affect rocket proxy placement.
-        app.world_mut().spawn((
-            PlanetComponent {
-                domain_planet: sun.clone(),
-                material: default(),
-                has_texture: false,
-                base_reflectance: 0.0,
-                base_roughness: 0.0,
-            },
-            Transform::from_translation(Vec3::splat(123_456.0)),
-        ));
-        let rocket_sun = app
-            .world_mut()
-            .spawn((
-                RocketPlanet {
-                    name: "Sun".to_string(),
-                    is_bound_planet: false,
-                    is_sun: true,
-                },
-                Transform::default(),
-                Visibility::Visible,
-            ))
-            .id();
         let rocket_moon = app
             .world_mut()
             .spawn((
@@ -478,17 +513,8 @@ mod tests {
 
         app.update();
 
-        let expected_sun = (-DVec3::X * 149_597_870_700.0).as_vec3();
         let expected_moon = (DVec3::X * 384_400_000.0).as_vec3();
 
-        assert_eq!(
-            app.world()
-                .entity(rocket_sun)
-                .get::<Transform>()
-                .unwrap()
-                .translation,
-            expected_sun
-        );
         assert_eq!(
             app.world()
                 .entity(rocket_moon)
@@ -497,5 +523,14 @@ mod tests {
                 .translation,
             expected_moon
         );
+    }
+
+    #[test]
+    fn rocket_sun_disc_preserves_the_mean_solar_angular_radius() {
+        let radius_m = rocket_sun_disc_radius_m(ROCKET_SUN_DISC_DISTANCE_M);
+        let angular_radius_rad = (radius_m / ROCKET_SUN_DISC_DISTANCE_M).asin();
+        let expected_angular_radius_rad = (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M).asin();
+
+        assert!((angular_radius_rad - expected_angular_radius_rad).abs() < 1e-12);
     }
 }

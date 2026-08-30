@@ -60,11 +60,12 @@ pub fn update_performance_monitor(
         / quality_controller.frame_times.len() as f32;
     perf_stats.fps = 1.0 / avg_frame_time;
 
-    // Update quality level in PerformanceStats to match QualityController
-    perf_stats.quality_level = quality_controller.current_level;
-
-    // Gradual quality adaptation
-    quality_controller.adapt_quality(perf_stats.fps);
+    if perf_stats.adaptive_enabled {
+        // Legacy callers can opt in explicitly, but the application defaults
+        // to fixed user-selected quality.
+        perf_stats.quality_level = quality_controller.current_level;
+        quality_controller.adapt_quality(perf_stats.fps);
+    }
 }
 
 // System to capture screenshot on next frame after notifications are hidden

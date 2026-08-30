@@ -42,7 +42,7 @@ pub fn update_wasm_memory_stats(
         .and_then(|value| value.as_f64())
         .unwrap_or(0.0) as u64;
 
-    if used == 0 || limit == 0 {
+    if used == 0 || limit == 0 || !performance_stats.adaptive_enabled {
         return;
     }
 

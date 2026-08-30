@@ -145,7 +145,9 @@ impl Default for PerformanceStats {
             frame_count: 0,
             quality_level: QualityLevel::High,
             target_fps: 60.0,
-            adaptive_enabled: true,
+            // Rendering quality is an explicit user setting. Do not silently
+            // degrade terrain or presentation during a demanding scene.
+            adaptive_enabled: false,
             frame_history: VecDeque::with_capacity(60), // DEPRECATED
             history_len: 60,                            // DEPRECATED
             adaptation_rate: 0.1,
@@ -199,6 +201,16 @@ impl Default for PerformanceStats {
             last_quality_adjustment: std::time::Instant::now(),
             adaptation_cooldown_ms: 1000, // 1 second minimum between adjustments
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quality_adaptation_is_disabled_by_default() {
+        assert!(!PerformanceStats::default().adaptive_enabled);
     }
 }
 

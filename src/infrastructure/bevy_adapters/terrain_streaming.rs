@@ -1,7 +1,7 @@
 //! Cube-sphere terrain streaming (AGENTS.md sections 22-23).
 //!
 //! A `TerrainPatchManager` resource is driven each tick by a streaming system
-//! that keeps a viewport-local cube-sphere quadtree through the
+//! that keeps a complete coarse cube-sphere cover with viewport-local refinement through the
 //! requested → generating → ready → visible → cached → evicted lifecycle, and
 //! enforces the configured memory budget by evicting least-recently-used cached
 //! patches. Generated patch geometry is built deterministically from the shared
@@ -461,10 +461,10 @@ pub fn stream_terrain_patches(
         );
     }
 
-    // The flight-globe fallback covers non-requested faces, so only the camera
-    // neighborhood enters terrain generation. Each selected group still keeps
-    // siblings and ancestors to preserve terrain LOD seam invariants.
-    let mut requested = BTreeSet::new();
+    // Keep every root resident as the complete source-authoritative fallback.
+    // The recessed flight globe is only a bootstrap mesh while these async jobs
+    // complete; it must not become exposed terrain between local patches.
+    let mut requested: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
     for patch in selection
         .requested
         .iter()
@@ -1236,19 +1236,20 @@ mod tests {
     }
 
     #[test]
-    fn viewport_request_retains_only_the_camera_face_root() {
+    fn complete_root_coverage_is_retained_with_camera_local_refinement() {
         let parent = TerrainPatch::root(CubeFace::PosZ);
         let selected: BTreeSet<_> = parent.children().into_iter().collect();
-        let mut requested = BTreeSet::new();
+        let mut requested: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
 
         add_viewport_lod_group(parent.children()[0], &selected, &mut requested);
 
-        let roots: Vec<_> = requested
-            .iter()
-            .copied()
-            .filter(|patch| patch.level == 0)
-            .collect();
-        assert_eq!(roots, vec![parent]);
+        assert!(TerrainPatch::roots()
+            .into_iter()
+            .all(|root| requested.contains(&root)));
+        assert!(parent
+            .children()
+            .into_iter()
+            .all(|child| requested.contains(&child)));
     }
 
     #[test]

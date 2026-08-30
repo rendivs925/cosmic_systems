@@ -95,7 +95,8 @@ use crate::infrastructure::bevy_adapters::rocket_lifecycle::{
 };
 use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
-    isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets, RocketBoundPlanet,
+    isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets,
+    update_rocket_sun_disc, RocketBoundPlanet,
 };
 use crate::infrastructure::bevy_adapters::rocket_presentation::{
     capture_render_state, interpolate_render_transform,
@@ -281,12 +282,7 @@ impl Plugin for SharedSimulationPlugin {
         // Performance and quality systems
         app.add_systems(
             Update,
-            (
-                update_performance_stats,
-                adaptive_quality_system,
-                log_performance_stats,
-            )
-                .chain(),
+            (update_performance_stats, log_performance_stats).chain(),
         );
 
         // Vulkan compute (native only)
@@ -741,6 +737,10 @@ impl Plugin for RocketModePlugin {
         // Rocket-mode celestial proxies use SimulationTime directly, independent
         // of the wall-clock shared solar-map presentation.
         app.add_systems(Update, update_rocket_planets.after(recenter_render_origin));
+        app.add_systems(
+            Update,
+            update_rocket_sun_disc.after(update_rocket_camera_projection),
+        );
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(Update, update_sun_day_night_cycle);
     }

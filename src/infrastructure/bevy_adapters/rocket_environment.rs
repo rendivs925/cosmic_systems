@@ -1,3 +1,4 @@
+use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
@@ -33,8 +34,8 @@ pub fn setup_rocket_sun_light(
 
     commands.spawn((
         bevy::light::DirectionalLight {
-            illuminance: 100_000.0,             // bright daylight (lux)
-            color: Color::srgb(1.0, 0.9, 0.75), // warm low-sun light
+            illuminance: SUN_ILLUMINANCE_AT_EARTH_LUX,
+            color: Color::srgb(1.0, 1.0, 0.98),
             shadows_enabled: true,
             ..default()
         },

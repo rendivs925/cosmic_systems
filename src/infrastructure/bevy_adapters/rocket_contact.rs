@@ -16,7 +16,6 @@ use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
     decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
     resolve_resting_contact, sample_surface, GroundContact, SurfaceSample, TouchdownCriteria,
-    TOUCHDOWN_BAND_M,
 };
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -435,6 +434,10 @@ pub fn resolve_ground_contact(
                 }
             }
             collision.ground_contact = GroundContact::Landed;
+            if !tip_over.is_toppling() {
+                rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+                rocket.dynamics.angular_acceleration_radps2 = DVec3::ZERO;
+            }
             monitor_grounded_topple(tip_over, legs.as_deref(), geometry, tilt_deg, dt);
             continue;
         }
@@ -446,18 +449,40 @@ pub fn resolve_ground_contact(
             rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity;
         }
 
-        if signed_altitude_m > TOUCHDOWN_BAND_M || components.normal_mps > 0.0 {
+        // A terminal verdict is valid only at the sampled contact plane. The
+        // previous three-metre band could mark a descending vehicle as Landed
+        // while it was still airborne; fixed-step penetration is projected onto
+        // this plane immediately above before the verdict is evaluated.
+        if signed_altitude_m > 0.0 || components.normal_mps > 0.0 {
             collision.ground_contact = GroundContact::None;
             continue;
         }
 
-        let verdict = evaluate_touchdown(
+        let mut verdict = evaluate_touchdown(
             -components.normal_mps,
             components.lateral_mps,
             sample.slope_deg,
             tilt_deg,
             &criteria,
         );
+        if verdict == GroundContact::Landed
+            && legs
+                .as_ref()
+                .filter(|legs| legs.deployed())
+                .is_some_and(|legs| {
+                    !legs.gear.supports_touchdown(
+                        rocket.dynamics.mass_kg,
+                        (-components.normal_mps).max(0.0),
+                    )
+                })
+        {
+            bevy::log::warn!(
+                "Landing gear capacity exceeded at touchdown: mass {:.0} kg, descent {:.2} m/s",
+                rocket.dynamics.mass_kg,
+                -components.normal_mps
+            );
+            verdict = GroundContact::Crash;
+        }
         collision.ground_contact = verdict;
 
         match verdict {
@@ -482,29 +507,18 @@ pub fn resolve_ground_contact(
                     autopilot.target_landing_position_m,
                     collision.over_water,
                 );
-                match legs.as_ref().filter(|legs| legs.deployed()).map(|legs| {
-                    legs.gear.absorbs_touchdown_energy(
-                        rocket.dynamics.mass_kg,
-                        (-components.normal_mps).max(0.0),
-                    )
-                }) {
-                    Some(true) => {}
-                    Some(false) => bevy::log::warn!(
-                        "Touchdown energy exceeds strut stroke capacity (descent {:.2} m/s)",
-                        -components.normal_mps
-                    ),
-                    None => {
-                        let res = resolve_resting_contact(
-                            position_m,
-                            velocity,
-                            surface_radius_m,
-                            normal,
-                            dt,
-                        );
-                        rocket.dynamics.position_m = res.position_m;
-                        rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
-                    }
+                if legs.as_ref().filter(|legs| legs.deployed()).is_none() {
+                    let res =
+                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
+                    rocket.dynamics.position_m = res.position_m;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
                 }
+                // Point-contact terrain has no contact-torque model. Arresting
+                // free rotation on an accepted supported landing prevents the
+                // integrator from rotating a resting vehicle through the ground.
+                // A beyond-support lean still enters the existing topple model.
+                rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+                rocket.dynamics.angular_acceleration_radps2 = DVec3::ZERO;
 
                 if matches!(
                     *mission_state,

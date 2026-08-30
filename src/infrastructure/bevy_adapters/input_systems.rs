@@ -3,7 +3,6 @@ use super::craft_components::{CraftCameraTag, CraftTravelTarget};
 use crate::domain::services::physics;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::components::PerformanceStats;
 use crate::infrastructure::bevy_adapters::planet_systems::solar_map_render_translation;
 use bevy::input::mouse::MouseButton;
 use bevy::math::DVec3;
@@ -204,7 +203,6 @@ pub fn handle_solar_system_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut simulation_time: ResMut<SimulationTime>,
     mut solar_params: ResMut<SolarSystemParameters>,
-    mut perf_stats: ResMut<PerformanceStats>,
     mut camera_query: Query<(&mut CameraController, &mut Transform)>,
     selected_planet: Res<SelectedPlanet>,
     planet_query: Query<(&PlanetComponent, &SolarMapPosition)>,
@@ -267,25 +265,6 @@ pub fn handle_solar_system_input(
             "Time scale reset to: {:.1}x",
             simulation_time.time_acceleration
         );
-    }
-
-    // Toggle automatic quality adaptation
-    if keyboard.just_pressed(KeyCode::KeyA)
-        && keyboard.pressed(KeyCode::ControlLeft)
-        && keyboard.pressed(KeyCode::ShiftLeft)
-    {
-        perf_stats.adaptive_enabled = !perf_stats.adaptive_enabled;
-        println!(
-            "Automatic quality adaptation: {}",
-            if perf_stats.adaptive_enabled {
-                "ENABLED"
-            } else {
-                "DISABLED (manual control)"
-            }
-        );
-        if !perf_stats.adaptive_enabled {
-            println!("Use Ctrl+T/Ctrl+R to manually adjust time scale");
-        }
     }
 
     // Toggle orbit visualization

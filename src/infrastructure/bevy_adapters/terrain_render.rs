@@ -169,7 +169,9 @@ impl Default for TerrainRenderConfig {
             recenter_threshold_m: 10_000.0,
             skirt_depth_m: 5.0,
             // 2^n + 1 samples preserve parent/child boundary sample alignment.
-            patch_resolution: 33,
+            // 65 samples retain smooth macro curvature in the near-flight view;
+            // residency remains bounded by TerrainStreamingResource's budget.
+            patch_resolution: 65,
         }
     }
 }

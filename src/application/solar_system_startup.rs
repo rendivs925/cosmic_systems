@@ -30,16 +30,16 @@ pub struct SolarCameraEnabled(pub bool);
 
 /// Direct normal illuminance from the Sun at Earth's mean orbital distance,
 /// before atmospheric attenuation.
-const SUN_ILLUMINANCE_AT_EARTH_LUX: f32 = 127_000.0;
+pub(crate) const SUN_ILLUMINANCE_AT_EARTH_LUX: f32 = 127_000.0;
 
-fn solar_light_luminous_power_lm(solar_params: &SolarSystemParameters) -> f32 {
+pub(crate) fn solar_light_luminous_power_lm(solar_params: &SolarSystemParameters) -> f32 {
     // Bevy point lights use total luminous power (lm). At one rendered AU this
     // yields the measured top-of-atmosphere solar illuminance: E = Phi / 4pi r^2.
     let earth_orbit_units = solar_params.au_to_units(1.0);
     4.0 * std::f32::consts::PI * SUN_ILLUMINANCE_AT_EARTH_LUX * earth_orbit_units.powi(2)
 }
 
-fn solar_surface_luminance_nits(solar_params: &SolarSystemParameters) -> f32 {
+pub(crate) fn solar_surface_luminance_nits(solar_params: &SolarSystemParameters) -> f32 {
     // A uniformly radiating sphere has Phi = 4pi^2 r^2 L. Derive the visible
     // surface luminance from the same luminous power used by the point source.
     let radius_units = physics::calculate_sun_visual_radius(solar_params);
