@@ -46,6 +46,15 @@ fn test_ephemeris_snapshot() -> EphemerisSnapshot {
 }
 
 #[cfg(test)]
+fn ksc_terrain_coordinates() -> (f64, f64) {
+    let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+    crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon(
+        &crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates::default(),
+        &earth,
+    )
+}
+
+#[cfg(test)]
 mod ground_contact_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
@@ -136,7 +145,7 @@ mod ground_contact_tests {
         let source =
             crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
                 .source;
-        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let (lat, lon) = ksc_terrain_coordinates();
         let h = source.height_m(lat, lon);
         let up = radial_direction(lat, lon);
         let surface_radius = EARTH_RADIUS_M + h;
@@ -237,7 +246,7 @@ mod ground_contact_tests {
         let (rocket, rest, collision) = q.single(world).unwrap();
 
         assert!(rest.active, "vehicle must still be resting on the pad");
-        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let (lat, lon) = ksc_terrain_coordinates();
         let h =
             crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
                 .source
@@ -343,7 +352,7 @@ mod ground_contact_tests {
         let mut app = {
             let mut app = pad_app(0.0, 20.0); // engines off
             let world = app.world_mut();
-            let (lat, lon) = (28.5721_f64, -80.6480_f64);
+            let (lat, lon) = ksc_terrain_coordinates();
             let h = crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for(
                 "Earth",
             )
@@ -835,7 +844,7 @@ mod recovery_pipeline_tests {
             terrain,
         ));
 
-        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let (lat, lon) = ksc_terrain_coordinates();
         let up = radial_direction(lat, lon);
         let terrain_surface_m = EARTH_RADIUS_M + terrain_source.height_m(lat, lon);
         let deck_center_m = up * (terrain_surface_m + deck_altitude_m);
@@ -1203,7 +1212,7 @@ mod ascent_pipeline_tests {
             1_250.0, 11_300.0, 0.6, 18.0,
         );
 
-        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        let (lat, lon) = ksc_terrain_coordinates();
         let h =
             crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
                 .source
@@ -2049,7 +2058,7 @@ mod determinism_regression_tests {
     use crate::components::rocket::{RocketMissionState, RocketPhysicsState};
     use crate::domain::entities::rocket::RocketMissionState as DomainMission;
     use crate::domain::services::regression::{
-        load_baseline_ron, RegressionConfig, RocketStateSample,
+        load_baseline_ron, save_baseline_ron, RegressionConfig, RocketStateSample,
     };
     use bevy::prelude::*;
 
@@ -2148,6 +2157,26 @@ mod determinism_regression_tests {
         );
 
         let current = record_ascent_samples();
+        if std::env::var_os("REGRESSION_RECORD").is_some() {
+            let mut recorded = baseline;
+            recorded.git_commit = std::process::Command::new("git")
+                .args(["rev-parse", "--short", "HEAD"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|commit| commit.trim().to_owned())
+                .filter(|commit| !commit.is_empty())
+                .unwrap_or_else(|| "uncommitted".to_string());
+            recorded.samples = current;
+            recorded.hash_chain = recorded.recompute_hash_chain();
+            std::fs::write(
+                &path,
+                save_baseline_ron(&recorded).expect("baseline serializes"),
+            )
+            .expect("baseline writes");
+            return;
+        }
         let divergences = baseline.compare(&current, &RegressionConfig::default());
 
         assert!(

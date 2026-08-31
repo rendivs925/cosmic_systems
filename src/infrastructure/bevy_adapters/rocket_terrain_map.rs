@@ -10,7 +10,8 @@ use crate::components::rocket::{
     TerrainCollisionState,
 };
 use crate::domain::services::reference_frames::{
-    catalog_body_fixed_to_inertial_rotation, planet_inertial_to_body_fixed,
+    body_fixed_to_terrain_lat_lon, catalog_body_fixed_to_inertial_rotation,
+    geodetic_to_terrain_lat_lon, planet_inertial_to_body_fixed,
 };
 use crate::domain::services::terrain_source::{surface_appearance, TerrainSource};
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -391,15 +392,16 @@ fn update_terrain_map_panel(
         if direction.length_squared() <= 1e-12 {
             return None;
         }
-        let latitude_deg = direction.y.asin().to_degrees();
-        let longitude_deg = direction.z.atan2(direction.x).to_degrees();
+        let (latitude_deg, longitude_deg) = body_fixed_to_terrain_lat_lon(direction);
         equirectangular_point(latitude_deg, longitude_deg, MAP_WIDTH_PX, MAP_HEIGHT_PX)
             .map(|point| (point, latitude_deg))
     };
     let current = to_map(rocket.dynamics.position_m).map(|point| point.0);
+    let (launch_latitude_deg, launch_longitude_deg) =
+        geodetic_to_terrain_lat_lon(launch_site, &planet.domain_planet);
     let launch = equirectangular_point(
-        launch_site.latitude_deg as f64,
-        launch_site.longitude_deg as f64,
+        launch_latitude_deg,
+        launch_longitude_deg,
         MAP_WIDTH_PX,
         MAP_HEIGHT_PX,
     );
@@ -541,12 +543,8 @@ fn map_recorded_entry(
     let direction = position_bf.normalize_or_zero();
     (direction.length_squared() > 1e-12)
         .then(|| {
-            equirectangular_point(
-                direction.y.asin().to_degrees(),
-                direction.z.atan2(direction.x).to_degrees(),
-                MAP_WIDTH_PX,
-                MAP_HEIGHT_PX,
-            )
+            let (latitude_deg, longitude_deg) = body_fixed_to_terrain_lat_lon(direction);
+            equirectangular_point(latitude_deg, longitude_deg, MAP_WIDTH_PX, MAP_HEIGHT_PX)
         })
         .flatten()
 }
@@ -571,12 +569,8 @@ fn prediction_track(
                 * *position_m;
             let direction = position_bf.normalize_or_zero();
             (direction.length_squared() > 1e-12).then(|| {
-                equirectangular_point(
-                    direction.y.asin().to_degrees(),
-                    direction.z.atan2(direction.x).to_degrees(),
-                    MAP_WIDTH_PX,
-                    MAP_HEIGHT_PX,
-                )
+                let (latitude_deg, longitude_deg) = body_fixed_to_terrain_lat_lon(direction);
+                equirectangular_point(latitude_deg, longitude_deg, MAP_WIDTH_PX, MAP_HEIGHT_PX)
             })
         })
         .flatten()

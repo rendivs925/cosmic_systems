@@ -150,7 +150,9 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
     vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
 };
 
-/// Texture resolution (texels per side) for the per-patch surface maps.
+/// Texture resolution (texels per side) for close-patch surface maps. At the
+/// finest ~10 km Earth tiles this retains material detail below 80 m per texel
+/// without changing authoritative geometry or collision sampling.
 const SURFACE_TEX_RES: u32 = 128;
 /// Blend toward the 128x128 authoritative source normal. The remainder comes
 /// from the 33x33 patch mesh already present at the fragment, so this encodes
@@ -283,7 +285,7 @@ pub fn build_patch_surfaces(
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        anisotropy_clamp: 4,
+        anisotropy_clamp: 16,
         ..Default::default()
     });
     albedo_img.sampler = sampler.clone();
@@ -611,7 +613,7 @@ pub fn build_vegetation_mesh(
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
-    use crate::domain::services::terrain_source::{PlanetaryDemSource, ProceduralTerrainSource};
+    use crate::domain::services::terrain_source::ProceduralTerrainSource;
 
     #[derive(Debug)]
     struct RiverTerrain;
@@ -653,7 +655,7 @@ mod tests {
             assert_eq!(sampler.mag_filter, ImageFilterMode::Linear);
             assert_eq!(sampler.min_filter, ImageFilterMode::Linear);
             assert_eq!(sampler.mipmap_filter, ImageFilterMode::Linear);
-            assert_eq!(sampler.anisotropy_clamp, 4);
+            assert_eq!(sampler.anisotropy_clamp, 16);
         }
 
         let (repeat_albedo, repeat_normal) =
@@ -683,7 +685,7 @@ mod tests {
 
     #[test]
     fn residual_normal_is_neutral_for_a_flat_source() {
-        let source = PlanetaryDemSource;
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
         let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
         let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0);

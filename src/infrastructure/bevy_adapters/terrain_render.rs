@@ -15,6 +15,7 @@ use crate::infrastructure::bevy_adapters::terrain_streaming::{
 };
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
+use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::{DQuat, DVec3};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
@@ -83,6 +84,7 @@ struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
     earth_macro_albedo: Option<Handle<Image>>,
+    earth_macro_albedo_sampler_configured: bool,
 }
 
 /// Identifies a terrain render entity independently for every planet. Patch
@@ -244,6 +246,10 @@ impl Plugin for TerrainRenderPlugin {
             )
             .add_systems(
                 Update,
+                configure_earth_macro_albedo_sampler.before(spawn_patch_mesh_system),
+            )
+            .add_systems(
+                Update,
                 (
                     update_patch_transforms,
                     reveal_cached_patch_mesh_system,
@@ -255,6 +261,31 @@ impl Plugin for TerrainRenderPlugin {
                     .after(stream_terrain_patches),
             );
     }
+}
+
+/// Keep the real-world Earth albedo sharp at grazing camera angles. The asset
+/// loads asynchronously, so this configures it once when its image is ready.
+fn configure_earth_macro_albedo_sampler(
+    mut render_assets: ResMut<TerrainRenderAssets>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if render_assets.earth_macro_albedo_sampler_configured {
+        return;
+    }
+    let Some(handle) = render_assets.earth_macro_albedo.as_ref() else {
+        return;
+    };
+    let Some(image) = images.get_mut(handle.id()) else {
+        return;
+    };
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 16,
+        ..default()
+    });
+    render_assets.earth_macro_albedo_sampler_configured = true;
 }
 
 /// System that spawns Bevy mesh/material entities when a terrain patch

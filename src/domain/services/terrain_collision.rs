@@ -6,6 +6,7 @@
 //! detection. There is no full-planet physics mesh: heights are sampled on
 //! demand from the source.
 
+use crate::domain::services::reference_frames::body_fixed_to_terrain_lat_lon;
 use crate::domain::services::terrain_source::TerrainSource;
 use bevy::math::DVec3;
 
@@ -92,7 +93,7 @@ pub fn radar_altitude_m(
         return 0.0;
     }
     let dir = position_body_fixed_m / r;
-    let (lat, lon) = lat_lon_from_direction(dir);
+    let (lat, lon) = body_fixed_to_terrain_lat_lon(dir);
     let surface_height_m = source.height_m(lat, lon);
     let surface_radius = planet_radius_m + surface_height_m;
     (r - surface_radius).max(0.0)
@@ -242,12 +243,6 @@ pub fn liftoff_from_rest(thrust_n: f64, weight_n: f64) -> bool {
     thrust_n > weight_n
 }
 
-/// Direction → latitude/longitude in degrees.
-pub fn lat_lon_from_direction(dir: DVec3) -> (f64, f64) {
-    let d = dir.normalize();
-    (d.y.asin().to_degrees(), d.z.atan2(d.x).to_degrees())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,8 +260,9 @@ mod tests {
     #[test]
     fn radar_altitude_is_radial_above_surface() {
         let s = source();
-        // Position on the surface at KSC latitude/longitude + 5 km altitude.
-        let (lat, lon) = (28.5721_f64, -80.6480_f64);
+        // Position on the surface at representative radial terrain coordinates
+        // plus 5 km altitude.
+        let (lat, lon) = (28.4_f64, -80.65_f64);
         let h = s.height_m(lat, lon);
         let r = EARTH_RADIUS_M + h + 5_000.0;
         let pos = radial_direction(lat, lon) * r;
@@ -416,7 +412,7 @@ mod tests {
     #[test]
     fn direction_to_lat_lon_round_trips() {
         let dir = DVec3::new(0.5, 0.3, 0.81).normalize();
-        let (lat, lon) = lat_lon_from_direction(dir);
+        let (lat, lon) = body_fixed_to_terrain_lat_lon(dir);
         let back = radial_direction(lat, lon);
         assert!((back - dir).length() < 1e-9);
     }

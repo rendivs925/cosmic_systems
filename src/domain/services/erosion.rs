@@ -626,7 +626,7 @@ impl TerrainSource for ErodedTerrainSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::{PlanetaryDemSource, ProceduralTerrainSource};
+    use crate::domain::services::terrain_source::ProceduralTerrainSource;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Barrier;
     use std::thread;
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn river_strength_uses_cached_flow_without_triggering_a_bake() {
         let source = ErodedTerrainSource::new(
-            Arc::new(PlanetaryDemSource),
+            Arc::new(ProceduralTerrainSource::new(0, 0.0, 0.0, 0)),
             ErosionConfig {
                 resolution: 16,
                 droplets: 0,

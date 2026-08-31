@@ -8,14 +8,15 @@ use crate::components::rocket::{
 use crate::domain::events::SplashdownDetectedEvent;
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::reference_frames::{
-    body_fixed_to_planet_inertial_rotation, geodetic_to_body_fixed, planet_inertial_to_body_fixed,
+    body_fixed_to_planet_inertial_rotation, body_fixed_to_terrain_lat_lon, geodetic_to_body_fixed,
+    geodetic_to_terrain_lat_lon, planet_inertial_to_body_fixed,
     surface_velocity_in_planet_inertial,
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
-    decompose_velocity, evaluate_touchdown, lat_lon_from_direction, liftoff_from_rest,
-    resolve_resting_contact, sample_surface, GroundContact, SurfaceSample, TouchdownCriteria,
+    decompose_velocity, evaluate_touchdown, liftoff_from_rest, resolve_resting_contact,
+    sample_surface, GroundContact, SurfaceSample, TouchdownCriteria,
 };
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -277,7 +278,7 @@ pub fn resolve_ground_contact(
         if dir_bf.length_squared() < 1e-12 {
             continue;
         }
-        let (lat, lon) = lat_lon_from_direction(dir_bf);
+        let (lat, lon) = body_fixed_to_terrain_lat_lon(dir_bf);
         let sample = surface_cache.as_deref().map_or_else(
             || sample_surface(planet_terrain.source.as_ref(), lat, lon, radius_m),
             |cache| {
@@ -322,12 +323,14 @@ pub fn resolve_ground_contact(
             if let Some(launch_site) = access.launch_site {
                 let pad_direction_bf =
                     geodetic_to_body_fixed(launch_site, &planet.domain_planet).normalize();
+                let (pad_latitude_deg, pad_longitude_deg) =
+                    geodetic_to_terrain_lat_lon(launch_site, &planet.domain_planet);
                 let pad_sample = surface_cache.as_deref().map_or_else(
                     || {
                         sample_surface(
                             planet_terrain.source.as_ref(),
-                            launch_site.latitude_deg as f64,
-                            launch_site.longitude_deg as f64,
+                            pad_latitude_deg,
+                            pad_longitude_deg,
                             radius_m,
                         )
                     },
@@ -335,8 +338,8 @@ pub fn resolve_ground_contact(
                         cache.sample(
                             planet_entity,
                             planet_terrain.source.as_ref(),
-                            launch_site.latitude_deg as f64,
-                            launch_site.longitude_deg as f64,
+                            pad_latitude_deg,
+                            pad_longitude_deg,
                             radius_m,
                         )
                     },

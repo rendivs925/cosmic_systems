@@ -19,6 +19,12 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
+use crate::domain::services::planet_factory::PlanetFactory;
+use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+use crate::domain::value_objects::launch_site_coordinates::{
+    predefined_sites, LaunchSiteCoordinates,
+};
 
 /// Feature-scale of the 3D value-noise field on the unit sphere: higher values
 /// produce more, smaller features across the planet.
@@ -825,17 +831,6 @@ impl TerrainSource for HeightmapTerrainSource {
     }
 }
 
-/// Real planetary DEM data source placeholder. Real DEM integration plugs in
-/// behind the same trait without touching render or collision consumers.
-#[derive(Debug, Clone, Default)]
-pub struct PlanetaryDemSource;
-
-impl TerrainSource for PlanetaryDemSource {
-    fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-        0.0
-    }
-}
-
 /// Continuous surface appearance (albedo/roughness/metallic) blended from
 /// elevation, soil moisture, latitude zone and local slope — the "one
 /// continuous law" terrain best-practice (glassy wash → soft hills → textured
@@ -1016,34 +1011,54 @@ fn layered_earth_source() -> Arc<dyn TerrainSource> {
 
 fn terrain_sites(name: &str) -> Vec<TerrainSite> {
     match name {
-        "Earth" => vec![
-            TerrainSite {
-                name: "Kennedy Space Center",
-                latitude_deg: 28.5721,
-                longitude_deg: -80.6480,
-                // ~17 m flat pad, then an ~11 km C1 grade. The procedural
-                // Earth can differ substantially from the surveyed 2 m pad.
-                radius_deg: 0.00015,
-                blend_radius_deg: 0.1,
-                elevation_m: 2.0,
-            },
-            TerrainSite {
-                name: "RTLS Landing Pad",
-                latitude_deg: 28.61,
-                longitude_deg: -80.55,
-                radius_deg: 0.00015,
-                blend_radius_deg: 0.05,
-                elevation_m: 3.0,
-            },
-            TerrainSite {
-                name: "Drone Ship",
-                latitude_deg: 28.50,
-                longitude_deg: -80.05,
-                radius_deg: 0.00025,
-                blend_radius_deg: 0.03,
-                elevation_m: 0.0,
-            },
-        ],
+        "Earth" => {
+            let Some(earth) = PlanetFactory::create_by_name(name) else {
+                return Vec::new();
+            };
+            let terrain_coordinates = |latitude_deg, longitude_deg| {
+                let site = LaunchSiteCoordinates::new(
+                    CelestialBodyId::earth(),
+                    latitude_deg,
+                    longitude_deg,
+                    0.0,
+                );
+                geodetic_to_terrain_lat_lon(&site, &earth)
+            };
+            let ksc = predefined_sites::kennedy_space_center();
+            let (ksc_latitude_deg, ksc_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
+            let (rtls_latitude_deg, rtls_longitude_deg) = terrain_coordinates(28.61, -80.55);
+            let (drone_ship_latitude_deg, drone_ship_longitude_deg) =
+                terrain_coordinates(28.50, -80.05);
+
+            vec![
+                TerrainSite {
+                    name: "Kennedy Space Center",
+                    latitude_deg: ksc_latitude_deg,
+                    longitude_deg: ksc_longitude_deg,
+                    // ~17 m flat pad, then an ~11 km C1 grade. The procedural
+                    // Earth can differ substantially from the surveyed 2 m pad.
+                    radius_deg: 0.00015,
+                    blend_radius_deg: 0.1,
+                    elevation_m: 2.0,
+                },
+                TerrainSite {
+                    name: "RTLS Landing Pad",
+                    latitude_deg: rtls_latitude_deg,
+                    longitude_deg: rtls_longitude_deg,
+                    radius_deg: 0.00015,
+                    blend_radius_deg: 0.05,
+                    elevation_m: 3.0,
+                },
+                TerrainSite {
+                    name: "Drone Ship",
+                    latitude_deg: drone_ship_latitude_deg,
+                    longitude_deg: drone_ship_longitude_deg,
+                    radius_deg: 0.00025,
+                    blend_radius_deg: 0.03,
+                    elevation_m: 0.0,
+                },
+            ]
+        }
         "Moon" => vec![TerrainSite {
             name: "Lunar Landing Site",
             latitude_deg: 0.0,
@@ -1180,20 +1195,15 @@ mod tests {
     }
 
     #[test]
-    fn source_swap_preserves_interface() {
-        let procedural: &dyn TerrainSource = &ProceduralTerrainSource::default();
-        let dem: &dyn TerrainSource = &PlanetaryDemSource;
-        // Both expose the same height interface; swap is a type-level change.
-        let _ = procedural.height_m(0.0, 0.0);
-        let _ = dem.height_m(0.0, 0.0);
-        assert_eq!(PlanetaryDemSource.height_m(0.0, 0.0), 0.0);
-    }
-
-    #[test]
     fn site_aware_source_flattens_launch_sites() {
         let source = terrain_source_for("Earth");
+        let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
+            .expect("Earth exists");
+        let ksc = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
+        let (latitude_deg, longitude_deg) =
+            crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon(&ksc, &earth);
         // Inside the KSC site the height is the flat pad elevation.
-        let ksc_height = source.height_m(28.5721, -80.6480);
+        let ksc_height = source.height_m(latitude_deg, longitude_deg);
         assert!((ksc_height - 2.0).abs() < 1e-9);
         // Far from any site the procedural base applies.
         let far = source.height_m(-40.0, 100.0);
@@ -1242,10 +1252,15 @@ mod tests {
         let launch_site = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
         let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
             .expect("Earth exists");
+        let (latitude_deg, longitude_deg) =
+            crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon(
+                &launch_site,
+                &earth,
+            );
         let sample = crate::domain::services::terrain_collision::sample_surface(
             source.as_ref(),
-            launch_site.latitude_deg as f64,
-            launch_site.longitude_deg as f64,
+            latitude_deg,
+            longitude_deg,
             earth.radius_km as f64 * 1_000.0,
         );
         assert_eq!(

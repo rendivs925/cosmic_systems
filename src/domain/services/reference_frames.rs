@@ -194,6 +194,33 @@ pub fn geodetic_to_body_fixed(site: &LaunchSiteCoordinates, planet: &Planet) -> 
     }
 }
 
+/// Convert a geodetic surface location to the radial latitude/longitude used by
+/// the cube-sphere terrain source. Terrain heights are measured above a mean
+/// radial sphere, while Earth launch sites are expressed on the WGS-84
+/// ellipsoid, so their latitudes are not interchangeable.
+///
+/// The geodetic altitude is intentionally ignored: a terrain coordinate names
+/// a point on the body's reference surface, not a point above it.
+pub fn geodetic_to_terrain_lat_lon(site: &LaunchSiteCoordinates, planet: &Planet) -> (f64, f64) {
+    let surface_site = LaunchSiteCoordinates::new(
+        site.planet_id.clone(),
+        site.latitude_deg,
+        site.longitude_deg,
+        0.0,
+    );
+    body_fixed_to_terrain_lat_lon(geodetic_to_body_fixed(&surface_site, planet))
+}
+
+/// Convert a legacy terrain body-fixed direction or position to the radial
+/// latitude/longitude consumed by the cube-sphere terrain source.
+pub fn body_fixed_to_terrain_lat_lon(body_fixed: DVec3) -> (f64, f64) {
+    let direction = body_fixed.normalize_or_zero();
+    (
+        direction.y.clamp(-1.0, 1.0).asin().to_degrees(),
+        direction.z.atan2(direction.x).to_degrees(),
+    )
+}
+
 /// Map a legacy terrain body-fixed position (meters) back to its body's
 /// documented geodetic datum.
 pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoordinates {
@@ -744,6 +771,38 @@ mod tests {
                 - WGS84_SEMI_MAJOR_AXIS_M * (1.0 - 1.0 / WGS84_INVERSE_FLATTENING))
                 .abs()
                 < 1e-6
+        );
+    }
+
+    #[test]
+    fn wgs84_launch_sites_map_to_the_terrain_radial_coordinates() {
+        let planet = earth();
+        let surface_site = ksc();
+        let elevated_site = LaunchSiteCoordinates::new(
+            CelestialBodyId::earth(),
+            surface_site.latitude_deg,
+            surface_site.longitude_deg,
+            1_000.0,
+        );
+
+        let surface_coordinates = geodetic_to_terrain_lat_lon(&surface_site, &planet);
+        let elevated_coordinates = geodetic_to_terrain_lat_lon(&elevated_site, &planet);
+
+        assert!(
+            (surface_coordinates.0 - surface_site.latitude_deg as f64).abs() > 0.1,
+            "WGS-84 geodetic latitude must not be used directly for radial terrain sampling"
+        );
+        assert!((surface_coordinates.1 - surface_site.longitude_deg as f64).abs() < 1e-9);
+        assert_eq!(surface_coordinates, elevated_coordinates);
+        let datum_surface_site = LaunchSiteCoordinates::new(
+            surface_site.planet_id.clone(),
+            surface_site.latitude_deg,
+            surface_site.longitude_deg,
+            0.0,
+        );
+        assert_eq!(
+            surface_coordinates,
+            body_fixed_to_terrain_lat_lon(geodetic_to_body_fixed(&datum_surface_site, &planet))
         );
     }
 

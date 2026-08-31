@@ -4,7 +4,7 @@ use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
-    body_fixed_to_planet_inertial_rotation, geodetic_to_body_fixed,
+    body_fixed_to_planet_inertial_rotation, geodetic_to_body_fixed, geodetic_to_terrain_lat_lon,
     surface_velocity_in_planet_inertial,
 };
 use crate::domain::services::rocket_dynamics::{
@@ -68,11 +68,12 @@ pub fn spawn_rockets(
     let ksc = predefined_sites::kennedy_space_center();
     let earth = PlanetFactory::create_by_name(ksc.planet_id.as_str()).unwrap();
     let earth_radius_m = earth.radius_km as f64 * 1000.0;
+    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
     let terrain_sample = terrain_source.map(|source| {
         sample_surface(
             source,
-            ksc.latitude_deg as f64,
-            ksc.longitude_deg as f64,
+            terrain_latitude_deg,
+            terrain_longitude_deg,
             earth_radius_m,
         )
     });
@@ -85,7 +86,11 @@ pub fn spawn_rockets(
         ksc.longitude_deg,
         terrain_elevation_m as f32,
     );
-    let position_bf = geodetic_to_body_fixed(&launch_site, &earth);
+    // Terrain elevations are radial offsets from the catalog mean radius. Use
+    // the WGS-84-derived radial direction, but let the shared terrain surface
+    // define the authoritative launch radius.
+    let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
+        * (earth_radius_m + terrain_elevation_m);
     let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
     let position_m = body_to_inertial * position_bf;
 

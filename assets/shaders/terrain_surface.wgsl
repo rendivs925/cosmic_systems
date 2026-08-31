@@ -28,10 +28,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // The validated macro albedo provides continent/ocean readability; the
-    // source-derived local map supplies bounded biome and slope variation.
+    // The validated macro albedo is the real-world Earth color authority. The
+    // source-derived local map is normalized before modulation, retaining
+    // sharp biome, river, and rock variation without muting the imagery.
     // This material-only blend never affects terrain geometry or collision.
-    let local_modulation = mix(vec4<f32>(1.0), local_albedo, 0.35);
+    let local_reflectance = min(local_albedo * 1.35, vec4<f32>(1.0));
+    let local_modulation = mix(vec4<f32>(1.0), local_reflectance, 0.22);
     pbr_input.material.base_color *= mix(vec4<f32>(1.0), local_modulation, detail_weight);
 
     let local_surface = textureSample(

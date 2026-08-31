@@ -880,10 +880,7 @@ fn stitched_grid_index(i: usize, j: usize, resolution: usize, stitched_edges: &[
 
 /// Direction to latitude/longitude in degrees.
 pub fn direction_to_lat_lon(dir: DVec3) -> (f64, f64) {
-    let d = dir.normalize();
-    let lat = d.y.asin().to_degrees();
-    let lon = d.z.atan2(d.x).to_degrees();
-    (lat, lon)
+    crate::domain::services::reference_frames::body_fixed_to_terrain_lat_lon(dir)
 }
 
 #[cfg(test)]
