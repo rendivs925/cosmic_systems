@@ -65,7 +65,8 @@ fn rocket_task_pool_options() -> TaskPoolOptions {
 }
 
 fn main() {
-    let options = parse_launch_options(env::args());
+    let options = parse_launch_options(env::args().skip(1))
+        .unwrap_or_else(|error| panic!("Invalid launch options: {error}"));
 
     if matches!(options.mode, Mode::Rocket) {
         validate_vehicle_selection(&options.vehicle);

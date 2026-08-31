@@ -19,7 +19,6 @@ required-features = ["native"]
 bevy = { version = "0.17.3" }
 pulldown-cmark = "0.13"
 rand = "0.8.5"
-bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types
 serde = { version = "1.0", features = ["derive"] }  # Serialization for Web Workers
 ron = "0.10"            # Rocket vehicle configuration files (assets/configs/rockets)
@@ -47,4 +46,3 @@ futures-channel = "0.3"
 [features]
 default = ["native"]
 native = []
-simd = []

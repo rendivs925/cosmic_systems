@@ -8,7 +8,7 @@ use crate::components::rocket::{
     AblationState, CommsState, DroneShip, DroneShipLandingTarget, ForceAccumulator,
     GravityAcceleration, GroundRest, LandingLegs, LandingScorecard, MaxQTracker, ParachuteState,
     PayloadFairing, RetroPropulsionEffect, RocketAutopilot, RocketCommands, RocketFlightConditions,
-    RocketMass, RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRenderState,
+    RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRenderState,
     SpecificForceAcceleration, SpentStage, TerrainCollisionState, ThermalState, TipOverState,
     TorqueAccumulator,
 };
@@ -27,7 +27,6 @@ pub struct RocketReplaySnapshot {
     pub entity: Entity,
     pub timestamp_s: f64,
     pub physics: RocketPhysicsState,
-    pub mass: RocketMass,
     pub mission: RocketMissionState,
     pub propulsion: RocketPropulsion,
     pub commands: RocketCommands,
@@ -65,7 +64,6 @@ pub struct ReplayFrame {
 struct SpentStageReplaySnapshot {
     entity: Entity,
     physics: RocketPhysicsState,
-    mass: RocketMass,
     flight_conditions: RocketFlightConditions,
     gravity: GravityAcceleration,
     force_accumulator: ForceAccumulator,
@@ -146,7 +144,6 @@ pub enum ReplayAction {
 pub struct ReplayCaptureAccess {
     pub entity: Entity,
     pub physics: &'static RocketPhysicsState,
-    pub mass: &'static RocketMass,
     pub mission: &'static RocketMissionState,
     pub propulsion: &'static RocketPropulsion,
     pub commands: &'static RocketCommands,
@@ -176,7 +173,6 @@ pub struct ReplayCaptureAccess {
 pub struct ReplayRestoreAccess {
     pub entity: Entity,
     pub physics: &'static mut RocketPhysicsState,
-    pub mass: &'static mut RocketMass,
     pub mission: &'static mut RocketMissionState,
     pub propulsion: &'static mut RocketPropulsion,
     pub commands: &'static mut RocketCommands,
@@ -206,7 +202,6 @@ pub struct ReplayRestoreAccess {
 pub struct ReplaySpentStageCaptureAccess {
     pub entity: Entity,
     pub physics: &'static RocketPhysicsState,
-    pub mass: &'static RocketMass,
     pub flight_conditions: &'static RocketFlightConditions,
     pub gravity: &'static GravityAcceleration,
     pub force_accumulator: &'static ForceAccumulator,
@@ -218,7 +213,6 @@ pub struct ReplaySpentStageCaptureAccess {
 pub struct ReplaySpentStageRestoreAccess {
     pub entity: Entity,
     pub physics: &'static mut RocketPhysicsState,
-    pub mass: &'static mut RocketMass,
     pub flight_conditions: &'static mut RocketFlightConditions,
     pub gravity: &'static mut GravityAcceleration,
     pub force_accumulator: &'static mut ForceAccumulator,
@@ -248,7 +242,6 @@ fn capture_rockets(
             entity: rocket.entity,
             timestamp_s,
             physics: rocket.physics.clone(),
-            mass: *rocket.mass,
             mission: *rocket.mission,
             propulsion: rocket.propulsion.clone(),
             commands: *rocket.commands,
@@ -282,7 +275,6 @@ fn capture_spent_stages(
         .map(|stage| SpentStageReplaySnapshot {
             entity: stage.entity,
             physics: stage.physics.clone(),
-            mass: *stage.mass,
             flight_conditions: *stage.flight_conditions,
             gravity: *stage.gravity,
             force_accumulator: *stage.force_accumulator,
@@ -334,7 +326,6 @@ fn restore_frame(
             };
 
             *rocket.physics = snapshot.physics.clone();
-            *rocket.mass = snapshot.mass;
             *rocket.mission = snapshot.mission;
             *rocket.propulsion = snapshot.propulsion.clone();
             *rocket.commands = snapshot.commands;
@@ -402,7 +393,6 @@ fn restore_spent_stages(
             continue;
         };
         *stage.physics = snapshot.physics.clone();
-        *stage.mass = snapshot.mass;
         *stage.flight_conditions = snapshot.flight_conditions;
         *stage.gravity = snapshot.gravity;
         *stage.force_accumulator = snapshot.force_accumulator;
@@ -609,7 +599,6 @@ mod tests {
             .world_mut()
             .spawn((
                 RocketPhysicsState { dynamics },
-                RocketMass(1_000.0),
                 RocketMissionState::Landing,
                 RocketPropulsion {
                     vehicle: Rocket::falcon9(),
@@ -720,7 +709,6 @@ mod tests {
                     kind: SpentStageKind::Booster,
                 },
                 RocketPhysicsState { dynamics },
-                RocketMass(50.0),
                 RocketFlightConditions(FlightConditions {
                     altitude_m: 1_000.0,
                     ..default()
@@ -786,7 +774,11 @@ mod tests {
                 .unwrap()
                 .dynamics
                 .position_m = DVec3::ZERO;
-            stage.get_mut::<RocketMass>().unwrap().0 = 1.0;
+            stage
+                .get_mut::<RocketPhysicsState>()
+                .unwrap()
+                .dynamics
+                .mass_kg = 1.0;
             stage
                 .get_mut::<RocketFlightConditions>()
                 .unwrap()
@@ -821,7 +813,10 @@ mod tests {
                 .position_m,
             DVec3::new(7.0, 8.0, 9.0)
         );
-        assert_eq!(stage.get::<RocketMass>().unwrap().0, 50.0);
+        assert_eq!(
+            stage.get::<RocketPhysicsState>().unwrap().dynamics.mass_kg,
+            50.0
+        );
         assert_eq!(
             stage.get::<RocketFlightConditions>().unwrap().altitude_m,
             1_000.0
@@ -896,7 +891,11 @@ mod tests {
                 .unwrap()
                 .dynamics
                 .position_m = DVec3::splat(99.0);
-            rocket.get_mut::<RocketMass>().unwrap().0 = 99.0;
+            rocket
+                .get_mut::<RocketPhysicsState>()
+                .unwrap()
+                .dynamics
+                .mass_kg = 99.0;
             rocket.get_mut::<RocketPropulsion>().unwrap().throttle = 0.0;
             rocket.get_mut::<RocketCommands>().unwrap().throttle_cmd = 0.0;
             rocket.get_mut::<RocketAutopilot>().unwrap().integral = DVec3::ZERO;
@@ -950,7 +949,10 @@ mod tests {
                 .position_m,
             DVec3::new(1.0, 2.0, 3.0)
         );
-        assert_eq!(rocket.get::<RocketMass>().unwrap().0, 1_000.0);
+        assert_eq!(
+            rocket.get::<RocketPhysicsState>().unwrap().dynamics.mass_kg,
+            1_000.0
+        );
         assert_eq!(rocket.get::<RocketPropulsion>().unwrap().throttle, 0.7);
         assert_eq!(rocket.get::<RocketCommands>().unwrap().throttle_cmd, 0.8);
         assert_eq!(

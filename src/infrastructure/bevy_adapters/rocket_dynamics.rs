@@ -2,7 +2,7 @@
 
 use crate::components::rocket::{
     AblationState, ForceAccumulator, GravityAcceleration, RocketFlightConditions, RocketGeometry,
-    RocketMass, RocketPhysicsState, SpecificForceAcceleration, TorqueAccumulator,
+    RocketPhysicsState, SpecificForceAcceleration, TorqueAccumulator,
 };
 use crate::domain::services::aerodynamics::{
     aerodynamic_coefficients_with_nose_bluntness, aerodynamic_torque_body, angle_of_attack,
@@ -18,10 +18,14 @@ use bevy::prelude::{Query, Res};
 
 /// Add gravity after all other force writers without overwriting their output.
 pub fn accumulate_forces(
-    mut rocket_query: Query<(&RocketMass, &GravityAcceleration, &mut ForceAccumulator)>,
+    mut rocket_query: Query<(
+        &RocketPhysicsState,
+        &GravityAcceleration,
+        &mut ForceAccumulator,
+    )>,
 ) {
-    for (mass, gravity, mut force_accum) in rocket_query.iter_mut() {
-        force_accum.0 += gravity.value * mass.0;
+    for (rocket, gravity, mut force_accum) in rocket_query.iter_mut() {
+        force_accum.0 += gravity.value * rocket.dynamics.mass_kg;
     }
 }
 
@@ -34,7 +38,6 @@ pub fn integrate_6dof(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &mut RocketPhysicsState,
-        &mut RocketMass,
         Option<&GravityAcceleration>,
         Option<&mut SpecificForceAcceleration>,
         &mut ForceAccumulator,
@@ -42,7 +45,7 @@ pub fn integrate_6dof(
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut rocket, mut mass, gravity, specific_force, mut force_accum, mut torque_accum) in
+    for (mut rocket, gravity, specific_force, mut force_accum, mut torque_accum) in
         rocket_query.iter_mut()
     {
         if let Some(mut specific_force) = specific_force {
@@ -52,7 +55,6 @@ pub fn integrate_6dof(
         }
         rocket.dynamics.integrate_translation(force_accum.0, dt);
         rocket.dynamics.integrate_rotation(torque_accum.0, dt);
-        mass.0 = rocket.dynamics.mass_kg;
         force_accum.0 = DVec3::ZERO;
         torque_accum.0 = DVec3::ZERO;
     }
@@ -150,7 +152,6 @@ mod tests {
                         center_of_mass_m: DVec3::ZERO,
                     },
                 },
-                RocketMass(100.0),
                 GravityAcceleration {
                     value: DVec3::new(0.0, -9.80665, 0.0),
                 },

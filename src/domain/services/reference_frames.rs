@@ -15,11 +15,9 @@
 //!   them.
 //! - **Planet-centered inertial**: origin at a planet's center, axes parallel
 //!   to solar-inertial, real meters (f64).
-//! - **Legacy terrain body-fixed**: the terrain and launch-site APIs retain
-//!   their established axes: +Y toward geographic north, +X toward lon 0, and
-//!   +Z toward lon +90°. This is not IAU body-fixed. The explicit compatibility
-//!   conversion below maps it to IAU (+Z north, +Y east) before applying a
-//!   kernel orientation.
+//! - **Terrain body-fixed**: +Y toward geographic north, +X toward lon 0, and
+//!   +Z toward lon +90°. An explicit frame conversion maps it to IAU (+Z north,
+//!   +Y east) before applying a kernel orientation.
 //! - **IAU body-fixed**: supplied by [`BodyOrientation`] in ICRF/J2000. It is
 //!   the authoritative physical orientation for high-fidelity consumers.
 //! - **Local tangent**: East-North-Up (ENU) triad at a geodetic reference
@@ -40,7 +38,6 @@ use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::domain::value_objects::physical_scale::{PhysicalScale, AU_IN_METERS};
 use bevy::math::{DMat3, DQuat, DVec3, Vec3};
-use bevy::transform::components::Transform;
 
 /// The frames supported by the reference-frame module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,7 +159,7 @@ pub fn geodetic_datum(planet: &Planet) -> GeodeticDatum {
 // Geodetic (lat/lon/alt) <-> planet body-fixed
 // ---------------------------------------------------------------------------
 
-/// Map geodetic latitude/longitude/ellipsoidal height to the legacy terrain
+/// Map geodetic latitude/longitude/ellipsoidal height to the terrain
 /// body-fixed axes in meters. Earth uses WGS-84; all other bodies use their
 /// explicit spherical datum.
 pub fn geodetic_to_body_fixed(site: &LaunchSiteCoordinates, planet: &Planet) -> DVec3 {
@@ -211,7 +208,7 @@ pub fn geodetic_to_terrain_lat_lon(site: &LaunchSiteCoordinates, planet: &Planet
     body_fixed_to_terrain_lat_lon(geodetic_to_body_fixed(&surface_site, planet))
 }
 
-/// Convert a legacy terrain body-fixed direction or position to the radial
+/// Convert a terrain body-fixed direction or position to the radial
 /// latitude/longitude consumed by the cube-sphere terrain source.
 pub fn body_fixed_to_terrain_lat_lon(body_fixed: DVec3) -> (f64, f64) {
     let direction = body_fixed.normalize_or_zero();
@@ -221,7 +218,7 @@ pub fn body_fixed_to_terrain_lat_lon(body_fixed: DVec3) -> (f64, f64) {
     )
 }
 
-/// Map a legacy terrain body-fixed position (meters) back to its body's
+/// Map a terrain body-fixed position (meters) back to its body's
 /// documented geodetic datum.
 pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoordinates {
     let (lat_rad, lon_rad, height_m) = match geodetic_datum(planet) {
@@ -285,34 +282,36 @@ pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoord
 // ---------------------------------------------------------------------------
 
 /// Convert the terrain/geodetic body-fixed convention (+Y north, +Z east) to
-/// IAU body-fixed axes (+Z north, +Y east). This is the sole compatibility
-/// boundary for legacy terrain and launch-site coordinates.
-pub fn legacy_body_fixed_to_iau_body_fixed(pos_legacy_bf: DVec3) -> DVec3 {
-    DVec3::new(pos_legacy_bf.x, pos_legacy_bf.z, pos_legacy_bf.y)
+/// IAU body-fixed axes (+Z north, +Y east).
+pub fn terrain_body_fixed_to_iau_body_fixed(pos_terrain_bf: DVec3) -> DVec3 {
+    DVec3::new(pos_terrain_bf.x, pos_terrain_bf.z, pos_terrain_bf.y)
 }
 
-/// Convert IAU body-fixed axes (+Z north, +Y east) to the legacy terrain and
+/// Convert IAU body-fixed axes (+Z north, +Y east) to the terrain and
 /// geodetic convention (+Y north, +Z east).
-pub fn iau_body_fixed_to_legacy_body_fixed(pos_iau_bf: DVec3) -> DVec3 {
+pub fn iau_body_fixed_to_terrain_body_fixed(pos_iau_bf: DVec3) -> DVec3 {
     DVec3::new(pos_iau_bf.x, pos_iau_bf.z, pos_iau_bf.y)
 }
 
-/// Convert a legacy terrain body-fixed position to the project planet-centered
+/// Convert a terrain body-fixed position to the project planet-centered
 /// inertial frame through the shared IAU orientation snapshot.
-pub fn body_fixed_to_planet_inertial(pos_legacy_bf: DVec3, orientation: &BodyOrientation) -> DVec3 {
+pub fn body_fixed_to_planet_inertial(
+    pos_terrain_bf: DVec3,
+    orientation: &BodyOrientation,
+) -> DVec3 {
     let pos_icrf =
-        orientation.body_fixed_to_inertial * legacy_body_fixed_to_iau_body_fixed(pos_legacy_bf);
+        orientation.body_fixed_to_inertial * terrain_body_fixed_to_iau_body_fixed(pos_terrain_bf);
     icrf_j2000_to_solar_inertial(pos_icrf)
 }
 
-/// Convert a project planet-centered inertial position to the legacy terrain
+/// Convert a project planet-centered inertial position to the terrain
 /// body-fixed convention through the shared IAU orientation snapshot.
 pub fn planet_inertial_to_body_fixed(pos_pci: DVec3, orientation: &BodyOrientation) -> DVec3 {
     let pos_iau_bf = orientation.inertial_to_body_fixed * solar_inertial_to_icrf_j2000(pos_pci);
-    iau_body_fixed_to_legacy_body_fixed(pos_iau_bf)
+    iau_body_fixed_to_terrain_body_fixed(pos_iau_bf)
 }
 
-/// Rotation from legacy terrain body-fixed axes into project planet-centered
+/// Rotation from terrain body-fixed axes into project planet-centered
 /// inertial axes. IAU and solar mappings both reflect handedness, so their
 /// composition is a proper rotation suitable for `DQuat` presentation use.
 pub fn body_fixed_to_planet_inertial_rotation(orientation: &BodyOrientation) -> DQuat {
@@ -345,7 +344,7 @@ pub fn planet_equatorial_reference_x_axis(orientation: &BodyOrientation) -> DVec
     body_fixed_to_planet_inertial_rotation(orientation) * DVec3::X
 }
 
-/// Legacy catalog spin retained only for presentation-only consumers that need
+/// Catalog spin approximation for presentation-only consumers that need
 /// arbitrary historical or predicted epochs unavailable in the shared snapshot.
 pub fn catalog_body_fixed_to_inertial_rotation(planet: &Planet, time_days: f64) -> DQuat {
     let spin_rad = calculate_planet_rotation_f64(planet, time_days);
@@ -447,54 +446,12 @@ pub fn local_tangent_to_body_fixed(
     origin_bf + east * enu.x + north * enu.y + up * enu.z
 }
 
-// ---------------------------------------------------------------------------
-// Rocket physical state
-// ---------------------------------------------------------------------------
-
-/// High-precision rocket dynamics state, expressed in real meters (f64).
-///
-/// Position and velocity are relative to a chosen frame (typically the
-/// planet-centered inertial frame or a local tangent frame). Rendering maps
-/// this state to Bevy [`Transform`] only at the presentation boundary via
-/// [`RocketPhysicalState::render_transform`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RocketPhysicalState {
-    pub position_m: DVec3,
-    pub velocity_mps: DVec3,
-    pub orientation: DQuat,
-}
-
-impl RocketPhysicalState {
-    pub fn new(position_m: DVec3, velocity_mps: DVec3, orientation: DQuat) -> Self {
-        Self {
-            position_m,
-            velocity_mps,
-            orientation,
-        }
-    }
-
-    /// Map the f64 physical state to an f32 Bevy [`Transform`].
-    ///
-    /// The position is first rebased to `local_origin` in f64 so magnitudes
-    /// stay small near the vehicle, then scaled to flight display units and
-    /// downcast to f32. This avoids f32 cancellation at large distances.
-    pub fn render_transform(&self, local_origin: DVec3, scale: &PhysicalScale) -> Transform {
-        let local_m = self.position_m - local_origin;
-        let display = DVec3::new(
-            scale.flight_meters_to_units(local_m.x),
-            scale.flight_meters_to_units(local_m.y),
-            scale.flight_meters_to_units(local_m.z),
-        )
-        .as_vec3();
-        Transform::from_translation(display).with_rotation(self.orientation.as_quat())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::services::ephemeris::SpiceEphemeris;
     use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
     fn earth() -> Planet {
@@ -840,11 +797,21 @@ mod tests {
             body_fixed_to_planet_inertial(geodetic_to_body_fixed(&site, &planet), &orientation);
 
         // The f64 dynamics core + local-origin rebasing preserves a 1 m change.
-        let baseline = RocketPhysicalState::new(pci, DVec3::ZERO, DQuat::IDENTITY);
-        let moved = RocketPhysicalState::new(
+        let baseline = RocketDynamicsState::new(
+            pci,
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            1.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let moved = RocketDynamicsState::new(
             pci + DVec3::new(1.0, 0.0, 0.0),
             DVec3::ZERO,
             DQuat::IDENTITY,
+            1.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
         );
         let render_delta = (moved.render_transform(DVec3::ZERO, &scale).translation
             - baseline.render_transform(DVec3::ZERO, &scale).translation)
@@ -899,14 +866,14 @@ mod tests {
     }
 
     #[test]
-    fn legacy_terrain_axes_cross_the_explicit_iau_boundary() {
+    fn terrain_axes_cross_the_explicit_iau_boundary() {
         let planet = earth();
         let site = ksc();
-        let legacy = geodetic_to_body_fixed(&site, &planet);
-        let iau = legacy_body_fixed_to_iau_body_fixed(legacy);
+        let terrain = geodetic_to_body_fixed(&site, &planet);
+        let iau = terrain_body_fixed_to_iau_body_fixed(terrain);
 
-        assert_eq!(iau, DVec3::new(legacy.x, legacy.z, legacy.y));
-        assert_eq!(iau_body_fixed_to_legacy_body_fixed(iau), legacy);
+        assert_eq!(iau, DVec3::new(terrain.x, terrain.z, terrain.y));
+        assert_eq!(iau_body_fixed_to_terrain_body_fixed(iau), terrain);
     }
 
     #[test]

@@ -50,7 +50,6 @@ pub struct GuidanceAccess {
     pub binding: &'static RocketPlanetBinding,
     pub dynamics: &'static RocketPhysicsState,
     pub geometry: &'static RocketGeometry,
-    pub mass: &'static RocketMass,
     pub mission_state: &'static mut RocketMissionState,
     pub autopilot: &'static mut RocketAutopilot,
     pub propulsion: &'static RocketPropulsion,
@@ -91,7 +90,6 @@ pub fn guidance_system(
         let thermal = access.thermal;
         let collision = access.collision;
         let orbital = access.orbital;
-        let mass = access.mass;
         let mission_state = &mut *access.mission_state;
         let autopilot = &mut *access.autopilot;
         let commands = &mut *access.commands;
@@ -336,7 +334,7 @@ pub fn guidance_system(
                 let g_load = specific_force.map_or_else(
                     || {
                         aerodynamic_forces.map_or(0.0, |aero| {
-                            aero.force_body.length() / mass.0.max(1.0) / 9.80665
+                            aero.force_body.length() / rocket.dynamics.mass_kg.max(1.0) / 9.80665
                         })
                     },
                     |specific_force| specific_force.value.length() / 9.80665,
@@ -413,7 +411,7 @@ pub fn guidance_system(
                     velocity,
                     autopilot.target_landing_position_m,
                     radar_altitude_m,
-                    mass.0,
+                    rocket.dynamics.mass_kg,
                     max_thrust,
                     gravity_accel,
                 );
@@ -444,7 +442,7 @@ pub fn guidance_system(
                     velocity,
                     autopilot.target_landing_position_m,
                     radar_altitude_m,
-                    mass.0,
+                    rocket.dynamics.mass_kg,
                     max_thrust,
                     gravity_accel,
                 );
@@ -473,7 +471,7 @@ pub fn guidance_system(
                     position_m,
                     velocity,
                     autopilot.target_landing_position_m,
-                    mass.0,
+                    rocket.dynamics.mass_kg,
                     max_thrust,
                 );
                 commands.target_attitude = boostback.attitude;
@@ -511,7 +509,7 @@ pub fn guidance_system(
             let g_load = specific_force.map_or_else(
                 || {
                     aerodynamic_forces.map_or(0.0, |aero| {
-                        aero.force_body.length() / mass.0.max(1.0) / 9.80665
+                        aero.force_body.length() / rocket.dynamics.mass_kg.max(1.0) / 9.80665
                     })
                 },
                 |specific_force| specific_force.value.length() / 9.80665,

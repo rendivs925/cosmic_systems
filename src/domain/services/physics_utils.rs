@@ -34,11 +34,6 @@ pub fn calculate_sun_visual_radius(solar_params: &SolarSystemParameters) -> f32 
 /// Get the astronomical unit in simulation units
 pub const AU_IN_KM: f32 = 149597870.7; // 1 AU in kilometers
 
-/// Convert astronomical units to simulation distance units
-pub fn au_to_simulation_units(au: f32, solar_params: &SolarSystemParameters) -> f32 {
-    au * solar_params.scale_factor
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

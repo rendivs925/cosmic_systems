@@ -1,6 +1,6 @@
 use crate::components::rocket::{
     AblationState, CommsState, ForceAccumulator, GroundRest, ParachuteState, RetroPropulsionEffect,
-    RocketFlightConditions, RocketMass, RocketMissionState, RocketPhysicsState, RocketPropulsion,
+    RocketFlightConditions, RocketMissionState, RocketPhysicsState, RocketPropulsion,
     TerrainCollisionState, ThermalState,
 };
 use crate::domain::events::CommsBlackoutEvent;
@@ -79,13 +79,10 @@ pub fn compute_ablation(
         &RocketPropulsion,
         &ThermalState,
         &mut AblationState,
-        &mut RocketMass,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut rocket, geometry, propulsion, thermal, mut ablation, mut mass) in
-        rocket_query.iter_mut()
-    {
+    for (mut rocket, geometry, propulsion, thermal, mut ablation) in rocket_query.iter_mut() {
         let q_total = thermal.total_heat_flux_w_m2;
         if q_total <= 0.0 {
             continue;
@@ -143,7 +140,6 @@ pub fn compute_ablation(
         rocket.dynamics.mass_kg = new_mass;
         rocket.dynamics.inertia_body = inertia;
         rocket.dynamics.center_of_mass_m = center_of_mass_m;
-        mass.0 = new_mass;
     }
 }
 

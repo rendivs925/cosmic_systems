@@ -242,9 +242,8 @@ pub fn spawn_craft_model(
 
 fn craft_spawn_position(ephemeris_snapshot: &EphemerisSnapshot) -> Vec3 {
     let solar_params = SolarSystemParameters::for_visualization();
-    let Some(earth) = PlanetFactory::create_by_name("Earth") else {
-        return Vec3::new(0.0, 5.0, 0.0);
-    };
+    let earth = PlanetFactory::create_by_name("Earth")
+        .expect("the compiled planetary catalog must define Earth");
 
     let physical_scale = PhysicalScale::from_solar_parameters(&solar_params);
     let earth_position =

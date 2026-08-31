@@ -82,7 +82,6 @@ pub fn spawn_spent_stage(
                 radius_m: spec.radius_m,
                 height_m: spec.height_m,
             },
-            RocketMass(spec.dynamics.mass_kg),
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
             GravityAcceleration::default(),
@@ -207,23 +206,13 @@ pub fn check_fairing_separation(
         &mut RocketPhysicsState,
         &RocketGeometry,
         &RocketFlightConditions,
-        &mut RocketMass,
         &mut RocketPropulsion,
         &PayloadFairing,
         Option<&AblationState>,
     )>,
 ) {
-    for (
-        entity,
-        binding,
-        mut rocket,
-        geometry,
-        conditions,
-        mut mass,
-        mut propulsion,
-        fairing,
-        ablation,
-    ) in rocket_query.iter_mut()
+    for (entity, binding, mut rocket, geometry, conditions, mut propulsion, fairing, ablation) in
+        rocket_query.iter_mut()
     {
         if conditions.altitude_m < FAIRING_JETTISON_ALTITUDE_M {
             continue;
@@ -252,7 +241,6 @@ pub fn check_fairing_separation(
         rocket.dynamics.mass_kg = new_mass;
         rocket.dynamics.inertia_body = inertia;
         rocket.dynamics.center_of_mass_m = center_of_mass_m;
-        mass.0 = new_mass;
         commands.entity(entity).remove::<PayloadFairing>();
 
         // Two halves pushed apart along the body ±X axis.
@@ -345,7 +333,6 @@ mod tests {
         );
         app.world_mut().spawn((
             RocketPhysicsState { dynamics },
-            RocketMass(mass_kg),
             // Zero gravity isolates the external-force path under test.
             GravityAcceleration::default(),
             ForceAccumulator(DVec3::new(0.0, 20_000.0, 0.0)),
@@ -401,7 +388,6 @@ mod tests {
         let g = gravitational_acceleration(5.97237e24, position, DVec3::ZERO);
         app.world_mut().spawn((
             RocketPhysicsState { dynamics },
-            RocketMass(mass_kg),
             GravityAcceleration { value: g },
             ForceAccumulator::default(),
             TorqueAccumulator::default(),

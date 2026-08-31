@@ -34,7 +34,7 @@ pub fn spawn_rockets(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     catalog: &RocketCatalog,
     selected_key: Option<&str>,
-    terrain_source: Option<&dyn TerrainSource>,
+    terrain_source: &dyn TerrainSource,
     earth_orientation: &BodyOrientation,
 ) {
     let requested_key = selected_key.unwrap_or(DEFAULT_VEHICLE_KEY);
@@ -69,17 +69,13 @@ pub fn spawn_rockets(
     let earth = PlanetFactory::create_by_name(ksc.planet_id.as_str()).unwrap();
     let earth_radius_m = earth.radius_km as f64 * 1000.0;
     let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
-    let terrain_sample = terrain_source.map(|source| {
-        sample_surface(
-            source,
-            terrain_latitude_deg,
-            terrain_longitude_deg,
-            earth_radius_m,
-        )
-    });
-    let terrain_elevation_m = terrain_sample
-        .map(|sample| sample.height_m)
-        .unwrap_or(ksc.altitude_m as f64);
+    let terrain_sample = sample_surface(
+        terrain_source,
+        terrain_latitude_deg,
+        terrain_longitude_deg,
+        earth_radius_m,
+    );
+    let terrain_elevation_m = terrain_sample.height_m;
     let launch_site = LaunchSiteCoordinates::new(
         ksc.planet_id.clone(),
         ksc.latitude_deg,
@@ -97,9 +93,7 @@ pub fn spawn_rockets(
     // Stand vertical on the pad: body +Y aligned with the local up direction
     // (radial). Guidance's launch target is the same attitude, so the
     // closed-loop ascent starts from zero attitude error.
-    let launch_up = terrain_sample
-        .map(|sample| body_to_inertial * sample.normal)
-        .unwrap_or_else(|| position_m.normalize());
+    let launch_up = body_to_inertial * terrain_sample.normal;
     let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, launch_up);
     let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, earth_orientation);
 
@@ -138,7 +132,6 @@ pub fn spawn_rockets(
                 radius_m: radius_m as f32,
                 height_m: rocket.height_m,
             },
-            RocketMass(total_mass_kg),
             RocketMissionState::PreLaunch,
             RocketPropulsion {
                 vehicle: rocket.clone(),

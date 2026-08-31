@@ -28,7 +28,6 @@ pub struct TelemetryContext<'a> {
     pub orientation: DQuat,
     pub angular_velocity_radps: DVec3,
     pub mass_kg: f64,
-    pub rocket_mass: &'a RocketMass,
     pub geometry: &'a RocketGeometry,
     pub propulsion: &'a RocketPropulsion,
     pub mission_state: &'a RocketMissionState,
@@ -473,7 +472,6 @@ pub fn compute_rocket_telemetry_system(
         &RocketPlanetBinding,
         &RocketPhysicsState,
         &RocketGeometry,
-        &RocketMass,
         &RocketPropulsion,
         &RocketMissionState,
         &RocketAutopilot,
@@ -497,7 +495,6 @@ pub fn compute_rocket_telemetry_system(
         binding,
         rocket,
         geometry,
-        mass,
         propulsion,
         mission_state,
         autopilot,
@@ -534,8 +531,7 @@ pub fn compute_rocket_telemetry_system(
             velocity_mps: rocket.dynamics.velocity_mps,
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
-            mass_kg: mass.0,
-            rocket_mass: mass,
+            mass_kg: rocket.dynamics.mass_kg,
             geometry,
             propulsion,
             mission_state,
@@ -591,7 +587,6 @@ pub fn record_flight_data_system(
         &RocketPlanetBinding,
         &RocketPhysicsState,
         &RocketGeometry,
-        &RocketMass,
         &RocketPropulsion,
         &RocketMissionState,
         &RocketAutopilot,
@@ -614,7 +609,6 @@ pub fn record_flight_data_system(
         binding,
         rocket,
         geometry,
-        mass,
         propulsion,
         mission_state,
         autopilot,
@@ -659,8 +653,7 @@ pub fn record_flight_data_system(
             velocity_mps: rocket.dynamics.velocity_mps,
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
-            mass_kg: mass.0,
-            rocket_mass: mass,
+            mass_kg: rocket.dynamics.mass_kg,
             geometry,
             propulsion,
             mission_state,
@@ -1011,7 +1004,6 @@ mod g_load_tests {
         let vehicle = single_engine_vehicle(STANDARD_GRAVITY_MPS2 as f32);
         // Old formula would report ~713 "g" here while hovering.
         let speed_mps = 7_000.0;
-        let mass = RocketMass(MASS_KG);
         let geometry = RocketGeometry {
             radius_m: 1.0,
             height_m: 10.0,
@@ -1065,7 +1057,6 @@ mod g_load_tests {
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
-            rocket_mass: &mass,
             geometry: &geometry,
             propulsion: &propulsion,
             mission_state: &mission_state,
@@ -1097,7 +1088,6 @@ mod g_load_tests {
     fn orbital_coast_in_vacuum_reads_zero_g() {
         let vehicle = single_engine_vehicle(9.807);
         let speed_mps = 7_790.0;
-        let mass = RocketMass(MASS_KG);
         let geometry = RocketGeometry {
             radius_m: 1.0,
             height_m: 10.0,
@@ -1139,7 +1129,6 @@ mod g_load_tests {
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
-            rocket_mass: &mass,
             geometry: &geometry,
             propulsion: &propulsion,
             mission_state: &mission_state,

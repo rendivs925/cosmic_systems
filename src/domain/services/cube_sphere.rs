@@ -674,27 +674,6 @@ pub fn build_patch_geometry_with_stitches(
     )
 }
 
-/// Build a whole-body presentation fallback from the source's explicit coarse
-/// representation. This is for level-zero visual coverage only; collision and
-/// refined terrain continue to use [`build_patch_geometry_with_stitches`].
-pub fn build_patch_overview_geometry_with_stitches(
-    patch: &TerrainPatch,
-    source: &dyn TerrainSource,
-    planet_radius_m: f64,
-    resolution: u32,
-    skirt_depth_m: f64,
-    stitched_edges: &[PatchEdge],
-) -> PatchGeometry {
-    build_patch_geometry_with_height_sampler(
-        patch,
-        planet_radius_m,
-        resolution,
-        skirt_depth_m,
-        stitched_edges,
-        |latitude_deg, longitude_deg| source.overview_height_m(latitude_deg, longitude_deg),
-    )
-}
-
 fn build_patch_geometry_with_height_sampler(
     patch: &TerrainPatch,
     planet_radius_m: f64,

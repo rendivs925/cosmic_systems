@@ -1,5 +1,5 @@
 use super::components::*;
-use crate::application::simulation_service::SimulationService;
+use crate::domain::services::physics;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
 use bevy::prelude::*;
 
@@ -39,10 +39,10 @@ pub fn update_thrust(
     if gyros.is_empty() {
         return;
     }
-    let total_thrust = SimulationService::calculate_thrust(&gyros, &params);
+    let total_thrust = physics::calculate_total_thrust(&gyros, &params);
 
     for mut transform in arrow_query.iter_mut() {
-        let scale = crate::domain::services::physics::calculate_arrow_scale(total_thrust);
+        let scale = physics::calculate_arrow_scale(total_thrust);
         transform.scale = Vec3::new(0.1, 0.1, scale);
 
         if total_thrust.length() > 0.001 {

@@ -193,7 +193,6 @@ mod ground_contact_tests {
             RocketAutopilot::default(),
             FlightRecorder::new(64, 1.0),
             RocketMissionState::PreLaunch,
-            RocketMass(1000.0),
             GravityAcceleration { value: -up * G0 },
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
@@ -576,11 +575,10 @@ mod ground_contact_tests {
         let mut q = world.query::<(
             &RocketPhysicsState,
             &RocketPropulsion,
-            &RocketMass,
             &RocketMissionState,
             &GroundRest,
         )>();
-        let (rocket, propulsion, mass, mission, rest) = q.single(world).unwrap();
+        let (rocket, propulsion, mission, rest) = q.single(world).unwrap();
 
         assert_eq!(*mission, RocketMissionState::PreLaunch);
         assert!(rest.active, "pad-hold must re-engage");
@@ -601,8 +599,11 @@ mod ground_contact_tests {
             rocket.dynamics.velocity_mps.length()
         );
         assert!(
-            (mass.0 - rocket.dynamics.mass_kg).abs() < 1e-6,
-            "RocketMass must match the refueled dynamics mass"
+            (rocket.dynamics.mass_kg
+                - (propulsion.vehicle.total_mass_kg() + propulsion.attached_payload_kg) as f64)
+                .abs()
+                < 1e-6,
+            "dynamics mass must match the refueled vehicle inventory"
         );
     }
 
@@ -873,7 +874,6 @@ mod recovery_pipeline_tests {
                     radius_m: 0.5,
                     height_m: 10.0,
                 },
-                RocketMass(1_000.0),
                 RocketFlightConditions::default(),
                 RocketMissionState::Landing,
                 RocketPropulsion {
@@ -1240,7 +1240,6 @@ mod ascent_pipeline_tests {
                     radius_m: 0.6,
                     height_m: 18.0,
                 },
-                RocketMass(total_mass_kg),
                 RocketFlightConditions::default(),
                 RocketMissionState::Launch,
                 RocketPropulsion {
@@ -1638,7 +1637,6 @@ mod ascent_pipeline_tests {
                 radius_m: 0.6,
                 height_m: 18.0,
             },
-            RocketMass(total_mass_kg),
             RocketFlightConditions::default(),
             RocketPropulsion {
                 vehicle,
@@ -1695,13 +1693,8 @@ mod ascent_pipeline_tests {
         }
 
         let world = app.world_mut();
-        let mut q = world.query::<(
-            &RocketPhysicsState,
-            &RocketPropulsion,
-            &RocketMass,
-            &RocketGeometry,
-        )>();
-        let (rocket, propulsion, mass, geometry) = q.single(world).unwrap();
+        let mut q = world.query::<(&RocketPhysicsState, &RocketPropulsion, &RocketGeometry)>();
+        let (rocket, propulsion, geometry) = q.single(world).unwrap();
 
         assert_eq!(
             propulsion.separations_count, 1,
@@ -1718,9 +1711,9 @@ mod ascent_pipeline_tests {
             + propulsion.propellant_remaining_kg[1] as f64
             + propulsion.attached_payload_kg as f64;
         assert!(
-            (mass.0 - expected_mass).abs() < 1.0,
+            (rocket.dynamics.mass_kg - expected_mass).abs() < 1.0,
             "mass {} inconsistent with stage bookkeeping {expected_mass}",
-            mass.0
+            rocket.dynamics.mass_kg
         );
         assert!(
             propulsion.propellant_remaining_kg[1] < propulsion.vehicle.stages[1].propellant_mass_kg,
@@ -1793,8 +1786,8 @@ mod ascent_pipeline_tests {
             }
 
             let world = app.world_mut();
-            let mut q = world.query::<(&RocketPhysicsState, &RocketPropulsion, &RocketMass)>();
-            let (rocket, propulsion, mass) = q.single(world).unwrap();
+            let mut q = world.query::<(&RocketPhysicsState, &RocketPropulsion)>();
+            let (rocket, propulsion) = q.single(world).unwrap();
 
             assert_eq!(
                 propulsion.separations_count, 1,
@@ -1807,13 +1800,16 @@ mod ascent_pipeline_tests {
                 + propulsion.propellant_remaining_kg[1] as f64
                 + propulsion.attached_payload_kg as f64;
             assert!(
-                (mass.0 - expected_mass).abs() < 1.0,
+                (rocket.dynamics.mass_kg - expected_mass).abs() < 1.0,
                 "mass bookkeeping diverged at {acceleration}x: {} vs {expected_mass}",
-                mass.0
+                rocket.dynamics.mass_kg
             );
             assert!(rocket.dynamics.mass_kg.is_finite());
 
-            let post_burn = (propulsion.propellant_remaining_kg[1], mass.0);
+            let post_burn = (
+                propulsion.propellant_remaining_kg[1],
+                rocket.dynamics.mass_kg,
+            );
             if let Some(expected) = expected_post_burn {
                 assert!(
                     (post_burn.0 - expected.0).abs() < f32::EPSILON,
@@ -1853,20 +1849,18 @@ mod ascent_pipeline_tests {
             let world = app.world_mut();
             let mut q = world.query::<(
                 &RocketPhysicsState,
-                &RocketMass,
                 &RocketPropulsion,
                 &RocketMissionState,
                 &RocketCommands,
                 &GravityAcceleration,
             )>();
-            let (rocket, mass, propulsion, mission, commands, gravity) = q.single(world).unwrap();
+            let (rocket, propulsion, mission, commands, gravity) = q.single(world).unwrap();
             (
                 rocket.dynamics.position_m,
                 rocket.dynamics.velocity_mps,
                 rocket.dynamics.orientation,
                 rocket.dynamics.angular_velocity_radps,
                 rocket.dynamics.mass_kg,
-                mass.0,
                 propulsion.active_stage,
                 propulsion.throttle,
                 propulsion.separations_count,
@@ -1888,18 +1882,17 @@ mod ascent_pipeline_tests {
         assert_eq!(bits(&a.2), bits(&b.2), "orientation diverged");
         assert_eq!(vec3(&a.3), vec3(&b.3), "angular velocity diverged");
         assert_eq!(a.4.to_bits(), b.4.to_bits(), "dynamics mass diverged");
-        assert_eq!(a.5.to_bits(), b.5.to_bits(), "component mass diverged");
-        assert_eq!(a.6, b.6, "active stage diverged");
-        assert_eq!(a.7.to_bits(), b.7.to_bits(), "throttle diverged");
-        assert_eq!(a.8, b.8, "separations count diverged");
-        assert_eq!(a.9, b.9, "propellant vector diverged");
-        assert_eq!(a.10, b.10, "mission state diverged");
+        assert_eq!(a.5, b.5, "active stage diverged");
+        assert_eq!(a.6.to_bits(), b.6.to_bits(), "throttle diverged");
+        assert_eq!(a.7, b.7, "separations count diverged");
+        assert_eq!(a.8, b.8, "propellant vector diverged");
+        assert_eq!(a.9, b.9, "mission state diverged");
         assert_eq!(
-            bits(&a.11),
-            bits(&b.11),
+            bits(&a.10),
+            bits(&b.10),
             "guidance target attitude diverged"
         );
-        assert_eq!(vec3(&a.12), vec3(&b.12), "gravity diverged");
+        assert_eq!(vec3(&a.11), vec3(&b.11), "gravity diverged");
     }
 }
 

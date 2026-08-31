@@ -1,8 +1,7 @@
 //! Authoritative terrain height source (AGENTS.md sections 20-21).
 //!
 //! `TerrainSource` is the single terrain-data boundary. Render meshes and
-//! collision queries consume the same trait, so a procedural, heightmap, or
-//! DEM source can be swapped without rewriting either consumer.
+//! collision queries consume the same deterministic procedural source.
 //!
 //! Heights are in meters above the planet's mean radius (geocentric). The
 //! source is planet-scoped: the planet is bound when the source is attached to
@@ -218,15 +217,14 @@ impl TerrainDetailLayer {
 
 /// The one authoritative composition of a planet's terrain elevation layers.
 ///
-/// The base and macro layers provide global shape, an optional DEM layer adds
-/// configured local data or its own deterministic fallback, and detail remains
-/// in the physical source at every LOD. Rendering may use `lod_fade` to blend a
-/// representation, but collision and height queries always sample this sum.
+/// The base and macro layers provide global shape, while procedural detail
+/// remains in the physical source at every LOD. Rendering may use `lod_fade` to
+/// blend a representation, but collision and height queries always sample this
+/// sum.
 #[derive(Debug)]
 pub struct LayeredTerrainSource {
     pub base: TerrainElevationLayer,
     pub macro_elevation: Option<TerrainElevationLayer>,
-    pub dem_elevation: Option<TerrainElevationLayer>,
     pub procedural_detail: Option<TerrainDetailLayer>,
 }
 
@@ -234,13 +232,11 @@ impl LayeredTerrainSource {
     pub fn new(
         base: TerrainElevationLayer,
         macro_elevation: Option<TerrainElevationLayer>,
-        dem_elevation: Option<TerrainElevationLayer>,
         procedural_detail: Option<TerrainDetailLayer>,
     ) -> Self {
         Self {
             base,
             macro_elevation,
-            dem_elevation,
             procedural_detail,
         }
     }
@@ -250,9 +246,6 @@ impl LayeredTerrainSource {
         [
             Some(self.base.bounds()),
             self.macro_elevation
-                .as_ref()
-                .map(TerrainElevationLayer::bounds),
-            self.dem_elevation
                 .as_ref()
                 .map(TerrainElevationLayer::bounds),
             self.procedural_detail
@@ -265,14 +258,9 @@ impl LayeredTerrainSource {
     }
 
     fn primary_surface(&self) -> &dyn TerrainSource {
-        self.dem_elevation
+        self.macro_elevation
             .as_ref()
             .map(|layer| layer.source.as_ref())
-            .or_else(|| {
-                self.macro_elevation
-                    .as_ref()
-                    .map(|layer| layer.source.as_ref())
-            })
             .unwrap_or(self.base.source.as_ref())
     }
 }
@@ -281,9 +269,6 @@ impl TerrainSource for LayeredTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let mut height_m = self.base.source.height_m(latitude_deg, longitude_deg);
         if let Some(layer) = &self.macro_elevation {
-            height_m += layer.source.height_m(latitude_deg, longitude_deg);
-        }
-        if let Some(layer) = &self.dem_elevation {
             height_m += layer.source.height_m(latitude_deg, longitude_deg);
         }
         if let Some(layer) = &self.procedural_detail {
@@ -297,9 +282,6 @@ impl TerrainSource for LayeredTerrainSource {
         if let Some(layer) = &self.macro_elevation {
             layer.source.prepare_sample(latitude_deg, longitude_deg);
         }
-        if let Some(layer) = &self.dem_elevation {
-            layer.source.prepare_sample(latitude_deg, longitude_deg);
-        }
         if let Some(layer) = &self.procedural_detail {
             layer.source.prepare_sample(latitude_deg, longitude_deg);
         }
@@ -311,9 +293,6 @@ impl TerrainSource for LayeredTerrainSource {
             .source
             .overview_height_m(latitude_deg, longitude_deg);
         if let Some(layer) = &self.macro_elevation {
-            height_m += layer.source.overview_height_m(latitude_deg, longitude_deg);
-        }
-        if let Some(layer) = &self.dem_elevation {
             height_m += layer.source.overview_height_m(latitude_deg, longitude_deg);
         }
         height_m
@@ -857,43 +836,6 @@ impl TerrainSource for SiteAwareTerrainSource {
     }
 }
 
-/// A heightmap-backed source sampling a raw normalized grid. Kept domain-pure
-/// (no Bevy images); the renderer feeds the sampled grid in.
-#[derive(Debug, Clone)]
-pub struct HeightmapTerrainSource {
-    pub size_px: u32,
-    /// Normalized heights in [0, 1], row-major (y = row = latitude).
-    pub data: Vec<f32>,
-    pub lat_min_deg: f64,
-    pub lat_max_deg: f64,
-    pub lon_min_deg: f64,
-    pub lon_max_deg: f64,
-    pub height_min_m: f64,
-    pub height_max_m: f64,
-}
-
-impl TerrainSource for HeightmapTerrainSource {
-    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let lat = latitude_deg.clamp(self.lat_min_deg, self.lat_max_deg);
-        let lon = longitude_deg.clamp(self.lon_min_deg, self.lon_max_deg);
-        let size = self.size_px as f64;
-        let fy = (lat - self.lat_min_deg) / (self.lat_max_deg - self.lat_min_deg) * (size - 1.0);
-        let fx = (lon - self.lon_min_deg) / (self.lon_max_deg - self.lon_min_deg) * (size - 1.0);
-        let (y0, y1) = (fy.floor() as u32, fy.ceil() as u32);
-        let (x0, x1) = (fx.floor() as u32, fx.ceil() as u32);
-        let at = |x: u32, y: u32| {
-            let idx = (y.min(self.size_px - 1) * self.size_px + x.min(self.size_px - 1)) as usize;
-            self.data.get(idx).copied().unwrap_or(0.0) as f64
-        };
-        let sy = fy - fy.floor();
-        let sx = fx - fx.floor();
-        let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * sx;
-        let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * sx;
-        let n = top + (bottom - top) * sy;
-        self.height_min_m + n * (self.height_max_m - self.height_min_m)
-    }
-}
-
 /// Continuous surface appearance (albedo/roughness/metallic) blended from
 /// elevation, soil moisture, latitude zone and local slope — the "one
 /// continuous law" terrain best-practice (glassy wash → soft hills → textured
@@ -1062,7 +1004,6 @@ impl EarthTerrainSource {
                 eroded,
                 ElevationBounds::new(-10_000.0, 20_000_000.0),
             )),
-            None,
             Some(TerrainDetailLayer::new(
                 detail,
                 LocalDetailTerrainSource::elevation_bounds_m(),
@@ -1197,30 +1138,6 @@ mod tests {
     }
 
     #[test]
-    fn heightmap_source_samples_grid() {
-        let size = 3u32;
-        // Corner values 0..=1 for a bilinear sanity check.
-        let data = vec![0.0, 0.5, 1.0, 0.0, 0.5, 1.0, 0.0, 0.5, 1.0];
-        let source = HeightmapTerrainSource {
-            size_px: size,
-            data,
-            lat_min_deg: -1.0,
-            lat_max_deg: 1.0,
-            lon_min_deg: -1.0,
-            lon_max_deg: 1.0,
-            height_min_m: -100.0,
-            height_max_m: 100.0,
-        };
-        // Center of the grid → normalized 0.5 → 0 m.
-        let h = source.height_m(0.0, 0.0);
-        assert!((h - 0.0).abs() < 1e-6);
-        // Top-right corner → normalized 1.0 → +100 m.
-        assert!((source.height_m(1.0, 1.0) - 100.0).abs() < 1e-6);
-        // Bottom-left → -100 m.
-        assert!((source.height_m(-1.0, -1.0) - (-100.0)).abs() < 1e-6);
-    }
-
-    #[test]
     fn site_aware_source_flattens_launch_sites() {
         let source = EarthTerrainSource::new();
         let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
@@ -1344,10 +1261,6 @@ mod tests {
                 Arc::new(ConstantTerrain(-4.0)),
                 ElevationBounds::new(-4.0, -4.0),
             )),
-            Some(TerrainElevationLayer::new(
-                Arc::new(ConstantTerrain(3.0)),
-                ElevationBounds::new(3.0, 3.0),
-            )),
             Some(TerrainDetailLayer::new(
                 Arc::new(ConstantTerrain(-2.0)),
                 ElevationBounds::new(-2.0, 4.0),
@@ -1355,8 +1268,8 @@ mod tests {
             )),
         );
 
-        assert_eq!(source.height_m(12.0, -45.0), 7.0);
-        assert_eq!(source.elevation_bounds_m(), ElevationBounds::new(7.0, 13.0));
+        assert_eq!(source.height_m(12.0, -45.0), 4.0);
+        assert_eq!(source.elevation_bounds_m(), ElevationBounds::new(4.0, 10.0));
     }
 
     #[test]
@@ -1373,7 +1286,6 @@ mod tests {
                 Arc::new(ConstantTerrain(10.0)),
                 ElevationBounds::new(10.0, 10.0),
             ),
-            None,
             None,
             Some(TerrainDetailLayer::new(
                 Arc::new(ConstantTerrain(4.0)),
@@ -1395,7 +1307,6 @@ mod tests {
             ));
             LayeredTerrainSource::new(
                 TerrainElevationLayer::new(base.clone(), base.elevation_bounds_m()),
-                None,
                 None,
                 Some(TerrainDetailLayer::new(
                     detail,
@@ -1431,7 +1342,6 @@ mod tests {
                 Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0)),
                 ElevationBounds::new(-2_500.0, 3_700.0),
             ),
-            None,
             None,
             Some(TerrainDetailLayer::new(
                 detail,
@@ -1683,16 +1593,7 @@ mod tests {
 
     #[test]
     fn slope_deg_at_is_finite_and_zero_on_flat() {
-        let flat = crate::domain::services::terrain_source::HeightmapTerrainSource {
-            size_px: 3,
-            data: vec![5.0; 9],
-            lat_min_deg: -1.0,
-            lat_max_deg: 1.0,
-            lon_min_deg: -1.0,
-            lon_max_deg: 1.0,
-            height_min_m: 0.0,
-            height_max_m: 10.0,
-        };
+        let flat = FlatTerrainSource;
         let s = slope_deg_at(&flat, 0.0, 0.0);
         assert!(s.abs() < 1e-6, "flat terrain must have ~0 slope, got {s}");
         let proc = ProceduralTerrainSource::default();

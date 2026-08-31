@@ -315,7 +315,7 @@ pub fn stream_terrain_patches(
         }
         return;
     };
-    let Some((planet_entity, _planet, planet_terrain)) = planet_query
+    let Some((planet_entity, planet, planet_terrain)) = planet_query
         .iter()
         .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
     else {
@@ -348,11 +348,7 @@ pub fn stream_terrain_patches(
 
     let (completed_batch_count, completed_batch_ms) = collect_completed_generation(&mut streaming);
 
-    let radius_m = planet_query
-        .iter()
-        .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
-        .map(|(_, planet, _)| planet.domain_planet.radius_km as f64 * 1000.0)
-        .unwrap_or(6_371_000.0);
+    let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
     let position_m = rocket.dynamics.position_m;
     let r = position_m.length();
@@ -362,7 +358,7 @@ pub fn stream_terrain_patches(
     // Terrain source coordinates are planet body-fixed geographic coordinates;
     // the rocket state remains planet-centered inertial everywhere else.
     let Some(orientation) =
-        ephemeris_snapshot.orientation_for_catalog_body(&_planet.domain_planet.name)
+        ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
     else {
         return;
     };

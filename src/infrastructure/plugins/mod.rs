@@ -403,13 +403,12 @@ fn spawn_rockets_system(
     )>,
 ) {
     let launch_body = CelestialBodyId::earth();
-    let terrain_source = terrain_query
+    let Some((_, terrain)) = terrain_query
         .iter()
         .find(|(planet, _)| planet.matches_body(&launch_body))
-        .map(|(_, terrain)| terrain.source.as_ref());
-    if terrain_source.is_none() {
+    else {
         panic!("Rocket launch configuration references unknown body '{launch_body}'");
-    }
+    };
     let Some(earth_orientation) = ephemeris_snapshot.orientation(NaifBodyId::EARTH) else {
         panic!("Rocket launch requires the shared Earth IAU orientation snapshot");
     };
@@ -419,7 +418,7 @@ fn spawn_rockets_system(
         &mut materials,
         &catalog,
         selection.0.as_deref(),
-        terrain_source,
+        terrain.source.as_ref(),
         earth_orientation,
     );
 }

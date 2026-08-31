@@ -19,7 +19,7 @@ use crate::domain::services::long_arc_propagation::{
 };
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::{
-    geodetic_to_body_fixed, legacy_body_fixed_to_iau_body_fixed,
+    geodetic_to_body_fixed, terrain_body_fixed_to_iau_body_fixed,
 };
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -431,7 +431,7 @@ where
             case.longitude_rad.to_degrees() as f32,
             case.ellipsoidal_height_m as f32,
         );
-        let actual = legacy_body_fixed_to_iau_body_fixed(geodetic_to_body_fixed(&site, &earth));
+        let actual = terrain_body_fixed_to_iau_body_fixed(geodetic_to_body_fixed(&site, &earth));
         Self::scalar_residual(
             case_id,
             actual.distance(case.expected_position_m.as_dvec3()),

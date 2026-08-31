@@ -16,19 +16,39 @@ pub struct LaunchOptions {
     pub vehicle: Option<String>,
 }
 
+/// Invalid command-line input. Launch selection is explicit; unknown arguments
+/// never silently select a different simulation mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchOptionError {
+    MissingVehicleValue,
+    UnknownArgument(String),
+}
+
+impl std::fmt::Display for LaunchOptionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingVehicleValue => formatter.write_str("--vehicle requires a vehicle key"),
+            Self::UnknownArgument(argument) => {
+                write!(formatter, "unknown launch argument '{argument}'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LaunchOptionError {}
+
 impl Mode {
     /// Parse the run mode from command-line arguments.
     ///
     /// Recognizes the exact tokens `rocket`, `craft`, and `gyro` anywhere in
     /// the arguments without treating other arguments as mode selectors.
-    /// Unknown bare arguments are not treated as a mode selector; the mode
-    /// falls back to the default solar-system simulation. `--vehicle <key>`
-    /// consumes its value token so it is never mistaken for a mode argument.
-    pub fn from_args<I>(args: I) -> Self
+    /// `--vehicle <key>` consumes its value token so it is never mistaken for a
+    /// mode argument. Invalid arguments return a typed error.
+    pub fn from_args<I>(args: I) -> Result<Self, LaunchOptionError>
     where
         I: IntoIterator<Item = String>,
     {
-        parse_launch_options(args).mode
+        parse_launch_options(args).map(|options| options.mode)
     }
 
     pub fn title(self) -> &'static str {
@@ -42,10 +62,9 @@ impl Mode {
 }
 
 /// Parse the full launch options: run mode plus `--vehicle <key>` selection.
-/// A dangling `--vehicle` with no following value is warned about and
-/// ignored; unknown bare arguments keep their existing warn-and-fallback
-/// behavior so other subsystems' arguments stay harmless.
-pub fn parse_launch_options<I>(args: I) -> LaunchOptions
+/// Every supplied argument must be one of the documented mode tokens or the
+/// `--vehicle <key>` option; invalid input fails instead of changing mode.
+pub fn parse_launch_options<I>(args: I) -> Result<LaunchOptions, LaunchOptionError>
 where
     I: IntoIterator<Item = String>,
 {
@@ -53,7 +72,6 @@ where
         mode: Mode::Solar,
         vehicle: None,
     };
-    let mut saw_unknown = false;
     let mut expect_vehicle_value = false;
     for arg in args {
         if expect_vehicle_value {
@@ -66,34 +84,25 @@ where
             "craft" => options.mode = Mode::Craft,
             "gyro" => options.mode = Mode::Gyro,
             "--vehicle" => expect_vehicle_value = true,
-            _ => {
-                if !arg.starts_with('-') {
-                    saw_unknown = true;
-                }
-            }
+            _ => return Err(LaunchOptionError::UnknownArgument(arg)),
         }
     }
     if expect_vehicle_value {
-        bevy::log::warn!("--vehicle given without a value; using the default vehicle");
+        return Err(LaunchOptionError::MissingVehicleValue);
     }
-    if saw_unknown {
-        bevy::log::warn!(
-            "Unknown mode argument; falling back to the default solar-system simulation"
-        );
-    }
-    options
+    Ok(options)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_launch_options, LaunchOptions, Mode};
+    use super::{parse_launch_options, LaunchOptionError, LaunchOptions, Mode};
 
     fn parse(args: &[&str]) -> Mode {
-        Mode::from_args(args.iter().map(|s| s.to_string()))
+        Mode::from_args(args.iter().map(|s| s.to_string())).expect("valid launch options")
     }
 
     fn options(args: &[&str]) -> LaunchOptions {
-        parse_launch_options(args.iter().map(|s| s.to_string()))
+        parse_launch_options(args.iter().map(|s| s.to_string())).expect("valid launch options")
     }
 
     #[test]
@@ -109,28 +118,31 @@ mod tests {
     }
 
     #[test]
-    fn mode_token_position_is_irrelevant() {
-        assert_eq!(parse(&["rocket", "--flag"]), Mode::Rocket);
-        assert_eq!(parse(&["--flag", "craft"]), Mode::Craft);
-        assert_eq!(parse(&["--flag", "gyro"]), Mode::Gyro);
+    fn unknown_positional_is_rejected() {
+        assert_eq!(
+            parse_launch_options(["unknown-mode".to_string()]),
+            Err(LaunchOptionError::UnknownArgument("unknown-mode".into()))
+        );
     }
 
     #[test]
-    fn unknown_positional_falls_back_to_solar() {
-        assert_eq!(parse(&["unknown-mode"]), Mode::Solar);
+    fn unrecognized_mode_like_tokens_are_rejected() {
+        for argument in ["rocket-sim", "crafting", "mycraftfile"] {
+            assert_eq!(
+                parse_launch_options([argument.to_string()]),
+                Err(LaunchOptionError::UnknownArgument(argument.into()))
+            );
+        }
     }
 
     #[test]
-    fn no_substring_match() {
-        assert_eq!(parse(&["rocket-sim"]), Mode::Solar);
-        assert_eq!(parse(&["crafting"]), Mode::Solar);
-        assert_eq!(parse(&["mycraftfile"]), Mode::Solar);
-    }
-
-    #[test]
-    fn flag_arguments_are_not_modes() {
-        assert_eq!(parse(&["--rocket"]), Mode::Solar);
-        assert_eq!(parse(&["--craft"]), Mode::Solar);
+    fn unknown_flags_are_rejected() {
+        for argument in ["--rocket", "--craft"] {
+            assert_eq!(
+                parse_launch_options([argument.to_string()]),
+                Err(LaunchOptionError::UnknownArgument(argument.into()))
+            );
+        }
     }
 
     #[test]
@@ -153,9 +165,10 @@ mod tests {
     }
 
     #[test]
-    fn dangling_vehicle_flag_is_ignored() {
-        let parsed = options(&["rocket", "--vehicle"]);
-        assert_eq!(parsed.mode, Mode::Rocket);
-        assert!(parsed.vehicle.is_none());
+    fn dangling_vehicle_flag_is_rejected() {
+        assert_eq!(
+            parse_launch_options(["rocket".to_string(), "--vehicle".to_string()]),
+            Err(LaunchOptionError::MissingVehicleValue)
+        );
     }
 }

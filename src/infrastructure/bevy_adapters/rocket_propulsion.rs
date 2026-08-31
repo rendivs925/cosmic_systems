@@ -77,7 +77,6 @@ pub fn propulsion_staging(
         &RocketPlanetBinding,
         &mut RocketGeometry,
         &mut RocketPhysicsState,
-        &mut RocketMass,
         &mut RocketPropulsion,
         Option<&AblationState>,
         Option<&RocketAutopilot>,
@@ -85,17 +84,8 @@ pub fn propulsion_staging(
     )>,
 ) {
     let dt = sim_time.fixed_timestep() as f32;
-    for (
-        entity,
-        binding,
-        mut geometry,
-        mut rocket,
-        mut mass,
-        mut propulsion,
-        ablation,
-        autopilot,
-        legs,
-    ) in rocket_query.iter_mut()
+    for (entity, binding, mut geometry, mut rocket, mut propulsion, ablation, autopilot, legs) in
+        rocket_query.iter_mut()
     {
         propulsion.time_since_separation_s += dt;
 
@@ -140,7 +130,6 @@ pub fn propulsion_staging(
             propulsion.attached_payload_kg,
         ) - ablation_mass_loss_kg)
             .max(1.0);
-        mass.0 = new_mass;
         rocket.dynamics.mass_kg = new_mass;
         let (inertia, center_of_mass_m) = active_vehicle_inertia(
             &propulsion.vehicle.stages,
@@ -277,10 +266,6 @@ pub fn propulsion_thrust(
 }
 
 /// Consume pressure-independent engine mass flow and refresh vehicle mass data.
-#[expect(
-    clippy::type_complexity,
-    reason = "The propulsion query combines cohesive rocket state for fixed-step consumption."
-)]
 pub fn propulsion_consumption(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
@@ -288,14 +273,11 @@ pub fn propulsion_consumption(
         &RocketGeometry,
         &RocketFlightConditions,
         &mut RocketPropulsion,
-        &mut RocketMass,
         Option<&AblationState>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut rocket, geometry, conditions, mut propulsion, mut mass, ablation) in
-        rocket_query.iter_mut()
-    {
+    for (mut rocket, geometry, conditions, mut propulsion, ablation) in rocket_query.iter_mut() {
         let Some((stage, throttle)) = ignitable_stage(&propulsion) else {
             continue;
         };
@@ -315,7 +297,6 @@ pub fn propulsion_consumption(
             propulsion.attached_payload_kg,
         ) - ablation_mass_loss_kg)
             .max(1.0);
-        mass.0 = new_mass;
         rocket.dynamics.mass_kg = new_mass;
         let (inertia, center_of_mass_m) = active_vehicle_inertia(
             &propulsion.vehicle.stages,

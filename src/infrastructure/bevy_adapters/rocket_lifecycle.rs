@@ -48,7 +48,6 @@ pub fn apply_relaunch_requests(
         &RocketGeometry,
         &mut RocketPhysicsState,
         &mut RocketPropulsion,
-        &mut RocketMass,
         &mut RocketMissionState,
         &mut GroundRest,
         Option<&mut LandingLegs>,
@@ -82,7 +81,6 @@ pub fn apply_relaunch_requests(
                 geometry,
                 mut rocket,
                 mut propulsion,
-                mut mass,
                 mut mission_state,
                 mut rest,
                 legs,
@@ -138,7 +136,6 @@ pub fn apply_relaunch_requests(
             rocket.dynamics.mass_kg = total_mass_kg;
             rocket.dynamics.inertia_body = inertia;
             rocket.dynamics.center_of_mass_m = com;
-            mass.0 = total_mass_kg;
 
             // Upright, motionless, resting at the current site.
             let Some(planet) = planet_query

@@ -122,42 +122,7 @@ impl PlanetBuilder {
                 .expect("rotation_period_hours is required"),
             axial_tilt_deg: self.axial_tilt_deg.expect("axial_tilt_deg is required"),
             parent_entity: self.parent_entity.expect("parent_entity is required"),
-            has_ocean: self.has_ocean.unwrap_or(false),
-        }
-    }
-}
-
-impl Planet {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "This public constructor preserves the established planet data contract."
-    )]
-    pub fn new(
-        name: String,
-        radius_km: f32,
-        mass_kg: f64,
-        color: Color,
-        body_class: BodyClass,
-        orbital_distance_au: f32,
-        orbital_period_days: f32,
-        rotation_period_hours: f32,
-        axial_tilt_deg: f32,
-        parent_entity: Option<String>,
-    ) -> Self {
-        // Default: airless/rocky bodies have no open sea; Earth's flag comes
-        // from its config via [`PlanetBuilder::has_ocean`].
-        Self {
-            name,
-            radius_km,
-            mass_kg,
-            color,
-            body_class,
-            orbital_distance_au,
-            orbital_period_days,
-            rotation_period_hours,
-            axial_tilt_deg,
-            parent_entity,
-            has_ocean: false,
+            has_ocean: self.has_ocean.expect("has_ocean is required"),
         }
     }
 }

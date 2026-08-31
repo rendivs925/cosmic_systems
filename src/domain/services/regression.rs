@@ -422,11 +422,8 @@ pub fn compare_trajectory(
 /// (design.md: "physics change audit trail"). Recording a new baseline
 /// without describing the expected improvement, the numerical trade-offs and
 /// the affected scenarios is rejected by [`FlightBaseline::validate_audit`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IntendedBaselineDivergence {
-    /// The audit predates the external-scientific-validation requirement.
-    #[default]
-    Unspecified,
     /// The re-record is expected to retain the previous deterministic state.
     NoDivergence,
     /// The deterministic change is intentional and has been reviewed.
@@ -436,7 +433,6 @@ pub enum IntendedBaselineDivergence {
 impl IntendedBaselineDivergence {
     fn is_recorded(&self) -> bool {
         match self {
-            Self::Unspecified => false,
             Self::NoDivergence => true,
             Self::Expected { description } => !description.trim().is_empty(),
         }
@@ -447,11 +443,8 @@ impl IntendedBaselineDivergence {
 ///
 /// A signed deterministic baseline may be marked `Unverified` when local data
 /// is unavailable. That status is deliberately not scientific acceptance.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ScientificAcceptanceOutput {
-    /// The audit predates the external-scientific-validation requirement.
-    #[default]
-    NotRecorded,
     /// All affected external cases met their published budgets.
     Accepted { summary: String },
     /// At least one affected external case exceeded its published budget.
@@ -463,14 +456,13 @@ pub enum ScientificAcceptanceOutput {
 impl ScientificAcceptanceOutput {
     fn is_recorded(&self) -> bool {
         match self {
-            Self::NotRecorded => false,
             Self::Accepted { summary } | Self::Rejected { summary } => !summary.trim().is_empty(),
             Self::Unverified { reason } => !reason.trim().is_empty(),
         }
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BaselineJustification {
     /// Free-text description of the physics/software change.
     pub change_description: String,
@@ -483,13 +475,10 @@ pub struct BaselineJustification {
     pub affected_scenarios: Vec<String>,
     /// Versioned external cases affected by the change. These remain typed so
     /// audit records cannot silently drift from the scientific-case identity.
-    #[serde(default)]
     pub affected_external_case_ids: Vec<ScientificReferenceCaseId>,
     /// Whether the new fixture is expected to diverge from its predecessor.
-    #[serde(default)]
     pub intended_baseline_divergence: IntendedBaselineDivergence,
     /// The external scientific-validation result associated with this update.
-    #[serde(default)]
     pub scientific_acceptance_output: ScientificAcceptanceOutput,
     /// Reviewer sign-off. Baselines are immutable once approved; a new one
     /// requires a fresh approval.
@@ -753,7 +742,19 @@ mod tests {
 
     #[test]
     fn unsigned_baseline_is_rejected() {
-        let audit = BaselineJustification::default(); // not signed off
+        let audit = BaselineJustification {
+            change_description: "unsigned baseline".into(),
+            expected_improvement: "none".into(),
+            numerical_tradeoffs: "none".into(),
+            affected_scenarios: vec!["ascent".into()],
+            affected_external_case_ids: vec![ScientificReferenceCaseId::new("case-a")],
+            intended_baseline_divergence: IntendedBaselineDivergence::NoDivergence,
+            scientific_acceptance_output: ScientificAcceptanceOutput::Unverified {
+                reason: "approval intentionally absent".into(),
+            },
+            reviewer_approved: false,
+            recorded_by: "opencode".into(),
+        };
         let result = FlightBaseline::record("ascent", "abc", audit, Vec::new());
         assert!(result.is_err());
     }
@@ -761,8 +762,17 @@ mod tests {
     #[test]
     fn signed_off_requires_complete_audit() {
         let audit = BaselineJustification {
+            change_description: String::new(),
+            expected_improvement: String::new(),
+            numerical_tradeoffs: String::new(),
+            affected_scenarios: Vec::new(),
+            affected_external_case_ids: Vec::new(),
+            intended_baseline_divergence: IntendedBaselineDivergence::NoDivergence,
+            scientific_acceptance_output: ScientificAcceptanceOutput::Unverified {
+                reason: "incomplete audit fixture".into(),
+            },
             reviewer_approved: true,
-            ..Default::default()
+            recorded_by: String::new(),
         };
         assert!(!audit.is_signed_off());
         let full = BaselineJustification {
@@ -779,38 +789,6 @@ mod tests {
             recorded_by: "opencode".into(),
         };
         assert!(full.is_signed_off());
-    }
-
-    #[test]
-    fn legacy_baseline_ron_defaults_new_scientific_audit_fields() {
-        let legacy_ron = r#"
-(
-    name: "legacy",
-    git_commit: "abc",
-    audit: (
-        change_description: "legacy change",
-        expected_improvement: "legacy improvement",
-        numerical_tradeoffs: "legacy trade-off",
-        affected_scenarios: ["ascent"],
-        reviewer_approved: true,
-        recorded_by: "legacy",
-    ),
-    samples: [],
-    hash_chain: [],
-)
-"#;
-
-        let baseline = load_baseline_ron(legacy_ron).expect("legacy fixture remains readable");
-        assert!(baseline.audit.affected_external_case_ids.is_empty());
-        assert_eq!(
-            baseline.audit.intended_baseline_divergence,
-            IntendedBaselineDivergence::Unspecified
-        );
-        assert_eq!(
-            baseline.audit.scientific_acceptance_output,
-            ScientificAcceptanceOutput::NotRecorded
-        );
-        assert!(!baseline.audit.is_signed_off());
     }
 
     #[test]

@@ -51,12 +51,6 @@ pub struct RocketGeometry {
     pub height_m: f32,
 }
 
-/// Current vehicle mass (f64 for physics, derived from PhysicsState).
-/// Updated by propulsion_consumption, propulsion_staging.
-/// Read by gravity, integration, control systems.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct RocketMass(pub f64);
-
 /// Mission phase state machine component wrapping the domain enum.
 /// Updated by guidance_system, terrain_interaction.
 /// Read by control, actuation, propulsion, guidance systems.

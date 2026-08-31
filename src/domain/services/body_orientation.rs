@@ -81,7 +81,7 @@ pub struct BodyOrientationModel {
 
 impl BodyOrientationModel {
     /// Build an explicitly approximate model from the existing catalog fields.
-    /// This preserves legacy rotation exactly while retaining provenance that
+    /// This preserves catalog rotation exactly while retaining provenance that
     /// prevents it from being mistaken for PCK/BPC orientation data.
     pub fn from_catalog_approximation(
         target: NaifBodyId,

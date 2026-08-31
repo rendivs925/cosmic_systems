@@ -521,12 +521,14 @@ pub fn update_rocket_camera_projection(
         return;
     };
 
-    let altitude = rocket.dynamics.position_m.length();
-    let planet_radius = planet_query
+    let Some(planet_radius) = planet_query
         .iter()
         .find(|p| p.matches_body(&binding.planet_name))
         .map(|p| p.domain_planet.radius_km as f64 * 1000.0)
-        .unwrap_or(6_371_000.0);
+    else {
+        return;
+    };
+    let altitude = rocket.dynamics.position_m.length();
     let height_above_surface = (altitude - planet_radius).max(0.0);
     // A planet fills the view out to its geometric horizon. Clipping before
     // that intersection turns the curved globe into a flat far-plane slice.
