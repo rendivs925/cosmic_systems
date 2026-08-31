@@ -79,23 +79,15 @@ pub(crate) fn prepare_patch_surface(
     let vertex_colors = geometry
         .positions
         .iter()
-        .zip(&geometry.normals)
-        .map(|(position, normal)| {
+        .map(|position| {
             let position = DVec3::from_array(*position);
             let (lat, lon) = direction_to_lat_lon(position);
-            let radial = position.normalize();
-            let slope_deg = DVec3::from_array(*normal)
-                .normalize()
-                .dot(radial)
-                .clamp(-1.0, 1.0)
-                .acos()
-                .to_degrees();
             let appearance = with_river_appearance(
                 surface_appearance(
                     position.length() - radius_m,
                     source.moisture(lat, lon),
                     source.zone_lat(lat),
-                    slope_deg,
+                    slope_deg_at(source, lat, lon),
                 ),
                 source.river_strength(lat, lon),
             );
@@ -214,14 +206,13 @@ pub fn build_patch_surfaces(
                 outward_normal(source_tangent_u.cross(source_tangent_v), positions[idx]);
             let (mesh_tangent_u, mesh_tangent_v, mesh_normal) =
                 mesh_surface_frame(geometry, i, j, res);
-            let slope = source_normal
+            let source_slope_deg = source_normal
                 .dot(positions[idx].normalize())
                 .clamp(-1.0, 1.0)
                 .acos()
                 .to_degrees();
-
             let appearance = with_river_appearance(
-                surface_appearance(hi, moisture, zone, slope),
+                surface_appearance(hi, moisture, zone, source_slope_deg),
                 source.river_strength(la, lo),
             );
 
@@ -740,6 +731,40 @@ mod tests {
 
         let (_, _, normal) = mesh_surface_frame(&geometry, 0, 0, 2);
         assert!(normal.dot(DVec3::new(1.0, 0.0, 1.0).normalize()) > 0.999_999);
+    }
+
+    #[test]
+    fn source_appearance_is_identical_across_an_adjacent_lod_boundary() {
+        use crate::domain::services::cube_sphere::CubeFace;
+
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let coarse = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 1,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        // This child is the lower half of coarse patch's east neighbor, so its
+        // west edge shares the coarse patch's east edge.
+        let fine = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 2,
+            tile_x: 2,
+            tile_y: 0,
+        };
+        let coarse_geometry = build_patch_geometry(&coarse, &source, 6_371_000.0, 5, 5.0);
+        let fine_geometry = build_patch_geometry(&fine, &source, 6_371_000.0, 5, 5.0);
+        let coarse_surface = prepare_patch_surface(&source, &coarse, &coarse_geometry, 6_371_000.0);
+        let fine_surface = prepare_patch_surface(&source, &fine, &fine_geometry, 6_371_000.0);
+
+        for fine_j in [0, 2, 4] {
+            let coarse_j = fine_j / 2;
+            assert_eq!(
+                coarse_surface.vertex_colors[coarse_j * 5 + 4],
+                fine_surface.vertex_colors[fine_j * 5],
+                "the shared source appearance must not depend on mesh LOD"
+            );
+        }
     }
 
     #[test]

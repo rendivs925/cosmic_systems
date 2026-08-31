@@ -18,8 +18,8 @@ struct TerrainSurfaceExtension {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    // Tile-local data must fade at its boundary so a refined leaf transitions
-    // continuously into its coarser macro-imagery parent.
+    // Tile-local data fades into the same source-derived vertex appearance at
+    // its boundary, so refined leaves transition continuously into coarser LOD.
     let edge_distance = min(min(in.uv_b.x, 1.0 - in.uv_b.x), min(in.uv_b.y, 1.0 - in.uv_b.y));
     let edge_fade = smoothstep(0.02, 0.08, edge_distance);
     let detail_weight = terrain_surface.local_detail_weight * edge_fade;
@@ -28,10 +28,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // Macro imagery is useful at orbital scale, but close terrain must use the
-    // shared source-derived land reflectance. Replacing rather than multiplying
-    // the macro texel prevents an ocean pixel from tinting nearby grass blue.
-    // This material-only blend never affects terrain geometry or collision.
+    // Every LOD starts from the same source-derived vertex appearance. This map
+    // only increases its sampling density and never affects geometry or collision.
     pbr_input.material.base_color = mix(
         pbr_input.material.base_color,
         local_albedo,

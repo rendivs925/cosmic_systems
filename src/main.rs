@@ -49,13 +49,13 @@ fn validate_vehicle_selection(selection: &Option<String>) {
 }
 
 fn rocket_task_pool_options() -> TaskPoolOptions {
-    // Terrain bakes are CPU-bound. Reserve cores for Bevy's render, IO, and
-    // simulation pools so a cold terrain cache cannot lower presentation FPS
-    // by saturating every logical core during root generation.
+    // Terrain bakes are CPU-bound. Six workers exploit higher-core hosts while
+    // the percentage cap preserves CPU capacity for rendering, IO, and fixed
+    // simulation on smaller machines.
     TaskPoolOptions {
         async_compute: TaskPoolThreadAssignmentPolicy {
             min_threads: 1,
-            max_threads: 4,
+            max_threads: 6,
             percent: 0.25,
             on_thread_spawn: None,
             on_thread_destroy: None,
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn rocket_mode_reserves_cpu_capacity_for_presentation_during_terrain_bakes() {
         let options = rocket_task_pool_options();
-        assert_eq!(options.async_compute.max_threads, 4);
+        assert_eq!(options.async_compute.max_threads, 6);
         assert_eq!(options.async_compute.percent, 0.25);
     }
 }

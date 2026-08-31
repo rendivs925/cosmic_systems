@@ -65,10 +65,10 @@ const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
 /// culling. Keeping the sphere deliberately large can retain a tile, but can
 /// never reject terrain that could break the visible silhouette.
 const HORIZON_CULL_HEIGHT_MARGIN_M: f64 = 20_000.0;
-/// One CPU geometry bake is admitted per presentation frame. The async pool
-/// remains available for other simulator work and completed bakes are still
-/// consumed independently of new submissions.
-const MAX_TERRAIN_TASKS_PER_FRAME: usize = 1;
+/// Admit a bounded pair of CPU terrain bakes per presentation frame. This fills
+/// the reserved worker pool quickly after a camera move without queueing an
+/// unbounded cold-start burst or blocking the render thread.
+const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
@@ -1559,7 +1559,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_capacity_throttles_new_work_to_one_tile_per_frame() {
+    fn generation_capacity_admits_a_bounded_parallel_batch() {
         let roots = TerrainPatch::roots().to_vec();
         let mut manager = TerrainPatchManager::new();
         for patch in &roots {
@@ -1569,7 +1569,7 @@ mod tests {
         let generated = HashMap::new();
         let bootstrap_batch =
             generation_batch(&roots, &manager, &generated, generation_capacity(4, 0));
-        assert_eq!(bootstrap_batch, roots[..1].to_vec());
+        assert_eq!(bootstrap_batch, roots[..2].to_vec());
 
         let mut generated = HashMap::new();
         let focus = TerrainPatch::root(CubeFace::PosZ);
@@ -1591,12 +1591,12 @@ mod tests {
         manager.mark_ready(&focus);
         manager.mark_visible(&focus);
         let later_batch = generation_batch(&roots, &manager, &generated, generation_capacity(4, 0));
-        assert_eq!(later_batch.len(), 1);
-        assert_ne!(later_batch, vec![focus]);
+        assert_eq!(later_batch.len(), 2);
+        assert!(!later_batch.contains(&focus));
 
         assert_eq!(generation_capacity(4, 4), 0);
-        assert_eq!(generation_capacity(8, 6), 1);
-        assert_eq!(generation_capacity(8, 3), 1);
+        assert_eq!(generation_capacity(8, 6), 2);
+        assert_eq!(generation_capacity(8, 3), 2);
     }
 
     #[test]
