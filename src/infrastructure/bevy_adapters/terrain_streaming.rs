@@ -41,14 +41,15 @@ use std::time::Instant;
 /// The initial hierarchy keeps global roots inexpensive while allowing local
 /// detail down to roughly 2.4 km patches at Earth scale. Higher-resolution DEM
 /// and imagery work can raise this only after profiling the visible leaf budget.
-const MAX_PATCH_LEVEL: u32 = 12;
+const MAX_PATCH_LEVEL: u32 = 14;
 const FOV_RAD: f64 = 1.0;
 const SCREEN_HEIGHT_PX: f64 = 1080.0;
 const SCREEN_ERROR_PX: f64 = 4.0;
 /// Domain geometry retains f64 position/normal and two UV sets. The renderer
-/// creates a second f32 mesh with vertex color data, so budget both copies.
+/// creates a second f32 mesh with position, normal, two UVs, and vertex color,
+/// so budget both copies.
 const DOMAIN_BYTES_PER_VERTEX: u64 = 64;
-const RENDER_BYTES_PER_VERTEX: u64 = 48;
+const RENDER_BYTES_PER_VERTEX: u64 = 56;
 const BYTES_PER_INDEX: u64 = 4;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 const METRICS_GENERATED_TILE_INTERVAL: usize = 32;
@@ -94,6 +95,9 @@ pub struct TerrainStreamingResource {
     /// Leaves currently published to the renderer. Generated descendants remain
     /// cached until all siblings are ready, then replace their parent together.
     pub published: BTreeSet<TerrainPatch>,
+    /// Previous desired cover used to hold per-node split/merge decisions
+    /// inside the hysteresis band.
+    target_leaves: BTreeSet<TerrainPatch>,
     /// Planet that owns every entry in this cache. Patch coordinates alone are
     /// not sufficient when a rocket changes its bound celestial body.
     active_planet: Option<Entity>,
@@ -184,13 +188,14 @@ pub fn prebake_prelaunch_launchpad_patch(
 
     streaming.active_planet = Some(planet_entity);
     streaming.manager.tick();
-    streaming
-        .manager
-        .request(patch, estimated_patch_bytes(patch, config.patch_resolution));
+    streaming.manager.request(
+        patch,
+        estimated_patch_bytes(patch, config.patch_resolution_for(patch)),
+    );
     streaming.manager.begin_generation(&patch);
 
     let source = terrain.source.clone();
-    let patch_resolution = config.patch_resolution;
+    let patch_resolution = config.patch_resolution_for(patch);
     let skirt_depth_m = config.skirt_depth_m;
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let generation_started = Instant::now();
@@ -223,6 +228,7 @@ impl Default for TerrainStreamingResource {
             generated: HashMap::new(),
             inflight: BTreeMap::new(),
             published: BTreeSet::new(),
+            target_leaves: TerrainPatch::roots().into_iter().collect(),
             active_planet: None,
             next_metrics_report_at: 0,
             cadence: TerrainStreamingCadence::default(),
@@ -260,6 +266,8 @@ struct TerrainViewport {
     position_m: DVec3,
     forward: DVec3,
     half_fov_rad: f64,
+    vertical_fov_rad: f64,
+    viewport_height_px: f64,
 }
 
 #[derive(Default)]
@@ -291,7 +299,7 @@ pub fn stream_terrain_patches(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     time: Res<Time>,
     render_origin: Res<RenderOrigin>,
-    camera_query: Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
+    camera_query: Query<(&Camera, &Transform, &Projection), With<Camera3d>>,
 ) {
     // No rocket yet: keep the manager tidy and return.
     let Some((binding, rocket)) = rocket_query.iter().next() else {
@@ -351,8 +359,6 @@ pub fn stream_terrain_patches(
     if r < 1e-6 {
         return;
     }
-    let altitude_m = (r - radius_m).max(0.0);
-
     // Terrain source coordinates are planet body-fixed geographic coordinates;
     // the rocket state remains planet-centered inertial everywhere else.
     let Some(orientation) =
@@ -368,6 +374,7 @@ pub fn stream_terrain_patches(
         .as_ref()
         .map(|viewport| viewport.position_m)
         .unwrap_or(position_bf);
+    let altitude_m = (lod_camera_position_m.length() - radius_m).max(0.0);
 
     if !should_reconcile_terrain(
         &streaming.cadence,
@@ -407,16 +414,21 @@ pub fn stream_terrain_patches(
         radius_m,
     );
     streaming.cadence.max_focus_level = Some(max_focus_level);
-    let errors = projected_errors_for_focus(
+    let mut errors = projected_errors_for_focus(
         focus_direction,
         max_focus_level,
         radius_m,
         CameraProjection {
             position_m: lod_camera_position_m,
-            vertical_fov_rad: FOV_RAD,
-            viewport_height_px: SCREEN_HEIGHT_PX,
+            vertical_fov_rad: viewport
+                .as_ref()
+                .map_or(FOV_RAD, |viewport| viewport.vertical_fov_rad),
+            viewport_height_px: viewport
+                .as_ref()
+                .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
         },
     );
+    apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
     let mut state = QuadtreePatchState {
         ready: streaming.generated.keys().copied().collect(),
         // Roots remain the complete fallback coverage even when the camera is
@@ -433,9 +445,9 @@ pub fn stream_terrain_patches(
         },
     );
 
-    // Geometry caches include the stitch index pattern. Discard an obsolete
-    // variant whenever its desired neighboring LOD changes; the selection below
-    // falls back to its ready parent until the replacement is generated.
+    // Geometry caches include the stitch index pattern. Never destroy a
+    // published variant during a render handoff: its skirt remains a safe
+    // fallback until the patch leaves publication and can be regenerated.
     let stale_stitch_variants = stale_cached_stitch_variants(&streaming, &selection.target_leaves);
     let invalidated_stitch_variants = !stale_stitch_variants.is_empty();
     for patch in stale_stitch_variants {
@@ -447,8 +459,8 @@ pub fn stream_terrain_patches(
             planet_entity,
         });
     }
+    streaming.manager.sweep_evicted();
     if invalidated_stitch_variants {
-        streaming.manager.sweep_evicted();
         state.ready = streaming.generated.keys().copied().collect();
         selection = select_quadtree_leaves(
             &state,
@@ -460,6 +472,7 @@ pub fn stream_terrain_patches(
             },
         );
     }
+    streaming.target_leaves = selection.target_leaves.clone();
 
     // Keep every root resident as the complete source-authoritative fallback.
     // The recessed flight globe is only a bootstrap mesh while these async jobs
@@ -507,30 +520,16 @@ pub fn stream_terrain_patches(
     }
 
     for patch in &requested {
-        let size_bytes = estimated_patch_bytes(*patch, config.patch_resolution);
+        let size_bytes = estimated_patch_bytes(*patch, config.patch_resolution_for(*patch));
         streaming.manager.request(*patch, size_bytes);
     }
 
-    let requested_roots: BTreeSet<_> = requested
-        .iter()
-        .copied()
-        .filter(|patch| patch.level == 0)
-        .collect();
-    let roots_ready = requested_roots
-        .iter()
-        .all(|root| streaming.generated.contains_key(root));
-    let mut generation_order: Vec<_> = if roots_ready {
-        requested.iter().copied().collect()
-    } else {
-        // A visible face root must be available before any of its descendants
-        // replace it. The globe remains continuous while this small bootstrap
-        // set is generated asynchronously.
-        requested_roots.iter().copied().collect()
-    };
+    let mut generation_order: Vec<_> = requested.iter().copied().collect();
     generation_order.sort_by_key(|patch| {
         let center = patch.center_direction();
         let distance_key = ((1.0 - center.dot(focus_direction)).max(0.0) * 1_000_000.0) as u64;
         (
+            !patch_intersects_viewport(*patch, viewport.as_ref(), radius_m),
             patch.level,
             distance_key,
             patch.face,
@@ -539,11 +538,7 @@ pub fn stream_terrain_patches(
         )
     });
     let task_pool = AsyncComputeTaskPool::get();
-    let generation_limit = generation_capacity(
-        roots_ready,
-        task_pool.thread_num(),
-        streaming.inflight.len(),
-    );
+    let generation_limit = generation_capacity(task_pool.thread_num(), streaming.inflight.len());
     let batch = generation_batch(
         &generation_order,
         &streaming.manager,
@@ -555,7 +550,7 @@ pub fn stream_terrain_patches(
         let source = planet_terrain.source.clone();
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
         let stitch_mask = stitch_mask(&stitch_edges);
-        let patch_resolution = config.patch_resolution;
+        let patch_resolution = config.patch_resolution_for(patch);
         let skirt_depth_m = config.skirt_depth_m;
         let task = task_pool.spawn(async move {
             let generation_started = Instant::now();
@@ -634,7 +629,9 @@ pub fn stream_terrain_patches(
     }
 
     let budget = streaming.budget_bytes;
-    let protected = requested_roots;
+    // The complete requested chain is progressive render fallback. It may
+    // temporarily exceed the cache budget but must never be evicted mid-handoff.
+    let protected = requested;
     let evicted = streaming
         .manager
         .enforce_memory_budget_protecting(budget, &protected);
@@ -713,10 +710,10 @@ fn cancel_stale_requested(manager: &mut TerrainPatchManager, requested: &BTreeSe
     }
 }
 
-/// Keep terrain generation within the explicit async-worker budget. Root tiles
-/// retain priority, but submitting more jobs than workers only queues expensive
-/// bakes and starves the render/simulation task pools on a cold start.
-fn generation_capacity(_roots_ready: bool, worker_count: usize, inflight_count: usize) -> usize {
+/// Keep terrain generation within the explicit async-worker budget. Submitting
+/// more jobs than workers only queues expensive bakes and starves the
+/// render/simulation task pools on a cold start.
+fn generation_capacity(worker_count: usize, inflight_count: usize) -> usize {
     worker_count
         .saturating_sub(inflight_count)
         .min(MAX_TERRAIN_TASKS_PER_FRAME)
@@ -752,11 +749,13 @@ fn should_reconcile_terrain(
 }
 
 fn terrain_viewport(
-    camera_query: &Query<(&Camera, &GlobalTransform, &Projection), With<Camera3d>>,
+    camera_query: &Query<(&Camera, &Transform, &Projection), With<Camera3d>>,
     render_origin: &RenderOrigin,
     orientation: &BodyOrientation,
 ) -> Option<TerrainViewport> {
-    let (camera, transform, projection) = camera_query.iter().next()?;
+    let (camera, transform, projection) = camera_query
+        .iter()
+        .find(|(camera, _, _)| camera.is_active)?;
     let vertical_fov_rad = match projection {
         Projection::Perspective(perspective) => perspective.fov as f64,
         _ => return None,
@@ -766,16 +765,40 @@ fn terrain_viewport(
         .filter(|size| size.y > 0.0)
         .map(|size| (size.x / size.y) as f64)
         .unwrap_or(16.0 / 9.0);
+    let viewport_height_px = camera
+        .physical_viewport_size()
+        .filter(|size| size.y > 0)
+        .map_or(SCREEN_HEIGHT_PX, |size| f64::from(size.y));
     let horizontal_fov_rad = 2.0 * ((vertical_fov_rad * 0.5).tan() * aspect_ratio).atan();
     let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
-    let camera_position_inertial = render_origin.origin + transform.translation().as_dvec3();
-    let forward_inertial = transform.compute_transform().forward().as_vec3().as_dvec3();
+    let camera_position_inertial = render_origin.origin + transform.translation.as_dvec3();
+    let forward_inertial = transform.forward().as_vec3().as_dvec3();
 
     Some(TerrainViewport {
         position_m: body_to_inertial.inverse() * camera_position_inertial,
         forward: (body_to_inertial.inverse() * forward_inertial).normalize_or_zero(),
         half_fov_rad: vertical_fov_rad.max(horizontal_fov_rad) * 0.5,
+        vertical_fov_rad,
+        viewport_height_px,
     })
+}
+
+fn apply_selection_hysteresis(
+    errors: &mut BTreeMap<TerrainPatch, f64>,
+    previous_leaves: &BTreeSet<TerrainPatch>,
+) {
+    let split_threshold = SCREEN_ERROR_PX * (1.0 + LOD_HYSTERESIS_RATIO);
+    let merge_threshold = SCREEN_ERROR_PX * (1.0 - LOD_HYSTERESIS_RATIO);
+    for (patch, error_px) in errors {
+        let was_split = previous_leaves
+            .iter()
+            .any(|leaf| patch.level < leaf.level && patch.is_ancestor_of(leaf));
+        if was_split && *error_px > merge_threshold {
+            *error_px = error_px.max(SCREEN_ERROR_PX * (1.0 + 1e-12));
+        } else if !was_split && *error_px <= split_threshold {
+            *error_px = error_px.min(SCREEN_ERROR_PX);
+        }
+    }
 }
 
 /// Intersect the presentation camera's forward ray with the terrain sphere.
@@ -951,6 +974,7 @@ fn clear_terrain_cache(streaming: &mut TerrainStreamingResource) -> Vec<TerrainP
     let evicted = streaming.generated.keys().copied().collect();
     streaming.generated.clear();
     streaming.published.clear();
+    streaming.target_leaves = TerrainPatch::roots().into_iter().collect();
     streaming.cadence = TerrainStreamingCadence::default();
     evicted
 }
@@ -1060,10 +1084,11 @@ fn stale_cached_stitch_variants(
         .iter()
         .copied()
         .filter(|patch| {
-            matches!(
-                streaming.manager.state_of(patch),
-                Some(PatchState::Ready | PatchState::Visible | PatchState::Cached)
-            )
+            !streaming.published.contains(patch)
+                && matches!(
+                    streaming.manager.state_of(patch),
+                    Some(PatchState::Ready | PatchState::Visible | PatchState::Cached)
+                )
         })
         .filter(|patch| {
             streaming.generated.get(patch).is_some_and(|cached| {
@@ -1136,7 +1161,9 @@ mod tests {
     #[test]
     fn lod_hysteresis_holds_level_inside_transition_band() {
         let radius_m = 6_371_000.0;
-        let level = MAX_PATCH_LEVEL;
+        // Stay below the configured ceiling: this exercises the hysteresis
+        // band rather than a max-level clamp.
+        let level = MAX_PATCH_LEVEL - 2;
         let distance_m = 1_300_000.0;
         let direct = crate::domain::services::cube_sphere::lod_for_distance(
             distance_m,
@@ -1144,7 +1171,7 @@ mod tests {
             FOV_RAD,
             SCREEN_HEIGHT_PX,
             SCREEN_ERROR_PX,
-            MAX_PATCH_LEVEL,
+            level,
         );
         let held = lod_for_distance_with_hysteresis(Some(level), distance_m, radius_m);
 
@@ -1216,6 +1243,8 @@ mod tests {
             position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
             forward: -DVec3::Z,
             half_fov_rad: 0.5,
+            vertical_fov_rad: 0.8,
+            viewport_height_px: 1080.0,
         };
 
         assert!(patch_intersects_viewport(
@@ -1270,6 +1299,36 @@ mod tests {
         );
         assert_eq!(streaming.manager.state_of(&patch), None);
         assert_eq!(streaming.manager.resident_bytes(), 0);
+    }
+
+    #[test]
+    fn active_fallback_chain_survives_memory_pressure() {
+        let root = TerrainPatch::root(CubeFace::PosZ);
+        let child = root.children()[0];
+        let mut manager = TerrainPatchManager::new();
+        for patch in [root, child] {
+            manager.request(patch, 1_024);
+            manager.mark_ready(&patch);
+            manager.mark_visible(&patch);
+            manager.mark_cached(&patch);
+        }
+
+        let protected = BTreeSet::from([root, child]);
+        assert!(manager
+            .enforce_memory_budget_protecting(0, &protected)
+            .is_empty());
+        assert_eq!(manager.resident_bytes(), 2_048);
+    }
+
+    #[test]
+    fn per_node_hysteresis_holds_previous_split_inside_band() {
+        let root = TerrainPatch::root(CubeFace::PosZ);
+        let previous: BTreeSet<_> = root.children().into_iter().collect();
+        let mut errors = BTreeMap::from([(root, SCREEN_ERROR_PX * 0.9)]);
+
+        apply_selection_hysteresis(&mut errors, &previous);
+
+        assert!(errors[&root] > SCREEN_ERROR_PX);
     }
 
     #[test]
@@ -1424,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_geometry_is_regenerated_when_its_stitch_pattern_changes() {
+    fn published_geometry_is_retained_when_its_stitch_pattern_changes() {
         let patch = TerrainPatch {
             face: CubeFace::PosZ,
             level: 2,
@@ -1456,8 +1515,13 @@ mod tests {
         );
         streaming.published.insert(patch);
 
+        let target = BTreeSet::from([patch, coarser_neighbor]);
+        assert!(stale_cached_stitch_variants(&streaming, &target).is_empty());
+
+        streaming.published.remove(&patch);
+        streaming.manager.mark_cached(&patch);
         assert_eq!(
-            stale_cached_stitch_variants(&streaming, &BTreeSet::from([patch, coarser_neighbor])),
+            stale_cached_stitch_variants(&streaming, &target),
             vec![patch]
         );
     }
@@ -1503,12 +1567,8 @@ mod tests {
         }
 
         let generated = HashMap::new();
-        let bootstrap_batch = generation_batch(
-            &roots,
-            &manager,
-            &generated,
-            generation_capacity(false, 4, 0),
-        );
+        let bootstrap_batch =
+            generation_batch(&roots, &manager, &generated, generation_capacity(4, 0));
         assert_eq!(bootstrap_batch, roots[..1].to_vec());
 
         let mut generated = HashMap::new();
@@ -1530,18 +1590,13 @@ mod tests {
         manager.begin_generation(&focus);
         manager.mark_ready(&focus);
         manager.mark_visible(&focus);
-        let later_batch = generation_batch(
-            &roots,
-            &manager,
-            &generated,
-            generation_capacity(true, 4, 0),
-        );
+        let later_batch = generation_batch(&roots, &manager, &generated, generation_capacity(4, 0));
         assert_eq!(later_batch.len(), 1);
         assert_ne!(later_batch, vec![focus]);
 
-        assert_eq!(generation_capacity(false, 4, 4), 0);
-        assert_eq!(generation_capacity(false, 8, 6), 1);
-        assert_eq!(generation_capacity(true, 8, 3), 1);
+        assert_eq!(generation_capacity(4, 4), 0);
+        assert_eq!(generation_capacity(8, 6), 1);
+        assert_eq!(generation_capacity(8, 3), 1);
     }
 
     #[test]

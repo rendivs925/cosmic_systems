@@ -246,12 +246,12 @@ pub fn guidance_system(
                 ));
                 commands.throttle_cmd = 1.0;
 
-                // Cut off once the target apoapsis is established; insertion
-                // mode coasts to apoapsis before the circularization burn.
-                if state_elements.apoapsis_m
-                    >= radius_m + autopilot.target_orbit.target_apoapsis_altitude_m
-                        - autopilot.target_orbit.altitude_tolerance_m
-                {
+                // Do not coast merely because apoapsis is high enough. A
+                // suborbital state can satisfy that condition while retaining
+                // an Earth-intersecting periapsis, leaving the upper stage in
+                // Ascent with zero throttle until it impacts. The shared orbit
+                // predicate validates both apsides and the target plane.
+                if target_orbit_reached {
                     autopilot.mode = AutopilotMode::OrbitInsertion;
                     commands.throttle_cmd = 0.0;
                 }

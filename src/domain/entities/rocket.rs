@@ -54,6 +54,10 @@ pub struct RocketStage {
     pub name: String,
     pub dry_mass_kg: f32,
     pub propellant_mass_kg: f32,
+    /// Propellant retained by a recoverable lower stage after separation. The
+    /// separated recovery vehicle owns and consumes this reserve through the
+    /// normal propulsion pipeline; `None` keeps the stage expendable.
+    pub recovery_propellant_reserve_kg: Option<f32>,
     pub engines: Vec<RocketEngine>,
 }
 
@@ -105,12 +109,14 @@ impl Rocket {
                     name: "Falcon 9 Stage 1".to_string(),
                     dry_mass_kg: 18_000.0,
                     propellant_mass_kg: 90_000.0,
+                    recovery_propellant_reserve_kg: Some(15_000.0),
                     engines: stage1_engines,
                 },
                 RocketStage {
                     name: "Falcon 9 Stage 2".to_string(),
                     dry_mass_kg: 4_200.0,
                     propellant_mass_kg: 30_000.0,
+                    recovery_propellant_reserve_kg: None,
                     engines: vec![RocketEngine {
                         position_m: Vec3::new(0.0, 12.0, 0.0),
                         thrust_axis: Vec3::Y,

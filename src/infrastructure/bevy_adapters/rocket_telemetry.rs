@@ -987,6 +987,7 @@ mod g_load_tests {
                 name: "S1".into(),
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
+                recovery_propellant_reserve_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
                     thrust_axis: bevy::math::Vec3::Y,

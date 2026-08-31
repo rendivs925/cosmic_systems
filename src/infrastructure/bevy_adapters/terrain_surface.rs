@@ -15,10 +15,11 @@
 //! independent of frame rate or spawn order (AGENTS.md 26, 44).
 
 use crate::domain::services::cube_sphere::{
-    direction_to_lat_lon, face_uv_to_direction, patch_world_size_m, PatchGeometry, TerrainPatch,
+    direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
 use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
 use bevy::asset::RenderAssetUsages;
+use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::DVec3;
 use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -70,39 +71,37 @@ pub(crate) fn prepare_patch_surface(
     geometry: &PatchGeometry,
     radius_m: f64,
 ) -> PreparedPatchSurface {
-    let detail = ((patch.level as f32 - 5.0) / 3.0).clamp(0.0, 1.0);
-    let vertex_colors = if detail == 0.0 {
-        vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()]
-    } else {
-        geometry
-            .positions
-            .iter()
-            .zip(&geometry.normals)
-            .map(|(position, normal)| {
-                let position = DVec3::from_array(*position);
-                let (lat, lon) = direction_to_lat_lon(position);
-                let radial = position.normalize();
-                let slope_deg = DVec3::from_array(*normal)
-                    .normalize()
-                    .dot(radial)
-                    .clamp(-1.0, 1.0)
-                    .acos()
-                    .to_degrees();
-                let appearance = surface_appearance(
-                    position.length() - radius_m,
-                    source.moisture(lat, lon),
-                    source.zone_lat(lat),
-                    slope_deg,
-                );
-                [
-                    1.0 + (appearance.albedo[0] - 1.0) * detail * 0.25,
-                    1.0 + (appearance.albedo[1] - 1.0) * detail * 0.25,
-                    1.0 + (appearance.albedo[2] - 1.0) * detail * 0.25,
-                    1.0,
-                ]
-            })
-            .collect()
-    };
+    // Coarse and fine mesh colors both come from the authoritative procedural
+    // surface model. Global imagery is not terrain authority and produced a
+    // separate, visibly conflicting material layer at close range.
+    let vertex_colors = geometry
+        .positions
+        .iter()
+        .zip(&geometry.normals)
+        .map(|(position, normal)| {
+            let position = DVec3::from_array(*position);
+            let (lat, lon) = direction_to_lat_lon(position);
+            let radial = position.normalize();
+            let slope_deg = DVec3::from_array(*normal)
+                .normalize()
+                .dot(radial)
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            let appearance = surface_appearance(
+                position.length() - radius_m,
+                source.moisture(lat, lon),
+                source.zone_lat(lat),
+                slope_deg,
+            );
+            [
+                appearance.albedo[0],
+                appearance.albedo[1],
+                appearance.albedo[2],
+                1.0,
+            ]
+        })
+        .collect();
 
     let center = patch.center_direction();
     let (lat, lon) = direction_to_lat_lon(center);
@@ -113,8 +112,8 @@ pub(crate) fn prepare_patch_surface(
         source.zone_lat(lat),
         slope_deg_at(source, lat, lon),
     );
-    let local_surfaces =
-        supports_local_surfaces(patch.level).then(|| build_patch_surfaces(source, patch, radius_m));
+    let local_surfaces = supports_local_surfaces(patch.level)
+        .then(|| build_patch_surfaces(source, patch, geometry, radius_m));
     let vegetation_anchor = center * (radius_m + height_m);
     let vegetation = supports_vegetation(patch.level)
         .then(|| build_vegetation_mesh(source, patch, radius_m, &vegetation_anchor))
@@ -145,34 +144,36 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
 
 /// Texture resolution (texels per side) for the per-patch surface maps.
 const SURFACE_TEX_RES: u32 = 128;
-/// Exaggeration applied to the height-gradient when baking the normal map so
-/// fine relief reads clearly under the launch-pad sun.
-const NORMAL_STRENGTH: f64 = 0.6;
+/// Blend toward the 128x128 authoritative source normal. The remainder comes
+/// from the 33x33 patch mesh already present at the fragment, so this encodes
+/// only detail the mesh cannot represent.
+const NORMAL_DETAIL_WEIGHT: f64 = 0.75;
 
-/// Deterministic 3D pseudo-noise for micro surface variation (independent of the
-/// source's own noise fields). Cheap hash-based; only used to break up flat
-/// tonal bands up close.
+/// Deterministic pseudo-noise used only to vary scatter silhouettes. Terrain
+/// color comes exclusively from the shared `surface_appearance` authority.
 fn micro_noise(x: f64, y: f64, z: f64) -> f64 {
     let s = x.sin() * 12.9898 + y.sin() * 78.233 + z.sin() * 37.719;
     s - s.floor()
 }
 
-/// Build the per-patch albedo + tangent-space normal map from the shared source.
-/// `tex_res` texels are sampled across the patch's [u0..u1]x[v0..v1] parameter
-/// space; the result aligns 1:1 with the mesh UVs produced by `build_patch_geometry`.
+/// Build the per-patch albedo + residual tangent-space normal map from the
+/// shared source. The normal map represents source detail missing from the
+/// existing patch mesh rather than applying the complete terrain slope twice.
 pub fn build_patch_surfaces(
     source: &dyn TerrainSource,
     patch: &TerrainPatch,
+    geometry: &PatchGeometry,
     radius_m: f64,
 ) -> (Image, Image) {
     let res = SURFACE_TEX_RES as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
-    // Height grid (one source sample per texel; slope derived by finite diffs
-    // of this same grid so color and normal stay consistent).
+    // Source samples remain worker-local. Their high-resolution normals provide
+    // only residual detail relative to the already-generated terrain mesh.
     let mut h = vec![0.0f64; res * res];
     let mut lat = vec![0.0f64; res * res];
     let mut lon = vec![0.0f64; res * res];
+    let mut positions = vec![DVec3::ZERO; res * res];
     for j in 0..res {
         for i in 0..res {
             let u = u0 + (u1 - u0) * i as f64 / (res - 1) as f64;
@@ -183,11 +184,9 @@ pub fn build_patch_surfaces(
             lat[idx] = la;
             lon[idx] = lo;
             h[idx] = source.height_m(la, lo);
+            positions[idx] = dir * (radius_m + h[idx]);
         }
     }
-
-    let world_size = patch_world_size_m(patch.level, radius_m);
-    let texel_m = world_size / (res - 1) as f64;
 
     let mut albedo = Vec::with_capacity(res * res * 4);
     let mut normal_data = Vec::with_capacity(res * res * 4);
@@ -200,35 +199,25 @@ pub fn build_patch_surfaces(
             let hi = h[idx];
             let moisture = source.moisture(la, lo);
             let zone = source.zone_lat(la);
-
-            // Slope from neighboring texels (central difference, clamped edges).
-            let (dhdu, dhdv) = (
-                if i == 0 {
-                    (h[idx + 1] - hi) / texel_m
-                } else if i + 1 == res {
-                    (hi - h[idx - 1]) / texel_m
-                } else {
-                    (h[idx + 1] - h[idx - 1]) / (2.0 * texel_m)
-                },
-                if j == 0 {
-                    (h[idx + res] - hi) / texel_m
-                } else if j + 1 == res {
-                    (hi - h[idx - res]) / texel_m
-                } else {
-                    (h[idx + res] - h[idx - res]) / (2.0 * texel_m)
-                },
-            );
-            let slope = (dhdu.hypot(dhdv)).atan().to_degrees();
+            let (source_tangent_u, source_tangent_v) = grid_tangents(&positions, res, i, j);
+            let source_normal =
+                outward_normal(source_tangent_u.cross(source_tangent_v), positions[idx]);
+            let (mesh_tangent_u, mesh_tangent_v, mesh_normal) =
+                mesh_surface_frame(geometry, i, j, res);
+            let slope = source_normal
+                .dot(positions[idx].normalize())
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
 
             let appearance = surface_appearance(hi, moisture, zone, slope);
 
-            // Micro variation: perturb albedo slightly so flat biomes (grass,
-            // sand) do not read as a single flat tone up close.
-            let n = micro_noise(la * 0.7, lo * 0.7, hi * 0.01);
-            let shade = 0.92 + n * 0.16; // [0.92, 1.08]
-            let r = (appearance.albedo[0] * shade as f32).clamp(0.0, 1.0);
-            let g = (appearance.albedo[1] * shade as f32).clamp(0.0, 1.0);
-            let b = (appearance.albedo[2] * shade as f32).clamp(0.0, 1.0);
+            // `SurfaceAppearance::albedo` is linear reflectance. Keeping this
+            // map linear makes it agree with the shader-linear vertex color
+            // path and avoids a latitude/longitude hash seam at the dateline.
+            let r = appearance.albedo[0].clamp(0.0, 1.0);
+            let g = appearance.albedo[1].clamp(0.0, 1.0);
+            let b = appearance.albedo[2].clamp(0.0, 1.0);
             albedo.extend_from_slice(&[
                 (r * 255.0) as u8,
                 (g * 255.0) as u8,
@@ -236,15 +225,25 @@ pub fn build_patch_surfaces(
                 255,
             ]);
 
-            // Tangent-space normal from the height gradient.
-            let nx = (-dhdu * NORMAL_STRENGTH) as f32;
-            let ny = (-dhdv * NORMAL_STRENGTH) as f32;
-            let nz = 1.0f32;
-            let inv = (nx * nx + ny * ny + nz * nz).sqrt().recip();
+            let tangent = (mesh_tangent_u - mesh_normal * mesh_normal.dot(mesh_tangent_u))
+                .normalize_or_zero();
+            let mut bitangent = mesh_normal.cross(tangent).normalize_or_zero();
+            if bitangent.dot(mesh_tangent_v) < 0.0 {
+                bitangent = -bitangent;
+            }
+            let detailed_normal = (mesh_normal * (1.0 - NORMAL_DETAIL_WEIGHT)
+                + source_normal * NORMAL_DETAIL_WEIGHT)
+                .normalize_or_zero();
+            let local_normal = DVec3::new(
+                detailed_normal.dot(tangent),
+                detailed_normal.dot(bitangent),
+                detailed_normal.dot(mesh_normal),
+            )
+            .normalize_or_zero();
             normal_data.extend_from_slice(&[
-                (((nx * inv) * 0.5 + 0.5) * 255.0) as u8,
-                (((ny * inv) * 0.5 + 0.5) * 255.0) as u8,
-                (((nz * inv) * 0.5 + 0.5) * 255.0) as u8,
+                ((local_normal.x * 0.5 + 0.5) * 255.0).round() as u8,
+                ((local_normal.y * 0.5 + 0.5) * 255.0).round() as u8,
+                ((local_normal.z * 0.5 + 0.5) * 255.0).round() as u8,
                 (appearance.roughness.clamp(0.0, 1.0) * 255.0).round() as u8,
             ]);
         }
@@ -255,21 +254,88 @@ pub fn build_patch_surfaces(
         height: res as u32,
         depth_or_array_layers: 1,
     };
-    let albedo_img = Image::new(
+    let mut albedo_img = Image::new(
         extent,
         TextureDimension::D2,
         albedo,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
-    let normal_img = Image::new(
+    let mut normal_img = Image::new(
         extent,
         TextureDimension::D2,
         normal_data,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
+    let sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 4,
+        ..Default::default()
+    });
+    albedo_img.sampler = sampler.clone();
+    normal_img.sampler = sampler;
     (albedo_img, normal_img)
+}
+
+fn grid_tangents(points: &[DVec3], resolution: usize, i: usize, j: usize) -> (DVec3, DVec3) {
+    let idx = |x: usize, y: usize| y * resolution + x;
+    let tangent_u = if i == 0 {
+        points[idx(1, j)] - points[idx(0, j)]
+    } else if i + 1 == resolution {
+        points[idx(i, j)] - points[idx(i - 1, j)]
+    } else {
+        points[idx(i + 1, j)] - points[idx(i - 1, j)]
+    };
+    let tangent_v = if j == 0 {
+        points[idx(i, 1)] - points[idx(i, 0)]
+    } else if j + 1 == resolution {
+        points[idx(i, j)] - points[idx(i, j - 1)]
+    } else {
+        points[idx(i, j + 1)] - points[idx(i, j - 1)]
+    };
+    (tangent_u, tangent_v)
+}
+
+fn outward_normal(normal: DVec3, position: DVec3) -> DVec3 {
+    let normal = normal.normalize_or_zero();
+    if normal.dot(position) < 0.0 {
+        -normal
+    } else {
+        normal
+    }
+}
+
+fn mesh_surface_frame(
+    geometry: &PatchGeometry,
+    texture_i: usize,
+    texture_j: usize,
+    texture_resolution: usize,
+) -> (DVec3, DVec3, DVec3) {
+    // Grid vertices precede the skirt ring. Its count solves
+    // `vertices = resolution^2 + 4 * (resolution - 1)`.
+    let mesh_resolution = ((geometry.positions.len() + 8) as f64).sqrt() as usize - 2;
+    let mesh_extent = (mesh_resolution - 1) as f64;
+    let u = texture_i as f64 / (texture_resolution - 1) as f64 * mesh_extent;
+    let v = texture_j as f64 / (texture_resolution - 1) as f64 * mesh_extent;
+    let i = u.floor().min(mesh_extent - 1.0) as usize;
+    let j = v.floor().min(mesh_extent - 1.0) as usize;
+    let fu = u - i as f64;
+    let fv = v - j as f64;
+    let point = |x: usize, y: usize| DVec3::from_array(geometry.positions[y * mesh_resolution + x]);
+    let p00 = point(i, j);
+    let p10 = point(i + 1, j);
+    let p01 = point(i, j + 1);
+    let p11 = point(i + 1, j + 1);
+    let tangent_u = (p10 - p00) * (1.0 - fv) + (p11 - p01) * fv;
+    let tangent_v = (p01 - p00) * (1.0 - fu) + (p11 - p10) * fu;
+    let position = (p00 * (1.0 - fu) + p10 * fu) * (1.0 - fv) + (p01 * (1.0 - fu) + p11 * fu) * fv;
+    let normal = |x: usize, y: usize| DVec3::from_array(geometry.normals[y * mesh_resolution + x]);
+    let mesh_normal = (normal(i, j) * (1.0 - fu) + normal(i + 1, j) * fu) * (1.0 - fv)
+        + (normal(i, j + 1) * (1.0 - fu) + normal(i + 1, j + 1) * fu) * fv;
+    (tangent_u, tangent_v, outward_normal(mesh_normal, position))
 }
 
 /// Accumulator for building one merged vegetation/scatter mesh per patch.
@@ -322,13 +388,21 @@ impl MeshAccum {
             let radial = tangent * ca + bitangent * sa;
             let p0 = base + radial * r0;
             let p1 = top + radial * r1;
-            // Side normal points outward (radial) for a cylinder/cone.
+            // A tapered prism normal needs an axial component. A radial-only
+            // cone normal produces a visibly incorrect highlight.
+            let side_normal = (radial + up * ((r0 - r1) / height.max(f64::EPSILON))).normalize();
             self.positions.push([p0.x as f32, p0.y as f32, p0.z as f32]);
             self.positions.push([p1.x as f32, p1.y as f32, p1.z as f32]);
-            self.normals
-                .push([radial.x as f32, radial.y as f32, radial.z as f32]);
-            self.normals
-                .push([radial.x as f32, radial.y as f32, radial.z as f32]);
+            self.normals.push([
+                side_normal.x as f32,
+                side_normal.y as f32,
+                side_normal.z as f32,
+            ]);
+            self.normals.push([
+                side_normal.x as f32,
+                side_normal.y as f32,
+                side_normal.z as f32,
+            ]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
         }
@@ -536,13 +610,20 @@ pub fn build_vegetation_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use crate::domain::services::terrain_source::{PlanetaryDemSource, ProceduralTerrainSource};
 
     #[test]
     fn patch_surfaces_produce_aligned_rgb_textures() {
         let src = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
-        let (albedo, normal) = build_patch_surfaces(&src, &patch, 6_371_000.0);
+        let geometry = crate::domain::services::cube_sphere::build_patch_geometry(
+            &patch,
+            &src,
+            6_371_000.0,
+            33,
+            5.0,
+        );
+        let (albedo, normal) = build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0);
         assert_eq!(albedo.width(), SURFACE_TEX_RES);
         assert_eq!(albedo.height(), SURFACE_TEX_RES);
         assert_eq!(normal.width(), SURFACE_TEX_RES);
@@ -552,6 +633,64 @@ mod tests {
             albedo.data.as_ref().unwrap().len(),
             (SURFACE_TEX_RES as usize).pow(2) * 4
         );
+        assert_eq!(normal.texture_descriptor.format, TextureFormat::Rgba8Unorm);
+        for image in [&albedo, &normal] {
+            let ImageSampler::Descriptor(sampler) = &image.sampler else {
+                panic!("local terrain maps must use explicit filtered sampling");
+            };
+            assert_eq!(sampler.mag_filter, ImageFilterMode::Linear);
+            assert_eq!(sampler.min_filter, ImageFilterMode::Linear);
+            assert_eq!(sampler.mipmap_filter, ImageFilterMode::Linear);
+            assert_eq!(sampler.anisotropy_clamp, 4);
+        }
+
+        let (repeat_albedo, repeat_normal) =
+            build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0);
+        assert_eq!(albedo.data, repeat_albedo.data);
+        assert_eq!(normal.data, repeat_normal.data);
+    }
+
+    #[test]
+    fn residual_normal_is_neutral_for_a_flat_source() {
+        let source = PlanetaryDemSource;
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+        let geometry = crate::domain::services::cube_sphere::build_patch_geometry(
+            &patch,
+            &source,
+            6_371_000.0,
+            33,
+            5.0,
+        );
+        let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0);
+        let data = normal.data.as_ref().unwrap();
+        let center = ((SURFACE_TEX_RES as usize / 2) * SURFACE_TEX_RES as usize
+            + SURFACE_TEX_RES as usize / 2)
+            * 4;
+
+        assert!((i16::from(data[center]) - 128).abs() <= 2);
+        assert!((i16::from(data[center + 1]) - 128).abs() <= 2);
+        assert!(data[center + 2] >= 252);
+    }
+
+    #[test]
+    fn residual_normal_frame_uses_rendered_mesh_normals() {
+        let geometry = crate::domain::services::cube_sphere::PatchGeometry {
+            positions: vec![
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            // Deliberately differ from the planar triangle normal. The map
+            // frame must match the normal carried by the rendered mesh.
+            normals: vec![[1.0, 0.0, 1.0]; 4],
+            uvs: vec![],
+            local_uvs: vec![],
+            indices: vec![],
+        };
+
+        let (_, _, normal) = mesh_surface_frame(&geometry, 0, 0, 2);
+        assert!(normal.dot(DVec3::new(1.0, 0.0, 1.0).normalize()) > 0.999_999);
     }
 
     #[test]

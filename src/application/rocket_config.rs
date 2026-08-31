@@ -73,6 +73,10 @@ pub struct StageDef {
     pub name: String,
     pub dry_mass_kg: f32,
     pub propellant_mass_kg: f32,
+    /// Propellant held back for a first-stage recovery burn sequence. Stages
+    /// without a reserve remain expendable debris after separation.
+    #[serde(default)]
+    pub recovery_propellant_reserve_kg: Option<f32>,
     #[serde(default)]
     pub engines: Vec<EngineDef>,
 }
@@ -206,6 +210,14 @@ impl VehicleDef {
                     self.invalid(format!("{at}: carries engines but propellant_mass_kg <= 0"))
                 );
             }
+            if stage
+                .recovery_propellant_reserve_kg
+                .is_some_and(|reserve| reserve <= 0.0 || reserve >= stage.propellant_mass_kg)
+            {
+                return Err(self.invalid(format!(
+                    "{at}: recovery_propellant_reserve_kg must be > 0 and less than propellant_mass_kg"
+                )));
+            }
             if stage.engines.is_empty() {
                 return Err(self.invalid(format!("{at}: needs at least one engine")));
             }
@@ -295,6 +307,7 @@ impl VehicleDef {
                 name: stage.name.clone(),
                 dry_mass_kg: stage.dry_mass_kg,
                 propellant_mass_kg: stage.propellant_mass_kg,
+                recovery_propellant_reserve_kg: stage.recovery_propellant_reserve_kg,
                 engines: stage
                     .engines
                     .iter()

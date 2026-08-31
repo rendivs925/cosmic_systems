@@ -34,9 +34,9 @@ pub fn setup_rocket_camera_and_origin(
     mut camera_query: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
     mut render_origin: ResMut<RenderOrigin>,
     config: Res<RocketCameraConfig>,
-    rocket_query: Query<&RocketPhysicsState>,
+    rocket_query: Query<(&RocketPhysicsState, &RocketGeometry)>,
 ) {
-    let Some(rocket) = rocket_query.iter().next() else {
+    let Some((rocket, geometry)) = rocket_query.iter().next() else {
         bevy::log::warn!("setup_rocket_camera_and_origin: no rocket entity found");
         return;
     };
@@ -49,28 +49,22 @@ pub fn setup_rocket_camera_and_origin(
     render_origin.origin = rocket_pos_m;
     render_origin.last_camera_pos = rocket_pos_m;
 
-    // Compute initial camera position matching the chase camera logic.
-    // At spawn, rocket body +Y aligns with radial up. The chase camera
-    // detects this vertical alignment and uses a side offset (right vector)
-    // instead of a rear offset. We replicate that logic here.
-    // Up direction (radial from planet center to rocket)
+    // The render origin is the rocket, so its initial presentation position is
+    // zero. Use the same rotated-body chase pose as the per-frame system;
+    // looking at world +Y here points away from launch sites whose local up is
+    // not render +Y and exposed the fallback globe as if the vehicle were
+    // below terrain on the first frames.
+    let rocket_pos_flight = Vec3::ZERO;
     let up_dir = rocket_pos_m.normalize().as_vec3();
-
-    // Right direction: perpendicular to up_dir
-    let right_dir = if up_dir.z.abs() < 0.9 {
-        up_dir.cross(Vec3::Z).normalize()
-    } else {
-        up_dir.cross(Vec3::X).normalize()
-    };
-
-    // For vertical rocket, chase camera uses side offset (right) + up
-    let camera_pos_flight = right_dir * config.chase_distance + up_dir * config.chase_height;
-
-    // Camera looks at rocket center (half height up in flight frame).
-    // The Falcon 9 is 70m tall; center is at ~35m in the flight frame.
-    let rocket_center = Vec3::new(0.0, 35.0, 0.0);
+    let (camera_pos_flight, camera_rotation) = compute_chase_camera(
+        rocket_pos_flight,
+        rocket.dynamics.orientation.as_quat(),
+        up_dir,
+        geometry,
+        &config,
+    );
     let camera_transform =
-        Transform::from_translation(camera_pos_flight).looking_at(rocket_center, up_dir);
+        Transform::from_translation(camera_pos_flight).with_rotation(camera_rotation);
 
     // The launch pad horizon is tens of kilometers away. Start at the chase
     // camera range so the curved Earth proxy is visible on the first frame;
@@ -184,6 +178,10 @@ pub fn handle_free_camera_input(
 /// interpolated physics state. The radial frame and velocity use that same
 /// interpolated f64 state, so camera inputs do not mix render-frame position
 /// with a newer fixed-tick physics sample at liftoff.
+#[expect(
+    clippy::type_complexity,
+    reason = "The camera reads the cohesive presentation state for the primary vehicle."
+)]
 pub fn update_rocket_camera(
     time: Res<Time>,
     fixed_time: Res<Time<Fixed>>,
@@ -198,7 +196,7 @@ pub fn update_rocket_camera(
             &RocketFacade,
             &Transform,
         ),
-        Without<Camera3d>,
+        (Without<Camera3d>, Without<SpentStage>),
     >,
     mut camera_query: Query<(&mut Transform, &mut RocketCameraController), With<Camera3d>>,
 ) {

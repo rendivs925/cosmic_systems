@@ -281,6 +281,12 @@ pub struct SpentStage {
     pub kind: SpentStageKind,
 }
 
+/// A separated booster retained in the normal rocket flight pipeline for a
+/// configured recovery. It remains a `SpentStage` for lifecycle identity, but
+/// is excluded from the drag-only debris/despawn systems.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct RecoveringStage;
+
 /// Payload fairing attached to the vehicle. Presence of the component means
 /// the fairing is still attached; jettison removes it and drops its mass.
 #[derive(Component, Debug, Clone, Copy)]

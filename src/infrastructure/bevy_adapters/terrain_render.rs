@@ -4,7 +4,6 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
-use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
@@ -27,7 +26,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
 /// completed terrain batch from stalling camera and HUD presentation.
-const MAX_PATCH_UPLOADS_PER_FRAME: usize = 1;
+const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
@@ -161,6 +160,11 @@ pub struct TerrainRenderConfig {
     pub skirt_depth_m: f64,
     /// Patch resolution (vertices per side).
     pub patch_resolution: u32,
+    /// Finest visible leaves use this resolution for locally smooth terrain.
+    /// Coarser fallback coverage retains `patch_resolution` for responsiveness.
+    pub detail_patch_resolution: u32,
+    /// First level using `detail_patch_resolution`.
+    pub detail_patch_min_level: u32,
 }
 
 impl Default for TerrainRenderConfig {
@@ -169,9 +173,24 @@ impl Default for TerrainRenderConfig {
             recenter_threshold_m: 10_000.0,
             skirt_depth_m: 5.0,
             // 2^n + 1 samples preserve parent/child boundary sample alignment.
-            // 65 samples retain smooth macro curvature in the near-flight view;
-            // residency remains bounded by TerrainStreamingResource's budget.
-            patch_resolution: 65,
+            // Local LOD supplies spatial detail; keeping each worker bake at 33
+            // samples avoids delayed viewport publication and upload bursts.
+            patch_resolution: 33,
+            // Near-ground leaves retain a denser mesh so the visual surface can
+            // represent launch-pad and landing-scale terrain without changing
+            // the authoritative source or collision model.
+            detail_patch_resolution: 65,
+            detail_patch_min_level: 13,
+        }
+    }
+}
+
+impl TerrainRenderConfig {
+    pub(crate) fn patch_resolution_for(&self, patch: TerrainPatch) -> u32 {
+        if patch.level >= self.detail_patch_min_level {
+            self.detail_patch_resolution
+        } else {
+            self.patch_resolution
         }
     }
 }
@@ -252,7 +271,6 @@ fn spawn_patch_mesh_system(
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
-    asset_server: Res<AssetServer>,
     mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
@@ -330,11 +348,7 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        let mut base_material = patch_material(surface.roughness, surface.metallic);
-        base_material.base_color_texture = load_texture(
-            &asset_server,
-            get_planet_textures(&planet.domain_planet.name).albedo,
-        );
+        let base_material = patch_material(surface.roughness, surface.metallic);
         let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
             if let Some((albedo, normal)) = surface.local_surfaces {
                 let albedo = images.add(albedo);
@@ -375,6 +389,21 @@ fn spawn_patch_mesh_system(
                 .clone()
         });
 
+        // A departing parent remains the visible fallback until a complete
+        // descendant cover has reached the renderer. Spawning each replacement
+        // hidden avoids depth fighting while the upload budget spreads that
+        // cover across multiple frames.
+        let visibility = if has_departing_ancestor_render_entity(
+            patch,
+            event.planet_entity,
+            &streaming.published,
+            &render_index,
+        ) {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+
         let entity = commands
             .spawn((
                 Mesh3d(mesh_handle.clone()),
@@ -390,6 +419,7 @@ fn spawn_patch_mesh_system(
                     body_to_inertial_at_spawn: body_to_inertial,
                     render_origin_at_spawn: render_origin.origin,
                 },
+                visibility,
                 Name::new(format!(
                     "TerrainPatch_{:?}_{}_{}_{}",
                     patch.face, patch.level, patch.tile_x, patch.tile_y
@@ -444,22 +474,24 @@ fn hide_cached_patch_mesh_system(
 
     let pending: Vec<_> = pending_hides.0.iter().copied().collect();
     for key in pending {
-        // A departing tile with no visible descendant can disappear now. A
-        // refinement parent must remain visible until its complete replacement
-        // cover has reached the renderer, not merely the CPU geometry cache.
-        let replacements: Vec<_> = streaming
+        if streaming.published.contains(&key.patch) {
+            pending_hides.0.remove(&key);
+            continue;
+        }
+        // A refinement parent remains visible until every quadrant is covered
+        // by an uploaded published descendant. Checking every direct region
+        // recursively prevents a partial child set from exposing a hole.
+        let has_replacements = streaming
             .published
             .iter()
-            .copied()
-            .filter(|patch| key.patch.is_ancestor_of(patch))
-            .collect();
-        if !replacements.is_empty()
-            && !replacements.iter().all(|patch| {
-                render_index.0.contains_key(&TerrainPatchRenderKey {
-                    planet_entity: key.planet_entity,
-                    patch: *patch,
-                })
-            })
+            .any(|patch| patch.level > key.patch.level && key.patch.is_ancestor_of(patch));
+        if has_replacements
+            && !published_cover_is_renderable(
+                key.patch,
+                key.planet_entity,
+                &streaming.published,
+                &render_index,
+            )
         {
             continue;
         }
@@ -469,18 +501,58 @@ fn hide_cached_patch_mesh_system(
         };
         if let Ok(mut visibility) = render_query.get_mut(entity) {
             *visibility = Visibility::Hidden;
-            pending_hides.0.remove(&key);
         } else {
             render_index.0.remove(&key);
             pending_hides.0.remove(&key);
+            continue;
         }
+        reveal_published_descendants(
+            key.patch,
+            key.planet_entity,
+            &streaming.published,
+            &render_index,
+            &mut render_query,
+        );
+        pending_hides.0.remove(&key);
+    }
+
+    // Publication is authoritative. Repair a stale hidden state only when no
+    // visible parent is still covering this patch's area during a refinement
+    // handoff.
+    for key in render_index.0.keys().copied().collect::<Vec<_>>() {
+        if !streaming.published.contains(&key.patch)
+            || !streaming
+                .active_planet()
+                .is_none_or(|active| active == key.planet_entity)
+            || has_visible_departing_ancestor(
+                key.patch,
+                key.planet_entity,
+                &streaming.published,
+                &render_index,
+                &mut render_query,
+            )
+        {
+            continue;
+        }
+        if let Some(entity) = render_index.0.get(&key).copied() {
+            if let Ok(mut visibility) = render_query.get_mut(entity) {
+                *visibility = Visibility::Visible;
+            }
+        }
+        pending_hides.0.remove(&key);
     }
 }
 
 /// Restore a cached tile before the ready handler considers creating new GPU
 /// assets. A cache hit therefore performs no mesh conversion or asset upload.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This cache handoff coordinates streaming publication, ephemeris pose, and render entity state."
+)]
 fn reveal_cached_patch_mesh_system(
     mut events: MessageReader<TerrainPatchReady>,
+    mut pending_hides: ResMut<PendingTerrainPatchHides>,
+    streaming: Res<TerrainStreamingResource>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     render_origin: Res<RenderOrigin>,
     planet_query: Query<&PlanetComponent>,
@@ -489,6 +561,7 @@ fn reveal_cached_patch_mesh_system(
 ) {
     for event in events.read() {
         let key = TerrainPatchRenderKey::from(event);
+        pending_hides.0.remove(&key);
         let Some(entity) = render_index.0.get(&key).copied() else {
             continue;
         };
@@ -501,9 +574,111 @@ fn reveal_cached_patch_mesh_system(
                 };
                 update_patch_transform(&mut transform, state, orientation, render_origin.origin);
             }
-            *visibility = Visibility::Visible;
+            *visibility = if has_departing_ancestor_render_entity(
+                event.patch,
+                event.planet_entity,
+                &streaming.published,
+                &render_index,
+            ) {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
         } else {
             render_index.0.remove(&key);
+        }
+    }
+}
+
+fn has_departing_ancestor_render_entity(
+    patch: TerrainPatch,
+    planet_entity: Entity,
+    published: &std::collections::BTreeSet<TerrainPatch>,
+    render_index: &TerrainPatchRenderIndex,
+) -> bool {
+    let mut ancestor = patch.parent();
+    while let Some(parent) = ancestor {
+        if !published.contains(&parent)
+            && render_index.0.contains_key(&TerrainPatchRenderKey {
+                planet_entity,
+                patch: parent,
+            })
+        {
+            return true;
+        }
+        ancestor = parent.parent();
+    }
+    false
+}
+
+fn has_visible_departing_ancestor(
+    patch: TerrainPatch,
+    planet_entity: Entity,
+    published: &std::collections::BTreeSet<TerrainPatch>,
+    render_index: &TerrainPatchRenderIndex,
+    render_query: &mut Query<&mut Visibility>,
+) -> bool {
+    let mut ancestor = patch.parent();
+    while let Some(parent) = ancestor {
+        let key = TerrainPatchRenderKey {
+            planet_entity,
+            patch: parent,
+        };
+        if !published.contains(&parent) {
+            if let Some(entity) = render_index.0.get(&key).copied() {
+                if let Ok(visibility) = render_query.get_mut(entity) {
+                    if *visibility != Visibility::Hidden {
+                        return true;
+                    }
+                }
+            }
+        }
+        ancestor = parent.parent();
+    }
+    false
+}
+
+fn published_cover_is_renderable(
+    patch: TerrainPatch,
+    planet_entity: Entity,
+    published: &std::collections::BTreeSet<TerrainPatch>,
+    render_index: &TerrainPatchRenderIndex,
+) -> bool {
+    if published.contains(&patch) {
+        return render_index.0.contains_key(&TerrainPatchRenderKey {
+            planet_entity,
+            patch,
+        });
+    }
+
+    patch.children().into_iter().all(|child| {
+        published
+            .iter()
+            .any(|candidate| child.is_ancestor_of(candidate))
+            && published_cover_is_renderable(child, planet_entity, published, render_index)
+    })
+}
+
+fn reveal_published_descendants(
+    parent: TerrainPatch,
+    planet_entity: Entity,
+    published: &std::collections::BTreeSet<TerrainPatch>,
+    render_index: &TerrainPatchRenderIndex,
+    render_query: &mut Query<&mut Visibility>,
+) {
+    for patch in published
+        .iter()
+        .copied()
+        .filter(|patch| patch.level > parent.level && parent.is_ancestor_of(patch))
+    {
+        let key = TerrainPatchRenderKey {
+            planet_entity,
+            patch,
+        };
+        if let Some(entity) = render_index.0.get(&key).copied() {
+            if let Ok(mut visibility) = render_query.get_mut(entity) {
+                *visibility = Visibility::Visible;
+            }
         }
     }
 }
@@ -890,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn global_imagery_coordinates_keep_coarse_tiles_neutral_and_fine_tiles_tinted() {
+    fn source_appearance_colors_every_terrain_lod_without_global_imagery() {
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
@@ -912,11 +1087,8 @@ mod tests {
         assert!(coarse
             .vertex_colors
             .iter()
-            .all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
-        assert!(fine
-            .vertex_colors
-            .iter()
             .any(|color| *color != [1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(coarse.vertex_colors, fine.vertex_colors);
         assert_eq!(geometry.uvs.len(), geometry.local_uvs.len());
 
         let mesh = patch_geometry_to_mesh(
@@ -943,8 +1115,8 @@ mod tests {
             .add_systems(
                 Update,
                 (
-                    hide_cached_patch_mesh_system,
                     reveal_cached_patch_mesh_system,
+                    hide_cached_patch_mesh_system,
                 )
                     .chain(),
             );
@@ -1055,7 +1227,30 @@ mod tests {
             Visibility::Visible
         );
 
-        let child_entity = app.world_mut().spawn_empty().id();
+        // Republishing the parent cancels the delayed hide. A later descendant
+        // becoming renderable must not consume that obsolete transition.
+        app.world_mut()
+            .resource_mut::<TerrainStreamingResource>()
+            .published
+            .remove(&child);
+        app.world_mut()
+            .resource_mut::<TerrainStreamingResource>()
+            .published
+            .insert(patch);
+        app.world_mut()
+            .resource_mut::<Messages<TerrainPatchReady>>()
+            .write(TerrainPatchReady {
+                patch,
+                planet_entity,
+            });
+        app.update();
+        assert!(app
+            .world()
+            .resource::<PendingTerrainPatchHides>()
+            .0
+            .is_empty());
+
+        let child_entity = app.world_mut().spawn(Visibility::Visible).id();
         app.world_mut()
             .resource_mut::<TerrainPatchRenderIndex>()
             .0
@@ -1069,8 +1264,66 @@ mod tests {
         app.update();
         assert_eq!(
             *app.world().get::<Visibility>(entity).unwrap(),
+            Visibility::Visible
+        );
+
+        // A partial child cover is not a replacement: the parent remains
+        // visible even after the first descendant entity has uploaded.
+        app.world_mut()
+            .resource_mut::<TerrainStreamingResource>()
+            .published
+            .remove(&patch);
+        app.world_mut()
+            .resource_mut::<TerrainStreamingResource>()
+            .published
+            .insert(child);
+        app.world_mut()
+            .resource_mut::<Messages<TerrainPatchCached>>()
+            .write(TerrainPatchCached {
+                patch,
+                planet_entity,
+            });
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(entity).unwrap(),
+            Visibility::Visible
+        );
+
+        // Once every child quadrant has a render entity, the parent can hand
+        // off coverage without exposing a gap.
+        for sibling in patch.children().into_iter().skip(1) {
+            let sibling_entity = app.world_mut().spawn(Visibility::Hidden).id();
+            app.world_mut()
+                .resource_mut::<TerrainStreamingResource>()
+                .published
+                .insert(sibling);
+            app.world_mut()
+                .resource_mut::<TerrainPatchRenderIndex>()
+                .0
+                .insert(
+                    TerrainPatchRenderKey {
+                        planet_entity,
+                        patch: sibling,
+                    },
+                    sibling_entity,
+                );
+        }
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(entity).unwrap(),
             Visibility::Hidden
         );
+        for child in patch.children() {
+            let child_entity = app.world().resource::<TerrainPatchRenderIndex>().0
+                [&TerrainPatchRenderKey {
+                    planet_entity,
+                    patch: child,
+                }];
+            assert_eq!(
+                *app.world().get::<Visibility>(child_entity).unwrap(),
+                Visibility::Visible
+            );
+        }
     }
 
     #[test]

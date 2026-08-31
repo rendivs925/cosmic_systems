@@ -26,6 +26,7 @@
                     name: "Falcon 9 Stage 1",
                     dry_mass_kg: 18_000.0,
                     propellant_mass_kg: 90_000.0,
+                    recovery_propellant_reserve_kg: Some(15_000.0),
                     engines: [
                         (
                             position: (1.2, -32.0, 0.0),

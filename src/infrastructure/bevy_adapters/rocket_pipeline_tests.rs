@@ -89,6 +89,7 @@ mod ground_contact_tests {
                 name: "S1".into(),
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
+                recovery_propellant_reserve_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
                     thrust_axis: bevy::math::Vec3::Y,
@@ -791,6 +792,7 @@ mod recovery_pipeline_tests {
                 name: "Booster".into(),
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
+                recovery_propellant_reserve_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
                     thrust_axis: bevy::math::Vec3::Y,
@@ -1141,12 +1143,14 @@ mod ascent_pipeline_tests {
                     name: "S1".into(),
                     dry_mass_kg: 950.0,
                     propellant_mass_kg: 9_250.0,
+                    recovery_propellant_reserve_kg: None,
                     engines,
                 },
                 RocketStage {
                     name: "S2".into(),
                     dry_mass_kg: 250.0,
                     propellant_mass_kg: 2_050.0,
+                    recovery_propellant_reserve_kg: None,
                     engines: vec![RocketEngine {
                         position_m: bevy::math::Vec3::new(0.0, 6.0, 0.0),
                         thrust_axis: bevy::math::Vec3::Y,
@@ -1436,6 +1440,7 @@ mod ascent_pipeline_tests {
             rocket.dynamics.position_m = position_m;
             rocket.dynamics.velocity_mps = circular_velocity_mps;
             *world.get_mut::<RocketMissionState>(safe_entity).unwrap() = RocketMissionState::Ascent;
+            world.get_mut::<RocketAutopilot>(safe_entity).unwrap().mode = AutopilotMode::Ascent;
         }
         // The first app update initializes Bevy's fixed-time clock; the
         // second executes the configured fixed-step flight pipeline.
@@ -1469,6 +1474,10 @@ mod ascent_pipeline_tests {
             rocket.dynamics.velocity_mps = circular_velocity_mps * 0.98;
             *world.get_mut::<RocketMissionState>(unsafe_entity).unwrap() =
                 RocketMissionState::Ascent;
+            world
+                .get_mut::<RocketAutopilot>(unsafe_entity)
+                .unwrap()
+                .mode = AutopilotMode::Ascent;
         }
         unsafe_app.update();
         unsafe_app.update();
@@ -1479,6 +1488,15 @@ mod ascent_pipeline_tests {
                 .unwrap(),
             RocketMissionState::Orbit,
             "an unsafe periapsis must not complete ascent"
+        );
+        assert!(
+            unsafe_app
+                .world()
+                .get::<RocketCommands>(unsafe_entity)
+                .unwrap()
+                .throttle_cmd
+                > 0.0,
+            "an unsafe periapsis must remain under ascent thrust rather than coasting into impact"
         );
     }
 
@@ -1692,6 +1710,41 @@ mod ascent_pipeline_tests {
             "stage 2 must also have consumed propellant post-staging"
         );
         assert!(rocket.dynamics.mass_kg.is_finite() && rocket.dynamics.mass_kg > 0.0);
+    }
+
+    #[test]
+    fn reserved_booster_enters_existing_recovery_pipeline_at_separation() {
+        let mut app = burn_rig_app(1.0);
+        {
+            let world = app.world_mut();
+            let mut propulsion = world
+                .query::<&mut RocketPropulsion>()
+                .single_mut(world)
+                .unwrap();
+            propulsion.vehicle.stages[0].recovery_propellant_reserve_kg = Some(100.0);
+        }
+
+        for _ in 0..20_000 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let world = app.world_mut();
+            let mut recovering = world.query_filtered::<(
+                &RocketPropulsion,
+                &RocketMissionState,
+                &RocketAutopilot,
+                &TerrainCollisionState,
+            ), With<RecoveringStage>>();
+            if let Ok((propulsion, mission, autopilot, _collision)) = recovering.single(world) {
+                assert_eq!(*mission, RocketMissionState::Landing);
+                assert_eq!(autopilot.mode, AutopilotMode::Boostback);
+                assert_eq!(propulsion.propellant_remaining_kg, vec![100.0]);
+                assert!(propulsion.vehicle.stages[0]
+                    .recovery_propellant_reserve_kg
+                    .is_none());
+                return;
+            }
+        }
+
+        panic!("a stage with a recovery reserve must enter the recovery flight pipeline");
     }
 
     /// Phase 17 scenario `time_warp_burn`: the SAME burn executed at 1×, 10×

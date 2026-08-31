@@ -25,10 +25,12 @@ pub fn setup_rocket_sun_light(
     };
     let sun_direction = sun_direction.as_vec3();
 
-    // Sky-blue ambient fill so shadowed faces read as sky-lit instead of black.
+    // The default DE440 epoch is civil twilight at KSC. This presentation-only
+    // fill keeps the launch terrain and vehicle inspectable while the direct
+    // light still follows the authoritative Sun direction and casts shadows.
     commands.insert_resource(bevy::light::AmbientLight {
         color: Color::srgb(0.5, 0.6, 0.75),
-        brightness: 400.0,
+        brightness: 12_000.0,
         ..default()
     });
 

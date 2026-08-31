@@ -501,7 +501,10 @@ impl Plugin for RocketModePlugin {
                 .after(warmup_terrain_system),
         );
         // Terrain priorities use the current presentation camera frustum.
-        app.add_systems(Update, stream_terrain_patches.after(update_rocket_camera));
+        app.add_systems(
+            Update,
+            stream_terrain_patches.after(update_rocket_camera_projection),
+        );
         app.add_systems(Update, collect_terrain_warmup_tasks);
 
         // Terrain rendering plugin (spawns meshes from streaming patches).

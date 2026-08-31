@@ -102,6 +102,10 @@ pub fn spawn_spent_stage(
 /// Simplified drag-only aerodynamics for debris (no lift/side force, no
 /// attitude model): `F = -v̂ · q·Cd·A`. Consumes the shared atmosphere cache;
 /// runs before force accumulation like every other force writer.
+#[expect(
+    clippy::type_complexity,
+    reason = "The debris query groups the state required for its single drag-force write."
+)]
 pub fn spent_stage_aerodynamics(
     mut debris_query: Query<
         (
@@ -110,7 +114,7 @@ pub fn spent_stage_aerodynamics(
             &RocketFlightConditions,
             &mut ForceAccumulator,
         ),
-        With<SpentStage>,
+        (With<SpentStage>, Without<RecoveringStage>),
     >,
 ) {
     for (_debris, geometry, conditions, mut force_accum) in debris_query.iter_mut() {
@@ -131,10 +135,17 @@ pub fn spent_stage_aerodynamics(
 /// Despawn debris that reached the surface or fell below the lifecycle
 /// threshold. Radar altitude comes from the same per-planet TerrainSource the
 /// active vehicle uses (single terrain authority).
+#[expect(
+    clippy::type_complexity,
+    reason = "The lifecycle query identifies eligible debris and its authoritative dynamics."
+)]
 pub fn update_spent_stage_lifecycle(
     mut commands: Commands,
     planet_query: Query<(&PlanetComponent, &PlanetTerrain)>,
-    debris_query: Query<(Entity, &RocketPlanetBinding, &RocketPhysicsState), With<SpentStage>>,
+    debris_query: Query<
+        (Entity, &RocketPlanetBinding, &RocketPhysicsState),
+        (With<SpentStage>, Without<RecoveringStage>),
+    >,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
     for (entity, binding, debris) in debris_query.iter() {
