@@ -17,7 +17,9 @@
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
-use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance, TerrainSource};
+use crate::domain::services::terrain_source::{
+    slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
+};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::DVec3;
@@ -25,7 +27,7 @@ use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
-const TREE_COUNT: usize = 70;
+const TREE_COUNT: usize = 140;
 const ROCK_COUNT: usize = 14;
 const TRUNK_SEGMENTS: usize = 6;
 const FOLIAGE_SEGMENTS: usize = 7;
@@ -88,11 +90,14 @@ pub(crate) fn prepare_patch_surface(
                 .clamp(-1.0, 1.0)
                 .acos()
                 .to_degrees();
-            let appearance = surface_appearance(
-                position.length() - radius_m,
-                source.moisture(lat, lon),
-                source.zone_lat(lat),
-                slope_deg,
+            let appearance = with_river_appearance(
+                surface_appearance(
+                    position.length() - radius_m,
+                    source.moisture(lat, lon),
+                    source.zone_lat(lat),
+                    slope_deg,
+                ),
+                source.river_strength(lat, lon),
             );
             [
                 appearance.albedo[0],
@@ -106,11 +111,14 @@ pub(crate) fn prepare_patch_surface(
     let center = patch.center_direction();
     let (lat, lon) = direction_to_lat_lon(center);
     let height_m = source.height_m(lat, lon);
-    let appearance = surface_appearance(
-        height_m,
-        source.moisture(lat, lon),
-        source.zone_lat(lat),
-        slope_deg_at(source, lat, lon),
+    let appearance = with_river_appearance(
+        surface_appearance(
+            height_m,
+            source.moisture(lat, lon),
+            source.zone_lat(lat),
+            slope_deg_at(source, lat, lon),
+        ),
+        source.river_strength(lat, lon),
     );
     let local_surfaces = supports_local_surfaces(patch.level)
         .then(|| build_patch_surfaces(source, patch, geometry, radius_m));
@@ -210,7 +218,10 @@ pub fn build_patch_surfaces(
                 .acos()
                 .to_degrees();
 
-            let appearance = surface_appearance(hi, moisture, zone, slope);
+            let appearance = with_river_appearance(
+                surface_appearance(hi, moisture, zone, slope),
+                source.river_strength(la, lo),
+            );
 
             // `SurfaceAppearance::albedo` is linear reflectance. Keeping this
             // map linear makes it agree with the shader-linear vertex color
@@ -492,28 +503,6 @@ pub fn build_vegetation_mesh(
 ) -> Option<Mesh> {
     let (u0, v0, u1, v1) = patch.uv_bounds();
 
-    // Decide vegetation from the patch centre biome.
-    let cu = (u0 + u1) * 0.5;
-    let cv = (v0 + v1) * 0.5;
-    let cdir = face_uv_to_direction(patch.face, cu, cv);
-    let (clat, clon) = direction_to_lat_lon(cdir);
-    let cheight = source.height_m(clat, clon);
-    let cmoisture = source.moisture(clat, clon);
-    let czone = source.zone_lat(clat);
-    let cslope = slope_deg_at(source, clat, clon);
-    let center = surface_appearance(cheight, cmoisture, czone, cslope);
-
-    // Vegetate grass/forest biomes: greenish albedo, above water, below snow,
-    // not on cliff faces.
-    let is_vegetated = center.albedo[1] > center.albedo[0]
-        && center.albedo[1] > center.albedo[2]
-        && cheight > 1.0
-        && cheight < 2600.0
-        && cslope < 32.0;
-    if !is_vegetated {
-        return None;
-    }
-
     let mut accum = MeshAccum::new();
 
     for k in 0..TREE_COUNT {
@@ -537,6 +526,17 @@ pub fn build_vegetation_mesh(
         }
         let local_slope = slope_deg_at(source, lat, lon);
         if local_slope > 34.0 {
+            continue;
+        }
+        let appearance = surface_appearance(
+            h,
+            source.moisture(lat, lon),
+            source.zone_lat(lat),
+            local_slope,
+        );
+        if appearance.albedo[1] <= appearance.albedo[0]
+            || appearance.albedo[1] <= appearance.albedo[2]
+        {
             continue;
         }
         let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
@@ -610,19 +610,31 @@ pub fn build_vegetation_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::cube_sphere::build_patch_geometry;
     use crate::domain::services::terrain_source::{PlanetaryDemSource, ProceduralTerrainSource};
+
+    #[derive(Debug)]
+    struct RiverTerrain;
+
+    impl TerrainSource for RiverTerrain {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            300.0
+        }
+
+        fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.5
+        }
+
+        fn river_strength(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            1.0
+        }
+    }
 
     #[test]
     fn patch_surfaces_produce_aligned_rgb_textures() {
         let src = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
-        let geometry = crate::domain::services::cube_sphere::build_patch_geometry(
-            &patch,
-            &src,
-            6_371_000.0,
-            33,
-            5.0,
-        );
+        let geometry = build_patch_geometry(&patch, &src, 6_371_000.0, 33, 5.0);
         let (albedo, normal) = build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0);
         assert_eq!(albedo.width(), SURFACE_TEX_RES);
         assert_eq!(albedo.height(), SURFACE_TEX_RES);
@@ -651,16 +663,29 @@ mod tests {
     }
 
     #[test]
+    fn river_strength_is_encoded_in_the_local_surface_map() {
+        let source = RiverTerrain;
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
+        let (albedo, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0);
+        let center = ((SURFACE_TEX_RES as usize / 2) * SURFACE_TEX_RES as usize
+            + SURFACE_TEX_RES as usize / 2)
+            * 4;
+        let albedo = albedo.data.as_ref().unwrap();
+        let normal = normal.data.as_ref().unwrap();
+
+        assert!(albedo[center + 2] > albedo[center + 1]);
+        assert!(
+            normal[center + 3] < 100,
+            "river channels must be smoother than ground"
+        );
+    }
+
+    #[test]
     fn residual_normal_is_neutral_for_a_flat_source() {
         let source = PlanetaryDemSource;
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
-        let geometry = crate::domain::services::cube_sphere::build_patch_geometry(
-            &patch,
-            &source,
-            6_371_000.0,
-            33,
-            5.0,
-        );
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
         let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0);
         let data = normal.data.as_ref().unwrap();
         let center = ((SURFACE_TEX_RES as usize / 2) * SURFACE_TEX_RES as usize
@@ -670,6 +695,23 @@ mod tests {
         assert!((i16::from(data[center]) - 128).abs() <= 2);
         assert!((i16::from(data[center + 1]) - 128).abs() <= 2);
         assert!(data[center + 2] >= 252);
+    }
+
+    #[test]
+    fn residual_normal_captures_detail_missing_from_a_coarse_mesh() {
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
+        let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0);
+        let data = normal.data.as_ref().unwrap();
+        let (texels, _) = data.as_chunks::<4>();
+
+        assert!(
+            texels.iter().any(|texel| {
+                (i16::from(texel[0]) - 128).abs() > 0 || (i16::from(texel[1]) - 128).abs() > 0
+            }),
+            "a detailed source must encode non-neutral tangent-space normals for shader lighting"
+        );
     }
 
     #[test]

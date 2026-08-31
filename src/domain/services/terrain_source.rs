@@ -65,6 +65,13 @@ pub trait TerrainSource: Send + Sync + Debug {
         0.5
     }
 
+    /// Normalized river-channel strength in `[0, 1]`. This is presentation
+    /// metadata derived from the same authoritative terrain source; a default
+    /// of zero keeps sources without hydrology dry.
+    fn river_strength(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+
     /// Coarse, non-authoritative moisture for whole-body presentation.
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.moisture(latitude_deg, longitude_deg)
@@ -304,6 +311,11 @@ impl TerrainSource for LayeredTerrainSource {
 
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.primary_surface().moisture(latitude_deg, longitude_deg)
+    }
+
+    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.primary_surface()
+            .river_strength(latitude_deg, longitude_deg)
     }
 
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -637,6 +649,10 @@ impl TerrainSource for LocalDetailTerrainSource {
         self.base.moisture(latitude_deg, longitude_deg)
     }
 
+    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.river_strength(latitude_deg, longitude_deg)
+    }
+
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.base.overview_height_m(latitude_deg, longitude_deg)
     }
@@ -917,6 +933,23 @@ pub fn surface_appearance(
         roughness: roughness as f32,
         metallic: 0.0,
     }
+}
+
+/// Blend a ground appearance with a source-derived river channel. The strength
+/// comes from the erosion source, rather than an independent render-time water
+/// field, so terrain color agrees with its carved drainage network.
+pub fn with_river_appearance(
+    mut appearance: SurfaceAppearance,
+    river_strength: f64,
+) -> SurfaceAppearance {
+    let strength = river_strength.clamp(0.0, 1.0);
+    let wet_bank = strength.sqrt() * 0.32;
+    appearance.albedo = lerp3(appearance.albedo, [0.10, 0.18, 0.12], wet_bank);
+
+    let channel = ss(0.12, 0.65, strength);
+    appearance.albedo = lerp3(appearance.albedo, [0.012, 0.075, 0.14], channel);
+    appearance.roughness = lerp_f(appearance.roughness, 0.18, channel);
+    appearance
 }
 
 /// Local terrain slope (degrees ≥ 0) at a lat/lon by central differences over
@@ -1556,6 +1589,16 @@ mod tests {
         );
         // Seafloor below sea level.
         assert_eq!(surface_appearance(-100.0, 0.5, 0.5, 0.0).metallic, 0.0);
+    }
+
+    #[test]
+    fn river_appearance_is_darker_smoother_and_blue_shifted() {
+        let ground = surface_appearance(300.0, 0.5, 0.5, 5.0);
+        let river = with_river_appearance(ground, 1.0);
+
+        assert!(river.albedo[0] < ground.albedo[0]);
+        assert!(river.albedo[2] > river.albedo[1]);
+        assert!(river.roughness < ground.roughness);
     }
 
     #[test]

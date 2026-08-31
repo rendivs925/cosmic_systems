@@ -1883,7 +1883,7 @@ mod render_interpolation_tests {
     use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_state;
 
     #[test]
-    fn prelaunch_render_interpolates_with_the_rotating_pad() {
+    fn render_dynamics_interpolates_distinct_fixed_snapshots() {
         let current = RocketDynamicsState::new(
             DVec3::new(10.0, 20.0, 30.0),
             DVec3::new(1.0, 2.0, 3.0),
@@ -1932,6 +1932,56 @@ mod render_interpolation_tests {
         );
 
         assert_eq!(rendered.position_m, DVec3::new(2.5, 0.0, 0.0));
+    }
+
+    #[test]
+    fn terminal_surface_states_render_the_latest_fixed_snapshot() {
+        let dynamics = RocketDynamicsState::new(
+            DVec3::new(10.0, 20.0, 30.0),
+            DVec3::new(1.0, 2.0, 3.0),
+            DQuat::IDENTITY,
+            100.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let stale_snapshot = RocketDynamicsState {
+            position_m: DVec3::new(-10.0, -20.0, -30.0),
+            ..dynamics
+        };
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            crate::infrastructure::bevy_adapters::rocket_presentation::capture_render_state,
+        );
+        for (mission, ground_rest) in [
+            (RocketMissionState::Landing, false),
+            (RocketMissionState::Landed, false),
+            (RocketMissionState::Crashed, false),
+            (RocketMissionState::Ascent, true),
+        ] {
+            app.world_mut().spawn((
+                RocketPhysicsState { dynamics },
+                mission,
+                GroundRest {
+                    active: ground_rest,
+                },
+                RocketRenderState {
+                    prev: stale_snapshot,
+                    current: stale_snapshot,
+                },
+            ));
+        }
+
+        app.update();
+
+        let world = app.world_mut();
+        let mut render_states = world.query::<&RocketRenderState>();
+        for render in render_states.iter(world) {
+            assert_eq!(render.prev, dynamics);
+            assert_eq!(render.current, dynamics);
+            assert_eq!(render_dynamics_state(*render, 0.0), dynamics);
+            assert_eq!(render_dynamics_state(*render, 0.999), dynamics);
+        }
     }
 
     #[test]

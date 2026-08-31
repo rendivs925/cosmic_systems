@@ -351,7 +351,7 @@ pub fn erode_tile(
 /// Bilinear sample of a lat/lon in a raster's data channel, returning
 /// `(value, edge_factor)` where `edge_factor ∈ [0,1]` is 0 in the interior and
 /// 1 at the tile boundary.
-fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
+fn sample_channel(raster: &HeightRaster, values: &[f32], lat: f64, lon: f64) -> (f64, f64) {
     let w = raster.width as usize;
     let hgt = raster.height as usize;
     let span_lat = (raster.lat_max - raster.lat_min).abs().max(1e-12);
@@ -362,7 +362,7 @@ fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
     let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(hgt - 1));
     let dx = fx - x0 as f64;
     let dy = fy - y0 as f64;
-    let at = |x: usize, y: usize| raster.data[y * w + x] as f64;
+    let at = |x: usize, y: usize| values[y * w + x] as f64;
     let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * dx;
     let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * dx;
     let value = top + (bottom - top) * dy;
@@ -379,6 +379,10 @@ fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
     // so the feather is zero in the interior and one at every boundary.
     let edge = (1.0 - 2.0 * nearest_edge_distance).clamp(0.0, 1.0);
     (value, edge)
+}
+
+fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
+    sample_channel(raster, &raster.data, lat, lon)
 }
 
 /// Return how much of an erosion raster contributes at an edge-factor value.
@@ -586,6 +590,22 @@ impl TerrainSource for ErodedTerrainSource {
         }
     }
 
+    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let Some(tile) = self.cached_tile(latitude_deg, longitude_deg) else {
+            return self.base.river_strength(latitude_deg, longitude_deg);
+        };
+        let (flow, edge) = sample_channel(&tile, &tile.flow, latitude_deg, longitude_deg);
+        // A channel begins at the configured carving threshold and reaches full
+        // visual strength at three times that flow, matching the carve cap.
+        let normalized = (flow / f64::from(self.cfg.river_flow_threshold.max(f32::MIN_POSITIVE)))
+            .log2()
+            / 3.0f64.log2();
+        let eroded = normalized.clamp(0.0, 1.0);
+        let weight = erosion_weight(edge, self.cfg.edge_feather);
+        let base = self.base.river_strength(latitude_deg, longitude_deg);
+        base + (eroded - base) * weight
+    }
+
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.base.overview_height_m(latitude_deg, longitude_deg)
     }
@@ -606,7 +626,7 @@ impl TerrainSource for ErodedTerrainSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use crate::domain::services::terrain_source::{PlanetaryDemSource, ProceduralTerrainSource};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Barrier;
     use std::thread;
@@ -756,6 +776,29 @@ mod tests {
         // Moisture is normalized.
         let m = source.moisture(11.5, 21.5);
         assert!((0.0..=1.0).contains(&m));
+    }
+
+    #[test]
+    fn river_strength_uses_cached_flow_without_triggering_a_bake() {
+        let source = ErodedTerrainSource::new(
+            Arc::new(PlanetaryDemSource),
+            ErosionConfig {
+                resolution: 16,
+                droplets: 0,
+                thermal_iterations: 0,
+                river_flow_threshold: 0.5,
+                ..cfg()
+            },
+        );
+
+        assert_eq!(source.river_strength(11.0, 21.0), 0.0);
+        source.prepare_sample(11.0, 21.0);
+        let strength = source.river_strength(11.0, 21.0);
+        assert!((0.0..=1.0).contains(&strength));
+        assert!(
+            strength > 0.0,
+            "cached flow must become visible as a river channel"
+        );
     }
 
     #[test]

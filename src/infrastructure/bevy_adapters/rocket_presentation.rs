@@ -1,6 +1,8 @@
 //! Presentation adapters for the authoritative rocket dynamics state.
 
-use crate::components::rocket::{RocketFacade, RocketPhysicsState, RocketRenderState};
+use crate::components::rocket::{
+    GroundRest, RocketFacade, RocketMissionState, RocketPhysicsState, RocketRenderState,
+};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
@@ -9,9 +11,27 @@ use bevy::time::Fixed;
 
 /// Snapshot fixed-step simulation state for subsequent render interpolation.
 pub fn capture_render_state(
-    mut rocket_query: Query<(&RocketPhysicsState, &mut RocketRenderState)>,
+    mut rocket_query: Query<(
+        &RocketPhysicsState,
+        &RocketMissionState,
+        Option<&GroundRest>,
+        &mut RocketRenderState,
+    )>,
 ) {
-    for (rocket, mut render) in rocket_query.iter_mut() {
+    for (rocket, mission, ground_rest, mut render) in rocket_query.iter_mut() {
+        // Terrain and planet presentation use the latest fixed ephemeris pose.
+        // During surface-constrained terminal states, interpolating the rocket
+        // from the previous tick makes the chase camera sawtooth relative to
+        // that surface once per fixed update.
+        if matches!(
+            *mission,
+            RocketMissionState::Landing | RocketMissionState::Landed | RocketMissionState::Crashed
+        ) || ground_rest.is_some_and(|rest| rest.active)
+        {
+            render.prev = rocket.dynamics;
+            render.current = rocket.dynamics;
+            continue;
+        }
         render.prev = render.current;
         render.current = rocket.dynamics;
     }

@@ -28,26 +28,43 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // The source-derived local albedo refines the same procedural appearance
-    // represented by coarse mesh vertex colors. It is not multiplied against
-    // unrelated global imagery, which caused near-field color conflicts.
-    pbr_input.material.base_color = mix(
-        pbr_input.material.base_color,
-        local_albedo,
-        detail_weight,
-    );
+    // The validated macro albedo provides continent/ocean readability; the
+    // source-derived local map supplies bounded biome and slope variation.
+    // This material-only blend never affects terrain geometry or collision.
+    let local_modulation = mix(vec4<f32>(1.0), local_albedo, 0.35);
+    pbr_input.material.base_color *= mix(vec4<f32>(1.0), local_modulation, detail_weight);
 
     let local_surface = textureSample(
         terrain_local_normal,
         terrain_local_normal_sampler,
         in.uv_b,
     );
+    let local_normal = local_surface.xyz * 2.0 - vec3<f32>(1.0);
     let local_roughness = local_surface.w;
     pbr_input.material.perceptual_roughness = mix(
         pbr_input.material.perceptual_roughness,
         local_roughness,
         detail_weight,
     );
+    // Reconstruct the local tangent frame from the patch UVs. The normal map
+    // contains source detail absent from the streamed mesh, so it must affect
+    // lighting rather than only roughness.
+    let position_dx = dpdx(in.world_position.xyz);
+    let position_dy = dpdy(in.world_position.xyz);
+    let uv_dx = dpdx(in.uv_b);
+    let uv_dy = dpdy(in.uv_b);
+    let determinant = uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x;
+    if abs(determinant) > 1e-6 {
+        let raw_tangent = (position_dx * uv_dy.y - position_dy * uv_dx.y) / determinant;
+        let tangent = normalize(raw_tangent - pbr_input.N * dot(pbr_input.N, raw_tangent));
+        let raw_bitangent = (-position_dx * uv_dy.x + position_dy * uv_dx.x) / determinant;
+        let handedness = select(-1.0, 1.0, dot(cross(pbr_input.N, tangent), raw_bitangent) >= 0.0);
+        let bitangent = cross(pbr_input.N, tangent) * handedness;
+        let mapped_normal = normalize(
+            tangent * local_normal.x + bitangent * local_normal.y + pbr_input.N * local_normal.z,
+        );
+        pbr_input.N = normalize(mix(pbr_input.N, mapped_normal, detail_weight));
+    }
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material,
         pbr_input.material.base_color,

@@ -4,6 +4,7 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
+use crate::application::texture_config::get_planet_textures;
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
@@ -81,6 +82,7 @@ pub struct TerrainPatchRenderState {
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
+    earth_macro_albedo: Option<Handle<Image>>,
 }
 
 /// Identifies a terrain render entity independently for every planet. Patch
@@ -270,6 +272,7 @@ fn spawn_patch_mesh_system(
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
@@ -348,7 +351,22 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        let base_material = patch_material(surface.roughness, surface.metallic);
+        let mut base_material = patch_material(surface.roughness, surface.metallic);
+        if planet.domain_planet.name == "Earth" {
+            // Macro imagery makes continental land and ocean immediately
+            // legible. It remains presentation-only: mesh elevation, local
+            // detail, vegetation, and collision still come from TerrainSource.
+            let earth_albedo = render_assets
+                .earth_macro_albedo
+                .get_or_insert_with(|| {
+                    let texture_path = get_planet_textures("Earth")
+                        .albedo
+                        .expect("Earth has a configured macro albedo texture");
+                    asset_server.load(texture_path)
+                })
+                .clone();
+            base_material.base_color_texture = Some(earth_albedo);
+        }
         let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
             if let Some((albedo, normal)) = surface.local_surfaces {
                 let albedo = images.add(albedo);
@@ -1065,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn source_appearance_colors_every_terrain_lod_without_global_imagery() {
+    fn source_appearance_colors_every_terrain_lod_for_macro_texture_modulation() {
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
