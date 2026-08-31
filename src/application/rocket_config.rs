@@ -921,14 +921,6 @@ mod tests {
         fs::read_to_string(path)
             .expect("electron config exists")
             .replace("Representative", "SourceVerified")
-            .replace(
-                "version: \"8\",",
-                "version: \"8\", publication_date: \"2025-01\",",
-            )
-            .replace(
-                "source_url: \"https://www.rocketlabusa.com/launch/electron/\",",
-                "source_url: \"https://www.rocketlabusa.com/launch/electron/\", sha256: \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",",
-            )
     }
 
     /// Parse a definition expected to be invalid; returns the user-facing
@@ -995,27 +987,27 @@ mod tests {
                 "primary_source.title",
             ),
             (
-                verified.replace("version: \"8\"", "version: \"\""),
+                verified.replace("version: \"8.0\"", "version: \"\""),
                 "primary_source.version",
             ),
             (
                 verified.replace(
-                    "publication_date: \"2025-01\"",
+                    "publication_date: \"2025-09\"",
                     "publication_date: \"2025-13\"",
                 ),
                 "publication_date in YYYY-MM or YYYY-MM-DD",
             ),
             (
                 verified.replace(
-                    "https://www.rocketlabusa.com/launch/electron/",
-                    "http://www.rocketlabusa.com/launch/electron/",
+                    "https://rocketlabcorp.com/assets/Rocket-Lab-Electron-Payload-User-Guide-8.0.pdf",
+                    "http://rocketlabcorp.com/assets/Rocket-Lab-Electron-Payload-User-Guide-8.0.pdf",
                 ),
                 "HTTPS",
             ),
             (
                 verified.replace(
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeF",
+                    "a212a499a70d44f7bde5b92d163b520558379aa0e71655be72ce936b3eb840f7",
+                    "a212a499a70d44f7bde5b92d163b520558379aa0e71655be72ce936b3eb840fF",
                 ),
                 "lowercase 64-hex",
             ),
@@ -1179,6 +1171,43 @@ mod tests {
             parsed_files >= 4,
             "expected the four shipped vehicle files, found {parsed_files}"
         );
+    }
+
+    #[test]
+    fn shipped_catalog_pins_retrieved_primary_source_bytes() {
+        for (file, expected_url, expected_sha256) in [
+            (
+                "sls.ron",
+                "https://www.nasa.gov/wp-content/uploads/2026/01/sls-5558-artemis-ii-sls-reference-guide-final-review-508-012026.pdf",
+                "2f15dbdc7015fab5fb0deb080f49f527f78cb26fbfb767529029dd71f1e34fa3",
+            ),
+            (
+                "electron.ron",
+                "https://rocketlabcorp.com/assets/Rocket-Lab-Electron-Payload-User-Guide-8.0.pdf",
+                "a212a499a70d44f7bde5b92d163b520558379aa0e71655be72ce936b3eb840f7",
+            ),
+        ] {
+            let manifest = env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+            let text = fs::read_to_string(
+                Path::new(&manifest)
+                    .join(CONFIGS_RELATIVE_PATH)
+                    .join(file),
+            )
+            .unwrap_or_else(|error| panic!("cannot read {file}: {error}"));
+            let vehicle = RocketConfigFile::ron_options()
+                .from_str::<RocketConfigFile>(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {file}: {error}"))
+                .vehicles
+                .into_iter()
+                .next()
+                .expect("shipped file must define one vehicle");
+            let source = vehicle
+                .provenance
+                .primary_source
+                .expect("pinned vehicle must declare primary source");
+            assert_eq!(source.source_url.as_deref(), Some(expected_url));
+            assert_eq!(source.sha256.as_deref(), Some(expected_sha256));
+        }
     }
 
     #[test]

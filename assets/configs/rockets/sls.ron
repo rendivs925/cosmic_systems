@@ -23,6 +23,7 @@
                     version: "January 2026",
                     publication_date: "2026-01",
                     source_url: "https://www.nasa.gov/wp-content/uploads/2026/01/sls-5558-artemis-ii-sls-reference-guide-final-review-508-012026.pdf",
+                    sha256: "2f15dbdc7015fab5fb0deb080f49f527f78cb26fbfb767529029dd71f1e34fa3",
                 ),
                 representative_rationale: "The NASA guide informs the public envelope, while configured mass splits, engine stations, ignition limits, and ICPS values remain simulator approximations.",
             ),

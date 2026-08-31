@@ -4,7 +4,12 @@
 // at representative stage-local stations; one Rutherford Vacuum on stage 2.
 // Electric-pump engines allow deep throttling and air restarts.
 //
-// Sources (rough public figures): Rocket Lab Payload User Guide - vehicle
+// Source: Rocket Lab Electron Payload User's Guide v8.0 (September 2025),
+// SHA-256 a212a499a70d44f7bde5b92d163b520558379aa0e71655be72ce936b3eb840f7.
+// The guide provides the public vehicle envelope; configured stage values are
+// still representative where the guide does not specify them.
+//
+// Public guide figures: vehicle
 // 1.2 m diameter x 18 m; first stage ~12.1 m and second stage ~2.4 m; liftoff mass ~13 t with ~9.25 t stage-1 propellant
 // and ~2.05 t stage-2 propellant; 9 x Rutherford ~26 kN SL (~232 kN total),
 // ISP ~303 s (SL) / ~311 s (vac), with 26 kN rated at sea level; Rutherford
@@ -22,8 +27,10 @@
                 manufacturer: "Rocket Lab",
                 primary_source: (
                     title: "Electron Payload User's Guide",
-                    version: "8",
-                    source_url: "https://www.rocketlabusa.com/launch/electron/",
+                    version: "8.0",
+                    publication_date: "2025-09",
+                    source_url: "https://rocketlabcorp.com/assets/Rocket-Lab-Electron-Payload-User-Guide-8.0.pdf",
+                    sha256: "a212a499a70d44f7bde5b92d163b520558379aa0e71655be72ce936b3eb840f7",
                 ),
                 representative_rationale: "The guide informs the public envelope, but stage mass splits, engine stations, ignition limits, and fairing mass remain simulator approximations.",
             ),
