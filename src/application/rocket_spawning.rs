@@ -156,6 +156,7 @@ pub fn spawn_rockets(
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
             GravityAcceleration::default(),
+            SpecificForceAcceleration::default(),
             RocketPlanetBinding {
                 planet_name: CelestialBodyId::earth(),
             },

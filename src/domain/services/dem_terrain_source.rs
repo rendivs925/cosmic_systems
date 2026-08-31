@@ -478,29 +478,6 @@ impl TerrainSource for DemTerrainSource {
     }
 }
 
-// Non-dem feature stub.
-#[cfg(not(feature = "dem"))]
-#[derive(Debug, Clone)]
-pub struct DemTerrainSource;
-
-#[cfg(not(feature = "dem"))]
-impl DemTerrainSource {
-    pub fn new(_config: ()) -> Self {
-        Self
-    }
-}
-
-#[cfg(not(feature = "dem"))]
-impl crate::domain::services::terrain_source::TerrainSource for DemTerrainSource {
-    fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-        0.0
-    }
-
-    fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-        0.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "dem")]

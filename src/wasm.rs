@@ -1,13 +1,11 @@
-use crate::infrastructure::bevy_adapters::components::{ChromeOptimizations, PerformanceStats};
-use crate::infrastructure::bevy_adapters::systems::{
+use crate::infrastructure::bevy_adapters::material_systems::{
     apply_pending_material_textures, apply_texture_worker_results, queue_pending_material_textures,
-    update_wasm_memory_stats,
 };
+use crate::infrastructure::bevy_adapters::performance_components::PerformanceStats;
 use crate::infrastructure::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
-use js_sys::Reflect;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys;
@@ -44,20 +42,8 @@ pub fn main() {
     // ephemeris presentation systems cannot diverge by platform.
     app.add_plugins((SharedSimulationPlugin, SolarSystemModePlugin));
 
-    let (is_chrome, webgpu_supported) = detect_chrome_and_webgpu();
     let mut perf_stats = PerformanceStats::default();
-    perf_stats.target_fps = if is_chrome { 90.0 } else { 60.0 };
     app.insert_resource(perf_stats);
-    #[cfg(target_arch = "wasm32")]
-    app.insert_resource(
-        crate::infrastructure::bevy_adapters::components::WasmMemoryStats::default(),
-    );
-    app.insert_resource(ChromeOptimizations {
-        is_chrome,
-        webgpu_supported,
-        webgpu_enabled: is_chrome && webgpu_supported,
-        worker_target: 0,
-    });
     app.insert_non_send_resource(TextureDecodeWorker::new());
     app.add_systems(
         Update,
@@ -67,9 +53,6 @@ pub fn main() {
         Update,
         apply_texture_worker_results.before(apply_pending_material_textures),
     );
-    app.add_systems(Update, update_wasm_memory_stats);
-
-    log_webgpu_status(is_chrome, webgpu_supported);
     web_sys::console::log_1(&"Cosmic Systems Simulator initialized successfully".into());
     app.run();
 }
@@ -107,31 +90,5 @@ fn prepare_dom_for_wasm() {
                 loading.remove();
             }
         }
-    }
-}
-
-fn detect_chrome_and_webgpu() -> (bool, bool) {
-    let user_agent = web_sys::window()
-        .and_then(|window| window.navigator().user_agent().ok())
-        .unwrap_or_default();
-    let is_chrome = user_agent.contains("Chrome") && !user_agent.contains("Edg");
-
-    let webgpu_supported = web_sys::window()
-        .map(|window| JsValue::from(window.navigator()))
-        .and_then(|navigator| Reflect::has(&navigator, &JsValue::from_str("gpu")).ok())
-        .unwrap_or(false);
-
-    (is_chrome, webgpu_supported)
-}
-
-fn log_webgpu_status(is_chrome: bool, webgpu_supported: bool) {
-    if is_chrome && webgpu_supported {
-        web_sys::console::log_1(
-            &"WebGPU enabled by default for Chrome (high-performance backend preferred)".into(),
-        );
-    } else if webgpu_supported {
-        web_sys::console::log_1(&"WebGPU supported, using CPU fallback until enabled".into());
-    } else {
-        web_sys::console::log_1(&"WebGPU unavailable, using SIMD + workers fallback".into());
     }
 }

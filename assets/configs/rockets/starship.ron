@@ -6,7 +6,7 @@
 // back-pressure is handled by ISP blending in the simulator.
 //
 // Sources (rough public figures): SpaceX Starship updates - Super Heavy
-// ~200 t dry / ~3 400 t propellant, 33 Raptors x ~2 256 kN SL (~7 500 tf
+// ~71 m Super Heavy / ~50 m Ship; ~200 t dry / ~3 400 t propellant, 33 Raptors x ~2 256 kN SL (~7 500 tf
 // liftoff); Ship ~110 t dry / ~1 200 t propellant, 3 sea-level + 3 vacuum
 // Raptors; Raptor ISP ~327 s (SL) / ~350 s (vac), RVac ~372 s; deep throttle
 // to about 40 percent. No payload fairing: payload bay door instead.
@@ -20,6 +20,8 @@
             stages: [
                 (
                     name: "Super Heavy Booster",
+                    diameter_m: 9.0,
+                    height_m: 71.0,
                     dry_mass_kg: 200_000.0,
                     propellant_mass_kg: 3_400_000.0,
                     engines: [
@@ -324,6 +326,8 @@
                 ),
                 (
                     name: "Starship Upper Stage",
+                    diameter_m: 9.0,
+                    height_m: 50.0,
                     dry_mass_kg: 110_000.0,
                     propellant_mass_kg: 1_200_000.0,
                     engines: [

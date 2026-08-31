@@ -1,6 +1,5 @@
 pub mod camera_systems;
 pub mod components;
-pub mod compute_components;
 pub mod craft_components;
 pub mod craft_effects;
 pub mod craft_systems;
@@ -40,10 +39,7 @@ pub mod rocket_replay;
 pub mod rocket_separation;
 pub mod rocket_telemetry;
 pub mod rocket_terrain_map;
-pub mod simd_kepler;
-pub mod systems;
 pub mod terrain_render;
 pub mod terrain_streaming;
 pub mod terrain_surface;
 pub mod ui_components;
-pub mod webgpu_systems;

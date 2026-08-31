@@ -455,9 +455,6 @@ mod tests {
             CameraMode::TerrainView
         ));
         assert!(!uses_camera_relative_solar_map_origin(CameraMode::Orbit));
-        assert!(!uses_camera_relative_solar_map_origin(
-            CameraMode::FollowPlanet
-        ));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::components::rocket::{
     AblationState, ForceAccumulator, GravityAcceleration, RocketFlightConditions, RocketGeometry,
-    RocketMass, RocketPhysicsState, TorqueAccumulator,
+    RocketMass, RocketPhysicsState, SpecificForceAcceleration, TorqueAccumulator,
 };
 use crate::domain::services::aerodynamics::{
     aerodynamic_coefficients_with_nose_bluntness, aerodynamic_torque_body, angle_of_attack,
@@ -26,17 +26,30 @@ pub fn accumulate_forces(
 }
 
 /// Integrate the authoritative f64 state and clear each fixed-tick accumulator.
+#[expect(
+    clippy::type_complexity,
+    reason = "Integration consumes the complete fixed-tick force and rigid-body state."
+)]
 pub fn integrate_6dof(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &mut RocketPhysicsState,
         &mut RocketMass,
+        Option<&GravityAcceleration>,
+        Option<&mut SpecificForceAcceleration>,
         &mut ForceAccumulator,
         &mut TorqueAccumulator,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut rocket, mut mass, mut force_accum, mut torque_accum) in rocket_query.iter_mut() {
+    for (mut rocket, mut mass, gravity, specific_force, mut force_accum, mut torque_accum) in
+        rocket_query.iter_mut()
+    {
+        if let Some(mut specific_force) = specific_force {
+            let gravity_mps2 = gravity.map_or(DVec3::ZERO, |gravity| gravity.value);
+            specific_force.value =
+                force_accum.0 / rocket.dynamics.mass_kg.max(f64::MIN_POSITIVE) - gravity_mps2;
+        }
         rocket.dynamics.integrate_translation(force_accum.0, dt);
         rocket.dynamics.integrate_rotation(torque_accum.0, dt);
         mass.0 = rocket.dynamics.mass_kg;
@@ -107,5 +120,53 @@ pub fn aerodynamic_torque(
                 rocket.dynamics.center_of_mass_m,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use bevy::math::{DMat3, DQuat};
+    use bevy::prelude::{App, Update};
+
+    #[test]
+    fn integration_records_non_gravitational_specific_force() {
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(1.0 / 60.0));
+        app.add_systems(Update, integrate_6dof);
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState {
+                        position_m: DVec3::ZERO,
+                        velocity_mps: DVec3::ZERO,
+                        orientation: DQuat::IDENTITY,
+                        angular_velocity_radps: DVec3::ZERO,
+                        angular_acceleration_radps2: DVec3::ZERO,
+                        mass_kg: 100.0,
+                        inertia_body: DMat3::IDENTITY,
+                        center_of_mass_m: DVec3::ZERO,
+                    },
+                },
+                RocketMass(100.0),
+                GravityAcceleration {
+                    value: DVec3::new(0.0, -9.80665, 0.0),
+                },
+                SpecificForceAcceleration::default(),
+                // 1,000 N of thrust plus the 980.665 N gravitational force.
+                ForceAccumulator(DVec3::new(1_000.0, -980.665, 0.0)),
+                TorqueAccumulator::default(),
+            ))
+            .id();
+
+        app.update();
+
+        let specific_force = app
+            .world()
+            .get::<SpecificForceAcceleration>(entity)
+            .unwrap();
+        assert_eq!(specific_force.value, DVec3::new(10.0, 0.0, 0.0));
     }
 }

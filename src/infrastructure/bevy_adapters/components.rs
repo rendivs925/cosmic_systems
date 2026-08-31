@@ -1,5 +1,4 @@
-// Re-export all component types from their respective modules
-// This maintains backward compatibility while organizing code better
+// Shared ECS component vocabulary for adapter composition.
 
 // Entity components (planets, cameras, etc.)
 pub use super::entity_components::*;
@@ -15,9 +14,6 @@ pub use super::performance_components::*;
 
 // Quality adaptation components
 pub use super::quality_components::*;
-
-// Compute backend components
-pub use super::compute_components::*;
 
 // Craft/UFO components
 pub use super::craft_components::*;

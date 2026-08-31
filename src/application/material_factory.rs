@@ -46,35 +46,6 @@ pub fn create_planet_material(config: PlanetMaterialConfig) -> StandardMaterial 
     }
 }
 
-// Keep the old function signature for backward compatibility
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This legacy public constructor preserves its established material input API."
-)]
-pub fn create_planet_material_legacy(
-    base_color_texture: Option<Handle<Image>>,
-    normal_map_texture: Option<Handle<Image>>,
-    emissive_texture: Option<Handle<Image>>,
-    base_color: Color,
-    emissive: LinearRgba,
-    unlit: bool,
-    metallic: f32,
-    reflectance: f32,
-    perceptual_roughness: f32,
-) -> StandardMaterial {
-    create_planet_material(PlanetMaterialConfig {
-        base_color_texture,
-        normal_map_texture,
-        emissive_texture,
-        base_color,
-        emissive,
-        unlit,
-        metallic,
-        reflectance,
-        perceptual_roughness,
-    })
-}
-
 pub fn orbit_color_for(body_class: BodyClass, selected: bool) -> Color {
     let base = match body_class {
         BodyClass::Star => Color::srgb(1.0, 0.95, 0.85),

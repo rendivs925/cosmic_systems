@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use std::collections::VecDeque;
 
 // Quality levels for automatic adjustment
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,19 +36,11 @@ pub struct PerformanceStats {
     pub frame_time_history: Vec<f32>,        // Raw frame times for percentile calculation
     pub history_capacity: usize, // Frame history size (default 1000 for 99th percentile)
 
-    // LEGACY FIELDS (deprecated - use new fields above)
-    pub frame_time: f32,         // DEPRECATED: Use frame_time_ms
-    pub fps: f32,                // DEPRECATED: Use fps_display
-    pub average_frame_time: f32, // DEPRECATED: Use frame_time_smoothed
-    pub average_fps: f32,        // DEPRECATED: Use fps_smoothed
-
     // Session and configuration
-    pub frame_count: u64,             // Total frames rendered
-    pub quality_level: QualityLevel,  // Current quality setting
-    pub target_fps: f32,              // Target FPS for quality adjustment
-    pub adaptive_enabled: bool,       // Whether automatic quality adjustment is enabled
-    pub frame_history: VecDeque<f32>, // DEPRECATED: Use frame_time_history
-    pub history_len: usize,           // DEPRECATED: Use history_capacity
+    pub frame_count: u64,            // Total frames rendered
+    pub quality_level: QualityLevel, // Current quality setting
+    pub target_fps: f32,             // Target FPS for quality adjustment
+    pub adaptive_enabled: bool,      // Whether automatic quality adjustment is enabled
     pub adaptation_rate: f32,
 
     // Detailed optimization timing (for benchmarking)
@@ -77,15 +68,6 @@ pub struct PerformanceStats {
     // Process memory metrics. `NaN` means this platform has no collector.
     pub memory_usage_mb: f32,
     pub peak_memory_mb: f32,
-
-    // GPU acceleration
-    pub vulkan_enabled: bool, // Whether Vulkan compute is available and active
-    pub vulkan_initialized: bool, // Whether Vulkan initialization has been attempted
-    #[cfg(not(target_arch = "wasm32"))]
-    pub vulkan_solver:
-        Option<crate::infrastructure::gpu_compute::vulkan_kepler::VulkanKeplerSolver>,
-    #[cfg(target_arch = "wasm32")]
-    pub vulkan_solver: Option<()>,
 
     // Benchmark timing accumulators
     pub benchmark_start_time: Option<std::time::Instant>,
@@ -135,12 +117,6 @@ impl Default for PerformanceStats {
             frame_time_history: Vec::with_capacity(1000),
             history_capacity: 1000, // Keep 1000 samples for 99th percentile
 
-            // LEGACY FIELDS (maintained for compatibility)
-            frame_time: 16.67,         // DEPRECATED
-            fps: 60.0,                 // DEPRECATED
-            average_frame_time: 16.67, // DEPRECATED
-            average_fps: 60.0,         // DEPRECATED
-
             // Session configuration
             frame_count: 0,
             quality_level: QualityLevel::High,
@@ -148,8 +124,6 @@ impl Default for PerformanceStats {
             // Rendering quality is an explicit user setting. Do not silently
             // degrade terrain or presentation during a demanding scene.
             adaptive_enabled: false,
-            frame_history: VecDeque::with_capacity(60), // DEPRECATED
-            history_len: 60,                            // DEPRECATED
             adaptation_rate: 0.1,
 
             // Detailed optimization timing
@@ -178,14 +152,6 @@ impl Default for PerformanceStats {
             memory_usage_mb: f32::NAN,
             peak_memory_mb: f32::NAN,
 
-            // GPU acceleration
-            vulkan_enabled: false,
-            vulkan_initialized: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            vulkan_solver: None,
-            #[cfg(target_arch = "wasm32")]
-            vulkan_solver: None,
-
             // Benchmark timing
             benchmark_start_time: None,
             benchmark_frame_count: 0,
@@ -212,12 +178,4 @@ mod tests {
     fn quality_adaptation_is_disabled_by_default() {
         assert!(!PerformanceStats::default().adaptive_enabled);
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Resource, Default)]
-pub struct WasmMemoryStats {
-    pub used_heap_bytes: u64,
-    pub heap_limit_bytes: u64,
-    pub utilization: f32,
 }

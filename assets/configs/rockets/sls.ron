@@ -7,7 +7,8 @@
 // burn booster model would need dedicated infrastructure.
 //
 // Sources (rough public figures): NASA SLS Block 1 factsheets - core 8.4 m
-// diameter x ~98 m stack; core ~85 t dry / ~979 t LOX+LH2 propellant;
+// diameter x ~98 m stack; core stage ~65 m, ICPS ~13.7 m x 5.1 m; core ~85 t
+// dry / ~979 t LOX+LH2 propellant;
 // 4 x RS-25, ISP ~366 s (SL) / ~452 s (vac), ~2.2 MN vac each at rated
 // power, gimbal ~10.5 deg, throttle to ~67%; RS-25 cannot restart in flight.
 // ICPS ~3.5 t dry / ~27 t propellant, one RL10-class engine ~110 kN,
@@ -22,6 +23,8 @@
             stages: [
                 (
                     name: "Core Stage",
+                    diameter_m: 8.4,
+                    height_m: 65.0,
                     dry_mass_kg: 85_000.0,
                     propellant_mass_kg: 979_000.0,
                     engines: [
@@ -71,6 +74,8 @@
                 ),
                 (
                     name: "ICPS",
+                    diameter_m: 5.1,
+                    height_m: 13.7,
                     dry_mass_kg: 3_500.0,
                     propellant_mass_kg: 27_200.0,
                     engines: [

@@ -52,6 +52,12 @@ pub enum EngineState {
 #[derive(Clone, Debug)]
 pub struct RocketStage {
     pub name: String,
+    /// Outer cylindrical diameter used by active-stage aerodynamic and inertia
+    /// approximations, meters.
+    pub diameter_m: f32,
+    /// Physical stage length used by active-stage aerodynamic and inertia
+    /// approximations, meters.
+    pub height_m: f32,
     pub dry_mass_kg: f32,
     pub propellant_mass_kg: f32,
     /// Propellant retained by a recoverable lower stage after separation. The
@@ -107,6 +113,8 @@ impl Rocket {
             stages: vec![
                 RocketStage {
                     name: "Falcon 9 Stage 1".to_string(),
+                    diameter_m: 3.7,
+                    height_m: 41.2,
                     dry_mass_kg: 18_000.0,
                     propellant_mass_kg: 90_000.0,
                     recovery_propellant_reserve_kg: Some(15_000.0),
@@ -114,6 +122,8 @@ impl Rocket {
                 },
                 RocketStage {
                     name: "Falcon 9 Stage 2".to_string(),
+                    diameter_m: 3.7,
+                    height_m: 13.2,
                     dry_mass_kg: 4_200.0,
                     propellant_mass_kg: 30_000.0,
                     recovery_propellant_reserve_kg: None,

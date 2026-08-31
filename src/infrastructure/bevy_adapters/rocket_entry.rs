@@ -5,8 +5,9 @@ use crate::components::rocket::{
 };
 use crate::domain::events::CommsBlackoutEvent;
 use crate::domain::services::entry_physics::{
-    comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
-    radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_recession_rate_mps,
+    capped_tps_recession_m, comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
+    radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_mass_loss_kg,
+    tps_recession_rate_mps,
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::rocket_propulsion::{
@@ -22,9 +23,9 @@ use bevy::prelude::{Entity, MessageWriter, Query, Res};
 /// writes ThermalState for the ablation system.
 pub fn compute_heating(
     config: Res<EntryPhysicsConfig>,
-    mut rocket_query: Query<(&RocketFlightConditions, &mut ThermalState)>,
+    mut rocket_query: Query<(&RocketFlightConditions, &AblationState, &mut ThermalState)>,
 ) {
-    for (conditions, mut thermal) in rocket_query.iter_mut() {
+    for (conditions, ablation, mut thermal) in rocket_query.iter_mut() {
         let rho = conditions.density_kg_m3;
         let v = conditions.airspeed_mps;
 
@@ -38,7 +39,7 @@ pub fn compute_heating(
 
         // Convective heating: Sutton-Graves q_dot = k * sqrt(rho/R_nose) * v^3
         // (single authority: domain::services::entry_physics, AGENTS.md 50).
-        let nose_radius = config.nose_radius_initial_m;
+        let nose_radius = ablation.nose_radius_m.max(config.nose_radius_initial_m);
         let q_conv = convective_heat_flux_w_m2(config.convective_coefficient, rho, nose_radius, v);
         thermal.convective_heat_flux_w_m2 = q_conv;
 
@@ -48,6 +49,21 @@ pub fn compute_heating(
 
         thermal.total_heat_flux_w_m2 = q_conv + q_rad;
         thermal.stagnation_point_heat_flux_w_m2 = q_conv; // Stagnation point = convective peak
+    }
+}
+
+/// Establishes the configured physical TPS state once after spawn or relaunch.
+/// A default component deliberately carries no body-specific constants.
+pub fn initialize_thermal_protection(
+    config: Res<EntryPhysicsConfig>,
+    mut rocket_query: Query<&mut AblationState>,
+) {
+    for mut ablation in rocket_query.iter_mut() {
+        if ablation.nose_radius_m > 0.0 || ablation.tps_exhausted {
+            continue;
+        }
+        ablation.nose_radius_m = config.nose_radius_initial_m;
+        ablation.tps_thickness_remaining_m = config.tps_initial_thickness_m;
     }
 }
 
@@ -79,23 +95,32 @@ pub fn compute_ablation(
         ablation.cumulative_heat_load_j_m2 += q_total * dt;
 
         // Recession rate: dr/dt = q_dot / (rho_tps * H_abl)
+        if ablation.tps_exhausted {
+            continue;
+        }
         let recession_rate = tps_recession_rate_mps(
             q_total,
             config.tps_density_kg_m3,
             config.heat_of_ablation_j_kg,
         );
-        ablation.recession_depth_m += recession_rate * dt;
+        let recession_m =
+            capped_tps_recession_m(recession_rate, dt, ablation.tps_thickness_remaining_m);
+        if recession_m <= 0.0 {
+            ablation.tps_exhausted = true;
+            continue;
+        }
 
         // Nose radius growth from recession
-        ablation.nose_radius_m = config.nose_radius_initial_m + ablation.recession_depth_m;
+        let nose_radius_before_m = ablation.nose_radius_m.max(config.nose_radius_initial_m);
+        ablation.recession_depth_m += recession_m;
+        ablation.nose_radius_m = nose_radius_before_m + recession_m;
 
-        // Mass loss from TPS
-        let tps_area = std::f64::consts::PI * ablation.nose_radius_m.powi(2); // Approximate
-        let mass_loss_rate = recession_rate * config.tps_density_kg_m3 * tps_area;
-        let mass_loss = mass_loss_rate * dt;
-        ablation.mass_loss_kg += mass_loss;
+        // Mass loss from the TPS cap over the actual bounded recession.
+        ablation.mass_loss_kg +=
+            tps_mass_loss_kg(config.tps_density_kg_m3, nose_radius_before_m, recession_m);
         ablation.tps_thickness_remaining_m =
-            (config.tps_initial_thickness_m - ablation.recession_depth_m).max(0.0);
+            (ablation.tps_thickness_remaining_m - recession_m).max(0.0);
+        ablation.tps_exhausted = ablation.tps_thickness_remaining_m <= 0.0;
 
         // Rebuild all rigid-body quantities from the same attached mass
         // inventory. Incremental subtraction left COM/inertia stale.

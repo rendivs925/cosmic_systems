@@ -256,14 +256,6 @@ pub fn apply_camera_transform(
                 transform.translation = orbit_pos;
                 transform.look_at(Vec3::ZERO, Vec3::Y);
             }
-            CameraMode::FollowPlanet => {
-                // Follow a specific planet (placeholder)
-                // Would need to track the target entity's position
-            }
-            CameraMode::ApproachPlanet => {
-                // Approach a planet (placeholder)
-                // Would smoothly interpolate toward target
-            }
             CameraMode::TerrainView => {
                 // Ground-level terrain exploration
                 // Use free flight controls but constrain to terrain surface

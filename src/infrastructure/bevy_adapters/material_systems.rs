@@ -82,7 +82,6 @@ pub fn queue_pending_material_textures(
     mut texture_worker: NonSendMut<
         crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker,
     >,
-    memory_stats: Option<Res<crate::infrastructure::bevy_adapters::components::WasmMemoryStats>>,
 ) {
     let camera_pos = camera_query.single().expect("camera present").translation();
     let worker_count = texture_worker.worker_count();
@@ -91,13 +90,6 @@ pub fn queue_pending_material_textures(
     } else {
         worker_count.min(4)
     };
-
-    if memory_stats
-        .as_ref()
-        .is_some_and(|stats| stats.utilization > 0.8)
-    {
-        return;
-    }
 
     for (entity, mut pending) in pending_query.iter_mut() {
         if load_budget == 0 {

@@ -84,6 +84,35 @@ pub fn tps_recession_rate_mps(
     total_heat_flux_w_m2 / (tps_density_kg_m3 * heat_of_ablation_j_kg)
 }
 
+/// Advances an ablative layer by one fixed step without consuming material
+/// beyond the configured physical thickness. Returns the actual recession
+/// during the step in meters.
+pub fn capped_tps_recession_m(
+    recession_rate_mps: f64,
+    timestep_s: f64,
+    thickness_remaining_m: f64,
+) -> f64 {
+    if recession_rate_mps <= 0.0 || timestep_s <= 0.0 || thickness_remaining_m <= 0.0 {
+        return 0.0;
+    }
+    (recession_rate_mps * timestep_s).min(thickness_remaining_m)
+}
+
+/// Mass removed from a circular TPS cap during a recession step. The cap area
+/// is evaluated at the midpoint nose radius so a changing bluntness does not
+/// make the fixed-step result depend on which endpoint is sampled.
+pub fn tps_mass_loss_kg(
+    tps_density_kg_m3: f64,
+    nose_radius_before_m: f64,
+    recession_m: f64,
+) -> f64 {
+    if tps_density_kg_m3 <= 0.0 || nose_radius_before_m <= 0.0 || recession_m <= 0.0 {
+        return 0.0;
+    }
+    let mean_radius_m = nose_radius_before_m + recession_m * 0.5;
+    std::f64::consts::PI * mean_radius_m.powi(2) * recession_m * tps_density_kg_m3
+}
+
 /// Electron density from the empirical fit `n_e = C·ρ·v³` [1/m³].
 pub fn electron_density_m3(density_kg_m3: f64, velocity_mps: f64) -> f64 {
     PLASMA_DENSITY_COEFFICIENT_M3 * density_kg_m3 * velocity_mps.powi(3)
@@ -610,5 +639,16 @@ mod tests {
         );
         // Cumulative heat load would also have grown (the ECS integrates it);
         // here we validate the shape-change coupling.
+    }
+
+    #[test]
+    fn tps_recession_stops_exactly_at_the_remaining_thickness() {
+        let recession = capped_tps_recession_m(0.03, 1.0, 0.01);
+        assert_eq!(recession, 0.01);
+        assert_eq!(capped_tps_recession_m(0.03, 1.0, 0.0), 0.0);
+
+        let mass_loss = tps_mass_loss_kg(1_500.0, 2.5, recession);
+        assert!(mass_loss > 0.0);
+        assert!(mass_loss.is_finite());
     }
 }

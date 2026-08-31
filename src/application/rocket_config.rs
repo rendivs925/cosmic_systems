@@ -71,6 +71,12 @@ pub struct LandingLegsDef {
 #[serde(deny_unknown_fields)]
 pub struct StageDef {
     pub name: String,
+    /// Outer cylindrical diameter used by the active-stage force and inertia
+    /// model, meters.
+    pub diameter_m: f32,
+    /// Physical stage length used by the active-stage force and inertia model,
+    /// meters.
+    pub height_m: f32,
     pub dry_mass_kg: f32,
     pub propellant_mass_kg: f32,
     /// Propellant held back for a first-stage recovery burn sequence. Stages
@@ -205,6 +211,9 @@ impl VehicleDef {
             if stage.dry_mass_kg <= 0.0 {
                 return Err(self.invalid(format!("{at}: dry_mass_kg must be > 0")));
             }
+            if stage.diameter_m <= 0.0 || stage.height_m <= 0.0 {
+                return Err(self.invalid(format!("{at}: diameter_m and height_m must be > 0")));
+            }
             if !stage.engines.is_empty() && stage.propellant_mass_kg <= 0.0 {
                 return Err(
                     self.invalid(format!("{at}: carries engines but propellant_mass_kg <= 0"))
@@ -305,6 +314,8 @@ impl VehicleDef {
             .iter()
             .map(|stage| RocketStage {
                 name: stage.name.clone(),
+                diameter_m: stage.diameter_m,
+                height_m: stage.height_m,
                 dry_mass_kg: stage.dry_mass_kg,
                 propellant_mass_kg: stage.propellant_mass_kg,
                 recovery_propellant_reserve_kg: stage.recovery_propellant_reserve_kg,
@@ -510,6 +521,8 @@ mod tests {
 
         for (loaded_stage, hard_stage) in loaded.stages.iter().zip(hardcoded.stages.iter()) {
             assert_eq!(loaded_stage.name, hard_stage.name);
+            assert_eq!(loaded_stage.diameter_m, hard_stage.diameter_m);
+            assert_eq!(loaded_stage.height_m, hard_stage.height_m);
             assert!((loaded_stage.dry_mass_kg - hard_stage.dry_mass_kg).abs() < 1e-3);
             assert!((loaded_stage.propellant_mass_kg - hard_stage.propellant_mass_kg).abs() < 1e-3);
             assert_eq!(loaded_stage.engines.len(), hard_stage.engines.len());
@@ -630,6 +643,8 @@ mod tests {
                     height_m: 10.0,
                     stages: [(
                         name: "S1",
+                        diameter_m: 1.0,
+                        height_m: 10.0,
                         dry_mass_kg: 100.0,
                         propellant_mass_kg: 900.0,
                         engines: [(
@@ -673,6 +688,8 @@ mod tests {
                     ),
                     stages: [(
                         name: "S1",
+                        diameter_m: 3.7,
+                        height_m: 70.0,
                         dry_mass_kg: 500.0,
                         propellant_mass_kg: 1_000.0,
                         engines: [(
@@ -715,15 +732,24 @@ mod tests {
 
         // Negative mass.
         let err = parse_err(&base(
-            "( name: \"S1\", dry_mass_kg: -1.0, propellant_mass_kg: 10.0, engines: [( \
+            "( name: \"S1\", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: -1.0, propellant_mass_kg: 10.0, engines: [( \
              position: (0.0, 0.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0, \
              isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )",
         ));
         assert!(err.contains("dry_mass_kg"), "{err}");
 
+        // Stage exterior dimensions feed active-stage aero/inertia, so they
+        // must be physical rather than inferred from a whole-stack fallback.
+        let err = parse_err(&base(
+            "( name: \"S1\", diameter_m: 0.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
+             position: (0.0, 0.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0, \
+             isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )",
+        ));
+        assert!(err.contains("diameter_m and height_m"), "{err}");
+
         // Non-positive ISP.
         let err = parse_err(&base(
-            "( name: \"S1\", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
+            "( name: \"S1\", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
              position: (0.0, 0.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 0.0, \
              isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )",
         ));
@@ -731,7 +757,7 @@ mod tests {
 
         // Gimbal range above the sanity ceiling.
         let err = parse_err(&base(
-            "( name: \"S1\", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
+            "( name: \"S1\", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
              position: (0.0, 0.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0, \
              isp_vac: 250.0, gimbal_range_deg: 45.0, max_thrust_n: 1000.0 )] )",
         ));
@@ -739,13 +765,13 @@ mod tests {
 
         // No engines in a stage.
         let err = parse_err(&base(
-            "( name: \"S1\", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [] )",
+            "( name: \"S1\", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [] )",
         ));
         assert!(err.contains("at least one engine"), "{err}");
 
         // Inverted throttle bounds.
         let err = parse_err(&base(
-            "( name: \"S1\", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
+            "( name: \"S1\", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [( \
              position: (0.0, 0.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0, \
              isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0, \
              throttle_min: 0.9, throttle_max: 0.1 )] )",
@@ -762,7 +788,7 @@ mod tests {
         let err = parse_err(
             r#"( vehicles: [( name: "Bad", diameter_m: 3.7, height_m: 70.0,
                 landing_legs: ( count: 2, base_radius_m: 4.5, stroke_m: 3.0, deploy_altitude_m: 100.0 ),
-                stages: [( name: "S1", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [(
+                stages: [( name: "S1", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [(
                     position: (0.0, -5.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0,
                     isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )] )] )"#,
         );
@@ -772,7 +798,7 @@ mod tests {
         let err = parse_err(
             r#"( vehicles: [( name: "Bad", diameter_m: 3.7, height_m: 70.0,
                 landing_legs: ( count: 4, base_radius_m: -1.0, stroke_m: 3.0, deploy_altitude_m: 100.0 ),
-                stages: [( name: "S1", dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [(
+                stages: [( name: "S1", diameter_m: 1.0, height_m: 10.0, dry_mass_kg: 1.0, propellant_mass_kg: 10.0, engines: [(
                     position: (0.0, -5.0, 0.0), thrust_axis: (0.0, 1.0, 0.0), isp_sl: 200.0,
                     isp_vac: 250.0, gimbal_range_deg: 5.0, max_thrust_n: 1000.0 )] )] )] )"#,
         );

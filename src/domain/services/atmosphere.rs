@@ -8,13 +8,12 @@
 //!
 //! ## Earth model
 //!
-//! An ISA-style reference (troposphere with a linear lapse rate, isothermal
-//! stratosphere) valid for 0–~80 km with acceptable engineering accuracy:
-//!
-//! - 0–11 km (troposphere): `T = T0 − L·h`, pressure via the barometric
-//!   formula `P = P0·(T/T0)^(g0/(R·L))`, density `ρ = P/(R·T)`.
-//! - Above 11 km: isothermal at 216.65 K with exponential pressure decay
-//!   (stratosphere and above simplified to a single isothermal layer).
+//! The Earth model implements the 1976 U.S. Standard Atmosphere layer table
+//! through 84.852 km geopotential altitude. Geometric flight altitude is
+//! converted to geopotential altitude before sampling, as required by the
+//! standard. Above that range, the final state continues isothermally so the
+//! simulation has no force discontinuity while explicitly remaining outside
+//! the model's validated range.
 //!
 //! Units are SI (kelvin, pascals, kg/m³, m/s). The model is an approximation;
 //! a real ISA implementation or measured data can replace the formulas behind
@@ -32,16 +31,86 @@ pub const SEA_LEVEL_DENSITY_KG_M3: f64 = 1.225;
 pub const SEA_LEVEL_TEMPERATURE_K: f64 = 288.15;
 /// Standard atmosphere sea-level pressure, pascals.
 pub const SEA_LEVEL_PRESSURE_PA: f64 = 101_325.0;
-/// Troposphere lapse rate, K/m.
-pub const TROPOSPHERE_LAPSE_RATE_K_PER_M: f64 = 0.0065;
-/// Tropopause altitude, meters.
-pub const TROPOPAUSE_M: f64 = 11_000.0;
-/// Isothermal stratosphere temperature, kelvin.
-pub const STRATOSPHERE_TEMPERATURE_K: f64 = 216.65;
-/// Specific gas constant of air, J/(kg·K).
-pub const SPECIFIC_GAS_CONSTANT_AIR: f64 = 287.05;
+/// ISA-1976 specific gas constant of dry air, J/(kg·K).
+pub const SPECIFIC_GAS_CONSTANT_AIR: f64 = 287.05287;
 /// Ratio of specific heats of air.
 pub const HEAT_CAPACITY_RATIO_AIR: f64 = 1.4;
+/// Earth radius used by the U.S. Standard Atmosphere geopotential conversion,
+/// meters. This is a model constant, not the planetary shape authority.
+const STANDARD_ATMOSPHERE_EARTH_RADIUS_M: f64 = 6_356_766.0;
+
+#[derive(Clone, Copy)]
+struct StandardAtmosphereLayer {
+    base_geopotential_altitude_m: f64,
+    base_temperature_k: f64,
+    base_pressure_pa: f64,
+    lapse_rate_k_per_m: f64,
+}
+
+/// 1976 U.S. Standard Atmosphere base states. The final isothermal layer is a
+/// continuous extrapolation beyond the 84.852 km published layer boundary.
+const EARTH_STANDARD_ATMOSPHERE_LAYERS: [StandardAtmosphereLayer; 8] = [
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 0.0,
+        base_temperature_k: 288.15,
+        base_pressure_pa: 101_325.0,
+        lapse_rate_k_per_m: -0.0065,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 11_000.0,
+        base_temperature_k: 216.65,
+        base_pressure_pa: 22_632.06,
+        lapse_rate_k_per_m: 0.0,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 20_000.0,
+        base_temperature_k: 216.65,
+        base_pressure_pa: 5_474.889,
+        lapse_rate_k_per_m: 0.001,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 32_000.0,
+        base_temperature_k: 228.65,
+        base_pressure_pa: 868.0187,
+        lapse_rate_k_per_m: 0.0028,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 47_000.0,
+        base_temperature_k: 270.65,
+        base_pressure_pa: 110.9063,
+        lapse_rate_k_per_m: 0.0,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 51_000.0,
+        base_temperature_k: 270.65,
+        base_pressure_pa: 66.93887,
+        lapse_rate_k_per_m: -0.0028,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 71_000.0,
+        base_temperature_k: 214.65,
+        base_pressure_pa: 3.956420,
+        lapse_rate_k_per_m: -0.002,
+    },
+    StandardAtmosphereLayer {
+        base_geopotential_altitude_m: 84_852.0,
+        base_temperature_k: 186.946,
+        base_pressure_pa: 0.3734,
+        lapse_rate_k_per_m: 0.0,
+    },
+];
+
+fn geopotential_altitude_m(geometric_altitude_m: f64) -> f64 {
+    let geometric_altitude_m = geometric_altitude_m.max(0.0);
+    STANDARD_ATMOSPHERE_EARTH_RADIUS_M * geometric_altitude_m
+        / (STANDARD_ATMOSPHERE_EARTH_RADIUS_M + geometric_altitude_m)
+}
+
+#[cfg(test)]
+fn geometric_altitude_from_geopotential_m(geopotential_altitude_m: f64) -> f64 {
+    STANDARD_ATMOSPHERE_EARTH_RADIUS_M * geopotential_altitude_m
+        / (STANDARD_ATMOSPHERE_EARTH_RADIUS_M - geopotential_altitude_m)
+}
 
 /// Atmospheric state at an altitude, all SI units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,29 +171,32 @@ pub trait AtmosphereSource: Send + Sync + Debug {
     fn properties(&self, altitude_m: f64) -> AtmosphereProperties;
 }
 
-/// ISA-style Earth atmosphere (see module docs).
+/// 1976 U.S. Standard Atmosphere Earth model (see module docs).
 #[derive(Debug, Default)]
 pub struct EarthAtmosphere;
 
 impl AtmosphereSource for EarthAtmosphere {
     fn properties(&self, altitude_m: f64) -> AtmosphereProperties {
-        let h = altitude_m.max(0.0);
-        let (temperature_k, pressure_pa) = if h <= TROPOPAUSE_M {
-            let t = SEA_LEVEL_TEMPERATURE_K - TROPOSPHERE_LAPSE_RATE_K_PER_M * h;
-            let exponent = STANDARD_GRAVITY_MPS2
-                / (SPECIFIC_GAS_CONSTANT_AIR * TROPOSPHERE_LAPSE_RATE_K_PER_M);
-            let p = SEA_LEVEL_PRESSURE_PA * (t / SEA_LEVEL_TEMPERATURE_K).powf(exponent);
+        let h = geopotential_altitude_m(altitude_m);
+        let layer = EARTH_STANDARD_ATMOSPHERE_LAYERS
+            .iter()
+            .rev()
+            .find(|layer| h >= layer.base_geopotential_altitude_m)
+            .unwrap_or(&EARTH_STANDARD_ATMOSPHERE_LAYERS[0]);
+        let height_above_base_m = h - layer.base_geopotential_altitude_m;
+        let (temperature_k, pressure_pa) = if layer.lapse_rate_k_per_m.abs() <= f64::EPSILON {
+            let t = layer.base_temperature_k;
+            let p = layer.base_pressure_pa
+                * (-(STANDARD_GRAVITY_MPS2 * height_above_base_m)
+                    / (SPECIFIC_GAS_CONSTANT_AIR * t))
+                    .exp();
             (t, p)
         } else {
-            let t = STRATOSPHERE_TEMPERATURE_K;
-            let p_tropopause = SEA_LEVEL_PRESSURE_PA
-                * (STRATOSPHERE_TEMPERATURE_K / SEA_LEVEL_TEMPERATURE_K).powf(
-                    STANDARD_GRAVITY_MPS2
-                        / (SPECIFIC_GAS_CONSTANT_AIR * TROPOSPHERE_LAPSE_RATE_K_PER_M),
+            let t = layer.base_temperature_k + layer.lapse_rate_k_per_m * height_above_base_m;
+            let p = layer.base_pressure_pa
+                * (t / layer.base_temperature_k).powf(
+                    -STANDARD_GRAVITY_MPS2 / (SPECIFIC_GAS_CONSTANT_AIR * layer.lapse_rate_k_per_m),
                 );
-            let p = p_tropopause
-                * (-(STANDARD_GRAVITY_MPS2 * (h - TROPOPAUSE_M)) / (SPECIFIC_GAS_CONSTANT_AIR * t))
-                    .exp();
             (t, p)
         };
         let density_kg_m3 = pressure_pa / (SPECIFIC_GAS_CONSTANT_AIR * temperature_k);
@@ -182,7 +254,7 @@ mod tests {
 
     #[test]
     fn earth_tropopause_temperature() {
-        let props = EarthAtmosphere.properties(11_000.0);
+        let props = EarthAtmosphere.properties(geometric_altitude_from_geopotential_m(11_000.0));
         assert!((props.temperature_k - 216.65).abs() < 0.01);
         // Standard pressure at 11 km ≈ 22 632 Pa.
         assert!((props.pressure_pa - 22_632.0).abs() < 22_632.0 * 0.02);
@@ -200,11 +272,44 @@ mod tests {
     }
 
     #[test]
-    fn stratosphere_is_isothermal() {
+    fn earth_standard_atmosphere_matches_published_layer_checkpoints() {
         let earth = EarthAtmosphere;
-        let a = earth.properties(15_000.0);
-        let b = earth.properties(20_000.0);
-        assert!((a.temperature_k - b.temperature_k).abs() < 1e-9);
+        for (geopotential_altitude_m, temperature_k, pressure_pa) in [
+            (20_000.0, 216.65, 5_474.889),
+            (47_000.0, 270.65, 110.9063),
+            (71_000.0, 214.65, 3.956420),
+            (84_852.0, 186.946, 0.3734),
+        ] {
+            let properties = earth.properties(geometric_altitude_from_geopotential_m(
+                geopotential_altitude_m,
+            ));
+            assert!((properties.temperature_k - temperature_k).abs() < 0.01);
+            assert!((properties.pressure_pa - pressure_pa).abs() < pressure_pa * 0.01);
+        }
+    }
+
+    #[test]
+    fn earth_standard_atmosphere_is_continuous_at_layer_boundaries() {
+        let earth = EarthAtmosphere;
+        for layer in EARTH_STANDARD_ATMOSPHERE_LAYERS.iter().skip(1) {
+            let boundary_m =
+                geometric_altitude_from_geopotential_m(layer.base_geopotential_altitude_m);
+            let below = earth.properties(boundary_m - 0.01);
+            let above = earth.properties(boundary_m + 0.01);
+            assert!(
+                (above.temperature_k - below.temperature_k).abs() < 0.01,
+                "temperature discontinuity at {} m",
+                layer.base_geopotential_altitude_m
+            );
+            assert!(
+                // The published base pressures are rounded; retain continuity
+                // within that tabulation precision rather than asserting a
+                // false bit-level identity between adjacent equations.
+                (above.pressure_pa - below.pressure_pa).abs() < layer.base_pressure_pa * 1e-4,
+                "pressure discontinuity at {} m",
+                layer.base_geopotential_altitude_m
+            );
+        }
     }
 
     #[test]

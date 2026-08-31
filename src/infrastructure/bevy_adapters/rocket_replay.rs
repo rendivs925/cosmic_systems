@@ -9,7 +9,8 @@ use crate::components::rocket::{
     GravityAcceleration, GroundRest, LandingLegs, LandingScorecard, MaxQTracker, ParachuteState,
     PayloadFairing, RetroPropulsionEffect, RocketAutopilot, RocketCommands, RocketFlightConditions,
     RocketMass, RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRenderState,
-    SpentStage, TerrainCollisionState, ThermalState, TipOverState, TorqueAccumulator,
+    SpecificForceAcceleration, SpentStage, TerrainCollisionState, ThermalState, TipOverState,
+    TorqueAccumulator,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use bevy::ecs::query::QueryData;
@@ -47,6 +48,7 @@ pub struct RocketReplaySnapshot {
     pub drone_ship_target: Option<DroneShipLandingTarget>,
     pub force_accumulator: ForceAccumulator,
     pub torque_accumulator: TorqueAccumulator,
+    pub specific_force: Option<SpecificForceAcceleration>,
 }
 
 /// All rocket snapshots captured at one completed fixed tick.
@@ -165,6 +167,7 @@ pub struct ReplayCaptureAccess {
     pub drone_ship_target: Option<&'static DroneShipLandingTarget>,
     pub force_accumulator: &'static ForceAccumulator,
     pub torque_accumulator: &'static TorqueAccumulator,
+    pub specific_force: Option<&'static SpecificForceAcceleration>,
 }
 
 /// Mutable counterpart used only while physics is paused for replay.
@@ -194,6 +197,7 @@ pub struct ReplayRestoreAccess {
     pub drone_ship_target: Option<&'static mut DroneShipLandingTarget>,
     pub force_accumulator: &'static mut ForceAccumulator,
     pub torque_accumulator: &'static mut TorqueAccumulator,
+    pub specific_force: Option<&'static mut SpecificForceAcceleration>,
     pub render: &'static mut RocketRenderState,
 }
 
@@ -265,6 +269,7 @@ fn capture_rockets(
             drone_ship_target: rocket.drone_ship_target.copied(),
             force_accumulator: *rocket.force_accumulator,
             torque_accumulator: *rocket.torque_accumulator,
+            specific_force: rocket.specific_force.copied(),
         })
         .collect()
 }
@@ -347,6 +352,12 @@ fn restore_frame(
             *rocket.landing_scorecard = snapshot.landing_scorecard.clone();
             *rocket.force_accumulator = snapshot.force_accumulator;
             *rocket.torque_accumulator = snapshot.torque_accumulator;
+            if let (Some(snapshot_specific_force), Some(specific_force)) = (
+                snapshot.specific_force,
+                rocket.specific_force.as_deref_mut(),
+            ) {
+                *specific_force = snapshot_specific_force;
+            }
             *rocket.render = RocketRenderState::new(snapshot.physics.dynamics);
 
             if let Some(legs) = rocket.landing_legs.as_deref_mut() {

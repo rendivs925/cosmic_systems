@@ -16,14 +16,6 @@ use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::ActiveForceModel
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
-/// Trait for computing telemetry from rocket state.
-/// Allows different implementations (realtime, recorded, simulated).
-pub trait TelemetryComputer<'a> {
-    type Output;
-
-    fn compute(&self, ctx: &TelemetryContext<'a>) -> Self::Output;
-}
-
 /// Context containing all data needed for telemetry computation.
 #[derive(Debug, Clone)]
 pub struct TelemetryContext<'a> {
@@ -45,6 +37,9 @@ pub struct TelemetryContext<'a> {
     pub conditions: &'a RocketFlightConditions,
     pub comms: &'a CommsState,
     pub aero_forces: &'a AerodynamicForces,
+    /// Completed-tick accelerometer sample. Is optional for isolated domain
+    /// telemetry fixtures that do not run the fixed integration adapter.
+    pub specific_force: Option<&'a SpecificForceAcceleration>,
     pub thermal: &'a ThermalState,
     pub ablation: &'a AblationState,
     pub parachute: &'a ParachuteState,
@@ -83,12 +78,15 @@ impl<'a> TelemetryContext<'a> {
             0.0
         };
 
-        // Sensed load factor: magnitude of the non-gravitational specific
-        // force (thrust + aerodynamics), divided by standard gravity. An
-        // accelerometer reads exactly this; a coasting vehicle in vacuum
-        // reads 0 regardless of orbital speed.
+        // Sensed load factor is the completed fixed tick's non-gravitational
+        // specific force. This includes every accumulated force mechanism,
+        // such as thrust, aerodynamics, parachutes, and retro-propulsion. An
+        // isolated domain fixture falls back to its available thrust/aero data.
         let sensed_force_world = self.orientation * (thrust_body + self.aero_forces.force_body);
-        let g_load = sensed_force_world.length() / (self.mass_kg * STANDARD_GRAVITY_MPS2);
+        let g_load = self.specific_force.map_or_else(
+            || sensed_force_world.length() / (self.mass_kg * STANDARD_GRAVITY_MPS2),
+            |specific_force| specific_force.value.length() / STANDARD_GRAVITY_MPS2,
+        );
 
         let body_velocity = self.orientation.inverse() * relative_velocity;
         let aoa = angle_of_attack(body_velocity).to_degrees();
@@ -244,21 +242,6 @@ struct DerivedTelemetry {
     yaw_rate: f64,
     bank: f64,
     plasma_blackout: bool,
-}
-
-/// Real-time telemetry computer that writes to RocketTelemetry resource.
-pub struct RealtimeTelemetryComputer;
-
-impl<'a> TelemetryComputer<'a> for RealtimeTelemetryComputer {
-    type Output = ();
-
-    fn compute(&self, ctx: &TelemetryContext<'a>) -> Self::Output {
-        let _d = ctx.derived();
-
-        // Write to resource - this is the side effect
-        // In a real system, this would be done via Bevy's ResMut in a system
-        // Here we just compute; the system handles the write
-    }
 }
 
 /// Compute telemetry from context into RocketTelemetry.
@@ -476,6 +459,7 @@ fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> 
 /// System: compute rocket telemetry and write to resource.
 #[expect(
     clippy::type_complexity,
+    clippy::too_many_arguments,
     reason = "Telemetry derives values from cohesive authoritative rocket components."
 )]
 pub fn compute_rocket_telemetry_system(
@@ -485,6 +469,7 @@ pub fn compute_rocket_telemetry_system(
     planet_query: Query<&PlanetComponent>,
     mut telemetry: ResMut<RocketTelemetry>,
     rocket_query: Query<(
+        Entity,
         &RocketPlanetBinding,
         &RocketPhysicsState,
         &RocketGeometry,
@@ -495,12 +480,12 @@ pub fn compute_rocket_telemetry_system(
         &OrbitalElements,
         &RocketFlightConditions,
         &CommsState,
-        &AerodynamicForces,
         &ThermalState,
         &AblationState,
         &ParachuteState,
         &TerrainCollisionState,
     )>,
+    force_query: Query<(&AerodynamicForces, Option<&SpecificForceAcceleration>)>,
     // Phase 14 extras, read-only and disjoint from the tuple above.
     lifecycle_query: Query<(&LandingScorecard, &TipOverState)>,
 ) {
@@ -508,6 +493,7 @@ pub fn compute_rocket_telemetry_system(
     let current_time = sim_time.sim_time_s;
 
     for (
+        entity,
         binding,
         rocket,
         geometry,
@@ -518,13 +504,15 @@ pub fn compute_rocket_telemetry_system(
         orbital,
         conditions,
         comms,
-        aero,
         thermal,
         ablation,
         parachute,
         collision,
     ) in rocket_query.iter()
     {
+        let Ok((aero, specific_force)) = force_query.get(entity) else {
+            continue;
+        };
         let Some(planet) = planet_query
             .iter()
             .find(|p| p.matches_body(&binding.planet_name))
@@ -556,6 +544,7 @@ pub fn compute_rocket_telemetry_system(
             conditions,
             comms,
             aero_forces: aero,
+            specific_force,
             thermal,
             ablation,
             parachute,
@@ -610,6 +599,7 @@ pub fn record_flight_data_system(
         &RocketFlightConditions,
         &CommsState,
         &AerodynamicForces,
+        Option<&SpecificForceAcceleration>,
         &ThermalState,
         &AblationState,
     )>,
@@ -632,6 +622,7 @@ pub fn record_flight_data_system(
         conditions,
         comms,
         aero,
+        specific_force,
         thermal,
         ablation,
     ) in rocket_query.iter_mut()
@@ -678,6 +669,7 @@ pub fn record_flight_data_system(
             conditions,
             comms,
             aero_forces: aero,
+            specific_force,
             thermal,
             ablation,
             parachute,
@@ -985,6 +977,8 @@ mod g_load_tests {
             height_m: 10.0,
             stages: vec![RocketStage {
                 name: "S1".into(),
+                diameter_m: 1.0,
+                height_m: 10.0,
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
@@ -1048,6 +1042,9 @@ mod g_load_tests {
             force_body: DVec3::ZERO,
             center_of_pressure_body: DVec3::ZERO,
         };
+        let specific_force = SpecificForceAcceleration {
+            value: DVec3::new(0.0, 9.80665, 0.0),
+        };
         let thermal = ThermalState::default();
         let ablation = AblationState::default();
         let parachute = ParachuteState::default();
@@ -1077,6 +1074,7 @@ mod g_load_tests {
             conditions: &conditions,
             comms: &comms,
             aero_forces: &aero_forces,
+            specific_force: Some(&specific_force),
             thermal: &thermal,
             ablation: &ablation,
             parachute: &parachute,
@@ -1125,6 +1123,7 @@ mod g_load_tests {
             force_body: DVec3::ZERO,
             center_of_pressure_body: DVec3::ZERO,
         };
+        let specific_force = SpecificForceAcceleration::default();
         let thermal = ThermalState::default();
         let ablation = AblationState::default();
         let parachute = ParachuteState::default();
@@ -1149,6 +1148,7 @@ mod g_load_tests {
             conditions: &conditions,
             comms: &comms,
             aero_forces: &aero_forces,
+            specific_force: Some(&specific_force),
             thermal: &thermal,
             ablation: &ablation,
             parachute: &parachute,

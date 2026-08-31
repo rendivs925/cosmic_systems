@@ -123,11 +123,9 @@ pub struct CloudLayer {
 // Camera control modes
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CameraMode {
-    FreeFlight,     // Free movement in 3D space
-    Orbit,          // Orbital view around solar system center
-    FollowPlanet,   // Follow a specific planet
-    ApproachPlanet, // Approach and potentially "land" on a planet
-    TerrainView,    // Ground-level terrain exploration view
+    FreeFlight,  // Free movement in 3D space
+    Orbit,       // Orbital view around solar system center
+    TerrainView, // Ground-level terrain exploration view
 }
 
 // Component for camera controller

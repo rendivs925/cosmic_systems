@@ -205,7 +205,7 @@ pub(crate) fn update_navbar(
     }
 
     if let Ok(mut text) = queries.p2().single_mut() {
-        let display_fps = performance_stats.average_fps;
+        let display_fps = performance_stats.fps_display;
         if hide_ui {
             *text = Text::new("");
         } else {

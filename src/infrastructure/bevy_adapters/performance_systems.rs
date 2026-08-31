@@ -39,37 +39,7 @@ pub fn request_screenshot_input(
     }
 }
 
-// Performance monitoring and quality adaptation system
-pub fn update_performance_monitor(
-    mut perf_stats: ResMut<PerformanceStats>,
-    mut quality_controller: ResMut<QualityController>,
-    time: Res<Time>,
-) {
-    // Update frame time history
-    perf_stats.frame_time = time.delta_secs();
-    quality_controller
-        .frame_times
-        .push_back(perf_stats.frame_time);
-
-    if quality_controller.frame_times.len() > 60 {
-        quality_controller.frame_times.pop_front();
-    }
-
-    // Calculate average FPS
-    let avg_frame_time = quality_controller.frame_times.iter().sum::<f32>()
-        / quality_controller.frame_times.len() as f32;
-    perf_stats.fps = 1.0 / avg_frame_time;
-
-    if perf_stats.adaptive_enabled {
-        // Legacy callers can opt in explicitly, but the application defaults
-        // to fixed user-selected quality.
-        perf_stats.quality_level = quality_controller.current_level;
-        quality_controller.adapt_quality(perf_stats.fps);
-    }
-}
-
-// System to capture screenshot on next frame after notifications are hidden
-// TODO: Re-implement with Bevy 0.17 screenshot API
+// Capture a screenshot on the frame after notifications are hidden.
 pub fn take_pending_screenshot(
     mut commands: Commands,
     mut screenshot_state: ResMut<ScreenshotState>,
@@ -352,11 +322,7 @@ pub fn adaptive_quality_system(
 // PRODUCTION-GRADE FPS MEASUREMENT (Industry Standard Implementation)
 /// Correctly measures frame time first, then derives FPS from it.
 /// Uses exponential moving average for stability and responsiveness.
-pub fn update_performance_stats(
-    _time: Res<Time>,
-    mut performance_stats: ResMut<PerformanceStats>,
-    chrome: Option<Res<ChromeOptimizations>>,
-) {
+pub fn update_performance_stats(mut performance_stats: ResMut<PerformanceStats>) {
     // PRODUCTION-GRADE FRAME TIME MEASUREMENT
     // Use high-resolution monotonic clock for accurate timing
     let now = std::time::Instant::now();
@@ -428,26 +394,8 @@ pub fn update_performance_stats(
     performance_stats.memory_usage_mb = f32::NAN;
     performance_stats.peak_memory_mb = f32::NAN;
 
-    // LEGACY COMPATIBILITY (deprecated fields)
-    performance_stats.frame_time = performance_stats.frame_time_ms;
-    performance_stats.fps = performance_stats.fps_display;
-    performance_stats.average_frame_time = performance_stats.frame_time_smoothed;
-    performance_stats.average_fps = performance_stats.fps_smoothed;
-
     // Update frame count
     performance_stats.frame_count += 1;
-
-    // Chrome detection for adaptive rate adjustment
-    if let Some(chrome) = chrome {
-        performance_stats.adaptation_rate = if chrome.is_chrome { 0.05 } else { 0.1 };
-    }
-
-    // LEGACY: Maintain old rolling average for compatibility
-    let fps_raw_copy = performance_stats.fps_raw; // Copy before mutable borrow ends
-    performance_stats.frame_history.push_back(fps_raw_copy);
-    if performance_stats.frame_history.len() > performance_stats.history_len {
-        performance_stats.frame_history.pop_front();
-    }
 }
 
 // Apply quality settings based on the quality level

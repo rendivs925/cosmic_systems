@@ -5,7 +5,7 @@
 // Electric-pump engines allow deep throttling and air restarts.
 //
 // Sources (rough public figures): Rocket Lab Payload User Guide - vehicle
-// 1.2 m diameter x 18 m; liftoff mass ~13 t with ~9.25 t stage-1 propellant
+// 1.2 m diameter x 18 m; first stage ~12.1 m and second stage ~2.4 m; liftoff mass ~13 t with ~9.25 t stage-1 propellant
 // and ~2.05 t stage-2 propellant; 9 x Rutherford ~26 kN SL (~232 kN total),
 // ISP ~303 s (SL) / ~311 s (vac); Rutherford Vacuum ~26 kN / ~343 s;
 // throttle to ~60%; payload fairing ~50 kg.
@@ -19,6 +19,8 @@
             stages: [
                 (
                     name: "Electron First Stage",
+                    diameter_m: 1.2,
+                    height_m: 12.1,
                     dry_mass_kg: 950.0,
                     propellant_mass_kg: 9_250.0,
                     engines: [
@@ -107,6 +109,8 @@
                 ),
                 (
                     name: "Electron Second Stage",
+                    diameter_m: 1.2,
+                    height_m: 2.4,
                     dry_mass_kg: 250.0,
                     propellant_mass_kg: 2_050.0,
                     engines: [

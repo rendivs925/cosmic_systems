@@ -86,6 +86,7 @@ pub fn spawn_spent_stage(
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
             GravityAcceleration::default(),
+            SpecificForceAcceleration::default(),
             RocketFlightConditions::default(),
             RocketPlanetBinding {
                 planet_name: spec.planet_id,

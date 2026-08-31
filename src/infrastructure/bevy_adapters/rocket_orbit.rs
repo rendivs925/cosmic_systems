@@ -6,8 +6,7 @@
 //! [`predicted_orbit`] function remains independently testable.
 
 use crate::components::rocket::{
-    GroundRest, PlannedManeuver, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
-    TerrainCollisionState,
+    GroundRest, RocketMissionState, RocketPhysicsState, RocketPlanetBinding, TerrainCollisionState,
 };
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::gravity::{ForceModelConfig, ForceModelTier};
@@ -66,7 +65,6 @@ struct OrbitPredictionKey {
     planet_mu_m3_s2_bits: u64,
     surface_radius_m_bits: u64,
     allowed: bool,
-    maneuver: Option<([u64; 3], u64)>,
 }
 
 impl Default for OrbitPredictionCache {
@@ -451,13 +449,11 @@ pub fn update_orbit_prediction_cache(
         &RocketMissionState,
         &TerrainCollisionState,
         &GroundRest,
-        Option<&PlannedManeuver>,
     )>,
     sim_time: Res<SimulationTime>,
     mut cache: ResMut<OrbitPredictionCache>,
 ) {
-    let Some((binding, rocket, mission, collision, ground_rest, planned_maneuver)) =
-        rocket_query.iter().next()
+    let Some((binding, rocket, mission, collision, ground_rest)) = rocket_query.iter().next()
     else {
         cache.clear();
         return;
@@ -485,27 +481,12 @@ pub fn update_orbit_prediction_cache(
     let surface_radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
     let position_m = rocket.dynamics.position_m;
     let velocity_mps = rocket.dynamics.velocity_mps;
-    let maneuver = planned_maneuver.and_then(|planned| {
-        let execute_after_s = planned.execute_at_sim_time_s - sim_time.sim_time_s;
-        (execute_after_s > 0.0 && execute_after_s.is_finite() && planned.delta_v_mps.is_finite())
-            .then_some(ManeuverImpulse {
-                execute_after_s,
-                delta_v_mps: planned.delta_v_mps,
-            })
-    });
-
     let key = OrbitPredictionKey {
         position_m_bits: dvec3_bits(position_m),
         velocity_mps_bits: dvec3_bits(velocity_mps),
         planet_mu_m3_s2_bits: planet_mu_m3_s2.to_bits(),
         surface_radius_m_bits: surface_radius_m.to_bits(),
         allowed,
-        maneuver: maneuver.map(|maneuver| {
-            (
-                dvec3_bits(maneuver.delta_v_mps),
-                maneuver.execute_after_s.to_bits(),
-            )
-        }),
     };
     if cache.key.as_ref() == Some(&key) {
         return;
@@ -513,35 +494,25 @@ pub fn update_orbit_prediction_cache(
 
     cache.prediction = if allowed {
         let central_body = NaifBodyId::for_catalog_name(&planet.domain_planet.name);
-        if maneuver.is_none() {
-            central_body
-                .and_then(|central_body| {
-                    predicted_two_body_long_arc(
-                        position_m,
-                        velocity_mps,
-                        planet_mu_m3_s2,
-                        surface_radius_m,
-                        central_body,
-                    )
-                })
-                .unwrap_or_else(|| {
-                    predicted_orbit_with_maneuver(
-                        position_m,
-                        velocity_mps,
-                        planet_mu_m3_s2,
-                        surface_radius_m,
-                        None,
-                    )
-                })
-        } else {
-            predicted_orbit_with_maneuver(
-                position_m,
-                velocity_mps,
-                planet_mu_m3_s2,
-                surface_radius_m,
-                maneuver,
-            )
-        }
+        central_body
+            .and_then(|central_body| {
+                predicted_two_body_long_arc(
+                    position_m,
+                    velocity_mps,
+                    planet_mu_m3_s2,
+                    surface_radius_m,
+                    central_body,
+                )
+            })
+            .unwrap_or_else(|| {
+                predicted_orbit_with_maneuver(
+                    position_m,
+                    velocity_mps,
+                    planet_mu_m3_s2,
+                    surface_radius_m,
+                    None,
+                )
+            })
     } else {
         OrbitPrediction::empty()
     };
@@ -866,7 +837,6 @@ mod tests {
             planet_mu_m3_s2_bits: earth_mu_m3_s2().to_bits(),
             surface_radius_m_bits: EARTH_RADIUS_M.to_bits(),
             allowed: true,
-            maneuver: None,
         };
         assert_eq!(base, base.clone());
 

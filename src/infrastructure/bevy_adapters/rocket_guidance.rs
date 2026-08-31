@@ -3,8 +3,8 @@ use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction,
     banked_attitude_from_direction, boostback_guidance, default_surface_landing_target,
     gravity_turn_direction_gated, pitch_axis_from_reference, prograde_attitude, reentry_bank_angle,
-    reentry_bank_angle_enhanced, terminal_landing_guidance, transfer_burn_phase, AutopilotMode,
-    DescentGuidanceConfig, TransferBurnPhase,
+    reentry_bank_angle_enhanced, target_surface_range_errors_m, terminal_landing_guidance,
+    transfer_burn_phase, AutopilotMode, DescentGuidanceConfig, TransferBurnPhase,
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
@@ -55,6 +55,12 @@ pub struct GuidanceAccess {
     pub autopilot: &'static mut RocketAutopilot,
     pub propulsion: &'static RocketPropulsion,
     pub conditions: &'static RocketFlightConditions,
+    /// Present on production rockets. Optional to keep isolated fixed-pipeline
+    /// fixtures focused on the state they are testing.
+    pub aerodynamic_forces: Option<&'static AerodynamicForces>,
+    /// Fixed-tick proper acceleration from every non-gravitational force.
+    pub specific_force: Option<&'static SpecificForceAcceleration>,
+    pub thermal: Option<&'static ThermalState>,
     pub collision: &'static TerrainCollisionState,
     pub orbital: &'static OrbitalElements,
     pub commands: &'static mut RocketCommands,
@@ -80,6 +86,9 @@ pub fn guidance_system(
         let binding = access.binding;
         let propulsion = access.propulsion;
         let conditions = access.conditions;
+        let aerodynamic_forces = access.aerodynamic_forces;
+        let specific_force = access.specific_force;
+        let thermal = access.thermal;
         let collision = access.collision;
         let orbital = access.orbital;
         let mass = access.mass;
@@ -322,11 +331,23 @@ pub fn guidance_system(
             }
             AutopilotMode::Reentry => {
                 // Enhanced reentry bank-angle management.
-                // Compute g-load from acceleration (gravity + aero).
-                let g_load = (rocket.dynamics.velocity_mps.length() / 9.81).min(10.0); // Simplified
-                let heat_flux = 0.0; // TODO: from ThermalState
-                let crossrange = 0.0; // TODO: compute from target
-                let downrange = 0.0; // TODO: compute from target
+                // Guidance observes the completed prior tick. Proper acceleration
+                // excludes free-fall gravity and includes all applied vehicle forces.
+                let g_load = specific_force.map_or_else(
+                    || {
+                        aerodynamic_forces.map_or(0.0, |aero| {
+                            aero.force_body.length() / mass.0.max(1.0) / 9.80665
+                        })
+                    },
+                    |specific_force| specific_force.value.length() / 9.80665,
+                );
+                let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
+                let (crossrange, downrange) = target_surface_range_errors_m(
+                    position_m,
+                    velocity,
+                    autopilot.target_landing_position_m,
+                    radius_m,
+                );
 
                 // Reference bank angle from precomputed profile (simplified).
                 let reference_bank = if altitude_m > 80_000.0 {
@@ -340,7 +361,6 @@ pub fn guidance_system(
                 let bank_angle = reentry_bank_angle_enhanced(
                     altitude_m,
                     speed,
-                    0.0, // flight path angle
                     dynamic_pressure_pa,
                     heat_flux,
                     g_load,
@@ -484,13 +504,25 @@ pub fn guidance_system(
             }
         }
 
-        // For reentry corridor (legacy mission state), compute bank angle command.
+        // Reentry-corridor mission state receives a bank-angle command.
         if *mission_state == RocketMissionState::ReentryCorridor
             && autopilot.mode == AutopilotMode::Off
         {
-            let g_load = 1.0;
-            let heat_flux = 0.0;
-            let crossrange = 0.0;
+            let g_load = specific_force.map_or_else(
+                || {
+                    aerodynamic_forces.map_or(0.0, |aero| {
+                        aero.force_body.length() / mass.0.max(1.0) / 9.80665
+                    })
+                },
+                |specific_force| specific_force.value.length() / 9.80665,
+            );
+            let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
+            let (crossrange, _) = target_surface_range_errors_m(
+                position_m,
+                velocity,
+                autopilot.target_landing_position_m,
+                radius_m,
+            );
             let bank_angle = reentry_bank_angle(
                 altitude_m,
                 speed,

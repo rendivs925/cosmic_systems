@@ -37,7 +37,6 @@ pub enum HudField {
     Periapsis,
     TwRatio,
     DeltaV,
-    Maneuver,
     // Vehicle group
     Stage,
     MissionPhase,
@@ -226,7 +225,6 @@ fn spawn_left_panel(commands: &mut Commands, builder: &HudBuilder) {
             spawn_field(p, builder, HudField::Periapsis, "Periapsis: --- km");
             spawn_field(p, builder, HudField::TwRatio, "T/W: ---");
             spawn_field(p, builder, HudField::DeltaV, "dV: --- m/s");
-            spawn_field(p, builder, HudField::Maneuver, "Node: ---");
 
             // Vehicle group
             p.spawn(builder.section_header("--- VEHICLE ---"));
@@ -394,10 +392,6 @@ fn spawn_field_with_style(
 struct FieldFormatters;
 
 impl FieldFormatters {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "HUD formatting combines the independent telemetry and presentation inputs for one field."
-    )]
     fn format_field(
         field: HudField,
         telemetry: &RocketTelemetry,
@@ -405,8 +399,6 @@ impl FieldFormatters {
         flash_on: bool,
         event_feed: &RocketEventFeed,
         time_acceleration: f64,
-        planned_maneuver: Option<&PlannedManeuver>,
-        sim_time_s: f64,
     ) -> (String, Color) {
         match field {
             HudField::AltitudeAgl => (
@@ -493,29 +485,6 @@ impl FieldFormatters {
                 format!("dV: {:.0} m/s", telemetry.delta_v_remaining_mps),
                 Color::WHITE,
             ),
-            HudField::Maneuver => match planned_maneuver {
-                Some(maneuver)
-                    if maneuver.execute_at_sim_time_s.is_finite()
-                        && maneuver.delta_v_mps.is_finite() =>
-                {
-                    let countdown_s = maneuver.execute_at_sim_time_s - sim_time_s;
-                    let color = if countdown_s > 0.0 {
-                        HudColors::default().caution
-                    } else {
-                        HudColors::default().danger
-                    };
-                    (
-                        format!(
-                            "Node: T{:+.0}s dV {:.0} m/s",
-                            countdown_s,
-                            maneuver.delta_v_mps.length()
-                        ),
-                        color,
-                    )
-                }
-                Some(_) => ("Node: INVALID".to_string(), HudColors::default().danger),
-                None => ("Node: ---".to_string(), Color::WHITE),
-            },
             HudField::PropellantFraction => {
                 let color = if telemetry.propellant_fraction < 0.1 {
                     HudColors::default().danger
@@ -745,17 +714,12 @@ pub(crate) struct HudUpdateState {
 }
 
 /// System to update all HUD fields from telemetry.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This HUD system receives independent telemetry, UI, and timing resources."
-)]
 pub(crate) fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
     time: Res<Time>,
     sim_time: Res<SimulationTime>,
     event_feed: Res<RocketEventFeed>,
-    planned_maneuver_query: Query<&PlannedManeuver>,
     mut hud_query: Query<(&RocketHudMarker, &mut Text, &mut TextColor)>,
     mut update_state: Local<HudUpdateState>,
 ) {
@@ -775,8 +739,6 @@ pub(crate) fn update_rocket_hud_system(
             flash_on,
             &event_feed,
             sim_time.time_acceleration,
-            planned_maneuver_query.iter().next(),
-            sim_time.sim_time_s,
         );
         if text.0 != formatted {
             text.0 = formatted;

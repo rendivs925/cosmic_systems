@@ -1105,6 +1105,41 @@ pub fn boostback_guidance(
     }
 }
 
+/// Target-relative surface range errors in the vehicle's local flight frame.
+/// `crossrange_m` is positive when the target lies to the vehicle's left;
+/// `downrange_m` is positive when it lies ahead along the horizontal velocity.
+/// Both values are great-circle distances on the supplied reference sphere.
+pub fn target_surface_range_errors_m(
+    position_m: DVec3,
+    velocity_mps: DVec3,
+    target_position_m: DVec3,
+    reference_radius_m: f64,
+) -> (f64, f64) {
+    if reference_radius_m <= 0.0
+        || position_m.length_squared() <= 0.0
+        || velocity_mps.length_squared() <= 0.0
+        || target_position_m.length_squared() <= 0.0
+    {
+        return (0.0, 0.0);
+    }
+
+    let up = position_m.normalize();
+    let target_up = target_position_m.normalize();
+    let target_tangent = target_up - up * target_up.dot(up);
+    let horizontal_velocity = velocity_mps - up * velocity_mps.dot(up);
+    if target_tangent.length_squared() <= 1e-12 || horizontal_velocity.length_squared() <= 1e-12 {
+        return (0.0, 0.0);
+    }
+
+    let forward = horizontal_velocity.normalize();
+    let right = up.cross(forward).normalize();
+    let target_direction = target_tangent.normalize();
+    let arc_distance_m = reference_radius_m * up.dot(target_up).clamp(-1.0, 1.0).acos();
+    let downrange_m = arc_distance_m * target_direction.dot(forward);
+    let crossrange_m = -arc_distance_m * target_direction.dot(right);
+    (crossrange_m, downrange_m)
+}
+
 /// Enhanced reentry bank-angle guidance with predictor-corrector.
 /// Uses reference trajectory tracking for precise corridor management.
 #[expect(
@@ -1114,7 +1149,6 @@ pub fn boostback_guidance(
 pub fn reentry_bank_angle_enhanced(
     _altitude_m: f64,
     _velocity_mps: f64,
-    _flight_path_angle_rad: f64,
     dynamic_pressure_pa: f64,
     heat_flux_w_m2: f64,
     g_load: f64,
@@ -1573,6 +1607,28 @@ mod tests {
         let config = DescentGuidanceConfig::default();
         let bank = reentry_bank_angle(50_000.0, 5000.0, 100_000.0, 2_000_000.0, 6.0, &config, 0.0);
         assert!((bank.abs() - 90.0_f64.to_radians()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn surface_range_errors_follow_the_local_flight_frame() {
+        let radius_m = 6_371_000.0;
+        let position = DVec3::new(radius_m, 0.0, 0.0);
+        let velocity = DVec3::Y * 1_000.0;
+
+        // A target ahead along +Y has positive downrange and no crossrange.
+        let ahead = DVec3::new(radius_m, 100_000.0, 0.0).normalize() * radius_m;
+        let (crossrange, downrange) =
+            target_surface_range_errors_m(position, velocity, ahead, radius_m);
+        assert!(crossrange.abs() < 1e-6);
+        assert!(downrange > 99_000.0 && downrange < 100_000.0);
+
+        // At this location the vehicle's left is -Z, matching the bank sign
+        // convention used by `reentry_bank_angle_enhanced`.
+        let left = DVec3::new(radius_m, 0.0, -100_000.0).normalize() * radius_m;
+        let (crossrange, downrange) =
+            target_surface_range_errors_m(position, velocity, left, radius_m);
+        assert!(crossrange > 99_000.0 && crossrange < 100_000.0);
+        assert!(downrange.abs() < 1e-6);
     }
 
     #[test]

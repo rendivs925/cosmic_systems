@@ -5,7 +5,8 @@
 // simulator aggregates: 22.2 t dry (18.0 t stage 1 + 4.2 t stage 2),
 // 120.0 t propellant (90.0 t + 30.0 t), 7 607 kN liftoff thrust across nine
 // Merlin 1D engines, ISP 282 s (SL) / 311 s (vac), 5 deg TVC gimbal, 3.7 m
-// core diameter over a 70 m stack; nine engines on a 1.2 m octaweb ring at
+// core diameter; stage lengths 41.2 m / 13.2 m within the 70 m stack; nine
+// engines on a 1.2 m octaweb ring at
 // body-frame y = -32 m; second stage: one Merlin Vacuum, 934 kN at y = +12 m,
 // ISP 311 s (SL) / 348 s (vac).
 //
@@ -24,6 +25,8 @@
                     // Nine Merlin 1D engines on the octaweb ring (radius
                     // 1.2 m at y = -32 m); per-engine thrust = 7 607 kN / 9.
                     name: "Falcon 9 Stage 1",
+                    diameter_m: 3.7,
+                    height_m: 41.2,
                     dry_mass_kg: 18_000.0,
                     propellant_mass_kg: 90_000.0,
                     recovery_propellant_reserve_kg: Some(15_000.0),
@@ -104,6 +107,8 @@
                 ),
                 (
                     name: "Falcon 9 Stage 2",
+                    diameter_m: 3.7,
+                    height_m: 13.2,
                     dry_mass_kg: 4_200.0,
                     propellant_mass_kg: 30_000.0,
                     engines: [

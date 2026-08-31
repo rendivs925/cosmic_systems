@@ -27,7 +27,7 @@ use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
-const TREE_COUNT: usize = 140;
+const TREE_COUNT: usize = 64;
 const ROCK_COUNT: usize = 14;
 const TRUNK_SEGMENTS: usize = 6;
 const FOLIAGE_SEGMENTS: usize = 7;
@@ -550,8 +550,13 @@ pub fn build_vegetation_mesh(
         let foliage_h = 4.5 * scale;
         let foliage_r = 1.6 * scale;
         let base = flight;
-        let trunk_color = [0.30f32, 0.22f32, 0.13f32];
-        let foliage_color = [0.18f32, 0.38f32, 0.13f32];
+        let foliage_tint = 0.8 + hash01(k as u64, patch.tile_y as u64, patch.tile_x as u64) * 0.3;
+        let trunk_color = [0.075f32, 0.038f32, 0.014f32];
+        let foliage_color = [
+            0.028f32 * foliage_tint as f32,
+            0.115f32 * foliage_tint as f32,
+            0.014f32 * foliage_tint as f32,
+        ];
         accum.push_prism(
             base,
             up,

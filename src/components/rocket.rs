@@ -42,7 +42,9 @@ impl RocketRenderState {
     }
 }
 
-/// Static vehicle geometry (immutable after spawn).
+/// Exterior geometry of the currently attached vehicle assembly. It starts as
+/// the full launch stack and changes atomically at stage separation so every
+/// aerodynamic, inertia, recovery, and contact consumer sees the same body.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RocketGeometry {
     pub radius_m: f32,
@@ -179,6 +181,14 @@ pub struct GravityAcceleration {
     pub value: DVec3,
 }
 
+/// Acceleration a vehicle-mounted accelerometer would sense (m/s²), excluding
+/// gravity. Captured from the completed fixed integration force budget for use
+/// by telemetry and the following tick's guidance.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct SpecificForceAcceleration {
+    pub value: DVec3,
+}
+
 /// Cached fixed-tick atmosphere sample and atmosphere-relative motion.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct RocketFlightConditions(pub FlightConditions);
@@ -205,7 +215,7 @@ pub struct MaxQTracker {
     pub max_q_pa: f64,
 }
 
-/// f32 facade fields for rendering/compatibility, synced from authoritative state.
+/// f32 facade fields for rendering, synced from authoritative state.
 /// Only sync_render_transform writes this.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct RocketFacade {
@@ -237,6 +247,9 @@ pub struct AblationState {
     pub nose_radius_m: f64,
     pub mass_loss_kg: f64,
     pub tps_thickness_remaining_m: f64,
+    /// True once the configured TPS layer is fully consumed. Heating remains
+    /// observable, but ablation and TPS mass loss cannot continue past zero.
+    pub tps_exhausted: bool,
 }
 
 /// Comms link state driven by plasma blackout edge detection.
@@ -459,15 +472,6 @@ pub struct OrbitalElements {
     pub orbital_period_s: f64,
     pub apoapsis_m: f64,
     pub periapsis_m: f64,
-}
-
-/// One hypothetical orbital impulse planned against authoritative simulation
-/// time. It is consumed only by presentation prediction until a future command
-/// arbitration system executes a physical burn.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct PlannedManeuver {
-    pub execute_at_sim_time_s: f64,
-    pub delta_v_mps: DVec3,
 }
 
 /// Aggregated rocket telemetry for HUD, flight log, and external consumers.

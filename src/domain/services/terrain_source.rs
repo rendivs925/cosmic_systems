@@ -872,21 +872,23 @@ pub fn surface_appearance(
     zone_lat: f64,
     slope_deg: f64,
 ) -> SurfaceAppearance {
-    const SAND: [f32; 3] = [0.76, 0.70, 0.50];
-    const GRASS: [f32; 3] = [0.32, 0.50, 0.22];
-    const FOREST: [f32; 3] = [0.26, 0.42, 0.16];
-    const SAVANNA: [f32; 3] = [0.62, 0.56, 0.30];
-    const DESERT: [f32; 3] = [0.80, 0.74, 0.55];
-    const TUNDRA: [f32; 3] = [0.62, 0.60, 0.58];
-    const POLAR: [f32; 3] = [0.92, 0.94, 0.97];
-    const ROCK: [f32; 3] = [0.45, 0.42, 0.40];
-    const SNOW: [f32; 3] = [0.94, 0.95, 0.98];
-    const SEAFLOOR: [f32; 3] = [0.08, 0.16, 0.22];
+    // Linear broadband reflectance ranges keep sunlit terrain grounded rather
+    // than turning vegetation and rock into emissive-looking pastel colors.
+    const SAND: [f32; 3] = [0.36, 0.30, 0.16];
+    const GRASS: [f32; 3] = [0.10, 0.22, 0.04];
+    const FOREST: [f32; 3] = [0.025, 0.10, 0.015];
+    const SAVANNA: [f32; 3] = [0.24, 0.20, 0.055];
+    const DESERT: [f32; 3] = [0.42, 0.31, 0.16];
+    const TUNDRA: [f32; 3] = [0.18, 0.18, 0.14];
+    const POLAR: [f32; 3] = [0.75, 0.80, 0.84];
+    const ROCK: [f32; 3] = [0.20, 0.18, 0.15];
+    const SNOW: [f32; 3] = [0.78, 0.82, 0.86];
+    const SEAFLOOR: [f32; 3] = [0.015, 0.04, 0.08];
 
     // Seafloor below sea level.
     if elevation_m < 0.0 {
         let depth = (-elevation_m).min(4000.0) / 4000.0;
-        let albedo = lerp3([0.12, 0.28, 0.42], SEAFLOOR, depth);
+        let albedo = lerp3([0.035, 0.11, 0.17], SEAFLOOR, depth);
         return SurfaceAppearance {
             albedo,
             roughness: lerp_f(0.25, 0.7, depth),
@@ -939,10 +941,10 @@ pub fn with_river_appearance(
 ) -> SurfaceAppearance {
     let strength = river_strength.clamp(0.0, 1.0);
     let wet_bank = strength.sqrt() * 0.32;
-    appearance.albedo = lerp3(appearance.albedo, [0.10, 0.18, 0.12], wet_bank);
+    appearance.albedo = lerp3(appearance.albedo, [0.035, 0.09, 0.025], wet_bank);
 
     let channel = ss(0.12, 0.65, strength);
-    appearance.albedo = lerp3(appearance.albedo, [0.012, 0.075, 0.14], channel);
+    appearance.albedo = lerp3(appearance.albedo, [0.006, 0.025, 0.055], channel);
     appearance.roughness = lerp_f(appearance.roughness, 0.18, channel);
     appearance
 }
@@ -1591,19 +1593,32 @@ mod tests {
         let low = surface_appearance(1_000.0, 0.5, 0.5, 10.0);
         let high = surface_appearance(5_500.0, 0.5, 0.5, 10.0);
         assert!(
-            high.albedo[0] > 0.9 && high.albedo[1] > 0.9,
+            high.albedo[0] > 0.75 && high.albedo[1] > 0.8,
             "snow must be near-white"
         );
         assert!(high.roughness < low.roughness, "snow is less rough");
         // Steep faces read as bare rock.
         let cliff = surface_appearance(1_000.0, 0.5, 0.5, 60.0);
         assert!(
-            (cliff.albedo[0] - 0.45).abs() < 0.08 && (cliff.albedo[1] - 0.42).abs() < 0.08,
+            (cliff.albedo[0] - 0.20).abs() < 0.08 && (cliff.albedo[1] - 0.18).abs() < 0.08,
             "cliff should trend toward rocky grey {:?}",
             cliff.albedo
         );
         // Seafloor below sea level.
         assert_eq!(surface_appearance(-100.0, 0.5, 0.5, 0.0).metallic, 0.0);
+    }
+
+    #[test]
+    fn grassland_uses_a_natural_non_pastel_green_reflectance() {
+        let grassland = surface_appearance(300.0, 0.5, 0.5, 5.0);
+
+        assert!(grassland.albedo[1] > grassland.albedo[0]);
+        assert!(grassland.albedo[1] > grassland.albedo[2]);
+        assert!(
+            grassland.albedo[1] < 0.25,
+            "grass reflectance should remain physically subdued: {:?}",
+            grassland.albedo
+        );
     }
 
     #[test]

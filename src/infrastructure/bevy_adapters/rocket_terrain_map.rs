@@ -699,7 +699,7 @@ mod tests {
         let b = terrain_map_raster(&FlatTerrain, 3, 2);
         assert_eq!(a, b);
         assert_eq!(a.len(), 3 * 2 * 4);
-        assert_eq!(&a[..4], &[30, 71, 106, 255]);
+        assert_eq!(&a[..4], &[8, 28, 43, 255]);
     }
 
     #[test]

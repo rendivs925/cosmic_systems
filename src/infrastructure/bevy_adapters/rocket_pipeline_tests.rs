@@ -96,6 +96,8 @@ mod ground_contact_tests {
             height_m: 10.0,
             stages: vec![RocketStage {
                 name: "S1".into(),
+                diameter_m: 1.0,
+                height_m: 10.0,
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
@@ -799,6 +801,8 @@ mod recovery_pipeline_tests {
             height_m: 10.0,
             stages: vec![RocketStage {
                 name: "Booster".into(),
+                diameter_m: 1.0,
+                height_m: 10.0,
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
@@ -1150,6 +1154,8 @@ mod ascent_pipeline_tests {
             stages: vec![
                 RocketStage {
                     name: "S1".into(),
+                    diameter_m: 1.2,
+                    height_m: 12.1,
                     dry_mass_kg: 950.0,
                     propellant_mass_kg: 9_250.0,
                     recovery_propellant_reserve_kg: None,
@@ -1157,6 +1163,8 @@ mod ascent_pipeline_tests {
                 },
                 RocketStage {
                     name: "S2".into(),
+                    diameter_m: 1.2,
+                    height_m: 2.4,
                     dry_mass_kg: 250.0,
                     propellant_mass_kg: 2_050.0,
                     recovery_propellant_reserve_kg: None,
@@ -1692,8 +1700,13 @@ mod ascent_pipeline_tests {
         }
 
         let world = app.world_mut();
-        let mut q = world.query::<(&RocketPhysicsState, &RocketPropulsion, &RocketMass)>();
-        let (rocket, propulsion, mass) = q.single(world).unwrap();
+        let mut q = world.query::<(
+            &RocketPhysicsState,
+            &RocketPropulsion,
+            &RocketMass,
+            &RocketGeometry,
+        )>();
+        let (rocket, propulsion, mass, geometry) = q.single(world).unwrap();
 
         assert_eq!(
             propulsion.separations_count, 1,
@@ -1719,6 +1732,16 @@ mod ascent_pipeline_tests {
             "stage 2 must also have consumed propellant post-staging"
         );
         assert!(rocket.dynamics.mass_kg.is_finite() && rocket.dynamics.mass_kg > 0.0);
+        assert_eq!(geometry.radius_m, 0.6);
+        assert_eq!(geometry.height_m, 2.4);
+
+        // Stage separation must replace every geometry-dependent model input:
+        // the detached first stage retains its own exterior while the live
+        // upper stage supplies aero area, center of pressure, and inertia.
+        let mut spent = world.query_filtered::<&RocketGeometry, With<SpentStage>>();
+        let spent_geometry = spent.single(world).expect("separated first stage");
+        assert_eq!(spent_geometry.radius_m, 0.6);
+        assert_eq!(spent_geometry.height_m, 12.1);
     }
 
     #[test]

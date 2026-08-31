@@ -70,6 +70,7 @@ pub fn apply_relaunch_requests(
         &mut MaxQTracker,
         &mut ForceAccumulator,
         &mut TorqueAccumulator,
+        Option<&mut SpecificForceAcceleration>,
         &mut OrbitalElements,
     )>,
 ) {
@@ -180,6 +181,7 @@ pub fn apply_relaunch_requests(
             mut max_q,
             mut force_accumulator,
             mut torque_accumulator,
+            specific_force,
             mut orbital_elements,
         )) = reset_query.get_mut(entity)
         else {
@@ -198,13 +200,15 @@ pub fn apply_relaunch_requests(
         *max_q = MaxQTracker::default();
         *force_accumulator = ForceAccumulator::default();
         *torque_accumulator = TorqueAccumulator::default();
+        if let Some(mut specific_force) = specific_force {
+            *specific_force = SpecificForceAcceleration::default();
+        }
         *orbital_elements = OrbitalElements::default();
         if let Some(fairing) = initial_fairing {
             commands.entity(entity).insert(PayloadFairing {
                 dry_mass_kg: fairing.dry_mass_kg,
             });
         }
-        commands.entity(entity).remove::<PlannedManeuver>();
 
         bevy::log::info!(
             "Relaunch ready: {:.0} kg refueled, vehicle upright and held on the pad",

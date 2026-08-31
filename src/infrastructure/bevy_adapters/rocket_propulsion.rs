@@ -75,7 +75,7 @@ pub fn propulsion_staging(
     mut rocket_query: Query<(
         Entity,
         &RocketPlanetBinding,
-        &RocketGeometry,
+        &mut RocketGeometry,
         &mut RocketPhysicsState,
         &mut RocketMass,
         &mut RocketPropulsion,
@@ -88,7 +88,7 @@ pub fn propulsion_staging(
     for (
         entity,
         binding,
-        geometry,
+        mut geometry,
         mut rocket,
         mut mass,
         mut propulsion,
@@ -127,6 +127,11 @@ pub fn propulsion_staging(
         );
         rocket.dynamics.velocity_mps = outcome.upper_velocity_mps;
 
+        let separated_stage = &propulsion.vehicle.stages[propulsion.active_stage - 1];
+        let active_stage = &propulsion.vehicle.stages[propulsion.active_stage];
+        geometry.radius_m = active_stage.diameter_m * 0.5;
+        geometry.height_m = active_stage.height_m;
+
         let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);
         let new_mass = (active_vehicle_mass_with_payload(
             &propulsion.vehicle.stages,
@@ -152,10 +157,10 @@ pub fn propulsion_staging(
         let mut spent_dynamics = pre_separation;
         spent_dynamics.velocity_mps = outcome.spent_velocity_mps;
         spent_dynamics.mass_kg = shed;
-        let estimated_height_m = geometry.height_m / propulsion.vehicle.stages.len() as f32;
-        if MIN_SEPARATION_CLEARANCE_M > estimated_height_m as f64 {
+        if MIN_SEPARATION_CLEARANCE_M > separated_stage.height_m as f64 {
             warn!(
-                "Separation clearance {MIN_SEPARATION_CLEARANCE_M} m exceeds estimated stage length {estimated_height_m} m"
+                "Separation clearance {MIN_SEPARATION_CLEARANCE_M} m exceeds stage length {} m",
+                separated_stage.height_m,
             );
         }
 
@@ -167,8 +172,8 @@ pub fn propulsion_staging(
                 parent_rocket: entity,
                 planet_id: binding.planet_name.clone(),
                 dynamics: spent_dynamics,
-                radius_m: geometry.radius_m,
-                height_m: estimated_height_m,
+                radius_m: separated_stage.diameter_m * 0.5,
+                height_m: separated_stage.height_m,
                 kind: SpentStageKind::Booster,
             },
         );
@@ -186,8 +191,8 @@ pub fn propulsion_staging(
             recovery_autopilot.time_since_liftoff_s = 0.0;
             let recovery_vehicle = Rocket {
                 name: format!("{} recovery", recovery_stage.name),
-                diameter_m: geometry.radius_m * 2.0,
-                height_m: estimated_height_m,
+                diameter_m: separated_stage.diameter_m,
+                height_m: separated_stage.height_m,
                 stages: vec![recovery_stage],
             };
             commands.entity(spent_entity).insert((

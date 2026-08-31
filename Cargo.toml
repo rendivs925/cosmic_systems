@@ -21,14 +21,12 @@ pulldown-cmark = "0.13"
 rand = "0.8.5"
 bumpalo = "3.14"        # Arena-based memory allocation
 bytemuck = "1.14"       # Safe casting between byte slices and types
-num_cpus = "1.16"       # CPU core detection
 serde = { version = "1.0", features = ["derive"] }  # Serialization for Web Workers
 ron = "0.10"            # Rocket vehicle configuration files (assets/configs/rockets)
 async-trait = "0.1"     # Async trait definitions
 anise = { version = "=0.10.6", default-features = false } # Offline SPICE/DE ephemeris evaluation
 sha2 = "0.10"           # Kernel manifest checksum validation
 tokio = { version = "1.0", features = ["rt", "macros", "io-util", "time"] }  # Async runtime (wasm-compatible features)
-wgpu = "26"             # Match Bevy's rendering backend for standalone compute
 bevy_mesh = "0.17.3"
 bevy_asset = "0.17.3"
 
@@ -36,21 +34,6 @@ bevy_asset = "0.17.3"
 geotiff = { version = "0.1", optional = true }
 proj = { version = "0.31", optional = true }
 srtm_reader = { version = "0.5", optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"            # System calls for CPU affinity
-
-[target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.25"          # macOS system frameworks
-objc = "0.2.7"          # Objective-C runtime bindings
-
-[target.'cfg(target_os = "windows")'.dependencies]
-winapi = { version = "0.3", features = ["processthreadsapi"] }  # Windows thread affinity
-
-# Vulkan dependencies - only include if libloading is available
-[target.'cfg(all(not(target_arch = "wasm32"), any(unix, windows)))'.dependencies]
-ash = { version = "0.37", optional = true }  # Vulkan bindings for native compute
-gpu-allocator = { version = "0.25", optional = true }  # Vulkan memory allocator
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"
@@ -66,13 +49,8 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "CanvasRende
 serde-wasm-bindgen = "0.6"  # Web Worker communication
 futures-channel = "0.3"
 
-[dependencies.rayon]
-version = "1.8"
-optional = true             # Optional for parallel processing
-
 [features]
 default = ["native"]
-native = ["ash"]            # Enable native binary build with Vulkan GPU acceleration
-simd = []                   # Enable SIMD optimizations
-parallel = ["rayon"]        # Enable parallel processing
+native = []
+simd = []
 dem = ["geotiff", "proj", "srtm_reader"]  # Real planetary DEM data

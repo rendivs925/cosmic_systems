@@ -35,6 +35,10 @@ use crate::domain::services::simulation_time::{
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::simulation_params::SimulationParameters;
+use crate::infrastructure::bevy_adapters::camera_systems::{
+    apply_camera_transform, auto_inspect_selected_planet, update_camera_controller,
+    update_starfield_position,
+};
 use crate::infrastructure::bevy_adapters::components::{
     CameraInputState, HoveredPlanet, NotificationQueue, PerformanceStats, ScreenshotState,
     SelectedPlanet, UiPointerState, ZenMode,
@@ -48,6 +52,10 @@ use crate::infrastructure::bevy_adapters::craft_systems::{
 };
 use crate::infrastructure::bevy_adapters::craft_ui::update_craft_ui;
 use crate::infrastructure::bevy_adapters::education_systems::register_education_systems;
+use crate::infrastructure::bevy_adapters::entity_components::{
+    EntryPhysicsConfig, RocketCameraConfig, RocketCameraMode, RocketTelemetry,
+    SolarMapCameraCommand,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::ephemeris::{
@@ -56,9 +64,23 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
 use crate::infrastructure::bevy_adapters::gyroscope_systems::{
     handle_input, update_gyroscopes, update_thrust,
 };
-use crate::infrastructure::bevy_adapters::performance_systems::{
-    request_screenshot_input, take_pending_screenshot,
+use crate::infrastructure::bevy_adapters::input_systems::{
+    handle_mouse_planet_selection, handle_planet_selection, handle_solar_system_input,
 };
+use crate::infrastructure::bevy_adapters::material_systems::apply_pending_material_textures;
+use crate::infrastructure::bevy_adapters::orbit_systems::{
+    update_orbit_thickness, update_orbit_visibility, update_orbit_visuals,
+    update_planet_reflections,
+};
+use crate::infrastructure::bevy_adapters::performance_systems::{
+    handle_video_recording, log_performance_stats, request_screenshot_input,
+    take_pending_screenshot, toggle_video_recording, update_performance_stats,
+};
+use crate::infrastructure::bevy_adapters::planet_systems::{
+    preserve_sun_disc_at_overview_distances, rebase_solar_presentation, update_orbit_positions,
+    update_planet_positions, update_planet_rotations,
+};
+use crate::infrastructure::bevy_adapters::quality_components::QualityAdaptationResource;
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
@@ -73,7 +95,7 @@ use crate::infrastructure::bevy_adapters::rocket_dynamics::{
 };
 use crate::infrastructure::bevy_adapters::rocket_entry::{
     compute_ablation, compute_heating, compute_parachute_forces, compute_plasma_blackout,
-    compute_retro_propulsion,
+    compute_retro_propulsion, initialize_thermal_protection,
 };
 use crate::infrastructure::bevy_adapters::rocket_environment::{
     setup_rocket_sky_color, setup_rocket_sun_light, update_rocket_sky_color,
@@ -120,7 +142,6 @@ use crate::infrastructure::bevy_adapters::rocket_telemetry::{
     RocketEventFeed,
 };
 use crate::infrastructure::bevy_adapters::rocket_terrain_map::RocketTerrainMapPlugin;
-use crate::infrastructure::bevy_adapters::systems::*;
 use crate::infrastructure::bevy_adapters::terrain_render::{
     recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
 };
@@ -131,8 +152,6 @@ use crate::infrastructure::bevy_adapters::terrain_streaming::{
     TerrainStreamingResource, TerrainWarmupTasks,
 };
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
-#[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
-use crate::infrastructure::bevy_adapters::webgpu_systems::init_vulkan_solver;
 use crate::presentation::ui::*;
 use crate::presentation::ui_setup::setup_ui;
 use crate::systems::sets::RocketSet;
@@ -148,27 +167,12 @@ fn never_run_default_fixed_loop() -> bool {
     false
 }
 
-/// The native Kepler solver serves the solar-system presentation, not rocket
-/// flight's fixed-step dynamics. Avoid its costly device setup in rocket mode.
-#[cfg(any(
-    test,
-    all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel")
-))]
-fn shared_solar_presentation_requires_vulkan(rocket_mode_enabled: bool) -> bool {
-    !rocket_mode_enabled
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
-fn vulkan_solver_required(rocket_mode: Option<Res<RocketMode>>) -> bool {
-    shared_solar_presentation_requires_vulkan(rocket_mode.is_some())
-}
-
 fn solar_presentation_enabled(rocket_mode: Option<Res<RocketMode>>) -> bool {
     rocket_mode.is_none()
 }
 
 /// Shared solar-system world: resources, physics, orbit visuals, performance,
-/// Vulkan compute, screenshot/recording, terrain, and starfield.
+/// screenshot/recording, terrain, and starfield.
 pub struct SharedSimulationPlugin;
 
 impl Plugin for SharedSimulationPlugin {
@@ -207,9 +211,7 @@ impl Plugin for SharedSimulationPlugin {
         app.insert_resource(ZenMode::default());
         app.insert_resource(UiIdleState::default());
         app.insert_resource(VideoRecordingState::default());
-        app.insert_resource(
-            crate::infrastructure::bevy_adapters::systems::QualityAdaptationResource::default(),
-        );
+        app.insert_resource(QualityAdaptationResource::default());
 
         // Startup systems
         app.add_systems(Startup, setup_space.after(update_ephemeris_snapshot));
@@ -284,10 +286,6 @@ impl Plugin for SharedSimulationPlugin {
             Update,
             (update_performance_stats, log_performance_stats).chain(),
         );
-
-        // Vulkan compute (native only)
-        #[cfg(all(not(target_arch = "wasm32"), feature = "ash", feature = "parallel"))]
-        app.add_systems(Update, init_vulkan_solver.run_if(vulkan_solver_required));
 
         // Screenshot and recording
         app.add_systems(
@@ -656,6 +654,7 @@ impl Plugin for RocketModePlugin {
                 spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
                 update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
                 check_fairing_separation.in_set(RocketSet::SpentStage),
+                initialize_thermal_protection.in_set(RocketSet::EntryPhysics),
                 compute_heating.in_set(RocketSet::EntryPhysics),
                 compute_ablation.in_set(RocketSet::EntryPhysics),
                 compute_plasma_blackout.in_set(RocketSet::EntryPhysics),
@@ -800,12 +799,6 @@ mod tests {
             .normalize();
 
         (earth.position_m, rotation_rad, sun_direction)
-    }
-
-    #[test]
-    fn vulkan_compute_is_not_required_for_rocket_presentation() {
-        assert!(!shared_solar_presentation_requires_vulkan(true));
-        assert!(shared_solar_presentation_requires_vulkan(false));
     }
 
     #[test]
