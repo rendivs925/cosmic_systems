@@ -7,13 +7,6 @@ pub struct SelectedPlanet {
     pub name: Option<String>,
 }
 
-// Resource to track hovered planet for information display
-#[derive(Resource)]
-pub struct HoveredPlanet {
-    pub name: Option<String>,
-    pub info: Option<String>,
-}
-
 // Resource to manage notification queue
 #[derive(Resource)]
 pub struct NotificationQueue {
@@ -94,26 +87,6 @@ impl Default for CameraInputState {
             last_selected_entity: None,
             last_overview_key_press_s: None,
             earth_terrain_active: false,
-        }
-    }
-}
-
-// Resource to track dynamic resolution scaling
-#[derive(Resource)]
-pub struct DynamicResolutionState {
-    pub scale: f32,
-    pub min_scale: f32,
-    pub max_scale: f32,
-    pub cooldown: f32,
-}
-
-impl Default for DynamicResolutionState {
-    fn default() -> Self {
-        Self {
-            scale: 1.0,
-            min_scale: 0.6,
-            max_scale: 1.0,
-            cooldown: 0.0,
         }
     }
 }

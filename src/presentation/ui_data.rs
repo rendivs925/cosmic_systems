@@ -1,1 +1,0 @@
-// UI data functions and constants

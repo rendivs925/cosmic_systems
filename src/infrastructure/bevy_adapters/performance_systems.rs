@@ -1,29 +1,7 @@
 use super::components::*;
-use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-
-fn push_bounded_frame_time(samples: &mut Vec<f32>, capacity: usize, frame_time_ms: f32) {
-    if capacity == 0 {
-        samples.clear();
-        return;
-    }
-    if samples.len() == capacity {
-        // Sample order is not used by percentile or variance calculations, so
-        // O(1) eviction avoids shifting a large vector every rendered frame.
-        samples.swap_remove(0);
-    }
-    samples.push(frame_time_ms);
-}
-
-fn percentile_99th(samples: &mut [f32]) -> Option<f32> {
-    (!samples.is_empty()).then(|| {
-        let index = ((samples.len() - 1) as f32 * 0.99) as usize;
-        let (_, value, _) = samples.select_nth_unstable_by(index, f32::total_cmp);
-        *value
-    })
-}
 
 /// Request a Bevy framebuffer capture in every simulation mode. This belongs
 /// to shared presentation infrastructure rather than solar-system input so
@@ -291,139 +269,26 @@ fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
     }
 }
 
-// System for adaptive quality control
-pub fn adaptive_quality_system(
-    mut perf_stats: ResMut<PerformanceStats>,
-    mut quality_adapter: ResMut<QualityAdaptationResource>,
-) {
-    if !perf_stats.adaptive_enabled || !quality_adapter.enabled {
-        return;
-    }
-
-    // Update frame time history for variance calculation
-    let frame_time_ms = perf_stats.frame_time_ms;
-    let history_capacity = perf_stats.history_capacity;
-    push_bounded_frame_time(
-        &mut perf_stats.frame_time_history,
-        history_capacity,
-        frame_time_ms,
-    );
-
-    // Run quality adaptation
-    if let Some(new_quality) = quality_adapter.system.update_and_adapt(&mut perf_stats) {
-        perf_stats.quality_level = new_quality;
-        println!("Quality adapted to: {:?}", new_quality);
-    }
-
-    // Minimal quality logging - only when quality changes significantly
-    // Removed frequent quality status logging to reduce noise
-}
-
-// PRODUCTION-GRADE FPS MEASUREMENT (Industry Standard Implementation)
 /// Correctly measures frame time first, then derives FPS from it.
 /// Uses exponential moving average for stability and responsiveness.
 pub fn update_performance_stats(mut performance_stats: ResMut<PerformanceStats>) {
-    // PRODUCTION-GRADE FRAME TIME MEASUREMENT
-    // Use high-resolution monotonic clock for accurate timing
     let now = std::time::Instant::now();
-
-    // Calculate frame time as difference from last frame
-    let frame_time_seconds = if performance_stats.frame_count > 0 {
-        now.duration_since(performance_stats.last_frame_time)
-            .as_secs_f64()
-    } else {
-        // First frame - use target frame time as estimate
-        1.0 / performance_stats.target_fps as f64
-    };
-
-    performance_stats.last_frame_time = now;
-
-    // Convert to milliseconds (industry standard unit)
+    let frame_time_seconds = performance_stats
+        .last_frame_time
+        .map(|last_frame_time| now.duration_since(last_frame_time).as_secs_f64())
+        .unwrap_or(1.0 / 60.0);
+    performance_stats.last_frame_time = Some(now);
     let frame_time_ms = (frame_time_seconds * 1000.0) as f32;
-
-    // PRIMARY METRIC: Frame time (this is the truth)
     performance_stats.frame_time_ms = frame_time_ms;
-
-    // DERIVED METRIC: Raw FPS = 1/frame_time (jumps violently, not for display)
     performance_stats.fps_raw = if frame_time_ms > 0.0 {
         1000.0 / frame_time_ms
     } else {
-        0.0 // Prevent division by zero
+        0.0
     };
-
-    // EXPONENTIAL MOVING AVERAGE (Industry Standard Smoothing)
-    // fps_smoothed = fps_smoothed * 0.9 + fps_raw * 0.1
-    // - Stable: Doesn't jump around
-    // - Responsive: Reacts to changes quickly
-    // - Cheap: Single multiplication per frame
-    const SMOOTHING_FACTOR: f32 = 0.1; // 0.1 = 10% new data, 90% history
+    const SMOOTHING_FACTOR: f32 = 0.1;
     performance_stats.fps_smoothed = performance_stats.fps_smoothed * (1.0 - SMOOTHING_FACTOR)
         + performance_stats.fps_raw * SMOOTHING_FACTOR;
-
-    // Frame time EMA (more stable than FPS for performance analysis)
-    performance_stats.frame_time_smoothed = performance_stats.frame_time_smoothed
-        * (1.0 - SMOOTHING_FACTOR)
-        + performance_stats.frame_time_ms * SMOOTHING_FACTOR;
-
-    // DISPLAY FPS (what users see - smoothed for human consumption)
     performance_stats.fps_display = performance_stats.fps_smoothed;
-
-    // FRAME TIME STATISTICS (most important for performance analysis)
-    // Update min/max frame times
-    performance_stats.frame_time_min = performance_stats.frame_time_min.min(frame_time_ms);
-    performance_stats.frame_time_max = performance_stats.frame_time_max.max(frame_time_ms);
-
-    // Maintain frame time history for percentile calculations
-    let history_capacity = performance_stats.history_capacity;
-    push_bounded_frame_time(
-        &mut performance_stats.frame_time_history,
-        history_capacity,
-        frame_time_ms,
-    );
-
-    // Calculate 99th percentile frame time (stutter detection)
-    if let Some(percentile) = percentile_99th(&mut performance_stats.frame_time_history) {
-        performance_stats.frame_time_99th = percentile;
-    }
-
-    // GPU timestamp queries and native process-memory collection are not
-    // registered in this application. Keep these unknown instead of reporting
-    // wall-clock time as GPU time or a fabricated memory budget as telemetry.
-    performance_stats.gpu_frame_time_ms = f32::NAN;
-    performance_stats.cpu_gpu_frame_time = frame_time_ms;
-    performance_stats.memory_usage_mb = f32::NAN;
-    performance_stats.peak_memory_mb = f32::NAN;
-
-    // Update frame count
-    performance_stats.frame_count += 1;
-}
-
-// Apply quality settings based on the quality level
-pub fn apply_quality_settings(
-    quality_level: QualityLevel,
-    _solar_params: &mut SolarSystemParameters,
-    _current_fps: f32,
-) {
-    // Quality adaptation now preserves user-set time scale
-    // Only adjust other quality parameters, not time scale
-    // Quality change notifications removed to reduce console noise
-    let _ = quality_level;
-}
-
-/// PRODUCTION-GRADE PERFORMANCE LOGGING (Industry Standards)
-/// Displays frame time (truth) and FPS (derived) with 99th percentile stutter detection
-pub fn log_performance_stats(_perf_stats: Res<PerformanceStats>, _time: Res<Time>) {
-    // Ultra-minimal logging - silent operation
-    // Performance monitoring completely silent for elegant experience
-}
-
-pub fn cap_fixed_overstep(mut fixed_time: ResMut<Time<Fixed>>) {
-    let max_overstep =
-        std::time::Duration::from_secs_f32(fixed_time.timestep().as_secs_f32() * 2.0);
-    let overstep = fixed_time.overstep();
-    if overstep > max_overstep {
-        fixed_time.discard_overstep(overstep - max_overstep);
-    }
 }
 
 #[cfg(test)]
@@ -431,21 +296,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bounded_frame_times_keep_capacity_without_front_shift() {
-        let mut samples = vec![1.0, 2.0, 3.0];
-        push_bounded_frame_time(&mut samples, 3, 4.0);
-        assert_eq!(samples.len(), 3);
-        assert!(samples.contains(&4.0));
-    }
-
-    #[test]
-    fn percentile_uses_in_place_selection() {
-        let mut samples = (1..=100).map(|value| value as f32).collect::<Vec<_>>();
-        assert_eq!(percentile_99th(&mut samples), Some(99.0));
-    }
-
-    #[test]
-    fn unavailable_gpu_and_memory_metrics_are_not_reported_as_measurements() {
+    fn performance_stats_initializes_fps_ema() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.insert_resource(PerformanceStats::default());
@@ -453,9 +304,7 @@ mod tests {
         app.update();
 
         let stats = app.world().resource::<PerformanceStats>();
-        assert!(stats.gpu_frame_time_ms.is_nan());
-        assert!(stats.memory_usage_mb.is_nan());
-        assert!(stats.peak_memory_mb.is_nan());
-        assert!(stats.cpu_gpu_frame_time.is_finite());
+        assert!(stats.fps_display.is_finite());
+        assert!(stats.frame_time_ms.is_finite());
     }
 }

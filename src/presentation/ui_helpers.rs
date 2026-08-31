@@ -96,26 +96,6 @@ pub fn nav_button_border_color(selected: bool) -> Color {
     }
 }
 
-pub fn nav_button_color_hover(selected: bool, hovered: bool) -> Color {
-    if selected {
-        Color::srgb(0.16, 0.24, 0.39) // Selected color unchanged
-    } else if hovered {
-        Color::srgba(0.051, 0.059, 0.083, 0.85) // Slightly brighter on hover
-    } else {
-        Color::srgba(0.031, 0.039, 0.063, 0.78) // Normal color
-    }
-}
-
-pub fn nav_button_border_color_hover(selected: bool, hovered: bool) -> Color {
-    if selected {
-        Color::srgb(0.31, 0.47, 0.78) // Selected border unchanged
-    } else if hovered {
-        Color::srgba(0.216, 0.295, 0.451, 0.35) // Slightly brighter border on hover
-    } else {
-        Color::srgba(0.196, 0.275, 0.431, 0.28) // Normal border
-    }
-}
-
 pub fn menu_button_colors(primary: bool, active: bool) -> (Color, Color) {
     if active {
         (Color::srgb(0.16, 0.24, 0.39), Color::srgb(0.31, 0.47, 0.78))
@@ -129,18 +109,6 @@ pub fn menu_button_colors(primary: bool, active: bool) -> (Color, Color) {
             Color::srgba(0.031, 0.039, 0.063, 0.78),
             Color::srgba(0.196, 0.275, 0.431, 0.28),
         )
-    }
-}
-
-pub fn fps_color(fps: f32) -> Color {
-    if fps >= 55.0 {
-        Color::srgb(0.7, 0.85, 0.7)
-    } else if fps >= 45.0 {
-        Color::srgb(0.9, 0.9, 0.7)
-    } else if fps >= 30.0 {
-        Color::srgb(0.9, 0.8, 0.7)
-    } else {
-        Color::srgb(0.9, 0.7, 0.7)
     }
 }
 
@@ -637,35 +605,6 @@ pub fn planet_names() -> [&'static str; 9] {
     ]
 }
 
-pub fn moon_list() -> [&'static str; 24] {
-    [
-        "Moon",
-        "Phobos",
-        "Deimos",
-        "Io",
-        "Europa",
-        "Ganymede",
-        "Callisto",
-        "Mimas",
-        "Enceladus",
-        "Tethys",
-        "Dione",
-        "Rhea",
-        "Titan",
-        "Hyperion",
-        "Iapetus",
-        "Miranda",
-        "Ariel",
-        "Umbriel",
-        "Titania",
-        "Oberon",
-        "Triton",
-        "Proteus",
-        "Nereid",
-        "Larissa",
-    ]
-}
-
 pub fn moon_names_for_parent(parent: &str) -> &'static [&'static str] {
     match parent {
         "Earth" => &["Moon"],
@@ -685,12 +624,6 @@ pub fn moon_names_for_parent(parent: &str) -> &'static [&'static str] {
         "Neptune" => &["Triton", "Proteus", "Nereid", "Larissa"],
         _ => &[],
     }
-}
-
-pub fn moon_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
-    moon_list()
-        .into_iter()
-        .map(|name| (get_parent_body(name), name))
 }
 
 pub fn is_primary_body(name: &str) -> bool {

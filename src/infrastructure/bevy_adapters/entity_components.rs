@@ -94,29 +94,12 @@ pub struct SolarMapCameraCommand {
 #[derive(Component)]
 pub struct SolarMapLight;
 
-// Component for velocity trail particle system
-#[derive(Component)]
-pub struct VelocityTrailComponent {
-    pub planet_entity: Entity,
-    pub trail_length: usize,
-    pub particle_entities: Vec<Entity>,
-    pub last_positions: Vec<Vec3>,
-    pub update_interval: f32,
-    pub trail_timer: f32,
-}
-
 #[derive(Component)]
 pub struct Starfield;
 
 // Marker component for moon orbits (orbits that need to follow their parent planet)
 #[derive(Component)]
 pub struct MoonOrbit;
-
-// Component for cloud layers to control rotation speed
-#[derive(Component)]
-pub struct CloudLayer {
-    pub rotation_period_hours: f32,
-}
 
 // Camera control modes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -178,15 +161,6 @@ impl PlanetAtmosphere {
             source: atmosphere_for(name),
         }
     }
-}
-
-// Component for launch sites (terrain markers)
-#[derive(Component)]
-pub struct LaunchSiteComponent {
-    pub name: String,
-    pub planet_entity: Entity,
-    pub position: Vec3, // Local position on terrain
-    pub launch_pad_model: Option<Handle<Scene>>,
 }
 
 /// Configuration for entry physics per celestial body.

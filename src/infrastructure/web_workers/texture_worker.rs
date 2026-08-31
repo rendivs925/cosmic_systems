@@ -70,27 +70,29 @@ impl TextureDecodeWorker {
             };
 
             let results = Rc::clone(&worker.results);
-            let callback = Closure::<dyn FnMut(MessageEvent)>::wrap(Box::new(move |event| {
-                let data = event.data();
-                let path = Reflect::get(&data, &JsValue::from_str("path"))
-                    .ok()
-                    .and_then(|value| value.as_string());
-                let bitmap_value = Reflect::get(&data, &JsValue::from_str("bitmap")).ok();
-                let bitmap = bitmap_value.and_then(|value| value.dyn_into::<ImageBitmap>().ok());
-                let error = Reflect::get(&data, &JsValue::from_str("error"))
-                    .ok()
-                    .and_then(|value| value.as_string());
+            let callback =
+                Closure::<dyn FnMut(MessageEvent)>::wrap(Box::new(move |event: MessageEvent| {
+                    let data = event.data();
+                    let path = Reflect::get(&data, &JsValue::from_str("path"))
+                        .ok()
+                        .and_then(|value| value.as_string());
+                    let bitmap_value = Reflect::get(&data, &JsValue::from_str("bitmap")).ok();
+                    let bitmap =
+                        bitmap_value.and_then(|value| value.dyn_into::<ImageBitmap>().ok());
+                    let error = Reflect::get(&data, &JsValue::from_str("error"))
+                        .ok()
+                        .and_then(|value| value.as_string());
 
-                let Some(path) = path else {
-                    return;
-                };
+                    let Some(path) = path else {
+                        return;
+                    };
 
-                results.borrow_mut().push_back(TextureWorkerResult {
-                    path,
-                    bitmap,
-                    error,
-                });
-            }));
+                    results.borrow_mut().push_back(TextureWorkerResult {
+                        path,
+                        bitmap,
+                        error,
+                    });
+                }));
 
             worker_handle.set_onmessage(Some(callback.as_ref().unchecked_ref()));
             worker.workers.push(worker_handle);

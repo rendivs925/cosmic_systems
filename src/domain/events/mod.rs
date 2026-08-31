@@ -44,12 +44,3 @@ pub struct FairingSeparatedEvent {
     /// Mass dropped with the fairing halves [kg].
     pub fairing_mass_kg: f64,
 }
-
-/// A relaunch was commanded (Phase 14): refuel from the RON configuration,
-/// reset the mission to PreLaunch upright at the current site, re-engage the
-/// pad-hold constraint, and clear jettisoned debris. Consumed by exactly one
-/// FixedUpdate system.
-#[derive(Debug, Clone, Copy, PartialEq, Message)]
-pub struct RelaunchRequested {
-    pub rocket: Entity,
-}

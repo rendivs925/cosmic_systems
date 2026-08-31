@@ -7,5 +7,4 @@ pub mod rocket_config;
 pub mod rocket_spawning;
 pub mod solar_system_startup;
 pub mod starfield;
-pub mod startup;
 pub mod texture_config;

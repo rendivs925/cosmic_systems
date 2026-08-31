@@ -739,9 +739,6 @@ fn spawn_celestial_body(
                     Mesh3d(create_uv_sphere_mesh(meshes, visual_radius * clouds.scale)),
                     MeshMaterial3d(cloud_material_handle.clone()),
                     Transform::default(),
-                    CloudLayer {
-                        rotation_period_hours: clouds.rotation_period_hours,
-                    },
                 ));
                 cloud_entity.insert(PendingMaterialTextures {
                     material: cloud_material_handle.clone(),
@@ -761,9 +758,6 @@ fn spawn_celestial_body(
                     Mesh3d(create_uv_sphere_mesh(meshes, visual_radius * clouds.scale)),
                     MeshMaterial3d(cloud_material_handle.clone()),
                     Transform::default(),
-                    CloudLayer {
-                        rotation_period_hours: clouds.rotation_period_hours,
-                    },
                 ));
             }
         });

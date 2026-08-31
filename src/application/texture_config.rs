@@ -11,7 +11,6 @@ pub struct PlanetTextureSet {
 pub struct CloudLayerConfig {
     pub texture_path: &'static str,
     pub alpha: f32,
-    pub rotation_period_hours: f32,
     pub scale: f32,
 }
 
@@ -205,19 +204,16 @@ pub fn get_cloud_layer_config(planet_name: &str) -> Option<CloudLayerConfig> {
         "Earth" => Some(CloudLayerConfig {
             texture_path: "textures/planets/earth/clouds.png",
             alpha: 0.65,
-            rotation_period_hours: 24.0,
             scale: 1.012,
         }),
         "Venus" => Some(CloudLayerConfig {
             texture_path: "textures/planets/venus/clouds.png",
             alpha: 0.4,
-            rotation_period_hours: 96.0,
             scale: 1.02,
         }),
         "Titan" => Some(CloudLayerConfig {
             texture_path: "textures/planets/titan/clouds.png",
             alpha: 0.45,
-            rotation_period_hours: 382.0,
             scale: 1.02,
         }),
         _ => None,

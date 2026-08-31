@@ -24,9 +24,7 @@ pub fn update_planet_positions(
     physical_scale: Res<PhysicalScale>,
     solar_params: Res<SolarSystemParameters>,
     mut query: Query<(&mut SolarMapPosition, &PlanetComponent)>,
-    mut perf_stats: ResMut<PerformanceStats>,
 ) {
-    let physics_start = std::time::Instant::now();
     let Ok(epoch) = simulation_time.tdb_epoch() else {
         bevy::log::error!("cannot update solar-map positions without a scientific epoch");
         return;
@@ -43,11 +41,6 @@ pub fn update_planet_positions(
         &solar_params,
         &mut query,
     );
-
-    perf_stats.physics_update_time = physics_start.elapsed().as_secs_f32() * 1000.0;
-    perf_stats.simd_enabled = false;
-    perf_stats.parallel_enabled = false;
-    perf_stats.cpu_cores_used = 1;
 }
 
 fn update_planet_positions_sequential(

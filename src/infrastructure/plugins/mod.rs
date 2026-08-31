@@ -21,8 +21,7 @@ use crate::application::solar_system_startup::setup_space;
 use crate::application::solar_system_startup::spawn_bodies_progressively;
 use crate::components::rocket::RocketMode;
 use crate::domain::events::{
-    CommsBlackoutEvent, FairingSeparatedEvent, RelaunchRequested, SplashdownDetectedEvent,
-    StageSeparatedEvent,
+    CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::services::ephemeris::NaifBodyId;
@@ -38,8 +37,8 @@ use crate::infrastructure::bevy_adapters::camera_systems::{
     update_starfield_position,
 };
 use crate::infrastructure::bevy_adapters::components::{
-    CameraInputState, HoveredPlanet, NotificationQueue, PerformanceStats, ScreenshotState,
-    SelectedPlanet, UiPointerState, ZenMode,
+    CameraInputState, NotificationQueue, PerformanceStats, ScreenshotState, SelectedPlanet,
+    UiPointerState, ZenMode,
 };
 use crate::infrastructure::bevy_adapters::craft_components::{
     CraftCameraState, CraftControlState, CraftEffectsEnabled, CraftTravelTarget,
@@ -71,14 +70,13 @@ use crate::infrastructure::bevy_adapters::orbit_systems::{
     update_planet_reflections,
 };
 use crate::infrastructure::bevy_adapters::performance_systems::{
-    handle_video_recording, log_performance_stats, request_screenshot_input,
-    take_pending_screenshot, toggle_video_recording, update_performance_stats,
+    handle_video_recording, request_screenshot_input, take_pending_screenshot,
+    toggle_video_recording, update_performance_stats,
 };
 use crate::infrastructure::bevy_adapters::planet_systems::{
     preserve_sun_disc_at_overview_distances, rebase_solar_presentation, update_orbit_positions,
     update_planet_positions, update_planet_rotations,
 };
-use crate::infrastructure::bevy_adapters::quality_components::QualityAdaptationResource;
 use crate::infrastructure::bevy_adapters::rocket_camera_systems::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
@@ -194,10 +192,6 @@ impl Plugin for SharedSimulationPlugin {
             name: None,
         });
         app.init_resource::<SolarMapCameraCommand>();
-        app.insert_resource(HoveredPlanet {
-            name: None,
-            info: None,
-        });
         app.insert_resource(NotificationQueue {
             notifications: Vec::new(),
             hide_for_screenshot: false,
@@ -209,7 +203,6 @@ impl Plugin for SharedSimulationPlugin {
         app.insert_resource(ZenMode::default());
         app.insert_resource(UiIdleState::default());
         app.insert_resource(VideoRecordingState::default());
-        app.insert_resource(QualityAdaptationResource::default());
 
         // Startup systems
         app.add_systems(Startup, setup_space.after(update_ephemeris_snapshot));
@@ -279,11 +272,8 @@ impl Plugin for SharedSimulationPlugin {
         );
         app.add_systems(Update, apply_pending_material_textures);
 
-        // Performance and quality systems
-        app.add_systems(
-            Update,
-            (update_performance_stats, log_performance_stats).chain(),
-        );
+        // Performance metrics feed the shared UI in every simulation mode.
+        app.add_systems(Update, update_performance_stats);
 
         // Screenshot and recording
         app.add_systems(
@@ -464,12 +454,11 @@ impl Plugin for RocketModePlugin {
         // Entry physics configuration.
         app.init_resource::<EntryPhysicsConfig>();
 
-        // Rocket domain messages (blackout edges, splashdown, staging, relaunch).
+        // Rocket domain messages (blackout edges, splashdown, and staging).
         app.add_message::<CommsBlackoutEvent>();
         app.add_message::<SplashdownDetectedEvent>();
         app.add_message::<StageSeparatedEvent>();
         app.add_message::<FairingSeparatedEvent>();
-        app.add_message::<RelaunchRequested>();
         app.init_resource::<RelaunchCommandQueue>();
 
         // Rocket camera resources.

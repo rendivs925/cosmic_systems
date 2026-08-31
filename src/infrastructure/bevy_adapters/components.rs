@@ -12,9 +12,6 @@ pub use super::ui_components::*;
 // Performance monitoring components
 pub use super::performance_components::*;
 
-// Quality adaptation components
-pub use super::quality_components::*;
-
 // Craft/UFO components
 pub use super::craft_components::*;
 

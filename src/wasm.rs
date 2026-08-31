@@ -42,7 +42,7 @@ pub fn main() {
     // ephemeris presentation systems cannot diverge by platform.
     app.add_plugins((SharedSimulationPlugin, SolarSystemModePlugin));
 
-    let mut perf_stats = PerformanceStats::default();
+    let perf_stats = PerformanceStats::default();
     app.insert_resource(perf_stats);
     app.insert_non_send_resource(TextureDecodeWorker::new());
     app.add_systems(
