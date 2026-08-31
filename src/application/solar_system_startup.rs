@@ -60,9 +60,6 @@ pub fn setup_space(
     #[cfg(not(target_arch = "wasm32"))] asset_server: Res<AssetServer>,
     solar_camera_enabled: Option<Res<SolarCameraEnabled>>,
     rocket_mode: Option<Res<RocketMode>>,
-    #[cfg(not(target_arch = "wasm32"))] earth_terrain: Option<
-        Res<crate::application::terrain_config::EarthTerrainConfig>,
-    >,
     #[cfg(not(target_arch = "wasm32"))] ephemeris_authority: Res<EphemerisAuthority>,
     #[cfg(not(target_arch = "wasm32"))] ephemeris_snapshot: Res<EphemerisSnapshot>,
 ) {
@@ -208,8 +205,6 @@ pub fn setup_space(
             &mut entity_map,
             &mut position_map,
             &axial_tilts,
-            #[cfg(not(target_arch = "wasm32"))]
-            earth_terrain.as_deref(),
             rocket_mode.is_some(),
             DVec3::ZERO,
         );
@@ -286,9 +281,6 @@ fn spawn_celestial_body(
     entity_map: &mut HashMap<String, Entity>,
     position_map: &mut HashMap<String, DVec3>,
     axial_tilts: &HashMap<String, f32>,
-    #[cfg(not(target_arch = "wasm32"))] earth_terrain: Option<
-        &crate::application::terrain_config::EarthTerrainConfig,
-    >,
     enable_earth_flight_environment: bool,
     render_origin_units: DVec3,
 ) {
@@ -406,20 +398,8 @@ fn spawn_celestial_body(
 
     // Terrain and atmosphere are flight simulation data, not solar-map layers.
     // Earth is the only body configured for them while Rocket mode is active.
-    #[cfg(all(feature = "dem", not(target_arch = "wasm32")))]
-    let terrain = (enable_earth_flight_environment && planet.name == "Earth").then(|| {
-        PlanetTerrain::with_srtm_directory(
-            "Earth",
-            earth_terrain.and_then(|config| config.srtm_dir.as_deref()),
-        )
-    });
-    #[cfg(any(not(feature = "dem"), target_arch = "wasm32"))]
-    let terrain = {
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = earth_terrain;
-        (enable_earth_flight_environment && planet.name == "Earth")
-            .then(|| PlanetTerrain::default_for("Earth"))
-    };
+    let terrain =
+        (enable_earth_flight_environment && planet.name == "Earth").then(PlanetTerrain::earth);
 
     let mut planet_commands = commands.spawn((
         Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),

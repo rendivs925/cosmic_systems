@@ -11,7 +11,7 @@ optimized** here (AGENTS.md section 12/41).
 | CPU | AMD Ryzen 9 8940HX (32 threads) |
 | GPU | NVIDIA RTX 5070 Laptop (8 GB) |
 | Display | Xvfb + PRIME offload (headless CI-style run) |
-| Binary | `./target/release/cosmic_systems --features dem`, vsync on (Bevy default), 1280x720 |
+| Binary | `./target/release/cosmic_systems`, vsync on (Bevy default), 1280x720 |
 | Method | 35 s runs, RSS sampled every 4 s (`ps`), GPU util averaged from 6 `nvidia-smi` samples |
 
 ## Results

@@ -30,11 +30,6 @@ tokio = { version = "1.0", features = ["rt", "macros", "io-util", "time"] }  # A
 bevy_mesh = "0.17.3"
 bevy_asset = "0.17.3"
 
-# DEM terrain data dependencies (optional, behind 'dem' feature)
-geotiff = { version = "0.1", optional = true }
-proj = { version = "0.31", optional = true }
-srtm_reader = { version = "0.5", optional = true }
-
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"
 console_log = "1.0"
@@ -53,4 +48,3 @@ futures-channel = "0.3"
 default = ["native"]
 native = []
 simd = []
-dem = ["geotiff", "proj", "srtm_reader"]  # Real planetary DEM data

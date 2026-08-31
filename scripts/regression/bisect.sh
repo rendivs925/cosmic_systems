@@ -17,7 +17,6 @@ cd "$(dirname "$0")/../.."
 GOOD="${1:?usage: bisect.sh <good-ref> <bad-ref> [test-filter]}"
 BAD="${2:?usage: bisect.sh <good-ref> <bad-ref> [test-filter]}"
 FILTER="${3:-determinism_regression_tests::ascent_matches_committed_baseline_within_tolerances}"
-FEATURES="${FEATURES:-dem}"
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -27,11 +26,10 @@ REF_COMMIT="$(git rev-list -n 1 "$GOOD")"
 echo "Reference baseline from good commit: $REF_COMMIT ($GOOD)"
 echo "Baseline fixtures pinned to:         $BASELINE_DIR"
 echo "Test filter:                          $FILTER"
-echo "Features:                             $FEATURES"
 
 # Harvest the reference baseline from the good commit.
 git worktree add --detach "$WORKDIR/ref" "$REF_COMMIT" >/dev/null 2>&1
-COMPARE_COMMAND="cargo test --features ${FEATURES} ${FILTER} -- --nocapture"
+COMPARE_COMMAND="cargo test ${FILTER} -- --nocapture"
 (
   cd "$WORKDIR/ref" \
     && REGRESSION_BASELINE_DIR="$BASELINE_DIR" REGRESSION_RECORD=1 $COMPARE_COMMAND >/dev/null 2>&1 \

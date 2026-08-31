@@ -14,8 +14,6 @@
 
 use bevy::math::DVec3;
 use std::fmt::Debug;
-#[cfg(feature = "dem")]
-use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
@@ -46,6 +44,12 @@ const SEED_WARP_X: u64 = 0xD1B5_A9B1_7E1F_2A3C;
 const SEED_WARP_Y: u64 = 0x5B1E_3C4D_92AF_4B11;
 const SEED_WARP_Z: u64 = 0x9E77_6E5D_C0A8_3B22;
 const SEED_MOISTURE: u64 = 0x4C3A_2B19_08F7_E6D5;
+const SEED_CONTINENTS: u64 = 0x6A09_E667_F3BC_C909;
+const SEED_OROGENY: u64 = 0xBB67_AE85_84CA_A73B;
+const CONTINENTAL_SCALE: f64 = 1.35;
+const CONTINENTAL_AMPLITUDE: f64 = 1.1;
+const ROLLING_AMPLITUDE: f64 = 1.4;
+const OROGENY_SCALE: f64 = 0.32;
 
 /// A source of terrain surface heights in meters above the mean radius.
 pub trait TerrainSource: Send + Sync + Debug {
@@ -446,27 +450,60 @@ pub fn central_angle_deg(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     d.to_degrees()
 }
 
-/// Procedural planet terrain: multi-octave rolling terrain plus ridged
-/// mountains and optional craters, all seeded and deterministic.
+/// Typed, validated parameters for deterministic procedural terrain.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProceduralTerrainConfig {
+    seed: u64,
+    rolling_amplitude_m: f64,
+    mountain_amplitude_m: f64,
+    crater_count: u32,
+}
+
+impl ProceduralTerrainConfig {
+    pub fn new(
+        seed: u64,
+        rolling_amplitude_m: f64,
+        mountain_amplitude_m: f64,
+        crater_count: u32,
+    ) -> Self {
+        assert!(
+            rolling_amplitude_m.is_finite() && rolling_amplitude_m >= 0.0,
+            "rolling terrain amplitude must be finite and non-negative"
+        );
+        assert!(
+            mountain_amplitude_m.is_finite() && mountain_amplitude_m >= 0.0,
+            "mountain terrain amplitude must be finite and non-negative"
+        );
+        Self {
+            seed,
+            rolling_amplitude_m,
+            mountain_amplitude_m,
+            crater_count,
+        }
+    }
+
+    pub const fn earth() -> Self {
+        Self {
+            seed: 0xE4A7,
+            rolling_amplitude_m: 2_500.0,
+            mountain_amplitude_m: 1_200.0,
+            crater_count: 0,
+        }
+    }
+}
+
+/// Procedural planet terrain: continental fBm, regional orogeny, ridged
+/// mountains, and optional craters, all seeded and deterministic.
 #[derive(Debug, Clone)]
 pub struct ProceduralTerrainSource {
-    pub seed: u64,
-    /// Amplitude of the rolling fBm terrain, m.
-    pub amplitude_m: f64,
-    /// Amplitude of the ridged mountain layer, m.
-    pub mountain_amplitude_m: f64,
-    /// Number of craters (0 for Earth-like bodies).
-    pub crater_count: u32,
+    config: ProceduralTerrainConfig,
     noise: ValueNoise,
 }
 
 impl Default for ProceduralTerrainSource {
     fn default() -> Self {
         Self {
-            seed: 1,
-            amplitude_m: 2_500.0,
-            mountain_amplitude_m: 1_200.0,
-            crater_count: 0,
+            config: ProceduralTerrainConfig::new(1, 2_500.0, 1_200.0, 0),
             noise: ValueNoise,
         }
     }
@@ -474,32 +511,39 @@ impl Default for ProceduralTerrainSource {
 
 impl ProceduralTerrainSource {
     pub fn new(seed: u64, amplitude_m: f64, mountain_amplitude_m: f64, crater_count: u32) -> Self {
-        Self {
+        Self::from_config(ProceduralTerrainConfig::new(
             seed,
             amplitude_m,
             mountain_amplitude_m,
             crater_count,
+        ))
+    }
+
+    pub fn from_config(config: ProceduralTerrainConfig) -> Self {
+        Self {
+            config,
             noise: ValueNoise,
         }
     }
 
     /// Conservative analytic envelope of the rolling, ridge, and crater terms.
     pub fn elevation_bounds_m(&self) -> ElevationBounds {
-        let crater_depth_m = self.crater_count as f64 * 1_600.0;
-        let crater_rim_m = self.crater_count as f64 * 480.0;
+        let crater_depth_m = self.config.crater_count as f64 * 1_600.0;
+        let crater_rim_m = self.config.crater_count as f64 * 480.0;
         ElevationBounds::new(
-            -self.amplitude_m - crater_depth_m,
-            self.amplitude_m + self.mountain_amplitude_m + crater_rim_m,
+            -1.3 * self.config.rolling_amplitude_m - crater_depth_m,
+            1.3 * self.config.rolling_amplitude_m + self.config.mountain_amplitude_m + crater_rim_m,
         )
     }
 
     fn crater_field(&self, lat: f64, lon: f64) -> f64 {
-        if self.crater_count == 0 {
+        if self.config.crater_count == 0 {
             return 0.0;
         }
         let mut total = 0.0;
-        for i in 0..self.crater_count {
+        for i in 0..self.config.crater_count {
             let s = self
+                .config
                 .seed
                 .wrapping_add(0xC3A5_C85C_97CB_3127)
                 .wrapping_add(i as u64);
@@ -507,84 +551,103 @@ impl ProceduralTerrainSource {
             let lon_c = self.noise.cell3(s, i as i64, 2, 0) * 360.0 - 180.0;
             let radius_deg = 0.5 + self.noise.cell3(s, i as i64, 3, 0) * 4.0;
             let depth_m = 100.0 + self.noise.cell3(s, i as i64, 4, 0) * 1_500.0;
-            total += crater_height(lat, lon, lat_c, lon_c, radius_deg, depth_m);
+            total += Self::crater_height(lat, lon, lat_c, lon_c, radius_deg, depth_m);
         }
         total
     }
-}
 
-/// Parabolic crater bowl with a raised rim, in meters (negative inside).
-pub fn crater_height(
-    lat: f64,
-    lon: f64,
-    lat_c: f64,
-    lon_c: f64,
-    radius_deg: f64,
-    depth_m: f64,
-) -> f64 {
-    let d = central_angle_deg(lat, lon, lat_c, lon_c);
-    if d >= radius_deg {
-        return 0.0;
+    /// Parabolic crater bowl with a raised rim, in meters (negative inside).
+    pub fn crater_height(
+        lat: f64,
+        lon: f64,
+        lat_c: f64,
+        lon_c: f64,
+        radius_deg: f64,
+        depth_m: f64,
+    ) -> f64 {
+        let d = central_angle_deg(lat, lon, lat_c, lon_c);
+        if d >= radius_deg {
+            return 0.0;
+        }
+        let t = d / radius_deg;
+        let bowl = -(1.0 - t * t) * depth_m;
+        let rim = if t > 0.7 {
+            (t - 0.7) / 0.3 * depth_m * 0.3
+        } else {
+            0.0
+        };
+        bowl + rim
     }
-    let t = d / radius_deg;
-    let bowl = -(1.0 - t * t) * depth_m;
-    let rim = if t > 0.7 {
-        (t - 0.7) / 0.3 * depth_m * 0.3
-    } else {
-        0.0
-    };
-    bowl + rim
+
+    fn direction(latitude_deg: f64, longitude_deg: f64) -> DVec3 {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
+    }
+
+    fn warped_coordinates(&self, direction: DVec3) -> DVec3 {
+        let base = direction * NOISE_SCALE;
+        let warp = |seed| self.noise.fbm(seed, base.x, base.y, base.z, 2) - 0.5;
+        DVec3::new(
+            base.x + warp(self.config.seed ^ SEED_WARP_X) * WARP_STRENGTH,
+            base.y + warp(self.config.seed ^ SEED_WARP_Y) * WARP_STRENGTH,
+            base.z + warp(self.config.seed ^ SEED_WARP_Z) * WARP_STRENGTH,
+        )
+    }
+
+    fn continental_mask(&self, direction: DVec3) -> f64 {
+        let continental_fbm = self.noise.fbm(
+            self.config.seed ^ SEED_CONTINENTS,
+            direction.x * CONTINENTAL_SCALE,
+            direction.y * CONTINENTAL_SCALE,
+            direction.z * CONTINENTAL_SCALE,
+            3,
+        );
+        ss(0.43, 0.62, continental_fbm)
+    }
+
+    fn mountain_region_mask(&self, direction: DVec3, continental_mask: f64) -> f64 {
+        let orogeny_fbm = self.noise.fbm(
+            self.config.seed ^ SEED_OROGENY,
+            direction.x * OROGENY_SCALE,
+            direction.y * OROGENY_SCALE,
+            direction.z * OROGENY_SCALE,
+            2,
+        );
+        continental_mask * ss(0.48, 0.66, orogeny_fbm)
+    }
 }
 
 impl TerrainSource for ProceduralTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        // Evaluate the 3D noise on the unit sphere (seamless in longitude).
-        let lat = latitude_deg.to_radians();
-        let lon = longitude_deg.to_radians();
-        let dir = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
-        let base = dir * NOISE_SCALE;
+        let direction = Self::direction(latitude_deg, longitude_deg);
+        let p = self.warped_coordinates(direction);
+        let continental_mask = self.continental_mask(direction);
+        let mountain_region_mask = self.mountain_region_mask(direction, continental_mask);
 
-        // Domain warp (best practice): displace the sample point by a
-        // low-frequency vector noise field before the fractal evaluation.
-        // Ridgelines meander and the axis-aligned "noise grid" disappears.
-        let wx = self
+        let continental_elevation =
+            (continental_mask - 0.52) * CONTINENTAL_AMPLITUDE * self.config.rolling_amplitude_m;
+        let rolling01 = self
             .noise
-            .fbm(self.seed ^ SEED_WARP_X, base.x, base.y, base.z, 2)
-            - 0.5;
-        let wy = self
-            .noise
-            .fbm(self.seed ^ SEED_WARP_Y, base.x, base.y, base.z, 2)
-            - 0.5;
-        let wz = self
-            .noise
-            .fbm(self.seed ^ SEED_WARP_Z, base.x, base.y, base.z, 2)
-            - 0.5;
-        let p = DVec3::new(
-            base.x + wx * WARP_STRENGTH,
-            base.y + wy * WARP_STRENGTH,
-            base.z + wz * WARP_STRENGTH,
-        );
-
-        // Base rolling terrain, then power redistribution: flat plains with
-        // sharp peaks instead of uniformly lumpy fBm.
-        let rolling01 = self.noise.fbm(self.seed, p.x, p.y, p.z, 4).clamp(0.0, 1.0);
+            .fbm(self.config.seed, p.x, p.y, p.z, 4)
+            .clamp(0.0, 1.0);
         let rolling = rolling01.powf(SHAPE_POWER) - 0.5;
-        let mountains = self
+        let hills = rolling * ROLLING_AMPLITUDE * self.config.rolling_amplitude_m;
+        let ridges = self
             .noise
-            .ridged_noise(self.seed.wrapping_add(7), p.x, p.y, p.z, 4);
-        let mut h = rolling * 2.0 * self.amplitude_m + mountains * self.mountain_amplitude_m;
-        if self.crater_count > 0 {
+            .ridged_noise(self.config.seed.wrapping_add(7), p.x, p.y, p.z, 4);
+        let mountains = ridges * mountain_region_mask * self.config.mountain_amplitude_m;
+        let mut h = continental_elevation + hills + mountains;
+        if self.config.crater_count > 0 {
             h += self.crater_field(latitude_deg, longitude_deg);
         }
         h
     }
 
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let lat = latitude_deg.to_radians();
-        let lon = longitude_deg.to_radians();
-        let p = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin()) * NOISE_SCALE;
+        let p = Self::direction(latitude_deg, longitude_deg) * NOISE_SCALE;
         self.noise
-            .fbm(self.seed ^ SEED_MOISTURE, p.x, p.y, p.z, 3)
+            .fbm(self.config.seed ^ SEED_MOISTURE, p.x, p.y, p.z, 3)
             .clamp(0.0, 1.0)
     }
 }
@@ -963,18 +1026,6 @@ pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg
     grad.atan().to_degrees()
 }
 
-/// The shared terrain source for a planet by name. Earth is the only body with
-/// an active terrain/collision authority. Other catalog bodies are currently
-/// texture-backed presentation only, so callers receive a flat source rather
-/// than silently inventing procedural physical terrain for them.
-pub fn terrain_source_for(name: &str) -> std::sync::Arc<dyn TerrainSource> {
-    let base: std::sync::Arc<dyn TerrainSource> = match name {
-        "Earth" => layered_earth_source(),
-        _ => std::sync::Arc::new(FlatTerrainSource),
-    };
-    with_sites(base, terrain_sites(name))
-}
-
 #[derive(Debug)]
 struct FlatTerrainSource;
 
@@ -984,145 +1035,127 @@ impl TerrainSource for FlatTerrainSource {
     }
 }
 
-fn zero_elevation_layer() -> TerrainElevationLayer {
-    TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0))
+/// Earth's one authoritative terrain composition. Rendering and collision use
+/// this same deterministic source; no body-name dispatch or data fallback path
+/// exists at this boundary.
+#[derive(Debug)]
+pub struct EarthTerrainSource {
+    source: Arc<SiteAwareTerrainSource>,
 }
 
-fn layered_earth_source() -> Arc<dyn TerrainSource> {
-    let procedural = Arc::new(ProceduralTerrainSource::new(0xE4A7, 2_500.0, 1_200.0, 0));
-    let eroded = erode_earth(procedural);
-    let detail = Arc::new(LocalDetailTerrainSource::new(
-        Arc::new(FlatTerrainSource),
-        0xE4A7_D371,
-    ));
-
-    // The erosion solver has a finite, configuration-bounded material budget.
-    // This broad interval remains conservative without probing terrain samples.
-    let eroded_bounds = ElevationBounds::new(-10_000.0, 20_000_000.0);
-    Arc::new(LayeredTerrainSource::new(
-        zero_elevation_layer(),
-        Some(TerrainElevationLayer::new(eroded, eroded_bounds)),
-        None,
-        Some(TerrainDetailLayer::new(
-            detail,
-            LocalDetailTerrainSource::elevation_bounds_m(),
-            DetailLodFade::new(3, 6),
-        )),
-    ))
-}
-
-fn terrain_sites(name: &str) -> Vec<TerrainSite> {
-    match name {
-        "Earth" => {
-            let Some(earth) = PlanetFactory::create_by_name(name) else {
-                return Vec::new();
-            };
-            let terrain_coordinates = |latitude_deg, longitude_deg| {
-                let site = LaunchSiteCoordinates::new(
-                    CelestialBodyId::earth(),
-                    latitude_deg,
-                    longitude_deg,
-                    0.0,
-                );
-                geodetic_to_terrain_lat_lon(&site, &earth)
-            };
-            let ksc = predefined_sites::kennedy_space_center();
-            let (ksc_latitude_deg, ksc_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
-            let (rtls_latitude_deg, rtls_longitude_deg) = terrain_coordinates(28.61, -80.55);
-            let (drone_ship_latitude_deg, drone_ship_longitude_deg) =
-                terrain_coordinates(28.50, -80.05);
-
-            vec![
-                TerrainSite {
-                    name: "Kennedy Space Center",
-                    latitude_deg: ksc_latitude_deg,
-                    longitude_deg: ksc_longitude_deg,
-                    // ~17 m flat pad, then an ~11 km C1 grade. The procedural
-                    // Earth can differ substantially from the surveyed 2 m pad.
-                    radius_deg: 0.00015,
-                    blend_radius_deg: 0.1,
-                    elevation_m: 2.0,
-                },
-                TerrainSite {
-                    name: "RTLS Landing Pad",
-                    latitude_deg: rtls_latitude_deg,
-                    longitude_deg: rtls_longitude_deg,
-                    radius_deg: 0.00015,
-                    blend_radius_deg: 0.05,
-                    elevation_m: 3.0,
-                },
-                TerrainSite {
-                    name: "Drone Ship",
-                    latitude_deg: drone_ship_latitude_deg,
-                    longitude_deg: drone_ship_longitude_deg,
-                    radius_deg: 0.00025,
-                    blend_radius_deg: 0.03,
-                    elevation_m: 0.0,
-                },
-            ]
+impl EarthTerrainSource {
+    pub fn new() -> Self {
+        let procedural = Arc::new(ProceduralTerrainSource::from_config(
+            ProceduralTerrainConfig::earth(),
+        ));
+        let eroded = Arc::new(ErodedTerrainSource::new(
+            procedural,
+            ErosionConfig::default(),
+        ));
+        let detail = Arc::new(LocalDetailTerrainSource::new(
+            Arc::new(FlatTerrainSource),
+            0xE4A7_D371,
+        ));
+        let layered = Arc::new(LayeredTerrainSource::new(
+            TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0)),
+            Some(TerrainElevationLayer::new(
+                eroded,
+                ElevationBounds::new(-10_000.0, 20_000_000.0),
+            )),
+            None,
+            Some(TerrainDetailLayer::new(
+                detail,
+                LocalDetailTerrainSource::elevation_bounds_m(),
+                DetailLodFade::new(3, 6),
+            )),
+        ));
+        Self {
+            source: Arc::new(SiteAwareTerrainSource::new(layered, Self::sites())),
         }
-        "Moon" => vec![TerrainSite {
-            name: "Lunar Landing Site",
-            latitude_deg: 0.0,
-            longitude_deg: 0.0,
-            radius_deg: 0.0003,
-            blend_radius_deg: 0.02,
-            elevation_m: 0.0,
-        }],
-        _ => vec![],
+    }
+
+    fn sites() -> Vec<TerrainSite> {
+        let earth_id = CelestialBodyId::earth();
+        let earth = PlanetFactory::create_by_name(earth_id.as_str())
+            .expect("Earth terrain requires the Earth catalog entry");
+        let terrain_coordinates = |latitude_deg, longitude_deg| {
+            let site =
+                LaunchSiteCoordinates::new(earth_id.clone(), latitude_deg, longitude_deg, 0.0);
+            geodetic_to_terrain_lat_lon(&site, &earth)
+        };
+        let ksc = predefined_sites::kennedy_space_center();
+        let (ksc_latitude_deg, ksc_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
+        let (rtls_latitude_deg, rtls_longitude_deg) = terrain_coordinates(28.61, -80.55);
+        let (drone_ship_latitude_deg, drone_ship_longitude_deg) =
+            terrain_coordinates(28.50, -80.05);
+
+        vec![
+            TerrainSite {
+                name: "Kennedy Space Center",
+                latitude_deg: ksc_latitude_deg,
+                longitude_deg: ksc_longitude_deg,
+                radius_deg: 0.00015,
+                blend_radius_deg: 0.1,
+                elevation_m: 2.0,
+            },
+            TerrainSite {
+                name: "RTLS Landing Pad",
+                latitude_deg: rtls_latitude_deg,
+                longitude_deg: rtls_longitude_deg,
+                radius_deg: 0.00015,
+                blend_radius_deg: 0.05,
+                elevation_m: 3.0,
+            },
+            TerrainSite {
+                name: "Drone Ship",
+                latitude_deg: drone_ship_latitude_deg,
+                longitude_deg: drone_ship_longitude_deg,
+                radius_deg: 0.00025,
+                blend_radius_deg: 0.03,
+                elevation_m: 0.0,
+            },
+        ]
     }
 }
 
-fn with_sites(
-    base: std::sync::Arc<dyn TerrainSource>,
-    sites: Vec<TerrainSite>,
-) -> std::sync::Arc<dyn TerrainSource> {
-    if sites.is_empty() {
-        base
-    } else {
-        std::sync::Arc::new(SiteAwareTerrainSource::new(base, sites))
+impl Default for EarthTerrainSource {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// Select raw SRTM data for Earth when an application-validated local directory
-/// is available. Missing tile coverage still uses `DemTerrainSource`'s seeded
-/// procedural fallback, and no DEM sample passes through coarse erosion.
-#[cfg(feature = "dem")]
-pub fn terrain_source_for_with_srtm_dir(
-    name: &str,
-    data_dir: Option<&Path>,
-) -> std::sync::Arc<dyn TerrainSource> {
-    let Some(data_dir) = data_dir.filter(|dir| dir.is_dir()) else {
-        return terrain_source_for(name);
-    };
-    if name != "Earth" {
-        return terrain_source_for(name);
+impl TerrainSource for EarthTerrainSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.height_m(latitude_deg, longitude_deg)
     }
 
-    use crate::domain::services::dem_terrain_source::{DemTerrainConfig, DemTerrainSource};
-    let source = Arc::new(DemTerrainSource::new(DemTerrainConfig {
-        data_dir: Some(data_dir.to_path_buf()),
-        ..DemTerrainConfig::default()
-    }));
-    let composed: Arc<dyn TerrainSource> = Arc::new(LayeredTerrainSource::new(
-        zero_elevation_layer(),
-        None,
-        // SRTM posts are signed 16-bit meters; the embedded procedural fallback
-        // is safely within this interval when a local tile is unavailable.
-        Some(TerrainElevationLayer::new(
-            source,
-            ElevationBounds::new(i16::MIN as f64, i16::MAX as f64),
-        )),
-        None,
-    ));
-    with_sites(composed, terrain_sites(name))
-}
+    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        self.source.prepare_sample(latitude_deg, longitude_deg);
+    }
 
-/// Wrap an Earth base source with deterministic hydraulic/thermal erosion and
-/// river carving (T2). The site layer sits *above* this so launch pads stay
-/// flat regardless of erosion.
-fn erode_earth(base: std::sync::Arc<dyn TerrainSource>) -> std::sync::Arc<dyn TerrainSource> {
-    std::sync::Arc::new(ErodedTerrainSource::new(base, ErosionConfig::default()))
+    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.moisture(latitude_deg, longitude_deg)
+    }
+
+    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.river_strength(latitude_deg, longitude_deg)
+    }
+
+    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.overview_height_m(latitude_deg, longitude_deg)
+    }
+
+    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.overview_moisture(latitude_deg, longitude_deg)
+    }
+
+    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.overview_slope_deg(latitude_deg, longitude_deg)
+    }
+
+    fn zone_lat(&self, latitude_deg: f64) -> f64 {
+        self.source.zone_lat(latitude_deg)
+    }
 }
 
 #[cfg(test)]
@@ -1136,15 +1169,6 @@ mod tests {
         let a = source.height_m(12.34, -45.67);
         let b = source.height_m(12.34, -45.67);
         assert_eq!(a, b);
-    }
-
-    #[test]
-    fn non_earth_bodies_do_not_receive_procedural_terrain() {
-        let mars = terrain_source_for("Mars");
-        let moon = terrain_source_for("Moon");
-
-        assert_eq!(mars.height_m(12.34, -45.67), 0.0);
-        assert_eq!(moon.height_m(12.34, -45.67), 0.0);
     }
 
     #[test]
@@ -1198,7 +1222,7 @@ mod tests {
 
     #[test]
     fn site_aware_source_flattens_launch_sites() {
-        let source = terrain_source_for("Earth");
+        let source = EarthTerrainSource::new();
         let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
             .expect("Earth exists");
         let ksc = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
@@ -1250,7 +1274,7 @@ mod tests {
 
     #[test]
     fn ksc_spawn_surface_sample_matches_the_authoritative_pad_height() {
-        let source = terrain_source_for("Earth");
+        let source = EarthTerrainSource::new();
         let launch_site = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
         let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
             .expect("Earth exists");
@@ -1260,7 +1284,7 @@ mod tests {
                 &earth,
             );
         let sample = crate::domain::services::terrain_collision::sample_surface(
-            source.as_ref(),
+            &source,
             latitude_deg,
             longitude_deg,
             earth.radius_km as f64 * 1_000.0,
@@ -1426,18 +1450,6 @@ mod tests {
         assert_eq!(collision.height_m, render_height);
     }
 
-    #[cfg(feature = "dem")]
-    #[test]
-    fn unavailable_srtm_directory_keeps_the_composed_earth_fallback() {
-        let expected = terrain_source_for("Earth");
-        let fallback = terrain_source_for_with_srtm_dir("Earth", None);
-        let point = (28.5721, -80.6480);
-        assert_eq!(
-            fallback.height_m(point.0, point.1),
-            expected.height_m(point.0, point.1)
-        );
-    }
-
     #[derive(Debug)]
     struct SlopedTerrain;
 
@@ -1532,10 +1544,13 @@ mod tests {
     #[test]
     fn crater_height_is_a_depression() {
         // At the crater center the height is the negative depth (bowl).
-        let h = crater_height(10.0, 10.0, 10.0, 10.0, 3.0, 500.0);
+        let h = ProceduralTerrainSource::crater_height(10.0, 10.0, 10.0, 10.0, 3.0, 500.0);
         assert!((h + 500.0).abs() < 1e-6);
         // Far away the crater contributes nothing.
-        assert_eq!(crater_height(10.0, 40.0, 10.0, 10.0, 3.0, 500.0), 0.0);
+        assert_eq!(
+            ProceduralTerrainSource::crater_height(10.0, 40.0, 10.0, 10.0, 3.0, 500.0),
+            0.0
+        );
     }
 
     #[test]
@@ -1555,22 +1570,57 @@ mod tests {
 
     #[test]
     fn domain_warped_height_stays_deterministic_and_bounded() {
-        // Adjacent points are continuous; amplitude stays within the configured
-        // envelope (rolling ±amplitude + mountains·mountain_amplitude).
+        // Adjacent points are continuous; continental and rolling fBm remain
+        // bounded before the regional mountain contribution is added.
         let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let a = source.height_m(36.5, -90.4);
         let b = source.height_m(36.5, -90.4);
         assert_eq!(a, b, "height must be deterministic");
         let h = source.height_m(10.0, 20.0);
         assert!(h.is_finite());
-        // Warping never blows past the amplitude + mountain envelope.
+        let bounds = source.elevation_bounds_m();
         for (la, lo) in [(-20.0, 30.0), (50.0, -120.0), (0.0, 0.0), (80.0, 90.0)] {
             let v = source.height_m(la, lo);
             assert!(
-                v.abs() <= 2000.0 + 800.0 + 1.0,
-                "height {v} exceeded envelope at ({la},{lo})"
+                v >= bounds.min_m && v <= bounds.max_m,
+                "height {v} exceeded envelope {bounds:?} at ({la},{lo})"
             );
         }
+    }
+
+    #[test]
+    fn continental_orogeny_excludes_oceanic_mountains() {
+        let source = ProceduralTerrainSource::from_config(ProceduralTerrainConfig::new(
+            99, 2_000.0, 800.0, 0,
+        ));
+        let mut has_oceanic_region = false;
+        let mut has_mountain_region = false;
+
+        for latitude_deg in (-80..=80).step_by(10) {
+            for longitude_deg in (-180..180).step_by(10) {
+                let direction = ProceduralTerrainSource::direction(
+                    f64::from(latitude_deg),
+                    f64::from(longitude_deg),
+                );
+                let continent = source.continental_mask(direction);
+                let mountain = source.mountain_region_mask(direction, continent);
+                assert!(mountain <= continent + 1e-12);
+                has_oceanic_region |= continent < 0.001 && mountain == 0.0;
+                has_mountain_region |= mountain > 0.1;
+            }
+        }
+
+        assert!(
+            has_oceanic_region,
+            "expected an oceanic region without mountains"
+        );
+        assert!(has_mountain_region, "expected a continental mountain belt");
+    }
+
+    #[test]
+    #[should_panic(expected = "rolling terrain amplitude")]
+    fn terrain_config_rejects_negative_rolling_amplitude() {
+        let _ = ProceduralTerrainConfig::new(1, -1.0, 1_200.0, 0);
     }
 
     #[test]

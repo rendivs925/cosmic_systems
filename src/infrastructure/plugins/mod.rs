@@ -19,8 +19,6 @@ use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::solar_system_startup::setup_space;
 #[cfg(target_arch = "wasm32")]
 use crate::application::solar_system_startup::spawn_bodies_progressively;
-#[cfg(feature = "dem")]
-use crate::application::terrain_config::EarthTerrainConfig;
 use crate::components::rocket::RocketMode;
 use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, RelaunchRequested, SplashdownDetectedEvent,
@@ -432,9 +430,6 @@ pub struct RocketModePlugin;
 
 impl Plugin for RocketModePlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(feature = "dem")]
-        app.insert_resource(EarthTerrainConfig::from_environment());
-
         // Vehicle catalog: data-driven definitions from assets/configs/rockets
         // (AGENTS.md section 65: fail fast on invalid configuration).
         #[cfg(not(target_arch = "wasm32"))]

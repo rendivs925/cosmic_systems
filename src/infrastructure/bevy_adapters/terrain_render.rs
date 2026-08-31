@@ -176,11 +176,10 @@ impl Default for TerrainRenderConfig {
             // Local LOD supplies spatial detail; keeping each worker bake at 33
             // samples avoids delayed viewport publication and upload bursts.
             patch_resolution: 33,
-            // Near-ground leaves retain a denser mesh so the visual surface can
-            // represent launch-pad and landing-scale terrain without changing
-            // the authoritative source or collision model.
+            // Align denser geometry with the first local surface map level so
+            // material normals, terrain silhouette, and scatter refine together.
             detail_patch_resolution: 65,
-            detail_patch_min_level: 13,
+            detail_patch_min_level: 12,
         }
     }
 }

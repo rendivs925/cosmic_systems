@@ -4,12 +4,10 @@ use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::atmosphere::atmosphere_for;
 use crate::domain::services::atmosphere::AtmosphereSource;
 use crate::domain::services::physics_orbital::OrbitShape;
-use crate::domain::services::terrain_source::{terrain_source_for, TerrainSource};
+use crate::domain::services::terrain_source::{EarthTerrainSource, TerrainSource};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-#[cfg(feature = "dem")]
-use std::path::Path;
 use std::sync::Arc;
 
 pub use crate::components::rocket::*;
@@ -161,18 +159,9 @@ pub struct PlanetTerrain {
 }
 
 impl PlanetTerrain {
-    pub fn default_for(name: &str) -> Self {
+    pub fn earth() -> Self {
         Self {
-            source: terrain_source_for(name),
-        }
-    }
-
-    #[cfg(feature = "dem")]
-    pub fn with_srtm_directory(name: &str, directory: Option<&Path>) -> Self {
-        Self {
-            source: crate::domain::services::terrain_source::terrain_source_for_with_srtm_dir(
-                name, directory,
-            ),
+            source: Arc::new(EarthTerrainSource::new()),
         }
     }
 }

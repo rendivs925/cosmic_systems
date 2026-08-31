@@ -246,9 +246,7 @@ pub fn liftoff_from_rest(thrust_n: f64, weight_n: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::{
-        crater_height, ProceduralTerrainSource, TerrainSource,
-    };
+    use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSource};
     use bevy::math::DVec3;
 
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
@@ -285,13 +283,16 @@ mod tests {
     #[test]
     fn crater_rim_raises_above_bowl() {
         // A deep crater raises a lip near its outer edge.
-        let bowl = crater_height(10.0, 10.0, 10.0, 10.0, 3.0, 2_000.0);
-        let rim = crater_height(12.8, 10.0, 10.0, 10.0, 3.0, 2_000.0);
+        let bowl = ProceduralTerrainSource::crater_height(10.0, 10.0, 10.0, 10.0, 3.0, 2_000.0);
+        let rim = ProceduralTerrainSource::crater_height(12.8, 10.0, 10.0, 10.0, 3.0, 2_000.0);
         assert!((bowl + 2_000.0).abs() < 1e-6, "bowl should be -depth");
         assert!(rim > bowl, "rim {rim} must sit above the bowl {bowl}");
         assert!(rim > 0.0, "outer rim should be elevated, got {rim}");
         // Outside the crater there is no contribution.
-        assert_eq!(crater_height(40.0, 10.0, 10.0, 10.0, 3.0, 2_000.0), 0.0);
+        assert_eq!(
+            ProceduralTerrainSource::crater_height(40.0, 10.0, 10.0, 10.0, 3.0, 2_000.0),
+            0.0
+        );
     }
 
     #[test]

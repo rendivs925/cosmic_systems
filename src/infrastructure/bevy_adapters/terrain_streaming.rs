@@ -429,6 +429,13 @@ pub fn stream_terrain_patches(
         },
     );
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
+    retain_visible_detail_errors(
+        &mut errors,
+        &streaming.target_leaves,
+        &streaming.generated,
+        viewport.as_ref(),
+        radius_m,
+    );
     let mut state = QuadtreePatchState {
         ready: streaming.generated.keys().copied().collect(),
         // Roots remain the complete fallback coverage even when the camera is
@@ -797,6 +804,39 @@ fn apply_selection_hysteresis(
             *error_px = error_px.max(SCREEN_ERROR_PX * (1.0 + 1e-12));
         } else if !was_split && *error_px <= split_threshold {
             *error_px = error_px.min(SCREEN_ERROR_PX);
+        }
+    }
+}
+
+/// Keep generated refinement selected until it has actually left the expanded
+/// viewport. The moving 3x3 error neighborhood otherwise drops a tile as soon
+/// as its focus cell changes, even though it remains visible on screen.
+fn retain_visible_detail_errors(
+    errors: &mut BTreeMap<TerrainPatch, f64>,
+    previous_target_leaves: &BTreeSet<TerrainPatch>,
+    generated: &HashMap<TerrainPatch, CachedTerrainGeometry>,
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+) {
+    let Some(viewport) = viewport else {
+        return;
+    };
+    for leaf in previous_target_leaves {
+        if leaf.level == 0
+            || !generated.contains_key(leaf)
+            || !patch_intersects_viewport(*leaf, Some(viewport), radius_m)
+        {
+            continue;
+        }
+        // Force the existing leaf's ancestor path to remain split. The leaf
+        // itself must not be forced, or selection would refine one more level.
+        let mut ancestor = leaf.parent();
+        while let Some(patch) = ancestor {
+            errors
+                .entry(patch)
+                .and_modify(|error| *error = error.max(SCREEN_ERROR_PX * (1.0 + 1e-12)))
+                .or_insert(SCREEN_ERROR_PX * (1.0 + 1e-12));
+            ancestor = patch.parent();
         }
     }
 }
@@ -1329,6 +1369,100 @@ mod tests {
         apply_selection_hysteresis(&mut errors, &previous);
 
         assert!(errors[&root] > SCREEN_ERROR_PX);
+    }
+
+    #[test]
+    fn generated_detail_stays_selected_while_it_remains_in_the_viewport() {
+        let radius_m = 6_371_000.0;
+        let detail = TerrainPatch::for_direction(DVec3::Z, 2);
+        let viewport = TerrainViewport {
+            position_m: DVec3::Z * (radius_m + 1_000.0),
+            forward: -DVec3::Z,
+            half_fov_rad: 0.8,
+            vertical_fov_rad: 0.8,
+            viewport_height_px: 1_080.0,
+        };
+        let mut generated = HashMap::new();
+        generated.insert(
+            detail,
+            CachedTerrainGeometry {
+                geometry: PatchGeometry {
+                    positions: Vec::new(),
+                    normals: Vec::new(),
+                    uvs: Vec::new(),
+                    local_uvs: Vec::new(),
+                    indices: Vec::new(),
+                },
+                surface: None,
+                stitch_mask: 0,
+            },
+        );
+        let mut errors = BTreeMap::new();
+
+        retain_visible_detail_errors(
+            &mut errors,
+            &BTreeSet::from([detail]),
+            &generated,
+            Some(&viewport),
+            radius_m,
+        );
+
+        let selection = select_quadtree_leaves(
+            &QuadtreePatchState {
+                ready: BTreeSet::from([detail]),
+                visible: TerrainPatch::roots().into_iter().collect(),
+            },
+            &errors,
+            QuadtreeSelectionConfig {
+                max_level: MAX_PATCH_LEVEL,
+                max_projected_error_px: SCREEN_ERROR_PX,
+                max_neighbor_level_difference: 1,
+            },
+        );
+        assert!(selection.target_leaves.contains(&detail));
+        assert!(selection
+            .target_leaves
+            .iter()
+            .all(|patch| !detail.is_ancestor_of(patch) || *patch == detail));
+    }
+
+    #[test]
+    fn generated_detail_can_coarsen_after_leaving_the_viewport() {
+        let radius_m = 6_371_000.0;
+        let detail = TerrainPatch::root(CubeFace::NegZ).children()[0];
+        let viewport = TerrainViewport {
+            position_m: DVec3::Z * (radius_m + 1_000.0),
+            forward: -DVec3::Z,
+            half_fov_rad: 0.5,
+            vertical_fov_rad: 0.8,
+            viewport_height_px: 1_080.0,
+        };
+        let mut generated = HashMap::new();
+        generated.insert(
+            detail,
+            CachedTerrainGeometry {
+                geometry: PatchGeometry {
+                    positions: Vec::new(),
+                    normals: Vec::new(),
+                    uvs: Vec::new(),
+                    local_uvs: Vec::new(),
+                    indices: Vec::new(),
+                },
+                surface: None,
+                stitch_mask: 0,
+            },
+        );
+        let mut errors = BTreeMap::new();
+
+        retain_visible_detail_errors(
+            &mut errors,
+            &BTreeSet::from([detail]),
+            &generated,
+            Some(&viewport),
+            radius_m,
+        );
+
+        assert!(errors.is_empty());
     }
 
     #[test]

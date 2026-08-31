@@ -141,12 +141,11 @@ mod ground_contact_tests {
                 base_reflectance: 1.0,
                 base_roughness: 1.0,
             },
-            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth"),
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth(),
         ));
 
         let source =
-            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
-                .source;
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth().source;
         let (lat, lon) = ksc_terrain_coordinates();
         let h = source.height_m(lat, lon);
         let up = radial_direction(lat, lon);
@@ -249,10 +248,9 @@ mod ground_contact_tests {
 
         assert!(rest.active, "vehicle must still be resting on the pad");
         let (lat, lon) = ksc_terrain_coordinates();
-        let h =
-            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
-                .source
-                .height_m(lat, lon);
+        let h = crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth()
+            .source
+            .height_m(lat, lon);
         let expected_r = EARTH_RADIUS_M + h;
         assert!(
             (rocket.dynamics.position_m.length() - expected_r).abs() < 0.05,
@@ -355,11 +353,9 @@ mod ground_contact_tests {
             let mut app = pad_app(0.0, 20.0); // engines off
             let world = app.world_mut();
             let (lat, lon) = ksc_terrain_coordinates();
-            let h = crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for(
-                "Earth",
-            )
-            .source
-            .height_m(lat, lon);
+            let h = crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth()
+                .source
+                .height_m(lat, lon);
             surface_r = EARTH_RADIUS_M + h;
 
             let (entity, up, mass_kg, inertia_body, com) = {
@@ -835,7 +831,7 @@ mod recovery_pipeline_tests {
         let planet =
             crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
                 .expect("Earth exists");
-        let terrain = PlanetTerrain::default_for("Earth");
+        let terrain = PlanetTerrain::earth();
         let terrain_source = terrain.source.clone();
         app.world_mut().spawn((
             PlanetComponent {
@@ -1206,7 +1202,7 @@ mod ascent_pipeline_tests {
                 base_reflectance: 1.0,
                 base_roughness: 1.0,
             },
-            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth"),
+            crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth(),
         ));
 
         let vehicle = electron_like();
@@ -1221,10 +1217,9 @@ mod ascent_pipeline_tests {
         );
 
         let (lat, lon) = ksc_terrain_coordinates();
-        let h =
-            crate::infrastructure::bevy_adapters::components::PlanetTerrain::default_for("Earth")
-                .source
-                .height_m(lat, lon);
+        let h = crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth()
+            .source
+            .height_m(lat, lon);
         let up = radial_direction(lat, lon);
         let surface_radius = EARTH_RADIUS_M + h;
 

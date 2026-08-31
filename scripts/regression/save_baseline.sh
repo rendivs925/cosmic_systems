@@ -13,13 +13,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-FEATURES="${FEATURES:-dem}"
 FILTER="${REGRESSION_TEST_FILTER:-determinism_regression_tests::ascent_matches_committed_baseline_within_tolerances}"
 
-echo "Recording baseline with feature(s): ${FEATURES}"
 echo "Recording test filter:             ${FILTER}"
 
-REGRESSION_RECORD=1 cargo test --features "${FEATURES}" "${FILTER}" -- --nocapture
+REGRESSION_RECORD=1 cargo test "${FILTER}" -- --nocapture
 
 echo "Baseline(s) written. Verify with:"
 echo "  git status tests/baselines/"

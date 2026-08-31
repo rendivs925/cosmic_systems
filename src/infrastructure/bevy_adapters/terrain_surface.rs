@@ -27,6 +27,8 @@ use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
+/// Maximum scatter counts for a level-12 patch. Finer leaves scale their count
+/// by patch area so refinement preserves density rather than multiplying it.
 const TREE_COUNT: usize = 64;
 const ROCK_COUNT: usize = 14;
 const TRUNK_SEGMENTS: usize = 6;
@@ -484,6 +486,17 @@ fn hash01(a: u64, b: u64, c: u64) -> f64 {
     (h & 0xFFFF_FFFF_FFFF) as f64 / 0x1_0000_0000_0000u64 as f64
 }
 
+/// Preserve scatter density as a quadtree patch splits into four children.
+/// A minimum of one instance retains rocks and landmark vegetation in the
+/// closest patches without creating an LOD-dependent density jump.
+fn scatter_count_for_level(max_count: usize, patch_level: u32) -> usize {
+    let level_delta = patch_level.saturating_sub(VEGETATION_MIN_PATCH_LEVEL);
+    max_count
+        .checked_shr(level_delta.saturating_mul(2))
+        .unwrap_or(0)
+        .max(1)
+}
+
 /// Build the merged vegetation/scatter mesh for a patch, or `None` if the patch
 /// is not vegetated (water, snow, bare rock, or too steep). Positions are in the
 /// rocket-local flight frame (planet-centered minus `render_origin`), matching
@@ -498,7 +511,7 @@ pub fn build_vegetation_mesh(
 
     let mut accum = MeshAccum::new();
 
-    for k in 0..TREE_COUNT {
+    for k in 0..scatter_count_for_level(TREE_COUNT, patch.level) {
         let ru = hash01(
             patch.face as u64,
             (patch.tile_x as u64) ^ (k as u64 * 2_654_355_561),
@@ -569,7 +582,7 @@ pub fn build_vegetation_mesh(
         );
     }
 
-    for k in 0..ROCK_COUNT {
+    for k in 0..scatter_count_for_level(ROCK_COUNT, patch.level) {
         let ru = hash01(
             (patch.face as u64) ^ (k as u64 * 7_919),
             patch.tile_y as u64,
@@ -809,5 +822,29 @@ mod tests {
     fn vegetation_is_limited_to_the_finest_terrain_tiles() {
         assert!(!supports_vegetation(VEGETATION_MIN_PATCH_LEVEL - 1));
         assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
+    }
+
+    #[test]
+    fn scatter_density_stays_stable_as_patches_refine() {
+        assert_eq!(
+            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL),
+            64
+        );
+        assert_eq!(
+            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 1),
+            16
+        );
+        assert_eq!(
+            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 2),
+            4
+        );
+        assert_eq!(
+            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 3),
+            1
+        );
+        assert_eq!(
+            scatter_count_for_level(ROCK_COUNT, VEGETATION_MIN_PATCH_LEVEL + 2),
+            1
+        );
     }
 }
