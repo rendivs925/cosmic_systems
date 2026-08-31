@@ -7,8 +7,9 @@
 //! # Frame conventions
 //!
 //! - **Solar-inertial display**: origin at the Sun, axes aligned with the
-//!   shared DE440 snapshot and orbit-ribbon rendering frame, right-handed Y-up,
-//!   display units.
+//!   shared DE440 snapshot and orbit-ribbon rendering frame. Its X/ecliptic
+//!   north/ecliptic-Y axis ordering is left-handed, so the ICRF conversion is
+//!   an improper orthogonal transform. It uses display units.
 //! - **Solar-inertial physical**: the same origin and axes, expressed as f64
 //!   meters and meters-per-second. Primary-body ephemerides cross into this
 //!   frame directly from ICRF/J2000 before any vehicle force model consumes
@@ -87,12 +88,13 @@ pub fn barycentric_to_relative_state(
 /// convention, whose axes are +X, +ecliptic-north, +ecliptic-Y.
 const J2000_OBLIQUITY_RAD: f64 = 84_381.448_f64.to_radians() / 3_600.0;
 
-/// Rotate an ICRF/J2000 vector into the project's solar-inertial axes.
+/// Transform an ICRF/J2000 vector into the project's solar-inertial axes.
 ///
-/// The source is right-handed ICRF equatorial (+X, +Y, +Z). The destination is
-/// right-handed J2000 ecliptic display/flight axes (+X, +ecliptic north,
-/// +ecliptic Y), in the input vector's units. This function is intentionally
-/// unit-preserving and applies equally to positions and velocities.
+/// The source is right-handed ICRF equatorial (+X, +Y, +Z). The destination
+/// orders its axes as (+X, +ecliptic north, +ecliptic Y); the final axis swap
+/// makes this an improper orthogonal transform with determinant -1, not a
+/// rotation. This function is intentionally unit-preserving and applies
+/// equally to polar vectors such as positions and velocities.
 pub fn icrf_j2000_to_solar_inertial(vector_icrf: DVec3) -> DVec3 {
     let sin_obliquity = J2000_OBLIQUITY_RAD.sin();
     let cos_obliquity = J2000_OBLIQUITY_RAD.cos();
@@ -101,7 +103,7 @@ pub fn icrf_j2000_to_solar_inertial(vector_icrf: DVec3) -> DVec3 {
     DVec3::new(vector_icrf.x, ecliptic_z, ecliptic_y)
 }
 
-/// Rotate the project's reflected solar-inertial axes back into ICRF/J2000.
+/// Transform the project's reflected solar-inertial axes back into ICRF/J2000.
 /// This is the inverse of [`icrf_j2000_to_solar_inertial`].
 pub fn solar_inertial_to_icrf_j2000(vector_solar: DVec3) -> DVec3 {
     let sin_obliquity = J2000_OBLIQUITY_RAD.sin();
@@ -344,6 +346,56 @@ pub fn planet_equatorial_reference_x_axis(orientation: &BodyOrientation) -> DVec
     body_fixed_to_planet_inertial_rotation(orientation) * DVec3::X
 }
 
+/// Local East-North-Up axes at a planet-centered inertial position.
+///
+/// The axes are expressed in the project's planet-centered inertial frame:
+/// `up` is radial, `east` follows the rotating surface, and `north` points
+/// toward the inertial spin axis. This is the sole local-horizontal basis for
+/// flight guidance; it intentionally does not use render or body-frame state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanetInertialEnuBasis {
+    pub east: DVec3,
+    pub north: DVec3,
+    pub up: DVec3,
+}
+
+/// Reasons a local planet-inertial ENU basis cannot be constructed safely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlanetInertialEnuError {
+    InvalidPosition,
+    InvalidSpinAxis,
+    PolarPosition,
+}
+
+/// Construct the planet-inertial ENU-like basis at `position_m`.
+///
+/// The solar-inertial axes are reflected relative to ICRF, so `up × spin`
+/// gives the eastward direction used by [`surface_velocity_in_planet_inertial`].
+/// At a pole east/north are undefined and this returns an explicit error rather
+/// than selecting an arbitrary horizontal direction.
+pub fn planet_inertial_enu_basis(
+    position_m: DVec3,
+    spin_axis: DVec3,
+) -> Result<PlanetInertialEnuBasis, PlanetInertialEnuError> {
+    if !position_m.is_finite() || position_m.length_squared() <= 1.0e-24 {
+        return Err(PlanetInertialEnuError::InvalidPosition);
+    }
+    if !spin_axis.is_finite() || spin_axis.length_squared() <= 1.0e-24 {
+        return Err(PlanetInertialEnuError::InvalidSpinAxis);
+    }
+
+    let up = position_m.normalize();
+    let spin_axis = spin_axis.normalize();
+    let east_unnormalized = up.cross(spin_axis);
+    if east_unnormalized.length_squared() <= 1.0e-24 {
+        return Err(PlanetInertialEnuError::PolarPosition);
+    }
+    let east = east_unnormalized.normalize();
+    let north = east.cross(up).normalize();
+
+    Ok(PlanetInertialEnuBasis { east, north, up })
+}
+
 /// Catalog spin approximation for presentation-only consumers that need
 /// arbitrary historical or predicted epochs unavailable in the shared snapshot.
 pub fn catalog_body_fixed_to_inertial_rotation(planet: &Planet, time_days: f64) -> DQuat {
@@ -506,6 +558,17 @@ mod tests {
         assert!(converted.x.abs() < 1.0e-15);
         assert!(converted.y < 0.0);
         assert!(converted.z > 0.0);
+    }
+
+    #[test]
+    fn icrf_to_solar_inertial_is_an_improper_transform() {
+        let x = icrf_j2000_to_solar_inertial(DVec3::X);
+        let y = icrf_j2000_to_solar_inertial(DVec3::Y);
+        let z = icrf_j2000_to_solar_inertial(DVec3::Z);
+        let transform = DMat3::from_cols(x, y, z);
+
+        assert!((transform.determinant() + 1.0).abs() < 1.0e-15);
+        assert!((x.cross(y) + z).length() < 1.0e-15);
     }
 
     #[test]

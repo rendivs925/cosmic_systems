@@ -2,7 +2,8 @@ use crate::components::rocket::*;
 use crate::domain::services::guidance::{
     advance_ascent_phase, advance_descent_phase, attitude_from_direction,
     banked_attitude_from_direction, boostback_guidance, default_surface_landing_target,
-    gravity_turn_direction_gated, pitch_axis_from_reference, prograde_attitude, reentry_bank_angle,
+    gravity_turn_direction_gated, pitch_axis_from_reference,
+    prograde_ascending_node_launch_heading, prograde_attitude, reentry_bank_angle,
     reentry_bank_angle_enhanced, target_surface_range_errors_m, terminal_landing_guidance,
     transfer_burn_phase, AutopilotMode, DescentGuidanceConfig, TransferBurnPhase,
 };
@@ -10,7 +11,7 @@ use crate::domain::services::physics_orbital::orbital_elements_from_state_in_ref
 use crate::domain::services::reference_frames::{
     planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
 };
-use crate::domain::services::rocket_propulsion::stage_thrust_body;
+use crate::domain::services::rocket_propulsion::stage_available_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{
     PlanetComponent, RocketAutopilot, RocketCommands,
@@ -53,6 +54,9 @@ pub struct GuidanceAccess {
     pub mission_state: &'static mut RocketMissionState,
     pub autopilot: &'static mut RocketAutopilot,
     pub propulsion: &'static RocketPropulsion,
+    /// Refreshed by `RocketSet::Atmosphere` before guidance. Descent guidance
+    /// uses this shared atmosphere/surface-relative sample rather than deriving
+    /// another rotating-frame velocity.
     pub conditions: &'static RocketFlightConditions,
     /// Present on production rockets. Optional to keep isolated fixed-pipeline
     /// fixtures focused on the state they are testing.
@@ -138,21 +142,22 @@ pub fn guidance_system(
         } else {
             altitude_m
         };
-        let velocity = rocket.dynamics.velocity_mps;
-        let speed = velocity.length();
+        let inertial_velocity_mps = rocket.dynamics.velocity_mps;
+        let surface_relative_velocity_mps = conditions.atmosphere_relative_velocity_mps;
+        let surface_relative_speed_mps = conditions.airspeed_mps;
         let mu = mu_m3_s2;
         let reference_normal = planet_inertial_spin_axis(orientation);
         let reference_x_axis = planet_equatorial_reference_x_axis(orientation);
         let state_elements = orbital_elements_from_state_in_reference_frame(
             position_m,
-            velocity,
+            inertial_velocity_mps,
             mu,
             reference_normal,
             reference_x_axis,
         );
         let target_orbit_reached = autopilot.target_orbit.matches_state_in_reference_frame(
             position_m,
-            velocity,
+            inertial_velocity_mps,
             mu,
             radius_m,
             reference_normal,
@@ -202,7 +207,7 @@ pub fn guidance_system(
         *mission_state = advance_descent_phase(
             (*mission_state).into(),
             radar_altitude_m,
-            speed,
+            surface_relative_speed_mps,
             dynamic_pressure_pa,
             has_active_engines,
             &descent_config,
@@ -228,12 +233,6 @@ pub fn guidance_system(
             autopilot.mode = AutopilotMode::Off;
         }
 
-        // The ascent plane is fixed in the planet-inertial frame; the pitch
-        // axis is the horizontal perpendicular to it.
-        let pitch_axis = pitch_axis_from_reference(up_dir, DVec3::Z)
-            .or_else(|| pitch_axis_from_reference(up_dir, DVec3::X))
-            .unwrap_or(DVec3::X);
-
         // Compute target attitude based on autopilot mode.
         match autopilot.mode {
             AutopilotMode::Ascent => {
@@ -242,15 +241,31 @@ pub fn guidance_system(
                 // then follow the altitude/time pitch ramp. Low-thrust
                 // vehicles must never start the turn while still near the
                 // ground just because the wall clock says so.
-                let vertical_speed_mps = velocity.dot(up_dir);
-                commands.target_attitude = attitude_from_direction(gravity_turn_direction_gated(
-                    &autopilot.ascent_profile,
-                    up_dir,
-                    pitch_axis,
-                    altitude_m,
-                    autopilot.time_since_liftoff_s,
-                    vertical_speed_mps,
-                ));
+                let vertical_speed_mps = inertial_velocity_mps.dot(up_dir);
+                commands.target_attitude = match prograde_ascending_node_launch_heading(
+                    position_m,
+                    reference_normal,
+                    autopilot.target_orbit.target_inclination_rad,
+                ) {
+                    Ok(heading) => {
+                        // The heading is horizontal by construction, so its
+                        // perpendicular pitch axis is always defined.
+                        let pitch_axis = pitch_axis_from_reference(up_dir, heading.direction_pci)
+                            .expect("a horizontal ascent heading has a pitch axis");
+                        attitude_from_direction(gravity_turn_direction_gated(
+                            &autopilot.ascent_profile,
+                            up_dir,
+                            pitch_axis,
+                            altitude_m,
+                            autopilot.time_since_liftoff_s,
+                            vertical_speed_mps,
+                        ))
+                    }
+                    // A polar site or unreachable inclination has no safe
+                    // launch azimuth. Hold vertical rather than substitute a
+                    // world axis and silently enter a wrong ascent plane.
+                    Err(_) => attitude_from_direction(up_dir),
+                };
                 commands.throttle_cmd = 1.0;
 
                 // Do not coast merely because apoapsis is high enough. A
@@ -272,7 +287,7 @@ pub fn guidance_system(
                 if target_radius_m <= radius_m {
                     // No target configured: hold and hand back.
                     autopilot.mode = AutopilotMode::OrbitInsertion;
-                    commands.target_attitude = prograde_attitude(velocity);
+                    commands.target_attitude = prograde_attitude(inertial_velocity_mps);
                     commands.throttle_cmd = 0.0;
                     continue;
                 }
@@ -288,9 +303,11 @@ pub fn guidance_system(
                         let raising = target_radius_m > radius;
                         commands.throttle_cmd = 1.0;
                         commands.target_attitude = if raising {
-                            prograde_attitude(velocity)
+                            prograde_attitude(inertial_velocity_mps)
                         } else {
-                            attitude_from_direction(-velocity / speed.max(1e-6))
+                            attitude_from_direction(
+                                -inertial_velocity_mps / inertial_velocity_mps.length().max(1e-6),
+                            )
                         };
                     }
                     // Coast and arrival circularization belong to the
@@ -304,13 +321,13 @@ pub fn guidance_system(
                         - autopilot.target_orbit.altitude_tolerance_m
                 {
                     // Raise the apoapsis until the insertion coast can begin.
-                    commands.target_attitude = prograde_attitude(velocity);
+                    commands.target_attitude = prograde_attitude(inertial_velocity_mps);
                     commands.throttle_cmd = 1.0;
                 } else {
                     // Coast to apoapsis, then circularize only near the target
                     // altitude instead of accepting an arbitrary low-e orbit.
-                    commands.target_attitude = prograde_attitude(velocity);
-                    let near_target_apoapsis = velocity.dot(up_dir).abs() <= 25.0
+                    commands.target_attitude = prograde_attitude(inertial_velocity_mps);
+                    let near_target_apoapsis = inertial_velocity_mps.dot(up_dir).abs() <= 25.0
                         && (altitude_m - autopilot.target_orbit.target_apoapsis_altitude_m).abs()
                             <= autopilot.target_orbit.altitude_tolerance_m;
                     commands.throttle_cmd = if near_target_apoapsis { 1.0 } else { 0.0 };
@@ -318,7 +335,9 @@ pub fn guidance_system(
             }
             AutopilotMode::Deorbit => {
                 // Retrograde burn to lower periapsis.
-                commands.target_attitude = attitude_from_direction(-velocity / speed.max(1e-6));
+                commands.target_attitude = attitude_from_direction(
+                    -inertial_velocity_mps / inertial_velocity_mps.length().max(1e-6),
+                );
                 commands.throttle_cmd = 1.0;
 
                 // Check if periapsis is low enough for entry.
@@ -342,7 +361,7 @@ pub fn guidance_system(
                 let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
                 let (crossrange, downrange) = target_surface_range_errors_m(
                     position_m,
-                    velocity,
+                    surface_relative_velocity_mps,
                     autopilot.target_landing_position_m,
                     radius_m,
                 );
@@ -358,7 +377,7 @@ pub fn guidance_system(
 
                 let bank_angle = reentry_bank_angle_enhanced(
                     altitude_m,
-                    speed,
+                    surface_relative_speed_mps,
                     dynamic_pressure_pa,
                     heat_flux,
                     g_load,
@@ -374,7 +393,9 @@ pub fn guidance_system(
                 commands.target_attitude = banked_attitude_from_direction(up_dir, bank_angle);
 
                 // Transition to powered descent when slow enough.
-                if speed < 500.0 && altitude_m < descent_config.powered_descent_altitude_m {
+                if surface_relative_speed_mps < 500.0
+                    && altitude_m < descent_config.powered_descent_altitude_m
+                {
                     autopilot.mode = AutopilotMode::PoweredDescent;
                     *mission_state = RocketMissionState::PoweredDescent;
                 }
@@ -392,9 +413,13 @@ pub fn guidance_system(
                     .stages
                     .get(propulsion.active_stage)
                     .map_or(0.0, |stage| {
-                        stage_thrust_body(&stage.engines, 1.0, conditions.ambient_pressure_pa)
-                            .0
-                            .length()
+                        stage_available_thrust_body(
+                            &stage.engines,
+                            1.0,
+                            conditions.ambient_pressure_pa,
+                        )
+                        .0
+                        .length()
                     });
                 if max_thrust <= 0.0 {
                     *mission_state = RocketMissionState::UnpoweredDescent;
@@ -408,7 +433,7 @@ pub fn guidance_system(
 
                 let (thrust_vec, thrust_att) = terminal_landing_guidance(
                     position_m,
-                    velocity,
+                    surface_relative_velocity_mps,
                     autopilot.target_landing_position_m,
                     radar_altitude_m,
                     rocket.dynamics.mass_kg,
@@ -430,16 +455,20 @@ pub fn guidance_system(
                     .stages
                     .get(propulsion.active_stage)
                     .map_or(0.0, |stage| {
-                        stage_thrust_body(&stage.engines, 1.0, conditions.ambient_pressure_pa)
-                            .0
-                            .length()
+                        stage_available_thrust_body(
+                            &stage.engines,
+                            1.0,
+                            conditions.ambient_pressure_pa,
+                        )
+                        .0
+                        .length()
                     });
 
                 let gravity_accel = mu_m3_s2 / (radius * radius);
 
                 let (thrust_vec, thrust_att) = terminal_landing_guidance(
                     position_m,
-                    velocity,
+                    surface_relative_velocity_mps,
                     autopilot.target_landing_position_m,
                     radar_altitude_m,
                     rocket.dynamics.mass_kg,
@@ -461,15 +490,17 @@ pub fn guidance_system(
                 if autopilot.target_landing_position_m.length() < 1.0 {
                     autopilot.target_landing_position_m = up_dir * radius_m;
                 }
-                let max_thrust = propulsion.vehicle.stages[propulsion.active_stage]
-                    .engines
-                    .iter()
-                    .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                    .sum::<f64>();
+                let max_thrust = stage_available_thrust_body(
+                    &propulsion.vehicle.stages[propulsion.active_stage].engines,
+                    1.0,
+                    conditions.ambient_pressure_pa,
+                )
+                .0
+                .length();
 
                 let boostback = boostback_guidance(
                     position_m,
-                    velocity,
+                    inertial_velocity_mps,
                     autopilot.target_landing_position_m,
                     rocket.dynamics.mass_kg,
                     max_thrust,
@@ -484,12 +515,12 @@ pub fn guidance_system(
             }
             AutopilotMode::StationKeep => {
                 // Maintain position relative to target (for orbital station-keeping).
-                commands.target_attitude = prograde_attitude(velocity);
+                commands.target_attitude = prograde_attitude(inertial_velocity_mps);
                 commands.throttle_cmd = 0.0;
             }
             AutopilotMode::Rendezvous => {
                 // Future: rendezvous guidance.
-                commands.target_attitude = prograde_attitude(velocity);
+                commands.target_attitude = prograde_attitude(inertial_velocity_mps);
                 commands.throttle_cmd = 0.0;
             }
             AutopilotMode::Off => {
@@ -517,13 +548,13 @@ pub fn guidance_system(
             let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
             let (crossrange, _) = target_surface_range_errors_m(
                 position_m,
-                velocity,
+                surface_relative_velocity_mps,
                 autopilot.target_landing_position_m,
                 radius_m,
             );
             let bank_angle = reentry_bank_angle(
                 altitude_m,
-                speed,
+                surface_relative_speed_mps,
                 dynamic_pressure_pa,
                 heat_flux,
                 g_load,
@@ -532,5 +563,261 @@ pub fn guidance_system(
             );
             commands.target_attitude = banked_attitude_from_direction(up_dir, bank_angle);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entities::rocket::Rocket;
+    use crate::domain::services::body_orientation::BodyOrientation;
+    use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+    use crate::domain::services::gravity::gravitational_parameter;
+    use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::services::reference_frames::{
+        body_fixed_to_planet_inertial, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
+    };
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+    use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
+    use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+    use bevy::math::{DMat3, DQuat};
+
+    fn earth_orientation() -> BodyOrientation {
+        BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "guidance-test-orientation".to_owned(),
+            DQuat::IDENTITY,
+            DVec3::Z * (std::f64::consts::TAU / (23.934 * 3_600.0)),
+        )
+    }
+
+    fn earth_snapshot(orientation: BodyOrientation) -> EphemerisSnapshot {
+        let earth_mass_kg = PlanetFactory::create_by_name("Earth")
+            .expect("Earth exists")
+            .mass_kg;
+        EphemerisSnapshot::from_states_orientations_and_gravitational_parameters(
+            Vec::new(),
+            vec![orientation],
+            vec![(NaifBodyId::EARTH, gravitational_parameter(earth_mass_kg))],
+        )
+    }
+
+    fn spawn_descent_rocket(
+        app: &mut App,
+        position_m: DVec3,
+        inertial_velocity_mps: DVec3,
+        target_position_m: DVec3,
+        mission_state: RocketMissionState,
+        autopilot_mode: AutopilotMode,
+        radar_altitude_m: f64,
+    ) -> Entity {
+        let vehicle = Rocket::falcon9_test_fixture();
+        let propellant_remaining_kg = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let mut conditions = RocketFlightConditions::default();
+        conditions.0.atmosphere_relative_velocity_mps = DVec3::ZERO;
+        conditions.0.airspeed_mps = 0.0;
+
+        app.world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        position_m,
+                        inertial_velocity_mps,
+                        DQuat::from_rotation_arc(DVec3::Y, position_m.normalize()),
+                        100_000.0,
+                        DMat3::IDENTITY,
+                        DVec3::ZERO,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: 1.85,
+                    height_m: 70.0,
+                    lower_extent_y_m: -35.0,
+                },
+                mission_state,
+                RocketAutopilot {
+                    mode: autopilot_mode,
+                    target_landing_position_m: target_position_m,
+                    ..Default::default()
+                },
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg,
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 0.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+                conditions,
+                TerrainCollisionState {
+                    radar_altitude_m,
+                    ..Default::default()
+                },
+                OrbitalElements::default(),
+                RocketCommands::default(),
+                RocketPlanetBinding {
+                    planet_name: CelestialBodyId::earth(),
+                },
+            ))
+            .id()
+    }
+
+    #[test]
+    fn ksc_surface_velocity_does_not_trigger_descent_lateral_correction() {
+        let orientation = earth_orientation();
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let ksc_surface_position_m = body_fixed_to_planet_inertial(
+            geodetic_to_body_fixed(&LaunchSiteCoordinates::default(), &earth),
+            &orientation,
+        );
+        let up_dir = ksc_surface_position_m.normalize();
+        let position_m = ksc_surface_position_m + up_dir * 1_000.0;
+        let inertial_velocity_mps = surface_velocity_in_planet_inertial(position_m, &orientation);
+        let target_position_m = up_dir * (earth.radius_km as f64 * 1_000.0);
+
+        assert!(
+            (400.0..420.0).contains(&inertial_velocity_mps.length()),
+            "KSC's rotating-surface speed must expose the inertial-velocity regression"
+        );
+
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(1.0 / 64.0));
+        app.insert_resource(earth_snapshot(orientation));
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth,
+            material: Handle::default(),
+            has_texture: false,
+            base_reflectance: 1.0,
+            base_roughness: 1.0,
+        });
+
+        let reentry = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            target_position_m,
+            RocketMissionState::ReentryCorridor,
+            AutopilotMode::Reentry,
+            1_000.0,
+        );
+        let powered_descent = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            target_position_m,
+            RocketMissionState::PoweredDescent,
+            AutopilotMode::PoweredDescent,
+            1_000.0,
+        );
+        let landing = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            target_position_m,
+            RocketMissionState::Landing,
+            AutopilotMode::Landing,
+            50.0,
+        );
+        app.add_systems(Update, guidance_system);
+        app.update();
+
+        let world = app.world();
+        assert_eq!(
+            *world.get::<RocketMissionState>(reentry).unwrap(),
+            RocketMissionState::PoweredDescent,
+            "the descent handoff must use the zero shared surface-relative speed"
+        );
+        assert_eq!(
+            world.get::<RocketAutopilot>(reentry).unwrap().mode,
+            AutopilotMode::PoweredDescent
+        );
+        for entity in [reentry, powered_descent, landing] {
+            let commanded_up =
+                world.get::<RocketCommands>(entity).unwrap().target_attitude * DVec3::Y;
+            assert!(
+                commanded_up.dot(up_dir) > 1.0 - 1e-12,
+                "co-moving vehicle received a false lateral correction: {commanded_up}"
+            );
+        }
+    }
+
+    #[test]
+    fn configured_orbit_inclinations_produce_distinct_ascent_headings() {
+        let orientation = earth_orientation();
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let radius_m = earth.radius_km as f64 * 1_000.0;
+        let position_m = DVec3::X * (radius_m + 50_000.0);
+        let up_dir = position_m.normalize();
+        let inertial_velocity_mps = up_dir * 300.0;
+
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(1.0 / 64.0));
+        app.insert_resource(earth_snapshot(orientation));
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth,
+            material: Handle::default(),
+            has_texture: false,
+            base_reflectance: 1.0,
+            base_roughness: 1.0,
+        });
+        let low_inclination = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            DVec3::ZERO,
+            RocketMissionState::Ascent,
+            AutopilotMode::Ascent,
+            50_000.0,
+        );
+        let high_inclination = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            DVec3::ZERO,
+            RocketMissionState::Ascent,
+            AutopilotMode::Ascent,
+            50_000.0,
+        );
+        for (entity, inclination_rad) in [
+            (low_inclination, 28.5_f64.to_radians()),
+            (high_inclination, 60.0_f64.to_radians()),
+        ] {
+            let mut autopilot = app.world_mut().get_mut::<RocketAutopilot>(entity).unwrap();
+            autopilot.target_orbit.target_inclination_rad = inclination_rad;
+            // Past the existing gate and smoothing schedule so this asserts the
+            // horizontal heading selected by the real guidance adapter.
+            autopilot.time_since_liftoff_s = 200.0;
+        }
+        app.add_systems(Update, guidance_system);
+        app.update();
+
+        let heading = |entity| {
+            let direction = app
+                .world()
+                .get::<RocketCommands>(entity)
+                .unwrap()
+                .target_attitude
+                * DVec3::Y;
+            (direction - up_dir * direction.dot(up_dir)).normalize()
+        };
+        let low_heading = heading(low_inclination);
+        let high_heading = heading(high_inclination);
+
+        assert!(
+            low_heading.dot(high_heading) < 0.9,
+            "distinct inclination targets must not share an ascent heading"
+        );
     }
 }

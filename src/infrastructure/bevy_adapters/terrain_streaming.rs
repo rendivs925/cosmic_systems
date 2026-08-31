@@ -61,10 +61,15 @@ const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 /// Extra frustum angle retained around the viewport so terrain does not pop at
 /// its edge while the camera is moving between streaming updates.
 const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
-/// Terrain envelopes stay within this conservative height margin for horizon
-/// culling. Keeping the sphere deliberately large can retain a tile, but can
-/// never reject terrain that could break the visible silhouette.
-const HORIZON_CULL_HEIGHT_MARGIN_M: f64 = 20_000.0;
+/// The active default Earth source is a layered composition with declared
+/// macro bounds `[-10_000 m, +20_000 m]` and local-detail bounds
+/// `[-36 m, +24 m]`. `TerrainSource` deliberately exposes no runtime bounds,
+/// so streaming uses this bounded default-source envelope rather than sampling
+/// or consulting its non-authoritative overview path on the main thread.
+const DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M: f64 = -10_036.0;
+const DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M: f64 = 20_024.0;
+const DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M: f64 =
+    DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M - DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M;
 /// Admit a bounded pair of CPU terrain bakes per presentation frame. This fills
 /// the reserved worker pool quickly after a camera move without queueing an
 /// unbounded cold-start burst or blocking the render thread.
@@ -904,10 +909,9 @@ fn patch_intersects_viewport(
         return false;
     }
 
-    let center = patch.center_direction();
-    let to_center = center * radius_m - viewport.position_m;
+    let (bounding_center_m, bounding_radius_m) = patch_bounding_sphere(patch, radius_m);
+    let to_center = bounding_center_m - viewport.position_m;
     let distance_m = to_center.length();
-    let bounding_radius_m = patch_bounding_radius_m(patch, radius_m);
     if distance_m <= bounding_radius_m {
         return true;
     }
@@ -920,7 +924,11 @@ fn patch_intersects_viewport(
     view_angle <= viewport.half_fov_rad + sphere_angle_rad + VIEWPORT_PREFETCH_MARGIN_RAD
 }
 
-fn patch_bounding_radius_m(patch: TerrainPatch, radius_m: f64) -> f64 {
+/// A conservative sphere enclosing the patch at both extrema of the default
+/// source's elevation interval. Centering at the radial midpoint is much tighter
+/// than adding the entire height range to a mean-radius sphere, while still
+/// retaining silhouettes at either declared source extreme.
+fn patch_bounding_sphere(patch: TerrainPatch, radius_m: f64) -> (DVec3, f64) {
     let center = patch.center_direction();
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let patch_radius_rad = [
@@ -933,9 +941,17 @@ fn patch_bounding_radius_m(patch: TerrainPatch, radius_m: f64) -> f64 {
     .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
     .fold(0.0, f64::max);
 
+    let min_surface_radius_m = radius_m + DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M;
+    let max_surface_radius_m = radius_m + DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M;
+    let center_radius_m = (min_surface_radius_m + max_surface_radius_m) * 0.5;
+    let radial_half_range_m = (max_surface_radius_m - min_surface_radius_m) * 0.5;
     // The chord reaches the farthest patch corner. An arc-length estimate here
     // is too small and could cull a tile that still contributes to the limb.
-    2.0 * radius_m * (patch_radius_rad * 0.5).sin() + HORIZON_CULL_HEIGHT_MARGIN_M
+    let angular_radius_m = 2.0 * max_surface_radius_m * (patch_radius_rad * 0.5).sin();
+    (
+        center * center_radius_m,
+        angular_radius_m + radial_half_range_m,
+    )
 }
 
 /// Reject a quadtree node only when its conservative bounding sphere lies
@@ -949,10 +965,9 @@ fn patch_is_behind_horizon(patch: TerrainPatch, camera_position_m: DVec3, radius
         return false;
     }
 
-    let center = patch.center_direction();
-    let bounding_radius_m = patch_bounding_radius_m(patch, radius_m);
+    let (bounding_center_m, bounding_radius_m) = patch_bounding_sphere(patch, radius_m);
 
-    camera_position_m.dot(center * radius_m) + camera_distance_m * bounding_radius_m
+    camera_position_m.dot(bounding_center_m) + camera_distance_m * bounding_radius_m
         < radius_m * radius_m
 }
 
@@ -1056,10 +1071,7 @@ fn projected_errors_for_focus(
     camera: CameraProjection,
 ) -> BTreeMap<TerrainPatch, f64> {
     let mut errors = BTreeMap::new();
-    let geometry_error = PatchGeometricError {
-        elevation_range_m: 20_000.0,
-        child_to_parent_deviation_m: 2_000.0,
-    };
+    let geometry_error = default_earth_patch_geometric_error();
     for level in 0..max_level {
         let focus = TerrainPatch::for_direction(focus_direction, level);
         for patch in patch_neighborhood(focus) {
@@ -1070,6 +1082,16 @@ fn projected_errors_for_focus(
         }
     }
     errors
+}
+
+/// Bound refinement error without sampling the source from presentation code.
+/// Any child sample can differ from its coarser source representation by the
+/// full declared source range until per-patch source error metadata exists.
+fn default_earth_patch_geometric_error() -> PatchGeometricError {
+    PatchGeometricError {
+        elevation_range_m: DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M,
+        child_to_parent_deviation_m: DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M,
+    }
 }
 
 fn patch_neighborhood(focus: TerrainPatch) -> BTreeSet<TerrainPatch> {
@@ -1742,5 +1764,46 @@ mod tests {
             radius_m
         ));
         assert!(patch_is_behind_horizon(hidden, camera_position_m, radius_m));
+    }
+
+    #[test]
+    fn streaming_bounds_cover_the_default_authoritative_terrain_envelope() {
+        assert_eq!(DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M, -10_036.0);
+        assert_eq!(DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M, 20_024.0);
+
+        let error = default_earth_patch_geometric_error();
+        assert_eq!(
+            error.elevation_range_m,
+            DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M
+        );
+        assert_eq!(
+            error.child_to_parent_deviation_m,
+            DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M
+        );
+    }
+
+    #[test]
+    fn culling_sphere_contains_both_default_source_elevation_extremes() {
+        let radius_m = 6_371_000.0;
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 8);
+        let (sphere_center, sphere_radius_m) = patch_bounding_sphere(patch, radius_m);
+        let (u0, v0, u1, v1) = patch.uv_bounds();
+
+        for direction in [
+            face_uv_to_direction(patch.face, u0, v0),
+            face_uv_to_direction(patch.face, u1, v0),
+            face_uv_to_direction(patch.face, u0, v1),
+            face_uv_to_direction(patch.face, u1, v1),
+        ] {
+            for elevation_m in [
+                DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M,
+                DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M,
+            ] {
+                assert!(
+                    (direction * (radius_m + elevation_m)).distance(sphere_center)
+                        <= sphere_radius_m + 1e-6
+                );
+            }
+        }
     }
 }

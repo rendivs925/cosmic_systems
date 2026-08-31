@@ -26,6 +26,7 @@ pub fn sample_surface(
     longitude_deg: f64,
     planet_radius_m: f64,
 ) -> SurfaceSample {
+    let (latitude_deg, longitude_deg) = canonical_terrain_lat_lon(latitude_deg, longitude_deg);
     let height_m = source.height_m(latitude_deg, longitude_deg);
     let normal = surface_normal(source, latitude_deg, longitude_deg, planet_radius_m);
     let radial = radial_direction(latitude_deg, longitude_deg);
@@ -39,45 +40,64 @@ pub fn sample_surface(
 
 /// The radial (up) unit vector at lat/lon (degrees).
 pub fn radial_direction(latitude_deg: f64, longitude_deg: f64) -> DVec3 {
+    let (latitude_deg, longitude_deg) = canonical_terrain_lat_lon(latitude_deg, longitude_deg);
     let lat = latitude_deg.to_radians();
     let lon = longitude_deg.to_radians();
     DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
 }
 
-/// Surface normal from central differences of the height field, at lat/lon.
+/// Surface normal from central differences of the authoritative height field,
+/// at canonical terrain latitude/longitude.
 pub fn surface_normal(
     source: &dyn TerrainSource,
     latitude_deg: f64,
     longitude_deg: f64,
     planet_radius_m: f64,
 ) -> DVec3 {
-    // ~5.5 m at Earth's equator: this resolves the pad-scale clearance
-    // footprint and the shared source's local relief instead of averaging a
-    // launch pad with terrain kilometres away.
-    const STEP_DEG: f64 = 0.00005;
-    let r = planet_radius_m;
+    // A fixed physical footprint keeps the normal precision consistent across
+    // bodies while resolving pad-scale relief from the shared source.
+    const SAMPLE_DISTANCE_M: f64 = 5.0;
+    let (latitude_deg, longitude_deg) = canonical_terrain_lat_lon(latitude_deg, longitude_deg);
+    let radial = radial_direction(latitude_deg, longitude_deg);
+    if !planet_radius_m.is_finite() || planet_radius_m <= 0.0 {
+        return radial;
+    }
+    let step_deg = (SAMPLE_DISTANCE_M / planet_radius_m).to_degrees();
 
     let at = |la_deg: f64, lo_deg: f64| -> DVec3 {
-        radial_direction(la_deg, lo_deg) * (r + source.height_m(la_deg, lo_deg))
+        let (la_deg, lo_deg) = canonical_terrain_lat_lon(la_deg, lo_deg);
+        radial_direction(la_deg, lo_deg) * (planet_radius_m + source.height_m(la_deg, lo_deg))
     };
-    let p = at(latitude_deg, longitude_deg);
-    let p_lat = at(latitude_deg + STEP_DEG, longitude_deg);
-    let p_lon = at(latitude_deg, longitude_deg + STEP_DEG);
-    let step_m = STEP_DEG.to_radians() * r;
-
-    let dlat = (p_lat - p) / step_m;
-    let dlon = (p_lon - p) / step_m;
+    let dlat =
+        at(latitude_deg + step_deg, longitude_deg) - at(latitude_deg - step_deg, longitude_deg);
+    let dlon =
+        at(latitude_deg, longitude_deg + step_deg) - at(latitude_deg, longitude_deg - step_deg);
     let normal = dlat.cross(dlon).normalize_or_zero();
     if normal.length_squared() < 1e-12 {
-        return radial_direction(latitude_deg, longitude_deg);
+        return radial;
     }
     // Orient outward (away from the planet center).
-    let radial = radial_direction(latitude_deg, longitude_deg);
     if normal.dot(radial) < 0.0 {
         -normal
     } else {
         normal
     }
+}
+
+/// Canonical terrain coordinates use latitude in `[-90, 90]` and longitude in
+/// `[-180, 180)`. Crossing a pole reflects latitude and advances longitude by
+/// 180 degrees so finite-difference probes remain on the same surface.
+fn canonical_terrain_lat_lon(latitude_deg: f64, longitude_deg: f64) -> (f64, f64) {
+    let wrapped_latitude_deg = (latitude_deg + 90.0).rem_euclid(360.0) - 90.0;
+    let (latitude_deg, longitude_deg) = if wrapped_latitude_deg > 90.0 {
+        (180.0 - wrapped_latitude_deg, longitude_deg + 180.0)
+    } else {
+        (wrapped_latitude_deg, longitude_deg)
+    };
+    (
+        latitude_deg,
+        (longitude_deg + 180.0).rem_euclid(360.0) - 180.0,
+    )
 }
 
 /// Radar altitude above the terrain along the radial direction for a
@@ -149,10 +169,10 @@ impl Default for TouchdownCriteria {
 
 /// Surface-relative velocity components against the local ground plane.
 ///
-/// The dynamics integrate in a planet-centered non-rotating frame and the
-/// atmosphere model carries no wind, so inertial velocity *is*
-/// surface-relative; vertical/lateral mean decomposition against the local
-/// surface normal.
+/// `velocity_mps` must already be relative to the rotating surface. Callers
+/// with planet-centered inertial velocity must first subtract
+/// `surface_velocity_in_planet_inertial`; vertical/lateral then describe the
+/// decomposition against the local surface normal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VelocityComponents {
     /// Component along the surface normal (+ = moving away from the ground).
@@ -416,5 +436,26 @@ mod tests {
         let (lat, lon) = body_fixed_to_terrain_lat_lon(dir);
         let back = radial_direction(lat, lon);
         assert!((back - dir).length() < 1e-9);
+    }
+
+    #[derive(Debug)]
+    struct CanonicalCoordinatesOnly;
+
+    impl TerrainSource for CanonicalCoordinatesOnly {
+        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+            assert!((-90.0..=90.0).contains(&latitude_deg));
+            assert!((-180.0..180.0).contains(&longitude_deg));
+            0.0
+        }
+    }
+
+    #[test]
+    fn surface_normal_uses_central_canonical_samples_across_the_longitude_seam() {
+        let source = CanonicalCoordinatesOnly;
+        let sample = sample_surface(&source, 10.0, 179.999_99, EARTH_RADIUS_M);
+        let radial = radial_direction(10.0, 179.999_99);
+
+        assert!((sample.normal.length() - 1.0).abs() < 1e-12);
+        assert!(sample.normal.dot(radial) > 1.0 - 1e-12);
     }
 }

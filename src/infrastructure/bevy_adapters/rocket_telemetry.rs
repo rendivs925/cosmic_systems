@@ -7,7 +7,7 @@ use crate::domain::events::{
 };
 use crate::domain::services::aerodynamics::{angle_of_attack, angle_of_sideslip};
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_mass_with_payload, stage_thrust_body, STANDARD_GRAVITY_MPS2,
+    active_vehicle_mass_with_payload_and_boosters, stage_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, Selectable};
@@ -173,7 +173,21 @@ impl<'a> TelemetryContext<'a> {
         if throttle <= 0.0 || remaining <= 0.0 {
             return (DVec3::ZERO, 0.0);
         }
-        let (thrust_body, _) = stage_thrust_body(&stage.engines, throttle, ambient_pressure_pa);
+        let (mut thrust_body, _) = stage_thrust_body(&stage.engines, throttle, ambient_pressure_pa);
+        if self.propulsion.boosters_attached {
+            if let Some(boosters) = &self.propulsion.vehicle.parallel_boosters {
+                for propellant_kg in &self.propulsion.booster_propellant_remaining_kg {
+                    if *propellant_kg > 0.0 {
+                        thrust_body += stage_thrust_body(
+                            &boosters.stage.engines,
+                            throttle,
+                            ambient_pressure_pa,
+                        )
+                        .0;
+                    }
+                }
+            }
+        }
         let isp_vac = stage
             .engines
             .iter()
@@ -186,12 +200,24 @@ impl<'a> TelemetryContext<'a> {
     fn compute_mass_properties(&self) -> (f64, f64) {
         // Attached payload hardware (fairing) counts as shed structure, so it
         // belongs to the dry mass of the active stack until jettison.
-        let dry_mass = active_vehicle_mass_with_payload(
+        let boosters = self
+            .propulsion
+            .boosters_attached
+            .then_some(())
+            .and(self.propulsion.vehicle.parallel_boosters.as_ref());
+        let dry_mass = active_vehicle_mass_with_payload_and_boosters(
             &self.propulsion.vehicle.stages,
             &self.propulsion.propellant_remaining_kg,
             self.propulsion.active_stage,
             self.propulsion.attached_payload_kg,
-        ) - self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64;
+            boosters,
+            &self.propulsion.booster_propellant_remaining_kg,
+        ) - self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64
+            - self
+                .propulsion
+                .booster_propellant_remaining_kg
+                .iter()
+                .sum::<f32>() as f64;
 
         let total_propellant_initial: f64 = self
             .propulsion
@@ -199,9 +225,22 @@ impl<'a> TelemetryContext<'a> {
             .stages
             .iter()
             .map(|s| s.propellant_mass_kg as f64)
-            .sum();
+            .sum::<f64>()
+            + self
+                .propulsion
+                .vehicle
+                .parallel_boosters
+                .as_ref()
+                .map_or(0.0, |boosters| {
+                    boosters.stage.propellant_mass_kg as f64 * boosters.count as f64
+                });
         let total_propellant_remaining: f64 =
-            self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64;
+            self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64
+                + self
+                    .propulsion
+                    .booster_propellant_remaining_kg
+                    .iter()
+                    .sum::<f32>() as f64;
         let propellant_fraction = if total_propellant_initial > 0.0 {
             total_propellant_remaining / total_propellant_initial
         } else {
@@ -952,7 +991,7 @@ mod export_tests {
 #[cfg(test)]
 mod g_load_tests {
     use super::*;
-    use crate::domain::entities::rocket::{Rocket, RocketEngine, RocketStage};
+    use crate::domain::entities::rocket::{Rocket, RocketEngine, RocketStage, ThrustReference};
     use crate::domain::services::atmosphere::{
         AtmosphereSource, EarthAtmosphere, FlightConditions,
     };
@@ -963,7 +1002,7 @@ mod g_load_tests {
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
     /// One-engine vehicle whose thrust axis is body +Y.
-    fn single_engine_vehicle(max_thrust_kn: f32) -> Rocket {
+    fn single_engine_vehicle(rated_thrust_kn: f32) -> Rocket {
         Rocket {
             name: "G-Load Test".into(),
             diameter_m: 1.0,
@@ -975,19 +1014,24 @@ mod g_load_tests {
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
+                landing_gear: None,
+                fairing_dry_mass_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
                     thrust_axis: bevy::math::Vec3::Y,
                     isp_sea_level: 250.0,
                     isp_vacuum: 300.0,
                     gimbal_range_deg: 0.0,
-                    max_thrust_kn,
+                    rated_thrust_kn,
+                    thrust_reference: ThrustReference::SeaLevel,
                     throttle_min: 0.0,
                     throttle_max: 1.0,
-                    restartable: true,
+                    max_ignitions: 2,
+                    ignition_count: 1,
                     state: EngineState::Running,
                 }],
             }],
+            parallel_boosters: None,
         }
     }
 
@@ -1007,11 +1051,14 @@ mod g_load_tests {
         let geometry = RocketGeometry {
             radius_m: 1.0,
             height_m: 10.0,
+            lower_extent_y_m: -5.0,
         };
         let propulsion = RocketPropulsion {
             vehicle: vehicle.clone(),
             active_stage: 0,
             propellant_remaining_kg: vec![600.0],
+            booster_propellant_remaining_kg: Vec::new(),
+            boosters_attached: false,
             throttle: 1.0,
             gimbal_pitch_rad: 0.0,
             gimbal_yaw_rad: 0.0,
@@ -1091,11 +1138,14 @@ mod g_load_tests {
         let geometry = RocketGeometry {
             radius_m: 1.0,
             height_m: 10.0,
+            lower_extent_y_m: -5.0,
         };
         let propulsion = RocketPropulsion {
             vehicle: vehicle.clone(),
             active_stage: 0,
             propellant_remaining_kg: vec![600.0],
+            booster_propellant_remaining_kg: Vec::new(),
+            boosters_attached: false,
             throttle: 0.0,
             gimbal_pitch_rad: 0.0,
             gimbal_yaw_rad: 0.0,

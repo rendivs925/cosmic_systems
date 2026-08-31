@@ -189,7 +189,9 @@ impl TerrainPatchManager {
             .filter(|(patch, p)| p.state == PatchState::Cached && !protected.contains(patch))
             .map(|(k, p)| (*k, p.last_used_frame))
             .collect();
-        candidates.sort_by_key(|(_, frame)| *frame); // oldest first
+        // HashMap iteration order is intentionally unstable. TerrainPatch has a
+        // stable total order, so equal-frame LRU candidates evict reproducibly.
+        candidates.sort_by_key(|(patch, frame)| (*frame, *patch)); // oldest first
 
         for (patch, _) in candidates {
             if self.resident_bytes <= budget_bytes {
@@ -313,6 +315,28 @@ mod tests {
         // Visible patches are never evicted.
         assert_eq!(m.state_of(&p3), Some(PatchState::Visible));
         assert_eq!(m.state_of(&p2), Some(PatchState::Cached));
+    }
+
+    #[test]
+    fn memory_budget_breaks_equal_lru_timestamps_by_patch_identity() {
+        let mut manager = TerrainPatchManager::new();
+        let p1 = patch(0, 0);
+        let p2 = patch(0, 1);
+        let p3 = patch(1, 0);
+        let mut expected = [p1, p2, p3];
+        expected.sort();
+
+        // Every lifecycle update intentionally occurs in one frame, creating
+        // the tie that previously depended on HashMap iteration order.
+        for terrain_patch in [p1, p2, p3] {
+            manager.request(terrain_patch, 100);
+            manager.mark_ready(&terrain_patch);
+            manager.mark_visible(&terrain_patch);
+            manager.mark_cached(&terrain_patch);
+        }
+
+        assert_eq!(manager.enforce_memory_budget(100), expected[..2]);
+        assert_eq!(manager.state_of(&expected[2]), Some(PatchState::Cached));
     }
 
     #[test]

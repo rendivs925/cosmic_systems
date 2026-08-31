@@ -1,9 +1,11 @@
 use crate::components::rocket::*;
-use crate::domain::services::landing_gear::LegDeploymentState;
+use crate::domain::services::landing_gear::LandingGear;
+use crate::domain::services::reference_frames::surface_velocity_in_planet_inertial;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload,
+    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
 };
 use crate::infrastructure::bevy_adapters::components::{MaxQTracker, PlanetComponent};
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -39,6 +41,7 @@ pub fn handle_relaunch_input_system(
 #[allow(clippy::type_complexity)]
 pub fn apply_relaunch_requests(
     mut relaunch_queue: ResMut<RelaunchCommandQueue>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     spent_stages: Query<(Entity, &SpentStage)>,
     mut commands: Commands,
@@ -107,6 +110,14 @@ pub fn apply_relaunch_requests(
                 .iter()
                 .map(|stage| stage.propellant_mass_kg)
                 .collect();
+            propulsion.booster_propellant_remaining_kg = propulsion
+                .vehicle
+                .parallel_boosters
+                .as_ref()
+                .map_or_else(Vec::new, |boosters| {
+                    vec![boosters.stage.propellant_mass_kg; boosters.count as usize]
+                });
+            propulsion.boosters_attached = propulsion.vehicle.parallel_boosters.is_some();
             propulsion.active_stage = 0;
             propulsion.separations_count = 0;
             propulsion.throttle = 0.0;
@@ -116,15 +127,27 @@ pub fn apply_relaunch_requests(
             propulsion.attached_payload_kg = initial_fairing
                 .map(|fairing| fairing.dry_mass_kg)
                 .unwrap_or(0.0);
+            for stage in &mut propulsion.vehicle.stages {
+                for engine in &mut stage.engines {
+                    engine.reset_lifecycle();
+                }
+            }
+            if let Some(boosters) = &mut propulsion.vehicle.parallel_boosters {
+                for engine in &mut boosters.stage.engines {
+                    engine.reset_lifecycle();
+                }
+            }
 
             // Mass and inertia from the refueled stack.
-            let total_mass_kg = active_vehicle_mass_with_payload(
+            let total_mass_kg = active_vehicle_mass_with_payload_and_boosters(
                 &propulsion.vehicle.stages,
                 &propulsion.propellant_remaining_kg,
                 0,
                 propulsion.attached_payload_kg,
+                propulsion.vehicle.parallel_boosters.as_ref(),
+                &propulsion.booster_propellant_remaining_kg,
             );
-            let (inertia, com) = active_vehicle_inertia(
+            let (inertia, com) = active_vehicle_inertia_with_boosters(
                 &propulsion.vehicle.stages,
                 &propulsion.propellant_remaining_kg,
                 0,
@@ -132,38 +155,73 @@ pub fn apply_relaunch_requests(
                 0.0,
                 geometry.radius_m as f64,
                 geometry.height_m as f64,
+                propulsion.vehicle.parallel_boosters.as_ref(),
+                &propulsion.booster_propellant_remaining_kg,
             );
             rocket.dynamics.mass_kg = total_mass_kg;
             rocket.dynamics.inertia_body = inertia;
             rocket.dynamics.center_of_mass_m = com;
 
-            // Upright, motionless, resting at the current site.
+            // Upright and co-moving with the rotating pad at the current site.
             let Some(planet) = planet_query
                 .iter()
                 .find(|planet| planet.matches_body(&binding.planet_name))
             else {
                 continue;
             };
+            let Some(orientation) =
+                ephemeris_snapshot.orientation_for_catalog_body(binding.planet_name.as_str())
+            else {
+                continue;
+            };
             let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
             let position_m = rocket.dynamics.position_m;
             let up = position_m / position_m.length().max(1.0);
-            rocket.dynamics.position_m = up * (position_m.length().max(radius_m));
-            rocket.dynamics.velocity_mps = DVec3::ZERO;
-            rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
             rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, up);
+            let lower_offset_world_m = rocket.dynamics.orientation * geometry.lower_extent_body_m();
+            rocket.dynamics.position_m = up * radius_m - lower_offset_world_m;
+            rocket.dynamics.velocity_mps =
+                surface_velocity_in_planet_inertial(rocket.dynamics.position_m, orientation);
+            rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
 
             // Mission and lifecycle state back to a fresh pad.
             *mission_state = RocketMissionState::PreLaunch;
             rest.active = true;
-            if let Some(mut legs) = legs {
-                legs.deployment = LegDeploymentState::default();
-                legs.compression_m = 0.0;
-            }
             *scorecard = LandingScorecard::default();
             tip_over.reset();
             recorder.clear();
+            match (
+                propulsion
+                    .vehicle
+                    .stages
+                    .first()
+                    .and_then(|stage| stage.landing_gear),
+                legs,
+            ) {
+                (Some(gear_spec), Some(mut legs)) => {
+                    *legs = LandingLegs::new(LandingGear::new(gear_spec, total_mass_kg));
+                }
+                (Some(gear_spec), None) => {
+                    commands
+                        .entity(entity)
+                        .insert(LandingLegs::new(LandingGear::new(gear_spec, total_mass_kg)));
+                }
+                (None, _) => {
+                    commands.entity(entity).remove::<LandingLegs>();
+                }
+            }
             (entity, total_mass_kg, initial_fairing.copied())
         };
+
+        // Restore the attached fairing independently of presentation/reset
+        // facade availability. Its mass was already rebuilt from the same
+        // immutable launch component above, so this cannot create a second
+        // mass authority.
+        if let Some(fairing) = initial_fairing {
+            commands.entity(entity).insert(PayloadFairing {
+                dry_mass_kg: fairing.dry_mass_kg,
+            });
+        }
 
         let Ok((
             mut rocket_commands,
@@ -201,12 +259,6 @@ pub fn apply_relaunch_requests(
             *specific_force = SpecificForceAcceleration::default();
         }
         *orbital_elements = OrbitalElements::default();
-        if let Some(fairing) = initial_fairing {
-            commands.entity(entity).insert(PayloadFairing {
-                dry_mass_kg: fairing.dry_mass_kg,
-            });
-        }
-
         bevy::log::info!(
             "Relaunch ready: {:.0} kg refueled, vehicle upright and held on the pad",
             total_mass_kg

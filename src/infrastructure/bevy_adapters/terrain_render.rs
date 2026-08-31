@@ -158,13 +158,12 @@ pub struct TerrainRenderConfig {
     pub recenter_threshold_m: f64,
     /// Skirt depth for LOD crack hiding (meters).
     pub skirt_depth_m: f64,
-    /// Patch resolution (vertices per side).
+    /// Patch resolution (vertices per side) used at every spatial LOD.
+    ///
+    /// A uniform `2^n + 1` grid preserves the supported 2:1 spatial stitch
+    /// invariant. Per-level grid-density upgrades would create an unsupported
+    /// 4:1 sample transition at a normal 2:1 LOD boundary.
     pub patch_resolution: u32,
-    /// Finest visible leaves use this resolution for locally smooth terrain.
-    /// Coarser fallback coverage retains `patch_resolution` for responsiveness.
-    pub detail_patch_resolution: u32,
-    /// First level using `detail_patch_resolution`.
-    pub detail_patch_min_level: u32,
 }
 
 impl Default for TerrainRenderConfig {
@@ -173,24 +172,19 @@ impl Default for TerrainRenderConfig {
             recenter_threshold_m: 10_000.0,
             skirt_depth_m: 5.0,
             // 2^n + 1 samples preserve parent/child boundary sample alignment.
-            // Local LOD supplies spatial detail; keeping each worker bake at 33
-            // samples avoids delayed viewport publication and upload bursts.
+            // Spatial LOD supplies detail without requiring unsupported 4:1
+            // stitching at the boundary between two resolution tiers.
             patch_resolution: 33,
-            // Align denser geometry with the first local surface map level so
-            // material normals, terrain silhouette, and scatter refine together.
-            detail_patch_resolution: 65,
-            detail_patch_min_level: 12,
         }
     }
 }
 
 impl TerrainRenderConfig {
-    pub(crate) fn patch_resolution_for(&self, patch: TerrainPatch) -> u32 {
-        if patch.level >= self.detail_patch_min_level {
-            self.detail_patch_resolution
-        } else {
-            self.patch_resolution
-        }
+    /// Return the grid resolution for a patch while 2:1 edge stitching is the
+    /// only supported transition. Keep this policy centralized so a future 4:1
+    /// stitch implementation has one explicit configuration boundary to extend.
+    pub(crate) fn patch_resolution_for(&self, _patch: TerrainPatch) -> u32 {
+        self.patch_resolution
     }
 }
 
@@ -980,6 +974,20 @@ mod tests {
         }
         // Skirt quads are present: more indices than a flat grid alone.
         assert!(geom.indices.len() > (res - 1) * (res - 1) * 6);
+    }
+
+    #[test]
+    fn spatial_lod_transitions_keep_a_2_to_1_stitch_compatible_resolution() {
+        let config = TerrainRenderConfig::default();
+        let coarse = TerrainPatch::for_direction(DVec3::Z, 11);
+        let fine = TerrainPatch::for_direction(DVec3::Z, 12);
+
+        assert_eq!(config.patch_resolution_for(coarse), 33);
+        assert_eq!(
+            config.patch_resolution_for(fine),
+            config.patch_resolution_for(coarse),
+            "a 2:1 spatial LOD edge must not become a 4:1 grid-sample transition"
+        );
     }
 
     #[test]

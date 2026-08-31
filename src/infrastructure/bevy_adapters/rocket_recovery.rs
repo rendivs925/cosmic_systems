@@ -79,10 +79,15 @@ pub fn resolve_drone_ship_deck_contact(
         if normal.length_squared() < 0.5 {
             continue;
         }
-        let relative_position_m = rocket.dynamics.position_m - ship.state.position_m;
+        let lower_offset_world_m = rocket.dynamics.orientation * geometry.lower_extent_body_m();
+        let contact_position_m = rocket.dynamics.position_m + lower_offset_world_m;
+        let relative_position_m = contact_position_m - ship.state.position_m;
         let deck_altitude_m = relative_position_m.dot(normal);
         let deck_lateral_m = relative_position_m - normal * deck_altitude_m;
-        let relative_velocity_mps = rocket.dynamics.velocity_mps - ship.state.velocity_mps;
+        let relative_velocity_mps = rocket.dynamics.velocity_mps
+            + (rocket.dynamics.orientation * rocket.dynamics.angular_velocity_radps)
+                .cross(lower_offset_world_m)
+            - ship.state.velocity_mps;
 
         if target.deck_contact {
             // The deck is a moving resting-contact frame. Remove normal motion

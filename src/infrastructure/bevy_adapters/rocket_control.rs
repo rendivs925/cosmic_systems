@@ -1,15 +1,15 @@
 //! Guidance-command control and actuator-limit adapters.
 
 use crate::components::rocket::{
-    RocketCommands, RocketFlightConditions, RocketMissionState, RocketPhysicsState,
+    RocketCommands, RocketFlightConditions, RocketGeometry, RocketMissionState, RocketPhysicsState,
     RocketPropulsion, TorqueAccumulator,
 };
-use crate::domain::entities::rocket::EngineState;
+use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
 use crate::domain::services::control::control_torque_body;
 use crate::domain::services::rocket_propulsion::{
-    allocate_gimbal_deflections, clamp_gimbal, clamp_throttle_range, engine_thrust_n,
-    gimbal_torque_body, stage_throttle_envelope,
+    allocate_gimbal_deflections_at_stage_origin, clamp_throttle_range,
+    ignition_allowed_during_ullage, stage_gimbal_torque_body, stage_throttle_envelope,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::RocketAutopilot;
@@ -23,13 +23,14 @@ pub fn control_system(
         &mut RocketCommands,
         &RocketPhysicsState,
         &RocketPropulsion,
+        &RocketGeometry,
         &RocketFlightConditions,
         &mut RocketAutopilot,
         &RocketMissionState,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut commands, rocket, propulsion, conditions, mut autopilot, mission) in
+    for (mut commands, rocket, propulsion, geometry, conditions, mut autopilot, mission) in
         rocket_query.iter_mut()
     {
         let gains = autopilot.gains;
@@ -59,8 +60,14 @@ pub fn control_system(
         } else {
             propulsion.throttle
         };
-        let (gimbal_pitch, gimbal_yaw) = allocate_gimbal_deflections(
+        let attached_stages = &propulsion.vehicle.stages[propulsion.active_stage..];
+        let stage_origin_in_stack_m =
+            Rocket::stage_origin_in_stack_m(attached_stages, geometry.height_m, 0)
+                .expect("active stage was checked above")
+                .as_dvec3();
+        let (gimbal_pitch, gimbal_yaw) = allocate_gimbal_deflections_at_stage_origin(
             &stage.engines,
+            stage_origin_in_stack_m,
             rocket.dynamics.center_of_mass_m,
             torque,
             gimbal_throttle,
@@ -82,21 +89,15 @@ pub fn control_system(
             commands.rcs_torque_cmd_body = torque;
             continue;
         }
-        let gimbal_torque = stage
-            .engines
-            .iter()
-            .filter(|engine| engine.state == EngineState::Running)
-            .fold(DVec3::ZERO, |total, engine| {
-                total
-                    + gimbal_torque_body(
-                        engine.position_m.as_dvec3(),
-                        rocket.dynamics.center_of_mass_m,
-                        engine.thrust_axis.as_dvec3(),
-                        engine_thrust_n(engine, gimbal_throttle, conditions.ambient_pressure_pa),
-                        clamp_gimbal(commands.gimbal_pitch_cmd_rad, engine.gimbal_range_deg) as f64,
-                        clamp_gimbal(commands.gimbal_yaw_cmd_rad, engine.gimbal_range_deg) as f64,
-                    )
-            });
+        let gimbal_torque = stage_gimbal_torque_body(
+            &stage.engines,
+            stage_origin_in_stack_m,
+            rocket.dynamics.center_of_mass_m,
+            gimbal_throttle,
+            conditions.ambient_pressure_pa,
+            commands.gimbal_pitch_cmd_rad as f64,
+            commands.gimbal_yaw_cmd_rad as f64,
+        );
         // Gimbals receive the primary pitch/yaw command; RCS only supplies the
         // remaining torque (including roll) instead of doubling PID authority.
         commands.rcs_torque_cmd_body = torque - gimbal_torque;
@@ -122,6 +123,7 @@ pub fn actuation_system(
             RocketMissionState::Landed | RocketMissionState::Crashed
         ) {
             propulsion.throttle = 0.0;
+            command_engine_lifecycle(&mut propulsion, false);
             propulsion.gimbal_pitch_rad = 0.0;
             propulsion.gimbal_yaw_rad = 0.0;
             continue;
@@ -144,6 +146,8 @@ pub fn actuation_system(
         } else {
             clamp_throttle_range(slewed, envelope.0, envelope.1)
         };
+        let run_commanded = commands.throttle_cmd > 0.0 && propulsion.throttle > 0.0;
+        command_engine_lifecycle(&mut propulsion, run_commanded);
         propulsion.gimbal_pitch_rad = clamp_deflection(
             commands.gimbal_pitch_cmd_rad,
             limits.max_gimbal_deflection_rad,
@@ -153,5 +157,46 @@ pub fn actuation_system(
             limits.max_gimbal_deflection_rad,
         );
         torque_accum.0 += clamp_rcs_torque(commands.rcs_torque_cmd_body, limits.max_rcs_torque_nm);
+    }
+}
+
+/// Actuation is the sole owner of commanded starts and cutoffs. The lifecycle
+/// state then drives every downstream force, torque, and mass-flow calculation.
+fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bool) {
+    let ignition_permitted = ignition_allowed_during_ullage(
+        propulsion.time_since_separation_s,
+        propulsion.ullage_settle_time_s,
+    );
+    let core_has_propellant = propulsion
+        .propellant_remaining_kg
+        .get(propulsion.active_stage)
+        .copied()
+        .zip(propulsion.vehicle.stages.get(propulsion.active_stage))
+        .is_some_and(|(remaining_kg, stage)| {
+            remaining_kg > stage.recovery_propellant_reserve_kg.unwrap_or(0.0)
+        });
+    if let Some(stage) = propulsion.vehicle.stages.get_mut(propulsion.active_stage) {
+        for engine in &mut stage.engines {
+            if core_has_propellant {
+                engine.command_lifecycle(run_commanded, ignition_permitted);
+            } else {
+                engine.deplete();
+            }
+        }
+    }
+    if propulsion.boosters_attached {
+        let boosters_have_propellant = propulsion
+            .booster_propellant_remaining_kg
+            .iter()
+            .any(|remaining_kg| *remaining_kg > 0.0);
+        if let Some(boosters) = &mut propulsion.vehicle.parallel_boosters {
+            for engine in &mut boosters.stage.engines {
+                if boosters_have_propellant {
+                    engine.command_lifecycle(run_commanded, ignition_permitted);
+                } else {
+                    engine.deplete();
+                }
+            }
+        }
     }
 }

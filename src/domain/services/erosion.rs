@@ -134,15 +134,128 @@ impl Default for ErosionConfig {
     }
 }
 
+impl ErosionConfig {
+    /// Reject values that would make the static erosion model non-physical or
+    /// numerically undefined before any tile work is scheduled.
+    pub fn validate(&self) {
+        assert!(
+            self.tile_deg.is_finite() && (0.0 < self.tile_deg && self.tile_deg <= 180.0),
+            "erosion tile_deg must be finite and in (0, 180] degrees"
+        );
+        assert!(
+            self.resolution >= 2,
+            "erosion resolution must contain at least two vertices per side"
+        );
+        assert!(
+            self.talus_slope.is_finite() && self.talus_slope >= 0.0,
+            "erosion talus_slope must be finite and non-negative"
+        );
+        assert!(
+            self.droplet_inertia.is_finite() && (0.0..=1.0).contains(&self.droplet_inertia),
+            "erosion droplet_inertia must be finite and in [0, 1]"
+        );
+        assert!(
+            self.droplet_capacity.is_finite() && self.droplet_capacity >= 0.0,
+            "erosion droplet_capacity must be finite and non-negative"
+        );
+        assert!(
+            self.droplet_erosion.is_finite() && self.droplet_erosion >= 0.0,
+            "erosion droplet_erosion must be finite and non-negative"
+        );
+        assert!(
+            self.droplet_deposition.is_finite() && (0.0..=1.0).contains(&self.droplet_deposition),
+            "erosion droplet_deposition must be finite and in [0, 1]"
+        );
+        assert!(
+            self.droplet_evaporation.is_finite() && (0.0..=1.0).contains(&self.droplet_evaporation),
+            "erosion droplet_evaporation must be finite and in [0, 1]"
+        );
+        assert!(
+            self.river_flow_threshold.is_finite() && self.river_flow_threshold > 0.0,
+            "erosion river_flow_threshold must be finite and positive"
+        );
+        assert!(
+            self.river_depth_m.is_finite() && self.river_depth_m >= 0.0,
+            "erosion river_depth_m must be finite and non-negative"
+        );
+        assert!(
+            self.edge_feather.is_finite() && (0.0..=0.5).contains(&self.edge_feather),
+            "erosion edge_feather must be finite and in [0, 0.5]"
+        );
+        assert!(
+            self.cache_max_tiles > 0,
+            "erosion cache_max_tiles must be positive"
+        );
+    }
+}
+
 fn idx(x: usize, y: usize, w: usize) -> usize {
     y * w + x
 }
 
+/// Grid distances used for D8 routing. Longitude spacing is row-specific so
+/// tiles retain sensible east-west slopes as they approach a pole.
+#[derive(Debug, Clone)]
+struct GridSpacing {
+    north_south_m: f64,
+    east_west_m: Vec<f64>,
+}
+
+impl GridSpacing {
+    fn uniform(spacing_m: f64, rows: usize) -> Self {
+        Self {
+            north_south_m: spacing_m,
+            east_west_m: vec![spacing_m; rows],
+        }
+    }
+
+    fn from_tile(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64, rows: usize) -> Self {
+        let row_count = rows.max(2);
+        let north_south_m = ((lat_max - lat_min) / (row_count - 1) as f64).abs() * 111_320.0;
+        let longitude_step_deg = ((lon_max - lon_min) / (row_count - 1) as f64).abs();
+        let east_west_m = (0..rows)
+            .map(|y| {
+                let lat = lat_min + (lat_max - lat_min) * y as f64 / (row_count - 1) as f64;
+                (longitude_step_deg * 111_320.0 * lat.to_radians().cos().abs()).max(1.0)
+            })
+            .collect();
+        Self {
+            north_south_m: north_south_m.max(1.0),
+            east_west_m,
+        }
+    }
+
+    fn neighbor_distance_m(&self, y: usize, ny: usize, dx: i64, dy: i64) -> f64 {
+        let north_south_m = if dy == 0 { 0.0 } else { self.north_south_m };
+        let east_west_m = if dx == 0 {
+            0.0
+        } else {
+            (self.east_west_m[y] + self.east_west_m[ny]) * 0.5
+        };
+        north_south_m.hypot(east_west_m).max(f64::EPSILON)
+    }
+}
+
 /// Steepest-downhill neighbour of a cell. Returns its flat index and the drop
 /// (height difference), or `None` for a local minimum / out-of-bounds.
+#[cfg(test)]
 fn steepest_downhill(x: usize, y: usize, h: &[f32], w: usize, hgt: usize) -> Option<(usize, f32)> {
+    let spacing = GridSpacing::uniform(1.0, hgt);
+    steepest_downhill_with_spacing(x, y, h, w, hgt, &spacing).map(|(index, drop, _)| (index, drop))
+}
+
+/// Distance-aware D8 choice. A lower diagonal is not selected over a steeper
+/// cardinal descent merely because its raw height drop is larger.
+fn steepest_downhill_with_spacing(
+    x: usize,
+    y: usize,
+    h: &[f32],
+    w: usize,
+    hgt: usize,
+    spacing: &GridSpacing,
+) -> Option<(usize, f32, f64)> {
     let mut best = None;
-    let mut best_drop = 0.0f32;
+    let mut best_slope = 0.0f64;
     for dy in -1i64..=1 {
         for dx in -1i64..=1 {
             if dx == 0 && dy == 0 {
@@ -154,9 +267,11 @@ fn steepest_downhill(x: usize, y: usize, h: &[f32], w: usize, hgt: usize) -> Opt
                 continue;
             }
             let drop = h[idx(x, y, w)] - h[idx(nx as usize, ny as usize, w)];
-            if drop > best_drop {
-                best_drop = drop;
-                best = Some((idx(nx as usize, ny as usize, w), drop));
+            let distance_m = spacing.neighbor_distance_m(y, ny as usize, dx, dy);
+            let slope = f64::from(drop) / distance_m;
+            if slope > best_slope {
+                best_slope = slope;
+                best = Some((idx(nx as usize, ny as usize, w), drop, distance_m));
             }
         }
     }
@@ -175,14 +290,28 @@ pub fn thermal_erode(
     talus_slope: f64,
     iterations: u32,
 ) {
+    let spacing = GridSpacing::uniform(spacing_m, hgt);
+    thermal_erode_with_spacing(h, w, hgt, &spacing, talus_slope, iterations);
+}
+
+fn thermal_erode_with_spacing(
+    h: &mut [f32],
+    w: usize,
+    hgt: usize,
+    spacing: &GridSpacing,
+    talus_slope: f64,
+    iterations: u32,
+) {
     for _ in 0..iterations {
         for y in 0..hgt {
             for x in 0..w {
                 let i = idx(x, y, w);
-                if let Some((n, drop)) = steepest_downhill(x, y, h, w, hgt) {
-                    let slope = drop as f64 / spacing_m;
+                if let Some((n, drop, distance_m)) =
+                    steepest_downhill_with_spacing(x, y, h, w, hgt, spacing)
+                {
+                    let slope = f64::from(drop) / distance_m;
                     if slope > talus_slope {
-                        let amount = 0.5 * (drop as f64 - talus_slope * spacing_m);
+                        let amount = 0.5 * (f64::from(drop) - talus_slope * distance_m);
                         h[i] -= amount as f32;
                         h[n] += amount as f32;
                     }
@@ -204,6 +333,19 @@ pub fn hydraulic_erode(
     seed: u64,
     cfg: &ErosionConfig,
 ) {
+    let spacing = GridSpacing::uniform(spacing_m, hgt);
+    hydraulic_erode_with_spacing(h, w, hgt, &spacing, droplets, seed, cfg);
+}
+
+fn hydraulic_erode_with_spacing(
+    h: &mut [f32],
+    w: usize,
+    hgt: usize,
+    spacing: &GridSpacing,
+    droplets: u32,
+    seed: u64,
+    cfg: &ErosionConfig,
+) {
     let mut rng = Rng::new(seed);
     for _ in 0..droplets {
         let mut x = rng.usize(w);
@@ -213,11 +355,13 @@ pub fn hydraulic_erode(
 
         for _ in 0..512 {
             let i = idx(x, y, w);
-            let Some((n, drop)) = steepest_downhill(x, y, h, w, hgt) else {
+            let Some((n, drop, distance_m)) =
+                steepest_downhill_with_spacing(x, y, h, w, hgt, spacing)
+            else {
                 break; // local minimum
             };
             let (nx, ny) = (n % w, n / w);
-            let slope = drop as f64 / spacing_m;
+            let slope = f64::from(drop) / distance_m;
             velocity = (velocity + cfg.droplet_inertia * slope).clamp(0.0, 64.0);
             let capacity = velocity.max(0.1) * cfg.droplet_capacity;
 
@@ -226,10 +370,12 @@ pub fn hydraulic_erode(
                 h[i] += deposit as f32;
                 sediment -= deposit;
             } else {
-                let erode = (capacity - sediment).min(cfg.droplet_erosion);
-                // Don't erode below the sea floor (0 m reference) too hard.
-                h[i] = (h[i] - erode as f32).max(-8000.0);
-                sediment += erode;
+                let requested = (capacity - sediment).min(cfg.droplet_erosion);
+                // The sediment load must match the material actually removed
+                // after applying the -8000 m floor.
+                let before = h[i];
+                h[i] = (before - requested as f32).max(-8000.0);
+                sediment += f64::from((before - h[i]).max(0.0));
             }
 
             x = nx;
@@ -251,6 +397,16 @@ pub fn hydraulic_erode(
 /// steepest downhill neighbour, processed in descending-height order so
 /// upslope flow is fully accumulated before it is passed on.
 pub fn flow_accumulation(h: &[f32], w: usize, hgt: usize) -> Vec<f32> {
+    let spacing = GridSpacing::uniform(1.0, hgt);
+    flow_accumulation_with_spacing(h, w, hgt, &spacing)
+}
+
+fn flow_accumulation_with_spacing(
+    h: &[f32],
+    w: usize,
+    hgt: usize,
+    spacing: &GridSpacing,
+) -> Vec<f32> {
     let mut acc = vec![1.0f32; w * hgt];
     FLOW_ORDER_SCRATCH.with(|scratch| {
         let mut order = scratch.borrow_mut();
@@ -258,7 +414,9 @@ pub fn flow_accumulation(h: &[f32], w: usize, hgt: usize) -> Vec<f32> {
         order.extend(0..w * hgt);
         order.sort_by(|&a, &b| h[b].partial_cmp(&h[a]).unwrap_or(std::cmp::Ordering::Equal));
         for &i in order.iter() {
-            if let Some((n, _)) = steepest_downhill(i % w, i / w, h, w, hgt) {
+            if let Some((n, _, _)) =
+                steepest_downhill_with_spacing(i % w, i / w, h, w, hgt, spacing)
+            {
                 acc[n] += acc[i];
             }
         }
@@ -305,28 +463,26 @@ pub fn erode_tile(
         for x in 0..res {
             let lon = lon_min + (lon_max - lon_min) * x as f64 / (res - 1) as f64;
             let lat = lat_min + (lat_max - lat_min) * y as f64 / (res - 1) as f64;
+            let (lat, lon) = canonical_lat_lon(lat, lon);
             let i = idx(x, y, res);
             h[i] = base.height_m(lat, lon) as f32;
             moisture[i] = base.moisture(lat, lon).clamp(0.0, 1.0) as f32;
         }
     }
 
-    let spacing_m = {
-        let dlat = (lat_max - lat_min) / (res - 1) as f64;
-        dlat.abs() * 111_320.0
-    };
+    let spacing = GridSpacing::from_tile(lat_min, lat_max, lon_min, lon_max, res);
 
-    thermal_erode(
+    thermal_erode_with_spacing(
         &mut h,
         res,
         res,
-        spacing_m,
+        &spacing,
         cfg.talus_slope,
         cfg.thermal_iterations,
     );
-    hydraulic_erode(&mut h, res, res, spacing_m, cfg.droplets, seed, cfg);
+    hydraulic_erode_with_spacing(&mut h, res, res, &spacing, cfg.droplets, seed, cfg);
 
-    let flow = flow_accumulation(&h, res, res);
+    let flow = flow_accumulation_with_spacing(&h, res, res, &spacing);
     carve_rivers(
         &mut h,
         &flow,
@@ -396,6 +552,27 @@ fn erosion_weight(edge_factor: f64, edge_feather: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Map equivalent geographic coordinates onto one stable representation before
+/// they reach the tile cache or its raster sampler. Longitude uses [-180, 180)
+/// and latitude is reflected across either pole, with the corresponding
+/// half-turn in longitude.
+fn canonical_lat_lon(latitude_deg: f64, longitude_deg: f64) -> (f64, f64) {
+    assert!(
+        latitude_deg.is_finite() && longitude_deg.is_finite(),
+        "terrain latitude and longitude must be finite"
+    );
+    let latitude_phase = (latitude_deg + 90.0).rem_euclid(360.0);
+    let (latitude_deg, longitude_deg) = if latitude_phase <= 180.0 {
+        (latitude_phase - 90.0, longitude_deg)
+    } else {
+        (270.0 - latitude_phase, longitude_deg + 180.0)
+    };
+    (
+        latitude_deg,
+        (longitude_deg + 180.0).rem_euclid(360.0) - 180.0,
+    )
+}
+
 /// A [`TerrainSource`] that samples erosion rasters. Tiles are generated
 /// lazily on first access, cached with a cap, and feathered back to the base
 /// analytic source near tile boundaries so independent tiles stay continuous.
@@ -403,9 +580,49 @@ fn erosion_weight(edge_factor: f64, edge_feather: f64) -> f64 {
 pub struct ErodedTerrainSource {
     base: Arc<dyn TerrainSource>,
     cfg: ErosionConfig,
-    cache: Mutex<HashMap<(i64, i64), Arc<HeightRaster>>>,
-    order: Mutex<Vec<(i64, i64)>>,
+    cache: Mutex<TileCache>,
     in_flight: Mutex<HashMap<(i64, i64), Arc<TileBuild>>>,
+}
+
+/// One lock keeps LRU metadata and resident tiles coherent. The vector is the
+/// complete recency order, so eviction never depends on hash-map iteration.
+#[derive(Debug)]
+struct TileCache {
+    tiles: HashMap<(i64, i64), Arc<HeightRaster>>,
+    order: Vec<(i64, i64)>,
+}
+
+impl TileCache {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            tiles: HashMap::with_capacity(capacity),
+            order: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn get(&mut self, key: (i64, i64)) -> Option<Arc<HeightRaster>> {
+        let tile = self.tiles.get(&key).cloned();
+        if tile.is_some() {
+            self.touch(key);
+        }
+        tile
+    }
+
+    fn insert(&mut self, key: (i64, i64), tile: Arc<HeightRaster>, capacity: usize) {
+        while self.tiles.len() >= capacity {
+            let lru = self.order.remove(0);
+            self.tiles.remove(&lru);
+        }
+        self.tiles.insert(key, tile);
+        self.order.push(key);
+    }
+
+    fn touch(&mut self, key: (i64, i64)) {
+        if let Some(index) = self.order.iter().position(|candidate| *candidate == key) {
+            self.order.remove(index);
+            self.order.push(key);
+        }
+    }
 }
 
 /// Shared completion state for one tile bake. It prevents concurrent geometry
@@ -419,19 +636,20 @@ struct TileBuild {
 
 impl ErodedTerrainSource {
     pub fn new(base: Arc<dyn TerrainSource>, cfg: ErosionConfig) -> Self {
+        cfg.validate();
         let cache_capacity = cfg.cache_max_tiles;
         Self {
             base,
             cfg,
             // Raster buffers are retained by the bounded cache, so reserve all
             // metadata storage before the first terrain task reaches it.
-            cache: Mutex::new(HashMap::with_capacity(cache_capacity)),
-            order: Mutex::new(Vec::with_capacity(cache_capacity)),
+            cache: Mutex::new(TileCache::with_capacity(cache_capacity)),
             in_flight: Mutex::new(HashMap::with_capacity(cache_capacity.min(8))),
         }
     }
 
     fn tile_key(lat: f64, lon: f64, tile_deg: f64) -> (i64, i64) {
+        let (lat, lon) = canonical_lat_lon(lat, lon);
         let tx = (lon / tile_deg).floor() as i64;
         let ty = (lat / tile_deg).floor() as i64;
         (tx, ty)
@@ -444,16 +662,14 @@ impl ErodedTerrainSource {
     }
 
     fn get_tile(&self, lat: f64, lon: f64) -> Arc<HeightRaster> {
+        let (lat, lon) = canonical_lat_lon(lat, lon);
         let tile_deg = self.cfg.tile_deg;
         let (tx, ty) = Self::tile_key(lat, lon, tile_deg);
 
         // Check cache first.
         {
-            let cache = self.cache.lock().expect("erosion cache lock");
-            if let Some(t) = cache.get(&(tx, ty)) {
-                let tile = Arc::clone(t);
-                drop(cache);
-                self.touch((tx, ty));
+            let mut cache = self.cache.lock().expect("erosion cache lock");
+            if let Some(tile) = cache.get((tx, ty)) {
                 return tile;
             }
         }
@@ -494,16 +710,11 @@ impl ErodedTerrainSource {
             self.tile_seed(tx, ty),
         ));
 
-        let mut cache = self.cache.lock().expect("erosion cache lock");
-        let mut order = self.order.lock().expect("erosion order lock");
-        if cache.len() >= self.cfg.cache_max_tiles {
-            if let Some(lru) = order.first().copied() {
-                cache.remove(&lru);
-                order.remove(0);
-            }
-        }
-        cache.insert((tx, ty), Arc::clone(&tile));
-        order.push((tx, ty));
+        self.cache.lock().expect("erosion cache lock").insert(
+            (tx, ty),
+            Arc::clone(&tile),
+            self.cfg.cache_max_tiles,
+        );
 
         {
             let mut completed_tile = build.tile.lock().expect("erosion tile build lock");
@@ -516,35 +727,12 @@ impl ErodedTerrainSource {
             .remove(&(tx, ty));
         tile
     }
-
-    fn cached_tile(&self, lat: f64, lon: f64) -> Option<Arc<HeightRaster>> {
-        let key = Self::tile_key(lat, lon, self.cfg.tile_deg);
-        let tile = self
-            .cache
-            .lock()
-            .expect("erosion cache lock")
-            .get(&key)
-            .cloned();
-        if tile.is_some() {
-            self.touch(key);
-        }
-        tile
-    }
-
-    fn touch(&self, key: (i64, i64)) {
-        let mut order = self.order.lock().expect("erosion order lock");
-        if let Some(index) = order.iter().position(|candidate| *candidate == key) {
-            order.remove(index);
-            order.push(key);
-        }
-    }
 }
 
 impl TerrainSource for ErodedTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let Some(tile) = self.cached_tile(latitude_deg, longitude_deg) else {
-            return self.base.height_m(latitude_deg, longitude_deg);
-        };
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        let tile = self.get_tile(latitude_deg, longitude_deg);
         let (eroded, edge) = sample(&tile, latitude_deg, longitude_deg);
         let weight = erosion_weight(edge, self.cfg.edge_feather);
         if weight == 1.0 {
@@ -556,31 +744,17 @@ impl TerrainSource for ErodedTerrainSource {
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
         self.base.prepare_sample(latitude_deg, longitude_deg);
         self.get_tile(latitude_deg, longitude_deg);
     }
 
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let Some(tile) = self.cached_tile(latitude_deg, longitude_deg) else {
-            return self.base.moisture(latitude_deg, longitude_deg);
-        };
-        let w = tile.width as usize;
-        let hgt = tile.height as usize;
-        let span_lat = (tile.lat_max - tile.lat_min).abs().max(1e-12);
-        let span_lon = (tile.lon_max - tile.lon_min).abs().max(1e-12);
-        let fy = ((latitude_deg - tile.lat_min) / span_lat * (hgt - 1) as f64)
-            .clamp(0.0, (hgt - 1) as f64);
-        let fx =
-            ((longitude_deg - tile.lon_min) / span_lon * (w - 1) as f64).clamp(0.0, (w - 1) as f64);
-        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
-        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(hgt - 1));
-        let dx = fx - x0 as f64;
-        let dy = fy - y0 as f64;
-        let at = |x: usize, y: usize| tile.moisture[y * w + x] as f64;
-        let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * dx;
-        let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * dx;
-        let eroded = (top + (bottom - top) * dy).clamp(0.0, 1.0);
-        let edge_factor = sample(&tile, latitude_deg, longitude_deg).1;
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        let tile = self.get_tile(latitude_deg, longitude_deg);
+        let (eroded, edge_factor) =
+            sample_channel(&tile, &tile.moisture, latitude_deg, longitude_deg);
+        let eroded = eroded.clamp(0.0, 1.0);
         let weight = erosion_weight(edge_factor, self.cfg.edge_feather);
         if weight == 1.0 {
             eroded
@@ -591,9 +765,8 @@ impl TerrainSource for ErodedTerrainSource {
     }
 
     fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let Some(tile) = self.cached_tile(latitude_deg, longitude_deg) else {
-            return self.base.river_strength(latitude_deg, longitude_deg);
-        };
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        let tile = self.get_tile(latitude_deg, longitude_deg);
         let (flow, edge) = sample_channel(&tile, &tile.flow, latitude_deg, longitude_deg);
         // A channel begins at the configured carving threshold and reaches full
         // visual strength at three times that flow, matching the carve cap.
@@ -607,19 +780,22 @@ impl TerrainSource for ErodedTerrainSource {
     }
 
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
         self.base.overview_height_m(latitude_deg, longitude_deg)
     }
 
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
         self.base.overview_moisture(latitude_deg, longitude_deg)
     }
 
     fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
         self.base.overview_slope_deg(latitude_deg, longitude_deg)
     }
 
     fn zone_lat(&self, latitude_deg: f64) -> f64 {
-        self.base.zone_lat(latitude_deg)
+        self.base.zone_lat(canonical_lat_lon(latitude_deg, 0.0).0)
     }
 }
 
@@ -779,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn river_strength_uses_cached_flow_without_triggering_a_bake() {
+    fn river_strength_bakes_the_same_authoritative_tile_as_other_channels() {
         let source = ErodedTerrainSource::new(
             Arc::new(ProceduralTerrainSource::new(0, 0.0, 0.0, 0)),
             ErosionConfig {
@@ -791,8 +967,6 @@ mod tests {
             },
         );
 
-        assert_eq!(source.river_strength(11.0, 21.0), 0.0);
-        source.prepare_sample(11.0, 21.0);
         let strength = source.river_strength(11.0, 21.0);
         assert!((0.0..=1.0).contains(&strength));
         assert!(
@@ -879,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn uncached_fixed_step_height_uses_base_without_baking() {
+    fn height_m_bakes_an_authoritative_tile_without_prepare_sample() {
         let base = Arc::new(CountingTerrain::default());
         let source = ErodedTerrainSource::new(
             base.clone(),
@@ -894,8 +1068,8 @@ mod tests {
         assert_eq!(source.height_m(11.0, 21.0), 0.0);
         assert_eq!(
             base.height_samples.load(Ordering::Relaxed),
-            1,
-            "height_m must not synchronously generate a 16x16 erosion raster"
+            16 * 16,
+            "height_m must sample the same erosion tile as prepare_sample"
         );
     }
 
@@ -917,8 +1091,172 @@ mod tests {
         source.prepare_sample(10.5, 24.5);
 
         let cache = source.cache.lock().expect("erosion cache lock");
-        assert!(cache.contains_key(&(10, 5)));
-        assert!(!cache.contains_key(&(11, 5)));
-        assert!(cache.contains_key(&(12, 5)));
+        assert!(cache.tiles.contains_key(&(10, 5)));
+        assert!(!cache.tiles.contains_key(&(11, 5)));
+        assert!(cache.tiles.contains_key(&(12, 5)));
+    }
+
+    #[test]
+    fn terrain_channels_are_cache_history_independent() {
+        let source = ErodedTerrainSource::new(
+            Arc::new(base()),
+            ErosionConfig {
+                resolution: 16,
+                droplets: 100,
+                thermal_iterations: 1,
+                cache_max_tiles: 1,
+                river_flow_threshold: 0.5,
+                ..cfg()
+            },
+        );
+        let coordinate = (11.0, 21.0);
+        let before_prepare = (
+            source.height_m(coordinate.0, coordinate.1),
+            source.moisture(coordinate.0, coordinate.1),
+            source.river_strength(coordinate.0, coordinate.1),
+        );
+
+        source.prepare_sample(coordinate.0, coordinate.1);
+        assert_eq!(
+            before_prepare,
+            (
+                source.height_m(coordinate.0, coordinate.1),
+                source.moisture(coordinate.0, coordinate.1),
+                source.river_strength(coordinate.0, coordinate.1),
+            ),
+            "prepare_sample must not change an authoritative terrain result"
+        );
+
+        source.prepare_sample(13.0, 23.0); // Evicts the coordinate's only tile.
+        assert_eq!(
+            before_prepare,
+            (
+                source.height_m(coordinate.0, coordinate.1),
+                source.moisture(coordinate.0, coordinate.1),
+                source.river_strength(coordinate.0, coordinate.1),
+            ),
+            "regenerating an evicted tile must reproduce every terrain channel"
+        );
+    }
+
+    #[test]
+    fn canonical_coordinates_share_tile_keys_and_samples() {
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
+
+        assert_eq!(
+            ErodedTerrainSource::tile_key(10.5, 21.0, 2.0),
+            ErodedTerrainSource::tile_key(10.5, 381.0, 2.0),
+            "longitudes separated by a full turn must share a tile"
+        );
+        assert_eq!(
+            ErodedTerrainSource::tile_key(100.0, 20.0, 2.0),
+            ErodedTerrainSource::tile_key(80.0, -160.0, 2.0),
+            "coordinates reflected across the north pole must share a tile"
+        );
+
+        for ((latitude_a, longitude_a), (latitude_b, longitude_b)) in [
+            ((10.5, 21.0), (10.5, 381.0)),
+            ((100.0, 20.0), (80.0, -160.0)),
+        ] {
+            assert_eq!(
+                source.height_m(latitude_a, longitude_a),
+                source.height_m(latitude_b, longitude_b)
+            );
+            assert_eq!(
+                source.moisture(latitude_a, longitude_a),
+                source.moisture(latitude_b, longitude_b)
+            );
+            assert_eq!(
+                source.river_strength(latitude_a, longitude_a),
+                source.river_strength(latitude_b, longitude_b)
+            );
+        }
+    }
+
+    #[test]
+    fn erosion_config_rejects_non_physical_values_at_source_construction() {
+        for invalid in [
+            ErosionConfig {
+                tile_deg: f64::NAN,
+                ..cfg()
+            },
+            ErosionConfig {
+                resolution: 1,
+                ..cfg()
+            },
+            ErosionConfig {
+                droplet_evaporation: 1.1,
+                ..cfg()
+            },
+            ErosionConfig {
+                river_flow_threshold: 0.0,
+                ..cfg()
+            },
+            ErosionConfig {
+                edge_feather: 0.6,
+                ..cfg()
+            },
+            ErosionConfig {
+                cache_max_tiles: 0,
+                ..cfg()
+            },
+        ] {
+            assert!(std::panic::catch_unwind(|| ErodedTerrainSource::new(
+                Arc::new(base()),
+                invalid
+            ))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn hydraulic_erosion_only_deposits_material_removed_above_the_floor() {
+        let mut heights = vec![-7_999.9f32, -8_000.0];
+        let initial_total: f32 = heights.iter().sum();
+        let config = ErosionConfig {
+            droplet_inertia: 1.0,
+            droplet_capacity: 10.0,
+            droplet_erosion: 0.3,
+            droplet_evaporation: 0.0,
+            ..cfg()
+        };
+        let seed = (1..)
+            .find(|&candidate| Rng::new(candidate).usize(2) == 0)
+            .expect("a deterministic seed must select the uphill cell");
+
+        hydraulic_erode(&mut heights, 2, 1, 1.0, 1, seed, &config);
+        let final_total: f32 = heights.iter().sum();
+        assert!(
+            (final_total - initial_total).abs() < 0.001,
+            "the floor must not create sediment: {initial_total} -> {final_total}"
+        );
+        assert!(heights.iter().all(|height| *height >= -8_000.0));
+    }
+
+    #[test]
+    fn d8_uses_distance_aware_and_latitude_aware_slopes() {
+        let mut heights = vec![20.0f32; 3 * 3];
+        heights[idx(1, 1, 3)] = 10.0;
+        heights[idx(2, 1, 3)] = 1.0; // Raw drop 9 over 10 m.
+        heights[idx(2, 2, 3)] = 0.0; // Raw drop 10 over sqrt(200) m.
+        let uniform = GridSpacing::uniform(10.0, 3);
+        assert_eq!(
+            steepest_downhill_with_spacing(1, 1, &heights, 3, 3, &uniform)
+                .map(|(index, _, _)| index),
+            Some(idx(2, 1, 3)),
+            "D8 must select the steeper cardinal slope over the lower diagonal"
+        );
+
+        let polar = GridSpacing::from_tile(88.0, 90.0, 0.0, 2.0, 3);
+        assert!(polar.east_west_m[1] < polar.north_south_m);
+        heights.fill(20.0);
+        heights[idx(1, 1, 3)] = 10.0;
+        heights[idx(2, 1, 3)] = 9.0; // Small drop over the short polar east-west cell.
+        heights[idx(1, 2, 3)] = 0.0; // Larger drop over one latitude cell.
+        assert_eq!(
+            steepest_downhill_with_spacing(1, 1, &heights, 3, 3, &polar).map(|(index, _, _)| index),
+            Some(idx(2, 1, 3)),
+            "D8 must account for the latitude-dependent east-west cell width"
+        );
     }
 }

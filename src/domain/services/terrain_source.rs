@@ -550,11 +550,9 @@ impl ProceduralTerrainSource {
         }
         let t = d / radius_deg;
         let bowl = -(1.0 - t * t) * depth_m;
-        let rim = if t > 0.7 {
-            (t - 0.7) / 0.3 * depth_m * 0.3
-        } else {
-            0.0
-        };
+        // A bounded lip rises inside the outer band and returns to zero at the
+        // crater boundary, preserving height and normal continuity outside it.
+        let rim = ss(0.7, 0.85, t) * (1.0 - ss(0.85, 1.0, t)) * depth_m * 0.8;
         bowl + rim
     }
 
@@ -768,12 +766,20 @@ pub struct SiteAwareTerrainSource {
 
 impl SiteAwareTerrainSource {
     pub fn new(base: std::sync::Arc<dyn TerrainSource>, sites: Vec<TerrainSite>) -> Self {
-        let sites = sites
+        let sites: Vec<_> = sites
             .into_iter()
             .map(|site| {
                 assert!(
-                    site.radius_deg >= 0.0 && site.blend_radius_deg > site.radius_deg,
-                    "terrain site '{}' must have a non-negative flat radius and a larger blend radius",
+                    site.latitude_deg.is_finite()
+                        && (-90.0..=90.0).contains(&site.latitude_deg)
+                        && site.longitude_deg.is_finite()
+                        && site.elevation_m.is_finite()
+                        && site.radius_deg.is_finite()
+                        && site.blend_radius_deg.is_finite()
+                        && site.radius_deg >= 0.0
+                        && site.blend_radius_deg > site.radius_deg
+                        && site.blend_radius_deg <= 180.0,
+                    "terrain site '{}' must have finite coordinates/elevation, a non-negative flat radius, and a larger blend radius no greater than 180 degrees",
                     site.name
                 );
                 CalibratedTerrainSite {
@@ -782,6 +788,22 @@ impl SiteAwareTerrainSource {
                 }
             })
             .collect();
+
+        for (index, site) in sites.iter().enumerate() {
+            for other in sites.iter().skip(index + 1) {
+                assert!(
+                    central_angle_deg(
+                        site.site.latitude_deg,
+                        site.site.longitude_deg,
+                        other.site.latitude_deg,
+                        other.site.longitude_deg,
+                    ) >= site.site.blend_radius_deg + other.site.blend_radius_deg,
+                    "terrain grade regions '{}' and '{}' overlap",
+                    site.site.name,
+                    other.site.name,
+                );
+            }
+        }
         Self { base, sites }
     }
 }
@@ -1002,7 +1024,7 @@ impl EarthTerrainSource {
             TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0)),
             Some(TerrainElevationLayer::new(
                 eroded,
-                ElevationBounds::new(-10_000.0, 20_000_000.0),
+                ElevationBounds::new(-10_000.0, 20_000.0),
             )),
             Some(TerrainDetailLayer::new(
                 detail,
@@ -1036,7 +1058,7 @@ impl EarthTerrainSource {
                 latitude_deg: ksc_latitude_deg,
                 longitude_deg: ksc_longitude_deg,
                 radius_deg: 0.00015,
-                blend_radius_deg: 0.1,
+                blend_radius_deg: 0.04,
                 elevation_m: 2.0,
             },
             TerrainSite {
@@ -1156,6 +1178,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn earth_configured_pads_have_their_configured_elevations() {
+        let source = EarthTerrainSource::new();
+
+        for site in EarthTerrainSource::sites() {
+            assert_eq!(
+                source.height_m(site.latitude_deg, site.longitude_deg),
+                site.elevation_m,
+                "{} pad must retain its configured elevation",
+                site.name
+            );
+        }
+    }
+
     #[derive(Debug, Default)]
     struct CountingTerrainSource(AtomicUsize);
 
@@ -1187,6 +1223,80 @@ mod tests {
 
         let _ = source.height_m(0.015, 0.0);
         assert!(base.0.load(Ordering::Relaxed) >= 2);
+    }
+
+    #[test]
+    fn terrain_site_validation_rejects_invalid_coordinates_elevation_and_radii() {
+        let valid = TerrainSite {
+            name: "valid",
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            radius_deg: 0.01,
+            blend_radius_deg: 0.02,
+            elevation_m: 0.0,
+        };
+        let invalid_sites = [
+            TerrainSite {
+                latitude_deg: f64::NAN,
+                ..valid
+            },
+            TerrainSite {
+                longitude_deg: f64::INFINITY,
+                ..valid
+            },
+            TerrainSite {
+                elevation_m: f64::NEG_INFINITY,
+                ..valid
+            },
+            TerrainSite {
+                radius_deg: -0.01,
+                ..valid
+            },
+            TerrainSite {
+                blend_radius_deg: 181.0,
+                ..valid
+            },
+        ];
+
+        for site in invalid_sites {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    SiteAwareTerrainSource::new(Arc::new(FlatTerrainSource), vec![site]);
+                }))
+                .is_err(),
+                "invalid site {site:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn site_aware_source_rejects_overlapping_grade_regions() {
+        let sites = vec![
+            TerrainSite {
+                name: "first",
+                latitude_deg: 0.0,
+                longitude_deg: 0.0,
+                radius_deg: 0.001,
+                blend_radius_deg: 0.02,
+                elevation_m: 1.0,
+            },
+            TerrainSite {
+                name: "second",
+                latitude_deg: 0.03,
+                longitude_deg: 0.0,
+                radius_deg: 0.001,
+                blend_radius_deg: 0.02,
+                elevation_m: 2.0,
+            },
+        ];
+
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                SiteAwareTerrainSource::new(Arc::new(FlatTerrainSource), sites);
+            }))
+            .is_err(),
+            "overlapping grade regions must be rejected rather than selecting by site order"
+        );
     }
 
     #[test]
@@ -1333,15 +1443,13 @@ mod tests {
 
     #[test]
     fn collision_and_render_samples_agree_on_composed_height() {
+        let base = Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0));
         let detail = Arc::new(LocalDetailTerrainSource::new(
             Arc::new(FlatTerrainSource),
             99,
         ));
         let source = LayeredTerrainSource::new(
-            TerrainElevationLayer::new(
-                Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0)),
-                ElevationBounds::new(-2_500.0, 3_700.0),
-            ),
+            TerrainElevationLayer::new(base.clone(), base.elevation_bounds_m()),
             None,
             Some(TerrainDetailLayer::new(
                 detail,
@@ -1461,6 +1569,37 @@ mod tests {
             ProceduralTerrainSource::crater_height(10.0, 40.0, 10.0, 10.0, 3.0, 500.0),
             0.0
         );
+    }
+
+    #[test]
+    fn crater_rim_is_continuous_at_its_outer_radius() {
+        let radius_deg = 3.0;
+        let depth_m = 500.0;
+        let just_inside = ProceduralTerrainSource::crater_height(
+            radius_deg - 0.000_001,
+            10.0,
+            0.0,
+            10.0,
+            radius_deg,
+            depth_m,
+        );
+        let at_radius = ProceduralTerrainSource::crater_height(
+            radius_deg, 10.0, 0.0, 10.0, radius_deg, depth_m,
+        );
+        let outside = ProceduralTerrainSource::crater_height(
+            radius_deg + 0.000_001,
+            10.0,
+            0.0,
+            10.0,
+            radius_deg,
+            depth_m,
+        );
+
+        assert!(
+            (just_inside - at_radius).abs() < 0.001,
+            "crater rim must not jump at its outer radius: {just_inside} vs {at_radius}"
+        );
+        assert_eq!(at_radius, outside);
     }
 
     #[test]

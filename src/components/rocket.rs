@@ -49,6 +49,18 @@ impl RocketRenderState {
 pub struct RocketGeometry {
     pub radius_m: f32,
     pub height_m: f32,
+    /// Lowest attached-cylinder extent in the shared stack frame, meters.
+    pub lower_extent_y_m: f32,
+}
+
+impl RocketGeometry {
+    /// Lowest point of the cylindrical contact approximation, measured from
+    /// the assembly geometric center in the body frame. Engine bells and
+    /// landing-leg visuals remain presentation-only; contact uses this single
+    /// cylindrical extent.
+    pub fn lower_extent_body_m(self) -> DVec3 {
+        DVec3::Y * f64::from(self.lower_extent_y_m.min(0.0))
+    }
 }
 
 /// Mission phase state machine component wrapping the domain enum.
@@ -102,6 +114,10 @@ pub struct RocketPropulsion {
     pub vehicle: Rocket,
     pub active_stage: usize,
     pub propellant_remaining_kg: Vec<f32>,
+    /// Per-attached-booster propellant indexed by the configured symmetric
+    /// attachment positions. Empty for serial-only vehicles and after jettison.
+    pub booster_propellant_remaining_kg: Vec<f32>,
+    pub boosters_attached: bool,
     pub throttle: f32,
     pub gimbal_pitch_rad: f32,
     pub gimbal_yaw_rad: f32,
@@ -112,10 +128,8 @@ pub struct RocketPropulsion {
     /// Required settle time after staging before engines may ignite (ullage).
     /// Zero disables the gate.
     pub ullage_settle_time_s: f32,
-    /// Number of stage separations so far. Zero means the vehicle has never
-    /// separated a stage, so its first ignition is not an air-start; after
-    /// any separation, ignition additionally requires the stage's engines to
-    /// be `restartable`.
+    /// Number of stage separations so far. After any separation, an engine
+    /// start must wait for the configured ullage settle interval.
     pub separations_count: u32,
     /// Mass of attached payload hardware (payload fairing) still on the
     /// vehicle, kg. Included in every mass recompute so consumption, staging,
@@ -346,10 +360,9 @@ pub struct GroundRest {
     pub active: bool,
 }
 
-/// Deployable landing gear. Composes the pure domain assembly
-/// (`LandingGear`: spec + sized struts) with the one-way deployment latch;
-/// the compression state is advanced only by the GroundContact authority
-/// while the vehicle rests on deployed legs.
+/// Deployable landing gear attached to the active or recovering stage. It
+/// composes the pure domain assembly (`LandingGear`: spec + sized struts) with
+/// the one-way deployment latch; GroundContact alone advances compression.
 #[derive(Component, Debug, Clone)]
 pub struct LandingLegs {
     pub gear: LandingGear,

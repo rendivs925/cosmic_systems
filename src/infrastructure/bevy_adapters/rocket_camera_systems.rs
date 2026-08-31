@@ -466,13 +466,16 @@ fn compute_surface_camera(
 
     // Compute forward along velocity projected to horizontal plane
     // For now, use a fixed forward direction relative to the planet
-    let forward = up_dir.cross(Vec3::Z).normalize(); // Eastward
+    let mut forward = up_dir.cross(Vec3::Z).normalize_or_zero();
+    if forward.length_squared() < 1e-6 {
+        forward = up_dir.cross(Vec3::X).normalize_or_zero();
+    }
 
     let offset = -forward * distance + up_dir * height;
     let target_pos = rocket_pos + offset;
 
     // Look down at the landing area
-    let look_dir = (rocket_pos - target_pos).normalize();
+    let look_dir = (rocket_pos - target_pos).normalize_or_zero();
     let target_rot = Quat::from_rotation_arc(-Vec3::Z, look_dir);
 
     (target_pos, target_rot)
@@ -604,5 +607,18 @@ mod tests {
         let at_60_fps = advance(1.0 / 60.0, 60);
         let at_120_fps = advance(1.0 / 120.0, 120);
         assert!((at_60_fps - at_120_fps).abs() < 1e-5);
+    }
+
+    #[test]
+    fn surface_camera_remains_finite_at_radial_basis_singularities() {
+        for up_dir in [Vec3::Z, -Vec3::Z] {
+            let (position, rotation) = compute_surface_camera(
+                Vec3::new(10.0, 20.0, 30.0),
+                up_dir,
+                &RocketCameraConfig::default(),
+            );
+            assert!(position.is_finite());
+            assert!(rotation.is_finite());
+        }
     }
 }

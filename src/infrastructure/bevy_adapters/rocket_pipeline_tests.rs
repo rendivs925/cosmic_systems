@@ -36,6 +36,277 @@ fn test_earth_orientation() -> BodyOrientation {
 }
 
 #[cfg(test)]
+mod engine_lifecycle_pipeline_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{
+        EngineState, ParallelBoosters, Rocket, RocketEngine, RocketStage, ThrustReference,
+    };
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::simulation_time::SimulationTime;
+    use crate::infrastructure::bevy_adapters::rocket_control::actuation_system;
+    use crate::infrastructure::bevy_adapters::rocket_propulsion::{
+        propulsion_consumption, propulsion_thrust,
+    };
+
+    fn engine(max_ignitions: u32) -> RocketEngine {
+        RocketEngine {
+            position_m: bevy::math::Vec3::ZERO,
+            thrust_axis: bevy::math::Vec3::Y,
+            isp_sea_level: 250.0,
+            isp_vacuum: 250.0,
+            gimbal_range_deg: 0.0,
+            rated_thrust_kn: 100.0,
+            thrust_reference: ThrustReference::SeaLevel,
+            throttle_min: 0.0,
+            throttle_max: 1.0,
+            max_ignitions,
+            ignition_count: 0,
+            state: EngineState::Off,
+        }
+    }
+
+    fn stage(name: &str, max_ignitions: u32) -> RocketStage {
+        RocketStage {
+            name: name.into(),
+            diameter_m: 1.0,
+            height_m: 4.0,
+            dry_mass_kg: 100.0,
+            propellant_mass_kg: 100.0,
+            recovery_propellant_reserve_kg: None,
+            landing_gear: None,
+            fairing_dry_mass_kg: None,
+            engines: vec![engine(max_ignitions)],
+        }
+    }
+
+    fn lifecycle_app(with_parallel_boosters: bool) -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(0.25));
+        app.add_systems(
+            FixedUpdate,
+            (actuation_system, propulsion_thrust, propulsion_consumption).chain(),
+        );
+        let boosters = with_parallel_boosters.then(|| ParallelBoosters {
+            count: 2,
+            stage: stage("Booster", 1),
+            attachment_positions_m: vec![
+                bevy::math::Vec3::new(-2.0, 0.0, 0.0),
+                bevy::math::Vec3::new(2.0, 0.0, 0.0),
+            ],
+        });
+        let vehicle = Rocket {
+            name: "Lifecycle test".into(),
+            diameter_m: 1.0,
+            height_m: 8.0,
+            stages: vec![stage("S1", 2), stage("S2", 1)],
+            parallel_boosters: boosters,
+        };
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        DVec3::ZERO,
+                        DVec3::ZERO,
+                        DQuat::IDENTITY,
+                        500.0,
+                        DMat3::IDENTITY,
+                        DVec3::ZERO,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: 0.5,
+                    height_m: 8.0,
+                    lower_extent_y_m: -4.0,
+                },
+                RocketFlightConditions::default(),
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg: vec![100.0, 100.0],
+                    booster_propellant_remaining_kg: if with_parallel_boosters {
+                        vec![100.0, 100.0]
+                    } else {
+                        Vec::new()
+                    },
+                    boosters_attached: with_parallel_boosters,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 2.0,
+                    ullage_settle_time_s: 2.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+                RocketCommands {
+                    throttle_cmd: 1.0,
+                    ..default()
+                },
+                RocketAutopilot::default(),
+                RocketMissionState::Launch,
+                RetroPropulsionEffect::default(),
+                ForceAccumulator::default(),
+                TorqueAccumulator::default(),
+            ))
+            .id();
+        (app, entity)
+    }
+
+    #[test]
+    fn cutoff_stops_thrust_and_flow_then_budget_exhaustion_is_terminal() {
+        let (mut app, entity) = lifecycle_app(false);
+        app.world_mut().run_schedule(FixedUpdate);
+        let after_start = app.world().get::<RocketPropulsion>(entity).unwrap();
+        let propellant_after_start = after_start.propellant_remaining_kg[0];
+        let engine = &after_start.vehicle.stages[0].engines[0];
+        assert_eq!(engine.state, EngineState::Running);
+        assert_eq!(engine.ignition_count, 1);
+        assert!(app.world().get::<ForceAccumulator>(entity).unwrap().0.y > 0.0);
+
+        {
+            let mut entity_mut = app.world_mut().entity_mut(entity);
+            entity_mut.get_mut::<RocketCommands>().unwrap().throttle_cmd = 0.0;
+            *entity_mut.get_mut::<ForceAccumulator>().unwrap() = ForceAccumulator::default();
+        }
+        app.world_mut().run_schedule(FixedUpdate);
+        let after_cutoff = app.world().get::<RocketPropulsion>(entity).unwrap();
+        assert_eq!(
+            after_cutoff.vehicle.stages[0].engines[0].state,
+            EngineState::Off
+        );
+        assert_eq!(
+            after_cutoff.propellant_remaining_kg[0],
+            propellant_after_start
+        );
+        assert_eq!(
+            app.world().get::<ForceAccumulator>(entity).unwrap().0,
+            DVec3::ZERO
+        );
+
+        {
+            let mut entity_mut = app.world_mut().entity_mut(entity);
+            entity_mut.get_mut::<RocketCommands>().unwrap().throttle_cmd = 1.0;
+        }
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(
+            app.world()
+                .get::<RocketPropulsion>(entity)
+                .unwrap()
+                .vehicle
+                .stages[0]
+                .engines[0]
+                .ignition_count,
+            2
+        );
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<RocketCommands>()
+            .unwrap()
+            .throttle_cmd = 0.0;
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<RocketCommands>()
+            .unwrap()
+            .throttle_cmd = 1.0;
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<ForceAccumulator>()
+            .unwrap()
+            .0 = DVec3::ZERO;
+        let propellant_before_denied_restart = app
+            .world()
+            .get::<RocketPropulsion>(entity)
+            .unwrap()
+            .propellant_remaining_kg[0];
+        app.world_mut().run_schedule(FixedUpdate);
+        let propulsion = app.world().get::<RocketPropulsion>(entity).unwrap();
+        assert_eq!(
+            propulsion.vehicle.stages[0].engines[0].state,
+            EngineState::Depleted
+        );
+        assert_eq!(
+            propulsion.propellant_remaining_kg[0],
+            propellant_before_denied_restart
+        );
+        assert_eq!(
+            app.world().get::<ForceAccumulator>(entity).unwrap().0,
+            DVec3::ZERO
+        );
+    }
+
+    #[test]
+    fn serial_upper_stage_waits_for_ullage_before_its_first_start() {
+        let (mut app, entity) = lifecycle_app(false);
+        {
+            let mut propulsion = app.world_mut().get_mut::<RocketPropulsion>(entity).unwrap();
+            propulsion.active_stage = 1;
+            propulsion.time_since_separation_s = 0.0;
+            propulsion.separations_count = 1;
+        }
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(
+            app.world()
+                .get::<RocketPropulsion>(entity)
+                .unwrap()
+                .vehicle
+                .stages[1]
+                .engines[0]
+                .state,
+            EngineState::Off
+        );
+        app.world_mut()
+            .get_mut::<RocketPropulsion>(entity)
+            .unwrap()
+            .time_since_separation_s = 2.0;
+        app.world_mut().run_schedule(FixedUpdate);
+        let upper = &app
+            .world()
+            .get::<RocketPropulsion>(entity)
+            .unwrap()
+            .vehicle
+            .stages[1]
+            .engines[0];
+        assert_eq!(upper.state, EngineState::Running);
+        assert_eq!(upper.ignition_count, 1);
+    }
+
+    #[test]
+    fn serial_and_parallel_booster_engines_share_the_same_start_lifecycle() {
+        let (mut serial, serial_entity) = lifecycle_app(false);
+        serial.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(
+            serial
+                .world()
+                .get::<RocketPropulsion>(serial_entity)
+                .unwrap()
+                .vehicle
+                .stages[0]
+                .engines[0]
+                .state,
+            EngineState::Running
+        );
+
+        let (mut parallel, parallel_entity) = lifecycle_app(true);
+        parallel.world_mut().run_schedule(FixedUpdate);
+        let propulsion = parallel
+            .world()
+            .get::<RocketPropulsion>(parallel_entity)
+            .unwrap();
+        assert_eq!(propulsion.vehicle.stages[0].engines[0].ignition_count, 1);
+        let booster = &propulsion
+            .vehicle
+            .parallel_boosters
+            .as_ref()
+            .unwrap()
+            .stage
+            .engines[0];
+        assert_eq!(booster.state, EngineState::Running);
+        assert_eq!(booster.ignition_count, 1);
+    }
+}
+
+#[cfg(test)]
 fn test_ephemeris_snapshot() -> EphemerisSnapshot {
     let earth_mass_kg = PlanetFactory::create_by_name("Earth").unwrap().mass_kg;
     EphemerisSnapshot::from_states_orientations_and_gravitational_parameters(
@@ -57,7 +328,9 @@ fn ksc_terrain_coordinates() -> (f64, f64) {
 #[cfg(test)]
 mod ground_contact_tests {
     use super::*;
-    use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::entities::rocket::{
+        EngineState, Rocket, RocketEngine, RocketStage, ThrustReference,
+    };
     use crate::domain::events::SplashdownDetectedEvent;
     use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
     use crate::domain::services::reference_frames::{
@@ -88,8 +361,8 @@ mod ground_contact_tests {
     const DT: f64 = 1.0 / 64.0;
     const G0: f64 = 9.80665;
 
-    /// One-engine test vehicle: 20 kN vacuum thrust, +Y body axis.
-    fn test_vehicle(max_thrust_kn: f32) -> Rocket {
+    /// One-engine test vehicle with a sea-level rated thrust, +Y body axis.
+    fn test_vehicle(rated_thrust_kn: f32) -> Rocket {
         Rocket {
             name: "Test".into(),
             diameter_m: 1.0,
@@ -101,26 +374,31 @@ mod ground_contact_tests {
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
+                landing_gear: None,
+                fairing_dry_mass_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
                     thrust_axis: bevy::math::Vec3::Y,
                     isp_sea_level: 250.0,
                     isp_vacuum: 300.0,
                     gimbal_range_deg: 0.0,
-                    max_thrust_kn,
+                    rated_thrust_kn,
+                    thrust_reference: ThrustReference::SeaLevel,
                     throttle_min: 0.0,
                     throttle_max: 1.0,
-                    restartable: true,
+                    max_ignitions: 2,
+                    ignition_count: 1,
                     state: EngineState::Running,
                 }],
             }],
+            parallel_boosters: None,
         }
     }
 
     /// Spawn a rocket standing exactly on the terrain at (lat, lon), plus the
     /// Earth planet entity, and run only the tail of the fixed pipeline:
     /// force writer → accumulate → integrate → ground contact.
-    fn pad_app(throttle: f32, max_thrust_kn: f32) -> App {
+    fn pad_app(throttle: f32, rated_thrust_kn: f32) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<SplashdownDetectedEvent>();
@@ -151,7 +429,7 @@ mod ground_contact_tests {
         let up = radial_direction(lat, lon);
         let surface_radius = EARTH_RADIUS_M + h;
 
-        let vehicle = test_vehicle(max_thrust_kn);
+        let vehicle = test_vehicle(rated_thrust_kn);
         let propellant = vehicle
             .stages
             .iter()
@@ -162,7 +440,7 @@ mod ground_contact_tests {
         app.world_mut().spawn((
             RocketPhysicsState {
                 dynamics: RocketDynamicsState::new(
-                    up * surface_radius,
+                    up * (surface_radius + 5.0),
                     DVec3::ZERO,
                     DQuat::from_rotation_arc(DVec3::Y, up),
                     1000.0,
@@ -173,11 +451,14 @@ mod ground_contact_tests {
             RocketGeometry {
                 radius_m: 0.5,
                 height_m: 10.0,
+                lower_extent_y_m: -5.0,
             },
             RocketPropulsion {
                 vehicle,
                 active_stage: 0,
                 propellant_remaining_kg: propellant,
+                booster_propellant_remaining_kg: Vec::new(),
+                boosters_attached: false,
                 throttle,
                 gimbal_pitch_rad: 0.0,
                 gimbal_yaw_rad: 0.0,
@@ -250,7 +531,7 @@ mod ground_contact_tests {
         let h = crate::infrastructure::bevy_adapters::components::PlanetTerrain::earth()
             .source
             .height_m(lat, lon);
-        let expected_r = EARTH_RADIUS_M + h;
+        let expected_r = EARTH_RADIUS_M + h + 5.0;
         assert!(
             (rocket.dynamics.position_m.length() - expected_r).abs() < 0.05,
             "position drifted off the pad: |r|={}",
@@ -374,7 +655,7 @@ mod ground_contact_tests {
             // until this descent crosses the sampled contact plane.
             world.entity_mut(entity).insert(RocketPhysicsState {
                 dynamics: RocketDynamicsState::new(
-                    up * (surface_r + 2.0),
+                    up * (surface_r + 7.0),
                     -up * 2.0,
                     DQuat::from_rotation_arc(DVec3::Y, up),
                     mass_kg,
@@ -459,7 +740,10 @@ mod ground_contact_tests {
         );
         // Soft contact: the hull rides below the point-contact radius by at
         // most one stroke (documented approximation).
-        let sink = surface_r - rocket.dynamics.position_m.length();
+        let lower_contact_radius_m = (rocket.dynamics.position_m
+            + rocket.dynamics.orientation * DVec3::NEG_Y * 5.0)
+            .length();
+        let sink = surface_r - lower_contact_radius_m;
         assert!(
             sink >= -0.5 && sink <= legs.gear.spec.stroke_m + 0.5,
             "sink depth {sink} m outside strut range"
@@ -523,7 +807,7 @@ mod ground_contact_tests {
     /// Relaunch (Phase 14): one command restores a flown, drained vehicle to
     /// a fresh pad state and clears its jettisoned debris.
     #[test]
-    fn relaunch_restores_fresh_pad_state() {
+    fn relaunch_restores_fresh_rotating_pad_state() {
         let mut app = pad_app(0.0, 20.0);
         app.init_resource::<RelaunchCommandQueue>();
         app.add_systems(FixedUpdate, apply_relaunch_requests);
@@ -551,12 +835,24 @@ mod ground_contact_tests {
             state.dynamics.position_m += DVec3::X * 1_000.0;
             state.dynamics.velocity_mps = DVec3::new(50.0, -10.0, 0.0);
             let mut propulsion = world.get_mut::<RocketPropulsion>(rocket_entity).unwrap();
+            propulsion.vehicle.stages[0].fairing_dry_mass_kg = Some(25.0);
             propulsion.propellant_remaining_kg = vec![0.0, 0.0];
             propulsion.active_stage = 1;
             propulsion.separations_count = 1;
             propulsion.throttle = 0.4;
+            propulsion.attached_payload_kg = 0.0;
+            let engine = &mut propulsion.vehicle.stages[0].engines[0];
+            engine.max_ignitions = 2;
+            engine.ignition_count = 2;
+            engine.state = EngineState::Depleted;
             let mut mission = world.get_mut::<RocketMissionState>(rocket_entity).unwrap();
             *mission = RocketMissionState::Landed;
+            world
+                .entity_mut(rocket_entity)
+                .insert(LaunchSiteCoordinates::default());
+            world
+                .entity_mut(rocket_entity)
+                .insert(InitialPayloadFairing { dry_mass_kg: 25.0 });
         }
 
         app.world_mut()
@@ -566,6 +862,7 @@ mod ground_contact_tests {
 
         app.update();
         app.update();
+        app.world_mut().flush();
 
         let world = app.world_mut();
         assert!(
@@ -585,6 +882,20 @@ mod ground_contact_tests {
         assert_eq!(propulsion.active_stage, 0);
         assert_eq!(propulsion.separations_count, 0);
         assert_eq!(propulsion.throttle, 0.0);
+        assert_eq!(propulsion.attached_payload_kg, 25.0);
+        assert_eq!(
+            world
+                .get::<PayloadFairing>(rocket_entity)
+                .expect("relaunch restores one attached fairing")
+                .dry_mass_kg,
+            25.0
+        );
+        for stage in &propulsion.vehicle.stages {
+            for engine in &stage.engines {
+                assert_eq!(engine.state, EngineState::Off);
+                assert_eq!(engine.ignition_count, 0);
+            }
+        }
         for (stage, remaining) in propulsion
             .vehicle
             .stages
@@ -593,10 +904,17 @@ mod ground_contact_tests {
         {
             assert!((remaining - stage.propellant_mass_kg).abs() < 1e-3);
         }
+        let expected_surface_velocity = surface_velocity_in_planet_inertial(
+            rocket.dynamics.position_m,
+            &test_earth_orientation(),
+        );
         assert!(
-            rocket.dynamics.velocity_mps.length() < 0.3,
-            "vehicle must be at rest after relaunch (one clamp cycle of gravity allowed): {}",
-            rocket.dynamics.velocity_mps.length()
+            (rocket.dynamics.velocity_mps - expected_surface_velocity).length() < 1e-9,
+            "a KSC-equivalent relaunch must co-move with its rotating pad"
+        );
+        assert!(
+            (400.0..420.0).contains(&rocket.dynamics.velocity_mps.length()),
+            "the reset velocity must preserve KSC's inertial surface speed"
         );
         assert!(
             (rocket.dynamics.mass_kg
@@ -605,6 +923,58 @@ mod ground_contact_tests {
                 < 1e-6,
             "dynamics mass must match the refueled vehicle inventory"
         );
+    }
+
+    #[test]
+    fn relaunch_restores_only_the_first_active_stage_gear() {
+        let mut app = pad_app(0.0, 20.0);
+        app.init_resource::<RelaunchCommandQueue>();
+        app.add_systems(FixedUpdate, apply_relaunch_requests);
+        let rocket_entity = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<RocketPhysicsState>>()
+                .single(world)
+                .unwrap()
+        };
+
+        let vehicle = Rocket::falcon9_test_fixture();
+        let expected_gear = vehicle.stages[0].landing_gear.expect("stage 1 has gear");
+        let stale_upper_gear = LandingGearSpec {
+            count: 4,
+            base_radius_m: 1.0,
+            stroke_m: 1.0,
+            max_landing_mass_kg: Some(1_000.0),
+            deploy_altitude_m: 50.0,
+        };
+        {
+            let world = app.world_mut();
+            let mut propulsion = world.get_mut::<RocketPropulsion>(rocket_entity).unwrap();
+            propulsion.vehicle = vehicle;
+            propulsion.active_stage = 1;
+            propulsion.propellant_remaining_kg = vec![0.0, 0.0];
+            propulsion.separations_count = 1;
+            world
+                .entity_mut(rocket_entity)
+                .insert(LandingLegs::new(LandingGear::new(
+                    stale_upper_gear,
+                    1_000.0,
+                )));
+        }
+        app.world_mut()
+            .resource_mut::<RelaunchCommandQueue>()
+            .0
+            .push(rocket_entity);
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let propulsion = world.get::<RocketPropulsion>(rocket_entity).unwrap();
+        let legs = world.get::<LandingLegs>(rocket_entity).unwrap();
+        assert_eq!(propulsion.active_stage, 0);
+        assert_eq!(legs.gear.spec, expected_gear);
+        assert_ne!(legs.gear.spec, stale_upper_gear);
     }
 
     /// Phase 17 scenario `tip_over` (app-level wiring): a resting vehicle
@@ -762,7 +1132,9 @@ mod ground_contact_tests {
 #[cfg(test)]
 mod recovery_pipeline_tests {
     use super::*;
-    use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::entities::rocket::{
+        EngineState, Rocket, RocketEngine, RocketStage, ThrustReference,
+    };
     use crate::domain::events::SplashdownDetectedEvent;
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::recovery::{DroneShip as DomainDroneShip, StationKeeper};
@@ -803,19 +1175,24 @@ mod recovery_pipeline_tests {
                 dry_mass_kg: 400.0,
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
+                landing_gear: None,
+                fairing_dry_mass_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
                     thrust_axis: bevy::math::Vec3::Y,
                     isp_sea_level: 250.0,
                     isp_vacuum: 300.0,
                     gimbal_range_deg: 4.0,
-                    max_thrust_kn: 20.0,
+                    rated_thrust_kn: 20.0,
+                    thrust_reference: ThrustReference::SeaLevel,
                     throttle_min: 0.0,
                     throttle_max: 1.0,
-                    restartable: true,
+                    max_ignitions: 3,
+                    ignition_count: 1,
                     state: EngineState::Running,
                 }],
             }],
+            parallel_boosters: None,
         }
     }
 
@@ -862,7 +1239,9 @@ mod recovery_pipeline_tests {
             .spawn((
                 RocketPhysicsState {
                     dynamics: RocketDynamicsState::new(
-                        deck_center_m + up * 2.0,
+                        // Physics positions are cylinder centers. Keep the
+                        // lower extent 2 m clear of the deck at test start.
+                        deck_center_m + up * 7.0,
                         -up * 2.0,
                         DQuat::from_rotation_arc(DVec3::Y, up),
                         1_000.0,
@@ -873,6 +1252,7 @@ mod recovery_pipeline_tests {
                 RocketGeometry {
                     radius_m: 0.5,
                     height_m: 10.0,
+                    lower_extent_y_m: -5.0,
                 },
                 RocketFlightConditions::default(),
                 RocketMissionState::Landing,
@@ -880,6 +1260,8 @@ mod recovery_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: propellant,
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -1023,8 +1405,10 @@ mod recovery_pipeline_tests {
         let target = world.get::<DroneShipLandingTarget>(stage).unwrap();
         let ship_state = &world.get::<DroneShip>(ship).unwrap().state;
         let deck_normal = ship_state.position_m.normalize_or_zero();
-        let deck_separation_m =
-            (rocket.dynamics.position_m - ship_state.position_m).dot(deck_normal);
+        let geometry = world.get::<RocketGeometry>(stage).unwrap();
+        let lower_contact_m = rocket.dynamics.position_m
+            + rocket.dynamics.orientation * geometry.lower_extent_body_m();
+        let deck_separation_m = (lower_contact_m - ship_state.position_m).dot(deck_normal);
         (
             rocket.dynamics.position_m,
             rocket.dynamics.velocity_mps,
@@ -1096,7 +1480,9 @@ mod recovery_pipeline_tests {
 #[cfg(test)]
 mod ascent_pipeline_tests {
     use super::*;
-    use crate::domain::entities::rocket::{EngineState, Rocket, RocketEngine, RocketStage};
+    use crate::domain::entities::rocket::{
+        EngineState, Rocket, RocketEngine, RocketStage, ThrustReference,
+    };
     use crate::domain::events::{SplashdownDetectedEvent, StageSeparatedEvent};
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
@@ -1130,15 +1516,21 @@ mod ascent_pipeline_tests {
             .map(|i| {
                 let angle = i as f32 * std::f32::consts::TAU / 9.0;
                 RocketEngine {
-                    position_m: bevy::math::Vec3::new(0.45 * angle.cos(), -8.0, 0.45 * angle.sin()),
+                    position_m: bevy::math::Vec3::new(
+                        0.45 * angle.cos(),
+                        -6.05,
+                        0.45 * angle.sin(),
+                    ),
                     thrust_axis: bevy::math::Vec3::Y,
                     isp_sea_level: 303.0,
                     isp_vacuum: 311.0,
                     gimbal_range_deg: 4.0,
-                    max_thrust_kn: 25.8,
+                    rated_thrust_kn: 25.8,
+                    thrust_reference: ThrustReference::SeaLevel,
                     throttle_min: 0.6,
                     throttle_max: 1.0,
-                    restartable: true,
+                    max_ignitions: 2,
+                    ignition_count: 1,
                     state: EngineState::Running,
                 }
             })
@@ -1155,6 +1547,8 @@ mod ascent_pipeline_tests {
                     dry_mass_kg: 950.0,
                     propellant_mass_kg: 9_250.0,
                     recovery_propellant_reserve_kg: None,
+                    landing_gear: None,
+                    fairing_dry_mass_kg: None,
                     engines,
                 },
                 RocketStage {
@@ -1164,20 +1558,25 @@ mod ascent_pipeline_tests {
                     dry_mass_kg: 250.0,
                     propellant_mass_kg: 2_050.0,
                     recovery_propellant_reserve_kg: None,
+                    landing_gear: None,
+                    fairing_dry_mass_kg: None,
                     engines: vec![RocketEngine {
-                        position_m: bevy::math::Vec3::new(0.0, 6.0, 0.0),
+                        position_m: bevy::math::Vec3::new(0.0, -1.2, 0.0),
                         thrust_axis: bevy::math::Vec3::Y,
                         isp_sea_level: 311.0,
                         isp_vacuum: 343.0,
                         gimbal_range_deg: 4.0,
-                        max_thrust_kn: 25.8,
+                        rated_thrust_kn: 25.8,
+                        thrust_reference: ThrustReference::Vacuum,
                         throttle_min: 0.6,
                         throttle_max: 1.0,
-                        restartable: true,
+                        max_ignitions: 2,
+                        ignition_count: 1,
                         state: EngineState::Running,
                     }],
                 },
             ],
+            parallel_boosters: None,
         }
     }
 
@@ -1239,6 +1638,7 @@ mod ascent_pipeline_tests {
                 RocketGeometry {
                     radius_m: 0.6,
                     height_m: 18.0,
+                    lower_extent_y_m: -9.0,
                 },
                 RocketFlightConditions::default(),
                 RocketMissionState::Launch,
@@ -1246,6 +1646,8 @@ mod ascent_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: propellant,
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -1636,12 +2038,15 @@ mod ascent_pipeline_tests {
             RocketGeometry {
                 radius_m: 0.6,
                 height_m: 18.0,
+                lower_extent_y_m: -9.0,
             },
             RocketFlightConditions::default(),
             RocketPropulsion {
                 vehicle,
                 active_stage: 0,
                 propellant_remaining_kg: propellant,
+                booster_propellant_remaining_kg: Vec::new(),
+                boosters_attached: false,
                 throttle: 0.0,
                 gimbal_pitch_rad: 0.0,
                 gimbal_yaw_rad: 0.0,
@@ -1730,6 +2135,19 @@ mod ascent_pipeline_tests {
         let spent_geometry = spent.single(world).expect("separated first stage");
         assert_eq!(spent_geometry.radius_m, 0.6);
         assert_eq!(spent_geometry.height_m, 12.1);
+        let active = world
+            .query_filtered::<Entity, With<RocketPropulsion>>()
+            .single(world)
+            .unwrap();
+        assert!(world.get::<LandingLegs>(active).is_none());
+        assert_eq!(
+            world
+                .query_filtered::<&LandingLegs, With<SpentStage>>()
+                .iter(world)
+                .count(),
+            0,
+            "gear-less serial stages retain point-contact behavior"
+        );
     }
 
     #[test]
@@ -1765,6 +2183,101 @@ mod ascent_pipeline_tests {
         }
 
         panic!("a stage with a recovery reserve must enter the recovery flight pipeline");
+    }
+
+    #[test]
+    fn falcon9_separation_moves_stage_local_gear_to_the_recovering_booster() {
+        use crate::domain::services::landing_gear::LandingGear;
+
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(DT));
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_message::<StageSeparatedEvent>();
+        app.add_systems(FixedUpdate, propulsion_staging);
+
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        vehicle.stages[1].fairing_dry_mass_kg = Some(50.0);
+        let expected_gear = vehicle.stages[0]
+            .landing_gear
+            .expect("fixture stage 1 gear");
+        let reserve_kg = vehicle.stages[0]
+            .recovery_propellant_reserve_kg
+            .expect("fixture stage 1 recovery reserve");
+        let (inertia, center_of_mass_m) =
+            crate::domain::services::rocket_dynamics::rocket_inertia_tensor(
+                vehicle.total_dry_mass_kg() as f64,
+                45_000.0,
+                vehicle.diameter_m as f64 * 0.5,
+                vehicle.height_m as f64,
+            );
+        let parent = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        DVec3::new(EARTH_RADIUS_M + 1_000.0, 0.0, 0.0),
+                        DVec3::new(0.0, 2_000.0, 0.0),
+                        DQuat::IDENTITY,
+                        67_250.0,
+                        inertia,
+                        center_of_mass_m,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: vehicle.diameter_m * 0.5,
+                    height_m: vehicle.height_m,
+                    lower_extent_y_m: vehicle.lower_extent_in_stack_m(),
+                },
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg: vec![reserve_kg, 30_000.0],
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 1.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 50.0,
+                },
+                RocketPlanetBinding {
+                    planet_name: CelestialBodyId::earth(),
+                },
+                LandingLegs::new(LandingGear::new(expected_gear, 67_250.0)),
+            ))
+            .id();
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let world = app.world_mut();
+        let upper = world.get::<RocketPropulsion>(parent).unwrap();
+        assert_eq!(upper.active_stage, 1);
+        assert_eq!(upper.attached_payload_kg, 50.0);
+        assert_eq!(upper.vehicle.stages[1].fairing_dry_mass_kg, Some(50.0));
+        assert!(upper.vehicle.stages[1].landing_gear.is_none());
+        assert!(world.get::<LandingLegs>(parent).is_none());
+        assert!(world.get::<Children>(parent).is_none());
+
+        let mut recovering = world.query_filtered::<(
+            Entity,
+            &RocketPhysicsState,
+            &RocketPropulsion,
+            &LandingLegs,
+        ), With<RecoveringStage>>();
+        let (spent, physics, propulsion, legs) = recovering.single(world).unwrap();
+        assert_eq!(legs.gear.spec, expected_gear);
+        assert_eq!(
+            propulsion.vehicle.stages[0].landing_gear,
+            Some(expected_gear)
+        );
+        assert!((physics.dynamics.mass_kg - 33_000.0).abs() < 1e-6);
+        assert_eq!(propulsion.attached_payload_kg, 0.0);
+        assert!(propulsion.vehicle.stages[0].fairing_dry_mass_kg.is_none());
+        assert!(physics.dynamics.inertia_body.is_finite());
+        assert!(world.get::<Children>(spent).is_some());
     }
 
     /// Phase 17 scenario `time_warp_burn`: the SAME burn executed at 1×, 10×
@@ -1893,6 +2406,335 @@ mod ascent_pipeline_tests {
             "guidance target attitude diverged"
         );
         assert_eq!(vec3(&a.11), vec3(&b.11), "gravity diverged");
+    }
+}
+
+#[cfg(test)]
+mod stage_coordinate_pipeline_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{
+        EngineState, Rocket, RocketEngine, RocketStage, ThrustReference,
+    };
+    use crate::domain::services::rocket_propulsion::{
+        clamp_gimbal, engine_thrust_n, gimbal_torque_body,
+    };
+    use crate::domain::services::simulation_time::SimulationTime;
+    use crate::infrastructure::bevy_adapters::rocket_propulsion::propulsion_gimbal;
+
+    #[test]
+    fn detached_stage_gimbal_uses_its_declared_stage_local_station() {
+        let engine = RocketEngine {
+            position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
+            thrust_axis: bevy::math::Vec3::Y,
+            isp_sea_level: 250.0,
+            isp_vacuum: 300.0,
+            gimbal_range_deg: 10.0,
+            rated_thrust_kn: 100.0,
+            thrust_reference: ThrustReference::SeaLevel,
+            throttle_min: 0.0,
+            throttle_max: 1.0,
+            max_ignitions: 2,
+            ignition_count: 1,
+            state: EngineState::Running,
+        };
+        let vehicle = Rocket {
+            name: "Detached stage".into(),
+            diameter_m: 2.0,
+            height_m: 10.0,
+            stages: vec![RocketStage {
+                name: "Booster".into(),
+                diameter_m: 2.0,
+                height_m: 10.0,
+                dry_mass_kg: 100.0,
+                propellant_mass_kg: 900.0,
+                recovery_propellant_reserve_kg: None,
+                landing_gear: None,
+                fairing_dry_mass_kg: None,
+                engines: vec![engine.clone()],
+            }],
+            parallel_boosters: None,
+        };
+        let center_of_mass_m = DVec3::new(0.0, -2.5, 0.0);
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(1.0 / 64.0));
+        app.add_systems(FixedUpdate, propulsion_gimbal);
+        app.world_mut().spawn((
+            SpentStage {
+                parent_rocket: Entity::PLACEHOLDER,
+                kind: SpentStageKind::Booster,
+            },
+            RocketPhysicsState {
+                dynamics: RocketDynamicsState::new(
+                    DVec3::ZERO,
+                    DVec3::ZERO,
+                    DQuat::IDENTITY,
+                    1_000.0,
+                    DMat3::IDENTITY,
+                    center_of_mass_m,
+                ),
+            },
+            RocketGeometry {
+                radius_m: 1.0,
+                height_m: 10.0,
+                lower_extent_y_m: -5.0,
+            },
+            RocketFlightConditions::default(),
+            RocketPropulsion {
+                vehicle,
+                active_stage: 0,
+                propellant_remaining_kg: vec![900.0],
+                booster_propellant_remaining_kg: Vec::new(),
+                boosters_attached: false,
+                throttle: 1.0,
+                gimbal_pitch_rad: 0.1,
+                gimbal_yaw_rad: 0.0,
+                time_since_separation_s: 10.0,
+                ullage_settle_time_s: 0.0,
+                separations_count: 1,
+                attached_payload_kg: 0.0,
+            },
+            TorqueAccumulator::default(),
+        ));
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let torque = app
+            .world_mut()
+            .query::<&TorqueAccumulator>()
+            .single(app.world())
+            .unwrap()
+            .0;
+        let expected = gimbal_torque_body(
+            engine.position_m.as_dvec3(),
+            center_of_mass_m,
+            engine.thrust_axis.as_dvec3(),
+            engine_thrust_n(&engine, 1.0, 0.0),
+            clamp_gimbal(0.1, engine.gimbal_range_deg) as f64,
+            0.0,
+        );
+        assert!(
+            (torque - expected).length() < 1e-9,
+            "{torque} vs {expected}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod parallel_booster_pipeline_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{
+        EngineState, ParallelBoosters, Rocket, RocketEngine, RocketStage, ThrustReference,
+    };
+    use crate::domain::events::StageSeparatedEvent;
+    use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
+    use crate::domain::services::simulation_time::SimulationTime;
+    use crate::infrastructure::bevy_adapters::rocket_dynamics::{
+        accumulate_forces, integrate_6dof,
+    };
+    use crate::infrastructure::bevy_adapters::rocket_propulsion::{
+        propulsion_consumption, propulsion_staging, propulsion_thrust,
+    };
+
+    fn engine(thrust_kn: f32) -> RocketEngine {
+        RocketEngine {
+            position_m: bevy::math::Vec3::new(0.0, -4.0, 0.0),
+            thrust_axis: bevy::math::Vec3::Y,
+            isp_sea_level: 1_000.0,
+            isp_vacuum: 1_000.0,
+            gimbal_range_deg: 0.0,
+            rated_thrust_kn: thrust_kn,
+            thrust_reference: ThrustReference::SeaLevel,
+            throttle_min: 1.0,
+            throttle_max: 1.0,
+            max_ignitions: 1,
+            ignition_count: 1,
+            state: EngineState::Running,
+        }
+    }
+
+    fn parallel_vehicle() -> Rocket {
+        Rocket {
+            name: "Parallel test".into(),
+            diameter_m: 2.0,
+            height_m: 12.0,
+            stages: vec![RocketStage {
+                name: "Core".into(),
+                diameter_m: 2.0,
+                height_m: 12.0,
+                dry_mass_kg: 100.0,
+                propellant_mass_kg: 100.0,
+                recovery_propellant_reserve_kg: None,
+                landing_gear: None,
+                fairing_dry_mass_kg: None,
+                engines: vec![engine(100.0)],
+            }],
+            parallel_boosters: Some(ParallelBoosters {
+                count: 2,
+                stage: RocketStage {
+                    name: "Booster".into(),
+                    diameter_m: 2.0,
+                    height_m: 8.0,
+                    dry_mass_kg: 20.0,
+                    propellant_mass_kg: 20.0,
+                    recovery_propellant_reserve_kg: None,
+                    landing_gear: None,
+                    fairing_dry_mass_kg: None,
+                    engines: vec![engine(50.0)],
+                },
+                attachment_positions_m: vec![
+                    bevy::math::Vec3::new(-3.0, -1.0, 0.0),
+                    bevy::math::Vec3::new(3.0, -1.0, 0.0),
+                ],
+            }),
+        }
+    }
+
+    fn run_parallel_sequence() -> (f64, f64, Vec<(DVec3, DVec3)>) {
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(0.1));
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_message::<StageSeparatedEvent>();
+        app.add_systems(
+            FixedUpdate,
+            (
+                propulsion_thrust,
+                accumulate_forces,
+                integrate_6dof,
+                propulsion_consumption,
+                propulsion_staging,
+            )
+                .chain(),
+        );
+        let vehicle = parallel_vehicle();
+        let (inertia, com) = rocket_inertia_tensor(280.0, 0.0, 1.0, 12.0);
+        let rocket_entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        DVec3::ZERO,
+                        DVec3::ZERO,
+                        DQuat::IDENTITY,
+                        280.0,
+                        inertia,
+                        com,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: 1.0,
+                    height_m: 12.0,
+                    lower_extent_y_m: -6.0,
+                },
+                RocketFlightConditions::default(),
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg: vec![100.0],
+                    booster_propellant_remaining_kg: vec![20.0, 20.0],
+                    boosters_attached: true,
+                    throttle: 1.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 0.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+                RetroPropulsionEffect::default(),
+                ForceAccumulator::default(),
+                TorqueAccumulator::default(),
+                GravityAcceleration::default(),
+                RocketPlanetBinding {
+                    planet_name: CelestialBodyId::earth(),
+                },
+            ))
+            .id();
+
+        app.world_mut().run_schedule(FixedUpdate);
+        let joined_velocity_mps = app
+            .world()
+            .get::<RocketPhysicsState>(rocket_entity)
+            .unwrap()
+            .dynamics
+            .velocity_mps
+            .y;
+        assert!(
+            joined_velocity_mps > 0.07,
+            "core + two boosters must exceed the core-only 100 kN impulse"
+        );
+
+        app.world_mut()
+            .get_mut::<RocketPropulsion>(rocket_entity)
+            .unwrap()
+            .booster_propellant_remaining_kg = vec![0.0, 0.0];
+        app.world_mut().run_schedule(FixedUpdate);
+        let post_jettison = app.world().get::<RocketPropulsion>(rocket_entity).unwrap();
+        assert!(!post_jettison.boosters_attached);
+        assert!(post_jettison.booster_propellant_remaining_kg.is_empty());
+        assert_eq!(
+            post_jettison.active_stage, 0,
+            "core serial stage must remain active"
+        );
+        let core_remaining_after_jettison = post_jettison.propellant_remaining_kg[0];
+        let mut debris = app
+            .world_mut()
+            .query_filtered::<&RocketPhysicsState, With<SpentStage>>()
+            .iter(app.world())
+            .map(|state| (state.dynamics.position_m, state.dynamics.velocity_mps))
+            .collect::<Vec<_>>();
+        debris.sort_by(|left, right| left.0.x.total_cmp(&right.0.x));
+        assert_eq!(debris.len(), 2);
+        assert!(debris[0].0.distance(debris[1].0) > 2.0);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<&LandingLegs, With<SpentStage>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "parallel boosters must not inherit core landing gear"
+        );
+
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(
+            app.world()
+                .get::<RocketPropulsion>(rocket_entity)
+                .unwrap()
+                .propellant_remaining_kg[0]
+                < core_remaining_after_jettison,
+            "the core must continue burning after booster separation"
+        );
+        (
+            joined_velocity_mps,
+            core_remaining_after_jettison as f64,
+            debris,
+        )
+    }
+
+    #[test]
+    fn boosters_join_the_fixed_pipeline_then_jettison_deterministically() {
+        let first = run_parallel_sequence();
+        let second = run_parallel_sequence();
+        assert_eq!(first.0.to_bits(), second.0.to_bits());
+        assert_eq!(first.1.to_bits(), second.1.to_bits());
+        assert_eq!(
+            first
+                .2
+                .iter()
+                .map(|(p, v)| (
+                    p.to_array().map(f64::to_bits),
+                    v.to_array().map(f64::to_bits)
+                ))
+                .collect::<Vec<_>>(),
+            second
+                .2
+                .iter()
+                .map(|(p, v)| (
+                    p.to_array().map(f64::to_bits),
+                    v.to_array().map(f64::to_bits)
+                ))
+                .collect::<Vec<_>>(),
+        );
     }
 }
 

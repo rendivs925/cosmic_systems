@@ -1,18 +1,20 @@
 // Stage separation & spent-stage debris (AGENTS.md sections 8, 24).
 //
-// Separated stages and fairing halves become their own entities carrying a
-// copy of the pre-separation f64 dynamics plus the separation impulse. Debris
+// Separated stages and fairing halves become their own entities carrying
+// independent post-separation f64 dynamics. Debris
 // flies under simplified drag-only aerodynamics (gravity is reused from the
 // shared `update_rocket_gravity`/`accumulate_forces` pipeline by matching the
 // same components — no second gravity implementation). A lifecycle system
 // despawns debris on surface contact or below an altitude threshold.
 
+use crate::application::rocket_spawning::spawn_landing_leg_meshes;
 use crate::components::rocket::*;
 use crate::domain::events::FairingSeparatedEvent;
 use crate::domain::services::aerodynamics::drag_force_body;
+use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload,
+    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
 };
 use crate::domain::services::terrain_collision::radar_altitude_m;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -44,6 +46,9 @@ pub struct SpentStageSpec {
     pub dynamics: crate::domain::services::rocket_dynamics::RocketDynamicsState,
     pub radius_m: f32,
     pub height_m: f32,
+    /// Present only when this detached body enters stage recovery. Parallel
+    /// boosters never receive serial-stage gear.
+    pub landing_gear: Option<crate::domain::services::landing_gear::LandingGearSpec>,
     pub kind: SpentStageKind,
 }
 
@@ -69,7 +74,7 @@ pub fn spawn_spent_stage(
     });
     let mesh = meshes.add(Mesh::from(Cylinder::new(spec.radius_m, spec.height_m)));
 
-    commands
+    let entity = commands
         .spawn((
             SpentStage {
                 parent_rocket: spec.parent_rocket,
@@ -81,6 +86,7 @@ pub fn spawn_spent_stage(
             RocketGeometry {
                 radius_m: spec.radius_m,
                 height_m: spec.height_m,
+                lower_extent_y_m: -spec.height_m * 0.5,
             },
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
@@ -91,12 +97,32 @@ pub fn spawn_spent_stage(
                 planet_name: spec.planet_id,
             },
             Mesh3d(mesh),
-            MeshMaterial3d(material),
+            MeshMaterial3d(material.clone()),
             Transform::default(),
             RocketRenderState::new(spec.dynamics),
             RocketFacade::default(),
         ))
-        .id()
+        .id();
+    if let Some(gear_spec) = spec.landing_gear {
+        commands
+            .entity(entity)
+            .insert(LandingLegs::new(LandingGear::new(
+                gear_spec,
+                spec.dynamics.mass_kg,
+            )));
+        // Detached recovery bodies own their visual legs. The full launch
+        // stack never parents lower-stage leg visuals to its upper stage.
+        spawn_landing_leg_meshes(
+            commands,
+            meshes,
+            &material,
+            entity,
+            spec.height_m,
+            spec.radius_m,
+            &gear_spec,
+        );
+    }
+    entity
 }
 
 /// Simplified drag-only aerodynamics for debris (no lift/side force, no
@@ -222,14 +248,20 @@ pub fn check_fairing_separation(
         // mass, COM, and inertia together.
         propulsion.attached_payload_kg = 0.0;
         let ablation_mass_loss_kg = ablation.map_or(0.0, |state| state.mass_loss_kg);
-        let new_mass = (active_vehicle_mass_with_payload(
+        let boosters = propulsion
+            .boosters_attached
+            .then_some(())
+            .and_then(|_| propulsion.vehicle.parallel_boosters.as_ref());
+        let new_mass = (active_vehicle_mass_with_payload_and_boosters(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
             propulsion.attached_payload_kg,
+            boosters,
+            &propulsion.booster_propellant_remaining_kg,
         ) - ablation_mass_loss_kg)
             .max(1.0);
-        let (inertia, center_of_mass_m) = active_vehicle_inertia(
+        let (inertia, center_of_mass_m) = active_vehicle_inertia_with_boosters(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
@@ -237,6 +269,8 @@ pub fn check_fairing_separation(
             ablation_mass_loss_kg,
             geometry.radius_m as f64,
             geometry.height_m as f64,
+            boosters,
+            &propulsion.booster_propellant_remaining_kg,
         );
         rocket.dynamics.mass_kg = new_mass;
         rocket.dynamics.inertia_body = inertia;
@@ -265,6 +299,7 @@ pub fn check_fairing_separation(
                     dynamics: half_dynamics(sign),
                     radius_m: half_radius_m,
                     height_m: half_height_m,
+                    landing_gear: None,
                     kind: SpentStageKind::FairingHalf,
                 },
             );
@@ -285,6 +320,9 @@ pub fn check_fairing_separation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::entities::rocket::Rocket;
+    use crate::domain::events::FairingSeparatedEvent;
+    use crate::domain::services::atmosphere::FlightConditions;
     use crate::domain::services::gravity::gravitational_acceleration;
     use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
     use crate::domain::services::simulation_time::SimulationTime;
@@ -405,6 +443,114 @@ mod tests {
         assert!(
             (velocity.length() - expected_dv).abs() < expected_dv * 0.10,
             "gravity did not integrate correctly: v={velocity}, expected |dv|≈{expected_dv}"
+        );
+    }
+
+    #[test]
+    fn final_stage_fairing_jettisons_mass_exactly_once() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_message::<FairingSeparatedEvent>();
+        app.add_systems(FixedUpdate, check_fairing_separation);
+
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        vehicle.stages[1].fairing_dry_mass_kg = Some(50.0);
+        let final_stage = &vehicle.stages[1];
+        let fairing_mass_kg = final_stage
+            .fairing_dry_mass_kg
+            .expect("test fairing belongs to final stage");
+        let propellant_remaining_kg = vec![0.0, final_stage.propellant_mass_kg];
+        let initial_mass_kg = final_stage.dry_mass_kg as f64
+            + final_stage.propellant_mass_kg as f64
+            + fairing_mass_kg as f64;
+        let (inertia, center_of_mass_m) = rocket_inertia_tensor(
+            initial_mass_kg,
+            0.0,
+            final_stage.diameter_m as f64 * 0.5,
+            final_stage.height_m as f64,
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        DVec3::new(6_500_000.0, 0.0, 0.0),
+                        DVec3::ZERO,
+                        DQuat::IDENTITY,
+                        initial_mass_kg,
+                        inertia,
+                        center_of_mass_m,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: final_stage.diameter_m * 0.5,
+                    height_m: final_stage.height_m,
+                    lower_extent_y_m: -final_stage.height_m * 0.5,
+                },
+                RocketFlightConditions(FlightConditions {
+                    altitude_m: FAIRING_JETTISON_ALTITUDE_M,
+                    ..default()
+                }),
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 1,
+                    propellant_remaining_kg,
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 0.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 1,
+                    attached_payload_kg: fairing_mass_kg,
+                },
+                RocketPlanetBinding {
+                    planet_name: CelestialBodyId::earth(),
+                },
+                PayloadFairing {
+                    dry_mass_kg: fairing_mass_kg,
+                },
+            ))
+            .id();
+
+        app.world_mut().run_schedule(FixedUpdate);
+        let first_mass_kg = app
+            .world()
+            .get::<RocketPhysicsState>(entity)
+            .unwrap()
+            .dynamics
+            .mass_kg;
+        assert_eq!(first_mass_kg, initial_mass_kg - fairing_mass_kg as f64);
+        assert_eq!(
+            app.world()
+                .get::<RocketPropulsion>(entity)
+                .unwrap()
+                .attached_payload_kg,
+            0.0
+        );
+        assert!(app.world().get::<PayloadFairing>(entity).is_none());
+
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(
+            app.world()
+                .get::<RocketPhysicsState>(entity)
+                .unwrap()
+                .dynamics
+                .mass_kg,
+            first_mass_kg
+        );
+        let spent_stage_count = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<SpentStage>>()
+                .iter(world)
+                .count()
+        };
+        assert_eq!(
+            spent_stage_count, 2,
+            "the removed component prevents a second fairing jettison"
         );
     }
 }

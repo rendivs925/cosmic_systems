@@ -262,7 +262,9 @@ pub fn resolve_ground_contact(
             continue;
         };
 
-        let position_m = rocket.dynamics.position_m;
+        let lower_extent_body_m = geometry.lower_extent_body_m();
+        let lower_offset_world_m = rocket.dynamics.orientation * lower_extent_body_m;
+        let contact_position_m = rocket.dynamics.position_m + lower_offset_world_m;
         let rotating_surface = access.launch_site.is_some();
         let orientation =
             ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name);
@@ -270,9 +272,9 @@ pub fn resolve_ground_contact(
             continue;
         }
         let position_bf = if rotating_surface {
-            planet_inertial_to_body_fixed(position_m, orientation.expect("checked above"))
+            planet_inertial_to_body_fixed(contact_position_m, orientation.expect("checked above"))
         } else {
-            position_m
+            contact_position_m
         };
         let dir_bf = position_bf.normalize_or_zero();
         if dir_bf.length_squared() < 1e-12 {
@@ -292,7 +294,7 @@ pub fn resolve_ground_contact(
             },
         );
         let surface_radius_m = radius_m + sample.height_m;
-        let signed_altitude_m = position_m.length() - surface_radius_m;
+        let signed_altitude_m = contact_position_m.length() - surface_radius_m;
 
         collision.radar_altitude_m = signed_altitude_m.max(0.0);
         collision.slope_deg = sample.slope_deg;
@@ -312,11 +314,18 @@ pub fn resolve_ground_contact(
             .angle_between(normal)
             .to_degrees();
         let surface_velocity = if rotating_surface {
-            surface_velocity_in_planet_inertial(position_m, orientation.expect("checked above"))
+            surface_velocity_in_planet_inertial(
+                contact_position_m,
+                orientation.expect("checked above"),
+            )
         } else {
             DVec3::ZERO
         };
-        let velocity = rocket.dynamics.velocity_mps - surface_velocity;
+        let angular_velocity_world_radps =
+            rocket.dynamics.orientation * rocket.dynamics.angular_velocity_radps;
+        let velocity = rocket.dynamics.velocity_mps
+            + angular_velocity_world_radps.cross(lower_offset_world_m)
+            - surface_velocity;
         let components = decompose_velocity(velocity, normal);
 
         if *mission_state == RocketMissionState::PreLaunch {
@@ -348,12 +357,13 @@ pub fn resolve_ground_contact(
                     body_to_inertial * (pad_direction_bf * (radius_m + pad_sample.height_m));
                 let pad_normal = (body_to_inertial * pad_sample.normal).normalize_or_zero();
 
-                rocket.dynamics.position_m = pad_position_m;
+                let pad_orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
+                rocket.dynamics.position_m = pad_position_m - pad_orientation * lower_extent_body_m;
                 rocket.dynamics.velocity_mps = surface_velocity_in_planet_inertial(
-                    pad_position_m,
+                    rocket.dynamics.position_m,
                     orientation.expect("checked above"),
                 );
-                rocket.dynamics.orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
+                rocket.dynamics.orientation = pad_orientation;
                 rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
                 rest.active = true;
                 collision.radar_altitude_m = 0.0;
@@ -374,7 +384,7 @@ pub fn resolve_ground_contact(
         };
 
         if rest.active {
-            let gravity_mps2 = mu_m3_s2 / position_m.length().powi(2);
+            let gravity_mps2 = mu_m3_s2 / rocket.dynamics.position_m.length().powi(2);
             let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
             let upward_thrust_n = propulsion
                 .vehicle
@@ -417,10 +427,16 @@ pub fn resolve_ground_contact(
             }) {
                 Some((outcome, legs)) if outcome.bottomed_out => {
                     bevy::log::warn!("Landing gear bottomed out; rigid contact engaged");
-                    let res =
-                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
-                    rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
+                    let res = resolve_resting_contact(
+                        contact_position_m,
+                        velocity,
+                        surface_radius_m,
+                        normal,
+                        dt,
+                    );
+                    rocket.dynamics.position_m = res.position_m - lower_offset_world_m;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity
+                        - angular_velocity_world_radps.cross(lower_offset_world_m);
                     legs.compression_m = legs.gear.spec.stroke_m;
                 }
                 Some((outcome, legs)) => {
@@ -430,10 +446,16 @@ pub fn resolve_ground_contact(
                         scorecard.leg_compression_peak_m.max(outcome.compression_m);
                 }
                 None => {
-                    let res =
-                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
-                    rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
+                    let res = resolve_resting_contact(
+                        contact_position_m,
+                        velocity,
+                        surface_radius_m,
+                        normal,
+                        dt,
+                    );
+                    rocket.dynamics.position_m = res.position_m - lower_offset_world_m;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity
+                        - angular_velocity_world_radps.cross(lower_offset_world_m);
                 }
             }
             collision.ground_contact = GroundContact::Landed;
@@ -446,10 +468,11 @@ pub fn resolve_ground_contact(
         }
 
         if signed_altitude_m < 0.0 {
-            let radial_dir = position_m.normalize_or_zero();
-            rocket.dynamics.position_m = radial_dir * surface_radius_m;
+            let radial_dir = contact_position_m.normalize_or_zero();
+            rocket.dynamics.position_m = radial_dir * surface_radius_m - lower_offset_world_m;
             let into_ground = velocity.dot(normal).min(0.0);
-            rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity;
+            rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity
+                - angular_velocity_world_radps.cross(lower_offset_world_m);
         }
 
         // A terminal verdict is valid only at the sampled contact plane. The
@@ -505,16 +528,22 @@ pub fn resolve_ground_contact(
                     components.lateral_mps,
                     tilt_deg,
                     sample.slope_deg,
-                    position_m,
+                    contact_position_m,
                     radius_m,
                     autopilot.target_landing_position_m,
                     collision.over_water,
                 );
                 if legs.as_ref().filter(|legs| legs.deployed()).is_none() {
-                    let res =
-                        resolve_resting_contact(position_m, velocity, surface_radius_m, normal, dt);
-                    rocket.dynamics.position_m = res.position_m;
-                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity;
+                    let res = resolve_resting_contact(
+                        contact_position_m,
+                        velocity,
+                        surface_radius_m,
+                        normal,
+                        dt,
+                    );
+                    rocket.dynamics.position_m = res.position_m - lower_offset_world_m;
+                    rocket.dynamics.velocity_mps = res.velocity_mps + surface_velocity
+                        - angular_velocity_world_radps.cross(lower_offset_world_m);
                 }
                 // Point-contact terrain has no contact-torque model. Arresting
                 // free rotation on an accepted supported landing prevents the
@@ -538,7 +567,7 @@ pub fn resolve_ground_contact(
                     if collision.over_water {
                         splashdown_writer.write(SplashdownDetectedEvent {
                             rocket: rocket_entity,
-                            position_m,
+                            position_m: contact_position_m,
                             touchdown_vertical_speed_mps: -components.normal_mps,
                         });
                         bevy::log::info!(
@@ -557,7 +586,7 @@ pub fn resolve_ground_contact(
                         components.lateral_mps,
                         tilt_deg,
                         sample.slope_deg,
-                        position_m,
+                        contact_position_m,
                         radius_m,
                         autopilot.target_landing_position_m,
                         collision.over_water,

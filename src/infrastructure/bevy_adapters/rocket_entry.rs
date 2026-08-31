@@ -11,7 +11,7 @@ use crate::domain::services::entry_physics::{
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload,
+    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::GroundContact;
@@ -121,14 +121,20 @@ pub fn compute_ablation(
 
         // Rebuild all rigid-body quantities from the same attached mass
         // inventory. Incremental subtraction left COM/inertia stale.
-        let new_mass = (active_vehicle_mass_with_payload(
+        let boosters = propulsion
+            .boosters_attached
+            .then_some(())
+            .and(propulsion.vehicle.parallel_boosters.as_ref());
+        let new_mass = (active_vehicle_mass_with_payload_and_boosters(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
             propulsion.attached_payload_kg,
+            boosters,
+            &propulsion.booster_propellant_remaining_kg,
         ) - ablation.mass_loss_kg)
             .max(1.0);
-        let (inertia, center_of_mass_m) = active_vehicle_inertia(
+        let (inertia, center_of_mass_m) = active_vehicle_inertia_with_boosters(
             &propulsion.vehicle.stages,
             &propulsion.propellant_remaining_kg,
             propulsion.active_stage,
@@ -136,6 +142,8 @@ pub fn compute_ablation(
             ablation.mass_loss_kg,
             geometry.radius_m as f64,
             geometry.height_m as f64,
+            boosters,
+            &propulsion.booster_propellant_remaining_kg,
         );
         rocket.dynamics.mass_kg = new_mass;
         rocket.dynamics.inertia_body = inertia;

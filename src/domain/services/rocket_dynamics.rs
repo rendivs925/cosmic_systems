@@ -12,6 +12,10 @@
 //! - Orientation is a body→world quaternion; angular velocity and torque are
 //!   in the body frame.
 //! - The body +Y axis is the rocket's longitudinal (roll) axis.
+//! - `position_m` is the geometric center of the currently attached
+//!   cylindrical assembly. Each `RocketEngine::position_m` is instead local to
+//!   its own stage cylinder center and is translated before attached-stack
+//!   torque calculations.
 
 use bevy::math::{DMat3, DQuat, DVec3};
 use bevy::prelude::Transform;

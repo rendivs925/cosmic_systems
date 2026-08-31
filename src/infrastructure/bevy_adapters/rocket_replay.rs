@@ -595,22 +595,26 @@ mod tests {
             },
             1_000.0,
         );
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        vehicle.stages[1].fairing_dry_mass_kg = Some(6.0);
         let entity = app
             .world_mut()
             .spawn((
                 RocketPhysicsState { dynamics },
                 RocketMissionState::Landing,
                 RocketPropulsion {
-                    vehicle: Rocket::falcon9(),
+                    vehicle,
                     active_stage: 1,
                     propellant_remaining_kg: vec![1.0, 2.0],
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
                     throttle: 0.7,
                     gimbal_pitch_rad: 0.1,
                     gimbal_yaw_rad: -0.2,
                     time_since_separation_s: 3.0,
                     ullage_settle_time_s: 0.5,
                     separations_count: 1,
-                    attached_payload_kg: 4.0,
+                    attached_payload_kg: 6.0,
                 },
                 RocketCommands {
                     target_attitude: DQuat::from_rotation_x(0.5),
@@ -897,6 +901,10 @@ mod tests {
                 .dynamics
                 .mass_kg = 99.0;
             rocket.get_mut::<RocketPropulsion>().unwrap().throttle = 0.0;
+            let engine =
+                &mut rocket.get_mut::<RocketPropulsion>().unwrap().vehicle.stages[0].engines[0];
+            engine.ignition_count = engine.max_ignitions;
+            engine.state = crate::domain::entities::rocket::EngineState::Depleted;
             rocket.get_mut::<RocketCommands>().unwrap().throttle_cmd = 0.0;
             rocket.get_mut::<RocketAutopilot>().unwrap().integral = DVec3::ZERO;
             rocket
@@ -954,6 +962,12 @@ mod tests {
             1_000.0
         );
         assert_eq!(rocket.get::<RocketPropulsion>().unwrap().throttle, 0.7);
+        let engine = &rocket.get::<RocketPropulsion>().unwrap().vehicle.stages[0].engines[0];
+        assert_eq!(engine.ignition_count, 1);
+        assert_eq!(
+            engine.state,
+            crate::domain::entities::rocket::EngineState::Running
+        );
         assert_eq!(rocket.get::<RocketCommands>().unwrap().throttle_cmd, 0.8);
         assert_eq!(
             rocket.get::<RocketAutopilot>().unwrap().integral,
@@ -1010,6 +1024,17 @@ mod tests {
             DVec3::new(13.0, 14.0, 15.0)
         );
         assert_eq!(rocket.get::<PayloadFairing>().unwrap().dry_mass_kg, 6.0);
+        assert_eq!(
+            rocket
+                .get::<RocketPropulsion>()
+                .unwrap()
+                .attached_payload_kg,
+            6.0
+        );
+        assert_eq!(
+            rocket.get::<RocketPropulsion>().unwrap().vehicle.stages[1].fairing_dry_mass_kg,
+            Some(6.0)
+        );
     }
 
     #[test]

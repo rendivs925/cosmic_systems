@@ -45,6 +45,10 @@ pub struct RocketSunDisc;
 const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
 const SUN_RADIUS_M: f64 = 696_340_000.0;
 const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
+/// Matches the active Earth terrain source's conservative lower envelope. The
+/// bootstrap stays farther inward so streamed terrain always occludes it.
+const EARTH_TERRAIN_MIN_ELEVATION_M: f32 = -10_036.0;
+const EARTH_TERRAIN_BOOTSTRAP_RECESS_M: f32 = 100.0;
 
 /// Component marking a moon entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -82,8 +86,12 @@ pub fn isolate_rocket_presentation(
 /// Startup system: spawn moons and the Sun in flight units.
 ///
 /// The streamed terrain renderer owns the bound planet's visible surface. A
-/// second globe proxy cannot agree with local terrain elevation at launch and
-/// must not become a presentation fallback beneath the vehicle.
+/// recessed globe provides temporary coverage while asynchronous root terrain
+/// geometry is generated, then remains hidden beneath that authoritative mesh.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy startup system parameters are distinct ECS authorities."
+)]
 pub fn setup_rocket_planets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -91,6 +99,7 @@ pub fn setup_rocket_planets(
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    planet_query: Query<&PlanetComponent>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
     let Some((binding, _rocket)) = rocket_query.iter().next() else {
@@ -98,6 +107,13 @@ pub fn setup_rocket_planets(
     };
     let planet_name = binding.planet_name.to_string();
     bound_planet_res.0 = Some(planet_name.clone());
+
+    if let Some(bound_planet) = planet_query
+        .iter()
+        .find(|planet| planet.domain_planet.name == planet_name)
+    {
+        spawn_rocket_bound_planet_bootstrap(&mut commands, &mut meshes, bound_planet);
+    }
 
     for moon in PlanetFactory::get_moons_of(&planet_name) {
         spawn_rocket_moon(
@@ -117,6 +133,31 @@ pub fn setup_rocket_planets(
         &asset_server,
         &solar_params,
     );
+}
+
+/// Spawn Earth's inner presentation globe below the terrain source's declared
+/// lower envelope. It shares the normal bound-planet proxy transform path.
+fn spawn_rocket_bound_planet_bootstrap(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    bound_planet: &PlanetComponent,
+) {
+    if bound_planet.domain_planet.name != "Earth" {
+        return;
+    }
+
+    let radius_m = bound_planet.domain_planet.radius_km * 1_000.0 + EARTH_TERRAIN_MIN_ELEVATION_M
+        - EARTH_TERRAIN_BOOTSTRAP_RECESS_M;
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::new(radius_m))),
+        MeshMaterial3d(bound_planet.material.clone()),
+        Transform::default(),
+        RocketPlanet {
+            name: bound_planet.domain_planet.name.clone(),
+            is_bound_planet: true,
+            is_sun: false,
+        },
+    ));
 }
 
 /// Spawn a moon in flight units.
@@ -487,5 +528,69 @@ mod tests {
         let expected_angular_radius_rad = (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M).asin();
 
         assert!((angular_radius_rad - expected_angular_radius_rad).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bound_planet_bootstrap_is_spawned_and_remains_finite() {
+        let solar = SolarSystemParameters::for_visualization();
+        let scale = PhysicalScale::from_solar_parameters(&solar);
+        let epoch = TdbEpoch::j2000();
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let mut app = App::new();
+        app.insert_resource(solar)
+            .insert_resource(scale)
+            .insert_resource(RenderOrigin {
+                origin: DVec3::new(6_371_002.0, -2_000.0, 500.0),
+                last_camera_pos: DVec3::ZERO,
+            })
+            .insert_resource(SimulationTime::default())
+            .insert_resource(RocketBoundPlanet(Some("Earth".to_string())))
+            .insert_resource(EphemerisSnapshot::from_states_and_orientations(
+                vec![],
+                vec![earth_orientation(epoch)],
+            ));
+        app.world_mut().spawn(RocketPhysicsState {
+            dynamics: RocketDynamicsState::new(
+                DVec3::ZERO,
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                1.0,
+                DMat3::IDENTITY,
+                DVec3::ZERO,
+            ),
+        });
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth,
+            material: default(),
+            has_texture: false,
+            base_reflectance: 0.0,
+            base_roughness: 0.0,
+        });
+        app.init_resource::<Assets<Mesh>>();
+        app.add_systems(
+            Startup,
+            |mut commands: Commands,
+             mut meshes: ResMut<Assets<Mesh>>,
+             planets: Query<&PlanetComponent>| {
+                spawn_rocket_bound_planet_bootstrap(
+                    &mut commands,
+                    &mut meshes,
+                    planets.single().unwrap(),
+                );
+            },
+        );
+        app.add_systems(Update, update_rocket_planets);
+
+        app.update();
+
+        let world = app.world_mut();
+        let (_, transform) = world
+            .query::<(&RocketPlanet, &Transform)>()
+            .iter(world)
+            .find(|(planet, _)| planet.is_bound_planet)
+            .expect("bound planet bootstrap should be spawned");
+        assert!(transform.translation.is_finite());
+        assert!(transform.rotation.is_finite());
+        assert!(transform.scale.is_finite());
     }
 }

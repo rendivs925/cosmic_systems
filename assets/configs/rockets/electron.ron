@@ -1,135 +1,177 @@
 // Electron - two-stage kerolox small-lift launch vehicle (Rocket Lab).
 //
 // Simplification: nine sea-level Rutherfords in a 1-center + 8-ring octaweb
-// at representative body-frame stations; one Rutherford Vacuum on stage 2.
+// at representative stage-local stations; one Rutherford Vacuum on stage 2.
 // Electric-pump engines allow deep throttling and air restarts.
 //
 // Sources (rough public figures): Rocket Lab Payload User Guide - vehicle
 // 1.2 m diameter x 18 m; first stage ~12.1 m and second stage ~2.4 m; liftoff mass ~13 t with ~9.25 t stage-1 propellant
 // and ~2.05 t stage-2 propellant; 9 x Rutherford ~26 kN SL (~232 kN total),
-// ISP ~303 s (SL) / ~311 s (vac); Rutherford Vacuum ~26 kN / ~343 s;
+// ISP ~303 s (SL) / ~311 s (vac), with 26 kN rated at sea level; Rutherford
+// Vacuum is rated at 26 kN in vacuum / ~343 s;
 // throttle to ~60%; payload fairing ~50 kg.
+// Ignition budgets are conservative catalog assumptions for this simulator,
+// not source-verified operational limits.
 
 (
     vehicles: [
         (
             name: "Electron",
+            basis: Representative,
+            provenance: (
+                manufacturer: "Rocket Lab",
+                primary_source: (
+                    title: "Electron Payload User's Guide",
+                    version: "8",
+                    source_url: "https://www.rocketlabusa.com/launch/electron/",
+                ),
+                representative_rationale: "The guide informs the public envelope, but stage mass splits, engine stations, ignition limits, and fairing mass remain simulator approximations.",
+            ),
             diameter_m: 1.2,
             height_m: 18.0,
             stages: [
                 (
                     name: "Electron First Stage",
+                    basis: Representative,
                     diameter_m: 1.2,
                     height_m: 12.1,
                     dry_mass_kg: 950.0,
                     propellant_mass_kg: 9_250.0,
-                    engines: [
+                    engines: (
+                        basis: Representative,
+                        values: [
                         (
-                            position: (0.0, -8.0, 0.0),
+                            position: (0.0, -6.05, 0.0),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (0.5, -8.0, 0.0),
+                            position: (0.5, -6.05, 0.0),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (0.3535534, -8.0, 0.3535534),
+                            position: (0.3535534, -6.05, 0.3535534),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (0.0, -8.0, 0.5),
+                            position: (0.0, -6.05, 0.5),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (-0.3535534, -8.0, 0.3535534),
+                            position: (-0.3535534, -6.05, 0.3535534),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (-0.5, -8.0, 0.0),
+                            position: (-0.5, -6.05, 0.0),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (-0.3535534, -8.0, -0.3535534),
+                            position: (-0.3535534, -6.05, -0.3535534),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (0.0, -8.0, -0.5),
+                            position: (0.0, -6.05, -0.5),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
                         (
-                            position: (0.3535534, -8.0, -0.3535534),
+                            position: (0.3535534, -6.05, -0.3535534),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 303.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: SeaLevel,
                             throttle_min: 0.6,
+                            max_ignitions: 1,
                         ),
-                    ],
+                        ],
+                    ),
                 ),
                 (
                     name: "Electron Second Stage",
+                    basis: Representative,
                     diameter_m: 1.2,
                     height_m: 2.4,
                     dry_mass_kg: 250.0,
                     propellant_mass_kg: 2_050.0,
-                    engines: [
+                    fairing: (
+                        basis: Representative,
+                        dry_mass_kg: 50.0,
+                    ),
+                    engines: (
+                        basis: Representative,
+                        values: [
                         // Single Rutherford Vacuum.
                         (
-                            position: (0.0, 6.0, 0.0),
+                            position: (0.0, -1.2, 0.0),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 311.0,
                             isp_vac: 343.0,
                             gimbal_range_deg: 4.0,
-                            max_thrust_n: 25_800.0,
+                            rated_thrust_n: 25_800.0,
+                            thrust_reference: Vacuum,
                             throttle_min: 0.6,
+                            max_ignitions: 2,
                         ),
-                    ],
+                        ],
+                    ),
                 ),
             ],
-            fairing: (
-                dry_mass_kg: 50.0,
-            ),
         ),
     ],
 )

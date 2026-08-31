@@ -6,7 +6,9 @@
 //! selection, and gimbal torque. Systems feed thrust and torque into the 6-DOF
 //! accumulator and never write the transform directly (AGENTS.md section 17).
 
-use crate::domain::entities::rocket::{EngineState, RocketEngine, RocketStage};
+use crate::domain::entities::rocket::{
+    EngineState, ParallelBoosters, RocketEngine, RocketStage, ThrustReference,
+};
 use crate::domain::services::atmosphere::SEA_LEVEL_PRESSURE_PA;
 use crate::domain::services::rocket_dynamics::rocket_inertia_tensor_with_mass_adjustments;
 use bevy::math::{DMat3, DQuat, DVec3};
@@ -25,6 +27,10 @@ pub const SPENT_STAGE_RETRO_DV_MPS: f64 = 0.5;
 /// Minimum guaranteed distance between the separated bodies at separation,
 /// m (interstage collision avoidance; see AGENTS.md section 71 scope note).
 pub const MIN_SEPARATION_CLEARANCE_M: f64 = 2.0;
+
+/// Radial relative velocity given to each detached parallel booster, m/s.
+/// Symmetric pairs have zero net linear impulse on the surviving core.
+pub const PARALLEL_BOOSTER_SEPARATION_DV_MPS: f64 = 2.0;
 
 /// Default settle time after staging before the next stage's engines may
 /// ignite (ullage: propellant must settle to the tank outlet in the new
@@ -47,26 +53,33 @@ pub struct SeparationOutcome {
     pub spent_velocity_mps: DVec3,
 }
 
-/// Apply a stage-separation impulse: a relative Δv to the upper stage along
+/// Apply a stage-separation impulse: a prescribed Δv to the upper stage along
 /// `separation_axis_body` (unit vector, body frame) and an optional retro-Δv
-/// to the spent stage along the opposite direction. Pure function returning
-/// updated velocities; positions are untouched (the caller guarantees
-/// clearance via [`MIN_SEPARATION_CLEARANCE_M`]).
+/// to the spent stage along the opposite direction.
 ///
-/// The two impulses are independent actuator effects (spring + retro motor),
-/// so linear momentum is not exactly conserved when both fire — documented
-/// idealization, consistent with prescribed-impulse separation models.
+/// The pusher response on the spent stage is mass-weighted so that the pusher
+/// itself conserves linear momentum. The optional retro motor remains a
+/// prescribed external Δv because this model does not represent its expelled
+/// reaction mass.
 pub fn separation_impulse(
     shared_velocity_mps: DVec3,
     orientation: DQuat,
     separation_axis_body: DVec3,
+    upper_mass_kg: f64,
+    spent_mass_kg: f64,
     upper_dv_mps: f64,
     spent_retro_dv_mps: f64,
 ) -> SeparationOutcome {
     let axis_world = (orientation * separation_axis_body).normalize_or_zero();
+    let spent_pusher_dv_mps = if spent_mass_kg > 0.0 {
+        upper_dv_mps * upper_mass_kg.max(0.0) / spent_mass_kg
+    } else {
+        0.0
+    };
     SeparationOutcome {
         upper_velocity_mps: shared_velocity_mps + axis_world * upper_dv_mps,
-        spent_velocity_mps: shared_velocity_mps - axis_world * spent_retro_dv_mps,
+        spent_velocity_mps: shared_velocity_mps
+            - axis_world * (spent_pusher_dv_mps + spent_retro_dv_mps),
     }
 }
 
@@ -98,9 +111,13 @@ pub struct EngineOperatingPoint {
 
 impl EngineOperatingPoint {
     pub fn from_engine(engine: &RocketEngine, throttle: f32, ambient_pressure_pa: f64) -> Self {
-        let sea_level_thrust_n =
-            engine.max_thrust_kn as f64 * 1000.0 * throttle.clamp(0.0, 1.0) as f64;
-        let mass_flow_kg_s = mass_flow_from_thrust(sea_level_thrust_n, engine.isp_sea_level);
+        let rated_thrust_n =
+            engine.rated_thrust_kn as f64 * 1000.0 * throttle.clamp(0.0, 1.0) as f64;
+        let rated_isp_s = match engine.thrust_reference {
+            ThrustReference::SeaLevel => engine.isp_sea_level,
+            ThrustReference::Vacuum => engine.isp_vacuum,
+        };
+        let mass_flow_kg_s = mass_flow_from_thrust(rated_thrust_n, rated_isp_s);
         let specific_impulse_s =
             selected_isp(engine.isp_sea_level, engine.isp_vacuum, ambient_pressure_pa);
         Self {
@@ -111,9 +128,9 @@ impl EngineOperatingPoint {
     }
 }
 
-/// Full-throttle thrust at an ambient pressure. Engine catalog thrust is
-/// calibrated at sea level, so mass flow is fixed from that reference and the
-/// pressure-selected Isp determines the resulting force.
+/// Full-throttle thrust at an ambient pressure. Fixed mass flow is derived from
+/// the engine's declared rated-thrust endpoint; pressure-selected Isp then
+/// determines force at every other ambient pressure.
 pub fn engine_thrust_n(engine: &RocketEngine, throttle: f32, ambient_pressure_pa: f64) -> f64 {
     EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa).thrust_n
 }
@@ -159,6 +176,36 @@ pub fn gimbal_torque_body(
     offset.cross(deflected * thrust_n)
 }
 
+/// Gimbal torque for engines mounted on one stage of an attached stack.
+/// `stage_origin_in_stack_m` converts the stage-local stations declared by the
+/// catalog into the current assembly frame. It is zero for a detached stage.
+pub fn stage_gimbal_torque_body(
+    engines: &[RocketEngine],
+    stage_origin_in_stack_m: DVec3,
+    center_of_mass_m: DVec3,
+    throttle: f32,
+    ambient_pressure_pa: f64,
+    gimbal_pitch_rad: f64,
+    gimbal_yaw_rad: f64,
+) -> DVec3 {
+    engines
+        .iter()
+        .filter(|engine| engine.state == EngineState::Running)
+        .map(|engine| {
+            let operating_point =
+                EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa);
+            gimbal_torque_body(
+                stage_origin_in_stack_m + engine.position_m.as_dvec3(),
+                center_of_mass_m,
+                engine.thrust_axis.as_dvec3(),
+                operating_point.thrust_n,
+                clamp_gimbal(gimbal_pitch_rad as f32, engine.gimbal_range_deg) as f64,
+                clamp_gimbal(gimbal_yaw_rad as f32, engine.gimbal_range_deg) as f64,
+            )
+        })
+        .sum()
+}
+
 /// The physical thrust axis after pitch/yaw gimbal deflection, in body frame.
 /// Force and torque consumers must use this same direction.
 pub fn gimbaled_thrust_direction_body(
@@ -185,6 +232,26 @@ pub fn allocate_gimbal_deflections(
     thrust_scale: f32,
     ambient_pressure_pa: f64,
 ) -> (f32, f32) {
+    allocate_gimbal_deflections_at_stage_origin(
+        engines,
+        DVec3::ZERO,
+        center_of_mass_m,
+        torque_cmd,
+        thrust_scale,
+        ambient_pressure_pa,
+    )
+}
+
+/// Allocate gimbal commands using stage-local engine stations translated into
+/// the current attached-stack frame.
+pub fn allocate_gimbal_deflections_at_stage_origin(
+    engines: &[RocketEngine],
+    stage_origin_in_stack_m: DVec3,
+    center_of_mass_m: DVec3,
+    torque_cmd: DVec3,
+    thrust_scale: f32,
+    ambient_pressure_pa: f64,
+) -> (f32, f32) {
     if engines.is_empty() {
         return (0.0, 0.0);
     }
@@ -195,7 +262,7 @@ pub fn allocate_gimbal_deflections(
         let mut total = DVec3::ZERO;
         for engine in engines {
             total += gimbal_torque_body(
-                engine.position_m.as_dvec3(),
+                stage_origin_in_stack_m + engine.position_m.as_dvec3(),
                 center_of_mass_m,
                 engine.thrust_axis.as_dvec3(),
                 engine_thrust_n(engine, scale as f32, ambient_pressure_pa),
@@ -255,14 +322,6 @@ pub fn stage_throttle_envelope(engines: &[RocketEngine]) -> (f32, f32) {
     )
 }
 
-/// May this stage's engines ignite after a separation? Engines marked
-/// non-restartable cannot air-start once separated; the pad ignition before
-/// any separation is never a restart. Combined with the ullage settle gate at
-/// the call sites.
-pub fn air_start_allowed(separated_since_ignition: bool, engines_restartable: bool) -> bool {
-    !separated_since_ignition || engines_restartable
-}
-
 /// Total mass of the vehicle considering only the active and future stages.
 pub fn active_vehicle_mass(
     stages: &[RocketStage],
@@ -287,6 +346,32 @@ pub fn active_vehicle_mass_with_payload(
     attached_payload_kg: f32,
 ) -> f64 {
     active_vehicle_mass(stages, propellant_remaining_kg, active_stage) + attached_payload_kg as f64
+}
+
+/// Active serial-stack mass plus optional attached parallel boosters. Passing
+/// `None` retains the serial-only result exactly.
+pub fn active_vehicle_mass_with_payload_and_boosters(
+    stages: &[RocketStage],
+    propellant_remaining_kg: &[f32],
+    active_stage: usize,
+    attached_payload_kg: f32,
+    boosters: Option<&ParallelBoosters>,
+    booster_propellant_remaining_kg: &[f32],
+) -> f64 {
+    active_vehicle_mass_with_payload(
+        stages,
+        propellant_remaining_kg,
+        active_stage,
+        attached_payload_kg,
+    ) + boosters.map_or(0.0, |boosters| {
+        booster_propellant_remaining_kg
+            .iter()
+            .take(boosters.count as usize)
+            .map(|propellant_kg| {
+                boosters.stage.dry_mass_kg as f64 + (*propellant_kg).max(0.0) as f64
+            })
+            .sum::<f64>()
+    })
 }
 
 /// Inertia tensor and center of mass for the active vehicle, using the shared
@@ -319,6 +404,233 @@ pub fn active_vehicle_inertia(
         radius_m,
         height_m,
     )
+}
+
+/// Active stack mass properties with optional attached parallel boosters. The
+/// serial stack continues to use the established cylinder approximation; each
+/// booster contributes its own stage-local properties translated from its
+/// declared full-stack attachment origin via the parallel-axis theorem.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This extends the established serial mass-property inputs with the optional attached-booster inventory."
+)]
+pub fn active_vehicle_inertia_with_boosters(
+    stages: &[RocketStage],
+    propellant_remaining_kg: &[f32],
+    active_stage: usize,
+    attached_payload_kg: f32,
+    ablation_mass_loss_kg: f64,
+    radius_m: f64,
+    height_m: f64,
+    boosters: Option<&ParallelBoosters>,
+    booster_propellant_remaining_kg: &[f32],
+) -> (DMat3, DVec3) {
+    let (serial_inertia, serial_com) = active_vehicle_inertia(
+        stages,
+        propellant_remaining_kg,
+        active_stage,
+        attached_payload_kg,
+        ablation_mass_loss_kg,
+        radius_m,
+        height_m,
+    );
+    let serial_mass_kg = (active_vehicle_mass_with_payload(
+        stages,
+        propellant_remaining_kg,
+        active_stage,
+        attached_payload_kg,
+    ) - ablation_mass_loss_kg.max(0.0))
+    .max(1.0);
+    let Some(boosters) = boosters else {
+        return (serial_inertia, serial_com);
+    };
+
+    let mut total_mass_kg = serial_mass_kg;
+    let mut weighted_center_m = serial_com * serial_mass_kg;
+    for (attachment_m, propellant_kg) in boosters
+        .attachment_positions_m
+        .iter()
+        .zip(booster_propellant_remaining_kg.iter())
+    {
+        let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
+        let center_m = attachment_m.as_dvec3() + properties.center_of_mass_m;
+        total_mass_kg += properties.mass_kg;
+        weighted_center_m += center_m * properties.mass_kg;
+    }
+    let center_of_mass_m = weighted_center_m / total_mass_kg.max(1.0);
+    let parallel_axis = |mass_kg: f64, offset_m: DVec3| {
+        let squared_distance_m2 = offset_m.length_squared();
+        mass_kg
+            * (DMat3::from_diagonal(DVec3::splat(squared_distance_m2))
+                - DMat3::from_cols(
+                    offset_m * offset_m.x,
+                    offset_m * offset_m.y,
+                    offset_m * offset_m.z,
+                ))
+    };
+    let mut inertia = serial_inertia + parallel_axis(serial_mass_kg, serial_com - center_of_mass_m);
+    for (attachment_m, propellant_kg) in boosters
+        .attachment_positions_m
+        .iter()
+        .zip(booster_propellant_remaining_kg.iter())
+    {
+        let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
+        let center_m = attachment_m.as_dvec3() + properties.center_of_mass_m;
+        inertia += properties.inertia_body
+            + parallel_axis(properties.mass_kg, center_m - center_of_mass_m);
+    }
+    (inertia, center_of_mass_m)
+}
+
+/// Mass properties for one separated physical stage. Geometry is deliberately
+/// taken from the stage itself so a detached body never inherits the full-stack
+/// inertia or center of mass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StageMassProperties {
+    pub mass_kg: f64,
+    pub inertia_body: DMat3,
+    pub center_of_mass_m: DVec3,
+    pub height_m: f64,
+}
+
+/// Rebuild one stage's rigid-body properties from its own dry mass, remaining
+/// propellant, attached payload, and ablated mass.
+pub fn stage_mass_properties(
+    stage: &RocketStage,
+    propellant_remaining_kg: f32,
+    attached_payload_kg: f32,
+    ablation_mass_loss_kg: f64,
+) -> StageMassProperties {
+    let dry_mass_kg = (stage.dry_mass_kg as f64 - ablation_mass_loss_kg.max(0.0)).max(0.0);
+    let propellant_mass_kg = propellant_remaining_kg.max(0.0) as f64;
+    let attached_payload_kg = attached_payload_kg.max(0.0) as f64;
+    let radius_m = stage.diameter_m as f64 * 0.5;
+    let height_m = stage.height_m as f64;
+    let (inertia_body, center_of_mass_m) = rocket_inertia_tensor_with_mass_adjustments(
+        dry_mass_kg,
+        propellant_mass_kg,
+        attached_payload_kg,
+        0.0,
+        radius_m,
+        height_m,
+    );
+    StageMassProperties {
+        mass_kg: dry_mass_kg + propellant_mass_kg + attached_payload_kg,
+        inertia_body,
+        center_of_mass_m,
+        height_m,
+    }
+}
+
+/// The independent f64 states created by a stage separation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StageSeparationDynamics {
+    pub upper: crate::domain::services::rocket_dynamics::RocketDynamicsState,
+    pub spent: crate::domain::services::rocket_dynamics::RocketDynamicsState,
+}
+
+/// Independent f64 dynamics for simultaneously jettisoned parallel boosters.
+/// Each attachment is a stage geometric origin in the parent stack frame.
+pub fn separate_parallel_boosters_dynamics(
+    pre_separation: crate::domain::services::rocket_dynamics::RocketDynamicsState,
+    boosters: &ParallelBoosters,
+    booster_propellant_remaining_kg: &[f32],
+    separation_dv_mps: f64,
+) -> Vec<crate::domain::services::rocket_dynamics::RocketDynamicsState> {
+    let angular_velocity_world_radps =
+        pre_separation.orientation * pre_separation.angular_velocity_radps;
+    boosters
+        .attachment_positions_m
+        .iter()
+        .zip(booster_propellant_remaining_kg.iter())
+        .map(|(attachment_m, propellant_kg)| {
+            let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
+            let attachment_world_m = pre_separation.orientation * attachment_m.as_dvec3();
+            let radial_body =
+                DVec3::new(attachment_m.x as f64, 0.0, attachment_m.z as f64).normalize_or_zero();
+            let mut dynamics = pre_separation;
+            dynamics.position_m = pre_separation.position_m + attachment_world_m;
+            dynamics.velocity_mps = pre_separation.velocity_mps
+                + angular_velocity_world_radps.cross(attachment_world_m)
+                + (pre_separation.orientation * radial_body) * separation_dv_mps;
+            dynamics.angular_acceleration_radps2 = DVec3::ZERO;
+            dynamics.mass_kg = properties.mass_kg;
+            dynamics.inertia_body = properties.inertia_body;
+            dynamics.center_of_mass_m = properties.center_of_mass_m;
+            dynamics
+        })
+        .collect()
+}
+
+/// Split a previously rigid launch stack into two non-overlapping bodies.
+///
+/// Positions in [`RocketDynamicsState`] are body origins. The offset therefore
+/// accounts for each stage-local center of mass while keeping the pre-separation
+/// composite center of mass fixed. Both stage centers inherit the pre-separation
+/// rigid-body velocity before receiving the axial separation impulse.
+pub fn separate_stage_dynamics(
+    pre_separation: crate::domain::services::rocket_dynamics::RocketDynamicsState,
+    upper_properties: StageMassProperties,
+    spent_properties: StageMassProperties,
+    separation_axis_body: DVec3,
+    upper_dv_mps: f64,
+    spent_retro_dv_mps: f64,
+    minimum_clearance_m: f64,
+) -> StageSeparationDynamics {
+    let axis_world = (pre_separation.orientation * separation_axis_body).normalize_or_zero();
+    let total_mass_kg = (upper_properties.mass_kg + spent_properties.mass_kg).max(1e-9);
+    let center_spacing_m = (upper_properties.height_m + spent_properties.height_m) * 0.5
+        + minimum_clearance_m.max(0.0);
+    let upper_origin_offset_from_spent_m = axis_world * center_spacing_m;
+    let upper_com_offset_from_spent_m = upper_origin_offset_from_spent_m
+        + pre_separation.orientation
+            * (upper_properties.center_of_mass_m - spent_properties.center_of_mass_m);
+
+    let pre_center_of_mass_m =
+        pre_separation.position_m + pre_separation.orientation * pre_separation.center_of_mass_m;
+    let upper_center_of_mass_m = pre_center_of_mass_m
+        + upper_com_offset_from_spent_m * spent_properties.mass_kg / total_mass_kg;
+    let spent_center_of_mass_m = pre_center_of_mass_m
+        - upper_com_offset_from_spent_m * upper_properties.mass_kg / total_mass_kg;
+
+    let angular_velocity_world_radps =
+        pre_separation.orientation * pre_separation.angular_velocity_radps;
+    let pre_center_velocity_mps = pre_separation.velocity_mps
+        + angular_velocity_world_radps
+            .cross(pre_separation.orientation * pre_separation.center_of_mass_m);
+    let impulses = separation_impulse(
+        pre_center_velocity_mps,
+        pre_separation.orientation,
+        separation_axis_body,
+        upper_properties.mass_kg,
+        spent_properties.mass_kg,
+        upper_dv_mps,
+        spent_retro_dv_mps,
+    );
+
+    let mut upper = pre_separation;
+    upper.position_m =
+        upper_center_of_mass_m - pre_separation.orientation * upper_properties.center_of_mass_m;
+    upper.velocity_mps = impulses.upper_velocity_mps
+        - angular_velocity_world_radps
+            .cross(pre_separation.orientation * upper_properties.center_of_mass_m);
+    upper.angular_acceleration_radps2 = DVec3::ZERO;
+    upper.mass_kg = upper_properties.mass_kg;
+    upper.inertia_body = upper_properties.inertia_body;
+    upper.center_of_mass_m = upper_properties.center_of_mass_m;
+
+    let mut spent = pre_separation;
+    spent.position_m =
+        spent_center_of_mass_m - pre_separation.orientation * spent_properties.center_of_mass_m;
+    spent.velocity_mps = impulses.spent_velocity_mps
+        - angular_velocity_world_radps
+            .cross(pre_separation.orientation * spent_properties.center_of_mass_m);
+    spent.angular_acceleration_radps2 = DVec3::ZERO;
+    spent.mass_kg = spent_properties.mass_kg;
+    spent.inertia_body = spent_properties.inertia_body;
+    spent.center_of_mass_m = spent_properties.center_of_mass_m;
+
+    StageSeparationDynamics { upper, spent }
 }
 
 /// The mass shed by separating the current stage (its dry mass plus remaining
@@ -364,6 +676,29 @@ pub fn stage_thrust_body(
     (force, mass_flow)
 }
 
+/// Maximum thrust available to guidance before an engine is commanded to run.
+/// Off engines with remaining ignition budget are startable; terminally
+/// depleted engines are not. This is a planning capability only: physical
+/// force, torque, and mass flow must continue to use [`stage_thrust_body`].
+pub fn stage_available_thrust_body(
+    engines: &[RocketEngine],
+    throttle: f32,
+    ambient_pressure_pa: f64,
+) -> (DVec3, f64) {
+    let throttle = throttle.clamp(0.0, 1.0);
+    let mut force = DVec3::ZERO;
+    let mut mass_flow = 0.0;
+    for engine in engines {
+        if engine.state == EngineState::Depleted {
+            continue;
+        }
+        let point = EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa);
+        force += engine.thrust_axis.as_dvec3() * point.thrust_n;
+        mass_flow += point.mass_flow_kg_s;
+    }
+    (force, mass_flow)
+}
+
 /// Running-engine thrust with the actual shared gimbal deflection applied.
 pub fn stage_gimbaled_thrust_body(
     engines: &[RocketEngine],
@@ -394,7 +729,7 @@ pub fn stage_gimbaled_thrust_body(
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::Rocket;
-    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
 
     #[test]
     fn thrust_follows_rocket_equation() {
@@ -427,7 +762,7 @@ mod tests {
 
     #[test]
     fn staging_sheds_stage_mass() {
-        let rocket = Rocket::falcon9();
+        let rocket = Rocket::falcon9_test_fixture();
         let mut propellant = rocket
             .stages
             .iter()
@@ -482,8 +817,10 @@ mod tests {
     /// ≈ 5.45 so ascent guidance assumptions remain valid.
     #[test]
     fn falcon9_pad_thrust_to_weight_ratio() {
-        let rocket = Rocket::falcon9();
-        let thrust_n = rocket.max_thrust_kn() as f64 * 1000.0;
+        let rocket = Rocket::falcon9_test_fixture();
+        let thrust_n = stage_thrust_body(&rocket.stages[0].engines, 1.0, SEA_LEVEL_PRESSURE_PA)
+            .0
+            .length();
         let weight_n = rocket.total_mass_kg() as f64 * STANDARD_GRAVITY_MPS2;
         let tw_ratio = thrust_n / weight_n;
         assert!(
@@ -497,7 +834,7 @@ mod tests {
     /// closed form (same harness as the single-stage analog above).
     #[test]
     fn falcon9_two_stage_delta_v_budget_matches_closed_form() {
-        let rocket = Rocket::falcon9();
+        let rocket = Rocket::falcon9_test_fixture();
         let stage1 = &rocket.stages[0];
         let stage2 = &rocket.stages[1];
         let g0 = STANDARD_GRAVITY_MPS2;
@@ -521,13 +858,8 @@ mod tests {
         let mut mass = m_full;
         let mut velocity = 0.0_f64;
         for (stage, next_stage) in [(stage1, Some(stage2)), (stage2, None)] {
-            let engine = &stage.engines[0];
-            let thrust_n = stage
-                .engines
-                .iter()
-                .map(|e| e.max_thrust_kn as f64 * 1000.0)
-                .sum::<f64>();
-            let mdot = mass_flow_from_thrust(thrust_n, engine.isp_vacuum);
+            let (thrust_body, mdot) = stage_thrust_body(&stage.engines, 1.0, 0.0);
+            let thrust_n = thrust_body.length();
             let burn_time = stage.propellant_mass_kg as f64 / mdot;
             let steps = (burn_time / dt).ceil() as u32;
             // Mass floor during this burn: everything still attached after
@@ -554,7 +886,7 @@ mod tests {
     /// initial total, with partial residual propellant at separation.
     #[test]
     fn staging_bookkeeping_conserves_total_across_full_sequence() {
-        let rocket = Rocket::falcon9();
+        let rocket = Rocket::falcon9_test_fixture();
         let initial_total = rocket.total_mass_kg() as f64;
         let mut propellant = rocket
             .stages
@@ -598,15 +930,24 @@ mod tests {
     }
 
     #[test]
-    fn pressure_changes_thrust_without_changing_mass_flow() {
-        let engine = engine_with_throttle(0.0, 1.0);
-        let (sea_level_thrust, sea_level_flow) =
-            stage_thrust_body(std::slice::from_ref(&engine), 1.0, SEA_LEVEL_PRESSURE_PA);
-        let (vacuum_thrust, vacuum_flow) = stage_thrust_body(&[engine], 1.0, 0.0);
+    fn rated_thrust_matches_declared_reference_with_fixed_mass_flow() {
+        for (reference, reference_pressure_pa, other_pressure_pa) in [
+            (ThrustReference::SeaLevel, SEA_LEVEL_PRESSURE_PA, 0.0),
+            (ThrustReference::Vacuum, 0.0, SEA_LEVEL_PRESSURE_PA),
+        ] {
+            let mut engine = engine_with_throttle(0.0, 1.0);
+            engine.thrust_reference = reference;
+            let rated = EngineOperatingPoint::from_engine(&engine, 1.0, reference_pressure_pa);
+            let intermediate =
+                EngineOperatingPoint::from_engine(&engine, 1.0, SEA_LEVEL_PRESSURE_PA * 0.5);
+            let other = EngineOperatingPoint::from_engine(&engine, 1.0, other_pressure_pa);
 
-        assert!((sea_level_thrust.y - 1_000_000.0).abs() < 1e-6);
-        assert!(vacuum_thrust.y > sea_level_thrust.y);
-        assert!((vacuum_flow - sea_level_flow).abs() < 1e-9);
+            assert!((rated.thrust_n - engine.rated_thrust_kn as f64 * 1000.0).abs() < 1e-6);
+            assert!((intermediate.mass_flow_kg_s - rated.mass_flow_kg_s).abs() < 1e-12);
+            assert!((other.mass_flow_kg_s - rated.mass_flow_kg_s).abs() < 1e-12);
+            assert!(intermediate.specific_impulse_s > engine.isp_sea_level);
+            assert!(intermediate.specific_impulse_s < engine.isp_vacuum);
+        }
     }
 
     #[test]
@@ -633,6 +974,36 @@ mod tests {
             torque.length() > 0.0,
             "deflected thrust must produce torque"
         );
+    }
+
+    #[test]
+    fn attached_stack_gimbal_translates_stage_local_engine_station() {
+        let rocket = Rocket::falcon9_test_fixture();
+        let stage_origin_in_stack_m =
+            Rocket::stage_origin_in_stack_m(&rocket.stages, rocket.height_m, 0)
+                .unwrap()
+                .as_dvec3();
+        let center_of_mass_m = DVec3::new(0.0, -8.0, 0.0);
+        let engine = &rocket.stages[0].engines[0];
+        let actual = stage_gimbal_torque_body(
+            std::slice::from_ref(engine),
+            stage_origin_in_stack_m,
+            center_of_mass_m,
+            1.0,
+            0.0,
+            clamp_gimbal(0.05, engine.gimbal_range_deg) as f64,
+            0.0,
+        );
+        let expected = gimbal_torque_body(
+            stage_origin_in_stack_m + engine.position_m.as_dvec3(),
+            center_of_mass_m,
+            engine.thrust_axis.as_dvec3(),
+            engine_thrust_n(engine, 1.0, 0.0),
+            clamp_gimbal(0.05, engine.gimbal_range_deg) as f64,
+            0.0,
+        );
+
+        assert!((actual - expected).length() < 1e-9);
     }
 
     #[test]
@@ -666,12 +1037,15 @@ mod tests {
             velocity,
             orientation,
             DVec3::Y,
+            2_000.0,
+            4_000.0,
             SEPARATION_UPPER_DV_MPS,
             SPENT_STAGE_RETRO_DV_MPS,
         );
         let axis_world = (orientation * DVec3::Y).normalize();
         let expected_upper = velocity + axis_world * SEPARATION_UPPER_DV_MPS;
-        let expected_spent = velocity - axis_world * SPENT_STAGE_RETRO_DV_MPS;
+        let expected_spent = velocity
+            - axis_world * (SEPARATION_UPPER_DV_MPS * 2_000.0 / 4_000.0 + SPENT_STAGE_RETRO_DV_MPS);
         assert!((outcome.upper_velocity_mps - expected_upper).length() < 1e-12);
         assert!((outcome.spent_velocity_mps - expected_spent).length() < 1e-12);
         // The bodies move apart: relative velocity along the axis is positive.
@@ -682,7 +1056,15 @@ mod tests {
     #[test]
     fn separation_with_zero_impulses_is_a_no_op() {
         let velocity = DVec3::new(1.0, 2.0, 3.0);
-        let outcome = separation_impulse(velocity, DQuat::IDENTITY, DVec3::Y, 0.0, 0.0);
+        let outcome = separation_impulse(
+            velocity,
+            DQuat::IDENTITY,
+            DVec3::Y,
+            1_000.0,
+            2_000.0,
+            0.0,
+            0.0,
+        );
         assert_eq!(outcome.upper_velocity_mps, velocity);
         assert_eq!(outcome.spent_velocity_mps, velocity);
     }
@@ -690,9 +1072,213 @@ mod tests {
     #[test]
     fn retro_dv_can_be_disabled_independently() {
         let velocity = DVec3::ZERO;
-        let outcome = separation_impulse(velocity, DQuat::IDENTITY, DVec3::Y, 1.5, 0.0);
-        assert_eq!(outcome.spent_velocity_mps, velocity);
+        let outcome = separation_impulse(
+            velocity,
+            DQuat::IDENTITY,
+            DVec3::Y,
+            1_000.0,
+            1_000.0,
+            1.5,
+            0.0,
+        );
+        assert_eq!(outcome.spent_velocity_mps, DVec3::new(0.0, -1.5, 0.0));
         assert_eq!(outcome.upper_velocity_mps, DVec3::new(0.0, 1.5, 0.0));
+    }
+
+    #[test]
+    fn stage_separation_assigns_local_properties_and_clearance() {
+        let rocket = Rocket::falcon9_test_fixture();
+        let upper_properties = stage_mass_properties(&rocket.stages[1], 20_000.0, 1_000.0, 0.0);
+        let spent_properties = stage_mass_properties(&rocket.stages[0], 15_000.0, 0.0, 0.0);
+        assert_eq!(upper_properties.mass_kg, 25_200.0);
+        assert_eq!(spent_properties.mass_kg, 33_000.0);
+        let pre_mass_kg = upper_properties.mass_kg + spent_properties.mass_kg;
+        let (pre_inertia, pre_com) = rocket_inertia_tensor(pre_mass_kg, 0.0, 1.85, 54.4);
+        let orientation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_4);
+        let pre = RocketDynamicsState::new(
+            DVec3::new(6_500_000.0, 100.0, -50.0),
+            DVec3::new(10.0, 2_000.0, -5.0),
+            orientation,
+            pre_mass_kg,
+            pre_inertia,
+            pre_com,
+        );
+
+        let separated = separate_stage_dynamics(
+            pre,
+            upper_properties,
+            spent_properties,
+            DVec3::Y,
+            SEPARATION_UPPER_DV_MPS,
+            0.0,
+            MIN_SEPARATION_CLEARANCE_M,
+        );
+
+        assert_eq!(separated.upper.mass_kg, upper_properties.mass_kg);
+        assert_eq!(separated.upper.inertia_body, upper_properties.inertia_body);
+        assert_eq!(
+            separated.upper.center_of_mass_m,
+            upper_properties.center_of_mass_m
+        );
+        assert_eq!(separated.spent.mass_kg, spent_properties.mass_kg);
+        assert_eq!(separated.spent.inertia_body, spent_properties.inertia_body);
+        assert_eq!(
+            separated.spent.center_of_mass_m,
+            spent_properties.center_of_mass_m
+        );
+        assert_ne!(separated.upper.inertia_body, separated.spent.inertia_body);
+        assert_ne!(separated.upper.inertia_body, pre.inertia_body);
+        assert_ne!(separated.spent.inertia_body, pre.inertia_body);
+        assert_ne!(
+            separated.upper.center_of_mass_m,
+            separated.spent.center_of_mass_m
+        );
+        assert_ne!(separated.upper.center_of_mass_m, pre.center_of_mass_m);
+        assert_ne!(separated.spent.center_of_mass_m, pre.center_of_mass_m);
+
+        let axis_world = (orientation * DVec3::Y).normalize();
+        let minimum_origin_distance_m = (upper_properties.height_m + spent_properties.height_m)
+            * 0.5
+            + MIN_SEPARATION_CLEARANCE_M;
+        let origin_delta_m = separated.upper.position_m - separated.spent.position_m;
+        assert!(
+            (origin_delta_m - axis_world * minimum_origin_distance_m).length() < 1e-9,
+            "stage origins overlap or are not separated on the body axis: {origin_delta_m}"
+        );
+
+        let world_com = |state: &RocketDynamicsState| {
+            state.position_m + state.orientation * state.center_of_mass_m
+        };
+        let composite_com_m = (world_com(&separated.upper) * separated.upper.mass_kg
+            + world_com(&separated.spent) * separated.spent.mass_kg)
+            / pre_mass_kg;
+        assert!(
+            (composite_com_m - world_com(&pre)).length() < 1e-9,
+            "separation moved the composite center of mass"
+        );
+
+        let pre_momentum = pre.velocity_mps * pre_mass_kg;
+        let post_momentum = separated.upper.velocity_mps * separated.upper.mass_kg
+            + separated.spent.velocity_mps * separated.spent.mass_kg;
+        assert!(
+            (post_momentum - pre_momentum).length() < 1e-8,
+            "the pusher impulse must conserve linear momentum"
+        );
+    }
+
+    #[test]
+    fn stage_separation_is_deterministic() {
+        let rocket = Rocket::falcon9_test_fixture();
+        let upper_properties = stage_mass_properties(&rocket.stages[1], 30_000.0, 0.0, 0.0);
+        let spent_properties = stage_mass_properties(&rocket.stages[0], 0.0, 0.0, 0.0);
+        let (inertia, com) = rocket_inertia_tensor(
+            upper_properties.mass_kg + spent_properties.mass_kg,
+            0.0,
+            1.85,
+            54.4,
+        );
+        let pre = RocketDynamicsState::new(
+            DVec3::new(6_500_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_000.0, 0.0),
+            DQuat::from_rotation_x(0.2),
+            upper_properties.mass_kg + spent_properties.mass_kg,
+            inertia,
+            com,
+        );
+
+        let first = separate_stage_dynamics(
+            pre,
+            upper_properties,
+            spent_properties,
+            DVec3::Y,
+            SEPARATION_UPPER_DV_MPS,
+            SPENT_STAGE_RETRO_DV_MPS,
+            MIN_SEPARATION_CLEARANCE_M,
+        );
+        let second = separate_stage_dynamics(
+            pre,
+            upper_properties,
+            spent_properties,
+            DVec3::Y,
+            SEPARATION_UPPER_DV_MPS,
+            SPENT_STAGE_RETRO_DV_MPS,
+            MIN_SEPARATION_CLEARANCE_M,
+        );
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn parallel_booster_jettison_is_symmetric_non_overlapping_and_momentum_neutral() {
+        let boosters = ParallelBoosters {
+            count: 2,
+            stage: RocketStage {
+                name: "Pair".into(),
+                diameter_m: 2.0,
+                height_m: 8.0,
+                dry_mass_kg: 100.0,
+                propellant_mass_kg: 10.0,
+                recovery_propellant_reserve_kg: None,
+                landing_gear: None,
+                fairing_dry_mass_kg: None,
+                engines: vec![engine_with_throttle(1.0, 1.0)],
+            },
+            attachment_positions_m: vec![
+                bevy::math::Vec3::new(-4.0, -1.0, 0.0),
+                bevy::math::Vec3::new(4.0, -1.0, 0.0),
+            ],
+        };
+        let (inertia, com) = rocket_inertia_tensor(1_200.0, 0.0, 1.0, 12.0);
+        let pre = RocketDynamicsState::new(
+            DVec3::new(10.0, 20.0, 30.0),
+            DVec3::new(40.0, 50.0, 60.0),
+            DQuat::from_rotation_z(0.2),
+            1_200.0,
+            inertia,
+            com,
+        );
+        let mut pre = pre;
+        pre.angular_velocity_radps = DVec3::new(0.0, 0.0, 0.5);
+
+        let first = separate_parallel_boosters_dynamics(
+            pre,
+            &boosters,
+            &[0.0, 0.0],
+            PARALLEL_BOOSTER_SEPARATION_DV_MPS,
+        );
+        let second = separate_parallel_boosters_dynamics(
+            pre,
+            &boosters,
+            &[0.0, 0.0],
+            PARALLEL_BOOSTER_SEPARATION_DV_MPS,
+        );
+        assert_eq!(first, second, "jettison must be deterministic");
+        assert!(
+            first[0].position_m.distance(first[1].position_m) > boosters.stage.diameter_m as f64,
+            "booster cylinders overlap at jettison"
+        );
+
+        let omega_world = pre.orientation * pre.angular_velocity_radps;
+        let mut separation_impulse_kg_mps = DVec3::ZERO;
+        for (index, dynamics) in first.iter().enumerate() {
+            let attachment_world =
+                pre.orientation * boosters.attachment_positions_m[index].as_dvec3();
+            let rigid_point_velocity = pre.velocity_mps + omega_world.cross(attachment_world);
+            let radial = (pre.orientation
+                * DVec3::new(
+                    boosters.attachment_positions_m[index].x as f64,
+                    0.0,
+                    boosters.attachment_positions_m[index].z as f64,
+                )
+                .normalize())
+                * PARALLEL_BOOSTER_SEPARATION_DV_MPS;
+            assert!((dynamics.velocity_mps - (rigid_point_velocity + radial)).length() < 1e-12);
+            separation_impulse_kg_mps +=
+                (dynamics.velocity_mps - rigid_point_velocity) * dynamics.mass_kg;
+        }
+        assert!(
+            separation_impulse_kg_mps.length() < 1e-10,
+            "symmetric booster impulses must not change core linear momentum"
+        );
     }
 
     #[test]
@@ -739,10 +1325,12 @@ mod tests {
             isp_sea_level: 282.0,
             isp_vacuum: 311.0,
             gimbal_range_deg: 5.0,
-            max_thrust_kn: 1000.0,
+            rated_thrust_kn: 1000.0,
+            thrust_reference: ThrustReference::SeaLevel,
             throttle_min: min,
             throttle_max: max,
-            restartable: true,
+            max_ignitions: 2,
+            ignition_count: 1,
             state: EngineState::Running,
         }
     }
@@ -762,18 +1350,24 @@ mod tests {
     }
 
     #[test]
-    fn air_start_requires_restartable_engines_after_separation() {
-        // Before any separation the first ignition is not a restart.
-        assert!(air_start_allowed(false, false));
-        assert!(air_start_allowed(false, true));
-        // After a separation only restartable engines may light.
-        assert!(!air_start_allowed(true, false));
-        assert!(air_start_allowed(true, true));
+    fn engine_lifecycle_enforces_ignition_budget_and_terminal_cutoff() {
+        let mut engine = engine_with_throttle(0.0, 1.0);
+        engine.reset_lifecycle();
+        engine.max_ignitions = 1;
+
+        engine.command_lifecycle(true, true);
+        assert_eq!(engine.state, EngineState::Running);
+        assert_eq!(engine.ignition_count, 1);
+        engine.command_lifecycle(false, true);
+        assert_eq!(engine.state, EngineState::Depleted);
+        engine.command_lifecycle(true, true);
+        assert_eq!(engine.state, EngineState::Depleted);
+        assert_eq!(engine.ignition_count, 1);
     }
 
     #[test]
     fn payload_mass_rides_with_active_vehicle_mass() {
-        let rocket = Rocket::falcon9();
+        let rocket = Rocket::falcon9_test_fixture();
         let propellant = vec![90_000.0_f32, 30_000.0];
         assert_eq!(
             active_vehicle_mass_with_payload(&rocket.stages, &propellant, 0, 1_900.0),
@@ -784,6 +1378,36 @@ mod tests {
             active_vehicle_mass_with_payload(&rocket.stages, &propellant, 1, 0.0),
             active_vehicle_mass(&rocket.stages, &propellant, 1)
         );
+    }
+
+    #[test]
+    fn serial_only_mass_and_inertia_are_unchanged_without_parallel_boosters() {
+        let rocket = Rocket::falcon9_test_fixture();
+        let propellant = vec![90_000.0_f32, 30_000.0];
+        let serial_mass = active_vehicle_mass_with_payload(&rocket.stages, &propellant, 0, 100.0);
+        let extended_mass = active_vehicle_mass_with_payload_and_boosters(
+            &rocket.stages,
+            &propellant,
+            0,
+            100.0,
+            None,
+            &[],
+        );
+        assert_eq!(serial_mass, extended_mass);
+        let serial_inertia =
+            active_vehicle_inertia(&rocket.stages, &propellant, 0, 100.0, 0.0, 1.85, 70.0);
+        let extended_inertia = active_vehicle_inertia_with_boosters(
+            &rocket.stages,
+            &propellant,
+            0,
+            100.0,
+            0.0,
+            1.85,
+            70.0,
+            None,
+            &[],
+        );
+        assert_eq!(serial_inertia, extended_inertia);
     }
 
     #[test]
@@ -810,10 +1434,11 @@ mod tests {
 
     #[test]
     fn gimbal_allocation_inverts_real_torque_coupling() {
-        let rocket = Rocket::falcon9();
+        let rocket = Rocket::falcon9_test_fixture();
         let engines = &rocket.stages[0].engines;
-        // First-stage COM sits below the mid-length (engines below COM).
-        let com = DVec3::new(0.0, -20.0, 0.0);
+        // Stage-local booster engines sit below a representative fuel-loaded
+        // COM, leaving enough gimbal lever arm to reproduce this command.
+        let com = DVec3::new(0.0, -10.0, 0.0);
         let torque_cmd = DVec3::new(5.0e6, 0.0, -3.0e6);
 
         let (pitch, yaw) = allocate_gimbal_deflections(engines, com, torque_cmd, 1.0, 0.0);
@@ -847,7 +1472,7 @@ mod tests {
 
     #[test]
     fn consumption_updates_dynamics_mass() {
-        let rocket = Rocket::falcon9();
+        let rocket = Rocket::falcon9_test_fixture();
         let (inertia, com) = active_vehicle_inertia(
             &rocket.stages,
             &[90_000.0, 30_000.0],

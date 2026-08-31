@@ -7,10 +7,11 @@ use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, geodetic_to_body_fixed, geodetic_to_terrain_lat_lon,
     surface_velocity_in_planet_inertial,
 };
-use crate::domain::services::rocket_dynamics::{
-    rocket_inertia_tensor_with_mass_adjustments, RocketDynamicsState,
+use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+use crate::domain::services::rocket_propulsion::{
+    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
+    DEFAULT_ULLAGE_SETTLE_TIME_S,
 };
-use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -42,10 +43,17 @@ pub fn spawn_rockets(
         let available = catalog.keys().cloned().collect::<Vec<_>>().join(", ");
         panic!("Unknown vehicle '{requested_key}'. Available vehicles: {available}");
     };
-    let rocket = vehicle.rocket.clone();
-    // Attached payload hardware (fairing) rides with the vehicle mass until
-    // jettison; one authority shared by consumption/staging/jettison.
-    let attached_payload_kg = vehicle.fairing_dry_mass_kg.unwrap_or(0.0);
+    // Catalog conversion initializes engines off; ensure a cloned catalog entry
+    // also begins each flight with a fresh lifecycle budget.
+    let mut rocket = vehicle.rocket.clone();
+    reset_engine_lifecycles(&mut rocket);
+    // A final-stage fairing rides with the vehicle mass until jettison; one
+    // authority is shared by consumption, serial staging, and jettison.
+    let final_stage_fairing_mass_kg = rocket
+        .stages
+        .last()
+        .and_then(|stage| stage.fairing_dry_mass_kg);
+    let attached_payload_kg = final_stage_fairing_mass_kg.unwrap_or(0.0);
 
     // Create a proper multi-part rocket mesh from the vehicle configuration.
     let mesh_handle = build_rocket_mesh(meshes, &rocket);
@@ -88,27 +96,53 @@ pub fn spawn_rockets(
     let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
         * (earth_radius_m + terrain_elevation_m);
     let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
-    let position_m = body_to_inertial * position_bf;
-
     // Stand vertical on the pad: body +Y aligned with the local up direction
     // (radial). Guidance's launch target is the same attitude, so the
     // closed-loop ascent starts from zero attitude error.
     let launch_up = body_to_inertial * terrain_sample.normal;
     let launch_attitude = DQuat::from_rotation_arc(DVec3::Y, launch_up);
-    let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, earth_orientation);
 
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
-    let total_mass_kg = (rocket.total_mass_kg() + attached_payload_kg) as f64;
+    let booster_propellant_remaining_kg = rocket
+        .parallel_boosters
+        .as_ref()
+        .map_or_else(Vec::new, |boosters| {
+            vec![boosters.stage.propellant_mass_kg; boosters.count as usize]
+        });
+    let total_mass_kg = active_vehicle_mass_with_payload_and_boosters(
+        &rocket.stages,
+        &rocket
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect::<Vec<_>>(),
+        0,
+        attached_payload_kg,
+        rocket.parallel_boosters.as_ref(),
+        &booster_propellant_remaining_kg,
+    );
     let radius_m = (rocket.diameter_m / 2.0) as f64;
-    let (inertia, com) = rocket_inertia_tensor_with_mass_adjustments(
-        rocket.total_dry_mass_kg() as f64,
-        rocket.total_propellant_mass_kg() as f64,
-        attached_payload_kg as f64,
+    let initial_propellant_remaining_kg = rocket
+        .stages
+        .iter()
+        .map(|stage| stage.propellant_mass_kg)
+        .collect::<Vec<_>>();
+    let (inertia, com) = active_vehicle_inertia_with_boosters(
+        &rocket.stages,
+        &initial_propellant_remaining_kg,
+        0,
+        attached_payload_kg,
         0.0,
         radius_m,
         rocket.height_m as f64,
+        rocket.parallel_boosters.as_ref(),
+        &booster_propellant_remaining_kg,
     );
+    // State position is the full cylindrical stack's geometric center; its
+    // lower -Y extent, rather than that center, rests on the launch surface.
+    let position_m = body_to_inertial * position_bf + launch_up * (rocket.height_m as f64 * 0.5);
+    let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, earth_orientation);
     let dynamics = RocketDynamicsState::new(
         position_m,
         surface_velocity_mps,
@@ -118,11 +152,7 @@ pub fn spawn_rockets(
         com,
     );
 
-    let propellant_remaining_kg = rocket
-        .stages
-        .iter()
-        .map(|stage| stage.propellant_mass_kg)
-        .collect();
+    let propellant_remaining_kg = initial_propellant_remaining_kg;
 
     // Phase 1: Core physics components (fits in bundle limit)
     let entity = commands
@@ -131,12 +161,15 @@ pub fn spawn_rockets(
             RocketGeometry {
                 radius_m: radius_m as f32,
                 height_m: rocket.height_m,
+                lower_extent_y_m: rocket.lower_extent_in_stack_m(),
             },
             RocketMissionState::PreLaunch,
             RocketPropulsion {
                 vehicle: rocket.clone(),
                 active_stage: 0,
                 propellant_remaining_kg,
+                booster_propellant_remaining_kg,
+                boosters_attached: rocket.parallel_boosters.is_some(),
                 throttle: 0.0,
                 gimbal_pitch_rad: 0.0,
                 gimbal_yaw_rad: 0.0,
@@ -186,7 +219,8 @@ pub fn spawn_rockets(
     ));
 
     // Phase 3: Entry/comms state + render primitives. Vehicles that define a
-    // fairing carry one at spawn; `check_fairing_separation` jettisons it.
+    // final-stage fairing carry one at spawn; `check_fairing_separation`
+    // jettisons it. The presentation mesh remains non-authoritative.
     commands.entity(entity).insert((
         CommsState::default(),
         RetroPropulsionEffect::default(),
@@ -199,7 +233,7 @@ pub fn spawn_rockets(
             selected: false,
         },
     ));
-    if let Some(fairing_dry_mass_kg) = vehicle.fairing_dry_mass_kg {
+    if let Some(fairing_dry_mass_kg) = final_stage_fairing_mass_kg {
         commands.entity(entity).insert((
             PayloadFairing {
                 dry_mass_kg: fairing_dry_mass_kg,
@@ -210,44 +244,60 @@ pub fn spawn_rockets(
         ));
     }
 
-    // Landing gear: domain assembly from the catalog spec (struts sized
-    // against the gross vehicle mass unless the config sets a limit), plus a
-    // simple fixed-pose leg strut per configured leg (presentation only —
-    // never authoritative for contact).
-    if let Some(spec) = vehicle.landing_legs {
-        spawn_landing_leg_meshes(
-            commands,
-            meshes,
-            &material_handle,
-            entity,
-            rocket.height_m,
-            rocket.diameter_m / 2.0,
-            &spec,
-        );
+    // Contact follows only the active serial stage's attached hardware. Leg
+    // meshes wait until a stage is independently recoverable, avoiding lower
+    // stage visuals parented to an upper stage after separation.
+    if let Some(spec) = rocket.stages.first().and_then(|stage| stage.landing_gear) {
         commands
             .entity(entity)
             .insert(LandingLegs::new(LandingGear::new(spec, total_mass_kg)));
     }
 }
 
-/// Build a proper multi-part rocket mesh from the vehicle configuration.
-/// The visual frame has y=0 at the base (pad), y=height at the nose.
+fn reset_engine_lifecycles(rocket: &mut crate::domain::entities::rocket::Rocket) {
+    for stage in &mut rocket.stages {
+        for engine in &mut stage.engines {
+            engine.reset_lifecycle();
+        }
+    }
+    if let Some(boosters) = &mut rocket.parallel_boosters {
+        for engine in &mut boosters.stage.engines {
+            engine.reset_lifecycle();
+        }
+    }
+}
+
+/// Build a catalog-derived multi-part rocket mesh. Its origin is the full
+/// cylindrical stack's geometric center, matching the physical assembly frame.
+fn rocket_mesh_engine_stations(
+    rocket: &crate::domain::entities::rocket::Rocket,
+) -> Vec<(usize, Vec3)> {
+    rocket
+        .stages
+        .iter()
+        .enumerate()
+        .flat_map(|(stage_index, stage)| {
+            stage.engines.iter().map(move |engine| {
+                (
+                    stage_index,
+                    crate::domain::entities::rocket::Rocket::engine_position_in_stack_m(
+                        &rocket.stages,
+                        rocket.height_m,
+                        stage_index,
+                        engine,
+                    )
+                    .expect("stage index comes from rocket.stages"),
+                )
+            })
+        })
+        .collect()
+}
+
 fn build_rocket_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     rocket: &crate::domain::entities::rocket::Rocket,
 ) -> Handle<Mesh> {
-    let hull_radius = rocket.diameter_m / 2.0;
     let total_height = rocket.height_m;
-
-    // Falcon 9 proportions (approximate from config):
-    // Stage 1: ~47m (engines at y=3m, top at y~50m)
-    // Interstage: ~3m (y=50-53m)
-    // Stage 2: ~12m (y=53-65m)
-    // Fairing/nose: ~5m (y=65-70m)
-    let stage1_height = 47.0;
-    let interstage_height = 3.0;
-    let stage2_height = 12.0;
-    let fairing_height = total_height - stage1_height - interstage_height - stage2_height;
 
     // Build mesh manually with all required attributes to avoid merge issues
     let mut positions: Vec<[f32; 3]> = Vec::new();
@@ -256,7 +306,9 @@ fn build_rocket_mesh(
     let mut indices: Vec<u32> = Vec::new();
 
     // Helper: add a cylinder section at base_y with given height and radius
-    let add_cylinder = |base_y: f32,
+    let add_cylinder = |center_x: f32,
+                        center_z: f32,
+                        base_y: f32,
                         height: f32,
                         radius: f32,
                         positions: &mut Vec<[f32; 3]>,
@@ -271,11 +323,10 @@ fn build_rocket_mesh(
             let v = ring as f32 / rings as f32;
             for seg in 0..segments {
                 let angle = seg as f32 * std::f32::consts::TAU / segments as f32;
-                let x = radius * angle.cos();
-                let z = radius * angle.sin();
+                let x = center_x + radius * angle.cos();
+                let z = center_z + radius * angle.sin();
                 positions.push([x, y, z]);
-                let nr = (x * x + z * z).sqrt();
-                normals.push([x / nr, 0.0, z / nr]);
+                normals.push([angle.cos(), 0.0, angle.sin()]);
                 uvs.push([seg as f32 / segments as f32, v]);
             }
         }
@@ -334,73 +385,50 @@ fn build_rocket_mesh(
 
     let mut idx_offset = 0u32;
 
-    // Stage 1 (white)
-    add_cylinder(
-        0.0,
-        stage1_height,
-        hull_radius,
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &mut idx_offset,
-    );
+    let mut next_stage_base_y_m = -total_height * 0.5;
+    for stage in &rocket.stages {
+        add_cylinder(
+            0.0,
+            0.0,
+            next_stage_base_y_m,
+            stage.height_m,
+            stage.diameter_m * 0.5,
+            &mut positions,
+            &mut normals,
+            &mut uvs,
+            &mut indices,
+            &mut idx_offset,
+        );
+        next_stage_base_y_m += stage.height_m;
+    }
 
-    // Interstage (dark band)
-    add_cylinder(
-        stage1_height,
-        interstage_height,
-        hull_radius,
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &mut idx_offset,
-    );
+    if let Some(boosters) = &rocket.parallel_boosters {
+        for attachment_m in &boosters.attachment_positions_m {
+            add_cylinder(
+                attachment_m.x,
+                attachment_m.z,
+                attachment_m.y - boosters.stage.height_m * 0.5,
+                boosters.stage.height_m,
+                boosters.stage.diameter_m * 0.5,
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut indices,
+                &mut idx_offset,
+            );
+        }
+    }
 
-    // Stage 2 (white)
-    add_cylinder(
-        stage1_height + interstage_height,
-        stage2_height,
-        hull_radius,
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &mut idx_offset,
-    );
-
-    // Fairing / nose cone
-    add_cone(
-        0.0,
-        0.0,
-        stage1_height + interstage_height + stage2_height,
-        fairing_height,
-        hull_radius,
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &mut idx_offset,
-    );
-
-    // Engine bells at the base (9 Merlin 1D engines on octaweb ring, radius 1.2m)
-    let engine_y = 3.0;
-    let engine_radius = 0.65;
-    let engine_height = 2.0;
-    let engine_ring_radius = 1.2;
-
-    for i in 0..rocket.stages[0].engines.len() {
-        let angle = i as f32 * std::f32::consts::TAU / rocket.stages[0].engines.len() as f32;
-        let x = engine_ring_radius * angle.cos();
-        let z = engine_ring_radius * angle.sin();
-        // Cone base at engine_y - engine_height, apex at engine_y
+    // Any declared stack height beyond the stage cylinders is the catalog's
+    // upper adapter/fairing volume. The catalog does not claim its exact shape.
+    let nose_height_m = (total_height * 0.5 - next_stage_base_y_m).max(0.0);
+    if nose_height_m > 0.0 {
         add_cone(
-            x,
-            z,
-            engine_y - engine_height,
-            engine_height,
-            engine_radius,
+            0.0,
+            0.0,
+            next_stage_base_y_m,
+            nose_height_m,
+            rocket.diameter_m * 0.5,
             &mut positions,
             &mut normals,
             &mut uvs,
@@ -409,22 +437,51 @@ fn build_rocket_mesh(
         );
     }
 
-    // Stage 2 engine (Merlin Vacuum) at y=12m body frame → y=47m visual
-    let stage2_engine_y = 47.0;
-    let stage2_engine_radius = 0.8;
-    let stage2_engine_height = 2.5;
-    add_cone(
-        0.0,
-        0.0,
-        stage2_engine_y - stage2_engine_height,
-        stage2_engine_height,
-        stage2_engine_radius,
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &mut idx_offset,
-    );
+    for (stage_index, engine_station_m) in rocket_mesh_engine_stations(rocket) {
+        let stage = &rocket.stages[stage_index];
+        // Bell proportions are generic presentation only. The station and
+        // radial engine layout are exactly the catalog's stage-local data.
+        let bell_height_m = (stage.diameter_m * 0.35).max(0.2);
+        let bell_radius_m = (stage.diameter_m * 0.16).max(0.08);
+        add_cone(
+            engine_station_m.x,
+            engine_station_m.z,
+            engine_station_m.y,
+            bell_height_m,
+            bell_radius_m,
+            &mut positions,
+            &mut normals,
+            &mut uvs,
+            &mut indices,
+            &mut idx_offset,
+        );
+    }
+    if let Some(boosters) = &rocket.parallel_boosters {
+        let bell_height_m = (boosters.stage.diameter_m * 0.35).max(0.2);
+        let bell_radius_m = (boosters.stage.diameter_m * 0.16).max(0.08);
+        for booster_index in 0..boosters.count as usize {
+            for engine in &boosters.stage.engines {
+                let engine_station_m = crate::domain::entities::rocket::Rocket::parallel_booster_engine_position_in_stack_m(
+                    boosters,
+                    booster_index,
+                    engine,
+                )
+                .expect("booster index is bounded by its configured count");
+                add_cone(
+                    engine_station_m.x,
+                    engine_station_m.z,
+                    engine_station_m.y,
+                    bell_height_m,
+                    bell_radius_m,
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    &mut idx_offset,
+                );
+            }
+        }
+    }
 
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -438,26 +495,110 @@ fn build_rocket_mesh(
     meshes.add(mesh)
 }
 
+#[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "The mesh-layout regression stays beside the catalog-driven mesh builder."
+)]
+mod mesh_layout_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{
+        EngineState, RocketEngine, RocketStage, ThrustReference,
+    };
+
+    #[test]
+    fn data_driven_mesh_layout_honors_non_falcon_dimensions_and_stations() {
+        let engine = |position_m| RocketEngine {
+            position_m,
+            thrust_axis: Vec3::Y,
+            isp_sea_level: 250.0,
+            isp_vacuum: 300.0,
+            gimbal_range_deg: 5.0,
+            rated_thrust_kn: 100.0,
+            thrust_reference: ThrustReference::SeaLevel,
+            throttle_min: 0.0,
+            throttle_max: 1.0,
+            max_ignitions: 2,
+            ignition_count: 1,
+            state: EngineState::Running,
+        };
+        let rocket = crate::domain::entities::rocket::Rocket {
+            name: "Narrow test vehicle".into(),
+            diameter_m: 2.0,
+            height_m: 30.0,
+            stages: vec![
+                RocketStage {
+                    name: "Lower".into(),
+                    diameter_m: 2.0,
+                    height_m: 10.0,
+                    dry_mass_kg: 100.0,
+                    propellant_mass_kg: 900.0,
+                    recovery_propellant_reserve_kg: None,
+                    landing_gear: None,
+                    fairing_dry_mass_kg: None,
+                    engines: vec![engine(Vec3::new(0.75, -5.0, 0.0))],
+                },
+                RocketStage {
+                    name: "Upper".into(),
+                    diameter_m: 1.0,
+                    height_m: 8.0,
+                    dry_mass_kg: 50.0,
+                    propellant_mass_kg: 250.0,
+                    recovery_propellant_reserve_kg: None,
+                    landing_gear: None,
+                    fairing_dry_mass_kg: None,
+                    engines: vec![engine(Vec3::new(0.0, -4.0, 0.0))],
+                },
+            ],
+            parallel_boosters: None,
+        };
+
+        assert_eq!(
+            crate::domain::entities::rocket::Rocket::stage_origin_in_stack_m(
+                &rocket.stages,
+                rocket.height_m,
+                0,
+            ),
+            Some(Vec3::new(0.0, -10.0, 0.0))
+        );
+        assert_eq!(
+            crate::domain::entities::rocket::Rocket::stage_origin_in_stack_m(
+                &rocket.stages,
+                rocket.height_m,
+                1,
+            ),
+            Some(Vec3::new(0.0, -1.0, 0.0))
+        );
+        assert_eq!(
+            rocket_mesh_engine_stations(&rocket),
+            vec![
+                (0, Vec3::new(0.75, -15.0, 0.0)),
+                (1, Vec3::new(0.0, -5.0, 0.0))
+            ]
+        );
+    }
+}
+
 /// Spawn one visual strut per configured landing leg as a child of the
 /// rocket, angled from the lower hull out to the foot radius. The pose is
 /// static (always shown deployed); collision/physics never read these
 /// entities.
-fn spawn_landing_leg_meshes(
+pub(crate) fn spawn_landing_leg_meshes(
     commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
+    meshes: &mut Assets<Mesh>,
     material: &Handle<StandardMaterial>,
     parent: Entity,
-    _height_m: f32,
+    height_m: f32,
     hull_radius_m: f32,
     spec: &LandingGearSpec,
 ) {
     let count = spec.count.max(1);
     let stroke_m = spec.stroke_m as f32;
     let base_radius_m = spec.base_radius_m as f32;
-    // Rocket mesh is offset so base is at y=0, top at y=height_m.
-    // Legs attach at the base (y=0) and extend downward.
-    let root_y = stroke_m * 0.25;
-    let foot_y = -stroke_m * 0.6;
+    // Mesh and physics share a center origin: legs attach at the lower
+    // cylindrical extent and extend below it as presentation only.
+    let root_y = -height_m * 0.5 + stroke_m * 0.25;
+    let foot_y = -height_m * 0.5 - stroke_m * 0.6;
 
     for i in 0..count {
         let azimuth = i as f32 * std::f32::consts::TAU / count as f32;

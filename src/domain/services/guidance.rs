@@ -23,6 +23,9 @@
 //! - Unpowered descent: parafoil lateral acceleration tracking.
 
 use crate::domain::entities::rocket::RocketMissionState;
+use crate::domain::services::reference_frames::{
+    planet_inertial_enu_basis, PlanetInertialEnuError,
+};
 use bevy::math::{DQuat, DVec3};
 
 /// Autopilot mode for the flight computer.
@@ -127,6 +130,69 @@ impl AscentGuidanceProfile {
         self.target_inclination_rad = inclination_rad;
         self
     }
+}
+
+/// A prograde, ascending-node horizontal launch solution in the local
+/// planet-inertial ENU-like frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AscendingNodeLaunchHeading {
+    /// Unit horizontal heading in planet-centered inertial coordinates.
+    pub direction_pci: DVec3,
+    /// Azimuth east of north in radians.
+    pub azimuth_east_of_north_rad: f64,
+}
+
+/// Reasons an inclination target cannot produce a safe local launch heading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AscendingNodeLaunchHeadingError {
+    InvalidTargetInclination,
+    InvalidLocalFrame(PlanetInertialEnuError),
+    UnreachableInclination,
+}
+
+/// Compute the deterministic prograde ascending-node heading for an orbit
+/// inclination measured from `spin_axis`.
+///
+/// `position_m` and `spin_axis` are planet-centered inertial vectors in meters
+/// and unitless direction respectively. The local frame supplies east, north,
+/// and up. The selected ascending solution has a non-negative north component
+/// and satisfies `cos(i) = cos(latitude) * sin(azimuth)`, where azimuth is
+/// measured east of north. The other mathematical solution is southbound and
+/// would descend through the equator, so it is deliberately not selected.
+///
+/// An orbit is reachable only when `abs(cos(i)) <= cos(latitude)`. Polar sites
+/// have no defined azimuth. Both cases return an error instead of substituting
+/// a generic world axis that could steer into the wrong orbital plane.
+pub fn prograde_ascending_node_launch_heading(
+    position_m: DVec3,
+    spin_axis: DVec3,
+    target_inclination_rad: f64,
+) -> Result<AscendingNodeLaunchHeading, AscendingNodeLaunchHeadingError> {
+    if !target_inclination_rad.is_finite()
+        || !(0.0..=std::f64::consts::PI).contains(&target_inclination_rad)
+    {
+        return Err(AscendingNodeLaunchHeadingError::InvalidTargetInclination);
+    }
+
+    let basis = planet_inertial_enu_basis(position_m, spin_axis)
+        .map_err(AscendingNodeLaunchHeadingError::InvalidLocalFrame)?;
+    let normalized_spin_axis = spin_axis.normalize();
+    let cos_latitude = (1.0 - normalized_spin_axis.dot(basis.up).powi(2))
+        .max(0.0)
+        .sqrt();
+    let sin_azimuth = target_inclination_rad.cos() / cos_latitude;
+    if !sin_azimuth.is_finite() || sin_azimuth.abs() > 1.0 + 1.0e-12 {
+        return Err(AscendingNodeLaunchHeadingError::UnreachableInclination);
+    }
+
+    let azimuth_east_of_north_rad = sin_azimuth.clamp(-1.0, 1.0).asin();
+    let direction_pci = (basis.north * azimuth_east_of_north_rad.cos()
+        + basis.east * azimuth_east_of_north_rad.sin())
+    .normalize();
+    Ok(AscendingNodeLaunchHeading {
+        direction_pci,
+        azimuth_east_of_north_rad,
+    })
 }
 
 /// Pitch angle (radians from the local vertical) for the gravity turn at an
@@ -1214,6 +1280,111 @@ mod tests {
 
     fn up_dir() -> DVec3 {
         DVec3::new(0.0, 1.0, 0.0)
+    }
+
+    #[test]
+    fn equatorial_orbit_from_equator_launches_due_east() {
+        let spin_axis = DVec3::Z;
+        let position_m = DVec3::X * 6_378_137.0;
+        let basis = planet_inertial_enu_basis(position_m, spin_axis).unwrap();
+        let heading = prograde_ascending_node_launch_heading(position_m, spin_axis, 0.0).unwrap();
+
+        assert!((heading.azimuth_east_of_north_rad - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!((heading.direction_pci - basis.east).length() < 1e-12);
+        assert!(heading.direction_pci.dot(basis.up).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ksc_28_5_degree_target_uses_the_eastward_ascending_solution() {
+        use crate::domain::services::body_orientation::BodyOrientation;
+        use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+        use crate::domain::services::planet_factory::PlanetFactory;
+        use crate::domain::services::reference_frames::{
+            body_fixed_to_planet_inertial, geodetic_to_body_fixed, planet_inertial_spin_axis,
+        };
+        use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
+
+        let orientation = BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "guidance-heading-test".to_owned(),
+            DQuat::IDENTITY,
+            DVec3::Z,
+        );
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let position_m = body_fixed_to_planet_inertial(
+            geodetic_to_body_fixed(&predefined_sites::kennedy_space_center(), &earth),
+            &orientation,
+        );
+        let spin_axis = planet_inertial_spin_axis(&orientation);
+        let basis = planet_inertial_enu_basis(position_m, spin_axis).unwrap();
+        let target_inclination_rad = 28.5_f64.to_radians();
+        let heading =
+            prograde_ascending_node_launch_heading(position_m, spin_axis, target_inclination_rad)
+                .unwrap();
+
+        assert!(heading.azimuth_east_of_north_rad.to_degrees() > 80.0);
+        assert!(heading.direction_pci.dot(basis.east) > 0.98);
+        assert!(
+            (target_inclination_rad.cos()
+                - (1.0 - spin_axis.dot(basis.up).powi(2)).sqrt()
+                    * heading.azimuth_east_of_north_rad.sin())
+            .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn polar_orbit_from_equator_launches_northbound() {
+        let spin_axis = DVec3::Z;
+        let position_m = DVec3::X;
+        let basis = planet_inertial_enu_basis(position_m, spin_axis).unwrap();
+        let heading = prograde_ascending_node_launch_heading(
+            position_m,
+            spin_axis,
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+
+        assert!(heading.azimuth_east_of_north_rad.abs() < 1e-12);
+        assert!((heading.direction_pci - basis.north).length() < 1e-12);
+    }
+
+    #[test]
+    fn arbitrary_tilted_spin_axis_defines_the_local_heading_frame() {
+        let spin_axis = DVec3::new(0.2, 0.7, 0.68).normalize();
+        let position_m = (DVec3::Y - spin_axis * spin_axis.y).normalize() * 7_000_000.0;
+        let basis = planet_inertial_enu_basis(position_m, spin_axis).unwrap();
+        let inclination_rad = 45.0_f64.to_radians();
+        let heading =
+            prograde_ascending_node_launch_heading(position_m, spin_axis, inclination_rad).unwrap();
+
+        let expected =
+            (basis.north * inclination_rad.cos() + basis.east * inclination_rad.sin()).normalize();
+        assert!((heading.direction_pci - expected).length() < 1e-12);
+        assert!(heading.direction_pci.dot(basis.up).abs() < 1e-12);
+    }
+
+    #[test]
+    fn target_below_launch_site_latitude_is_rejected() {
+        let spin_axis = DVec3::Z;
+        let latitude_rad = 30.0_f64.to_radians();
+        let position_m = DVec3::X * latitude_rad.cos() + spin_axis * latitude_rad.sin();
+
+        assert_eq!(
+            prograde_ascending_node_launch_heading(position_m, spin_axis, 10.0_f64.to_radians(),),
+            Err(AscendingNodeLaunchHeadingError::UnreachableInclination)
+        );
+    }
+
+    #[test]
+    fn polar_launch_site_returns_an_explicit_safe_error() {
+        assert_eq!(
+            prograde_ascending_node_launch_heading(DVec3::Z, DVec3::Z, std::f64::consts::FRAC_PI_2),
+            Err(AscendingNodeLaunchHeadingError::InvalidLocalFrame(
+                PlanetInertialEnuError::PolarPosition
+            ))
+        );
     }
 
     #[test]

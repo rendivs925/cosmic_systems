@@ -1,39 +1,38 @@
 //! Propulsion force, mass-flow, and gimbal-torque adapters.
 
 use crate::components::rocket::*;
-use crate::domain::entities::rocket::{EngineState, Rocket, RocketStage};
+use crate::domain::entities::rocket::{Rocket, RocketStage};
 use crate::domain::events::StageSeparatedEvent;
 use crate::domain::services::guidance::AutopilotMode;
+use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia, active_vehicle_mass_with_payload, air_start_allowed, burn_duration_s,
-    clamp_gimbal, consume_propellant, gimbal_torque_body, ignition_allowed_during_ullage,
-    separation_impulse, shed_stage, stage_gimbaled_thrust_body, stage_thrust_body,
-    EngineOperatingPoint, MIN_SEPARATION_CLEARANCE_M, SEPARATION_UPPER_DV_MPS,
-    SPENT_STAGE_RETRO_DV_MPS,
+    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
+    burn_duration_s, consume_propellant, separate_parallel_boosters_dynamics,
+    separate_stage_dynamics, shed_stage, stage_gimbal_torque_body, stage_gimbaled_thrust_body,
+    stage_mass_properties, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
+    PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
-use bevy::log::{info, warn};
+use bevy::log::info;
 use bevy::math::DVec3;
 use bevy::prelude::{
     Assets, Commands, Entity, Mesh, MessageWriter, Query, Res, ResMut, StandardMaterial,
 };
 
-/// Select an active stage only when its engines can produce force this tick.
-/// Every propulsion writer uses this guard so force, torque, and mass flow stay
-/// consistent across air-start and ullage constraints.
-fn ignitable_stage(propulsion: &RocketPropulsion) -> Option<(&RocketStage, f32)> {
+/// Select an active stage only when its running engines can produce force this
+/// tick. Every propulsion writer shares this guard so force, torque, and mass
+/// flow use exactly the same engine set.
+fn running_stage(propulsion: &RocketPropulsion) -> Option<(&RocketStage, f32)> {
     let stage = propulsion.vehicle.stages.get(propulsion.active_stage)?;
     let remaining = burnable_propellant_kg(propulsion);
     let throttle = propulsion.throttle.clamp(0.0, 1.0);
-    let engines_restartable = stage.engines.iter().all(|engine| engine.restartable);
     if throttle <= 0.0
         || remaining <= 0.0
-        || !air_start_allowed(propulsion.separations_count > 0, engines_restartable)
-        || !ignition_allowed_during_ullage(
-            propulsion.time_since_separation_s,
-            propulsion.ullage_settle_time_s,
-        )
+        || !stage
+            .engines
+            .iter()
+            .any(|engine| engine.state == crate::domain::entities::rocket::EngineState::Running)
     {
         return None;
     }
@@ -59,6 +58,63 @@ fn burnable_propellant_kg(propulsion: &RocketPropulsion) -> f32 {
     .max(0.0)
 }
 
+fn attached_boosters(
+    propulsion: &RocketPropulsion,
+) -> Option<&crate::domain::entities::rocket::ParallelBoosters> {
+    propulsion
+        .boosters_attached
+        .then_some(())
+        .and(propulsion.vehicle.parallel_boosters.as_ref())
+}
+
+fn booster_is_ignitable(propulsion: &RocketPropulsion, booster_index: usize) -> bool {
+    attached_boosters(propulsion).is_some_and(|boosters| {
+        propulsion.throttle > 0.0
+            && propulsion
+                .booster_propellant_remaining_kg
+                .get(booster_index)
+                .copied()
+                .unwrap_or(0.0)
+                > 0.0
+            && boosters
+                .stage
+                .engines
+                .iter()
+                .any(|engine| engine.state == crate::domain::entities::rocket::EngineState::Running)
+    })
+}
+
+fn refresh_attached_mass_properties(
+    rocket: &mut RocketPhysicsState,
+    geometry: &RocketGeometry,
+    propulsion: &RocketPropulsion,
+    ablation_mass_loss_kg: f64,
+) {
+    let boosters = attached_boosters(propulsion);
+    rocket.dynamics.mass_kg = (active_vehicle_mass_with_payload_and_boosters(
+        &propulsion.vehicle.stages,
+        &propulsion.propellant_remaining_kg,
+        propulsion.active_stage,
+        propulsion.attached_payload_kg,
+        boosters,
+        &propulsion.booster_propellant_remaining_kg,
+    ) - ablation_mass_loss_kg)
+        .max(1.0);
+    let (inertia, center_of_mass_m) = active_vehicle_inertia_with_boosters(
+        &propulsion.vehicle.stages,
+        &propulsion.propellant_remaining_kg,
+        propulsion.active_stage,
+        propulsion.attached_payload_kg,
+        ablation_mass_loss_kg,
+        geometry.radius_m as f64,
+        geometry.height_m as f64,
+        boosters,
+        &propulsion.booster_propellant_remaining_kg,
+    );
+    rocket.dynamics.inertia_body = inertia;
+    rocket.dynamics.center_of_mass_m = center_of_mass_m;
+}
+
 /// Separate an empty stage and refresh the surviving vehicle mass.
 /// The spent stage receives the domain separation impulse and is spawned as
 /// independent debris; the upper stage must settle propellant before restart.
@@ -80,14 +136,64 @@ pub fn propulsion_staging(
         &mut RocketPropulsion,
         Option<&AblationState>,
         Option<&RocketAutopilot>,
-        Option<&LandingLegs>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep() as f32;
-    for (entity, binding, mut geometry, mut rocket, mut propulsion, ablation, autopilot, legs) in
+    for (entity, binding, mut geometry, mut rocket, mut propulsion, ablation, autopilot) in
         rocket_query.iter_mut()
     {
         propulsion.time_since_separation_s += dt;
+
+        if let Some(boosters) = attached_boosters(&propulsion).cloned() {
+            if !propulsion.booster_propellant_remaining_kg.is_empty()
+                && propulsion
+                    .booster_propellant_remaining_kg
+                    .iter()
+                    .all(|propellant_kg| *propellant_kg <= 0.0)
+            {
+                let booster_dynamics = separate_parallel_boosters_dynamics(
+                    rocket.dynamics,
+                    &boosters,
+                    &propulsion.booster_propellant_remaining_kg,
+                    PARALLEL_BOOSTER_SEPARATION_DV_MPS,
+                );
+                propulsion.boosters_attached = false;
+                propulsion.booster_propellant_remaining_kg.clear();
+                refresh_attached_mass_properties(
+                    &mut rocket,
+                    &geometry,
+                    &propulsion,
+                    ablation.map_or(0.0, |state| state.mass_loss_kg),
+                );
+                for dynamics in booster_dynamics {
+                    let spent_entity = spawn_spent_stage(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        SpentStageSpec {
+                            parent_rocket: entity,
+                            planet_id: binding.planet_name.clone(),
+                            dynamics,
+                            radius_m: boosters.stage.diameter_m * 0.5,
+                            height_m: boosters.stage.height_m,
+                            // Parallel boosters never inherit core stage gear.
+                            landing_gear: None,
+                            kind: SpentStageKind::Booster,
+                        },
+                    );
+                    separated_writer.write(StageSeparatedEvent {
+                        rocket: entity,
+                        spent_stage: spent_entity,
+                        shed_mass_kg: dynamics.mass_kg,
+                    });
+                }
+                info!("{} parallel boosters separated", boosters.count);
+                continue;
+            }
+            // A serial core stage remains structurally attached until its
+            // parallel boosters have completed their concurrent burn.
+            continue;
+        }
 
         let remaining = propulsion
             .propellant_remaining_kg
@@ -108,49 +214,60 @@ pub fn propulsion_staging(
         let pre_separation = rocket.dynamics;
         propulsion.active_stage = next;
         propulsion.separations_count += 1;
-        let outcome = separation_impulse(
-            pre_separation.velocity_mps,
-            pre_separation.orientation,
-            DVec3::Y,
-            SEPARATION_UPPER_DV_MPS,
-            SPENT_STAGE_RETRO_DV_MPS,
-        );
-        rocket.dynamics.velocity_mps = outcome.upper_velocity_mps;
 
         let separated_stage = &propulsion.vehicle.stages[propulsion.active_stage - 1];
         let active_stage = &propulsion.vehicle.stages[propulsion.active_stage];
         geometry.radius_m = active_stage.diameter_m * 0.5;
         geometry.height_m = active_stage.height_m;
+        geometry.lower_extent_y_m = -active_stage.height_m * 0.5;
 
         let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);
-        let new_mass = (active_vehicle_mass_with_payload(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            propulsion.attached_payload_kg,
-        ) - ablation_mass_loss_kg)
-            .max(1.0);
-        rocket.dynamics.mass_kg = new_mass;
-        let (inertia, center_of_mass_m) = active_vehicle_inertia(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
+        let upper_properties = stage_mass_properties(
+            active_stage,
+            propulsion
+                .propellant_remaining_kg
+                .get(propulsion.active_stage)
+                .copied()
+                .unwrap_or(0.0),
             propulsion.attached_payload_kg,
             ablation_mass_loss_kg,
-            geometry.radius_m as f64,
-            geometry.height_m as f64,
         );
-        rocket.dynamics.inertia_body = inertia;
-        rocket.dynamics.center_of_mass_m = center_of_mass_m;
+        let spent_properties = stage_mass_properties(
+            separated_stage,
+            propulsion
+                .propellant_remaining_kg
+                .get(propulsion.active_stage - 1)
+                .copied()
+                .unwrap_or(0.0),
+            0.0,
+            0.0,
+        );
+        let separated = separate_stage_dynamics(
+            pre_separation,
+            upper_properties,
+            spent_properties,
+            DVec3::Y,
+            SEPARATION_UPPER_DV_MPS,
+            SPENT_STAGE_RETRO_DV_MPS,
+            MIN_SEPARATION_CLEARANCE_M,
+        );
+        rocket.dynamics = separated.upper;
+        let new_mass = rocket.dynamics.mass_kg;
+        let spent_dynamics = separated.spent;
+        let recovery_reserve_kg = separated_stage.recovery_propellant_reserve_kg;
 
-        let mut spent_dynamics = pre_separation;
-        spent_dynamics.velocity_mps = outcome.spent_velocity_mps;
-        spent_dynamics.mass_kg = shed;
-        if MIN_SEPARATION_CLEARANCE_M > separated_stage.height_m as f64 {
-            warn!(
-                "Separation clearance {MIN_SEPARATION_CLEARANCE_M} m exceeds stage length {} m",
-                separated_stage.height_m,
-            );
+        // The surviving stack owns only its newly active stage's hardware.
+        // Replacing an existing component is required when the new active
+        // stage also has gear; otherwise remove the lower-stage component.
+        match active_stage.landing_gear {
+            Some(gear_spec) => {
+                commands
+                    .entity(entity)
+                    .insert(LandingLegs::new(LandingGear::new(gear_spec, new_mass)));
+            }
+            None => {
+                commands.entity(entity).remove::<LandingLegs>();
+            }
         }
 
         let spent_entity = spawn_spent_stage(
@@ -163,15 +280,18 @@ pub fn propulsion_staging(
                 dynamics: spent_dynamics,
                 radius_m: separated_stage.diameter_m * 0.5,
                 height_m: separated_stage.height_m,
+                // Only an independently recoverable serial stage receives
+                // its own gear assembly and child presentation meshes.
+                landing_gear: recovery_reserve_kg.and(separated_stage.landing_gear),
                 kind: SpentStageKind::Booster,
             },
         );
-        if let Some(recovery_reserve_kg) =
-            propulsion.vehicle.stages[propulsion.active_stage - 1].recovery_propellant_reserve_kg
-        {
+        if let Some(recovery_reserve_kg) = recovery_reserve_kg {
             // The parent stage is now a standalone vehicle. Clear its reserve
             // marker so the recovery burns may consume the propellant that was
-            // deliberately withheld from ascent.
+            // deliberately withheld from ascent. Cloning preserves each
+            // engine's consumed ignition count; it is never reset on stage
+            // separation.
             let mut recovery_stage = propulsion.vehicle.stages[propulsion.active_stage - 1].clone();
             recovery_stage.recovery_propellant_reserve_kg = None;
             let mut recovery_autopilot = autopilot.cloned().unwrap_or_default();
@@ -183,6 +303,7 @@ pub fn propulsion_staging(
                 diameter_m: separated_stage.diameter_m,
                 height_m: separated_stage.height_m,
                 stages: vec![recovery_stage],
+                parallel_boosters: None,
             };
             commands.entity(spent_entity).insert((
                 RecoveringStage,
@@ -191,6 +312,8 @@ pub fn propulsion_staging(
                     vehicle: recovery_vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: vec![recovery_reserve_kg],
+                    booster_propellant_remaining_kg: Vec::new(),
+                    boosters_attached: false,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -216,9 +339,6 @@ pub fn propulsion_staging(
                 CommsState::default(),
                 RetroPropulsionEffect::default(),
             ));
-            if let Some(legs) = legs {
-                commands.entity(spent_entity).insert(legs.clone());
-            }
         }
         propulsion.time_since_separation_s = 0.0;
 
@@ -247,21 +367,45 @@ pub fn propulsion_thrust(
     )>,
 ) {
     for (rocket, conditions, propulsion, retro, mut force_accum) in rocket_query.iter_mut() {
-        let Some((stage, throttle)) = ignitable_stage(propulsion) else {
-            continue;
-        };
-        let (thrust_body, mass_flow_kg_s) = stage_gimbaled_thrust_body(
-            &stage.engines,
-            throttle,
-            conditions.ambient_pressure_pa,
-            propulsion.gimbal_pitch_rad as f64,
-            propulsion.gimbal_yaw_rad as f64,
-        );
-        let remaining = burnable_propellant_kg(propulsion);
-        let burn_fraction = burn_duration_s(remaining, mass_flow_kg_s, sim_time.fixed_timestep())
-            / sim_time.fixed_timestep();
-        force_accum.0 +=
-            rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction;
+        let throttle = propulsion.throttle.clamp(0.0, 1.0);
+        if let Some((stage, core_throttle)) = running_stage(propulsion) {
+            let (thrust_body, mass_flow_kg_s) = stage_gimbaled_thrust_body(
+                &stage.engines,
+                core_throttle,
+                conditions.ambient_pressure_pa,
+                propulsion.gimbal_pitch_rad as f64,
+                propulsion.gimbal_yaw_rad as f64,
+            );
+            let burn_fraction = burn_duration_s(
+                burnable_propellant_kg(propulsion),
+                mass_flow_kg_s,
+                sim_time.fixed_timestep(),
+            ) / sim_time.fixed_timestep();
+            force_accum.0 +=
+                rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction;
+        }
+        if let Some(boosters) = attached_boosters(propulsion) {
+            for booster_index in 0..boosters.count as usize {
+                if !booster_is_ignitable(propulsion, booster_index) {
+                    continue;
+                }
+                let (booster_thrust_body, booster_mass_flow_kg_s) = stage_gimbaled_thrust_body(
+                    &boosters.stage.engines,
+                    throttle,
+                    conditions.ambient_pressure_pa,
+                    propulsion.gimbal_pitch_rad as f64,
+                    propulsion.gimbal_yaw_rad as f64,
+                );
+                let remaining = propulsion.booster_propellant_remaining_kg[booster_index];
+                let burn_fraction =
+                    burn_duration_s(remaining, booster_mass_flow_kg_s, sim_time.fixed_timestep())
+                        / sim_time.fixed_timestep();
+                force_accum.0 += rocket.dynamics.orientation
+                    * booster_thrust_body
+                    * retro.thrust_multiplier
+                    * burn_fraction;
+            }
+        }
     }
 }
 
@@ -278,37 +422,41 @@ pub fn propulsion_consumption(
 ) {
     let dt = sim_time.fixed_timestep();
     for (mut rocket, geometry, conditions, mut propulsion, ablation) in rocket_query.iter_mut() {
-        let Some((stage, throttle)) = ignitable_stage(&propulsion) else {
-            continue;
-        };
-        let (_, mass_flow_kg_s) =
-            stage_thrust_body(&stage.engines, throttle, conditions.ambient_pressure_pa);
-        let active_stage = propulsion.active_stage;
-        let reserve_kg = recovery_reserve_kg(&propulsion);
-        let remaining = burnable_propellant_kg(&propulsion);
-        let (remaining_new, _) = consume_propellant(remaining, mass_flow_kg_s, dt);
-        propulsion.propellant_remaining_kg[active_stage] = reserve_kg + remaining_new;
+        let throttle = propulsion.throttle.clamp(0.0, 1.0);
+        if let Some((stage, core_throttle)) = running_stage(&propulsion) {
+            let (_, mass_flow_kg_s) = stage_thrust_body(
+                &stage.engines,
+                core_throttle,
+                conditions.ambient_pressure_pa,
+            );
+            let active_stage = propulsion.active_stage;
+            let reserve_kg = recovery_reserve_kg(&propulsion);
+            let remaining = burnable_propellant_kg(&propulsion);
+            let (remaining_new, _) = consume_propellant(remaining, mass_flow_kg_s, dt);
+            propulsion.propellant_remaining_kg[active_stage] = reserve_kg + remaining_new;
+        }
 
-        let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);
-        let new_mass = (active_vehicle_mass_with_payload(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            active_stage,
-            propulsion.attached_payload_kg,
-        ) - ablation_mass_loss_kg)
-            .max(1.0);
-        rocket.dynamics.mass_kg = new_mass;
-        let (inertia, center_of_mass_m) = active_vehicle_inertia(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            active_stage,
-            propulsion.attached_payload_kg,
-            ablation_mass_loss_kg,
-            geometry.radius_m as f64,
-            geometry.height_m as f64,
+        if let Some(boosters) = attached_boosters(&propulsion).cloned() {
+            for booster_index in 0..boosters.count as usize {
+                if !booster_is_ignitable(&propulsion, booster_index) {
+                    continue;
+                }
+                let (_, mass_flow_kg_s) = stage_thrust_body(
+                    &boosters.stage.engines,
+                    throttle,
+                    conditions.ambient_pressure_pa,
+                );
+                let remaining = propulsion.booster_propellant_remaining_kg[booster_index];
+                propulsion.booster_propellant_remaining_kg[booster_index] =
+                    consume_propellant(remaining, mass_flow_kg_s, dt).0;
+            }
+        }
+        refresh_attached_mass_properties(
+            &mut rocket,
+            geometry,
+            &propulsion,
+            ablation.map_or(0.0, |state| state.mass_loss_kg),
         );
-        rocket.dynamics.inertia_body = inertia;
-        rocket.dynamics.center_of_mass_m = center_of_mass_m;
     }
 }
 
@@ -317,36 +465,65 @@ pub fn propulsion_gimbal(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
         &RocketPhysicsState,
+        &RocketGeometry,
         &RocketFlightConditions,
         &RocketPropulsion,
         &mut TorqueAccumulator,
     )>,
 ) {
-    for (rocket, conditions, propulsion, mut torque_accum) in rocket_query.iter_mut() {
-        let Some((stage, throttle)) = ignitable_stage(propulsion) else {
-            continue;
-        };
-        let (_, stage_mass_flow_kg_s) =
-            stage_thrust_body(&stage.engines, throttle, conditions.ambient_pressure_pa);
-        let burn_fraction = burn_duration_s(
-            burnable_propellant_kg(propulsion),
-            stage_mass_flow_kg_s,
-            sim_time.fixed_timestep(),
-        ) / sim_time.fixed_timestep();
-        for engine in &stage.engines {
-            if engine.state != EngineState::Running {
-                continue;
-            }
-            let operating_point =
-                EngineOperatingPoint::from_engine(engine, throttle, conditions.ambient_pressure_pa);
-            torque_accum.0 += gimbal_torque_body(
-                engine.position_m.as_dvec3(),
+    for (rocket, geometry, conditions, propulsion, mut torque_accum) in rocket_query.iter_mut() {
+        let throttle = propulsion.throttle.clamp(0.0, 1.0);
+        if let Some((stage, core_throttle)) = running_stage(propulsion) {
+            let (_, stage_mass_flow_kg_s) = stage_thrust_body(
+                &stage.engines,
+                core_throttle,
+                conditions.ambient_pressure_pa,
+            );
+            let burn_fraction = burn_duration_s(
+                burnable_propellant_kg(propulsion),
+                stage_mass_flow_kg_s,
+                sim_time.fixed_timestep(),
+            ) / sim_time.fixed_timestep();
+            let attached_stages = &propulsion.vehicle.stages[propulsion.active_stage..];
+            let stage_origin_in_stack_m =
+                Rocket::stage_origin_in_stack_m(attached_stages, geometry.height_m, 0)
+                    .expect("active stage was checked above")
+                    .as_dvec3();
+            torque_accum.0 += stage_gimbal_torque_body(
+                &stage.engines,
+                stage_origin_in_stack_m,
                 rocket.dynamics.center_of_mass_m,
-                engine.thrust_axis.as_dvec3(),
-                operating_point.thrust_n,
-                clamp_gimbal(propulsion.gimbal_pitch_rad, engine.gimbal_range_deg) as f64,
-                clamp_gimbal(propulsion.gimbal_yaw_rad, engine.gimbal_range_deg) as f64,
+                core_throttle,
+                conditions.ambient_pressure_pa,
+                propulsion.gimbal_pitch_rad as f64,
+                propulsion.gimbal_yaw_rad as f64,
             ) * burn_fraction;
+        }
+        if let Some(boosters) = attached_boosters(propulsion) {
+            for booster_index in 0..boosters.count as usize {
+                if !booster_is_ignitable(propulsion, booster_index) {
+                    continue;
+                }
+                let (_, booster_mass_flow_kg_s) = stage_thrust_body(
+                    &boosters.stage.engines,
+                    throttle,
+                    conditions.ambient_pressure_pa,
+                );
+                let burn_fraction = burn_duration_s(
+                    propulsion.booster_propellant_remaining_kg[booster_index],
+                    booster_mass_flow_kg_s,
+                    sim_time.fixed_timestep(),
+                ) / sim_time.fixed_timestep();
+                torque_accum.0 += stage_gimbal_torque_body(
+                    &boosters.stage.engines,
+                    boosters.attachment_positions_m[booster_index].as_dvec3(),
+                    rocket.dynamics.center_of_mass_m,
+                    throttle,
+                    conditions.ambient_pressure_pa,
+                    propulsion.gimbal_pitch_rad as f64,
+                    propulsion.gimbal_yaw_rad as f64,
+                ) * burn_fraction;
+            }
         }
     }
 }
