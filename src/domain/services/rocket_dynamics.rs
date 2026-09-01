@@ -105,6 +105,21 @@ impl RocketDynamicsState {
     }
 }
 
+/// Construct a body-to-world orientation whose longitudinal +Y axis follows
+/// `up_world` while its +Z axis follows the tangent projection of
+/// `heading_hint_world`. This preserves a deterministic pad heading instead of
+/// leaving yaw to `from_rotation_arc`'s arbitrary shortest-arc choice.
+pub fn orientation_from_up_and_heading(
+    up_world: DVec3,
+    heading_hint_world: DVec3,
+) -> Option<DQuat> {
+    let up = up_world.try_normalize()?;
+    let heading = heading_hint_world - up * heading_hint_world.dot(up);
+    let forward = heading.try_normalize()?;
+    let right = up.cross(forward).try_normalize()?;
+    Some(DQuat::from_mat3(&DMat3::from_cols(right, up, forward)))
+}
+
 /// Inertia tensor of a solid cylinder about its center, returned as
 /// `(transverse_pitch_yaw, longitudinal_roll)` where the longitudinal axis is
 /// +Y.
@@ -286,6 +301,19 @@ mod tests {
             closeness > 1.0 - 1e-9,
             "expected identity after 2π, dot = {closeness}"
         );
+    }
+
+    #[test]
+    fn surface_orientation_aligns_longitudinal_axis_and_preserves_heading() {
+        let up = DVec3::new(0.2, 0.9, 0.4).normalize();
+        let north_hint = DVec3::new(-0.3, 0.3, 0.9).normalize();
+        let orientation = orientation_from_up_and_heading(up, north_hint)
+            .expect("nonparallel heading must define an orientation");
+
+        assert!((orientation * DVec3::Y).angle_between(up) < 1e-12);
+        let expected_heading = (north_hint - up * north_hint.dot(up)).normalize();
+        assert!((orientation * DVec3::Z).angle_between(expected_heading) < 1e-12);
+        assert!(orientation_from_up_and_heading(up, up).is_none());
     }
 
     #[test]

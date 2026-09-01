@@ -2,6 +2,7 @@
 
 use crate::components::rocket::{
     GroundRest, RocketFacade, RocketMissionState, RocketPhysicsState, RocketRenderState,
+    TipOverState,
 };
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
@@ -10,23 +11,33 @@ use bevy::prelude::{Query, Res, Time, Transform};
 use bevy::time::Fixed;
 
 /// Snapshot fixed-step simulation state for subsequent render interpolation.
+#[expect(
+    clippy::type_complexity,
+    reason = "The snapshot query reads the cohesive state that controls one presentation transition."
+)]
 pub fn capture_render_state(
     mut rocket_query: Query<(
         &RocketPhysicsState,
         &RocketMissionState,
         Option<&GroundRest>,
+        Option<&TipOverState>,
         &mut RocketRenderState,
     )>,
 ) {
-    for (rocket, mission, ground_rest, mut render) in rocket_query.iter_mut() {
+    for (rocket, mission, ground_rest, tip_over, mut render) in rocket_query.iter_mut() {
         // Terrain and planet presentation use the latest fixed ephemeris pose.
         // During surface-constrained terminal states, interpolating the rocket
         // from the previous tick makes the chase camera sawtooth relative to
         // that surface once per fixed update.
-        if matches!(
-            *mission,
-            RocketMissionState::Landing | RocketMissionState::Landed | RocketMissionState::Crashed
-        ) || ground_rest.is_some_and(|rest| rest.active)
+        let is_toppling = tip_over.is_some_and(TipOverState::is_toppling);
+        if !is_toppling
+            && matches!(
+                *mission,
+                RocketMissionState::Landing
+                    | RocketMissionState::Landed
+                    | RocketMissionState::Crashed
+            )
+            || (!is_toppling && ground_rest.is_some_and(|rest| rest.active))
         {
             render.prev = rocket.dynamics;
             render.current = rocket.dynamics;

@@ -16,6 +16,7 @@ use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::application::rocket_spawning::spawn_rockets;
+use crate::application::rocket_spawning::sync_launch_pad_presentation;
 use crate::application::solar_system_startup::setup_space;
 #[cfg(target_arch = "wasm32")]
 use crate::application::solar_system_startup::spawn_bodies_progressively;
@@ -509,6 +510,7 @@ impl Plugin for RocketModePlugin {
                 interpolate_render_transform
                     .after(recenter_render_origin)
                     .after(handle_rocket_launch_input),
+                sync_launch_pad_presentation.after(recenter_render_origin),
                 update_rocket_camera,
                 update_rocket_camera_projection,
             )

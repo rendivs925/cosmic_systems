@@ -182,6 +182,18 @@ pub struct RocketPlanetBinding {
     pub planet_name: CelestialBodyId,
 }
 
+/// Presentation-only procedural launch facility anchor in the bound planet's
+/// body-fixed meter frame. It follows the same terrain sample and ephemeris
+/// orientation as the prelaunch rocket, but never participates in contact or
+/// flight physics.
+#[derive(Component, Debug, Clone)]
+pub struct LaunchPadPresentation {
+    pub planet_name: CelestialBodyId,
+    pub position_body_fixed_m: DVec3,
+    pub normal_body_fixed: DVec3,
+    pub heading_body_fixed: DVec3,
+}
+
 /// Authoritative gravitational acceleration (m/s²) acting on vehicle.
 /// Computed by update_rocket_gravity, consumed by accumulate_forces.
 #[derive(Component, Debug, Clone, Copy, Default)]

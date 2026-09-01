@@ -1,17 +1,18 @@
 //! Terrain-contact preparation and constraint adapters.
 
 use crate::components::rocket::{
-    DroneShipLandingTarget, GroundRest, LandingLegs, LandingScorecard, RocketAutopilot,
-    RocketFlightConditions, RocketGeometry, RocketMissionState, RocketPhysicsState,
-    RocketPlanetBinding, RocketPropulsion, TipOverState,
+    DroneShipLandingTarget, GroundRest, LandingLegs, LandingScorecard, RecoveringStage,
+    RocketAutopilot, RocketFlightConditions, RocketGeometry, RocketMissionState,
+    RocketPhysicsState, RocketPlanetBinding, RocketPropulsion, TipOverState,
 };
 use crate::domain::events::SplashdownDetectedEvent;
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::reference_frames::{
-    body_fixed_to_planet_inertial_rotation, body_fixed_to_terrain_lat_lon, geodetic_to_body_fixed,
-    geodetic_to_terrain_lat_lon, planet_inertial_to_body_fixed,
+    body_fixed_to_planet_inertial_rotation, body_fixed_to_terrain_lat_lon, enu_basis,
+    geodetic_to_body_fixed, geodetic_to_terrain_lat_lon, planet_inertial_to_body_fixed,
     surface_velocity_in_planet_inertial,
 };
+use crate::domain::services::rocket_dynamics::orientation_from_up_and_heading;
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
@@ -159,6 +160,7 @@ pub struct GroundContactAccess {
     pub entity: Entity,
     pub binding: &'static RocketPlanetBinding,
     pub launch_site: Option<&'static LaunchSiteCoordinates>,
+    pub recovering_stage: Option<&'static RecoveringStage>,
     pub dynamics: &'static mut RocketPhysicsState,
     pub propulsion: &'static mut RocketPropulsion,
     pub conditions: Option<&'static RocketFlightConditions>,
@@ -265,17 +267,17 @@ pub fn resolve_ground_contact(
         let lower_extent_body_m = geometry.lower_extent_body_m();
         let lower_offset_world_m = rocket.dynamics.orientation * lower_extent_body_m;
         let contact_position_m = rocket.dynamics.position_m + lower_offset_world_m;
-        let rotating_surface = access.launch_site.is_some();
+        let rotating_surface = access.launch_site.is_some() || access.recovering_stage.is_some();
         let orientation =
             ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name);
         if rotating_surface && orientation.is_none() {
             continue;
         }
-        let position_bf = if rotating_surface {
-            planet_inertial_to_body_fixed(contact_position_m, orientation.expect("checked above"))
-        } else {
-            contact_position_m
-        };
+        let position_bf = orientation
+            .filter(|_| rotating_surface)
+            .map_or(contact_position_m, |orientation| {
+                planet_inertial_to_body_fixed(contact_position_m, orientation)
+            });
         let dir_bf = position_bf.normalize_or_zero();
         if dir_bf.length_squared() < 1e-12 {
             continue;
@@ -300,11 +302,9 @@ pub fn resolve_ground_contact(
         collision.slope_deg = sample.slope_deg;
         collision.over_water = planet.domain_planet.has_ocean && sample.height_m < 0.0;
 
-        let body_to_inertial = if rotating_surface {
-            body_fixed_to_planet_inertial_rotation(orientation.expect("checked above"))
-        } else {
-            DQuat::IDENTITY
-        };
+        let body_to_inertial = orientation
+            .filter(|_| rotating_surface)
+            .map_or(DQuat::IDENTITY, body_fixed_to_planet_inertial_rotation);
         let normal = if sample.normal.length_squared() > 1e-12 {
             body_to_inertial * sample.normal
         } else {
@@ -313,14 +313,11 @@ pub fn resolve_ground_contact(
         let tilt_deg = (rocket.dynamics.orientation * DVec3::Y)
             .angle_between(normal)
             .to_degrees();
-        let surface_velocity = if rotating_surface {
-            surface_velocity_in_planet_inertial(
-                contact_position_m,
-                orientation.expect("checked above"),
-            )
-        } else {
-            DVec3::ZERO
-        };
+        let surface_velocity = orientation
+            .filter(|_| rotating_surface)
+            .map_or(DVec3::ZERO, |orientation| {
+                surface_velocity_in_planet_inertial(contact_position_m, orientation)
+            });
         let angular_velocity_world_radps =
             rocket.dynamics.orientation * rocket.dynamics.angular_velocity_radps;
         let velocity = rocket.dynamics.velocity_mps
@@ -357,11 +354,15 @@ pub fn resolve_ground_contact(
                     body_to_inertial * (pad_direction_bf * (radius_m + pad_sample.height_m));
                 let pad_normal = (body_to_inertial * pad_sample.normal).normalize_or_zero();
 
-                let pad_orientation = DQuat::from_rotation_arc(DVec3::Y, pad_normal);
+                let (_, pad_north_bf, _) =
+                    enu_basis(launch_site.latitude_deg, launch_site.longitude_deg);
+                let pad_orientation =
+                    orientation_from_up_and_heading(pad_normal, body_to_inertial * pad_north_bf)
+                        .expect("nonpolar launch pad must define a surface heading");
                 rocket.dynamics.position_m = pad_position_m - pad_orientation * lower_extent_body_m;
                 rocket.dynamics.velocity_mps = surface_velocity_in_planet_inertial(
                     rocket.dynamics.position_m,
-                    orientation.expect("checked above"),
+                    orientation.expect("launch site requires orientation"),
                 );
                 rocket.dynamics.orientation = pad_orientation;
                 rocket.dynamics.angular_velocity_radps = DVec3::ZERO;

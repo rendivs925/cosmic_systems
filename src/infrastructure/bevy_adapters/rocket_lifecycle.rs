@@ -1,3 +1,4 @@
+use crate::application::rocket_spawning::build_rocket_mesh;
 use crate::components::rocket::*;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::reference_frames::surface_velocity_in_planet_inertial;
@@ -39,8 +40,13 @@ pub fn handle_relaunch_input_system(
 /// despawn jettisoned debris. One authority for the whole reset; runs before
 /// guidance so the auto-launch takes over on the same tick.
 #[allow(clippy::type_complexity)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The relaunch transaction needs its queue, shared assets, and cohesive reset queries."
+)]
 pub fn apply_relaunch_requests(
     mut relaunch_queue: ResMut<RelaunchCommandQueue>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     spent_stages: Query<(Entity, &SpentStage)>,
@@ -49,6 +55,7 @@ pub fn apply_relaunch_requests(
         Entity,
         &RocketPlanetBinding,
         &RocketGeometry,
+        Option<&mut Mesh3d>,
         &mut RocketPhysicsState,
         &mut RocketPropulsion,
         &mut RocketMissionState,
@@ -82,6 +89,7 @@ pub fn apply_relaunch_requests(
                 entity,
                 binding,
                 geometry,
+                rocket_mesh,
                 mut rocket,
                 mut propulsion,
                 mut mission_state,
@@ -131,6 +139,9 @@ pub fn apply_relaunch_requests(
                 for engine in &mut stage.engines {
                     engine.reset_lifecycle();
                 }
+            }
+            if let (Some(mut rocket_mesh), Some(meshes)) = (rocket_mesh, meshes.as_deref_mut()) {
+                *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &propulsion.vehicle));
             }
             if let Some(boosters) = &mut propulsion.vehicle.parallel_boosters {
                 for engine in &mut boosters.stage.engines {

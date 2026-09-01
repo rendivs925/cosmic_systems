@@ -1,5 +1,6 @@
 //! Propulsion force, mass-flow, and gimbal-torque adapters.
 
+use crate::application::rocket_spawning::{build_rocket_mesh, build_serial_stage_mesh};
 use crate::components::rocket::*;
 use crate::domain::entities::rocket::{Rocket, RocketStage};
 use crate::domain::events::StageSeparatedEvent;
@@ -17,7 +18,7 @@ use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage,
 use bevy::log::info;
 use bevy::math::DVec3;
 use bevy::prelude::{
-    Assets, Commands, Entity, Mesh, MessageWriter, Query, Res, ResMut, StandardMaterial,
+    Assets, Commands, Entity, Mesh, Mesh3d, MessageWriter, Query, Res, ResMut, StandardMaterial,
 };
 
 /// Select an active stage only when its running engines can produce force this
@@ -132,6 +133,7 @@ pub fn propulsion_staging(
         Entity,
         &RocketPlanetBinding,
         &mut RocketGeometry,
+        Option<&mut Mesh3d>,
         &mut RocketPhysicsState,
         &mut RocketPropulsion,
         Option<&AblationState>,
@@ -139,8 +141,16 @@ pub fn propulsion_staging(
     )>,
 ) {
     let dt = sim_time.fixed_timestep() as f32;
-    for (entity, binding, mut geometry, mut rocket, mut propulsion, ablation, autopilot) in
-        rocket_query.iter_mut()
+    for (
+        entity,
+        binding,
+        mut geometry,
+        mut rocket_mesh,
+        mut rocket,
+        mut propulsion,
+        ablation,
+        autopilot,
+    ) in rocket_query.iter_mut()
     {
         propulsion.time_since_separation_s += dt;
 
@@ -159,6 +169,11 @@ pub fn propulsion_staging(
                 );
                 propulsion.boosters_attached = false;
                 propulsion.booster_propellant_remaining_kg.clear();
+                let mut serial_stack = propulsion.vehicle.clone();
+                serial_stack.parallel_boosters = None;
+                if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
+                    *rocket_mesh = Mesh3d(build_rocket_mesh(&mut meshes, &serial_stack));
+                }
                 refresh_attached_mass_properties(
                     &mut rocket,
                     &geometry,
@@ -220,6 +235,9 @@ pub fn propulsion_staging(
         geometry.radius_m = active_stage.diameter_m * 0.5;
         geometry.height_m = active_stage.height_m;
         geometry.lower_extent_y_m = -active_stage.height_m * 0.5;
+        if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
+            *rocket_mesh = Mesh3d(build_serial_stage_mesh(&mut meshes, active_stage));
+        }
 
         let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);
         let upper_properties = stage_mass_properties(
