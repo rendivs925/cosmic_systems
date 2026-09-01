@@ -54,6 +54,14 @@ const OROGENY_SCALE: f64 = 0.32;
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
 
+    /// Presentation height at one cube-sphere LOD. The default is the exact
+    /// physical sample. Expensive layered sources may return a deterministic
+    /// coarse representation for distant meshes, but collision, altitude, and
+    /// all simulation systems must continue to use [`Self::height_m`].
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, _patch_level: u32) -> f64 {
+        self.height_m(latitude_deg, longitude_deg)
+    }
+
     /// Prepare expensive, deterministic data for a sample. This is invoked only
     /// by terrain worker tasks; fixed-step collision queries must use `height_m`
     /// without causing I/O or a terrain bake.
@@ -274,6 +282,22 @@ impl TerrainSource for LayeredTerrainSource {
         if let Some(layer) = &self.procedural_detail {
             height_m += layer.source.height_m(latitude_deg, longitude_deg);
         }
+        height_m
+    }
+
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
+        let mut height_m = self
+            .base
+            .source
+            .mesh_height_m(latitude_deg, longitude_deg, patch_level);
+        if let Some(layer) = &self.macro_elevation {
+            height_m += layer
+                .source
+                .mesh_height_m(latitude_deg, longitude_deg, patch_level);
+        }
+        // Fine local relief is represented by the close-range normal map.
+        // Injecting it into LOD-dependent mesh positions breaks shared edge
+        // agreement and aliases sub-cell features into kilometre-scale peaks.
         height_m
     }
 
@@ -591,7 +615,10 @@ impl ProceduralTerrainSource {
             direction.z * OROGENY_SCALE,
             2,
         );
-        continental_mask * ss(0.48, 0.66, orogeny_fbm)
+        // The continental mask begins below mean sea level. Gate orogeny on
+        // established land so ridges cannot raise the ocean floor into visible
+        // mountain chains before the continental shelf emerges.
+        ss(0.52, 0.68, continental_mask) * ss(0.48, 0.66, orogeny_fbm)
     }
 }
 
@@ -830,6 +857,29 @@ impl TerrainSource for SiteAwareTerrainSource {
             }
         }
         self.base.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
+        for calibrated in &self.sites {
+            let site = calibrated.site;
+            let flat_weight = site.flat_weight(latitude_deg, longitude_deg);
+            if flat_weight > 0.0 {
+                if flat_weight == 1.0 {
+                    return site.elevation_m;
+                }
+                let base = self
+                    .base
+                    .mesh_height_m(latitude_deg, longitude_deg, patch_level);
+                let base_center_height_m = *calibrated
+                    .base_center_height_m
+                    .get_or_init(|| self.base.height_m(site.latitude_deg, site.longitude_deg));
+                let center_bias_m = site.elevation_m - base_center_height_m;
+                let corrected_base = base + center_bias_m * flat_weight;
+                return corrected_base + (site.elevation_m - corrected_base) * flat_weight;
+            }
+        }
+        self.base
+            .mesh_height_m(latitude_deg, longitude_deg, patch_level)
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
@@ -1090,6 +1140,11 @@ impl Default for EarthTerrainSource {
 impl TerrainSource for EarthTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.source.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
+        self.source
+            .mesh_height_m(latitude_deg, longitude_deg, patch_level)
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
@@ -1653,8 +1708,15 @@ mod tests {
                 );
                 let continent = source.continental_mask(direction);
                 let mountain = source.mountain_region_mask(direction, continent);
-                assert!(mountain <= continent + 1e-12);
+                let established_land = ss(0.52, 0.68, continent);
+                assert!(mountain <= established_land + 1e-12);
                 has_oceanic_region |= continent < 0.001 && mountain == 0.0;
+                if continent <= 0.52 {
+                    assert_eq!(
+                        mountain, 0.0,
+                        "submerged continental shelf must not receive mountain uplift"
+                    );
+                }
                 has_mountain_region |= mountain > 0.1;
             }
         }

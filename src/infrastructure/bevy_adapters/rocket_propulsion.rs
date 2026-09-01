@@ -236,7 +236,17 @@ pub fn propulsion_staging(
         geometry.height_m = active_stage.height_m;
         geometry.lower_extent_y_m = -active_stage.height_m * 0.5;
         if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
-            *rocket_mesh = Mesh3d(build_serial_stage_mesh(&mut meshes, active_stage));
+            let attached_upper_envelope_height_m = (propulsion.vehicle.height_m
+                - propulsion.vehicle.stages[..=propulsion.active_stage]
+                    .iter()
+                    .map(|stage| stage.height_m)
+                    .sum::<f32>())
+            .max(0.0);
+            *rocket_mesh = Mesh3d(build_serial_stage_mesh(
+                &mut meshes,
+                active_stage,
+                attached_upper_envelope_height_m,
+            ));
         }
 
         let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);

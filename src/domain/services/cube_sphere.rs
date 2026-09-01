@@ -670,7 +670,9 @@ pub fn build_patch_geometry_with_stitches(
         resolution,
         skirt_depth_m,
         stitched_edges,
-        |latitude_deg, longitude_deg| source.height_m(latitude_deg, longitude_deg),
+        |latitude_deg, longitude_deg| {
+            source.mesh_height_m(latitude_deg, longitude_deg, patch.level)
+        },
     )
 }
 

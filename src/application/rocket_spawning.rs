@@ -434,6 +434,7 @@ pub(crate) fn build_rocket_mesh(
                         index_offset: &mut u32| {
         let rings = 16;
         let segments = 32;
+        let section_start = *index_offset;
         for ring in 0..=rings {
             let y = base_y + height * (ring as f32 / rings as f32);
             let v = ring as f32 / rings as f32;
@@ -449,14 +450,31 @@ pub(crate) fn build_rocket_mesh(
         for ring in 0..rings {
             for seg in 0..segments {
                 let next_seg = (seg + 1) % segments;
-                let a = *index_offset + ring * segments + seg;
-                let b = *index_offset + ring * segments + next_seg;
-                let c = *index_offset + (ring + 1) * segments + seg;
-                let d = *index_offset + (ring + 1) * segments + next_seg;
+                let a = section_start + ring * segments + seg;
+                let b = section_start + ring * segments + next_seg;
+                let c = section_start + (ring + 1) * segments + seg;
+                let d = section_start + (ring + 1) * segments + next_seg;
                 indices.extend_from_slice(&[a, c, b, b, c, d]);
             }
         }
-        *index_offset += (rings + 1) * segments;
+        let base_cap = section_start + (rings + 1) * segments;
+        positions.push([center_x, base_y, center_z]);
+        normals.push([0.0, -1.0, 0.0]);
+        uvs.push([0.5, 0.5]);
+        let top_cap = base_cap + 1;
+        positions.push([center_x, base_y + height, center_z]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([0.5, 0.5]);
+        for seg in 0..segments {
+            let next_seg = (seg + 1) % segments;
+            let base_a = section_start + seg;
+            let base_b = section_start + next_seg;
+            let top_a = section_start + rings * segments + seg;
+            let top_b = section_start + rings * segments + next_seg;
+            indices.extend_from_slice(&[base_cap, base_b, base_a]);
+            indices.extend_from_slice(&[top_cap, top_a, top_b]);
+        }
+        *index_offset = top_cap + 1;
     };
 
     // Helper: add a cone at (center_x, center_z) with base at base_y, apex at base_y + height
@@ -497,6 +515,17 @@ pub(crate) fn build_rocket_mesh(
             indices.extend_from_slice(&[a, b, c]);
         }
         *index_offset += segments;
+        let base_cap = *index_offset;
+        positions.push([center_x, base_y, center_z]);
+        normals.push([0.0, -1.0, 0.0]);
+        uvs.push([0.5, 0.5]);
+        for seg in 0..segments {
+            let next_seg = (seg + 1) % segments;
+            let a = base_cap - segments + seg;
+            let b = base_cap - segments + next_seg;
+            indices.extend_from_slice(&[base_cap, b, a]);
+        }
+        *index_offset += 1;
     };
 
     let mut idx_offset = 0u32;
@@ -562,7 +591,7 @@ pub(crate) fn build_rocket_mesh(
         add_cone(
             engine_station_m.x,
             engine_station_m.z,
-            engine_station_m.y,
+            engine_station_m.y - bell_height_m,
             bell_height_m,
             bell_radius_m,
             &mut positions,
@@ -586,7 +615,7 @@ pub(crate) fn build_rocket_mesh(
                 add_cone(
                     engine_station_m.x,
                     engine_station_m.z,
-                    engine_station_m.y,
+                    engine_station_m.y - bell_height_m,
                     bell_height_m,
                     bell_radius_m,
                     &mut positions,
@@ -617,13 +646,17 @@ pub(crate) fn build_rocket_mesh(
 pub(crate) fn build_serial_stage_mesh(
     meshes: &mut Assets<Mesh>,
     stage: &crate::domain::entities::rocket::RocketStage,
+    upper_envelope_height_m: f32,
 ) -> Handle<Mesh> {
     build_rocket_mesh(
         meshes,
         &crate::domain::entities::rocket::Rocket {
             name: stage.name.clone(),
             diameter_m: stage.diameter_m,
-            height_m: stage.height_m,
+            // The physics stage remains its catalog height; this presentation
+            // envelope preserves the upper adapter/fairing that stays attached
+            // after a lower serial stage separates.
+            height_m: stage.height_m + upper_envelope_height_m.max(0.0),
             stages: vec![stage.clone()],
             parallel_boosters: None,
         },
@@ -740,7 +773,7 @@ mod mesh_layout_tests {
             }],
         };
         let mut meshes = Assets::<Mesh>::default();
-        let mesh = build_serial_stage_mesh(&mut meshes, &stage);
+        let mesh = build_serial_stage_mesh(&mut meshes, &stage, 0.0);
 
         assert!(meshes.get(&mesh).is_some());
     }

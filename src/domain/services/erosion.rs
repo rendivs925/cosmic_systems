@@ -743,6 +743,15 @@ impl TerrainSource for ErodedTerrainSource {
         }
     }
 
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
+        // Mesh edges must be independent of LOD: a different radial height at
+        // the same geographic sample produces cracks that stitch indices cannot
+        // close. Erosion remains exact for collision and close-range material
+        // maps, while the macro mesh uses the deterministic analytic field.
+        self.base
+            .mesh_height_m(latitude_deg, longitude_deg, patch_level)
+    }
+
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
         let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
         self.base.prepare_sample(latitude_deg, longitude_deg);
@@ -822,6 +831,35 @@ mod tests {
             cache_max_tiles: 8,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn mesh_samples_use_the_lod_independent_macro_field() {
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
+        let latitude_deg = 28.5;
+        let longitude_deg = -80.6;
+
+        assert_eq!(
+            source.mesh_height_m(latitude_deg, longitude_deg, 3),
+            source.base.height_m(latitude_deg, longitude_deg)
+        );
+        assert!(source
+            .cache
+            .lock()
+            .expect("erosion cache lock")
+            .tiles
+            .is_empty());
+
+        assert_eq!(
+            source.mesh_height_m(latitude_deg, longitude_deg, 12),
+            source.base.height_m(latitude_deg, longitude_deg)
+        );
+        assert!(source
+            .cache
+            .lock()
+            .expect("erosion cache lock")
+            .tiles
+            .is_empty());
     }
 
     #[test]

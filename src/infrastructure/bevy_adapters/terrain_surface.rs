@@ -67,6 +67,13 @@ pub(crate) struct PreparedPatchSurface {
     pub metallic: f32,
     pub local_surfaces: Option<(Image, Image)>,
     pub vegetation: Option<(Mesh, DVec3)>,
+    pub water: Option<PreparedWaterSurface>,
+}
+
+/// Sea-level triangles for one terrain patch. They are generated with the
+/// patch's worker result and rendered separately from the physical seabed.
+pub(crate) struct PreparedWaterSurface {
+    pub indices: Vec<u32>,
 }
 
 pub(crate) fn prepare_patch_surface(
@@ -78,20 +85,39 @@ pub(crate) fn prepare_patch_surface(
     // Coarse and fine mesh colors both come from the authoritative procedural
     // surface model. Global imagery is not terrain authority and produced a
     // separate, visibly conflicting material layer at close range.
+    // Erosion/hydrology fields are expensive and only visually resolvable with
+    // the local material maps. Coarser patches use their deterministic overview
+    // appearance instead of baking tile data merely to color distant pixels.
+    let uses_erosion_surface_data = supports_local_surfaces(patch.level);
     let vertex_colors = geometry
         .positions
         .iter()
         .map(|position| {
             let position = DVec3::from_array(*position);
             let (lat, lon) = direction_to_lat_lon(position);
+            let moisture = if uses_erosion_surface_data {
+                source.moisture(lat, lon)
+            } else {
+                source.overview_moisture(lat, lon)
+            };
+            let slope_deg = if uses_erosion_surface_data {
+                slope_deg_at(source, lat, lon)
+            } else {
+                source.overview_slope_deg(lat, lon)
+            };
+            let river_strength = if uses_erosion_surface_data {
+                source.river_strength(lat, lon)
+            } else {
+                0.0
+            };
             let appearance = with_river_appearance(
                 surface_appearance(
                     position.length() - radius_m,
-                    source.moisture(lat, lon),
+                    moisture,
                     source.zone_lat(lat),
-                    slope_deg_at(source, lat, lon),
+                    slope_deg,
                 ),
-                source.river_strength(lat, lon),
+                river_strength,
             );
             [
                 appearance.albedo[0],
@@ -104,15 +130,25 @@ pub(crate) fn prepare_patch_surface(
 
     let center = patch.center_direction();
     let (lat, lon) = direction_to_lat_lon(center);
-    let height_m = source.height_m(lat, lon);
+    let height_m = source.mesh_height_m(lat, lon, patch.level);
+    let moisture = if uses_erosion_surface_data {
+        source.moisture(lat, lon)
+    } else {
+        source.overview_moisture(lat, lon)
+    };
+    let slope_deg = if uses_erosion_surface_data {
+        slope_deg_at(source, lat, lon)
+    } else {
+        source.overview_slope_deg(lat, lon)
+    };
+    let river_strength = if uses_erosion_surface_data {
+        source.river_strength(lat, lon)
+    } else {
+        0.0
+    };
     let appearance = with_river_appearance(
-        surface_appearance(
-            height_m,
-            source.moisture(lat, lon),
-            source.zone_lat(lat),
-            slope_deg_at(source, lat, lon),
-        ),
-        source.river_strength(lat, lon),
+        surface_appearance(height_m, moisture, source.zone_lat(lat), slope_deg),
+        river_strength,
     );
     let local_surfaces = supports_local_surfaces(patch.level)
         .then(|| build_patch_surfaces(source, patch, geometry, radius_m));
@@ -121,6 +157,7 @@ pub(crate) fn prepare_patch_surface(
         .then(|| build_vegetation_mesh(source, patch, radius_m, &vegetation_anchor))
         .flatten()
         .map(|mesh| (mesh, vegetation_anchor));
+    let water = build_water_surface(geometry, radius_m);
 
     PreparedPatchSurface {
         vertex_colors,
@@ -128,7 +165,37 @@ pub(crate) fn prepare_patch_surface(
         metallic: appearance.metallic,
         local_surfaces,
         vegetation,
+        water,
     }
+}
+
+/// Emit only fully submerged cells at mean sea level. The physical terrain
+/// remains an irregular seabed below it; this presentation layer prevents that
+/// seabed from being mistaken for the ocean surface while retaining a cheap,
+/// deterministic shoreline approximation at streamed patch resolution.
+fn build_water_surface(geometry: &PatchGeometry, radius_m: f64) -> Option<PreparedWaterSurface> {
+    let resolution = ((geometry.positions.len() + 8) as f64).sqrt() as usize - 2;
+    if resolution < 2 {
+        return None;
+    }
+    let mut indices = Vec::new();
+    for y in 0..resolution - 1 {
+        for x in 0..resolution - 1 {
+            let a = y * resolution + x;
+            let b = a + 1;
+            let c = a + resolution;
+            let d = c + 1;
+            if [a, b, c, d]
+                .into_iter()
+                .all(|index| DVec3::from_array(geometry.positions[index]).length() < radius_m)
+            {
+                indices.extend_from_slice(&[
+                    a as u32, c as u32, b as u32, b as u32, c as u32, d as u32,
+                ]);
+            }
+        }
+    }
+    (!indices.is_empty()).then_some(PreparedWaterSurface { indices })
 }
 
 /// Conservative maximum allocation for one merged vegetation mesh. The

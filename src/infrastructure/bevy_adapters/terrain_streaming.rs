@@ -28,7 +28,7 @@ use crate::infrastructure::bevy_adapters::terrain_render::{
 };
 use crate::infrastructure::bevy_adapters::terrain_surface::{
     prepare_patch_surface, supports_local_surfaces, supports_vegetation, PreparedPatchSurface,
-    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES, VEGETATION_MIN_PATCH_LEVEL,
+    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -72,10 +72,6 @@ const DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M: f64 =
 /// the reserved worker pool quickly after a camera move without queueing an
 /// unbounded cold-start burst or blocking the render thread.
 const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
-/// Before liftoff, the launch facility must be surrounded by the same local
-/// surface maps and vegetation that flight terrain uses. This remains an async,
-/// bounded request through the normal streaming lifecycle.
-const PRELAUNCH_MIN_PATCH_LEVEL: u32 = VEGETATION_MIN_PATCH_LEVEL;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
@@ -286,10 +282,10 @@ struct TerrainStreamingCadence {
     max_focus_level: Option<u32>,
 }
 
-/// Streaming system: keep six root tiles available for the bound planet, refine
-/// the rocket-facing neighborhood by projected geometric error, generate
-/// deterministic geometry from the shared terrain source, and enforce the
-/// memory budget. It only updates the streaming resource; it never writes
+/// Streaming system: keep viewport-visible root tiles available for the bound
+/// planet, refine the rocket-facing neighborhood by projected geometric error,
+/// generate deterministic geometry from the shared terrain source, and enforce
+/// the memory budget. It only updates the streaming resource; it never writes
 /// rendered geometry or the rocket's state.
 #[expect(
     clippy::too_many_arguments,
@@ -427,13 +423,10 @@ pub fn stream_terrain_patches(
     let lod_distance_m =
         ground_distance_m + (orbital_distance_m.max(ground_distance_m) - ground_distance_m) * blend;
 
-    let max_focus_level = prelaunch_focus_level(
-        lod_for_distance_with_hysteresis(
-            streaming.cadence.max_focus_level,
-            lod_distance_m,
-            radius_m,
-        ),
-        prelaunch,
+    let max_focus_level = lod_for_distance_with_hysteresis(
+        streaming.cadence.max_focus_level,
+        lod_distance_m,
+        radius_m,
     );
     streaming.cadence.max_focus_level = Some(max_focus_level);
     let mut errors = projected_errors_for_focus(
@@ -503,9 +496,12 @@ pub fn stream_terrain_patches(
     }
     streaming.target_leaves = selection.target_leaves.clone();
 
-    // Keep every root resident as the complete source-authoritative fallback.
-    // The streamed root cover remains visible between local patch refinements.
-    let mut requested: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+    // Keep source-authoritative roots only for the active viewport. Generating
+    // far-side roots would make every worker bake erosion tiles that cannot
+    // contribute to the current frame. The focused root remains requested even
+    // if a temporarily obstructed camera culls it during prelaunch.
+    let focused_root = TerrainPatch::for_direction(focus_direction, 0);
+    let mut requested = root_requests_for_viewport(focused_root, viewport.as_ref(), radius_m);
     for patch in selection
         .requested
         .iter()
@@ -552,15 +548,12 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
-    let focused_root = TerrainPatch::for_direction(focus_direction, 0);
     let mut generation_order: Vec<_> = requested.iter().copied().collect();
     generation_order.sort_by_key(|patch| {
         let center = patch.center_direction();
         let distance_key = ((1.0 - center.dot(focus_direction)).max(0.0) * 1_000_000.0) as u64;
         (
             !patch_intersects_viewport(*patch, viewport.as_ref(), radius_m),
-            // The visible launch hierarchy is useful immediately; the other
-            // five global roots remain requested but must not delay it.
             patch.level == 0 && *patch != focused_root,
             patch.level,
             distance_key,
@@ -728,14 +721,6 @@ fn lod_for_distance_with_hysteresis(previous: Option<u32>, distance_m: f64, radi
         level -= 1;
     }
     level
-}
-
-fn prelaunch_focus_level(camera_focus_level: u32, prelaunch: bool) -> u32 {
-    if prelaunch {
-        camera_focus_level.max(PRELAUNCH_MIN_PATCH_LEVEL)
-    } else {
-        camera_focus_level
-    }
 }
 
 fn cancel_stale_requested(manager: &mut TerrainPatchManager, requested: &BTreeSet<TerrainPatch>) {
@@ -922,6 +907,22 @@ fn add_viewport_lod_group(
     }
 }
 
+/// Root coverage is scoped to the camera's conservative viewport. The root
+/// containing the active focus is retained as an async fallback for launch-site
+/// presentation when the camera is temporarily blocked by vehicle geometry.
+fn root_requests_for_viewport(
+    focused_root: TerrainPatch,
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+) -> BTreeSet<TerrainPatch> {
+    let mut roots: BTreeSet<_> = TerrainPatch::roots()
+        .into_iter()
+        .filter(|root| patch_intersects_viewport(*root, viewport, radius_m))
+        .collect();
+    roots.insert(focused_root);
+    roots
+}
+
 /// Conservative bounding-sphere frustum test. It intentionally retains a small
 /// margin for smooth camera motion; patches outside it are not requested,
 /// rendered, or retained in the cache.
@@ -989,8 +990,8 @@ fn patch_bounding_sphere(patch: TerrainPatch, radius_m: f64) -> (DVec3, f64) {
 /// Reject a quadtree node only when its conservative bounding sphere lies
 /// wholly behind the tangent plane of the planet as seen by the camera.
 ///
-/// This runs before queueing a `TerrainSource` bake. Root coverage remains
-/// unconditional, while refined nodes behind the limb never consume a task.
+/// This runs before queueing a `TerrainSource` bake, including coarse roots.
+/// Nodes behind the limb never consume a task.
 fn patch_is_behind_horizon(patch: TerrainPatch, camera_position_m: DVec3, radius_m: f64) -> bool {
     let camera_distance_m = camera_position_m.length();
     if camera_distance_m <= radius_m {
@@ -1192,6 +1193,7 @@ fn stale_cached_stitch_variants(
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::CubeFace;
+    use crate::infrastructure::bevy_adapters::terrain_surface::VEGETATION_MIN_PATCH_LEVEL;
 
     #[derive(Debug)]
     struct DivergentOverviewSource;
@@ -1355,16 +1357,23 @@ mod tests {
     }
 
     #[test]
-    fn complete_root_coverage_is_retained_with_camera_local_refinement() {
+    fn root_coverage_is_limited_to_the_viewport_with_camera_local_refinement() {
         let parent = TerrainPatch::root(CubeFace::PosZ);
         let selected: BTreeSet<_> = parent.children().into_iter().collect();
-        let mut requested: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+        let radius_m = 6_371_000.0;
+        let viewport = TerrainViewport {
+            position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
+            forward: -DVec3::Z,
+            half_fov_rad: 0.5,
+            vertical_fov_rad: 0.8,
+            viewport_height_px: 1080.0,
+        };
+        let mut requested = root_requests_for_viewport(parent, Some(&viewport), radius_m);
 
         add_viewport_lod_group(parent.children()[0], &selected, &mut requested);
 
-        assert!(TerrainPatch::roots()
-            .into_iter()
-            .all(|root| requested.contains(&root)));
+        assert_eq!(requested.iter().filter(|patch| patch.level == 0).count(), 1);
+        assert!(requested.contains(&parent));
         assert!(parent
             .children()
             .into_iter()
@@ -1617,16 +1626,6 @@ mod tests {
             assert!(s >= last - 1e-12, "must be non-decreasing");
             last = s;
         }
-    }
-
-    #[test]
-    fn prelaunch_requests_local_surface_and_vegetation_detail() {
-        assert_eq!(
-            prelaunch_focus_level(4, true),
-            VEGETATION_MIN_PATCH_LEVEL,
-            "the launch facility needs the same detailed tiles that own its surface maps and vegetation"
-        );
-        assert_eq!(prelaunch_focus_level(4, false), 4);
     }
 
     #[test]
