@@ -26,11 +26,9 @@ use crate::infrastructure::bevy_adapters::rocket_contact::TerrainSurfaceSampleCa
 use crate::infrastructure::bevy_adapters::terrain_render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
-#[cfg(test)]
-use crate::infrastructure::bevy_adapters::terrain_surface::VEGETATION_MIN_PATCH_LEVEL;
 use crate::infrastructure::bevy_adapters::terrain_surface::{
     prepare_patch_surface, supports_local_surfaces, supports_vegetation, PreparedPatchSurface,
-    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
+    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES, VEGETATION_MIN_PATCH_LEVEL,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -74,6 +72,10 @@ const DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M: f64 =
 /// the reserved worker pool quickly after a camera move without queueing an
 /// unbounded cold-start burst or blocking the render thread.
 const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
+/// Before liftoff, the launch facility must be surrounded by the same local
+/// surface maps and vegetation that flight terrain uses. This remains an async,
+/// bounded request through the normal streaming lifecycle.
+const PRELAUNCH_MIN_PATCH_LEVEL: u32 = VEGETATION_MIN_PATCH_LEVEL;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
@@ -296,7 +298,14 @@ struct TerrainStreamingCadence {
 pub fn stream_terrain_patches(
     mut streaming: ResMut<TerrainStreamingResource>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
-    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState), Without<SpentStage>>,
+    rocket_query: Query<
+        (
+            &RocketPlanetBinding,
+            &RocketPhysicsState,
+            &RocketMissionState,
+        ),
+        Without<SpentStage>,
+    >,
     mut ready_events: MessageWriter<TerrainPatchReady>,
     mut cached_events: MessageWriter<TerrainPatchCached>,
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
@@ -307,7 +316,7 @@ pub fn stream_terrain_patches(
     camera_query: Query<(&Camera, &Transform, &Projection), With<Camera3d>>,
 ) {
     // No rocket yet: keep the manager tidy and return.
-    let Some((binding, rocket)) = rocket_query.iter().next() else {
+    let Some((binding, rocket, mission)) = rocket_query.iter().next() else {
         let active_planet = streaming.active_planet.take();
         let evicted = clear_terrain_cache(&mut streaming);
         if let Some(planet_entity) = active_planet {
@@ -370,7 +379,16 @@ pub fn stream_terrain_patches(
     let position_bf = planet_inertial_to_body_fixed(position_m, orientation);
     let dir = position_bf.normalize_or_zero();
     let viewport = terrain_viewport(&camera_query, &render_origin, orientation);
-    let focus_direction = viewport_focus_direction(viewport.as_ref(), radius_m, dir);
+    // A chase camera can be temporarily obstructed by the vehicle or launch
+    // tower. During pad hold, the authoritative launch direction is a more
+    // stable refinement focus and guarantees terrain is ready around the site
+    // before the vehicle can lift off.
+    let prelaunch = *mission == RocketMissionState::PreLaunch;
+    let focus_direction = if prelaunch {
+        dir
+    } else {
+        viewport_focus_direction(viewport.as_ref(), radius_m, dir)
+    };
     let lod_camera_position_m = viewport
         .as_ref()
         .map(|viewport| viewport.position_m)
@@ -409,10 +427,13 @@ pub fn stream_terrain_patches(
     let lod_distance_m =
         ground_distance_m + (orbital_distance_m.max(ground_distance_m) - ground_distance_m) * blend;
 
-    let max_focus_level = lod_for_distance_with_hysteresis(
-        streaming.cadence.max_focus_level,
-        lod_distance_m,
-        radius_m,
+    let max_focus_level = prelaunch_focus_level(
+        lod_for_distance_with_hysteresis(
+            streaming.cadence.max_focus_level,
+            lod_distance_m,
+            radius_m,
+        ),
+        prelaunch,
     );
     streaming.cadence.max_focus_level = Some(max_focus_level);
     let mut errors = projected_errors_for_focus(
@@ -483,8 +504,7 @@ pub fn stream_terrain_patches(
     streaming.target_leaves = selection.target_leaves.clone();
 
     // Keep every root resident as the complete source-authoritative fallback.
-    // The recessed flight globe is only a bootstrap mesh while these async jobs
-    // complete; it must not become exposed terrain between local patches.
+    // The streamed root cover remains visible between local patch refinements.
     let mut requested: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
     for patch in selection
         .requested
@@ -532,12 +552,16 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
+    let focused_root = TerrainPatch::for_direction(focus_direction, 0);
     let mut generation_order: Vec<_> = requested.iter().copied().collect();
     generation_order.sort_by_key(|patch| {
         let center = patch.center_direction();
         let distance_key = ((1.0 - center.dot(focus_direction)).max(0.0) * 1_000_000.0) as u64;
         (
             !patch_intersects_viewport(*patch, viewport.as_ref(), radius_m),
+            // The visible launch hierarchy is useful immediately; the other
+            // five global roots remain requested but must not delay it.
+            patch.level == 0 && *patch != focused_root,
             patch.level,
             distance_key,
             patch.face,
@@ -704,6 +728,14 @@ fn lod_for_distance_with_hysteresis(previous: Option<u32>, distance_m: f64, radi
         level -= 1;
     }
     level
+}
+
+fn prelaunch_focus_level(camera_focus_level: u32, prelaunch: bool) -> u32 {
+    if prelaunch {
+        camera_focus_level.max(PRELAUNCH_MIN_PATCH_LEVEL)
+    } else {
+        camera_focus_level
+    }
 }
 
 fn cancel_stale_requested(manager: &mut TerrainPatchManager, requested: &BTreeSet<TerrainPatch>) {
@@ -1585,6 +1617,16 @@ mod tests {
             assert!(s >= last - 1e-12, "must be non-decreasing");
             last = s;
         }
+    }
+
+    #[test]
+    fn prelaunch_requests_local_surface_and_vegetation_detail() {
+        assert_eq!(
+            prelaunch_focus_level(4, true),
+            VEGETATION_MIN_PATCH_LEVEL,
+            "the launch facility needs the same detailed tiles that own its surface maps and vegetation"
+        );
+        assert_eq!(prelaunch_focus_level(4, false), 4);
     }
 
     #[test]

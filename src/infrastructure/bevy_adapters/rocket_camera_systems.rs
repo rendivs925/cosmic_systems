@@ -52,8 +52,8 @@ pub fn setup_rocket_camera_and_origin(
     // The render origin is the rocket, so its initial presentation position is
     // zero. Use the same rotated-body chase pose as the per-frame system;
     // looking at world +Y here points away from launch sites whose local up is
-    // not render +Y and exposed the fallback globe as if the vehicle were
-    // below terrain on the first frames.
+    // not render +Y and leaves the streamed launch terrain out of frame on the
+    // first presentation frames.
     let rocket_pos_flight = Vec3::ZERO;
     let up_dir = rocket_pos_m.normalize().as_vec3();
     let (camera_pos_flight, camera_rotation) = compute_chase_camera(
@@ -253,28 +253,47 @@ pub fn update_rocket_camera(
             RocketCameraMode::Free => compute_free_camera(rocket_pos_flight, up_dir, &controller),
         };
 
-        let target_relative = rocket_relative_camera_pose(
+        let target_pose = camera_reference_pose(
             rocket_pos_flight,
             rocket_rot,
             Transform::from_translation(target_pos).with_rotation(target_rot),
+            controller.target_mode,
         );
-        let current_relative = controller.smoothed_relative_pose.unwrap_or_else(|| {
-            rocket_relative_camera_pose(rocket_pos_flight, rocket_rot, *camera_transform)
-        });
-
-        // Transitions and smoothing are intentionally rocket-relative. A
-        // RenderOrigin rebase changes both flight-frame positions, while this
-        // stored offset remains unchanged and therefore cannot produce a cut.
-        let mode_relative = if controller.current_mode == controller.target_mode {
-            controller.cancel_transition();
-            target_relative
+        let transitioning = controller.current_mode != controller.target_mode;
+        let current_pose = if transitioning {
+            // Changing reference frames means the previous stored pose may be
+            // body-relative while the new target is render-relative. Convert
+            // the rendered camera pose instead of interpolating mismatched data.
+            camera_reference_pose(
+                rocket_pos_flight,
+                rocket_rot,
+                *camera_transform,
+                controller.target_mode,
+            )
         } else {
-            let start = controller.begin_transition(current_relative);
+            controller.smoothed_pose.unwrap_or_else(|| {
+                camera_reference_pose(
+                    rocket_pos_flight,
+                    rocket_rot,
+                    *camera_transform,
+                    controller.target_mode,
+                )
+            })
+        };
+
+        // The pose frame is selected by the target camera mode. Both supported
+        // frames are relative to the rocket position, so a RenderOrigin rebase
+        // shifts neither stored offset nor produces a camera cut.
+        let mode_pose = if !transitioning {
+            controller.cancel_transition();
+            target_pose
+        } else {
+            let start = controller.begin_transition(current_pose);
             controller.transition_progress =
                 (controller.transition_progress + dt * config.transition_speed).min(1.0);
             let linear_t = controller.transition_progress;
             let t = linear_t * linear_t * (3.0 - 2.0 * linear_t);
-            let pose = interpolate_camera_pose(start, target_relative, t);
+            let pose = interpolate_camera_pose(start, target_pose, t);
 
             if controller.transition_progress >= 1.0 {
                 controller.complete_transition();
@@ -282,38 +301,64 @@ pub fn update_rocket_camera(
             pose
         };
         let smoothing = camera_smoothing_alpha(config.smooth_factor, dt);
-        let smoothed_relative = controller
-            .smoothed_relative_pose
-            .map(|previous| interpolate_camera_pose(previous, mode_relative, smoothing))
-            .unwrap_or(current_relative);
-        controller.smoothed_relative_pose = Some(smoothed_relative);
-        *camera_transform =
-            rocket_relative_to_camera_pose(rocket_pos_flight, rocket_rot, smoothed_relative);
+        let smoothed_pose = if transitioning {
+            interpolate_camera_pose(current_pose, mode_pose, smoothing)
+        } else {
+            controller
+                .smoothed_pose
+                .map(|previous| interpolate_camera_pose(previous, mode_pose, smoothing))
+                .unwrap_or(current_pose)
+        };
+        controller.smoothed_pose = Some(smoothed_pose);
+        *camera_transform = camera_pose_from_reference(
+            rocket_pos_flight,
+            rocket_rot,
+            smoothed_pose,
+            controller.target_mode,
+        );
     }
 }
 
-/// Convert a world-space camera pose into a rocket-body-relative presentation
-/// pose. This is the only camera state retained between frames.
-fn rocket_relative_camera_pose(
+/// Vehicle-attached views follow the body frame. Planet-relative and free views
+/// retain a render-frame orientation so landing attitude changes cannot shake
+/// their horizon or orbit direction.
+fn camera_uses_rocket_body_frame(mode: RocketCameraMode) -> bool {
+    matches!(mode, RocketCameraMode::Chase | RocketCameraMode::Cockpit)
+}
+
+/// Convert a render-frame camera pose into the frame owned by `mode`.
+fn camera_reference_pose(
     rocket_position: Vec3,
     rocket_rotation: Quat,
     camera_pose: Transform,
+    mode: RocketCameraMode,
 ) -> Transform {
-    let inverse_rocket_rotation = rocket_rotation.inverse();
+    let reference_rotation = if camera_uses_rocket_body_frame(mode) {
+        rocket_rotation
+    } else {
+        Quat::IDENTITY
+    };
+    let inverse_reference_rotation = reference_rotation.inverse();
     Transform::from_translation(
-        inverse_rocket_rotation * (camera_pose.translation - rocket_position),
+        inverse_reference_rotation * (camera_pose.translation - rocket_position),
     )
-    .with_rotation(inverse_rocket_rotation * camera_pose.rotation)
+    .with_rotation(inverse_reference_rotation * camera_pose.rotation)
 }
 
-/// Reapply a stored rocket-relative camera pose to the current flight frame.
-fn rocket_relative_to_camera_pose(
+/// Reapply a stored mode-reference pose to the current flight frame.
+fn camera_pose_from_reference(
     rocket_position: Vec3,
     rocket_rotation: Quat,
-    relative_pose: Transform,
+    pose: Transform,
+    mode: RocketCameraMode,
 ) -> Transform {
-    Transform::from_translation(rocket_position + rocket_rotation * relative_pose.translation)
-        .with_rotation(rocket_rotation * relative_pose.rotation)
+    let reference_rotation = if camera_uses_rocket_body_frame(mode) {
+        rocket_rotation
+    } else {
+        Quat::IDENTITY
+    };
+    Transform::from_translation(rocket_position + reference_rotation * pose.translation)
+        .with_rotation(reference_rotation * pose.rotation)
 }
 
 fn interpolate_camera_pose(from: Transform, to: Transform, amount: f32) -> Transform {
@@ -581,19 +626,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rocket_relative_camera_pose_rebases_without_a_camera_cut() {
+    fn render_relative_camera_pose_rebases_without_a_camera_cut() {
         let rocket_rotation = Quat::from_rotation_y(0.4);
         let relative = Transform::from_translation(Vec3::new(-220.0, 50.0, 0.0))
             .with_rotation(Quat::from_rotation_x(-0.2));
         let before_rocket = Vec3::new(1_000.0, -200.0, 50.0);
         let rebase_delta = Vec3::new(10_000.0, -4_000.0, 1_000.0);
 
-        let before = rocket_relative_to_camera_pose(before_rocket, rocket_rotation, relative);
-        let after =
-            rocket_relative_to_camera_pose(before_rocket - rebase_delta, rocket_rotation, relative);
+        let before = camera_pose_from_reference(
+            before_rocket,
+            rocket_rotation,
+            relative,
+            RocketCameraMode::Free,
+        );
+        let after = camera_pose_from_reference(
+            before_rocket - rebase_delta,
+            rocket_rotation,
+            relative,
+            RocketCameraMode::Free,
+        );
 
         assert!((after.translation + rebase_delta - before.translation).length() < 1e-3);
         assert_eq!(after.rotation, before.rotation);
+    }
+
+    #[test]
+    fn free_camera_pose_does_not_follow_a_touchdown_rotation() {
+        let pose = Transform::from_translation(Vec3::new(-220.0, 50.0, 0.0))
+            .with_rotation(Quat::from_rotation_x(-0.2));
+        let rocket_position = Vec3::new(12.0, 4.0, -8.0);
+        let before = camera_pose_from_reference(
+            rocket_position,
+            Quat::IDENTITY,
+            pose,
+            RocketCameraMode::Free,
+        );
+        let after = camera_pose_from_reference(
+            rocket_position,
+            Quat::from_rotation_z(1.2),
+            pose,
+            RocketCameraMode::Free,
+        );
+
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn chase_camera_pose_follows_the_rocket_body_rotation() {
+        let pose = Transform::from_translation(Vec3::new(-220.0, 50.0, 0.0));
+        let rocket_position = Vec3::ZERO;
+        let before = camera_pose_from_reference(
+            rocket_position,
+            Quat::IDENTITY,
+            pose,
+            RocketCameraMode::Chase,
+        );
+        let after = camera_pose_from_reference(
+            rocket_position,
+            Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            pose,
+            RocketCameraMode::Chase,
+        );
+
+        assert!((after.translation - before.translation).length() > 1.0);
     }
 
     #[test]
