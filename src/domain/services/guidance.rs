@@ -757,10 +757,30 @@ pub fn advance_descent_phase(
     altitude_m: f64,
     velocity_mps: f64,
     dynamic_pressure_pa: f64,
+    descending: bool,
     has_active_engines: bool,
     config: &DescentGuidanceConfig,
 ) -> RocketMissionState {
+    let terminal_descent_phase = || {
+        if has_active_engines {
+            RocketMissionState::PoweredDescent
+        } else {
+            RocketMissionState::UnpoweredDescent
+        }
+    };
     match phase {
+        // A failed ascent is still a descent. Without this handoff a vehicle
+        // that loses usable propulsion remains labelled Ascent while falling,
+        // leaving guidance at full throttle against unavailable engines.
+        RocketMissionState::Ascent
+            if descending && altitude_m < config.entry_interface_altitude_m =>
+        {
+            if velocity_mps < 340.0 && dynamic_pressure_pa < config.max_dynamic_pressure_pa {
+                terminal_descent_phase()
+            } else {
+                RocketMissionState::ReentryCorridor
+            }
+        }
         RocketMissionState::Orbit => {
             // Deorbit burn is commanded externally; transition when burn completes.
             // For auto-launch, we could add logic here. For now, stay in Orbit.
@@ -777,11 +797,7 @@ pub fn advance_descent_phase(
         RocketMissionState::ReentryCorridor => {
             // Transition to powered/unpowered descent when slow enough.
             if velocity_mps < 340.0 && dynamic_pressure_pa < config.max_dynamic_pressure_pa {
-                if has_active_engines {
-                    RocketMissionState::PoweredDescent
-                } else {
-                    RocketMissionState::UnpoweredDescent
-                }
+                terminal_descent_phase()
             } else {
                 phase
             }
@@ -1831,6 +1847,7 @@ mod tests {
             400_000.0,
             7600.0,
             0.0,
+            false,
             true,
             &config,
         );
@@ -1843,6 +1860,7 @@ mod tests {
             7000.0,
             1000.0,
             true,
+            true,
             &config,
         );
         assert_eq!(p, RocketMissionState::ReentryCorridor);
@@ -1853,6 +1871,7 @@ mod tests {
             5_000.0,
             200.0,
             1000.0,
+            true,
             true,
             &config,
         );
@@ -1865,6 +1884,7 @@ mod tests {
             1.0,
             100.0,
             true,
+            true,
             &config,
         );
         assert_eq!(p, RocketMissionState::Landing);
@@ -1875,6 +1895,20 @@ mod tests {
             5_000.0,
             200.0,
             1000.0,
+            true,
+            false,
+            &config,
+        );
+        assert_eq!(p, RocketMissionState::UnpoweredDescent);
+
+        // A failed ascent below the entry interface must no longer keep its
+        // ascent phase and full-throttle command while descending.
+        let p = advance_descent_phase(
+            RocketMissionState::Ascent,
+            12_000.0,
+            220.0,
+            8_000.0,
+            true,
             false,
             &config,
         );

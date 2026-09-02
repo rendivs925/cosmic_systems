@@ -5,6 +5,7 @@ use crate::domain::services::reference_frames::surface_velocity_in_planet_inerti
 use crate::domain::services::rocket_propulsion::{
     active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
 };
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{MaxQTracker, PlanetComponent};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_telemetry::FlightRecorder;
@@ -16,6 +17,49 @@ use bevy::prelude::*;
 /// them, even when rendering runs faster than the fixed schedule.
 #[derive(Resource, Default)]
 pub struct RelaunchCommandQueue(pub Vec<Entity>);
+
+/// Highest permitted warp during an atmospheric descent. The bounded fixed
+/// runner cannot present a controllable landing while it is draining a large
+/// queued warp backlog, so terminal flight explicitly returns to real time.
+const TERMINAL_FLIGHT_MAX_WARP: f64 = SimulationTime::REALTIME;
+const TERMINAL_FLIGHT_ALTITUDE_M: f64 = 100_000.0;
+
+/// Cancel outstanding warp demand once a vehicle enters terminal flight. This
+/// is a presentation/control policy only: completed fixed steps remain intact,
+/// while unexecuted future demand has never affected physical state.
+pub fn constrain_terminal_time_warp(
+    mut sim_time: ResMut<SimulationTime>,
+    rocket_query: Query<(
+        &RocketMissionState,
+        &RocketPhysicsState,
+        &RocketFlightConditions,
+    )>,
+) {
+    if sim_time.time_acceleration <= TERMINAL_FLIGHT_MAX_WARP {
+        return;
+    }
+    let terminal_flight = rocket_query.iter().any(|(mission, rocket, conditions)| {
+        matches!(
+            *mission,
+            RocketMissionState::PoweredDescent
+                | RocketMissionState::UnpoweredDescent
+                | RocketMissionState::Landing
+        ) || {
+            let radial = rocket.dynamics.position_m.normalize_or_zero();
+            conditions.altitude_m <= TERMINAL_FLIGHT_ALTITUDE_M
+                && conditions.atmosphere_relative_velocity_mps.dot(radial) < -1.0
+        }
+    });
+    if !terminal_flight {
+        return;
+    }
+    let cancelled_backlog_s = sim_time.pending_simulation_s();
+    sim_time.set_time_acceleration(TERMINAL_FLIGHT_MAX_WARP);
+    sim_time.cancel_pending_simulation();
+    bevy::log::info!(
+        "Terminal flight forced time warp to real time; cancelled {cancelled_backlog_s:.1} s of unexecuted warp demand"
+    );
+}
 
 /// Relaunch input (Phase 14): R commands a full pad-style reset of every
 /// vehicle. Presentation-adjacent input handling only — the mutation happens
@@ -274,6 +318,47 @@ pub fn apply_relaunch_requests(
             "Relaunch ready: {:.0} kg refueled, vehicle upright and held on the pad",
             total_mass_kg
         );
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "Launch input remains beside its lifecycle implementation."
+)]
+mod tests {
+    use super::*;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use bevy::math::DMat3;
+
+    #[test]
+    fn terminal_descent_cancels_unexecuted_warp_before_more_physics_runs() {
+        let mut app = App::new();
+        let mut sim_time = SimulationTime::default();
+        sim_time.set_time_acceleration(1_000.0);
+        sim_time.accrue_warp(1.0);
+        app.insert_resource(sim_time)
+            .add_systems(Update, constrain_terminal_time_warp);
+        app.world_mut().spawn((
+            RocketMissionState::PoweredDescent,
+            RocketPhysicsState {
+                dynamics: RocketDynamicsState::new(
+                    DVec3::X * 6_371_000.0,
+                    DVec3::ZERO,
+                    DQuat::IDENTITY,
+                    1_000.0,
+                    DMat3::IDENTITY,
+                    DVec3::ZERO,
+                ),
+            },
+            RocketFlightConditions::default(),
+        ));
+
+        app.update();
+
+        let sim_time = app.world().resource::<SimulationTime>();
+        assert_eq!(sim_time.time_acceleration, SimulationTime::REALTIME);
+        assert_eq!(sim_time.pending_simulation_s(), 0.0);
     }
 }
 

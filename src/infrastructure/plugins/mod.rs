@@ -109,8 +109,8 @@ use crate::infrastructure::bevy_adapters::rocket_hud::{
     spawn_rocket_hud_system, update_rocket_hud_system,
 };
 use crate::infrastructure::bevy_adapters::rocket_lifecycle::{
-    apply_relaunch_requests, handle_relaunch_input_system, handle_rocket_launch_input,
-    RelaunchCommandQueue,
+    apply_relaunch_requests, constrain_terminal_time_warp, handle_relaunch_input_system,
+    handle_rocket_launch_input, RelaunchCommandQueue,
 };
 use crate::infrastructure::bevy_adapters::rocket_orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket_planet::{
@@ -545,6 +545,10 @@ impl Plugin for RocketModePlugin {
 
         // Relaunch input (runs in Update; mutation happens in FixedUpdate).
         app.add_systems(Update, handle_relaunch_input_system.run_if(replay_inactive));
+
+        // This must run before the bounded fixed runner consumes a high-warp
+        // backlog, not one rendered frame later in Update.
+        app.add_systems(First, constrain_terminal_time_warp.after(accrue_time_warp));
 
         // Time acceleration changes shared fixed-tick demand while each physics
         // tick keeps the bounded SimulationTime timestep.

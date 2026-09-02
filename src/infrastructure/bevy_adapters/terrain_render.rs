@@ -30,6 +30,13 @@ const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
+/// A single smooth sea-level shell avoids coupling ocean topology to streamed
+/// terrain parent/child handoffs.
+const OCEAN_LONGITUDE_SEGMENTS: usize = 256;
+const OCEAN_LATITUDE_SEGMENTS: usize = 128;
+/// Keep the visual shell just below mean sea level so coastline vertices do not
+/// z-fight with the opaque terrain surface.
+const OCEAN_SURFACE_OFFSET_M: f64 = 0.25;
 
 /// Cached parents stay visible until every visible descendant has a render
 /// entity. CPU streaming readiness alone is not sufficient: asset creation is
@@ -67,12 +74,21 @@ pub struct TerrainPatchRenderState {
     /// released with a patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
-    water_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
     pub body_to_inertial_at_spawn: DQuat,
     /// Render origin used to bake this mesh's vertices.
     pub render_origin_at_spawn: DVec3,
+}
+
+/// Presentation-only global ocean for the currently streamed planet. Its mesh
+/// is baked through the same f64 render-origin boundary as terrain patches.
+#[derive(Component, Debug, Clone)]
+struct OceanShellRenderState {
+    planet_entity: Entity,
+    mesh_handle: Handle<Mesh>,
+    body_to_inertial_at_spawn: DQuat,
+    render_origin_at_spawn: DVec3,
 }
 
 /// Reusable render assets whose appearance is identical for every terrain
@@ -238,6 +254,7 @@ impl Plugin for TerrainRenderPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_ocean_shell_system,
                     update_patch_transforms,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
@@ -370,7 +387,6 @@ fn spawn_patch_mesh_system(
         let transform = Transform::IDENTITY;
 
         let vegetation = surface.vegetation;
-        let water = surface.water;
         let vegetation_mesh_handle = vegetation
             .as_ref()
             .map(|(mesh, _)| meshes.add(mesh.clone()));
@@ -387,29 +403,6 @@ fn spawn_patch_mesh_system(
                 })
                 .clone()
         });
-        let water_mesh_handle = water.as_ref().map(|water| {
-            meshes.add(sea_level_patch_mesh(
-                geometry,
-                &water.indices,
-                planet.domain_planet.radius_km as f64 * 1_000.0,
-                &render_origin.origin,
-                body_to_inertial,
-            ))
-        });
-        let ocean_material = water_mesh_handle.as_ref().map(|_| {
-            render_assets
-                .ocean_material
-                .get_or_insert_with(|| {
-                    standard_materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.015, 0.11, 0.16),
-                        perceptual_roughness: 0.22,
-                        metallic: 0.05,
-                        ..default()
-                    })
-                })
-                .clone()
-        });
-
         // A departing parent remains the visible fallback until a complete
         // descendant cover has reached the renderer. Spawning each replacement
         // hidden avoids depth fighting while the upload budget spreads that
@@ -436,7 +429,6 @@ fn spawn_patch_mesh_system(
                     material_handle: material_handle.clone(),
                     local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
-                    water_mesh_handle: water_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
                     render_origin_at_spawn: render_origin.origin,
@@ -470,20 +462,6 @@ fn spawn_patch_mesh_system(
                     .with_rotation(body_to_inertial.as_quat()),
                     Name::new(format!(
                         "Vegetation_{:?}_{}_{}_{}",
-                        patch.face, patch.level, patch.tile_x, patch.tile_y
-                    )),
-                ));
-            });
-        }
-        if let (Some(water_mesh_handle), Some(ocean_material)) = (water_mesh_handle, ocean_material)
-        {
-            commands.entity(entity).with_children(|parent| {
-                parent.spawn((
-                    Mesh3d(water_mesh_handle),
-                    MeshMaterial3d(ocean_material),
-                    Transform::IDENTITY,
-                    Name::new(format!(
-                        "OceanSurface_{:?}_{}_{}_{}",
                         patch.face, patch.level, patch.tile_x, patch.tile_y
                     )),
                 ));
@@ -755,9 +733,6 @@ fn release_patch_render_assets(
     if let Some(vegetation_mesh_handle) = &state.vegetation_mesh_handle {
         meshes.remove(vegetation_mesh_handle.id());
     }
-    if let Some(water_mesh_handle) = &state.water_mesh_handle {
-        meshes.remove(water_mesh_handle.id());
-    }
     if let Some((albedo, normal)) = &state.local_surface_handles {
         images.remove(albedo.id());
         images.remove(normal.id());
@@ -845,41 +820,6 @@ fn patch_geometry_to_mesh(
     mesh
 }
 
-/// Build a mean-sea-level mesh from the same patch topology. Terrain geometry
-/// stays the authoritative seabed; this child is presentation-only water.
-fn sea_level_patch_mesh(
-    geometry: &PatchGeometry,
-    indices: &[u32],
-    radius_m: f64,
-    render_origin: &DVec3,
-    body_to_inertial: DQuat,
-) -> Mesh {
-    let grid_vertices = ((geometry.positions.len() + 8) as f64).sqrt() as usize - 2;
-    let positions: Vec<_> = geometry.positions[..grid_vertices]
-        .iter()
-        .map(|position| {
-            let direction = DVec3::from_array(*position).normalize_or_zero();
-            let position = body_to_inertial * (direction * radius_m) - *render_origin;
-            [position.x as f32, position.y as f32, position.z as f32]
-        })
-        .collect();
-    let normals: Vec<_> = geometry.positions[..grid_vertices]
-        .iter()
-        .map(|position| {
-            let normal = body_to_inertial * DVec3::from_array(*position).normalize_or_zero();
-            [normal.x as f32, normal.y as f32, normal.z as f32]
-        })
-        .collect();
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_indices(Indices::U32(indices.to_vec()));
-    mesh
-}
-
 /// Shift only presentation coordinates when the rocket has moved far enough
 /// from the current local origin. Existing terrain mesh vertices stay valid;
 /// their root transforms preserve world placement until regenerated.
@@ -924,16 +864,184 @@ fn update_patch_transforms(
     }
 }
 
+/// Keep the single mean-sea-level ocean in the same planet pose and local render
+/// frame as the streamed terrain. It is deliberately independent of terrain
+/// patch visibility and cache events: land depth-occludes the shell while the
+/// ocean itself cannot overlap during a parent/child handoff.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Ocean lifetime combines the existing terrain renderer's active-planet, asset, and frame authorities."
+)]
+fn sync_ocean_shell_system(
+    mut commands: Commands,
+    streaming: Res<TerrainStreamingResource>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    render_origin: Res<RenderOrigin>,
+    planet_query: Query<&PlanetComponent>,
+    mut ocean_query: Query<(Entity, &mut OceanShellRenderState, &mut Transform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut standard_materials: ResMut<Assets<StandardMaterial>>,
+    mut render_assets: ResMut<TerrainRenderAssets>,
+) {
+    let active_planet = streaming.active_planet();
+    let desired = active_planet.and_then(|planet_entity| {
+        let planet = planet_query.get(planet_entity).ok()?;
+        planet.domain_planet.has_ocean.then_some((
+            planet_entity,
+            planet.domain_planet.radius_km as f64 * 1_000.0 - OCEAN_SURFACE_OFFSET_M,
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)?,
+        ))
+    });
+
+    let mut existing_for_active_planet = false;
+    for (entity, state, mut transform) in ocean_query.iter_mut() {
+        if desired.is_some_and(|(planet_entity, _, _)| state.planet_entity == planet_entity) {
+            let (_, _, orientation) = desired.expect("ocean shell desired above");
+            update_baked_transform(
+                &mut transform,
+                state.body_to_inertial_at_spawn,
+                state.render_origin_at_spawn,
+                orientation,
+                render_origin.origin,
+            );
+            existing_for_active_planet = true;
+            continue;
+        }
+        commands.entity(entity).despawn();
+        meshes.remove(state.mesh_handle.id());
+    }
+
+    let Some((planet_entity, radius_m, orientation)) = desired else {
+        return;
+    };
+    if existing_for_active_planet {
+        return;
+    }
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+    let mesh_handle = meshes.add(ocean_shell_mesh(
+        radius_m,
+        &render_origin.origin,
+        body_to_inertial,
+    ));
+    let material = render_assets
+        .ocean_material
+        .get_or_insert_with(|| {
+            standard_materials.add(StandardMaterial {
+                // Water has no atmospheric shader yet. Unlit albedo prevents the
+                // HDR launch fill from washing a physically dark ocean gray.
+                base_color: Color::srgb(0.012, 0.08, 0.14),
+                perceptual_roughness: 0.2,
+                metallic: 0.0,
+                unlit: true,
+                ..default()
+            })
+        })
+        .clone();
+    commands.spawn((
+        Mesh3d(mesh_handle.clone()),
+        MeshMaterial3d(material),
+        Transform::IDENTITY,
+        OceanShellRenderState {
+            planet_entity,
+            mesh_handle,
+            body_to_inertial_at_spawn: body_to_inertial,
+            render_origin_at_spawn: render_origin.origin,
+        },
+        Name::new("OceanSurface"),
+    ));
+}
+
+/// Build one smooth, mean-sea-level ocean mesh in the body-fixed frame, then
+/// rebase it before converting positions to f32. Terrain remains the sole
+/// source of land and seabed geometry; depth testing reveals this shell only
+/// where terrain lies below sea level.
+fn ocean_shell_mesh(radius_m: f64, render_origin: &DVec3, body_to_inertial: DQuat) -> Mesh {
+    let vertices_per_row = OCEAN_LONGITUDE_SEGMENTS + 1;
+    let vertex_count = vertices_per_row * (OCEAN_LATITUDE_SEGMENTS + 1);
+    let mut positions = Vec::with_capacity(vertex_count);
+    let mut normals = Vec::with_capacity(vertex_count);
+    for latitude_index in 0..=OCEAN_LATITUDE_SEGMENTS {
+        let latitude = -std::f64::consts::FRAC_PI_2
+            + std::f64::consts::PI * latitude_index as f64 / OCEAN_LATITUDE_SEGMENTS as f64;
+        let (sin_latitude, cos_latitude) = latitude.sin_cos();
+        for longitude_index in 0..=OCEAN_LONGITUDE_SEGMENTS {
+            let longitude =
+                std::f64::consts::TAU * longitude_index as f64 / OCEAN_LONGITUDE_SEGMENTS as f64;
+            let (sin_longitude, cos_longitude) = longitude.sin_cos();
+            let body_fixed_normal = DVec3::new(
+                cos_latitude * cos_longitude,
+                sin_latitude,
+                cos_latitude * sin_longitude,
+            );
+            let normal = body_to_inertial * body_fixed_normal;
+            let position = ocean_shell_render_position(
+                body_fixed_normal,
+                radius_m,
+                *render_origin,
+                body_to_inertial,
+            );
+            positions.push([position.x as f32, position.y as f32, position.z as f32]);
+            normals.push([normal.x as f32, normal.y as f32, normal.z as f32]);
+        }
+    }
+    let mut indices = Vec::with_capacity(OCEAN_LONGITUDE_SEGMENTS * OCEAN_LATITUDE_SEGMENTS * 6);
+    for latitude_index in 0..OCEAN_LATITUDE_SEGMENTS {
+        for longitude_index in 0..OCEAN_LONGITUDE_SEGMENTS {
+            let a = latitude_index * vertices_per_row + longitude_index;
+            let b = a + 1;
+            let c = a + vertices_per_row;
+            let d = c + 1;
+            indices
+                .extend_from_slice(&[a as u32, c as u32, b as u32, b as u32, c as u32, d as u32]);
+        }
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+fn ocean_shell_render_position(
+    body_fixed_normal: DVec3,
+    radius_m: f64,
+    render_origin: DVec3,
+    body_to_inertial: DQuat,
+) -> DVec3 {
+    body_to_inertial * (body_fixed_normal * radius_m) - render_origin
+}
+
 fn update_patch_transform(
     transform: &mut Transform,
     state: &TerrainPatchRenderState,
     orientation: &BodyOrientation,
     render_origin: DVec3,
 ) {
-    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
-    let (rotation, translation) = patch_transform_components(
+    update_baked_transform(
+        transform,
         state.body_to_inertial_at_spawn,
         state.render_origin_at_spawn,
+        orientation,
+        render_origin,
+    );
+}
+
+/// Apply the common f64 pose delta to geometry that was baked at an earlier
+/// body orientation and render origin.
+fn update_baked_transform(
+    transform: &mut Transform,
+    body_to_inertial_at_spawn: DQuat,
+    render_origin_at_spawn: DVec3,
+    orientation: &BodyOrientation,
+    render_origin: DVec3,
+) {
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+    let (rotation, translation) = patch_transform_components(
+        body_to_inertial_at_spawn,
+        render_origin_at_spawn,
         body_to_inertial,
         render_origin,
     );
@@ -1014,6 +1122,24 @@ mod tests {
             body_to_inertial_at_spawn * anchor_body_fixed_m - render_origin_at_spawn;
         patch_rotation * (body_to_inertial_at_spawn * body_fixed_offset_m + child_translation)
             + patch_translation
+    }
+
+    #[test]
+    fn ocean_shell_rebases_in_f64_before_the_render_boundary() {
+        let radius_m = 6_371_000.0;
+        let body_fixed_normal = DVec3::X;
+        let body_to_inertial = DQuat::from_rotation_y(0.4);
+        let exact_surface_m = body_to_inertial * (body_fixed_normal * radius_m);
+        let render_origin = exact_surface_m + DVec3::new(12.5, -3.0, 8.0);
+
+        let local = ocean_shell_render_position(
+            body_fixed_normal,
+            radius_m,
+            render_origin,
+            body_to_inertial,
+        );
+
+        assert!(local.abs_diff_eq(DVec3::new(-12.5, 3.0, -8.0), 1e-9));
     }
 
     #[test]
@@ -1221,7 +1347,6 @@ mod tests {
                     material_handle: Handle::default(),
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
-                    water_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
@@ -1249,7 +1374,6 @@ mod tests {
                     material_handle: Handle::default(),
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
-                    water_mesh_handle: None,
                     planet_entity: other_planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
@@ -1512,7 +1636,6 @@ mod tests {
             material_handle: material_handle.clone(),
             local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
-            water_mesh_handle: None,
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,
             render_origin_at_spawn: DVec3::ZERO,

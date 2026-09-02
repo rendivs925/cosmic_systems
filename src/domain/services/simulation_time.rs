@@ -181,6 +181,13 @@ impl SimulationTime {
         self.pending_simulation_s
     }
 
+    /// Explicitly cancel unexecuted warp demand when the flight mode changes to
+    /// a real-time-only regime such as terminal descent. These queued seconds
+    /// have not advanced authoritative state yet.
+    pub fn cancel_pending_simulation(&mut self) {
+        self.pending_simulation_s = 0.0;
+    }
+
     /// Advance the authoritative clock after one completed bounded physics tick.
     pub fn advance_fixed_step(&mut self) {
         if !self.paused {
@@ -413,6 +420,17 @@ mod tests {
         sim.accrue_warp(1.0);
         assert_eq!(sim.pending_simulation_s(), 0.0);
         assert_eq!(sim.take_pending_fixed_steps(), 0);
+    }
+
+    #[test]
+    fn cancelling_unexecuted_warp_preserves_completed_simulation_time() {
+        let mut sim = SimulationTime::new(0.1);
+        sim.accrue_warp(10.0);
+        sim.advance_fixed_step();
+        sim.cancel_pending_simulation();
+
+        assert_eq!(sim.sim_time_s, 0.1);
+        assert_eq!(sim.pending_simulation_s(), 0.0);
     }
 
     #[test]

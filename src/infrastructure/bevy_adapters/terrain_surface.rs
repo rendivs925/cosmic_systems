@@ -67,13 +67,6 @@ pub(crate) struct PreparedPatchSurface {
     pub metallic: f32,
     pub local_surfaces: Option<(Image, Image)>,
     pub vegetation: Option<(Mesh, DVec3)>,
-    pub water: Option<PreparedWaterSurface>,
-}
-
-/// Sea-level triangles for one terrain patch. They are generated with the
-/// patch's worker result and rendered separately from the physical seabed.
-pub(crate) struct PreparedWaterSurface {
-    pub indices: Vec<u32>,
 }
 
 pub(crate) fn prepare_patch_surface(
@@ -157,45 +150,13 @@ pub(crate) fn prepare_patch_surface(
         .then(|| build_vegetation_mesh(source, patch, radius_m, &vegetation_anchor))
         .flatten()
         .map(|mesh| (mesh, vegetation_anchor));
-    let water = build_water_surface(geometry, radius_m);
-
     PreparedPatchSurface {
         vertex_colors,
         roughness: appearance.roughness,
         metallic: appearance.metallic,
         local_surfaces,
         vegetation,
-        water,
     }
-}
-
-/// Emit only fully submerged cells at mean sea level. The physical terrain
-/// remains an irregular seabed below it; this presentation layer prevents that
-/// seabed from being mistaken for the ocean surface while retaining a cheap,
-/// deterministic shoreline approximation at streamed patch resolution.
-fn build_water_surface(geometry: &PatchGeometry, radius_m: f64) -> Option<PreparedWaterSurface> {
-    let resolution = ((geometry.positions.len() + 8) as f64).sqrt() as usize - 2;
-    if resolution < 2 {
-        return None;
-    }
-    let mut indices = Vec::new();
-    for y in 0..resolution - 1 {
-        for x in 0..resolution - 1 {
-            let a = y * resolution + x;
-            let b = a + 1;
-            let c = a + resolution;
-            let d = c + 1;
-            if [a, b, c, d]
-                .into_iter()
-                .all(|index| DVec3::from_array(geometry.positions[index]).length() < radius_m)
-            {
-                indices.extend_from_slice(&[
-                    a as u32, c as u32, b as u32, b as u32, c as u32, d as u32,
-                ]);
-            }
-        }
-    }
-    (!indices.is_empty()).then_some(PreparedWaterSurface { indices })
 }
 
 /// Conservative maximum allocation for one merged vegetation mesh. The

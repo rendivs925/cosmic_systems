@@ -399,6 +399,7 @@ impl FieldFormatters {
         flash_on: bool,
         event_feed: &RocketEventFeed,
         time_acceleration: f64,
+        pending_simulation_s: f64,
     ) -> (String, Color) {
         match field {
             HudField::AltitudeAgl => (
@@ -628,8 +629,11 @@ impl FieldFormatters {
                 };
                 (
                     format!(
-                        "T+: {:.1} s  CAM: {}  TIME ×{}",
-                        telemetry.time_since_liftoff_s, cam_name, time_acceleration
+                        "T+: {:.1} s  CAM: {}  WARP ×{}  QUEUE {:.1}s",
+                        telemetry.time_since_liftoff_s,
+                        cam_name,
+                        time_acceleration,
+                        pending_simulation_s,
                     ),
                     Color::WHITE,
                 )
@@ -739,6 +743,7 @@ pub(crate) fn update_rocket_hud_system(
             flash_on,
             &event_feed,
             sim_time.time_acceleration,
+            sim_time.pending_simulation_s(),
         );
         if text.0 != formatted {
             text.0 = formatted;

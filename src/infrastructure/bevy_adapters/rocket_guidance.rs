@@ -184,13 +184,25 @@ pub fn guidance_system(
         // Get descent guidance config for this body.
         let descent_config = DescentGuidanceConfig::for_body(&planet.domain_planet.name);
 
-        // Check if engines are active for descent phase logic.
-        let has_active_engines = propulsion.active_stage < propulsion.vehicle.stages.len()
-            && propulsion
-                .propellant_remaining_kg
-                .get(propulsion.active_stage)
-                .map(|m| *m > 0.0)
-                .unwrap_or(false);
+        // Descent phase selection must use the same propellant reserve and
+        // engine lifecycle constraints as actuation. A nonzero tank that is
+        // wholly reserved or has terminally depleted engines is not thrust
+        // availability.
+        let has_active_engines = propulsion
+            .propellant_remaining_kg
+            .get(propulsion.active_stage)
+            .zip(propulsion.vehicle.stages.get(propulsion.active_stage))
+            .is_some_and(|(remaining_kg, stage)| {
+                *remaining_kg > stage.recovery_propellant_reserve_kg.unwrap_or(0.0)
+                    && stage_available_thrust_body(
+                        &stage.engines,
+                        1.0,
+                        conditions.ambient_pressure_pa,
+                    )
+                    .0
+                    .length_squared()
+                        > 0.0
+            });
 
         // Guidance constraints use the shared fixed-tick flight conditions.
         let dynamic_pressure_pa = conditions.dynamic_pressure_pa;
@@ -209,6 +221,7 @@ pub fn guidance_system(
             radar_altitude_m,
             surface_relative_speed_mps,
             dynamic_pressure_pa,
+            surface_relative_velocity_mps.dot(up_dir) < -1.0,
             has_active_engines,
             &descent_config,
         )
@@ -217,8 +230,17 @@ pub fn guidance_system(
         // The mission state owns phase handoffs; without this synchronization a
         // descent can remain in an Off/Reentry mode and coast into the ground.
         match (*mission_state, autopilot.mode) {
-            (RocketMissionState::PoweredDescent, AutopilotMode::Off | AutopilotMode::Reentry) => {
+            (
+                RocketMissionState::PoweredDescent,
+                AutopilotMode::Off | AutopilotMode::Reentry | AutopilotMode::Ascent,
+            ) => {
                 autopilot.mode = AutopilotMode::PoweredDescent;
+            }
+            (RocketMissionState::ReentryCorridor, AutopilotMode::Off | AutopilotMode::Ascent) => {
+                autopilot.mode = AutopilotMode::Reentry;
+            }
+            (RocketMissionState::UnpoweredDescent, _) => {
+                autopilot.mode = AutopilotMode::Off;
             }
             (RocketMissionState::Landing, AutopilotMode::PoweredDescent | AutopilotMode::Off) => {
                 autopilot.mode = AutopilotMode::Landing;
