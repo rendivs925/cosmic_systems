@@ -1,0 +1,11 @@
+(
+    dataset: "ETOPO1 Ice Surface",
+    source_url: "https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO1/data/ice_surface/grid_registered/binary/etopo1_ice_g_i2.zip",
+    source_file: "etopo1_ice_g_i2.bin",
+    horizontal_datum: "WGS 84 / EPSG:4326",
+    vertical_datum: "mean sea level / EPSG:5715",
+    source_resolution_arcmin: 1,
+    cube_sphere_resolution: 2048,
+    runtime_asset: "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem",
+    conversion: "signed i16 LE ETOPO1 grid resampled bilinearly onto CubeFace::ALL",
+)

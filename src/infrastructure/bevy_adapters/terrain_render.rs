@@ -4,6 +4,7 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
+use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
@@ -63,6 +64,7 @@ impl MaterialExtension for TerrainSurfaceExtension {
 }
 
 type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
+type GlobalSurfaceMaps = (Option<Handle<Image>>, Option<Handle<Image>>);
 
 /// Component tracking the render state of a terrain patch.
 #[derive(Component, Debug, Clone)]
@@ -98,6 +100,9 @@ struct OceanShellRenderState {
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     ocean_material: Option<Handle<StandardMaterial>>,
+    /// Catalog imagery is shared by every patch of a planet. `StandardMaterial`
+    /// samples these maps with the mesh's geographic UV0 coordinates.
+    global_surface_maps: HashMap<String, GlobalSurfaceMaps>,
     fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
 }
 
@@ -283,6 +288,7 @@ fn spawn_patch_mesh_system(
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
+    asset_server: Res<AssetServer>,
     mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
@@ -360,10 +366,19 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        // Every LOD starts from the shared terrain appearance carried by its
-        // vertex colors. A separate global Earth image conflicts with that
-        // authority at refined patch boundaries.
-        let base_material = patch_material(surface.roughness, surface.metallic);
+        // StandardMaterial samples catalog albedo and emissive imagery through
+        // geographic UV0. UV1 remains reserved for close-range local detail.
+        let (global_albedo, global_emissive) = global_surface_maps(
+            &mut render_assets,
+            &asset_server,
+            &planet.domain_planet.name,
+        );
+        let base_material = patch_material(
+            surface.roughness,
+            surface.metallic,
+            global_albedo,
+            global_emissive,
+        );
         let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
             if let Some((albedo, normal)) = surface.local_surfaces {
                 let albedo = images.add(albedo);
@@ -770,6 +785,24 @@ fn fallback_surface_maps(
         .clone()
 }
 
+fn global_surface_maps(
+    render_assets: &mut TerrainRenderAssets,
+    asset_server: &AssetServer,
+    planet_name: &str,
+) -> (Option<Handle<Image>>, Option<Handle<Image>>) {
+    render_assets
+        .global_surface_maps
+        .entry(planet_name.to_owned())
+        .or_insert_with(|| {
+            let textures = get_planet_textures(planet_name);
+            (
+                load_texture(asset_server, textures.albedo),
+                load_texture(asset_server, textures.emissive),
+            )
+        })
+        .clone()
+}
+
 /// Convert domain PatchGeometry to Bevy Mesh, rebasing planet-centered positions
 /// into the rocket-local flight frame (`positions - render_origin`). This keeps
 /// f32 vertex magnitudes small near the camera, preserving the spherical surface
@@ -927,12 +960,12 @@ fn sync_ocean_shell_system(
         .ocean_material
         .get_or_insert_with(|| {
             standard_materials.add(StandardMaterial {
-                // Water has no atmospheric shader yet. Unlit albedo prevents the
-                // HDR launch fill from washing a physically dark ocean gray.
-                base_color: Color::srgb(0.012, 0.08, 0.14),
-                perceptual_roughness: 0.2,
+                // Keep water in the same sunlight and shadow model as terrain.
+                base_color: Color::srgb(0.008, 0.055, 0.14),
+                perceptual_roughness: 0.12,
                 metallic: 0.0,
-                unlit: true,
+                reflectance: 0.65,
+                unlit: false,
                 ..default()
             })
         })
@@ -1062,13 +1095,23 @@ fn patch_transform_components(
     (rotation, translation)
 }
 
-/// Create the base terrain material. The albedo and normal map are supplied per
-/// patch by `build_patch_surfaces` (set by the caller); this only provides the
-/// representative roughness from the shared `surface_appearance` law (AGENTS.md
-/// 50: one authoritative appearance law).
-fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
+/// Create the base terrain material. StandardMaterial owns global imagery on
+/// UV0, while the extension supplies UV1 local albedo and normal enhancement.
+fn patch_material(
+    roughness: f32,
+    metallic: f32,
+    base_color_texture: Option<Handle<Image>>,
+    emissive_texture: Option<Handle<Image>>,
+) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
+        base_color_texture,
+        emissive_texture: emissive_texture.clone(),
+        emissive: if emissive_texture.is_some() {
+            LinearRgba::WHITE
+        } else {
+            LinearRgba::BLACK
+        },
         perceptual_roughness: roughness,
         metallic,
         unlit: false,
@@ -1279,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn source_appearance_colors_every_terrain_lod_without_macro_texture_modulation() {
+    fn source_appearance_colors_every_terrain_lod_with_both_uv_sets() {
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
@@ -1311,7 +1354,26 @@ mod tests {
             DQuat::IDENTITY,
             &fine.vertex_colors,
         );
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+    }
+
+    #[test]
+    fn terrain_material_binds_earth_catalog_imagery_to_the_standard_uv0_layer() {
+        let textures = get_planet_textures("Earth");
+        assert_eq!(textures.albedo, Some("textures/planets/earth/albedo.png"));
+        assert_eq!(
+            textures.emissive,
+            Some("textures/planets/earth/emissive.png")
+        );
+
+        let mut images = Assets::<Image>::default();
+        let albedo = images.add(Image::default());
+        let emissive = images.add(Image::default());
+        let material = patch_material(0.7, 0.0, Some(albedo.clone()), Some(emissive.clone()));
+
+        assert_eq!(material.base_color_texture, Some(albedo));
+        assert_eq!(material.emissive_texture, Some(emissive));
     }
 
     #[test]

@@ -15,7 +15,11 @@ use bevy::math::DVec3;
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 
-use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
+#[cfg(feature = "dem")]
+use std::path::Path;
+
+#[cfg(feature = "dem")]
+use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -50,9 +54,73 @@ const CONTINENTAL_AMPLITUDE: f64 = 1.1;
 const ROLLING_AMPLITUDE: f64 = 1.4;
 const OROGENY_SCALE: f64 = 0.32;
 
+#[cfg(feature = "dem")]
+const DEFAULT_EARTH_DEM_PATH: &str =
+    "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem";
+
+/// Broad surface classification supplied by the authoritative terrain source.
+/// More detailed material or biome distinctions remain presentation concerns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SurfaceClass {
+    /// The source has no physical land-cover classification.
+    #[default]
+    Unknown,
+    /// Surface lies at or below the source's zero-elevation sea-level datum.
+    Ocean,
+    /// Surface lies above the source's zero-elevation sea-level datum.
+    Land,
+}
+
+/// A coherent terrain sample from the authoritative source.
+///
+/// Heights are meters above mean radius; moisture and river strength are
+/// normalized to `[0, 1]`. The type deliberately excludes a surface normal:
+/// normals require a body radius and remain the responsibility of
+/// `terrain_collision::sample_surface`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerrainSurfaceSample {
+    pub final_height_m: f64,
+    pub moisture: f64,
+    pub river_strength: f64,
+    pub surface_class: SurfaceClass,
+}
+
+impl Default for TerrainSurfaceSample {
+    fn default() -> Self {
+        Self {
+            final_height_m: 0.0,
+            moisture: 0.5,
+            river_strength: 0.0,
+            surface_class: SurfaceClass::Unknown,
+        }
+    }
+}
+
 /// A source of terrain surface heights in meters above the mean radius.
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
+
+    /// Coherent authoritative sample. Existing height and material metadata
+    /// methods remain supported as compatibility accessors.
+    fn surface_sample(&self, latitude_deg: f64, longitude_deg: f64) -> TerrainSurfaceSample {
+        TerrainSurfaceSample {
+            final_height_m: self.height_m(latitude_deg, longitude_deg),
+            moisture: self.moisture(latitude_deg, longitude_deg).clamp(0.0, 1.0),
+            river_strength: self
+                .river_strength(latitude_deg, longitude_deg)
+                .clamp(0.0, 1.0),
+            surface_class: self.surface_class(latitude_deg, longitude_deg),
+        }
+    }
+
+    /// Compatibility classification for sources that only expose elevation.
+    fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
+        if self.height_m(latitude_deg, longitude_deg) <= 0.0 {
+            SurfaceClass::Ocean
+        } else {
+            SurfaceClass::Land
+        }
+    }
 
     /// Presentation height at one cube-sphere LOD. The default is the exact
     /// physical sample. Expensive layered sources may return a deterministic
@@ -285,20 +353,11 @@ impl TerrainSource for LayeredTerrainSource {
         height_m
     }
 
-    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
-        let mut height_m = self
-            .base
-            .source
-            .mesh_height_m(latitude_deg, longitude_deg, patch_level);
-        if let Some(layer) = &self.macro_elevation {
-            height_m += layer
-                .source
-                .mesh_height_m(latitude_deg, longitude_deg, patch_level);
-        }
-        // Fine local relief is represented by the close-range normal map.
-        // Injecting it into LOD-dependent mesh positions breaks shared edge
-        // agreement and aliases sub-cell features into kilometre-scale peaks.
-        height_m
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, _patch_level: u32) -> f64 {
+        // Meshes, collision, and radar altitude share one final physical surface.
+        // The cube-sphere topology already keeps matching source samples aligned
+        // along adjacent patch edges, irrespective of LOD.
+        self.height_m(latitude_deg, longitude_deg)
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
@@ -1050,8 +1109,8 @@ impl TerrainSource for FlatTerrainSource {
 }
 
 /// Earth's one authoritative terrain composition. Rendering and collision use
-/// this same deterministic source; no body-name dispatch or data fallback path
-/// exists at this boundary.
+/// the same deterministic source selected at startup; no runtime download or
+/// per-sample fallback path exists at this boundary.
 #[derive(Debug)]
 pub struct EarthTerrainSource {
     source: Arc<SiteAwareTerrainSource>,
@@ -1059,13 +1118,41 @@ pub struct EarthTerrainSource {
 
 impl EarthTerrainSource {
     pub fn new() -> Self {
-        let procedural = Arc::new(ProceduralTerrainSource::from_config(
+        #[cfg(feature = "dem")]
+        match Self::with_dem_path(DEFAULT_EARTH_DEM_PATH) {
+            Ok(source) => return source,
+            Err(DemError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("Earth DEM configuration is invalid: {error}"),
+        }
+        Self::with_global_elevation(Arc::new(ProceduralTerrainSource::from_config(
             ProceduralTerrainConfig::earth(),
-        ));
-        let eroded = Arc::new(ErodedTerrainSource::new(
-            procedural,
-            ErosionConfig::default(),
-        ));
+        )))
+    }
+
+    /// Construct Earth terrain from a validated local cube-sphere DEM. The
+    /// caller chooses this configuration at startup; sampling itself is pure.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
+        Ok(Self::with_global_elevation(Arc::new(
+            DemTerrainSource::from_path(path)?,
+        )))
+    }
+
+    /// Use a local DEM when it exists, otherwise retain the deterministic
+    /// procedural Earth source. Corrupt or incompatible files are errors rather
+    /// than silently changing terrain authority.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_path_or_procedural(path: impl AsRef<Path>) -> Result<Self, DemError> {
+        match Self::with_dem_path(path) {
+            Ok(source) => Ok(source),
+            Err(DemError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Self::new())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn with_global_elevation(global_elevation: Arc<dyn TerrainSource>) -> Self {
         let detail = Arc::new(LocalDetailTerrainSource::new(
             Arc::new(FlatTerrainSource),
             0xE4A7_D371,
@@ -1073,7 +1160,7 @@ impl EarthTerrainSource {
         let layered = Arc::new(LayeredTerrainSource::new(
             TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0)),
             Some(TerrainElevationLayer::new(
-                eroded,
+                global_elevation,
                 ElevationBounds::new(-10_000.0, 20_000.0),
             )),
             Some(TerrainDetailLayer::new(
@@ -1187,6 +1274,20 @@ mod tests {
         let a = source.height_m(12.34, -45.67);
         let b = source.height_m(12.34, -45.67);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn surface_sample_preserves_legacy_terrain_metadata_defaults() {
+        let source = FlatTerrainSource;
+        assert_eq!(
+            source.surface_sample(0.0, 0.0),
+            TerrainSurfaceSample {
+                final_height_m: 0.0,
+                moisture: 0.5,
+                river_strength: 0.0,
+                surface_class: SurfaceClass::Ocean,
+            }
+        );
     }
 
     #[test]

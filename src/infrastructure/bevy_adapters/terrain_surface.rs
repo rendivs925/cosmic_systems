@@ -76,8 +76,8 @@ pub(crate) fn prepare_patch_surface(
     radius_m: f64,
 ) -> PreparedPatchSurface {
     // Coarse and fine mesh colors both come from the authoritative procedural
-    // surface model. Global imagery is not terrain authority and produced a
-    // separate, visibly conflicting material layer at close range.
+    // surface model. Global imagery supplies macro color on UV0; these local
+    // samples remain the close-range terrain detail and geometry authority.
     // Erosion/hydrology fields are expensive and only visually resolvable with
     // the local material maps. Coarser patches use their deterministic overview
     // appearance instead of baking tile data merely to color distant pixels.

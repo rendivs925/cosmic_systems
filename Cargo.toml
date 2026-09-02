@@ -45,4 +45,10 @@ futures-channel = "0.3"
 
 [features]
 default = ["native"]
-native = []
+native = ["dem"]
+dem = []
+
+[[bin]]
+name = "etopo1_convert"
+path = "src/bin/etopo1_convert.rs"
+required-features = ["dem"]

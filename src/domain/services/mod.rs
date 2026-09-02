@@ -5,6 +5,8 @@ pub mod body_orientation;
 pub mod control;
 pub mod craft_physics;
 pub mod cube_sphere;
+#[cfg(feature = "dem")]
+pub mod dem_terrain_source;
 pub mod entry_physics;
 pub mod ephemeris;
 pub mod erosion;

@@ -28,12 +28,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // Every LOD starts from the same source-derived vertex appearance. This map
-    // only increases its sampling density and never affects geometry or collision.
+    // StandardMaterial has already sampled global albedo and emissive imagery
+    // with UV0. Keep UV1 source-derived detail as a close-range enhancement.
     pbr_input.material.base_color = mix(
         pbr_input.material.base_color,
         local_albedo,
-        detail_weight * 0.88,
+        detail_weight * 0.25,
     );
 
     let local_surface = textureSample(
