@@ -686,7 +686,10 @@ fn build_patch_geometry_with_height_sampler(
 ) -> PatchGeometry {
     // Sample in planet-tangent coordinates, rather than patch UV space, so
     // shared vertices retain an identical normal across LOD and cube faces.
-    const NORMAL_SAMPLE_DISTANCE_M: f64 = 50.0;
+    // A global footprint keeps shared normals identical across cube faces and
+    // LOD transitions while filtering sub-cell micro relief out of macro mesh
+    // lighting. Fine patches recover small-scale grain through their normal map.
+    const NORMAL_SAMPLE_DISTANCE_M: f64 = 250.0;
 
     let res = resolution.max(2) as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
@@ -1220,6 +1223,46 @@ mod tests {
                 parent_geometry.normals[parent_index], child_geometry.normals[child_index],
                 "shared parent/child edge vertex has mismatched lighting normal"
             );
+        }
+    }
+
+    #[test]
+    fn root_face_shared_vertices_have_matching_normals() {
+        let source = source();
+        let faces = [
+            CubeFace::PosX,
+            CubeFace::NegX,
+            CubeFace::PosY,
+            CubeFace::NegY,
+            CubeFace::PosZ,
+            CubeFace::NegZ,
+        ];
+        let geometries = faces
+            .into_iter()
+            .map(|face| {
+                build_patch_geometry(&TerrainPatch::root(face), &source, 6_371_000.0, 5, 40.0)
+            })
+            .collect::<Vec<_>>();
+
+        for (index, geometry) in geometries.iter().enumerate() {
+            for (position, normal) in geometry.positions.iter().zip(&geometry.normals) {
+                let position = DVec3::from_array(*position);
+                let normal = DVec3::from_array(*normal);
+                assert!(normal.is_finite());
+                assert!((normal.length() - 1.0).abs() < 1e-12);
+                assert!(normal.dot(position) > 0.0);
+                for other in geometries.iter().skip(index + 1) {
+                    for (other_position, other_normal) in other.positions.iter().zip(&other.normals)
+                    {
+                        if position.distance(DVec3::from_array(*other_position)) < 1e-9 {
+                            assert!(
+                                normal.distance(DVec3::from_array(*other_normal)) < 1e-12,
+                                "shared cube-face vertex has mismatched lighting normal"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

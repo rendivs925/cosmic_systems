@@ -1312,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn source_appearance_colors_every_terrain_lod_with_both_uv_sets() {
+    fn earth_albedo_owns_every_terrain_lod_with_both_uv_sets() {
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
@@ -1326,7 +1326,7 @@ mod tests {
         );
         let fine = crate::infrastructure::bevy_adapters::terrain_surface::prepare_patch_surface(
             &source,
-            &TerrainPatch::for_direction(DVec3::Z, 8),
+            &TerrainPatch::for_direction(DVec3::Z, 12),
             &geometry,
             6_371_000.0,
         );
@@ -1334,8 +1334,9 @@ mod tests {
         assert!(coarse
             .vertex_colors
             .iter()
-            .any(|color| *color != [1.0, 1.0, 1.0, 1.0]));
+            .all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
         assert_eq!(coarse.vertex_colors, fine.vertex_colors);
+        assert!(fine.local_surfaces.is_some());
         assert_eq!(geometry.uvs.len(), geometry.local_uvs.len());
 
         let mesh = patch_geometry_to_mesh(

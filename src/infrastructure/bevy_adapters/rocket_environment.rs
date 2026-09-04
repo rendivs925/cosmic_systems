@@ -1,8 +1,10 @@
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
+use crate::components::rocket::{RocketFlightConditions, RocketPhysicsState};
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
 /// Spawns a directional sunlight source. The Sun's inertial direction comes
@@ -60,7 +62,7 @@ pub fn setup_rocket_sun_light(
 pub fn update_rocket_sky_ambient_light(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    rocket_query: Query<&crate::components::rocket::RocketPhysicsState>,
+    rocket_query: Query<&RocketPhysicsState>,
     mut ambient: ResMut<AmbientLight>,
 ) {
     let Some(sun_direction) = bound_planet
@@ -73,29 +75,63 @@ pub fn update_rocket_sky_ambient_light(
     let Some(rocket) = rocket_query.iter().next() else {
         return;
     };
-    let surface_normal = rocket.dynamics.position_m.normalize_or_zero();
-    let daylight = ((surface_normal.dot(sun_direction) + 0.12) / 0.32).clamp(0.0, 1.0);
-    let daylight = daylight * daylight * (3.0 - 2.0 * daylight);
+    let daylight = local_daylight(rocket.dynamics.position_m, sun_direction);
     ambient.color = Color::srgb(0.56, 0.68, 0.82);
     // 35 cd/m² is a restrained sky contribution beside 127 klux direct sun;
     // the 0.02 cd/m² floor preserves a genuinely dark night side.
-    ambient.brightness = 0.02 + daylight as f32 * 34.98;
+    ambient.brightness = 0.02 + daylight * 34.98;
 }
 
 /// Tag component marking the sun directional light for day/night rotation.
 #[derive(Component, Debug)]
 pub struct SunLight;
 
-/// Space is the clear color. Atmospheric haze is applied only to local geometry
-/// through the camera fog; it must never turn the entire universe blue.
+/// Initialize rocket rendering with space-black until the first atmosphere
+/// update evaluates the rocket's authoritative altitude and solar geometry.
 pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
     *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
 }
 
-/// Kept as an update hook so future atmospheric scattering can drive a local
-/// sky pass. ClearColor deliberately remains space-black at every altitude.
-pub fn update_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
-    *clear_color = ClearColor(Color::srgb(0.002, 0.002, 0.006));
+/// Approximate local atmospheric presentation from the same flight conditions
+/// and ephemeris Sun as terrain lighting. It fades to space by 100 km and does
+/// not alter any atmospheric physics or the solar direction.
+pub fn update_rocket_sky_color(
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    bound_planet: Res<RocketBoundPlanet>,
+    rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions)>,
+    mut clear_color: ResMut<ClearColor>,
+    mut fog_query: Query<&mut DistanceFog, With<Camera3d>>,
+) {
+    let Some(sun_direction) = bound_planet
+        .0
+        .as_deref()
+        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
+    else {
+        return;
+    };
+    let Some((rocket, conditions)) = rocket_query.iter().next() else {
+        return;
+    };
+    let daylight = local_daylight(rocket.dynamics.position_m, sun_direction);
+    let atmosphere = (1.0 - conditions.altitude_m as f32 / 100_000.0).clamp(0.0, 1.0);
+    let sky = daylight * atmosphere;
+    *clear_color = ClearColor(Color::srgb(
+        0.002 + 0.3 * sky,
+        0.002 + 0.52 * sky,
+        0.006 + 0.79 * sky,
+    ));
+
+    let visibility_m = 25_000.0 / atmosphere.max(0.025);
+    for mut fog in fog_query.iter_mut() {
+        fog.color = Color::srgba(0.52, 0.68, 0.9, sky);
+        fog.falloff = FogFalloff::from_visibility(visibility_m);
+    }
+}
+
+fn local_daylight(rocket_position_m: bevy::math::DVec3, sun_direction: bevy::math::DVec3) -> f32 {
+    let surface_normal = rocket_position_m.normalize_or_zero();
+    let daylight = ((surface_normal.dot(sun_direction) + 0.12) / 0.32).clamp(0.0, 1.0);
+    (daylight * daylight * (3.0 - 2.0 * daylight)) as f32
 }
 
 /// Updates rocket-mode sunlight from the same ephemeris state used by the Sun
@@ -166,5 +202,11 @@ mod tests {
             sun_direction_for_bound_planet(&snapshot, "Earth"),
             Some(-DVec3::X)
         );
+    }
+
+    #[test]
+    fn local_sky_presentation_follows_the_ephemeris_day_night_boundary() {
+        assert_eq!(local_daylight(DVec3::X, DVec3::X), 1.0);
+        assert_eq!(local_daylight(DVec3::X, -DVec3::X), 0.0);
     }
 }

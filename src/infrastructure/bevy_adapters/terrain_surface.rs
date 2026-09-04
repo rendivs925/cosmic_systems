@@ -79,46 +79,11 @@ pub(crate) fn prepare_patch_surface(
     geometry: &PatchGeometry,
     radius_m: f64,
 ) -> PreparedPatchSurface {
-    // Coarse and fine mesh colors both come from the authoritative procedural
-    // surface model. Global imagery supplies macro color on UV0; these local
-    // samples remain the close-range terrain detail and geometry authority.
-    // Erosion/hydrology fields are expensive and only visually resolvable with
-    // the local material maps. Coarser patches use their deterministic overview
-    // appearance instead of baking tile data merely to color distant pixels.
+    // Global Earth albedo is the macro terrain color at every LOD. Fine patches
+    // add one local modulation map; vertex colors must stay neutral so Bevy's
+    // StandardMaterial path cannot multiply the same biome signal twice.
     let uses_erosion_surface_data = supports_local_surfaces(patch.level);
-    let vertex_colors = geometry
-        .positions
-        .iter()
-        .map(|position| {
-            let position = DVec3::from_array(*position);
-            let (lat, lon) = direction_to_lat_lon(position);
-            let moisture = if uses_erosion_surface_data {
-                source.moisture(lat, lon)
-            } else {
-                source.overview_moisture(lat, lon)
-            };
-            let slope_deg = if uses_erosion_surface_data {
-                slope_deg_at(source, lat, lon)
-            } else {
-                source.overview_slope_deg(lat, lon)
-            };
-            let river_strength = if uses_erosion_surface_data {
-                source.river_strength(lat, lon)
-            } else {
-                0.0
-            };
-            let appearance = with_river_appearance(
-                surface_appearance(
-                    position.length() - radius_m,
-                    moisture,
-                    source.zone_lat(lat),
-                    slope_deg,
-                ),
-                river_strength,
-            );
-            terrain_albedo_modulation(appearance)
-        })
-        .collect();
+    let vertex_colors = vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()];
 
     let center = patch.center_direction();
     let (lat, lon) = direction_to_lat_lon(center);
@@ -181,10 +146,9 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
 /// finest ~10 km Earth tiles this retains material detail below 80 m per texel
 /// without changing authoritative geometry or collision sampling.
 const SURFACE_TEX_RES: u32 = 128;
-/// Blend toward the 128x128 authoritative source normal. The remainder comes
-/// from the 33x33 patch mesh already present at the fragment, so this encodes
-/// only detail the mesh cannot represent.
-const NORMAL_DETAIL_WEIGHT: f64 = 0.75;
+/// Blend a restrained amount of source micro-normal into the rendered mesh
+/// normal. Macro slopes remain in mesh geometry; this map only adds grain.
+const NORMAL_DETAIL_WEIGHT: f64 = 0.2;
 
 /// Deterministic pseudo-noise used only to vary scatter silhouettes. Terrain
 /// color comes exclusively from the shared `surface_appearance` authority.
@@ -317,13 +281,13 @@ pub fn build_patch_surfaces(
     (albedo_img, normal_img)
 }
 
-/// Convert the procedural material signal into a restrained linear multiplier
-/// for the Earth albedo. The same values are used for vertex colors at all LODs
-/// and close-range local maps, preventing a color identity change on refinement.
+/// Convert procedural biome data into a restrained linear darkening multiplier
+/// for the Earth albedo. Keeping the range within UNorm avoids clipped local
+/// texture data and leaves catalog imagery as the dominant terrain appearance.
 fn terrain_albedo_modulation(
     appearance: crate::domain::services::terrain_source::SurfaceAppearance,
 ) -> [f32; 4] {
-    let map_channel = |channel: f32| (0.72 + channel.clamp(0.0, 1.0) * 1.15).clamp(0.72, 1.35);
+    let map_channel = |channel: f32| 0.86 + channel.clamp(0.0, 1.0) * 0.14;
     [
         map_channel(appearance.albedo[0]),
         map_channel(appearance.albedo[1]),
@@ -796,12 +760,12 @@ mod tests {
     }
 
     #[test]
-    fn terrain_modulation_preserves_global_albedo_identity() {
+    fn terrain_modulation_is_subtle_and_representable_as_unorm() {
         let grass = terrain_albedo_modulation(surface_appearance(300.0, 0.6, 0.5, 5.0));
         let rock = terrain_albedo_modulation(surface_appearance(1_500.0, 0.4, 0.5, 60.0));
 
         for channel in grass.into_iter().chain(rock) {
-            assert!((0.72..=1.35).contains(&channel));
+            assert!((0.86..=1.0).contains(&channel));
         }
         assert!(grass[1] > grass[0]);
         assert!(rock[0] > grass[0]);
@@ -881,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn source_appearance_is_identical_across_an_adjacent_lod_boundary() {
+    fn vertex_color_is_neutral_across_an_adjacent_lod_boundary() {
         use crate::domain::services::cube_sphere::CubeFace;
 
         let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);

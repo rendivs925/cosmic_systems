@@ -6,6 +6,7 @@ use crate::infrastructure::bevy_adapters::rocket_presentation::render_dynamics_s
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::{Quat, Vec3};
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
 /// Adds RocketCameraController to the existing camera entity so the rocket
@@ -79,9 +80,17 @@ pub fn setup_rocket_camera_and_origin(
         // meshes that pass CPU visibility (rocket, pad primitives) silently
         // drop out of the indirect-draw path on this driver. Drawing directly
         // keeps every visible mesh on screen.
-        commands
-            .entity(entity)
-            .insert(bevy::render::view::NoIndirectDrawing);
+        commands.entity(entity).insert((
+            bevy::render::view::NoIndirectDrawing,
+            // Presentation-only low-altitude haze makes the distant
+            // terrain recede naturally without changing surface lighting.
+            DistanceFog {
+                color: Color::srgba(0.52, 0.68, 0.9, 1.0),
+                directional_light_color: Color::srgb(1.0, 0.94, 0.8),
+                directional_light_exponent: 8.0,
+                falloff: FogFalloff::from_visibility(25_000.0),
+            },
+        ));
     }
 }
 
