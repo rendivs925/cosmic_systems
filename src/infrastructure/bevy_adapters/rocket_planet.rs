@@ -28,6 +28,7 @@ use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
+use bevy::light::NotShadowCaster;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -40,8 +41,6 @@ pub struct RocketSunDisc;
 const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
 const SUN_RADIUS_M: f64 = 696_340_000.0;
 const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
-/// The far-field globe stays beneath streamed terrain and ocean near the rocket.
-const EARTH_FAR_FIELD_BASE_INSET_M: f64 = 2_000.0;
 const EARTH_CLOUD_SHELL_ALTITUDE_M: f64 = 12_000.0;
 
 /// Component marking a moon entity managed by the rocket planet system.
@@ -51,13 +50,10 @@ pub struct RocketMoon {
     pub parent_planet: String,
 }
 
-/// Marks one of the two presentation-only Earth shells. These are not celestial
-/// simulation entities; they fill the horizon outside the streamed terrain cover.
+/// Marks the presentation-only Earth cloud shell. It is not a celestial
+/// simulation entity or terrain authority.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RocketFarFieldEarthShell {
-    Base,
-    Clouds,
-}
+pub struct RocketFarFieldEarthClouds;
 
 /// Resource storing the bound planet name for quick lookup.
 #[derive(Resource, Debug, Default)]
@@ -87,9 +83,8 @@ pub fn isolate_rocket_presentation(
 
 /// Startup system: spawn moons and the Sun in flight units.
 ///
-/// The streamed terrain renderer owns the close planet surface. Earth also gets
-/// one low-resolution, flight-frame base shell and cloud shell for the horizon;
-/// neither is a simulation entity or terrain authority.
+/// The streamed terrain renderer owns Earth's visible surface. Earth retains a
+/// flight-frame cloud shell for horizon detail, without a second opaque globe.
 #[expect(
     clippy::too_many_arguments,
     reason = "Rocket startup reuses the shared bound-planet, asset, and presentation resources."
@@ -115,7 +110,7 @@ pub fn setup_rocket_planets(
             .iter()
             .find(|planet| planet.domain_planet.name == planet_name)
         {
-            spawn_rocket_far_field_earth_shells(
+            spawn_rocket_far_field_earth_clouds(
                 &mut commands,
                 &mut meshes,
                 &mut materials,
@@ -145,41 +140,13 @@ pub fn setup_rocket_planets(
     );
 }
 
-fn spawn_rocket_far_field_earth_shells(
+fn spawn_rocket_far_field_earth_clouds(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
     earth_radius_m: f64,
 ) {
-    let textures = get_planet_textures("Earth");
-    let albedo = load_texture(asset_server, textures.albedo);
-    let emissive = load_texture(asset_server, textures.emissive);
-    let base_material = materials.add(create_planet_material(PlanetMaterialConfig {
-        base_color_texture: albedo.clone(),
-        normal_map_texture: None,
-        emissive_texture: emissive.clone(),
-        base_color: Color::WHITE,
-        emissive: if emissive.is_some() {
-            LinearRgba::WHITE
-        } else {
-            LinearRgba::BLACK
-        },
-        unlit: false,
-        metallic: 0.0,
-        reflectance: 0.45,
-        perceptual_roughness: 0.82,
-    }));
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(
-            (earth_radius_m - EARTH_FAR_FIELD_BASE_INSET_M) as f32,
-        ))),
-        MeshMaterial3d(base_material),
-        Transform::IDENTITY,
-        RocketFarFieldEarthShell::Base,
-        Name::new("RocketFarFieldEarthBase"),
-    ));
-
     let Some(clouds) = get_cloud_layer_config("Earth") else {
         return;
     };
@@ -193,7 +160,8 @@ fn spawn_rocket_far_field_earth_shells(
         ))),
         MeshMaterial3d(cloud_material),
         Transform::IDENTITY,
-        RocketFarFieldEarthShell::Clouds,
+        NotShadowCaster,
+        RocketFarFieldEarthClouds,
         Name::new("RocketFarFieldEarthClouds"),
     ));
 }
@@ -311,9 +279,9 @@ pub fn update_rocket_planets(
     rocket_query: Query<(), With<RocketPhysicsState>>,
     planet_query: Query<&PlanetComponent, Without<RocketMoon>>,
     mut moon_query: Query<(&RocketMoon, &mut Transform)>,
-    mut earth_shell_query: Query<
+    mut earth_cloud_query: Query<
         &mut Transform,
-        (With<RocketFarFieldEarthShell>, Without<RocketMoon>),
+        (With<RocketFarFieldEarthClouds>, Without<RocketMoon>),
     >,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
@@ -336,8 +304,8 @@ pub fn update_rocket_planets(
     if bound_planet_name == "Earth" {
         if let Some(orientation) = ephemeris_snapshot.orientation(bound_body) {
             let transform = bound_planet_flight_transform(&render_origin, orientation);
-            for mut shell_transform in &mut earth_shell_query {
-                *shell_transform = transform;
+            for mut cloud_transform in &mut earth_cloud_query {
+                *cloud_transform = transform;
             }
         }
     }
@@ -567,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn far_field_earth_shell_attaches_to_the_bound_body_pose_and_render_origin() {
+    fn rocket_cloud_shell_attaches_to_the_bound_body_pose_and_render_origin() {
         let epoch = TdbEpoch::j2000();
         let orientation = earth_orientation(epoch);
         let origin = RenderOrigin {
