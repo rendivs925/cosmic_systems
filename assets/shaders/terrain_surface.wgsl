@@ -18,8 +18,8 @@ struct TerrainSurfaceExtension {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    // Tile-local data fades into the same source-derived vertex appearance at
-    // its boundary, so refined leaves transition continuously into coarser LOD.
+    // Tile-local material modulation fades to neutral at each boundary, so
+    // refined leaves retain the same global Earth albedo as their parent.
     let edge_distance = min(min(in.uv_b.x, 1.0 - in.uv_b.x), min(in.uv_b.y, 1.0 - in.uv_b.y));
     let edge_fade = smoothstep(0.02, 0.08, edge_distance);
     let detail_weight = terrain_surface.local_detail_weight * edge_fade;
@@ -28,12 +28,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // StandardMaterial has already sampled global albedo and emissive imagery
-    // with UV0. Keep UV1 source-derived detail as a close-range enhancement.
-    pbr_input.material.base_color = mix(
-        pbr_input.material.base_color,
-        local_albedo,
-        detail_weight * 0.25,
+    // StandardMaterial has already sampled global Earth albedo with UV0. The
+    // local map is a linear, source-derived multiplier, never a replacement;
+    // this preserves continental geography at every terrain LOD.
+    pbr_input.material.base_color = vec4(
+        pbr_input.material.base_color.rgb * mix(
+            vec3<f32>(1.0),
+            local_albedo.rgb,
+            detail_weight,
+        ),
+        pbr_input.material.base_color.a,
     );
 
     let local_surface = textureSample(

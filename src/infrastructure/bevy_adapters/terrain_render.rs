@@ -64,7 +64,7 @@ impl MaterialExtension for TerrainSurfaceExtension {
 }
 
 type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
-type GlobalSurfaceMaps = (Option<Handle<Image>>, Option<Handle<Image>>);
+type GlobalSurfaceMaps = Option<Handle<Image>>;
 
 /// Component tracking the render state of a terrain patch.
 #[derive(Component, Debug, Clone)]
@@ -366,19 +366,16 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        // StandardMaterial samples catalog albedo and emissive imagery through
-        // geographic UV0. UV1 remains reserved for close-range local detail.
-        let (global_albedo, global_emissive) = global_surface_maps(
+        // StandardMaterial samples catalog albedo through geographic UV0. UV1
+        // remains reserved for close-range material modulation. City-light
+        // imagery is intentionally not emissive terrain: it would make land
+        // self-illuminate in daylight and defeat physical day/night shading.
+        let global_albedo = global_surface_maps(
             &mut render_assets,
             &asset_server,
             &planet.domain_planet.name,
         );
-        let base_material = patch_material(
-            surface.roughness,
-            surface.metallic,
-            global_albedo,
-            global_emissive,
-        );
+        let base_material = patch_material(surface.roughness, surface.metallic, global_albedo);
         let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
             if let Some((albedo, normal)) = surface.local_surfaces {
                 let albedo = images.add(albedo);
@@ -413,6 +410,9 @@ fn spawn_patch_mesh_system(
                         base_color: Color::WHITE,
                         perceptual_roughness: 0.9,
                         metallic: 0.0,
+                        // Low-poly foliage and blades must be visible from both
+                        // sides; Bevy flips normals for the back face in PBR.
+                        cull_mode: None,
                         ..default()
                     })
                 })
@@ -789,16 +789,13 @@ fn global_surface_maps(
     render_assets: &mut TerrainRenderAssets,
     asset_server: &AssetServer,
     planet_name: &str,
-) -> (Option<Handle<Image>>, Option<Handle<Image>>) {
+) -> Option<Handle<Image>> {
     render_assets
         .global_surface_maps
         .entry(planet_name.to_owned())
         .or_insert_with(|| {
             let textures = get_planet_textures(planet_name);
-            (
-                load_texture(asset_server, textures.albedo),
-                load_texture(asset_server, textures.emissive),
-            )
+            load_texture(asset_server, textures.albedo)
         })
         .clone()
 }
@@ -1101,17 +1098,10 @@ fn patch_material(
     roughness: f32,
     metallic: f32,
     base_color_texture: Option<Handle<Image>>,
-    emissive_texture: Option<Handle<Image>>,
 ) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture,
-        emissive_texture: emissive_texture.clone(),
-        emissive: if emissive_texture.is_some() {
-            LinearRgba::WHITE
-        } else {
-            LinearRgba::BLACK
-        },
         perceptual_roughness: roughness,
         metallic,
         unlit: false,
@@ -1359,21 +1349,17 @@ mod tests {
     }
 
     #[test]
-    fn terrain_material_binds_earth_catalog_imagery_to_the_standard_uv0_layer() {
+    fn terrain_material_binds_earth_albedo_without_self_illuminating_land() {
         let textures = get_planet_textures("Earth");
         assert_eq!(textures.albedo, Some("textures/planets/earth/albedo.png"));
-        assert_eq!(
-            textures.emissive,
-            Some("textures/planets/earth/emissive.png")
-        );
 
         let mut images = Assets::<Image>::default();
         let albedo = images.add(Image::default());
-        let emissive = images.add(Image::default());
-        let material = patch_material(0.7, 0.0, Some(albedo.clone()), Some(emissive.clone()));
+        let material = patch_material(0.7, 0.0, Some(albedo.clone()));
 
         assert_eq!(material.base_color_texture, Some(albedo));
-        assert_eq!(material.emissive_texture, Some(emissive));
+        assert!(material.emissive_texture.is_none());
+        assert_eq!(material.emissive, LinearRgba::BLACK);
     }
 
     #[test]

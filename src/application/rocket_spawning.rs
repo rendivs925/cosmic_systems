@@ -68,9 +68,10 @@ pub fn spawn_rockets(
     // Slightly lower base value + higher roughness to prevent blowout under
     // 100 klx sun + sky ambient.
     let material = StandardMaterial {
-        base_color: Color::srgb(0.78, 0.78, 0.8),
+        base_color: Color::srgb(0.9, 0.9, 0.92),
         metallic: 0.05,
-        perceptual_roughness: 0.6,
+        perceptual_roughness: 0.52,
+        reflectance: 0.45,
         ..default()
     };
     let material_handle = materials.add(material);
@@ -287,14 +288,15 @@ fn spawn_procedural_launch_pad(
     rocket_diameter_m: f32,
 ) {
     let concrete = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.12, 0.13, 0.14),
+        base_color: Color::srgb(0.24, 0.25, 0.25),
         perceptual_roughness: 0.9,
         ..default()
     });
     let steel = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.16, 0.18, 0.2),
-        metallic: 0.8,
-        perceptual_roughness: 0.38,
+        base_color: Color::srgb(0.28, 0.31, 0.34),
+        metallic: 0.35,
+        perceptual_roughness: 0.48,
+        reflectance: 0.5,
         ..default()
     });
     let tower_height_m = rocket_height_m * 0.82;

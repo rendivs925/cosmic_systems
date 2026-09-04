@@ -95,8 +95,8 @@ use crate::infrastructure::bevy_adapters::rocket_entry::{
     compute_retro_propulsion, initialize_thermal_protection,
 };
 use crate::infrastructure::bevy_adapters::rocket_environment::{
-    setup_rocket_sky_color, setup_rocket_sun_light, update_rocket_sky_color,
-    update_sun_day_night_cycle,
+    setup_rocket_sky_color, setup_rocket_sun_light, update_rocket_sky_ambient_light,
+    update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket_flight_conditions::refresh_flight_conditions;
 use crate::infrastructure::bevy_adapters::rocket_gravity_orbit::{
@@ -733,7 +733,10 @@ impl Plugin for RocketModePlugin {
             update_rocket_sun_disc.after(update_rocket_camera_projection),
         );
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
-        app.add_systems(Update, update_sun_day_night_cycle);
+        app.add_systems(
+            Update,
+            (update_sun_day_night_cycle, update_rocket_sky_ambient_light).chain(),
+        );
     }
 }
 

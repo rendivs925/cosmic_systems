@@ -17,6 +17,7 @@
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
+use crate::domain::services::terrain_collision::surface_normal;
 use crate::domain::services::terrain_source::{
     slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -30,6 +31,9 @@ use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 /// Maximum scatter counts for a level-12 patch. Finer leaves scale their count
 /// by patch area so refinement preserves density rather than multiplying it.
 const TREE_COUNT: usize = 64;
+/// A bounded carpet of crossed blades makes close vegetation read as grass
+/// without adding entities or unique materials.
+const GRASS_CLUMP_COUNT: usize = 512;
 const ROCK_COUNT: usize = 14;
 const TRUNK_SEGMENTS: usize = 6;
 const FOLIAGE_SEGMENTS: usize = 7;
@@ -112,12 +116,7 @@ pub(crate) fn prepare_patch_surface(
                 ),
                 river_strength,
             );
-            [
-                appearance.albedo[0],
-                appearance.albedo[1],
-                appearance.albedo[2],
-                1.0,
-            ]
+            terrain_albedo_modulation(appearance)
         })
         .collect();
 
@@ -167,8 +166,14 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
     let tree_indices = TRUNK_SEGMENTS * 6 + FOLIAGE_SEGMENTS * 6;
     let boulder_vertices = (BOULDER_RINGS + 1) * BOULDER_SEGMENTS;
     let boulder_indices = BOULDER_RINGS * BOULDER_SEGMENTS * 6;
-    let vertices = TREE_COUNT * tree_vertices + ROCK_COUNT * boulder_vertices;
-    let indices = TREE_COUNT * tree_indices + ROCK_COUNT * boulder_indices;
+    let grass_vertices = 6;
+    let grass_indices = 6;
+    let vertices = TREE_COUNT * tree_vertices
+        + ROCK_COUNT * boulder_vertices
+        + GRASS_CLUMP_COUNT * grass_vertices;
+    let indices = TREE_COUNT * tree_indices
+        + ROCK_COUNT * boulder_indices
+        + GRASS_CLUMP_COUNT * grass_indices;
     vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
 };
 
@@ -246,12 +251,10 @@ pub fn build_patch_surfaces(
                 source.river_strength(la, lo),
             );
 
-            // `SurfaceAppearance::albedo` is linear reflectance. Keeping this
-            // map linear makes it agree with the shader-linear vertex color
-            // path and avoids a latitude/longitude hash seam at the dateline.
-            let r = appearance.albedo[0].clamp(0.0, 1.0);
-            let g = appearance.albedo[1].clamp(0.0, 1.0);
-            let b = appearance.albedo[2].clamp(0.0, 1.0);
+            // The global catalog albedo owns macro geography. Local samples
+            // encode only a bounded linear material modulation, so local detail
+            // enriches that imagery instead of replacing it with procedural tan.
+            let [r, g, b, _] = terrain_albedo_modulation(appearance);
             albedo.extend_from_slice(&[
                 (r * 255.0) as u8,
                 (g * 255.0) as u8,
@@ -312,6 +315,21 @@ pub fn build_patch_surfaces(
     albedo_img.sampler = sampler.clone();
     normal_img.sampler = sampler;
     (albedo_img, normal_img)
+}
+
+/// Convert the procedural material signal into a restrained linear multiplier
+/// for the Earth albedo. The same values are used for vertex colors at all LODs
+/// and close-range local maps, preventing a color identity change on refinement.
+fn terrain_albedo_modulation(
+    appearance: crate::domain::services::terrain_source::SurfaceAppearance,
+) -> [f32; 4] {
+    let map_channel = |channel: f32| (0.72 + channel.clamp(0.0, 1.0) * 1.15).clamp(0.72, 1.35);
+    [
+        map_channel(appearance.albedo[0]),
+        map_channel(appearance.albedo[1]),
+        map_channel(appearance.albedo[2]),
+        1.0,
+    ]
 }
 
 fn grid_tangents(points: &[DVec3], resolution: usize, i: usize, j: usize) -> (DVec3, DVec3) {
@@ -488,6 +506,37 @@ impl MeshAccum {
         }
     }
 
+    fn push_grass_clump(
+        &mut self,
+        base: DVec3,
+        up: DVec3,
+        width_m: f64,
+        height_m: f64,
+        rotation_rad: f64,
+        color: [f32; 3],
+    ) {
+        let reference = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
+        let tangent = up.cross(reference).normalize();
+        let bitangent = up.cross(tangent).normalize();
+        for angle in [rotation_rad, rotation_rad + std::f64::consts::FRAC_PI_2] {
+            let across = tangent * angle.cos() + bitangent * angle.sin();
+            let start = self.positions.len() as u32;
+            let left = base - across * width_m * 0.5;
+            let right = base + across * width_m * 0.5;
+            let tip = base + up * height_m;
+            let normal = across.cross(up).normalize();
+            for point in [left, right, tip] {
+                self.positions
+                    .push([point.x as f32, point.y as f32, point.z as f32]);
+                self.normals
+                    .push([normal.x as f32, normal.y as f32, normal.z as f32]);
+                self.colors.push([color[0], color[1], color[2], 1.0]);
+            }
+            self.indices
+                .extend_from_slice(&[start, start + 1, start + 2]);
+        }
+    }
+
     fn into_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -574,8 +623,8 @@ pub fn build_vegetation_mesh(
             continue;
         }
         let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
-        let up = dir; // radial up (terrain normal ~ radial for gentle slopes)
-                      // Vary tree size a little.
+        let up = surface_normal(source, lat, lon, radius_m);
+        // Vary tree size a little.
         let scale = 0.7 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.9;
         let trunk_h = 2.2 * scale;
         let trunk_r = 0.18 * scale;
@@ -583,11 +632,11 @@ pub fn build_vegetation_mesh(
         let foliage_r = 1.6 * scale;
         let base = flight;
         let foliage_tint = 0.8 + hash01(k as u64, patch.tile_y as u64, patch.tile_x as u64) * 0.3;
-        let trunk_color = [0.075f32, 0.038f32, 0.014f32];
+        let trunk_color = [0.16f32, 0.07f32, 0.025f32];
         let foliage_color = [
-            0.028f32 * foliage_tint as f32,
-            0.115f32 * foliage_tint as f32,
-            0.014f32 * foliage_tint as f32,
+            0.035f32 * foliage_tint as f32,
+            0.19f32 * foliage_tint as f32,
+            0.022f32 * foliage_tint as f32,
         ];
         accum.push_prism(
             base,
@@ -607,6 +656,51 @@ pub fn build_vegetation_mesh(
             foliage_h,
             FOLIAGE_SEGMENTS,
             foliage_color,
+        );
+    }
+
+    for k in 0..scatter_count_for_level(GRASS_CLUMP_COUNT, patch.level) {
+        let ru = hash01(
+            patch.face as u64 ^ 0xCAFE_BABE,
+            patch.tile_x as u64,
+            (patch.tile_y as u64).wrapping_add(k as u64),
+        );
+        let rv = hash01(
+            patch.level as u64,
+            patch.tile_y as u64 ^ 0x0A11_CE55,
+            (patch.tile_x as u64).wrapping_add(k as u64),
+        );
+        let u = u0 + (u1 - u0) * ru;
+        let v = v0 + (v1 - v0) * rv;
+        let dir = face_uv_to_direction(patch.face, u, v);
+        let (lat, lon) = direction_to_lat_lon(dir);
+        let h = source.height_m(lat, lon);
+        let slope_deg = slope_deg_at(source, lat, lon);
+        let appearance = surface_appearance(
+            h,
+            source.moisture(lat, lon),
+            source.zone_lat(lat),
+            slope_deg,
+        );
+        if h < 0.5
+            || h > 2_800.0
+            || slope_deg > 28.0
+            || appearance.albedo[1] <= appearance.albedo[0]
+            || appearance.albedo[1] <= appearance.albedo[2]
+        {
+            continue;
+        }
+        let base = dir * (radius_m + h) - *mesh_origin_body_fixed;
+        let up = surface_normal(source, lat, lon, radius_m);
+        let scale = 0.55 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.65;
+        let grass_color = [0.045, 0.24, 0.025];
+        accum.push_grass_clump(
+            base,
+            up,
+            0.22 * scale,
+            0.45 * scale,
+            hash01(patch.tile_x as u64, patch.tile_y as u64, k as u64) * std::f64::consts::TAU,
+            grass_color,
         );
     }
 
@@ -699,6 +793,18 @@ mod tests {
             build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0);
         assert_eq!(albedo.data, repeat_albedo.data);
         assert_eq!(normal.data, repeat_normal.data);
+    }
+
+    #[test]
+    fn terrain_modulation_preserves_global_albedo_identity() {
+        let grass = terrain_albedo_modulation(surface_appearance(300.0, 0.6, 0.5, 5.0));
+        let rock = terrain_albedo_modulation(surface_appearance(1_500.0, 0.4, 0.5, 60.0));
+
+        for channel in grass.into_iter().chain(rock) {
+            assert!((0.72..=1.35).contains(&channel));
+        }
+        assert!(grass[1] > grass[0]);
+        assert!(rock[0] > grass[0]);
     }
 
     #[test]
