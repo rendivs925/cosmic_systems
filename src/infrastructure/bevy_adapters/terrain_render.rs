@@ -31,14 +31,6 @@ const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
-/// A single smooth sea-level shell avoids coupling ocean topology to streamed
-/// terrain parent/child handoffs.
-const OCEAN_LONGITUDE_SEGMENTS: usize = 256;
-const OCEAN_LATITUDE_SEGMENTS: usize = 128;
-/// Keep the visual shell just below mean sea level so coastline vertices do not
-/// z-fight with the opaque terrain surface.
-const OCEAN_SURFACE_OFFSET_M: f64 = 0.25;
-
 /// Cached parents stay visible until every visible descendant has a render
 /// entity. CPU streaming readiness alone is not sufficient: asset creation is
 /// deliberately spread across frames.
@@ -83,23 +75,12 @@ pub struct TerrainPatchRenderState {
     pub render_origin_at_spawn: DVec3,
 }
 
-/// Presentation-only global ocean for the currently streamed planet. Its mesh
-/// is baked through the same f64 render-origin boundary as terrain patches.
-#[derive(Component, Debug, Clone)]
-struct OceanShellRenderState {
-    planet_entity: Entity,
-    mesh_handle: Handle<Mesh>,
-    body_to_inertial_at_spawn: DQuat,
-    render_origin_at_spawn: DVec3,
-}
-
 /// Reusable render assets whose appearance is identical for every terrain
 /// patch. Patch terrain materials stay independent because roughness is derived
 /// from their geographic surface sample.
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
-    ocean_material: Option<Handle<StandardMaterial>>,
     /// Catalog imagery is shared by every patch of a planet. `StandardMaterial`
     /// samples these maps with the mesh's geographic UV0 coordinates.
     global_surface_maps: HashMap<String, GlobalSurfaceMaps>,
@@ -259,7 +240,6 @@ impl Plugin for TerrainRenderPlugin {
             .add_systems(
                 Update,
                 (
-                    sync_ocean_shell_system,
                     update_patch_transforms,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
@@ -894,156 +874,6 @@ fn update_patch_transforms(
     }
 }
 
-/// Keep the single mean-sea-level ocean in the same planet pose and local render
-/// frame as the streamed terrain. It is deliberately independent of terrain
-/// patch visibility and cache events: land depth-occludes the shell while the
-/// ocean itself cannot overlap during a parent/child handoff.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Ocean lifetime combines the existing terrain renderer's active-planet, asset, and frame authorities."
-)]
-fn sync_ocean_shell_system(
-    mut commands: Commands,
-    streaming: Res<TerrainStreamingResource>,
-    ephemeris_snapshot: Res<EphemerisSnapshot>,
-    render_origin: Res<RenderOrigin>,
-    planet_query: Query<&PlanetComponent>,
-    mut ocean_query: Query<(Entity, &mut OceanShellRenderState, &mut Transform)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut standard_materials: ResMut<Assets<StandardMaterial>>,
-    mut render_assets: ResMut<TerrainRenderAssets>,
-) {
-    let active_planet = streaming.active_planet();
-    let desired = active_planet.and_then(|planet_entity| {
-        let planet = planet_query.get(planet_entity).ok()?;
-        planet.domain_planet.has_ocean.then_some((
-            planet_entity,
-            planet.domain_planet.radius_km as f64 * 1_000.0 - OCEAN_SURFACE_OFFSET_M,
-            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)?,
-        ))
-    });
-
-    let mut existing_for_active_planet = false;
-    for (entity, state, mut transform) in ocean_query.iter_mut() {
-        if desired.is_some_and(|(planet_entity, _, _)| state.planet_entity == planet_entity) {
-            let (_, _, orientation) = desired.expect("ocean shell desired above");
-            update_baked_transform(
-                &mut transform,
-                state.body_to_inertial_at_spawn,
-                state.render_origin_at_spawn,
-                orientation,
-                render_origin.origin,
-            );
-            existing_for_active_planet = true;
-            continue;
-        }
-        commands.entity(entity).despawn();
-        meshes.remove(state.mesh_handle.id());
-    }
-
-    let Some((planet_entity, radius_m, orientation)) = desired else {
-        return;
-    };
-    if existing_for_active_planet {
-        return;
-    }
-    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
-    let mesh_handle = meshes.add(ocean_shell_mesh(
-        radius_m,
-        &render_origin.origin,
-        body_to_inertial,
-    ));
-    let material = render_assets
-        .ocean_material
-        .get_or_insert_with(|| {
-            standard_materials.add(StandardMaterial {
-                // Keep water in the same sunlight and shadow model as terrain.
-                base_color: Color::srgb(0.008, 0.055, 0.14),
-                perceptual_roughness: 0.12,
-                metallic: 0.0,
-                reflectance: 0.65,
-                unlit: false,
-                ..default()
-            })
-        })
-        .clone();
-    commands.spawn((
-        Mesh3d(mesh_handle.clone()),
-        MeshMaterial3d(material),
-        Transform::IDENTITY,
-        OceanShellRenderState {
-            planet_entity,
-            mesh_handle,
-            body_to_inertial_at_spawn: body_to_inertial,
-            render_origin_at_spawn: render_origin.origin,
-        },
-        Name::new("OceanSurface"),
-    ));
-}
-
-/// Build one smooth, mean-sea-level ocean mesh in the body-fixed frame, then
-/// rebase it before converting positions to f32. Terrain remains the sole
-/// source of land and seabed geometry; depth testing reveals this shell only
-/// where terrain lies below sea level.
-fn ocean_shell_mesh(radius_m: f64, render_origin: &DVec3, body_to_inertial: DQuat) -> Mesh {
-    let vertices_per_row = OCEAN_LONGITUDE_SEGMENTS + 1;
-    let vertex_count = vertices_per_row * (OCEAN_LATITUDE_SEGMENTS + 1);
-    let mut positions = Vec::with_capacity(vertex_count);
-    let mut normals = Vec::with_capacity(vertex_count);
-    for latitude_index in 0..=OCEAN_LATITUDE_SEGMENTS {
-        let latitude = -std::f64::consts::FRAC_PI_2
-            + std::f64::consts::PI * latitude_index as f64 / OCEAN_LATITUDE_SEGMENTS as f64;
-        let (sin_latitude, cos_latitude) = latitude.sin_cos();
-        for longitude_index in 0..=OCEAN_LONGITUDE_SEGMENTS {
-            let longitude =
-                std::f64::consts::TAU * longitude_index as f64 / OCEAN_LONGITUDE_SEGMENTS as f64;
-            let (sin_longitude, cos_longitude) = longitude.sin_cos();
-            let body_fixed_normal = DVec3::new(
-                cos_latitude * cos_longitude,
-                sin_latitude,
-                cos_latitude * sin_longitude,
-            );
-            let normal = body_to_inertial * body_fixed_normal;
-            let position = ocean_shell_render_position(
-                body_fixed_normal,
-                radius_m,
-                *render_origin,
-                body_to_inertial,
-            );
-            positions.push([position.x as f32, position.y as f32, position.z as f32]);
-            normals.push([normal.x as f32, normal.y as f32, normal.z as f32]);
-        }
-    }
-    let mut indices = Vec::with_capacity(OCEAN_LONGITUDE_SEGMENTS * OCEAN_LATITUDE_SEGMENTS * 6);
-    for latitude_index in 0..OCEAN_LATITUDE_SEGMENTS {
-        for longitude_index in 0..OCEAN_LONGITUDE_SEGMENTS {
-            let a = latitude_index * vertices_per_row + longitude_index;
-            let b = a + 1;
-            let c = a + vertices_per_row;
-            let d = c + 1;
-            indices
-                .extend_from_slice(&[a as u32, c as u32, b as u32, b as u32, c as u32, d as u32]);
-        }
-    }
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
-}
-
-fn ocean_shell_render_position(
-    body_fixed_normal: DVec3,
-    radius_m: f64,
-    render_origin: DVec3,
-    body_to_inertial: DQuat,
-) -> DVec3 {
-    body_to_inertial * (body_fixed_normal * radius_m) - render_origin
-}
-
 fn update_patch_transform(
     transform: &mut Transform,
     state: &TerrainPatchRenderState,
@@ -1155,24 +985,6 @@ mod tests {
             body_to_inertial_at_spawn * anchor_body_fixed_m - render_origin_at_spawn;
         patch_rotation * (body_to_inertial_at_spawn * body_fixed_offset_m + child_translation)
             + patch_translation
-    }
-
-    #[test]
-    fn ocean_shell_rebases_in_f64_before_the_render_boundary() {
-        let radius_m = 6_371_000.0;
-        let body_fixed_normal = DVec3::X;
-        let body_to_inertial = DQuat::from_rotation_y(0.4);
-        let exact_surface_m = body_to_inertial * (body_fixed_normal * radius_m);
-        let render_origin = exact_surface_m + DVec3::new(12.5, -3.0, 8.0);
-
-        let local = ocean_shell_render_position(
-            body_fixed_normal,
-            radius_m,
-            render_origin,
-            body_to_inertial,
-        );
-
-        assert!(local.abs_diff_eq(DVec3::new(-12.5, 3.0, -8.0), 1e-9));
     }
 
     #[test]

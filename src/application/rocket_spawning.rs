@@ -277,8 +277,8 @@ pub fn spawn_rockets(
     );
 }
 
-/// Spawn a compact procedural pad and service tower. The facility is visual
-/// context for the exact terrain launch point; it has no collision authority.
+/// Spawn a procedural service tower at the exact terrain launch point. It has
+/// no collision authority.
 fn spawn_procedural_launch_pad(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -287,11 +287,6 @@ fn spawn_procedural_launch_pad(
     rocket_height_m: f32,
     rocket_diameter_m: f32,
 ) {
-    let concrete = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.24, 0.25, 0.25),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
     let steel = materials.add(StandardMaterial {
         base_color: Color::srgb(0.28, 0.31, 0.34),
         metallic: 0.35,
@@ -310,16 +305,6 @@ fn spawn_procedural_launch_pad(
         ))
         .id();
     commands.entity(root).with_children(|parent| {
-        parent.spawn((
-            Mesh3d(meshes.add(Cylinder::new(22.0, 0.4))),
-            MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(0.0, -0.2, 0.0),
-        ));
-        parent.spawn((
-            Mesh3d(meshes.add(Cylinder::new(rocket_diameter_m * 0.72, 0.18))),
-            MeshMaterial3d(steel.clone()),
-            Transform::from_xyz(0.0, 0.09, 0.0),
-        ));
         for x in [-4.0_f32, 4.0] {
             for z in [-4.0_f32, 4.0] {
                 parent.spawn((

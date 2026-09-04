@@ -9,26 +9,20 @@
 //! The existing display-scale conversion remains only for the current
 //! parent-relative moon approximation.
 
-use crate::application::material_factory::{
-    create_cloud_material, create_planet_material, PlanetMaterialConfig,
-};
+use crate::application::material_factory::{create_planet_material, PlanetMaterialConfig};
 use crate::application::solar_system_startup::solar_surface_luminance_nits;
-use crate::application::texture_config::{
-    get_cloud_layer_config, get_planet_textures, load_texture,
-};
+use crate::application::texture_config::{get_planet_textures, load_texture};
 use crate::components::rocket::{RocketPhysicsState, RocketPlanetBinding};
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
-use bevy::light::NotShadowCaster;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -41,7 +35,6 @@ pub struct RocketSunDisc;
 const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
 const SUN_RADIUS_M: f64 = 696_340_000.0;
 const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
-const EARTH_CLOUD_SHELL_ALTITUDE_M: f64 = 12_000.0;
 
 /// Component marking a moon entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -49,11 +42,6 @@ pub struct RocketMoon {
     pub name: String,
     pub parent_planet: String,
 }
-
-/// Marks the presentation-only Earth cloud shell. It is not a celestial
-/// simulation entity or terrain authority.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RocketFarFieldEarthClouds;
 
 /// Resource storing the bound planet name for quick lookup.
 #[derive(Resource, Debug, Default)]
@@ -83,12 +71,7 @@ pub fn isolate_rocket_presentation(
 
 /// Startup system: spawn moons and the Sun in flight units.
 ///
-/// The streamed terrain renderer owns Earth's visible surface. Earth retains a
-/// flight-frame cloud shell for horizon detail, without a second opaque globe.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Rocket startup reuses the shared bound-planet, asset, and presentation resources."
-)]
+/// The streamed terrain renderer owns Earth's entire visible surface.
 pub fn setup_rocket_planets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -96,7 +79,6 @@ pub fn setup_rocket_planets(
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
-    planet_query: Query<&PlanetComponent>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
     let Some((binding, _rocket)) = rocket_query.iter().next() else {
@@ -104,21 +86,6 @@ pub fn setup_rocket_planets(
     };
     let planet_name = binding.planet_name.to_string();
     bound_planet_res.0 = Some(planet_name.clone());
-
-    if planet_name == "Earth" {
-        if let Some(earth) = planet_query
-            .iter()
-            .find(|planet| planet.domain_planet.name == planet_name)
-        {
-            spawn_rocket_far_field_earth_clouds(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                &asset_server,
-                earth.domain_planet.radius_km as f64 * 1_000.0,
-            );
-        }
-    }
 
     for moon in PlanetFactory::get_moons_of(&planet_name) {
         spawn_rocket_moon(
@@ -138,32 +105,6 @@ pub fn setup_rocket_planets(
         &asset_server,
         &solar_params,
     );
-}
-
-fn spawn_rocket_far_field_earth_clouds(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    asset_server: &AssetServer,
-    earth_radius_m: f64,
-) {
-    let Some(clouds) = get_cloud_layer_config("Earth") else {
-        return;
-    };
-    let cloud_material = materials.add(create_cloud_material(
-        load_texture(asset_server, Some(clouds.texture_path)),
-        clouds.alpha,
-    ));
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(
-            (earth_radius_m + EARTH_CLOUD_SHELL_ALTITUDE_M) as f32,
-        ))),
-        MeshMaterial3d(cloud_material),
-        Transform::IDENTITY,
-        NotShadowCaster,
-        RocketFarFieldEarthClouds,
-        Name::new("RocketFarFieldEarthClouds"),
-    ));
 }
 
 /// Spawn a moon in flight units.
@@ -279,10 +220,6 @@ pub fn update_rocket_planets(
     rocket_query: Query<(), With<RocketPhysicsState>>,
     planet_query: Query<&PlanetComponent, Without<RocketMoon>>,
     mut moon_query: Query<(&RocketMoon, &mut Transform)>,
-    mut earth_cloud_query: Query<
-        &mut Transform,
-        (With<RocketFarFieldEarthClouds>, Without<RocketMoon>),
-    >,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
     let Some(bound_planet_name) = &bound_planet_res.0 else {
@@ -301,14 +238,6 @@ pub fn update_rocket_planets(
     let Some(bound_body) = NaifBodyId::for_catalog_name(bound_planet_name) else {
         return;
     };
-    if bound_planet_name == "Earth" {
-        if let Some(orientation) = ephemeris_snapshot.orientation(bound_body) {
-            let transform = bound_planet_flight_transform(&render_origin, orientation);
-            for mut cloud_transform in &mut earth_cloud_query {
-                *cloud_transform = transform;
-            }
-        }
-    }
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit;
 
@@ -347,16 +276,6 @@ pub fn update_rocket_planets(
             }
         }
     }
-}
-
-/// Convert the bound planet's body-fixed proxy geometry into the local flight
-/// frame. The planet center is the origin of the rocket's planet-centered frame.
-fn bound_planet_flight_transform(
-    render_origin: &RenderOrigin,
-    orientation: &crate::domain::services::body_orientation::BodyOrientation,
-) -> Transform {
-    Transform::from_translation((-render_origin.origin).as_vec3())
-        .with_rotation(body_fixed_to_planet_inertial_rotation(orientation).as_quat())
 }
 
 /// Keep the visual Sun inside the local rocket camera depth range while its
@@ -532,26 +451,5 @@ mod tests {
         let expected_angular_radius_rad = (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M).asin();
 
         assert!((angular_radius_rad - expected_angular_radius_rad).abs() < 1e-12);
-    }
-
-    #[test]
-    fn rocket_cloud_shell_attaches_to_the_bound_body_pose_and_render_origin() {
-        let epoch = TdbEpoch::j2000();
-        let orientation = earth_orientation(epoch);
-        let origin = RenderOrigin {
-            origin: DVec3::new(6_371_200.0, -450.0, 125.0),
-            last_camera_pos: DVec3::ZERO,
-        };
-
-        let transform = bound_planet_flight_transform(&origin, &orientation);
-        let expected_x_axis = body_fixed_to_planet_inertial_rotation(&orientation) * DVec3::X;
-
-        assert_eq!(transform.translation, (-origin.origin).as_vec3());
-        assert!(
-            (transform.rotation * Vec3::X)
-                .as_dvec3()
-                .distance(expected_x_axis)
-                < 1e-6
-        );
     }
 }

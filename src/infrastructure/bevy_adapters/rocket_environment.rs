@@ -3,7 +3,6 @@ use crate::components::rocket::{RocketFlightConditions, RocketPhysicsState};
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
-use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
@@ -15,9 +14,6 @@ pub fn setup_rocket_sun_light(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
 ) {
-    // The flight camera needs a denser near-field map than the solar overview;
-    // this is still one ephemeris-driven directional Sun, not a fill light.
-    commands.insert_resource(DirectionalLightShadowMap { size: 4096 });
     let Some(sun_direction) = bound_planet
         .0
         .as_deref()
@@ -34,21 +30,13 @@ pub fn setup_rocket_sun_light(
         bevy::light::DirectionalLight {
             illuminance: SUN_ILLUMINANCE_AT_EARTH_LUX,
             color: Color::srgb(1.0, 1.0, 0.98),
-            shadows_enabled: true,
-            shadow_depth_bias: 0.015,
-            shadow_normal_bias: 0.8,
+            // Terrain is assembled from rebased streamed patches. Do not let
+            // directional shadow cascades introduce a planet-scale dark arc at
+            // patch boundaries; ephemeris-driven direct lighting still models
+            // the physical day/night cycle.
+            shadows_enabled: false,
             ..default()
         },
-        // Cascade shadow config tuned for the rocket flight scale (1 unit = 1 m).
-        // The first cascade covers the immediate pad area; later cascades extend
-        // to the horizon so distant terrain still casts visible shadows.
-        CascadeShadowConfigBuilder {
-            first_cascade_far_bound: 45.0,
-            maximum_distance: 1_200.0,
-            overlap_proportion: 0.25,
-            ..default()
-        }
-        .build(),
         // Light travels along local -Z toward the scene; orient it so the Sun
         // appears in its ephemeris direction.
         Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_direction, Vec3::Y),
