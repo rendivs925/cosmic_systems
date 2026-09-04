@@ -15,6 +15,18 @@ use crate::domain::services::simulation_epoch::{
 /// Unprocessed time remains queued, rather than being discarded.
 pub const MAX_FIXED_STEPS_PER_RENDER_FRAME: u32 = 32;
 
+/// Shared physical start instant for every application mode. It places the
+/// Kennedy Space Center launch scene in daylight while remaining inside the
+/// pinned DE440/LSK epoch authority.
+pub const DEFAULT_SIMULATION_START_UTC: UtcDateTime = UtcDateTime {
+    year: 2000,
+    month: 1,
+    day: 1,
+    hour: 17,
+    minute: 0,
+    second: 0.0,
+};
+
 /// Simulation time resource managing real time, simulation time, and time acceleration.
 ///
 /// This is the single authoritative source for time control. Physics systems should
@@ -75,14 +87,15 @@ impl SimulationTime {
         1.0 / self.fixed_timestep_s
     }
 
-    /// Configure this clock from a validated local leap-second source. The
-    /// default simulation instant is J2000 TDB, preserving existing ephemeris
-    /// coverage while exposing its matching civil and dynamical time scales.
+    /// Configure this clock from a validated local leap-second source at the
+    /// shared daylight startup instant, exposing matching civil and dynamical
+    /// time scales through one authoritative conversion.
     pub fn configure_scientific_epoch(
         &mut self,
         leap_seconds: LeapSecondTable,
     ) -> Result<(), SimulationEpochError> {
-        let epoch_at_simulation_start = leap_seconds.epoch_from_tdb(TdbEpoch::j2000())?;
+        let epoch_at_simulation_start =
+            leap_seconds.epoch_from_utc(DEFAULT_SIMULATION_START_UTC)?;
         self.leap_seconds = Some(leap_seconds);
         self.epoch_at_simulation_start = Some(epoch_at_simulation_start);
         Ok(())
@@ -348,11 +361,16 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        let initial_epoch = sim.tdb_epoch().unwrap();
         sim.advance_fixed_step();
 
         let epoch = sim.tdb_epoch().unwrap();
-        assert!((epoch.seconds_since_j2000() - 60.0).abs() < 1e-5);
-        assert!((epoch.julian_date() - (2_451_545.0 + 60.0 / 86_400.0)).abs() < 1e-12);
+        assert!(
+            (epoch.seconds_since_j2000() - initial_epoch.seconds_since_j2000() - 60.0).abs() < 1e-5
+        );
+        assert!(
+            (epoch.julian_date() - initial_epoch.julian_date() - 60.0 / 86_400.0).abs() < 1e-10
+        );
     }
 
     #[test]

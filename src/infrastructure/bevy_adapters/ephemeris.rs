@@ -268,9 +268,14 @@ impl Plugin for EphemerisPlugin {
             .unwrap_or_else(|error| {
                 panic!("cannot configure scientific simulation epoch: {error}")
             });
+        let startup_epoch = app
+            .world()
+            .resource::<SimulationTime>()
+            .tdb_epoch()
+            .unwrap_or_else(|error| panic!("cannot read scientific startup epoch: {error}"));
         let dataset_report = authority
             .provenance()
-            .dataset_statuses_at_tdb(TdbEpoch::j2000());
+            .dataset_statuses_at_tdb(startup_epoch);
         for status in &dataset_report {
             match status.availability {
                 ScientificDatasetAvailability::Validated => bevy::log::info!(
@@ -388,6 +393,7 @@ fn update_ephemeris_snapshot_after_time_advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::simulation_time::DEFAULT_SIMULATION_START_UTC;
     use bevy::math::DVec3;
 
     #[test]
@@ -401,7 +407,10 @@ mod tests {
             .resource::<SimulationTime>()
             .scientific_epoch()
             .unwrap();
-        assert_eq!(epoch.tdb_epoch(), TdbEpoch::j2000());
+        assert_eq!(
+            epoch.utc_julian_date(),
+            DEFAULT_SIMULATION_START_UTC.julian_date().unwrap()
+        );
         assert_eq!(epoch.ut1_julian_date(), None);
     }
 
@@ -431,7 +440,12 @@ mod tests {
 
         let snapshot = app.world().resource::<EphemerisSnapshot>();
         let expected_targets: Vec<_> = snapshot_bodies().collect();
-        assert_eq!(snapshot.epoch, Some(TdbEpoch::j2000()));
+        let startup_epoch = app
+            .world()
+            .resource::<SimulationTime>()
+            .tdb_epoch()
+            .unwrap();
+        assert_eq!(snapshot.epoch, Some(startup_epoch));
         assert_eq!(snapshot.states.len(), expected_targets.len());
         assert_eq!(snapshot.orientations.len(), expected_targets.len() - 1);
         for target in expected_targets {
@@ -439,7 +453,7 @@ mod tests {
                 .state(target)
                 .unwrap_or_else(|| panic!("snapshot missing NAIF {}", target.value()));
             assert_eq!(state.center, NaifBodyId::SOLAR_SYSTEM_BARYCENTER);
-            assert_eq!(state.epoch, TdbEpoch::j2000());
+            assert_eq!(state.epoch, startup_epoch);
         }
         for target in NaifBodyId::kernel_backed_catalog_targets() {
             assert!(snapshot.gravitational_parameter_m3_s2(target).is_some());
