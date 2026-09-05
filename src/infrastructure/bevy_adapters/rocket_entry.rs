@@ -119,10 +119,11 @@ pub fn compute_ablation(
 
         // Rebuild all rigid-body quantities from the same attached mass
         // inventory. Incremental subtraction left COM/inertia stale.
-        let boosters = propulsion
-            .boosters_attached
-            .then_some(())
-            .and(propulsion.vehicle.parallel_boosters.as_ref());
+        let (boosters, booster_propellant_remaining_kg) = propulsion
+            .attached_boosters()
+            .map_or((None, &[][..]), |(boosters, inventory)| {
+                (Some(boosters), inventory)
+            });
         let mass_properties = ActiveVehicleMassPropertiesInput {
             stages: &propulsion.vehicle.stages,
             propellant_remaining_kg: &propulsion.propellant_remaining_kg,
@@ -132,7 +133,7 @@ pub fn compute_ablation(
             radius_m: geometry.radius_m as f64,
             height_m: geometry.height_m as f64,
             boosters,
-            booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+            booster_propellant_remaining_kg,
         }
         .calculate();
         rocket.dynamics.mass_kg = mass_properties.mass_kg;

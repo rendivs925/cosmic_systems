@@ -162,6 +162,11 @@ pub fn apply_relaunch_requests(
             }
 
             // Mass and inertia from the refueled stack.
+            let (boosters, booster_propellant_remaining_kg) = propulsion
+                .attached_boosters()
+                .map_or((None, &[][..]), |(boosters, inventory)| {
+                    (Some(boosters), inventory)
+                });
             let mass_properties = ActiveVehicleMassPropertiesInput {
                 stages: &propulsion.vehicle.stages,
                 propellant_remaining_kg: &propulsion.propellant_remaining_kg,
@@ -170,8 +175,8 @@ pub fn apply_relaunch_requests(
                 ablation_mass_loss_kg: 0.0,
                 radius_m: geometry.radius_m as f64,
                 height_m: geometry.height_m as f64,
-                boosters: propulsion.vehicle.parallel_boosters.as_ref(),
-                booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+                boosters,
+                booster_propellant_remaining_kg,
             }
             .calculate();
             let total_mass_kg = mass_properties.mass_kg;

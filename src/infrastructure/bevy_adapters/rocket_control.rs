@@ -184,9 +184,10 @@ fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bo
             }
         }
     }
-    if propulsion.boosters_attached {
+    if propulsion.boosters_attached() {
         let boosters_have_propellant = propulsion
-            .booster_propellant_remaining_kg
+            .attached_booster_inventory()
+            .expect("attached boosters have a fixed propellant inventory")
             .iter()
             .any(|remaining_kg| *remaining_kg > 0.0);
         if let Some(boosters) = &mut propulsion.vehicle.parallel_boosters {

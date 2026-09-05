@@ -550,7 +550,7 @@ pub fn replay_active(stream: Res<ReplaySnapshotStream>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::rocket::SpentStageKind;
+    use crate::components::rocket::{BoosterAttachmentState, SpentStageKind};
     use crate::domain::entities::rocket::Rocket;
     use crate::domain::services::atmosphere::FlightConditions;
     use crate::domain::services::guidance::AutopilotMode;
@@ -606,8 +606,7 @@ mod tests {
                     vehicle,
                     active_stage: 1,
                     propellant_remaining_kg: vec![1.0, 2.0],
-                    booster_propellant_remaining_kg: Vec::new(),
-                    boosters_attached: false,
+                    booster_attachment: BoosterAttachmentState::Detached,
                     throttle: 0.7,
                     gimbal_pitch_rad: 0.1,
                     gimbal_yaw_rad: -0.2,

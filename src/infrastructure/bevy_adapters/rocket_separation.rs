@@ -246,10 +246,11 @@ pub fn check_fairing_separation(
         // mass, COM, and inertia together.
         propulsion.attached_payload_kg = 0.0;
         let ablation_mass_loss_kg = ablation.map_or(0.0, |state| state.mass_loss_kg);
-        let boosters = propulsion
-            .boosters_attached
-            .then_some(())
-            .and_then(|_| propulsion.vehicle.parallel_boosters.as_ref());
+        let (boosters, booster_propellant_remaining_kg) = propulsion
+            .attached_boosters()
+            .map_or((None, &[][..]), |(boosters, inventory)| {
+                (Some(boosters), inventory)
+            });
         let mass_properties = ActiveVehicleMassPropertiesInput {
             stages: &propulsion.vehicle.stages,
             propellant_remaining_kg: &propulsion.propellant_remaining_kg,
@@ -259,7 +260,7 @@ pub fn check_fairing_separation(
             radius_m: geometry.radius_m as f64,
             height_m: geometry.height_m as f64,
             boosters,
-            booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+            booster_propellant_remaining_kg,
         }
         .calculate();
         rocket.dynamics.mass_kg = mass_properties.mass_kg;
@@ -486,8 +487,7 @@ mod tests {
                     vehicle,
                     active_stage: 1,
                     propellant_remaining_kg,
-                    booster_propellant_remaining_kg: Vec::new(),
-                    boosters_attached: false,
+                    booster_attachment: BoosterAttachmentState::Detached,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,

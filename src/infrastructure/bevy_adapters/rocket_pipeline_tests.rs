@@ -102,6 +102,7 @@ mod engine_lifecycle_pipeline_tests {
             stages: vec![stage("S1", 2), stage("S2", 1)],
             parallel_boosters: boosters,
         };
+        let booster_attachment = BoosterAttachmentState::fresh_for(&vehicle);
         let entity = app
             .world_mut()
             .spawn((
@@ -125,12 +126,7 @@ mod engine_lifecycle_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: vec![100.0, 100.0],
-                    booster_propellant_remaining_kg: if with_parallel_boosters {
-                        vec![100.0, 100.0]
-                    } else {
-                        Vec::new()
-                    },
-                    boosters_attached: with_parallel_boosters,
+                    booster_attachment,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -458,8 +454,7 @@ mod ground_contact_tests {
                 vehicle,
                 active_stage: 0,
                 propellant_remaining_kg: propellant,
-                booster_propellant_remaining_kg: Vec::new(),
-                boosters_attached: false,
+                booster_attachment: BoosterAttachmentState::Detached,
                 throttle,
                 gimbal_pitch_rad: 0.0,
                 gimbal_yaw_rad: 0.0,
@@ -1261,8 +1256,7 @@ mod recovery_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: propellant,
-                    booster_propellant_remaining_kg: Vec::new(),
-                    boosters_attached: false,
+                    booster_attachment: BoosterAttachmentState::Detached,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -1647,8 +1641,7 @@ mod ascent_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: propellant,
-                    booster_propellant_remaining_kg: Vec::new(),
-                    boosters_attached: false,
+                    booster_attachment: BoosterAttachmentState::Detached,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -2046,8 +2039,7 @@ mod ascent_pipeline_tests {
                 vehicle,
                 active_stage: 0,
                 propellant_remaining_kg: propellant,
-                booster_propellant_remaining_kg: Vec::new(),
-                boosters_attached: false,
+                booster_attachment: BoosterAttachmentState::Detached,
                 throttle: 0.0,
                 gimbal_pitch_rad: 0.0,
                 gimbal_yaw_rad: 0.0,
@@ -2234,8 +2226,7 @@ mod ascent_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: vec![reserve_kg, 30_000.0],
-                    booster_propellant_remaining_kg: Vec::new(),
-                    boosters_attached: false,
+                    booster_attachment: BoosterAttachmentState::Detached,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -2484,8 +2475,7 @@ mod stage_coordinate_pipeline_tests {
                 vehicle,
                 active_stage: 0,
                 propellant_remaining_kg: vec![900.0],
-                booster_propellant_remaining_kg: Vec::new(),
-                boosters_attached: false,
+                booster_attachment: BoosterAttachmentState::Detached,
                 throttle: 1.0,
                 gimbal_pitch_rad: 0.1,
                 gimbal_yaw_rad: 0.0,
@@ -2607,6 +2597,7 @@ mod parallel_booster_pipeline_tests {
                 .chain(),
         );
         let vehicle = parallel_vehicle();
+        let booster_attachment = BoosterAttachmentState::fresh_for(&vehicle);
         let (inertia, com) = rocket_inertia_tensor(280.0, 0.0, 1.0, 12.0);
         let rocket_entity = app
             .world_mut()
@@ -2631,8 +2622,7 @@ mod parallel_booster_pipeline_tests {
                     vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: vec![100.0],
-                    booster_propellant_remaining_kg: vec![20.0, 20.0],
-                    boosters_attached: true,
+                    booster_attachment,
                     throttle: 1.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -2667,11 +2657,13 @@ mod parallel_booster_pipeline_tests {
         app.world_mut()
             .get_mut::<RocketPropulsion>(rocket_entity)
             .unwrap()
-            .booster_propellant_remaining_kg = vec![0.0, 0.0];
+            .attached_booster_inventory_mut()
+            .expect("parallel fixture starts with attached boosters")
+            .fill(0.0);
         app.world_mut().run_schedule(FixedUpdate);
         let post_jettison = app.world().get::<RocketPropulsion>(rocket_entity).unwrap();
-        assert!(!post_jettison.boosters_attached);
-        assert!(post_jettison.booster_propellant_remaining_kg.is_empty());
+        assert!(!post_jettison.boosters_attached());
+        assert!(post_jettison.attached_booster_inventory().is_none());
         assert_eq!(
             post_jettison.active_stage, 0,
             "core serial stage must remain active"

@@ -1,7 +1,9 @@
 // Granular rocket components for ECS query isolation.
 // Each component has a single responsibility, enabling parallel system execution.
 
-use crate::domain::entities::rocket::{Rocket, RocketMissionState as DomainRocketMissionState};
+use crate::domain::entities::rocket::{
+    ParallelBoosters, Rocket, RocketMissionState as DomainRocketMissionState,
+};
 use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::gravity::ForceModelReport;
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
@@ -107,6 +109,64 @@ impl Deref for RocketMissionState {
     }
 }
 
+/// Attached booster fuel is valid only while the hardware remains on the core.
+/// Keeping the lifecycle and inventory together prevents a detached stack from
+/// continuing to contribute booster mass, thrust, or torque.
+#[derive(Debug, Clone)]
+pub(crate) enum BoosterAttachmentState {
+    Detached,
+    Attached(AttachedBoosterInventory),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AttachedBoosterInventory {
+    propellant_remaining_kg: Vec<f32>,
+}
+
+impl BoosterAttachmentState {
+    pub(crate) fn fresh_for(vehicle: &Rocket) -> Self {
+        vehicle
+            .parallel_boosters
+            .as_ref()
+            .map_or(Self::Detached, |boosters| {
+                Self::Attached(AttachedBoosterInventory {
+                    propellant_remaining_kg: vec![
+                        boosters.stage.propellant_mass_kg;
+                        boosters.count()
+                    ],
+                })
+            })
+    }
+
+    pub(crate) fn is_attached(&self) -> bool {
+        matches!(self, Self::Attached(_))
+    }
+
+    pub(crate) fn remaining_kg(&self) -> Option<&[f32]> {
+        match self {
+            Self::Detached => None,
+            Self::Attached(inventory) => Some(&inventory.propellant_remaining_kg),
+        }
+    }
+
+    pub(crate) fn remaining_kg_mut(&mut self) -> Option<&mut [f32]> {
+        match self {
+            Self::Detached => None,
+            Self::Attached(inventory) => Some(&mut inventory.propellant_remaining_kg),
+        }
+    }
+
+    pub(crate) fn all_propellant_depleted(&self) -> bool {
+        self.remaining_kg().is_some_and(|remaining_kg| {
+            !remaining_kg.is_empty() && remaining_kg.iter().all(|mass_kg| *mass_kg <= 0.0)
+        })
+    }
+
+    pub(crate) fn detach(&mut self) {
+        *self = Self::Detached;
+    }
+}
+
 /// Runtime propulsion state: vehicle definition, active stage, throttle, gimbal.
 /// Updated by actuation_system, propulsion_consumption, propulsion_staging.
 #[derive(Component, Debug, Clone)]
@@ -114,10 +174,7 @@ pub struct RocketPropulsion {
     pub vehicle: Rocket,
     pub active_stage: usize,
     pub propellant_remaining_kg: Vec<f32>,
-    /// Per-attached-booster propellant indexed by the configured symmetric
-    /// attachment positions. Empty for serial-only vehicles and after jettison.
-    pub booster_propellant_remaining_kg: Vec<f32>,
-    pub boosters_attached: bool,
+    pub(crate) booster_attachment: BoosterAttachmentState,
     pub throttle: f32,
     pub gimbal_pitch_rad: f32,
     pub gimbal_yaw_rad: f32,
@@ -149,8 +206,7 @@ impl RocketPropulsion {
             vehicle,
             active_stage: 0,
             propellant_remaining_kg: Vec::new(),
-            booster_propellant_remaining_kg: Vec::new(),
-            boosters_attached: false,
+            booster_attachment: BoosterAttachmentState::Detached,
             throttle: 0.0,
             gimbal_pitch_rad: 0.0,
             gimbal_yaw_rad: 0.0,
@@ -174,14 +230,7 @@ impl RocketPropulsion {
             .iter()
             .map(|stage| stage.propellant_mass_kg)
             .collect();
-        self.booster_propellant_remaining_kg = self
-            .vehicle
-            .parallel_boosters
-            .as_ref()
-            .map_or_else(Vec::new, |boosters| {
-                vec![boosters.stage.propellant_mass_kg; boosters.count()]
-            });
-        self.boosters_attached = self.vehicle.parallel_boosters.is_some();
+        self.booster_attachment = BoosterAttachmentState::fresh_for(&self.vehicle);
         self.active_stage = 0;
         self.throttle = 0.0;
         self.gimbal_pitch_rad = 0.0;
@@ -189,6 +238,33 @@ impl RocketPropulsion {
         self.time_since_separation_s = self.ullage_settle_time_s;
         self.separations_count = 0;
         self.attached_payload_kg = attached_payload_kg;
+    }
+
+    pub(crate) fn boosters_attached(&self) -> bool {
+        self.booster_attachment.is_attached()
+    }
+
+    pub(crate) fn attached_booster_inventory(&self) -> Option<&[f32]> {
+        self.booster_attachment.remaining_kg()
+    }
+
+    pub(crate) fn attached_booster_inventory_mut(&mut self) -> Option<&mut [f32]> {
+        self.booster_attachment.remaining_kg_mut()
+    }
+
+    pub(crate) fn attached_boosters(&self) -> Option<(&ParallelBoosters, &[f32])> {
+        Some((
+            self.vehicle.parallel_boosters.as_ref()?,
+            self.attached_booster_inventory()?,
+        ))
+    }
+
+    pub(crate) fn attached_boosters_are_depleted(&self) -> bool {
+        self.booster_attachment.all_propellant_depleted()
+    }
+
+    pub(crate) fn detach_boosters(&mut self) {
+        self.booster_attachment.detach();
     }
 }
 
@@ -831,7 +907,10 @@ mod propulsion_tests {
             .iter()
             .zip(&propulsion.propellant_remaining_kg)
             .all(|(stage, remaining)| *remaining == stage.propellant_mass_kg));
-        assert_eq!(propulsion.booster_propellant_remaining_kg, vec![90_000.0]);
+        assert_eq!(
+            propulsion.attached_booster_inventory(),
+            Some(&[90_000.0][..])
+        );
         assert!(all_engines_are_fresh(&propulsion.vehicle));
 
         propulsion.active_stage = 1;
@@ -862,8 +941,28 @@ mod propulsion_tests {
         assert_eq!(propulsion.time_since_separation_s, 2.0);
         assert_eq!(propulsion.separations_count, 0);
         assert_eq!(propulsion.attached_payload_kg, 10.0);
-        assert_eq!(propulsion.booster_propellant_remaining_kg, vec![90_000.0]);
+        assert_eq!(
+            propulsion.attached_booster_inventory(),
+            Some(&[90_000.0][..])
+        );
         assert!(all_engines_are_fresh(&propulsion.vehicle));
+    }
+
+    #[test]
+    fn booster_attachment_transition_removes_the_inventory_atomically() {
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        vehicle.parallel_boosters = Some(ParallelBoosters::new(
+            vehicle.stages[0].clone(),
+            vec![Vec3::X, Vec3::NEG_X],
+        ));
+        let mut attachment = BoosterAttachmentState::fresh_for(&vehicle);
+
+        assert_eq!(attachment.remaining_kg(), Some(&[90_000.0, 90_000.0][..]));
+        assert!(attachment.is_attached());
+        attachment.detach();
+
+        assert!(attachment.remaining_kg().is_none());
+        assert!(!attachment.is_attached());
     }
 }
 

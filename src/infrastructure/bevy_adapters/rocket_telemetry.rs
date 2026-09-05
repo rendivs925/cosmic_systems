@@ -46,6 +46,18 @@ pub struct TelemetryContext<'a> {
     pub force_model: crate::domain::services::gravity::ForceModelConfig,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TelemetryThrust {
+    body_force_n: DVec3,
+    isp_vacuum_s: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TelemetryMassProperties {
+    dry_mass_kg: f64,
+    propellant_fraction: f64,
+}
+
 impl<'a> TelemetryContext<'a> {
     /// Compute derived values used by multiple telemetry fields.
     fn derived(&self) -> DerivedTelemetry {
@@ -69,8 +81,8 @@ impl<'a> TelemetryContext<'a> {
         let gravity_accel = self.planet_mu_m3_s2 / (radius * radius);
         let weight = self.mass_kg * gravity_accel;
 
-        let (thrust_body, isp_vac) = self.compute_thrust(self.conditions.ambient_pressure_pa);
-        let total_thrust_n = thrust_body.length();
+        let thrust = self.compute_thrust(self.conditions.ambient_pressure_pa);
+        let total_thrust_n = thrust.body_force_n.length();
         let tw_ratio = if weight > 0.0 {
             total_thrust_n / weight
         } else {
@@ -81,7 +93,8 @@ impl<'a> TelemetryContext<'a> {
         // specific force. This includes every accumulated force mechanism,
         // such as thrust, aerodynamics, parachutes, and retro-propulsion. An
         // isolated domain fixture falls back to its available thrust/aero data.
-        let sensed_force_world = self.orientation * (thrust_body + self.aero_forces.force_body);
+        let sensed_force_world =
+            self.orientation * (thrust.body_force_n + self.aero_forces.force_body);
         let g_load = self.specific_force.map_or_else(
             || sensed_force_world.length() / (self.mass_kg * STANDARD_GRAVITY_MPS2),
             |specific_force| specific_force.value.length() / STANDARD_GRAVITY_MPS2,
@@ -127,9 +140,13 @@ impl<'a> TelemetryContext<'a> {
             0.0
         };
 
-        let (dry_mass, propellant_fraction) = self.compute_mass_properties();
+        let mass_properties = self.compute_mass_properties();
 
-        let delta_v = Self::compute_delta_v(self.mass_kg, dry_mass, isp_vac);
+        let delta_v = Self::compute_delta_v(
+            self.mass_kg,
+            mass_properties.dry_mass_kg,
+            thrust.isp_vacuum_s,
+        );
 
         // Blackout authority is the CommsState component written by
         // compute_plasma_blackout; telemetry only mirrors it here.
@@ -143,10 +160,10 @@ impl<'a> TelemetryContext<'a> {
             mach,
             q,
             total_thrust_n,
-            isp_vac,
+            isp_vac: thrust.isp_vacuum_s,
             tw_ratio,
             g_load,
-            propellant_fraction,
+            propellant_fraction: mass_properties.propellant_fraction,
             delta_v,
             aoa,
             aos,
@@ -158,9 +175,12 @@ impl<'a> TelemetryContext<'a> {
         }
     }
 
-    fn compute_thrust(&self, ambient_pressure_pa: f64) -> (DVec3, f64) {
+    fn compute_thrust(&self, ambient_pressure_pa: f64) -> TelemetryThrust {
         if self.propulsion.active_stage >= self.propulsion.vehicle.stages.len() {
-            return (DVec3::ZERO, 0.0);
+            return TelemetryThrust {
+                body_force_n: DVec3::ZERO,
+                isp_vacuum_s: 0.0,
+            };
         }
         let stage = &self.propulsion.vehicle.stages[self.propulsion.active_stage];
         let throttle = self.propulsion.throttle.clamp(0.0, 1.0);
@@ -171,20 +191,17 @@ impl<'a> TelemetryContext<'a> {
             .copied()
             .unwrap_or(0.0);
         if throttle <= 0.0 || remaining <= 0.0 {
-            return (DVec3::ZERO, 0.0);
+            return TelemetryThrust {
+                body_force_n: DVec3::ZERO,
+                isp_vacuum_s: 0.0,
+            };
         }
         let (mut thrust_body, _) = stage_thrust_body(&stage.engines, throttle, ambient_pressure_pa);
-        if self.propulsion.boosters_attached {
-            if let Some(boosters) = &self.propulsion.vehicle.parallel_boosters {
-                for propellant_kg in &self.propulsion.booster_propellant_remaining_kg {
-                    if *propellant_kg > 0.0 {
-                        thrust_body += stage_thrust_body(
-                            &boosters.stage.engines,
-                            throttle,
-                            ambient_pressure_pa,
-                        )
-                        .0;
-                    }
+        if let Some((boosters, inventory)) = self.propulsion.attached_boosters() {
+            for propellant_kg in inventory {
+                if *propellant_kg > 0.0 {
+                    thrust_body +=
+                        stage_thrust_body(&boosters.stage.engines, throttle, ambient_pressure_pa).0;
                 }
             }
         }
@@ -194,30 +211,30 @@ impl<'a> TelemetryContext<'a> {
             .find(|e| e.state == EngineState::Running)
             .map(|e| e.isp_vacuum as f64)
             .unwrap_or(0.0);
-        (thrust_body, isp_vac)
+        TelemetryThrust {
+            body_force_n: thrust_body,
+            isp_vacuum_s: isp_vac,
+        }
     }
 
-    fn compute_mass_properties(&self) -> (f64, f64) {
+    fn compute_mass_properties(&self) -> TelemetryMassProperties {
         // Attached payload hardware (fairing) counts as shed structure, so it
         // belongs to the dry mass of the active stack until jettison.
-        let boosters = self
+        let (boosters, booster_propellant_remaining_kg) = self
             .propulsion
-            .boosters_attached
-            .then_some(())
-            .and(self.propulsion.vehicle.parallel_boosters.as_ref());
+            .attached_boosters()
+            .map_or((None, &[][..]), |(boosters, inventory)| {
+                (Some(boosters), inventory)
+            });
         let dry_mass = active_vehicle_mass_with_payload_and_boosters(
             &self.propulsion.vehicle.stages,
             &self.propulsion.propellant_remaining_kg,
             self.propulsion.active_stage,
             self.propulsion.attached_payload_kg,
             boosters,
-            &self.propulsion.booster_propellant_remaining_kg,
+            booster_propellant_remaining_kg,
         ) - self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64
-            - self
-                .propulsion
-                .booster_propellant_remaining_kg
-                .iter()
-                .sum::<f32>() as f64;
+            - booster_propellant_remaining_kg.iter().sum::<f32>() as f64;
 
         let total_propellant_initial: f64 = self
             .propulsion
@@ -238,7 +255,8 @@ impl<'a> TelemetryContext<'a> {
             self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64
                 + self
                     .propulsion
-                    .booster_propellant_remaining_kg
+                    .attached_booster_inventory()
+                    .unwrap_or_default()
                     .iter()
                     .sum::<f32>() as f64;
         let propellant_fraction = if total_propellant_initial > 0.0 {
@@ -246,7 +264,10 @@ impl<'a> TelemetryContext<'a> {
         } else {
             0.0
         };
-        (dry_mass, propellant_fraction)
+        TelemetryMassProperties {
+            dry_mass_kg: dry_mass,
+            propellant_fraction,
+        }
     }
 
     fn compute_delta_v(initial_mass: f64, dry_mass: f64, isp_vac: f64) -> f64 {
@@ -1049,8 +1070,7 @@ mod g_load_tests {
             vehicle: vehicle.clone(),
             active_stage: 0,
             propellant_remaining_kg: vec![600.0],
-            booster_propellant_remaining_kg: Vec::new(),
-            boosters_attached: false,
+            booster_attachment: BoosterAttachmentState::Detached,
             throttle: 1.0,
             gimbal_pitch_rad: 0.0,
             gimbal_yaw_rad: 0.0,
@@ -1136,8 +1156,7 @@ mod g_load_tests {
             vehicle: vehicle.clone(),
             active_stage: 0,
             propellant_remaining_kg: vec![600.0],
-            booster_propellant_remaining_kg: Vec::new(),
-            boosters_attached: false,
+            booster_attachment: BoosterAttachmentState::Detached,
             throttle: 0.0,
             gimbal_pitch_rad: 0.0,
             gimbal_yaw_rad: 0.0,

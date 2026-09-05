@@ -115,6 +115,11 @@ pub(crate) fn spawn_rockets(
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
     let radius_m = (rocket.diameter_m / 2.0) as f64;
+    let (boosters, booster_propellant_remaining_kg) = propulsion
+        .attached_boosters()
+        .map_or((None, &[][..]), |(boosters, inventory)| {
+            (Some(boosters), inventory)
+        });
     let mass_properties = ActiveVehicleMassPropertiesInput {
         stages: &rocket.stages,
         propellant_remaining_kg: &propulsion.propellant_remaining_kg,
@@ -123,8 +128,8 @@ pub(crate) fn spawn_rockets(
         ablation_mass_loss_kg: 0.0,
         radius_m,
         height_m: rocket.height_m as f64,
-        boosters: rocket.parallel_boosters.as_ref(),
-        booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+        boosters,
+        booster_propellant_remaining_kg,
     }
     .calculate();
     let total_mass_kg = mass_properties.mass_kg;

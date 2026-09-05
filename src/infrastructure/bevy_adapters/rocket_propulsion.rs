@@ -59,30 +59,16 @@ fn burnable_propellant_kg(propulsion: &RocketPropulsion) -> f32 {
     .max(0.0)
 }
 
-fn attached_boosters(
-    propulsion: &RocketPropulsion,
-) -> Option<&crate::domain::entities::rocket::ParallelBoosters> {
-    propulsion
-        .boosters_attached
-        .then_some(())
-        .and(propulsion.vehicle.parallel_boosters.as_ref())
-}
-
 fn booster_is_ignitable(propulsion: &RocketPropulsion, booster_index: usize) -> bool {
-    attached_boosters(propulsion).is_some_and(|boosters| {
-        propulsion.throttle > 0.0
-            && propulsion
-                .booster_propellant_remaining_kg
-                .get(booster_index)
-                .copied()
-                .unwrap_or(0.0)
-                > 0.0
-            && boosters
-                .stage
-                .engines
-                .iter()
-                .any(|engine| engine.state == crate::domain::entities::rocket::EngineState::Running)
-    })
+    propulsion
+        .attached_boosters()
+        .is_some_and(|(boosters, inventory)| {
+            propulsion.throttle > 0.0
+                && inventory.get(booster_index).copied().unwrap_or(0.0) > 0.0
+                && boosters.stage.engines.iter().any(|engine| {
+                    engine.state == crate::domain::entities::rocket::EngineState::Running
+                })
+        })
 }
 
 fn refresh_attached_mass_properties(
@@ -91,7 +77,11 @@ fn refresh_attached_mass_properties(
     propulsion: &RocketPropulsion,
     ablation_mass_loss_kg: f64,
 ) {
-    let boosters = attached_boosters(propulsion);
+    let (boosters, booster_propellant_remaining_kg) = propulsion
+        .attached_boosters()
+        .map_or((None, &[][..]), |(boosters, inventory)| {
+            (Some(boosters), inventory)
+        });
     let mass_properties = ActiveVehicleMassPropertiesInput {
         stages: &propulsion.vehicle.stages,
         propellant_remaining_kg: &propulsion.propellant_remaining_kg,
@@ -101,7 +91,7 @@ fn refresh_attached_mass_properties(
         radius_m: geometry.radius_m as f64,
         height_m: geometry.height_m as f64,
         boosters,
-        booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+        booster_propellant_remaining_kg,
     }
     .calculate();
     rocket.dynamics.mass_kg = mass_properties.mass_kg;
@@ -147,21 +137,16 @@ pub fn propulsion_staging(
     {
         propulsion.time_since_separation_s += dt;
 
-        if let Some(boosters) = attached_boosters(&propulsion).cloned() {
-            if !propulsion.booster_propellant_remaining_kg.is_empty()
-                && propulsion
-                    .booster_propellant_remaining_kg
-                    .iter()
-                    .all(|propellant_kg| *propellant_kg <= 0.0)
-            {
+        if let Some((boosters, booster_propellant_remaining_kg)) = propulsion.attached_boosters() {
+            if propulsion.attached_boosters_are_depleted() {
+                let boosters = boosters.clone();
                 let booster_dynamics = separate_parallel_boosters_dynamics(
                     rocket.dynamics,
                     &boosters,
-                    &propulsion.booster_propellant_remaining_kg,
+                    booster_propellant_remaining_kg,
                     PARALLEL_BOOSTER_SEPARATION_DV_MPS,
                 );
-                propulsion.boosters_attached = false;
-                propulsion.booster_propellant_remaining_kg.clear();
+                propulsion.detach_boosters();
                 let mut serial_stack = propulsion.vehicle.clone();
                 serial_stack.parallel_boosters = None;
                 if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
@@ -333,8 +318,7 @@ pub fn propulsion_staging(
                     vehicle: recovery_vehicle,
                     active_stage: 0,
                     propellant_remaining_kg: vec![recovery_reserve_kg],
-                    booster_propellant_remaining_kg: Vec::new(),
-                    boosters_attached: false,
+                    booster_attachment: BoosterAttachmentState::Detached,
                     throttle: 0.0,
                     gimbal_pitch_rad: 0.0,
                     gimbal_yaw_rad: 0.0,
@@ -405,7 +389,7 @@ pub fn propulsion_thrust(
             force_accum.0 +=
                 rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction;
         }
-        if let Some(boosters) = attached_boosters(propulsion) {
+        if let Some((boosters, _)) = propulsion.attached_boosters() {
             for booster_index in 0..boosters.count() {
                 if !booster_is_ignitable(propulsion, booster_index) {
                     continue;
@@ -417,7 +401,9 @@ pub fn propulsion_thrust(
                     propulsion.gimbal_pitch_rad as f64,
                     propulsion.gimbal_yaw_rad as f64,
                 );
-                let remaining = propulsion.booster_propellant_remaining_kg[booster_index];
+                let remaining = propulsion
+                    .attached_booster_inventory()
+                    .expect("attached boosters have a fixed propellant inventory")[booster_index];
                 let burn_fraction =
                     burn_duration_s(remaining, booster_mass_flow_kg_s, sim_time.fixed_timestep())
                         / sim_time.fixed_timestep();
@@ -458,7 +444,8 @@ pub fn propulsion_consumption(
                 reserve_kg + consumption.remaining_kg;
         }
 
-        if let Some(boosters) = attached_boosters(&propulsion).cloned() {
+        if let Some((boosters, _)) = propulsion.attached_boosters() {
+            let boosters = boosters.clone();
             for booster_index in 0..boosters.count() {
                 if !booster_is_ignitable(&propulsion, booster_index) {
                     continue;
@@ -468,8 +455,11 @@ pub fn propulsion_consumption(
                     throttle,
                     conditions.ambient_pressure_pa,
                 );
-                let remaining = propulsion.booster_propellant_remaining_kg[booster_index];
-                propulsion.booster_propellant_remaining_kg[booster_index] =
+                let inventory = propulsion
+                    .attached_booster_inventory_mut()
+                    .expect("attached boosters have a fixed propellant inventory");
+                let remaining = inventory[booster_index];
+                inventory[booster_index] =
                     consume_propellant(remaining, mass_flow_kg_s, dt).remaining_kg;
             }
         }
@@ -521,7 +511,7 @@ pub fn propulsion_gimbal(
                 propulsion.gimbal_yaw_rad as f64,
             ) * burn_fraction;
         }
-        if let Some(boosters) = attached_boosters(propulsion) {
+        if let Some((boosters, _)) = propulsion.attached_boosters() {
             for booster_index in 0..boosters.count() {
                 if !booster_is_ignitable(propulsion, booster_index) {
                     continue;
@@ -532,7 +522,10 @@ pub fn propulsion_gimbal(
                     conditions.ambient_pressure_pa,
                 );
                 let burn_fraction = burn_duration_s(
-                    propulsion.booster_propellant_remaining_kg[booster_index],
+                    propulsion
+                        .attached_booster_inventory()
+                        .expect("attached boosters have a fixed propellant inventory")
+                        [booster_index],
                     booster_mass_flow_kg_s,
                     sim_time.fixed_timestep(),
                 ) / sim_time.fixed_timestep();
