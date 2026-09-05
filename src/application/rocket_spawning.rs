@@ -11,8 +11,7 @@ use crate::domain::services::rocket_dynamics::{
     orientation_from_up_and_heading, RocketDynamicsState,
 };
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
-    DEFAULT_ULLAGE_SETTLE_TIME_S,
+    ActiveVehicleMassPropertiesInput, DEFAULT_ULLAGE_SETTLE_TIME_S,
 };
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
@@ -115,26 +114,20 @@ pub(crate) fn spawn_rockets(
 
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
-    let total_mass_kg = active_vehicle_mass_with_payload_and_boosters(
-        &rocket.stages,
-        &propulsion.propellant_remaining_kg,
-        0,
-        attached_payload_kg,
-        rocket.parallel_boosters.as_ref(),
-        &propulsion.booster_propellant_remaining_kg,
-    );
     let radius_m = (rocket.diameter_m / 2.0) as f64;
-    let (inertia, com) = active_vehicle_inertia_with_boosters(
-        &rocket.stages,
-        &propulsion.propellant_remaining_kg,
-        0,
+    let mass_properties = ActiveVehicleMassPropertiesInput {
+        stages: &rocket.stages,
+        propellant_remaining_kg: &propulsion.propellant_remaining_kg,
+        active_stage: 0,
         attached_payload_kg,
-        0.0,
+        ablation_mass_loss_kg: 0.0,
         radius_m,
-        rocket.height_m as f64,
-        rocket.parallel_boosters.as_ref(),
-        &propulsion.booster_propellant_remaining_kg,
-    );
+        height_m: rocket.height_m as f64,
+        boosters: rocket.parallel_boosters.as_ref(),
+        booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+    }
+    .calculate();
+    let total_mass_kg = mass_properties.mass_kg;
     // State position is the full cylindrical stack's geometric center; its
     // lower -Y extent, rather than that center, rests on the launch surface.
     let position_m = body_to_inertial * position_bf + launch_up * (rocket.height_m as f64 * 0.5);
@@ -144,8 +137,8 @@ pub(crate) fn spawn_rockets(
         surface_velocity_mps,
         launch_attitude,
         total_mass_kg,
-        inertia,
-        com,
+        mass_properties.inertia_body,
+        mass_properties.center_of_mass_m,
     );
 
     // Phase 1: Core physics components (fits in bundle limit)

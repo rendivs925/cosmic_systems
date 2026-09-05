@@ -420,80 +420,106 @@ pub fn active_vehicle_inertia(
     )
 }
 
-/// Active stack mass properties with optional attached parallel boosters. The
-/// serial stack continues to use the established cylinder approximation; each
-/// booster contributes its own stage-local properties translated from its
-/// declared full-stack attachment origin via the parallel-axis theorem.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This extends the established serial mass-property inputs with the optional attached-booster inventory."
-)]
-pub fn active_vehicle_inertia_with_boosters(
-    stages: &[RocketStage],
-    propellant_remaining_kg: &[f32],
-    active_stage: usize,
-    attached_payload_kg: f32,
-    ablation_mass_loss_kg: f64,
-    radius_m: f64,
-    height_m: f64,
-    boosters: Option<&ParallelBoosters>,
-    booster_propellant_remaining_kg: &[f32],
-) -> (DMat3, DVec3) {
-    let (serial_inertia, serial_com) = active_vehicle_inertia(
-        stages,
-        propellant_remaining_kg,
-        active_stage,
-        attached_payload_kg,
-        ablation_mass_loss_kg,
-        radius_m,
-        height_m,
-    );
-    let serial_mass_kg = (active_vehicle_mass_with_payload(
-        stages,
-        propellant_remaining_kg,
-        active_stage,
-        attached_payload_kg,
-    ) - ablation_mass_loss_kg.max(0.0))
-    .max(1.0);
-    let Some(boosters) = boosters else {
-        return (serial_inertia, serial_com);
-    };
+/// Inputs for calculating the rigid-body properties of the currently attached
+/// vehicle. The inventory, geometry, and optional boosters are evaluated as
+/// one assembly so its mass, inertia, and center of mass cannot diverge.
+pub struct ActiveVehicleMassPropertiesInput<'a> {
+    pub stages: &'a [RocketStage],
+    pub propellant_remaining_kg: &'a [f32],
+    pub active_stage: usize,
+    pub attached_payload_kg: f32,
+    pub ablation_mass_loss_kg: f64,
+    pub radius_m: f64,
+    pub height_m: f64,
+    pub boosters: Option<&'a ParallelBoosters>,
+    pub booster_propellant_remaining_kg: &'a [f32],
+}
 
-    let mut total_mass_kg = serial_mass_kg;
-    let mut weighted_center_m = serial_com * serial_mass_kg;
-    for (attachment_m, propellant_kg) in boosters
-        .attachment_positions_m
-        .iter()
-        .zip(booster_propellant_remaining_kg.iter())
-    {
-        let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
-        let center_m = attachment_m.as_dvec3() + properties.center_of_mass_m;
-        total_mass_kg += properties.mass_kg;
-        weighted_center_m += center_m * properties.mass_kg;
+/// Rigid-body properties derived from one attached vehicle inventory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActiveVehicleMassProperties {
+    pub mass_kg: f64,
+    pub inertia_body: DMat3,
+    pub center_of_mass_m: DVec3,
+}
+
+impl ActiveVehicleMassPropertiesInput<'_> {
+    /// Calculate the active stack from the established cylinder approximation.
+    /// Each attached booster contributes stage-local properties translated from
+    /// its declared full-stack attachment origin via the parallel-axis theorem.
+    pub fn calculate(self) -> ActiveVehicleMassProperties {
+        let (serial_inertia, serial_com) = active_vehicle_inertia(
+            self.stages,
+            self.propellant_remaining_kg,
+            self.active_stage,
+            self.attached_payload_kg,
+            self.ablation_mass_loss_kg,
+            self.radius_m,
+            self.height_m,
+        );
+        let serial_mass_kg = (active_vehicle_mass_with_payload(
+            self.stages,
+            self.propellant_remaining_kg,
+            self.active_stage,
+            self.attached_payload_kg,
+        ) - self.ablation_mass_loss_kg.max(0.0))
+        .max(1.0);
+        let total_mass_kg = (active_vehicle_mass_with_payload_and_boosters(
+            self.stages,
+            self.propellant_remaining_kg,
+            self.active_stage,
+            self.attached_payload_kg,
+            self.boosters,
+            self.booster_propellant_remaining_kg,
+        ) - self.ablation_mass_loss_kg.max(0.0))
+        .max(1.0);
+        let Some(boosters) = self.boosters else {
+            return ActiveVehicleMassProperties {
+                mass_kg: total_mass_kg,
+                inertia_body: serial_inertia,
+                center_of_mass_m: serial_com,
+            };
+        };
+
+        let mut weighted_center_m = serial_com * serial_mass_kg;
+        for (attachment_m, propellant_kg) in boosters
+            .attachment_positions_m
+            .iter()
+            .zip(self.booster_propellant_remaining_kg.iter())
+        {
+            let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
+            let center_m = attachment_m.as_dvec3() + properties.center_of_mass_m;
+            weighted_center_m += center_m * properties.mass_kg;
+        }
+        let center_of_mass_m = weighted_center_m / total_mass_kg;
+        let parallel_axis = |mass_kg: f64, offset_m: DVec3| {
+            let squared_distance_m2 = offset_m.length_squared();
+            mass_kg
+                * (DMat3::from_diagonal(DVec3::splat(squared_distance_m2))
+                    - DMat3::from_cols(
+                        offset_m * offset_m.x,
+                        offset_m * offset_m.y,
+                        offset_m * offset_m.z,
+                    ))
+        };
+        let mut inertia =
+            serial_inertia + parallel_axis(serial_mass_kg, serial_com - center_of_mass_m);
+        for (attachment_m, propellant_kg) in boosters
+            .attachment_positions_m
+            .iter()
+            .zip(self.booster_propellant_remaining_kg.iter())
+        {
+            let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
+            let center_m = attachment_m.as_dvec3() + properties.center_of_mass_m;
+            inertia += properties.inertia_body
+                + parallel_axis(properties.mass_kg, center_m - center_of_mass_m);
+        }
+        ActiveVehicleMassProperties {
+            mass_kg: total_mass_kg,
+            inertia_body: inertia,
+            center_of_mass_m,
+        }
     }
-    let center_of_mass_m = weighted_center_m / total_mass_kg.max(1.0);
-    let parallel_axis = |mass_kg: f64, offset_m: DVec3| {
-        let squared_distance_m2 = offset_m.length_squared();
-        mass_kg
-            * (DMat3::from_diagonal(DVec3::splat(squared_distance_m2))
-                - DMat3::from_cols(
-                    offset_m * offset_m.x,
-                    offset_m * offset_m.y,
-                    offset_m * offset_m.z,
-                ))
-    };
-    let mut inertia = serial_inertia + parallel_axis(serial_mass_kg, serial_com - center_of_mass_m);
-    for (attachment_m, propellant_kg) in boosters
-        .attachment_positions_m
-        .iter()
-        .zip(booster_propellant_remaining_kg.iter())
-    {
-        let properties = stage_mass_properties(&boosters.stage, *propellant_kg, 0.0, 0.0);
-        let center_m = attachment_m.as_dvec3() + properties.center_of_mass_m;
-        inertia += properties.inertia_body
-            + parallel_axis(properties.mass_kg, center_m - center_of_mass_m);
-    }
-    (inertia, center_of_mass_m)
 }
 
 /// Mass properties for one separated physical stage. Geometry is deliberately
@@ -1410,18 +1436,21 @@ mod tests {
         assert_eq!(serial_mass, extended_mass);
         let serial_inertia =
             active_vehicle_inertia(&rocket.stages, &propellant, 0, 100.0, 0.0, 1.85, 70.0);
-        let extended_inertia = active_vehicle_inertia_with_boosters(
-            &rocket.stages,
-            &propellant,
-            0,
-            100.0,
-            0.0,
-            1.85,
-            70.0,
-            None,
-            &[],
-        );
-        assert_eq!(serial_inertia, extended_inertia);
+        let properties = ActiveVehicleMassPropertiesInput {
+            stages: &rocket.stages,
+            propellant_remaining_kg: &propellant,
+            active_stage: 0,
+            attached_payload_kg: 100.0,
+            ablation_mass_loss_kg: 0.0,
+            radius_m: 1.85,
+            height_m: 70.0,
+            boosters: None,
+            booster_propellant_remaining_kg: &[],
+        }
+        .calculate();
+        assert_eq!(properties.mass_kg, serial_mass);
+        assert_eq!(properties.inertia_body, serial_inertia.0);
+        assert_eq!(properties.center_of_mass_m, serial_inertia.1);
     }
 
     #[test]

@@ -10,9 +10,7 @@ use crate::domain::services::entry_physics::{
     tps_recession_rate_mps,
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
-use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
-};
+use crate::domain::services::rocket_propulsion::ActiveVehicleMassPropertiesInput;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::GroundContact;
 use crate::infrastructure::bevy_adapters::components::EntryPhysicsConfig;
@@ -125,29 +123,21 @@ pub fn compute_ablation(
             .boosters_attached
             .then_some(())
             .and(propulsion.vehicle.parallel_boosters.as_ref());
-        let new_mass = (active_vehicle_mass_with_payload_and_boosters(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            propulsion.attached_payload_kg,
+        let mass_properties = ActiveVehicleMassPropertiesInput {
+            stages: &propulsion.vehicle.stages,
+            propellant_remaining_kg: &propulsion.propellant_remaining_kg,
+            active_stage: propulsion.active_stage,
+            attached_payload_kg: propulsion.attached_payload_kg,
+            ablation_mass_loss_kg: ablation.mass_loss_kg,
+            radius_m: geometry.radius_m as f64,
+            height_m: geometry.height_m as f64,
             boosters,
-            &propulsion.booster_propellant_remaining_kg,
-        ) - ablation.mass_loss_kg)
-            .max(1.0);
-        let (inertia, center_of_mass_m) = active_vehicle_inertia_with_boosters(
-            &propulsion.vehicle.stages,
-            &propulsion.propellant_remaining_kg,
-            propulsion.active_stage,
-            propulsion.attached_payload_kg,
-            ablation.mass_loss_kg,
-            geometry.radius_m as f64,
-            geometry.height_m as f64,
-            boosters,
-            &propulsion.booster_propellant_remaining_kg,
-        );
-        rocket.dynamics.mass_kg = new_mass;
-        rocket.dynamics.inertia_body = inertia;
-        rocket.dynamics.center_of_mass_m = center_of_mass_m;
+            booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+        }
+        .calculate();
+        rocket.dynamics.mass_kg = mass_properties.mass_kg;
+        rocket.dynamics.inertia_body = mass_properties.inertia_body;
+        rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
     }
 }
 

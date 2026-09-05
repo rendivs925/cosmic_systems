@@ -7,11 +7,11 @@ use crate::domain::events::StageSeparatedEvent;
 use crate::domain::services::guidance::AutopilotMode;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
     burn_duration_s, consume_propellant, separate_parallel_boosters_dynamics,
     separate_stage_dynamics, shed_stage, stage_gimbal_torque_body, stage_gimbaled_thrust_body,
-    stage_mass_properties, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
-    PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
+    stage_mass_properties, stage_thrust_body, ActiveVehicleMassPropertiesInput,
+    MIN_SEPARATION_CLEARANCE_M, PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS,
+    SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
@@ -92,28 +92,21 @@ fn refresh_attached_mass_properties(
     ablation_mass_loss_kg: f64,
 ) {
     let boosters = attached_boosters(propulsion);
-    rocket.dynamics.mass_kg = (active_vehicle_mass_with_payload_and_boosters(
-        &propulsion.vehicle.stages,
-        &propulsion.propellant_remaining_kg,
-        propulsion.active_stage,
-        propulsion.attached_payload_kg,
-        boosters,
-        &propulsion.booster_propellant_remaining_kg,
-    ) - ablation_mass_loss_kg)
-        .max(1.0);
-    let (inertia, center_of_mass_m) = active_vehicle_inertia_with_boosters(
-        &propulsion.vehicle.stages,
-        &propulsion.propellant_remaining_kg,
-        propulsion.active_stage,
-        propulsion.attached_payload_kg,
+    let mass_properties = ActiveVehicleMassPropertiesInput {
+        stages: &propulsion.vehicle.stages,
+        propellant_remaining_kg: &propulsion.propellant_remaining_kg,
+        active_stage: propulsion.active_stage,
+        attached_payload_kg: propulsion.attached_payload_kg,
         ablation_mass_loss_kg,
-        geometry.radius_m as f64,
-        geometry.height_m as f64,
+        radius_m: geometry.radius_m as f64,
+        height_m: geometry.height_m as f64,
         boosters,
-        &propulsion.booster_propellant_remaining_kg,
-    );
-    rocket.dynamics.inertia_body = inertia;
-    rocket.dynamics.center_of_mass_m = center_of_mass_m;
+        booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+    }
+    .calculate();
+    rocket.dynamics.mass_kg = mass_properties.mass_kg;
+    rocket.dynamics.inertia_body = mass_properties.inertia_body;
+    rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
 }
 
 /// Separate an empty stage and refresh the surviving vehicle mass.

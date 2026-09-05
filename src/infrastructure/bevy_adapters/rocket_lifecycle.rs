@@ -2,9 +2,7 @@ use crate::application::rocket_spawning::build_rocket_mesh;
 use crate::components::rocket::*;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::reference_frames::surface_velocity_in_planet_inertial;
-use crate::domain::services::rocket_propulsion::{
-    active_vehicle_inertia_with_boosters, active_vehicle_mass_with_payload_and_boosters,
-};
+use crate::domain::services::rocket_propulsion::ActiveVehicleMassPropertiesInput;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{MaxQTracker, PlanetComponent};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -164,28 +162,22 @@ pub fn apply_relaunch_requests(
             }
 
             // Mass and inertia from the refueled stack.
-            let total_mass_kg = active_vehicle_mass_with_payload_and_boosters(
-                &propulsion.vehicle.stages,
-                &propulsion.propellant_remaining_kg,
-                0,
-                propulsion.attached_payload_kg,
-                propulsion.vehicle.parallel_boosters.as_ref(),
-                &propulsion.booster_propellant_remaining_kg,
-            );
-            let (inertia, com) = active_vehicle_inertia_with_boosters(
-                &propulsion.vehicle.stages,
-                &propulsion.propellant_remaining_kg,
-                0,
-                propulsion.attached_payload_kg,
-                0.0,
-                geometry.radius_m as f64,
-                geometry.height_m as f64,
-                propulsion.vehicle.parallel_boosters.as_ref(),
-                &propulsion.booster_propellant_remaining_kg,
-            );
+            let mass_properties = ActiveVehicleMassPropertiesInput {
+                stages: &propulsion.vehicle.stages,
+                propellant_remaining_kg: &propulsion.propellant_remaining_kg,
+                active_stage: 0,
+                attached_payload_kg: propulsion.attached_payload_kg,
+                ablation_mass_loss_kg: 0.0,
+                radius_m: geometry.radius_m as f64,
+                height_m: geometry.height_m as f64,
+                boosters: propulsion.vehicle.parallel_boosters.as_ref(),
+                booster_propellant_remaining_kg: &propulsion.booster_propellant_remaining_kg,
+            }
+            .calculate();
+            let total_mass_kg = mass_properties.mass_kg;
             rocket.dynamics.mass_kg = total_mass_kg;
-            rocket.dynamics.inertia_body = inertia;
-            rocket.dynamics.center_of_mass_m = com;
+            rocket.dynamics.inertia_body = mass_properties.inertia_body;
+            rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
 
             // Upright and co-moving with the rotating pad at the current site.
             let Some(planet) = planet_query
