@@ -1188,21 +1188,30 @@ pub fn boostback_guidance(
 }
 
 /// Target-relative surface range errors in the vehicle's local flight frame.
-/// `crossrange_m` is positive when the target lies to the vehicle's left;
-/// `downrange_m` is positive when it lies ahead along the horizontal velocity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceRangeErrors {
+    /// Positive when the target lies to the vehicle's left, m.
+    pub crossrange_m: f64,
+    /// Positive when the target lies ahead along the horizontal velocity, m.
+    pub downrange_m: f64,
+}
+
 /// Both values are great-circle distances on the supplied reference sphere.
 pub fn target_surface_range_errors_m(
     position_m: DVec3,
     velocity_mps: DVec3,
     target_position_m: DVec3,
     reference_radius_m: f64,
-) -> (f64, f64) {
+) -> SurfaceRangeErrors {
     if reference_radius_m <= 0.0
         || position_m.length_squared() <= 0.0
         || velocity_mps.length_squared() <= 0.0
         || target_position_m.length_squared() <= 0.0
     {
-        return (0.0, 0.0);
+        return SurfaceRangeErrors {
+            crossrange_m: 0.0,
+            downrange_m: 0.0,
+        };
     }
 
     let up = position_m.normalize();
@@ -1210,7 +1219,10 @@ pub fn target_surface_range_errors_m(
     let target_tangent = target_up - up * target_up.dot(up);
     let horizontal_velocity = velocity_mps - up * velocity_mps.dot(up);
     if target_tangent.length_squared() <= 1e-12 || horizontal_velocity.length_squared() <= 1e-12 {
-        return (0.0, 0.0);
+        return SurfaceRangeErrors {
+            crossrange_m: 0.0,
+            downrange_m: 0.0,
+        };
     }
 
     let forward = horizontal_velocity.normalize();
@@ -1219,7 +1231,10 @@ pub fn target_surface_range_errors_m(
     let arc_distance_m = reference_radius_m * up.dot(target_up).clamp(-1.0, 1.0).acos();
     let downrange_m = arc_distance_m * target_direction.dot(forward);
     let crossrange_m = -arc_distance_m * target_direction.dot(right);
-    (crossrange_m, downrange_m)
+    SurfaceRangeErrors {
+        crossrange_m,
+        downrange_m,
+    }
 }
 
 /// Enhanced reentry bank-angle guidance with predictor-corrector.
@@ -1804,18 +1819,16 @@ mod tests {
 
         // A target ahead along +Y has positive downrange and no crossrange.
         let ahead = DVec3::new(radius_m, 100_000.0, 0.0).normalize() * radius_m;
-        let (crossrange, downrange) =
-            target_surface_range_errors_m(position, velocity, ahead, radius_m);
-        assert!(crossrange.abs() < 1e-6);
-        assert!(downrange > 99_000.0 && downrange < 100_000.0);
+        let range_errors = target_surface_range_errors_m(position, velocity, ahead, radius_m);
+        assert!(range_errors.crossrange_m.abs() < 1e-6);
+        assert!(range_errors.downrange_m > 99_000.0 && range_errors.downrange_m < 100_000.0);
 
         // At this location the vehicle's left is -Z, matching the bank sign
         // convention used by `reentry_bank_angle_enhanced`.
         let left = DVec3::new(radius_m, 0.0, -100_000.0).normalize() * radius_m;
-        let (crossrange, downrange) =
-            target_surface_range_errors_m(position, velocity, left, radius_m);
-        assert!(crossrange > 99_000.0 && crossrange < 100_000.0);
-        assert!(downrange.abs() < 1e-6);
+        let range_errors = target_surface_range_errors_m(position, velocity, left, radius_m);
+        assert!(range_errors.crossrange_m > 99_000.0 && range_errors.crossrange_m < 100_000.0);
+        assert!(range_errors.downrange_m.abs() < 1e-6);
     }
 
     #[test]

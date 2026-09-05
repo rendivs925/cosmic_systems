@@ -381,7 +381,7 @@ pub fn guidance_system(
                     |specific_force| specific_force.value.length() / 9.80665,
                 );
                 let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
-                let (crossrange, downrange) = target_surface_range_errors_m(
+                let range_errors = target_surface_range_errors_m(
                     position_m,
                     surface_relative_velocity_mps,
                     autopilot.target_landing_position_m,
@@ -404,8 +404,8 @@ pub fn guidance_system(
                     heat_flux,
                     g_load,
                     &descent_config,
-                    crossrange,
-                    downrange,
+                    range_errors.crossrange_m,
+                    range_errors.downrange_m,
                     reference_bank,
                 );
 
@@ -568,7 +568,7 @@ pub fn guidance_system(
                 |specific_force| specific_force.value.length() / 9.80665,
             );
             let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
-            let (crossrange, _) = target_surface_range_errors_m(
+            let range_errors = target_surface_range_errors_m(
                 position_m,
                 surface_relative_velocity_mps,
                 autopilot.target_landing_position_m,
@@ -581,7 +581,7 @@ pub fn guidance_system(
                 heat_flux,
                 g_load,
                 &descent_config,
-                crossrange,
+                range_errors.crossrange_m,
             );
             commands.target_attitude = banked_attitude_from_direction(up_dir, bank_angle);
         }

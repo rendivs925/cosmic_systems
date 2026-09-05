@@ -135,13 +135,27 @@ pub fn engine_thrust_n(engine: &RocketEngine, throttle: f32, ambient_pressure_pa
     EngineOperatingPoint::from_engine(engine, throttle, ambient_pressure_pa).thrust_n
 }
 
-/// Consume propellant at the given mass flow for `dt` seconds. Returns the
-/// remaining propellant and the actually consumed mass (never exceeds what is
-/// available).
-pub fn consume_propellant(propellant_kg: f32, mass_flow_kg_s: f64, dt: f64) -> (f32, f32) {
-    let remaining = (propellant_kg - (mass_flow_kg_s * dt) as f32).max(0.0);
-    let consumed = propellant_kg - remaining;
-    (remaining, consumed)
+/// Result of one bounded propellant-consumption step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PropellantConsumption {
+    /// Propellant left after the step, kg.
+    pub remaining_kg: f32,
+    /// Propellant actually consumed during the step, kg.
+    pub consumed_kg: f32,
+}
+
+/// Consume propellant at the given mass flow for `dt` seconds. Consumption
+/// never exceeds the available propellant.
+pub fn consume_propellant(
+    propellant_kg: f32,
+    mass_flow_kg_s: f64,
+    dt: f64,
+) -> PropellantConsumption {
+    let remaining_kg = (propellant_kg - (mass_flow_kg_s * dt) as f32).max(0.0);
+    PropellantConsumption {
+        remaining_kg,
+        consumed_kg: propellant_kg - remaining_kg,
+    }
 }
 
 /// Duration for which a stage can actually produce thrust during one fixed
@@ -744,13 +758,13 @@ mod tests {
 
     #[test]
     fn mass_loss_matches_flow_times_time() {
-        let (remaining, consumed) = consume_propellant(1_000.0, 250.0, 2.0);
-        assert!((remaining - 500.0).abs() < 1e-6);
-        assert!((consumed - 500.0).abs() < 1e-6);
+        let consumption = consume_propellant(1_000.0, 250.0, 2.0);
+        assert!((consumption.remaining_kg - 500.0).abs() < 1e-6);
+        assert!((consumption.consumed_kg - 500.0).abs() < 1e-6);
         // Cannot consume beyond available propellant.
-        let (remaining, consumed) = consume_propellant(100.0, 250.0, 2.0);
-        assert_eq!(remaining, 0.0);
-        assert!((consumed - 100.0).abs() < 1e-6);
+        let consumption = consume_propellant(100.0, 250.0, 2.0);
+        assert_eq!(consumption.remaining_kg, 0.0);
+        assert!((consumption.consumed_kg - 100.0).abs() < 1e-6);
     }
 
     #[test]
@@ -897,13 +911,13 @@ mod tests {
         // Burn partway into the active stage so a residual exists at
         // separation (realistic depletion).
         let mut burned_total = 0.0_f64;
-        let (remaining, consumed) = consume_propellant(
+        let consumption = consume_propellant(
             propellant[0],
             mass_flow_from_thrust(7_607_000.0, 282.0),
             30.0,
         );
-        propellant[0] = remaining;
-        burned_total += consumed as f64;
+        propellant[0] = consumption.remaining_kg;
+        burned_total += consumption.consumed_kg as f64;
 
         let mut shed_total = 0.0_f64;
         let mut active_stage = 0_usize;
@@ -1492,8 +1506,8 @@ mod tests {
         );
         assert!((state.mass_kg - 142_200.0).abs() < 1.0);
         // After burning ~5 s at a high mass flow the mass drops accordingly.
-        let (_, consumed) = consume_propellant(90_000.0, 2_500.0, 5.0);
-        state.mass_kg -= consumed as f64;
+        let consumption = consume_propellant(90_000.0, 2_500.0, 5.0);
+        state.mass_kg -= consumption.consumed_kg as f64;
         assert!((state.mass_kg - (142_200.0 - 12_500.0)).abs() < 1.0);
     }
 }

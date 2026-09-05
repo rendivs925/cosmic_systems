@@ -460,8 +460,9 @@ pub fn propulsion_consumption(
             let active_stage = propulsion.active_stage;
             let reserve_kg = recovery_reserve_kg(&propulsion);
             let remaining = burnable_propellant_kg(&propulsion);
-            let (remaining_new, _) = consume_propellant(remaining, mass_flow_kg_s, dt);
-            propulsion.propellant_remaining_kg[active_stage] = reserve_kg + remaining_new;
+            let consumption = consume_propellant(remaining, mass_flow_kg_s, dt);
+            propulsion.propellant_remaining_kg[active_stage] =
+                reserve_kg + consumption.remaining_kg;
         }
 
         if let Some(boosters) = attached_boosters(&propulsion).cloned() {
@@ -476,7 +477,7 @@ pub fn propulsion_consumption(
                 );
                 let remaining = propulsion.booster_propellant_remaining_kg[booster_index];
                 propulsion.booster_propellant_remaining_kg[booster_index] =
-                    consume_propellant(remaining, mass_flow_kg_s, dt).0;
+                    consume_propellant(remaining, mass_flow_kg_s, dt).remaining_kg;
             }
         }
         refresh_attached_mass_properties(
