@@ -10,9 +10,7 @@ use crate::domain::services::reference_frames::{
 use crate::domain::services::rocket_dynamics::{
     orientation_from_up_and_heading, RocketDynamicsState,
 };
-use crate::domain::services::rocket_propulsion::{
-    ActiveVehicleMassPropertiesInput, DEFAULT_ULLAGE_SETTLE_TIME_S,
-};
+use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -115,23 +113,12 @@ pub(crate) fn spawn_rockets(
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
     let radius_m = (rocket.diameter_m / 2.0) as f64;
-    let (boosters, booster_propellant_remaining_kg) = propulsion
-        .attached_boosters()
-        .map_or((None, &[][..]), |(boosters, inventory)| {
-            (Some(boosters), inventory)
-        });
-    let mass_properties = ActiveVehicleMassPropertiesInput {
-        stages: &rocket.stages,
-        propellant_remaining_kg: &propulsion.propellant_remaining_kg,
-        active_stage: 0,
-        attached_payload_kg,
-        ablation_mass_loss_kg: 0.0,
-        radius_m,
-        height_m: rocket.height_m as f64,
-        boosters,
-        booster_propellant_remaining_kg,
-    }
-    .calculate();
+    let geometry = RocketGeometry {
+        radius_m: radius_m as f32,
+        height_m: rocket.height_m,
+        lower_extent_y_m: rocket.lower_extent_in_stack_m(),
+    };
+    let mass_properties = propulsion.mass_properties(geometry, 0.0);
     let total_mass_kg = mass_properties.mass_kg;
     // State position is the full cylindrical stack's geometric center; its
     // lower -Y extent, rather than that center, rests on the launch surface.
@@ -150,11 +137,7 @@ pub(crate) fn spawn_rockets(
     let entity = commands
         .spawn((
             RocketPhysicsState { dynamics },
-            RocketGeometry {
-                radius_m: radius_m as f32,
-                height_m: rocket.height_m,
-                lower_extent_y_m: rocket.lower_extent_in_stack_m(),
-            },
+            geometry,
             RocketMissionState::PreLaunch,
             propulsion,
             ForceAccumulator::default(),
@@ -168,10 +151,9 @@ pub(crate) fn spawn_rockets(
         ))
         .id();
 
-    // Phase 2: Facade + render components.
+    // Phase 2: Render and flight-support components.
     // Two inserts because Bevy bundle tuples cap at 15 items.
     commands.entity(entity).insert((
-        RocketFacade::default(),
         RocketRenderState::new(dynamics),
         RocketFlightConditions::default(),
         AerodynamicForces::default(),

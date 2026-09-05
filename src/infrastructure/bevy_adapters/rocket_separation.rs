@@ -13,7 +13,6 @@ use crate::domain::events::FairingSeparatedEvent;
 use crate::domain::services::aerodynamics::drag_force_body;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
-use crate::domain::services::rocket_propulsion::ActiveVehicleMassPropertiesInput;
 use crate::domain::services::terrain_collision::radar_altitude_m;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, PlanetTerrain};
@@ -98,7 +97,6 @@ pub fn spawn_spent_stage(
             MeshMaterial3d(material.clone()),
             Transform::default(),
             RocketRenderState::new(spec.dynamics),
-            RocketFacade::default(),
         ))
         .id();
     if let Some(gear_spec) = spec.landing_gear {
@@ -246,23 +244,7 @@ pub fn check_fairing_separation(
         // mass, COM, and inertia together.
         propulsion.attached_payload_kg = 0.0;
         let ablation_mass_loss_kg = ablation.map_or(0.0, |state| state.mass_loss_kg);
-        let (boosters, booster_propellant_remaining_kg) = propulsion
-            .attached_boosters()
-            .map_or((None, &[][..]), |(boosters, inventory)| {
-                (Some(boosters), inventory)
-            });
-        let mass_properties = ActiveVehicleMassPropertiesInput {
-            stages: &propulsion.vehicle.stages,
-            propellant_remaining_kg: &propulsion.propellant_remaining_kg,
-            active_stage: propulsion.active_stage,
-            attached_payload_kg: propulsion.attached_payload_kg,
-            ablation_mass_loss_kg,
-            radius_m: geometry.radius_m as f64,
-            height_m: geometry.height_m as f64,
-            boosters,
-            booster_propellant_remaining_kg,
-        }
-        .calculate();
+        let mass_properties = propulsion.mass_properties(*geometry, ablation_mass_loss_kg);
         rocket.dynamics.mass_kg = mass_properties.mass_kg;
         rocket.dynamics.inertia_body = mass_properties.inertia_body;
         rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;

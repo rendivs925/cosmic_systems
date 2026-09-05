@@ -1,8 +1,7 @@
 //! Presentation adapters for the authoritative rocket dynamics state.
 
 use crate::components::rocket::{
-    GroundRest, RocketFacade, RocketMissionState, RocketPhysicsState, RocketRenderState,
-    TipOverState,
+    GroundRest, RocketMissionState, RocketPhysicsState, RocketRenderState, TipOverState,
 };
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
@@ -53,22 +52,12 @@ pub fn interpolate_render_transform(
     render_origin: Res<RenderOrigin>,
     physical_scale: Res<PhysicalScale>,
     time: Res<Time<Fixed>>,
-    mut rocket_query: Query<(
-        &RocketPhysicsState,
-        &RocketRenderState,
-        &mut RocketFacade,
-        &mut Transform,
-    )>,
+    mut rocket_query: Query<(&RocketPhysicsState, &RocketRenderState, &mut Transform)>,
 ) {
     let alpha = time.overstep_fraction() as f64;
-    for (rocket, render, mut facade, mut transform) in rocket_query.iter_mut() {
+    for (_rocket, render, mut transform) in rocket_query.iter_mut() {
         let interpolated = render_dynamics_state(*render, alpha);
         *transform = interpolated.render_transform(render_origin.origin, &physical_scale);
-        facade.position = transform.translation;
-        facade.velocity = interpolated.velocity_mps.as_vec3();
-        facade.orientation = interpolated.orientation.as_quat();
-        facade.angular_velocity = interpolated.angular_velocity_radps.as_vec3();
-        facade.mass = rocket.dynamics.mass_kg as f32;
     }
 }
 

@@ -8,9 +8,12 @@ use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::gravity::ForceModelReport;
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+use crate::domain::services::rocket_propulsion::{
+    ActiveVehicleMassProperties, ActiveVehicleMassPropertiesInput,
+};
 use crate::domain::services::terrain_collision::GroundContact;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use bevy::math::{DQuat, DVec3, Quat, Vec3};
+use bevy::math::{DQuat, DVec3, Vec3};
 use bevy::prelude::*;
 use std::ops::Deref;
 
@@ -266,6 +269,32 @@ impl RocketPropulsion {
     pub(crate) fn detach_boosters(&mut self) {
         self.booster_attachment.detach();
     }
+
+    /// Derive mass, inertia, and center of mass from the one authoritative
+    /// attached vehicle inventory.
+    pub(crate) fn mass_properties(
+        &self,
+        geometry: RocketGeometry,
+        ablation_mass_loss_kg: f64,
+    ) -> ActiveVehicleMassProperties {
+        let (boosters, booster_propellant_remaining_kg) = self
+            .attached_boosters()
+            .map_or((None, &[][..]), |(boosters, inventory)| {
+                (Some(boosters), inventory)
+            });
+        ActiveVehicleMassPropertiesInput {
+            stages: &self.vehicle.stages,
+            propellant_remaining_kg: &self.propellant_remaining_kg,
+            active_stage: self.active_stage,
+            attached_payload_kg: self.attached_payload_kg,
+            ablation_mass_loss_kg,
+            radius_m: f64::from(geometry.radius_m),
+            height_m: f64::from(geometry.height_m),
+            boosters,
+            booster_propellant_remaining_kg,
+        }
+        .calculate()
+    }
 }
 
 /// Flight computer command interface between guidance, control, actuation, physics.
@@ -364,20 +393,6 @@ pub struct AerodynamicForces {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct MaxQTracker {
     pub max_q_pa: f64,
-}
-
-/// f32 facade fields for rendering, synced from authoritative state.
-/// Only sync_render_transform writes this.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct RocketFacade {
-    pub position: Vec3,
-    pub velocity: Vec3,
-    pub orientation: Quat,
-    pub angular_velocity: Vec3,
-    pub mass: f32,
-    pub dry_mass_kg: f32,
-    pub fuel_mass: f32,
-    pub thrust: Vec3,
 }
 
 /// Thermal state from entry physics.
@@ -963,6 +978,31 @@ mod propulsion_tests {
 
         assert!(attachment.remaining_kg().is_none());
         assert!(!attachment.is_attached());
+    }
+
+    #[test]
+    fn mass_properties_follow_attached_inventory_and_ablation() {
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        let booster_stage = vehicle.stages[0].clone();
+        let booster_mass_kg = f64::from(booster_stage.total_mass_kg()) * 2.0;
+        vehicle.parallel_boosters = Some(ParallelBoosters::new(
+            booster_stage,
+            vec![Vec3::X, Vec3::NEG_X],
+        ));
+        let mut propulsion = RocketPropulsion::for_fresh_flight(vehicle, 0.0, 0.0);
+        let geometry = RocketGeometry {
+            radius_m: 2.0,
+            height_m: 70.0,
+            lower_extent_y_m: -35.0,
+        };
+
+        let attached = propulsion.mass_properties(geometry, 0.0);
+        propulsion.detach_boosters();
+        let detached = propulsion.mass_properties(geometry, 0.0);
+        let ablated = propulsion.mass_properties(geometry, 50.0);
+
+        assert!((attached.mass_kg - detached.mass_kg - booster_mass_kg).abs() < 1e-6);
+        assert!((detached.mass_kg - ablated.mass_kg - 50.0).abs() < 1e-6);
     }
 }
 

@@ -2,7 +2,6 @@ use crate::application::rocket_spawning::build_rocket_mesh;
 use crate::components::rocket::*;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::reference_frames::surface_velocity_in_planet_inertial;
-use crate::domain::services::rocket_propulsion::ActiveVehicleMassPropertiesInput;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{MaxQTracker, PlanetComponent};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -162,23 +161,7 @@ pub fn apply_relaunch_requests(
             }
 
             // Mass and inertia from the refueled stack.
-            let (boosters, booster_propellant_remaining_kg) = propulsion
-                .attached_boosters()
-                .map_or((None, &[][..]), |(boosters, inventory)| {
-                    (Some(boosters), inventory)
-                });
-            let mass_properties = ActiveVehicleMassPropertiesInput {
-                stages: &propulsion.vehicle.stages,
-                propellant_remaining_kg: &propulsion.propellant_remaining_kg,
-                active_stage: 0,
-                attached_payload_kg: propulsion.attached_payload_kg,
-                ablation_mass_loss_kg: 0.0,
-                radius_m: geometry.radius_m as f64,
-                height_m: geometry.height_m as f64,
-                boosters,
-                booster_propellant_remaining_kg,
-            }
-            .calculate();
+            let mass_properties = propulsion.mass_properties(*geometry, 0.0);
             let total_mass_kg = mass_properties.mass_kg;
             rocket.dynamics.mass_kg = total_mass_kg;
             rocket.dynamics.inertia_body = mass_properties.inertia_body;

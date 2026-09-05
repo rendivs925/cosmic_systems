@@ -9,9 +9,8 @@ use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::rocket_propulsion::{
     burn_duration_s, consume_propellant, separate_parallel_boosters_dynamics,
     separate_stage_dynamics, shed_stage, stage_gimbal_torque_body, stage_gimbaled_thrust_body,
-    stage_mass_properties, stage_thrust_body, ActiveVehicleMassPropertiesInput,
-    MIN_SEPARATION_CLEARANCE_M, PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS,
-    SPENT_STAGE_RETRO_DV_MPS,
+    stage_mass_properties, stage_thrust_body, MIN_SEPARATION_CLEARANCE_M,
+    PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::rocket_separation::{spawn_spent_stage, SpentStageSpec};
@@ -77,23 +76,7 @@ fn refresh_attached_mass_properties(
     propulsion: &RocketPropulsion,
     ablation_mass_loss_kg: f64,
 ) {
-    let (boosters, booster_propellant_remaining_kg) = propulsion
-        .attached_boosters()
-        .map_or((None, &[][..]), |(boosters, inventory)| {
-            (Some(boosters), inventory)
-        });
-    let mass_properties = ActiveVehicleMassPropertiesInput {
-        stages: &propulsion.vehicle.stages,
-        propellant_remaining_kg: &propulsion.propellant_remaining_kg,
-        active_stage: propulsion.active_stage,
-        attached_payload_kg: propulsion.attached_payload_kg,
-        ablation_mass_loss_kg,
-        radius_m: geometry.radius_m as f64,
-        height_m: geometry.height_m as f64,
-        boosters,
-        booster_propellant_remaining_kg,
-    }
-    .calculate();
+    let mass_properties = propulsion.mass_properties(*geometry, ablation_mass_loss_kg);
     rocket.dynamics.mass_kg = mass_properties.mass_kg;
     rocket.dynamics.inertia_body = mass_properties.inertia_body;
     rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;

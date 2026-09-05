@@ -202,7 +202,6 @@ pub fn update_rocket_camera(
             &RocketPlanetBinding,
             &RocketRenderState,
             &RocketGeometry,
-            &RocketFacade,
             &Transform,
         ),
         (Without<Camera3d>, Without<SpentStage>),
@@ -212,8 +211,7 @@ pub fn update_rocket_camera(
     let dt = time.delta_secs();
 
     // Get the rocket entity (assume single rocket for now)
-    let Some((binding, render, geometry, _facade, rocket_transform)) = rocket_query.iter().next()
-    else {
+    let Some((binding, render, geometry, rocket_transform)) = rocket_query.iter().next() else {
         return;
     };
 
