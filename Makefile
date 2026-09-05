@@ -1,4 +1,4 @@
-.PHONY: fmt check clippy test run run-craft run-rocket run-gyro build-wasm
+.PHONY: fmt check clippy test run run-craft run-rocket build-wasm
 
 fmt:
 	cargo fmt
@@ -20,9 +20,6 @@ run-craft:
 
 run-rocket:
 	cargo run -- rocket
-
-run-gyro:
-	cargo run -- gyro
 
 build-wasm:
 	cargo build --lib --target wasm32-unknown-unknown --no-default-features

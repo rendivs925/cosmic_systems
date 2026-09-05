@@ -12,7 +12,6 @@ use bevy::time::TimeSystems;
 use crate::application::craft_startup::spawn_craft;
 use crate::application::craft_startup::spawn_craft_model;
 use crate::application::craft_startup::spawn_craft_ui;
-use crate::application::gyro_startup::setup_gyro;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::application::rocket_spawning::spawn_rockets;
@@ -32,7 +31,6 @@ use crate::domain::services::simulation_time::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::domain::value_objects::simulation_params::SimulationParameters;
 use crate::infrastructure::bevy_adapters::camera_systems::{
     apply_camera_transform, auto_inspect_selected_planet, update_camera_controller,
     update_starfield_position,
@@ -58,9 +56,6 @@ use crate::infrastructure::bevy_adapters::entity_components::{
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisPlugin, EphemerisSet,
-};
-use crate::infrastructure::bevy_adapters::gyroscope_systems::{
-    handle_input, update_gyroscopes, update_thrust,
 };
 use crate::infrastructure::bevy_adapters::input_systems::{
     handle_mouse_planet_selection, handle_planet_selection, handle_solar_system_input,
@@ -364,19 +359,6 @@ impl Plugin for CraftModePlugin {
         );
 
         register_education_systems(app);
-    }
-}
-
-/// Gyro propulsion mode.
-pub struct GyroModePlugin;
-
-impl Plugin for GyroModePlugin {
-    fn build(&self, app: &mut App) {
-        app.insert_resource(SimulationParameters::new());
-        app.add_systems(Startup, setup_gyro);
-        app.add_systems(Update, update_gyroscopes);
-        app.add_systems(Update, update_thrust);
-        app.add_systems(Update, handle_input);
     }
 }
 

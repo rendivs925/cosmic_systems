@@ -15,7 +15,6 @@ pub mod guidance;
 pub mod landing_gear;
 pub mod long_arc_propagation;
 pub mod physics;
-pub mod physics_gyroscope;
 pub mod physics_orbital;
 pub mod physics_utils;
 pub mod planet_factory;

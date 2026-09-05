@@ -4,7 +4,6 @@ pub enum Mode {
     Solar,
     Craft,
     Rocket,
-    Gyro,
 }
 
 /// Everything parsed from the command line: the run mode plus mode-specific
@@ -40,7 +39,7 @@ impl std::error::Error for LaunchOptionError {}
 impl Mode {
     /// Parse the run mode from command-line arguments.
     ///
-    /// Recognizes the exact tokens `rocket`, `craft`, and `gyro` anywhere in
+    /// Recognizes the exact tokens `rocket` and `craft` anywhere in
     /// the arguments without treating other arguments as mode selectors.
     /// `--vehicle <key>` consumes its value token so it is never mistaken for a
     /// mode argument. Invalid arguments return a typed error.
@@ -56,7 +55,6 @@ impl Mode {
             Mode::Solar => "Cosmic Systems Simulator",
             Mode::Craft => "Cosmic Systems - ZPE Craft",
             Mode::Rocket => "Cosmic Systems - Rocket Flight",
-            Mode::Gyro => "Cosmic Systems - Gyro Propulsion",
         }
     }
 }
@@ -82,7 +80,6 @@ where
         match arg.as_str() {
             "rocket" => options.mode = Mode::Rocket,
             "craft" => options.mode = Mode::Craft,
-            "gyro" => options.mode = Mode::Gyro,
             "--vehicle" => expect_vehicle_value = true,
             _ => return Err(LaunchOptionError::UnknownArgument(arg)),
         }
@@ -114,15 +111,16 @@ mod tests {
     fn recognizes_each_mode() {
         assert_eq!(parse(&["rocket"]), Mode::Rocket);
         assert_eq!(parse(&["craft"]), Mode::Craft);
-        assert_eq!(parse(&["gyro"]), Mode::Gyro);
     }
 
     #[test]
     fn unknown_positional_is_rejected() {
-        assert_eq!(
-            parse_launch_options(["unknown-mode".to_string()]),
-            Err(LaunchOptionError::UnknownArgument("unknown-mode".into()))
-        );
+        for argument in ["unknown-mode", "gyro"] {
+            assert_eq!(
+                parse_launch_options([argument.to_string()]),
+                Err(LaunchOptionError::UnknownArgument(argument.into()))
+            );
+        }
     }
 
     #[test]

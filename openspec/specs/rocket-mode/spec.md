@@ -27,8 +27,8 @@ The system SHALL provide a `rocket` application mode selected by `cargo run -- r
 
 #### Scenario: Unknown mode argument
 
-- **WHEN** a user passes a mode argument that is not `rocket`, `craft`, or `gyro`
-- **THEN** the application falls back to the default solar-system mode and logs a warning
+- **WHEN** a user passes a mode argument that is not `rocket` or `craft`
+- **THEN** the application reports an invalid launch option without starting a mode
 
 ### Requirement: Rocket mode reuses shared solar-system infrastructure
 

@@ -7,7 +7,6 @@ pub mod craft_ui;
 pub mod education_systems;
 pub mod entity_components;
 pub mod ephemeris;
-pub mod gyroscope_systems;
 pub mod input_systems;
 pub mod material_components;
 pub mod material_systems;

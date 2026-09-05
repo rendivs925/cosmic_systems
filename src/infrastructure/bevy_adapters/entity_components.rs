@@ -1,5 +1,4 @@
 use crate::components::rocket::*;
-use crate::domain::entities::gyroscope::Gyroscope;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::atmosphere::atmosphere_for;
 use crate::domain::services::atmosphere::AtmosphereSource;
@@ -12,16 +11,6 @@ use std::sync::Arc;
 
 pub use crate::components::rocket::*;
 pub use crate::domain::entities::rocket::RocketMissionState as DomainRocketMissionState;
-
-// Component for gyroscope entities
-#[derive(Component)]
-pub struct GyroscopeComponent {
-    pub domain_gyro: Gyroscope,
-}
-
-// Component for thrust visualization (arrow entity)
-#[derive(Component)]
-pub struct ThrustArrow;
 
 // Component for planet entities
 #[derive(Component)]

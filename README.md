@@ -1,57 +1,86 @@
 # Cosmic Systems
 
-[![Rust](https://img.shields.io/badge/Rust-1.75+-orange?logo=rust)](https://www.rust-lang.org/)
-[![Bevy](https://img.shields.io/badge/Bevy-0.17.3-blue?logo=bevy)](https://bevyengine.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Cosmic Systems is a solar-system simulation project focused on space
+exploration. It creates an interactive 3D environment for observing celestial
+bodies, their motion, and the environments in which spacecraft operate, while
+evolving into a spaceflight simulator and game for launch, flight, orbit,
+landing, and exploration.
 
-Cosmic Systems is a Rust and Bevy 3D solar-system and rocket-flight simulator.
-Its simulation state is authoritative; rendering, terrain streaming, cameras,
-and UI present that state without owning physical rules.
+## Status
+
+The project is under active development. It provides solar-system, craft, and
+rocket-flight modes built on a shared Rust and Bevy application.
+
+## Requirements
+
+- A current Rust toolchain with Cargo.
+- The repository assets and scientific data files.
+- A native desktop environment with a working graphics driver.
 
 ## Run
+
+```bash
+# Solar-system mode
+cargo run
+
+# Craft mode
+cargo run -- craft
+
+# Rocket-flight mode
+cargo run -- rocket
+
+# Rocket-flight mode with a configured vehicle
+cargo run -- rocket --vehicle falcon9
+```
+
+| Command | Description |
+| --- | --- |
+| `cargo run` | Starts the solar-system simulation. |
+| `cargo run -- craft` | Starts craft mode in the shared solar-system world. |
+| `cargo run -- rocket` | Starts rocket-flight mode. |
+
+`--vehicle <key>` is available only in rocket mode. Unknown vehicle keys are
+reported before the application opens a window.
+
+The equivalent Make targets are `make run`, `make run-craft`, and
+`make run-rocket`.
+
+## Project Structure
+
+- `src/domain/`: simulation rules and calculations.
+- `src/application/`: startup and configuration.
+- `src/infrastructure/`: Bevy ECS integration, assets, streaming, and rendering.
+- `src/presentation/`: user interface and visual presentation.
+- `assets/`: vehicle configuration, textures, and scientific data configuration.
+
+## Validation
+
+Run these checks before submitting changes:
+
+```bash
+cargo fmt --check
+cargo check --features dem
+cargo clippy --features dem
+cargo test --features dem
+cargo build --release --features dem
+```
+
+For startup or mode changes, also run:
 
 ```bash
 cargo run
 cargo run -- craft
 cargo run -- rocket
-cargo run -- rocket --vehicle falcon9
-cargo run -- gyro
-```
-
-Equivalent Make targets are `make run`, `make run-craft`, `make run-rocket`,
-
-## Current Capabilities
-
-- Kernel-backed primary-body ephemerides and planetary orientation.
-- Fixed-step f64 rocket dynamics, gravity, propulsion, staging, guidance,
-  atmospheric entry, landing contact, replay, and telemetry.
-- Data-driven Falcon 9, Starship, Electron, and SLS vehicle configurations.
-- Deterministic procedural Earth terrain shared by collision and rendering,
-  with cube-sphere LOD, bounded streaming, erosion, hydrology, and local launch
-  site calibration.
-- Solar-system, craft, rocket, and gyro modes composed from shared Bevy
-  infrastructure.
-
-## Architecture
-
-- `domain/`: pure physical models, coordinate conversions, terrain, and
-  deterministic simulation services.
-- `application/`: startup composition and validated configuration.
-- `infrastructure/`: Bevy ECS adapters, plugins, asset integration, streaming,
-  and presentation synchronization.
-- `presentation/`: UI and visual presentation.
-
-## Validation
-
-```bash
-cargo fmt --check
-cargo check
-cargo clippy --all-targets -- -D warnings
-cargo test
 ```
 
 Use `make build-wasm` to build the library for `wasm32-unknown-unknown`.
 
+## Contributing
+
+Keep changes focused and reuse existing simulation and presentation systems
+where possible. See [AGENTS.md](AGENTS.md) for project architecture and
+engineering rules.
+
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+Licensed under the [MIT License](LICENSE).

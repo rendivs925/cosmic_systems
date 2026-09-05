@@ -7,7 +7,7 @@ The Cosmic System is built using Domain-Driven Design (DDD) combined with Clean 
 ## Architectural Principles
 
 ### Domain-Driven Design (DDD)
-- **Ubiquitous Language**: Terms like "gyroscope", "thrust", "precession" are consistently used across all layers
+- **Ubiquitous Language**: Terms for bodies, trajectories, rockets, and terrain are used consistently across all layers
 - **Bounded Contexts**: The simulation domain is clearly separated from infrastructure concerns
 - **Entities & Value Objects**: Core domain concepts are modeled as immutable, testable units
 
@@ -37,9 +37,7 @@ cosmic_systems/
 
 **Contents**:
 - `entities/` - Core domain objects with identity and behavior
-  - `gyroscope.rs` - Gyroscopic propulsion entity
 - `value_objects/` - Immutable data structures
-  - `simulation_params.rs` - Simulation configuration parameters
 - `services/` - Domain services for complex business logic
   - `physics.rs` - Physics calculations and formulas
 - `aggregates/` - Root entities that enforce business invariants

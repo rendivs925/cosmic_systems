@@ -16,38 +16,33 @@ use application::modes::{parse_launch_options, Mode};
 use application::rocket_config::{RocketCatalog, VehicleSelection};
 use application::solar_system_startup::SolarCameraEnabled;
 use infrastructure::plugins::{
-    CraftModePlugin, GyroModePlugin, RocketModePlugin, SharedSimulationPlugin,
-    SolarSystemModePlugin,
+    CraftModePlugin, RocketModePlugin, SharedSimulationPlugin, SolarSystemModePlugin,
 };
 
-/// Validate the requested vehicle BEFORE any window/renderer exists. The
-/// previous behavior validated inside `app.run()`'s Startup schedule, so an
-/// unknown key booted the full GPU stack and then panicked mid-teardown —
-/// surfacing as alternating SIGABRT/SIGSEGV exit codes instead of a clean
-/// error (Phase 17).
+/// Reject an unknown requested vehicle before creating the window or renderer.
 fn validate_vehicle_selection(selection: &VehicleSelection) {
     let Some(requested) = selection.requested() else {
-        return; // None = catalog default; always valid.
+        return;
     };
-    if let Ok(catalog) = RocketCatalog::from_dir() {
-        if catalog.resolve(selection).is_none() {
-            let available = catalog.keys().collect::<Vec<_>>().join(", ");
-            eprintln!(
-                "Unknown vehicle '{}'. Available vehicles: {}",
-                requested.as_str(),
-                available
-            );
-            std::process::exit(2);
-        }
-        // Catalog IO/parse failures are still handled by the plugin's
-        // fail-fast path (AGENTS.md section 65); do not duplicate them here.
+    let Ok(catalog) = RocketCatalog::from_dir() else {
+        // Plugin startup reports catalog load failures.
+        return;
+    };
+    if catalog.resolve(selection).is_some() {
+        return;
     }
+
+    let available = catalog.keys().collect::<Vec<_>>().join(", ");
+    eprintln!(
+        "Unknown vehicle '{}'. Available vehicles: {}",
+        requested.as_str(),
+        available
+    );
+    std::process::exit(2);
 }
 
 fn rocket_task_pool_options() -> TaskPoolOptions {
-    // Terrain bakes are CPU-bound. Six workers exploit higher-core hosts while
-    // the percentage cap preserves CPU capacity for rendering, IO, and fixed
-    // simulation on smaller machines.
+    // Reserve CPU capacity for rendering, IO, and fixed simulation.
     TaskPoolOptions {
         async_compute: TaskPoolThreadAssignmentPolicy {
             min_threads: 1,
@@ -85,8 +80,7 @@ fn main() {
 
     let plugins = DefaultPlugins
         .set(window_plugin)
-        // Keep native runs rooted at the repository's checked-in assets, just
-        // like the WASM entrypoint, rather than alongside the built binary.
+        // Native runs load the repository's checked-in assets.
         .set(AssetPlugin {
             file_path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets").to_string(),
             ..default()
@@ -105,8 +99,6 @@ fn main() {
     };
 
     let mut app = App::new();
-    // GizmoPlugin ships inside DefaultPlugins (bevy_gizmos feature); no
-    // explicit registration needed here.
     app.add_plugins(plugins);
 
     match mode {
@@ -123,14 +115,8 @@ fn main() {
         }
         Mode::Rocket => {
             app.insert_resource(vehicle_selection.expect("rocket mode has a vehicle selection"));
-            // Rocket Mode owns its own camera/HUD/input context. It does NOT
-            // add SolarSystemModePlugin, whose solar camera controller (free
-            // WASD flight), solar navigation input, and Explore/Orbits UI would
-            // otherwise fight the rocket camera and leak into the launch view.
+            // Rocket mode owns its camera, HUD, and input context.
             app.add_plugins((SharedSimulationPlugin, RocketModePlugin));
-        }
-        Mode::Gyro => {
-            app.add_plugins(GyroModePlugin);
         }
     }
 
