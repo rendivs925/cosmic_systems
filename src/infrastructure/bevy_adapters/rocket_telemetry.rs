@@ -6,9 +6,7 @@ use crate::domain::events::{
     CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
 };
 use crate::domain::services::aerodynamics::{angle_of_attack, angle_of_sideslip};
-use crate::domain::services::rocket_propulsion::{
-    active_vehicle_mass_with_payload_and_boosters, stage_thrust_body, STANDARD_GRAVITY_MPS2,
-};
+use crate::domain::services::rocket_propulsion::{stage_thrust_body, STANDARD_GRAVITY_MPS2};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::components::{PlanetComponent, Selectable};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -28,7 +26,6 @@ pub struct TelemetryContext<'a> {
     pub orientation: DQuat,
     pub angular_velocity_radps: DVec3,
     pub mass_kg: f64,
-    pub geometry: &'a RocketGeometry,
     pub propulsion: &'a RocketPropulsion,
     pub mission_state: &'a RocketMissionState,
     pub autopilot: &'a RocketAutopilot,
@@ -218,24 +215,6 @@ impl<'a> TelemetryContext<'a> {
     }
 
     fn compute_mass_properties(&self) -> TelemetryMassProperties {
-        // Attached payload hardware (fairing) counts as shed structure, so it
-        // belongs to the dry mass of the active stack until jettison.
-        let (boosters, booster_propellant_remaining_kg) = self
-            .propulsion
-            .attached_boosters()
-            .map_or((None, &[][..]), |(boosters, inventory)| {
-                (Some(boosters), inventory)
-            });
-        let dry_mass = active_vehicle_mass_with_payload_and_boosters(
-            &self.propulsion.vehicle.stages,
-            &self.propulsion.propellant_remaining_kg,
-            self.propulsion.active_stage,
-            self.propulsion.attached_payload_kg,
-            boosters,
-            booster_propellant_remaining_kg,
-        ) - self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64
-            - booster_propellant_remaining_kg.iter().sum::<f32>() as f64;
-
         let total_propellant_initial: f64 = self
             .propulsion
             .vehicle
@@ -259,6 +238,10 @@ impl<'a> TelemetryContext<'a> {
                     .unwrap_or_default()
                     .iter()
                     .sum::<f32>() as f64;
+        // Physics is the sole wet-mass authority. Subtracting its live attached
+        // propellant inventory preserves every structural change, including
+        // fairing and booster separation plus ablation mass loss.
+        let dry_mass = (self.mass_kg - total_propellant_remaining).max(0.0);
         let propellant_fraction = if total_propellant_initial > 0.0 {
             total_propellant_remaining / total_propellant_initial
         } else {
@@ -523,7 +506,6 @@ pub fn compute_rocket_telemetry_system(
         Entity,
         &RocketPlanetBinding,
         &RocketPhysicsState,
-        &RocketGeometry,
         &RocketPropulsion,
         &RocketMissionState,
         &RocketAutopilot,
@@ -546,7 +528,6 @@ pub fn compute_rocket_telemetry_system(
         entity,
         binding,
         rocket,
-        geometry,
         propulsion,
         mission_state,
         autopilot,
@@ -584,7 +565,6 @@ pub fn compute_rocket_telemetry_system(
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
             mass_kg: rocket.dynamics.mass_kg,
-            geometry,
             propulsion,
             mission_state,
             autopilot,
@@ -638,7 +618,6 @@ pub fn record_flight_data_system(
         Entity,
         &RocketPlanetBinding,
         &RocketPhysicsState,
-        &RocketGeometry,
         &RocketPropulsion,
         &RocketMissionState,
         &RocketAutopilot,
@@ -660,7 +639,6 @@ pub fn record_flight_data_system(
         entity,
         binding,
         rocket,
-        geometry,
         propulsion,
         mission_state,
         autopilot,
@@ -706,7 +684,6 @@ pub fn record_flight_data_system(
             orientation: rocket.dynamics.orientation,
             angular_velocity_radps: rocket.dynamics.angular_velocity_radps,
             mass_kg: rocket.dynamics.mass_kg,
-            geometry,
             propulsion,
             mission_state,
             autopilot,
@@ -1061,11 +1038,6 @@ mod g_load_tests {
         let vehicle = single_engine_vehicle(STANDARD_GRAVITY_MPS2 as f32);
         // Old formula would report ~713 "g" here while hovering.
         let speed_mps = 7_000.0;
-        let geometry = RocketGeometry {
-            radius_m: 1.0,
-            height_m: 10.0,
-            lower_extent_y_m: -5.0,
-        };
         let propulsion = RocketPropulsion {
             vehicle: vehicle.clone(),
             active_stage: 0,
@@ -1116,7 +1088,6 @@ mod g_load_tests {
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
-            geometry: &geometry,
             propulsion: &propulsion,
             mission_state: &mission_state,
             autopilot: &autopilot,
@@ -1147,11 +1118,6 @@ mod g_load_tests {
     fn orbital_coast_in_vacuum_reads_zero_g() {
         let vehicle = single_engine_vehicle(9.807);
         let speed_mps = 7_790.0;
-        let geometry = RocketGeometry {
-            radius_m: 1.0,
-            height_m: 10.0,
-            lower_extent_y_m: -5.0,
-        };
         let propulsion = RocketPropulsion {
             vehicle: vehicle.clone(),
             active_stage: 0,
@@ -1190,7 +1156,6 @@ mod g_load_tests {
             orientation: DQuat::IDENTITY,
             angular_velocity_radps: DVec3::ZERO,
             mass_kg: MASS_KG,
-            geometry: &geometry,
             propulsion: &propulsion,
             mission_state: &mission_state,
             autopilot: &autopilot,
@@ -1211,5 +1176,70 @@ mod g_load_tests {
             "coasting in vacuum must read 0 g, got {}",
             t.g_load
         );
+    }
+
+    #[test]
+    fn dry_mass_uses_authoritative_wet_mass_after_ablation() {
+        let vehicle = single_engine_vehicle(0.0);
+        let propulsion = RocketPropulsion {
+            vehicle,
+            active_stage: 0,
+            propellant_remaining_kg: vec![600.0],
+            booster_attachment: BoosterAttachmentState::Detached,
+            throttle: 0.0,
+            gimbal_pitch_rad: 0.0,
+            gimbal_yaw_rad: 0.0,
+            time_since_separation_s: 0.0,
+            ullage_settle_time_s: 0.0,
+            separations_count: 0,
+            attached_payload_kg: 0.0,
+        };
+        let mission_state = RocketMissionState::default();
+        let autopilot = RocketAutopilot::default();
+        let orbital = OrbitalElements::default();
+        let conditions = RocketFlightConditions::default();
+        let comms = CommsState::default();
+        let aero_forces = AerodynamicForces::default();
+        let thermal = ThermalState::default();
+        let ablation = AblationState {
+            mass_loss_kg: 50.0,
+            ..Default::default()
+        };
+        let parachute = ParachuteState::default();
+        let collision = TerrainCollisionState::default();
+        // The 950 kg authoritative wet mass already includes 50 kg of TPS
+        // ablation from the nominal 400 kg dry and 600 kg propellant masses.
+        let context = TelemetryContext {
+            sim_time: 0.0,
+            dt: 1.0 / 60.0,
+            planet_mu_m3_s2: 1.0,
+            planet_radius_m: 1.0,
+            position_m: DVec3::X,
+            velocity_mps: DVec3::ZERO,
+            orientation: DQuat::IDENTITY,
+            angular_velocity_radps: DVec3::ZERO,
+            mass_kg: 950.0,
+            propulsion: &propulsion,
+            mission_state: &mission_state,
+            autopilot: &autopilot,
+            orbital: &orbital,
+            conditions: &conditions,
+            comms: &comms,
+            aero_forces: &aero_forces,
+            specific_force: None,
+            thermal: &thermal,
+            ablation: &ablation,
+            parachute: &parachute,
+            collision: &collision,
+            force_model: crate::domain::services::gravity::ForceModelConfig::default(),
+        };
+
+        let mass_properties = context.compute_mass_properties();
+
+        assert_eq!(mass_properties.dry_mass_kg, 350.0);
+        let delta_v =
+            TelemetryContext::compute_delta_v(context.mass_kg, mass_properties.dry_mass_kg, 300.0);
+        let expected_delta_v = 300.0 * STANDARD_GRAVITY_MPS2 * (950.0_f64 / 350.0).ln();
+        assert!((delta_v - expected_delta_v).abs() < 1e-9);
     }
 }
