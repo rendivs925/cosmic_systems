@@ -84,10 +84,9 @@ pub fn setup_rocket_planets(
     let Some((binding, _rocket)) = rocket_query.iter().next() else {
         return;
     };
-    let planet_name = binding.planet_name.to_string();
-    bound_planet_res.0 = Some(planet_name.clone());
+    bound_planet_res.0 = Some(binding.planet_name.to_string());
 
-    for moon in PlanetFactory::get_moons_of(&planet_name) {
+    for moon in PlanetFactory::get_moons_of_id(&binding.planet_name) {
         spawn_rocket_moon(
             &mut commands,
             &mut meshes,

@@ -34,6 +34,11 @@ impl PlanetFactory {
             .collect()
     }
 
+    /// Get moons orbiting an already validated domain identifier.
+    pub fn get_moons_of_id(parent_id: &CelestialBodyId) -> Vec<Planet> {
+        Self::get_moons_of(parent_id.as_str())
+    }
+
     /// Get all planets (excluding moons)
     pub fn get_planets() -> Vec<Planet> {
         PLANET_CONFIGS
@@ -152,6 +157,13 @@ mod tests {
 
         let non_existent = PlanetFactory::get_moons_of("NonExistentPlanet");
         assert_eq!(non_existent.len(), 0);
+    }
+
+    #[test]
+    fn test_planet_factory_get_moons_of_id() {
+        let earth_moons = PlanetFactory::get_moons_of_id(&CelestialBodyId::earth());
+        assert_eq!(earth_moons.len(), 1);
+        assert_eq!(earth_moons[0].name, "Moon");
     }
 
     #[test]
