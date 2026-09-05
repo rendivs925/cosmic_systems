@@ -82,7 +82,7 @@ pub(crate) fn spawn_rockets(
     // converted once into the authoritative planet-centered inertial frame.
     // Collision and terrain convert back through the same reference-frame API.
     let ksc = predefined_sites::kennedy_space_center();
-    let earth = PlanetFactory::create_by_name(ksc.planet_id.as_str()).unwrap();
+    let earth = PlanetFactory::create_by_id(&ksc.planet_id).unwrap();
     let earth_radius_m = earth.radius_km as f64 * 1000.0;
     let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
     let terrain_sample = sample_surface(

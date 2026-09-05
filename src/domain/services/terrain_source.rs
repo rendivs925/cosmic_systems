@@ -1176,7 +1176,7 @@ impl EarthTerrainSource {
 
     fn sites() -> Vec<TerrainSite> {
         let earth_id = CelestialBodyId::earth();
-        let earth = PlanetFactory::create_by_name(earth_id.as_str())
+        let earth = PlanetFactory::create_by_id(&earth_id)
             .expect("Earth terrain requires the Earth catalog entry");
         let terrain_coordinates = |latitude_deg, longitude_deg| {
             let site =

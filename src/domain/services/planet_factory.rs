@@ -1,4 +1,5 @@
 use crate::domain::entities::planet::{Planet, PlanetBuilder};
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::planet_configs::{PlanetConfig, PLANET_CONFIGS};
 use bevy::prelude::*;
 
@@ -12,6 +13,11 @@ impl PlanetFactory {
             .iter()
             .find(|config| config.name == name)
             .map(Self::create_from_config)
+    }
+
+    /// Create a planet from an already validated domain identifier.
+    pub fn create_by_id(id: &CelestialBodyId) -> Option<Planet> {
+        Self::create_by_name(id.as_str())
     }
 
     /// Get all available planet names
@@ -90,6 +96,13 @@ mod tests {
         let phobos = PlanetFactory::create_by_name("Phobos").unwrap();
         assert_eq!(phobos.name, "Phobos");
         assert_eq!(phobos.parent_entity, Some("Mars".to_string()));
+    }
+
+    #[test]
+    fn test_planet_factory_creates_planets_by_id() {
+        let earth_id = CelestialBodyId::earth();
+        let earth = PlanetFactory::create_by_id(&earth_id).unwrap();
+        assert_eq!(earth.name, earth_id.as_str());
     }
 
     #[test]
