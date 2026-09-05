@@ -1,12 +1,12 @@
 //! Cube-sphere terrain streaming (AGENTS.md sections 22-23).
 //!
 //! A `TerrainPatchManager` resource is driven each tick by a streaming system
-//! that keeps a complete coarse cube-sphere cover with viewport-local refinement through the
+//! that keeps a complete coarse cube-sphere cover with viewport-wide refinement through the
 //! requested → generating → ready → visible → cached → evicted lifecycle, and
 //! enforces the configured memory budget by evicting least-recently-used cached
 //! patches. Generated patch geometry is built deterministically from the shared
 //! per-planet `TerrainSource`. Coarse roots provide fallback coverage for the
-//! active viewport; only its camera neighborhood is refined.
+//! active viewport; only its visible terrain is refined.
 
 use crate::components::rocket::RocketMissionState;
 use crate::domain::services::body_orientation::BodyOrientation;
@@ -32,7 +32,7 @@ use crate::infrastructure::bevy_adapters::terrain_surface::{
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::time::Instant;
 
 /// Camera/LOD constants.
@@ -72,6 +72,13 @@ const DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M: f64 =
 /// the reserved worker pool quickly after a camera move without queueing an
 /// unbounded cold-start burst or blocking the render thread.
 const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
+/// Bound the target leaf cover to the configured terrain cache's practical
+/// capacity. Refinement is distributed breadth-first across the viewport so a
+/// high-altitude camera does not spend the entire budget beneath the rocket.
+const MAX_VIEWPORT_TARGET_LEAVES: usize = 512;
+/// Reserve leaf budget for 2:1 neighbour balancing at the viewport boundary.
+/// The visible traversal itself stops below the published-cover limit.
+const MAX_VIEWPORT_UNBALANCED_LEAVES: usize = MAX_VIEWPORT_TARGET_LEAVES - 62;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
@@ -429,20 +436,25 @@ pub fn stream_terrain_patches(
         radius_m,
     );
     streaming.cadence.max_focus_level = Some(max_focus_level);
-    let mut errors = projected_errors_for_focus(
-        focus_direction,
-        max_focus_level,
-        radius_m,
-        CameraProjection {
-            position_m: lod_camera_position_m,
-            vertical_fov_rad: viewport
-                .as_ref()
-                .map_or(FOV_RAD, |viewport| viewport.vertical_fov_rad),
-            viewport_height_px: viewport
-                .as_ref()
-                .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
-        },
-    );
+    let camera_projection = CameraProjection {
+        position_m: lod_camera_position_m,
+        vertical_fov_rad: viewport
+            .as_ref()
+            .map_or(FOV_RAD, |viewport| viewport.vertical_fov_rad),
+        viewport_height_px: viewport
+            .as_ref()
+            .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
+    };
+    let mut errors = if let Some(viewport) = viewport.as_ref() {
+        projected_errors_for_viewport(viewport, max_focus_level, radius_m, camera_projection)
+    } else {
+        projected_errors_for_focus(
+            focus_direction,
+            max_focus_level,
+            radius_m,
+            camera_projection,
+        )
+    };
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
     retain_visible_detail_errors(
         &mut errors,
@@ -1094,9 +1106,49 @@ fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     terrain_bytes
 }
 
-/// Populate only the camera neighborhood at each level. The pure selection
-/// model still starts from all roots; absent entries intentionally stop
-/// refinement so distant terrain remains inexpensive.
+/// Populate the full visible viewport through a bounded breadth-first
+/// traversal. The previous focus-only 3x3 neighborhood gave a single patch
+/// stack near the rocket all of the available detail while visible terrain at
+/// the edge of the screen remained at root quality.
+fn projected_errors_for_viewport(
+    viewport: &TerrainViewport,
+    max_level: u32,
+    radius_m: f64,
+    camera: CameraProjection,
+) -> BTreeMap<TerrainPatch, f64> {
+    let mut errors = BTreeMap::new();
+    let geometry_error = default_earth_patch_geometric_error();
+    let mut pending: VecDeque<_> = TerrainPatch::roots()
+        .into_iter()
+        .filter(|patch| patch_intersects_viewport(*patch, Some(viewport), radius_m))
+        .collect();
+    let mut target_leaf_count = TerrainPatch::roots().len();
+
+    while let Some(patch) = pending.pop_front() {
+        if target_leaf_count + 3 > MAX_VIEWPORT_UNBALANCED_LEAVES {
+            break;
+        }
+        let error_px = projected_patch_error_px(&patch, geometry_error, radius_m, camera);
+        errors.insert(patch, error_px);
+        if patch.level >= max_level || error_px <= SCREEN_ERROR_PX {
+            continue;
+        }
+
+        target_leaf_count += 3;
+        pending.extend(
+            patch
+                .children()
+                .into_iter()
+                .filter(|child| patch_intersects_viewport(*child, Some(viewport), radius_m)),
+        );
+    }
+
+    errors
+}
+
+/// Populate the camera focus neighborhood when no presentation camera is
+/// available. This keeps startup fallback bounded; regular rendering always
+/// uses [`projected_errors_for_viewport`].
 fn projected_errors_for_focus(
     focus_direction: DVec3,
     max_level: u32,
@@ -1353,6 +1405,57 @@ mod tests {
         assert!(
             viewport_focus_direction(Some(&viewport), radius_m, DVec3::X)
                 .abs_diff_eq(DVec3::Z, 1e-9)
+        );
+    }
+
+    #[test]
+    fn viewport_error_traversal_distributes_detail_across_the_visible_surface() {
+        let radius_m = 6_371_000.0;
+        let viewport = TerrainViewport {
+            position_m: DVec3::Z * (radius_m + 307_000.0),
+            forward: -DVec3::Z,
+            half_fov_rad: 0.65,
+            vertical_fov_rad: 1.0,
+            viewport_height_px: 1_080.0,
+        };
+        let errors = projected_errors_for_viewport(
+            &viewport,
+            8,
+            radius_m,
+            CameraProjection {
+                position_m: viewport.position_m,
+                vertical_fov_rad: viewport.vertical_fov_rad,
+                viewport_height_px: viewport.viewport_height_px,
+            },
+        );
+
+        assert!(
+            errors.len() > 9 * 8,
+            "viewport traversal must cover more than the previous 3x3 focus neighborhood"
+        );
+        assert!(
+            errors
+                .keys()
+                .any(|patch| patch.level >= 3 && patch.center_direction().dot(DVec3::Z) < 0.98),
+            "detail must extend away from the center camera ray"
+        );
+        assert!(
+            errors.len() <= MAX_VIEWPORT_TARGET_LEAVES,
+            "viewport traversal must remain within the leaf budget"
+        );
+        let selection = select_quadtree_leaves(
+            &QuadtreePatchState::default(),
+            &errors,
+            QuadtreeSelectionConfig {
+                max_level: 8,
+                max_projected_error_px: SCREEN_ERROR_PX,
+                max_neighbor_level_difference: 1,
+            },
+        );
+        assert!(
+            selection.target_leaves.len() <= MAX_VIEWPORT_TARGET_LEAVES,
+            "balanced viewport refinement must remain within the leaf budget; got {}",
+            selection.target_leaves.len()
         );
     }
 
