@@ -408,7 +408,7 @@ fn spawn_rockets_system(
         &mut meshes,
         &mut materials,
         &catalog,
-        selection.0.as_deref(),
+        &selection,
         terrain.source.as_ref(),
         earth_orientation,
     );

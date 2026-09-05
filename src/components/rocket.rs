@@ -137,6 +137,61 @@ pub struct RocketPropulsion {
     pub attached_payload_kg: f32,
 }
 
+impl RocketPropulsion {
+    /// Create a fully fueled vehicle whose engine-start budget and ullage gate
+    /// are ready for its first pad ignition.
+    pub(crate) fn for_fresh_flight(
+        vehicle: Rocket,
+        attached_payload_kg: f32,
+        ullage_settle_time_s: f32,
+    ) -> Self {
+        let mut propulsion = Self {
+            vehicle,
+            active_stage: 0,
+            propellant_remaining_kg: Vec::new(),
+            booster_propellant_remaining_kg: Vec::new(),
+            boosters_attached: false,
+            throttle: 0.0,
+            gimbal_pitch_rad: 0.0,
+            gimbal_yaw_rad: 0.0,
+            time_since_separation_s: 0.0,
+            ullage_settle_time_s,
+            separations_count: 0,
+            attached_payload_kg: 0.0,
+        };
+        propulsion.reset_for_relaunch(attached_payload_kg);
+        propulsion
+    }
+
+    /// Restore configuration-derived inventories and flight-actuator state for
+    /// a pad relaunch. The configured ullage settle interval is retained, while
+    /// the gate starts open because the first ignition is ground supported.
+    pub(crate) fn reset_for_relaunch(&mut self, attached_payload_kg: f32) {
+        self.vehicle.reset_engine_lifecycles();
+        self.propellant_remaining_kg = self
+            .vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        self.booster_propellant_remaining_kg = self
+            .vehicle
+            .parallel_boosters
+            .as_ref()
+            .map_or_else(Vec::new, |boosters| {
+                vec![boosters.stage.propellant_mass_kg; boosters.count as usize]
+            });
+        self.boosters_attached = self.vehicle.parallel_boosters.is_some();
+        self.active_stage = 0;
+        self.throttle = 0.0;
+        self.gimbal_pitch_rad = 0.0;
+        self.gimbal_yaw_rad = 0.0;
+        self.time_since_separation_s = self.ullage_settle_time_s;
+        self.separations_count = 0;
+        self.attached_payload_kg = attached_payload_kg;
+    }
+}
+
 /// Flight computer command interface between guidance, control, actuation, physics.
 /// Guidance writes attitude and throttle targets; control writes gimbal/RCS;
 /// actuation applies physical limits before the physics step.
@@ -734,6 +789,82 @@ mod camera_controller_tests {
         assert_eq!(controller.target_mode, RocketCameraMode::Cockpit);
         assert_eq!(controller.transition_progress, 0.0);
         assert!(controller.transition_start_pose.is_none());
+    }
+}
+
+#[cfg(test)]
+mod propulsion_tests {
+    use super::*;
+    use crate::domain::entities::rocket::{EngineState, ParallelBoosters};
+    use bevy::math::Vec3;
+
+    fn all_engines_are_fresh(vehicle: &Rocket) -> bool {
+        vehicle.stages.iter().all(|stage| {
+            stage
+                .engines
+                .iter()
+                .all(|engine| engine.state == EngineState::Off && engine.ignition_count == 0)
+        }) && vehicle.parallel_boosters.as_ref().is_none_or(|boosters| {
+            boosters
+                .stage
+                .engines
+                .iter()
+                .all(|engine| engine.state == EngineState::Off && engine.ignition_count == 0)
+        })
+    }
+
+    #[test]
+    fn propulsion_reset_restores_the_configured_fresh_flight_state() {
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        vehicle.parallel_boosters = Some(ParallelBoosters {
+            count: 1,
+            stage: vehicle.stages[0].clone(),
+            attachment_positions_m: vec![Vec3::X],
+        });
+        let mut propulsion = RocketPropulsion::for_fresh_flight(vehicle, 25.0, 2.0);
+
+        assert_eq!(propulsion.active_stage, 0);
+        assert_eq!(propulsion.time_since_separation_s, 2.0);
+        assert_eq!(propulsion.attached_payload_kg, 25.0);
+        assert!(propulsion
+            .vehicle
+            .stages
+            .iter()
+            .zip(&propulsion.propellant_remaining_kg)
+            .all(|(stage, remaining)| *remaining == stage.propellant_mass_kg));
+        assert_eq!(propulsion.booster_propellant_remaining_kg, vec![90_000.0]);
+        assert!(all_engines_are_fresh(&propulsion.vehicle));
+
+        propulsion.active_stage = 1;
+        propulsion.propellant_remaining_kg.fill(0.0);
+        propulsion.throttle = 0.7;
+        propulsion.gimbal_pitch_rad = 0.2;
+        propulsion.gimbal_yaw_rad = -0.2;
+        propulsion.time_since_separation_s = 0.0;
+        propulsion.separations_count = 1;
+        propulsion.vehicle.stages[0].engines[0].state = EngineState::Depleted;
+        propulsion.vehicle.stages[0].engines[0].ignition_count = 3;
+        let booster_engine = &mut propulsion
+            .vehicle
+            .parallel_boosters
+            .as_mut()
+            .expect("fixture includes one booster")
+            .stage
+            .engines[0];
+        booster_engine.state = EngineState::Depleted;
+        booster_engine.ignition_count = 3;
+
+        propulsion.reset_for_relaunch(10.0);
+
+        assert_eq!(propulsion.active_stage, 0);
+        assert_eq!(propulsion.throttle, 0.0);
+        assert_eq!(propulsion.gimbal_pitch_rad, 0.0);
+        assert_eq!(propulsion.gimbal_yaw_rad, 0.0);
+        assert_eq!(propulsion.time_since_separation_s, 2.0);
+        assert_eq!(propulsion.separations_count, 0);
+        assert_eq!(propulsion.attached_payload_kg, 10.0);
+        assert_eq!(propulsion.booster_propellant_remaining_kg, vec![90_000.0]);
+        assert!(all_engines_are_fresh(&propulsion.vehicle));
     }
 }
 

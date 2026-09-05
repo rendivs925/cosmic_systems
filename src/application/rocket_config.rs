@@ -784,25 +784,24 @@ pub struct RocketCatalog {
 }
 
 impl RocketCatalog {
-    pub fn insert(&mut self, key: impl Into<String>, vehicle: LoadedVehicle) {
-        self.vehicles.insert(key.into(), vehicle);
+    pub(crate) fn insert(&mut self, key: VehicleKey, vehicle: LoadedVehicle) {
+        self.vehicles.insert(key.0, vehicle);
     }
 
-    pub fn get(&self, key: &str) -> Option<&LoadedVehicle> {
-        self.vehicles.get(key)
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &str> {
+        self.vehicles.keys().map(String::as_str)
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.vehicles.keys()
+    pub(crate) fn resolve<'catalog, 'selection>(
+        &'catalog self,
+        selection: &'selection VehicleSelection,
+    ) -> Option<(&'selection str, &'catalog LoadedVehicle)> {
+        let key = selection.selected_key();
+        self.vehicles.get(key).map(|vehicle| (key, vehicle))
     }
 
-    /// Deterministic default selection (first key in sorted order).
-    pub fn first_key(&self) -> Option<&str> {
-        self.vehicles.keys().next().map(String::as_str)
-    }
-
-    fn contains_key(&self, key: &str) -> bool {
-        self.vehicles.contains_key(key)
+    fn contains_key(&self, key: &VehicleKey) -> bool {
+        self.vehicles.contains_key(key.as_str())
     }
 
     /// Load every `*.ron` vehicle definition from the config directory,
@@ -827,21 +826,22 @@ impl RocketCatalog {
             let Some(key) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 return Err(RocketConfigError::MissingStem { path });
             };
+            let key = VehicleKey::from(key);
             let text = fs::read_to_string(&path).map_err(|source| RocketConfigError::Io {
                 path: path.clone(),
                 source,
             })?;
-            if catalog.contains_key(key) {
+            if catalog.contains_key(&key) {
                 return Err(RocketConfigError::DuplicateKey {
-                    key: key.to_string(),
+                    key: key.as_str().to_owned(),
                     path,
                 });
             }
             for vehicle in RocketConfigFile::parse(&text)? {
-                catalog.insert(key, vehicle);
+                catalog.insert(key.clone(), vehicle);
             }
         }
-        if catalog.first_key().is_none() {
+        if catalog.vehicles.is_empty() {
             return Err(RocketConfigError::NoVehicles { dir });
         }
         Ok(catalog)
@@ -852,11 +852,59 @@ impl RocketCatalog {
 pub const CONFIGS_RELATIVE_PATH: &str = "assets/configs/rockets";
 
 /// Default vehicle when no `--vehicle` argument is given.
-pub const DEFAULT_VEHICLE_KEY: &str = "falcon9";
+const DEFAULT_VEHICLE_KEY: &str = "falcon9";
 
-/// CLI-selected vehicle key (`--vehicle <key>`); `None` means default.
+/// A catalog key derived from a vehicle config-file stem or supplied through
+/// `--vehicle`. It is distinct from the vehicle's user-facing display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VehicleKey(String);
+
+impl VehicleKey {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for VehicleKey {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for VehicleKey {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+/// CLI-selected vehicle key (`--vehicle <key>`). `Default` selects the
+/// configured default catalog entry without storing a sentinel string.
 #[derive(Resource, Debug, Default, Clone)]
-pub struct VehicleSelection(pub Option<String>);
+pub(crate) enum VehicleSelection {
+    #[default]
+    Default,
+    Requested(VehicleKey),
+}
+
+impl From<Option<String>> for VehicleSelection {
+    fn from(value: Option<String>) -> Self {
+        value.map_or(Self::Default, |key| Self::Requested(key.into()))
+    }
+}
+
+impl VehicleSelection {
+    pub(crate) fn requested(&self) -> Option<&VehicleKey> {
+        match self {
+            Self::Default => None,
+            Self::Requested(key) => Some(key),
+        }
+    }
+
+    pub(crate) fn selected_key(&self) -> &str {
+        self.requested()
+            .map_or(DEFAULT_VEHICLE_KEY, VehicleKey::as_str)
+    }
+}
 
 /// Resolve the config directory the same way bevy_asset resolves its asset
 /// root: BEVY_ASSET_ROOT env, then CARGO_MANIFEST_DIR (set under cargo),
@@ -1632,7 +1680,7 @@ mod tests {
     fn catalog_keys_are_deterministic_and_sorted() {
         let mut catalog = RocketCatalog::default();
         catalog.insert(
-            "sls",
+            VehicleKey::from("sls"),
             LoadedVehicle {
                 rocket: Rocket {
                     name: "SLS".into(),
@@ -1644,7 +1692,7 @@ mod tests {
             },
         );
         catalog.insert(
-            "electron",
+            VehicleKey::from("electron"),
             LoadedVehicle {
                 rocket: Rocket {
                     name: "Electron".into(),
@@ -1656,7 +1704,7 @@ mod tests {
             },
         );
         catalog.insert(
-            "falcon9",
+            VehicleKey::from("falcon9"),
             LoadedVehicle {
                 rocket: Rocket {
                     name: "Falcon 9".into(),
@@ -1667,10 +1715,16 @@ mod tests {
                 },
             },
         );
-        let keys: Vec<&String> = catalog.keys().collect();
+        let keys: Vec<&str> = catalog.keys().collect();
         assert_eq!(keys, ["electron", "falcon9", "sls"]);
-        assert_eq!(catalog.first_key(), Some("electron"));
-        assert!(catalog.get("falcon9").is_some());
-        assert!(catalog.get("unknown").is_none());
+        assert!(catalog
+            .resolve(&VehicleSelection::Default)
+            .is_some_and(|(key, _)| key == DEFAULT_VEHICLE_KEY));
+        assert!(catalog
+            .resolve(&VehicleSelection::Requested(VehicleKey::from("falcon9")))
+            .is_some());
+        assert!(catalog
+            .resolve(&VehicleSelection::Requested(VehicleKey::from("unknown")))
+            .is_none());
     }
 }

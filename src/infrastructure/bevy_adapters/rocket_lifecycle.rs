@@ -155,42 +155,12 @@ pub fn apply_relaunch_requests(
                 }
             }
 
-            // Refuel from the authoritative configuration and reset propulsion.
-            propulsion.propellant_remaining_kg = propulsion
-                .vehicle
-                .stages
-                .iter()
-                .map(|stage| stage.propellant_mass_kg)
-                .collect();
-            propulsion.booster_propellant_remaining_kg = propulsion
-                .vehicle
-                .parallel_boosters
-                .as_ref()
-                .map_or_else(Vec::new, |boosters| {
-                    vec![boosters.stage.propellant_mass_kg; boosters.count as usize]
-                });
-            propulsion.boosters_attached = propulsion.vehicle.parallel_boosters.is_some();
-            propulsion.active_stage = 0;
-            propulsion.separations_count = 0;
-            propulsion.throttle = 0.0;
-            propulsion.gimbal_pitch_rad = 0.0;
-            propulsion.gimbal_yaw_rad = 0.0;
-            propulsion.time_since_separation_s = propulsion.ullage_settle_time_s;
-            propulsion.attached_payload_kg = initial_fairing
+            let attached_payload_kg = initial_fairing
                 .map(|fairing| fairing.dry_mass_kg)
                 .unwrap_or(0.0);
-            for stage in &mut propulsion.vehicle.stages {
-                for engine in &mut stage.engines {
-                    engine.reset_lifecycle();
-                }
-            }
+            propulsion.reset_for_relaunch(attached_payload_kg);
             if let (Some(mut rocket_mesh), Some(meshes)) = (rocket_mesh, meshes.as_deref_mut()) {
                 *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &propulsion.vehicle));
-            }
-            if let Some(boosters) = &mut propulsion.vehicle.parallel_boosters {
-                for engine in &mut boosters.stage.engines {
-                    engine.reset_lifecycle();
-                }
             }
 
             // Mass and inertia from the refueled stack.

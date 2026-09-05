@@ -155,6 +155,21 @@ pub struct Rocket {
 }
 
 impl Rocket {
+    /// Restore every attached engine to the lifecycle of a freshly loaded
+    /// vehicle. Serial stages and parallel boosters share the same reset rule.
+    pub(crate) fn reset_engine_lifecycles(&mut self) {
+        for stage in &mut self.stages {
+            for engine in &mut stage.engines {
+                engine.reset_lifecycle();
+            }
+        }
+        if let Some(boosters) = &mut self.parallel_boosters {
+            for engine in &mut boosters.stage.engines {
+                engine.reset_lifecycle();
+            }
+        }
+    }
+
     /// Stage-cylinder center in an attached cylindrical stack. The stack
     /// origin is its geometric center; any height beyond the stage cylinders
     /// represents attached adapters or fairing volume above the final stage.

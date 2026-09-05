@@ -1,4 +1,4 @@
-use crate::application::rocket_config::{RocketCatalog, DEFAULT_VEHICLE_KEY};
+use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::components::rocket::*;
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
@@ -34,24 +34,21 @@ const RECORDER_MAX_ENTRIES: usize = 2_048;
 /// Flight-recorder sampling interval (s): ~10 physics ticks at 60 Hz.
 const RECORDER_INTERVAL_S: f64 = 1.0 / 6.0;
 
-pub fn spawn_rockets(
+pub(crate) fn spawn_rockets(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     catalog: &RocketCatalog,
-    selected_key: Option<&str>,
+    selection: &VehicleSelection,
     terrain_source: &dyn TerrainSource,
     earth_orientation: &BodyOrientation,
 ) {
-    let requested_key = selected_key.unwrap_or(DEFAULT_VEHICLE_KEY);
-    let Some(vehicle) = catalog.get(requested_key) else {
-        let available = catalog.keys().cloned().collect::<Vec<_>>().join(", ");
+    let requested_key = selection.selected_key();
+    let Some((_, vehicle)) = catalog.resolve(selection) else {
+        let available = catalog.keys().collect::<Vec<_>>().join(", ");
         panic!("Unknown vehicle '{requested_key}'. Available vehicles: {available}");
     };
-    // Catalog conversion initializes engines off; ensure a cloned catalog entry
-    // also begins each flight with a fresh lifecycle budget.
-    let mut rocket = vehicle.rocket.clone();
-    reset_engine_lifecycles(&mut rocket);
+    let rocket = vehicle.rocket.clone();
     // A final-stage fairing rides with the vehicle mass until jettison; one
     // authority is shared by consumption, serial staging, and jettison.
     let final_stage_fairing_mass_kg = rocket
@@ -59,6 +56,11 @@ pub fn spawn_rockets(
         .last()
         .and_then(|stage| stage.fairing_dry_mass_kg);
     let attached_payload_kg = final_stage_fairing_mass_kg.unwrap_or(0.0);
+    let propulsion = RocketPropulsion::for_fresh_flight(
+        rocket.clone(),
+        attached_payload_kg,
+        DEFAULT_ULLAGE_SETTLE_TIME_S,
+    );
 
     // Create a proper multi-part rocket mesh from the vehicle configuration.
     let mesh_handle = build_rocket_mesh(meshes, &rocket);
@@ -113,40 +115,25 @@ pub fn spawn_rockets(
 
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
-    let booster_propellant_remaining_kg = rocket
-        .parallel_boosters
-        .as_ref()
-        .map_or_else(Vec::new, |boosters| {
-            vec![boosters.stage.propellant_mass_kg; boosters.count as usize]
-        });
     let total_mass_kg = active_vehicle_mass_with_payload_and_boosters(
         &rocket.stages,
-        &rocket
-            .stages
-            .iter()
-            .map(|stage| stage.propellant_mass_kg)
-            .collect::<Vec<_>>(),
+        &propulsion.propellant_remaining_kg,
         0,
         attached_payload_kg,
         rocket.parallel_boosters.as_ref(),
-        &booster_propellant_remaining_kg,
+        &propulsion.booster_propellant_remaining_kg,
     );
     let radius_m = (rocket.diameter_m / 2.0) as f64;
-    let initial_propellant_remaining_kg = rocket
-        .stages
-        .iter()
-        .map(|stage| stage.propellant_mass_kg)
-        .collect::<Vec<_>>();
     let (inertia, com) = active_vehicle_inertia_with_boosters(
         &rocket.stages,
-        &initial_propellant_remaining_kg,
+        &propulsion.propellant_remaining_kg,
         0,
         attached_payload_kg,
         0.0,
         radius_m,
         rocket.height_m as f64,
         rocket.parallel_boosters.as_ref(),
-        &booster_propellant_remaining_kg,
+        &propulsion.booster_propellant_remaining_kg,
     );
     // State position is the full cylindrical stack's geometric center; its
     // lower -Y extent, rather than that center, rests on the launch surface.
@@ -161,8 +148,6 @@ pub fn spawn_rockets(
         com,
     );
 
-    let propellant_remaining_kg = initial_propellant_remaining_kg;
-
     // Phase 1: Core physics components (fits in bundle limit)
     let entity = commands
         .spawn((
@@ -173,21 +158,7 @@ pub fn spawn_rockets(
                 lower_extent_y_m: rocket.lower_extent_in_stack_m(),
             },
             RocketMissionState::PreLaunch,
-            RocketPropulsion {
-                vehicle: rocket.clone(),
-                active_stage: 0,
-                propellant_remaining_kg,
-                booster_propellant_remaining_kg,
-                boosters_attached: rocket.parallel_boosters.is_some(),
-                throttle: 0.0,
-                gimbal_pitch_rad: 0.0,
-                gimbal_yaw_rad: 0.0,
-                // Gate starts open: the first (pad) ignition needs no ullage.
-                time_since_separation_s: DEFAULT_ULLAGE_SETTLE_TIME_S,
-                ullage_settle_time_s: DEFAULT_ULLAGE_SETTLE_TIME_S,
-                separations_count: 0,
-                attached_payload_kg,
-            },
+            propulsion,
             ForceAccumulator::default(),
             TorqueAccumulator::default(),
             GravityAcceleration::default(),
@@ -354,19 +325,6 @@ pub fn sync_launch_pad_presentation(
         )
         .as_vec3();
         transform.rotation = attitude.as_quat();
-    }
-}
-
-fn reset_engine_lifecycles(rocket: &mut crate::domain::entities::rocket::Rocket) {
-    for stage in &mut rocket.stages {
-        for engine in &mut stage.engines {
-            engine.reset_lifecycle();
-        }
-    }
-    if let Some(boosters) = &mut rocket.parallel_boosters {
-        for engine in &mut boosters.stage.engines {
-            engine.reset_lifecycle();
-        }
     }
 }
 

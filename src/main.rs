@@ -25,21 +25,17 @@ use infrastructure::plugins::{
 /// unknown key booted the full GPU stack and then panicked mid-teardown —
 /// surfacing as alternating SIGABRT/SIGSEGV exit codes instead of a clean
 /// error (Phase 17).
-fn validate_vehicle_selection(selection: &Option<String>) {
-    let Some(requested) = selection else {
+fn validate_vehicle_selection(selection: &VehicleSelection) {
+    let Some(requested) = selection.requested() else {
         return; // None = catalog default; always valid.
     };
     if let Ok(catalog) = RocketCatalog::from_dir() {
-        if catalog.get(requested).is_none() {
-            let mut available: Vec<&String> = catalog.keys().collect();
-            available.sort();
+        if catalog.resolve(selection).is_none() {
+            let available = catalog.keys().collect::<Vec<_>>().join(", ");
             eprintln!(
-                "Unknown vehicle '{requested}'. Available vehicles: {}",
+                "Unknown vehicle '{}'. Available vehicles: {}",
+                requested.as_str(),
                 available
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
             );
             std::process::exit(2);
         }
@@ -67,14 +63,20 @@ fn rocket_task_pool_options() -> TaskPoolOptions {
 fn main() {
     let options = parse_launch_options(env::args().skip(1))
         .unwrap_or_else(|error| panic!("Invalid launch options: {error}"));
+    let mode = options.mode;
+    let vehicle_selection = if matches!(mode, Mode::Rocket) {
+        Some(VehicleSelection::from(options.vehicle))
+    } else {
+        None
+    };
 
-    if matches!(options.mode, Mode::Rocket) {
-        validate_vehicle_selection(&options.vehicle);
+    if let Some(selection) = &vehicle_selection {
+        validate_vehicle_selection(selection);
     }
 
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
-            title: options.mode.title().to_string(),
+            title: mode.title().to_string(),
             resolution: (1280, 720).into(),
             ..default()
         }),
@@ -94,7 +96,7 @@ fn main() {
                 .to_string(),
             ..default()
         });
-    let plugins = if matches!(options.mode, Mode::Rocket) {
+    let plugins = if matches!(mode, Mode::Rocket) {
         plugins.set(TaskPoolPlugin {
             task_pool_options: rocket_task_pool_options(),
         })
@@ -107,7 +109,7 @@ fn main() {
     // explicit registration needed here.
     app.add_plugins(plugins);
 
-    match options.mode {
+    match mode {
         Mode::Solar => {
             app.add_plugins((SharedSimulationPlugin, SolarSystemModePlugin));
         }
@@ -120,7 +122,7 @@ fn main() {
             ));
         }
         Mode::Rocket => {
-            app.insert_resource(VehicleSelection(options.vehicle));
+            app.insert_resource(vehicle_selection.expect("rocket mode has a vehicle selection"));
             // Rocket Mode owns its own camera/HUD/input context. It does NOT
             // add SolarSystemModePlugin, whose solar camera controller (free
             // WASD flight), solar navigation input, and Explore/Orbits UI would
