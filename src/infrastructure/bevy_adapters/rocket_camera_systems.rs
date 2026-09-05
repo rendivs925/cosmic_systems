@@ -453,9 +453,14 @@ fn compute_chase_camera(
     let target_pos = rocket_pos + offset_dir * config.chase_distance + up * config.chase_height;
 
     // Frame the mid-body point along the vehicle's ACTUAL axis, so a pitched
-    // rocket stays centered instead of drifting out of the viewport.
+    // rocket stays centered instead of drifting out of the viewport. The
+    // configured pitch lowers the view toward the planet; without it, a close
+    // chase camera at ascent altitude looks above the geometric horizon and
+    // terrain streaming correctly has no visible surface to request.
     let half_len = geometry.height_m * 0.5;
-    let look_point = rocket_pos + body_fwd * half_len;
+    let ground_pitch_offset =
+        up * config.chase_distance * config.chase_pitch.clamp(-1.2, 1.2).tan();
+    let look_point = rocket_pos + body_fwd * half_len + ground_pitch_offset;
 
     let rotation = safe_look_rotation(target_pos, look_point, &[up, body_fwd, horiz]);
     (target_pos, rotation)
@@ -631,6 +636,7 @@ pub fn update_rocket_camera_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::DVec3;
 
     #[test]
     fn render_relative_camera_pose_rebases_without_a_camera_cut() {
@@ -722,5 +728,34 @@ mod tests {
             assert!(position.is_finite());
             assert!(rotation.is_finite());
         }
+    }
+
+    #[test]
+    fn chase_camera_pitch_keeps_earth_in_view_at_ascent_altitude() {
+        let radius_m = 6_371_000.0;
+        let altitude_m = 307_000.0;
+        let geometry = RocketGeometry {
+            radius_m: 2.0,
+            height_m: 70.0,
+            lower_extent_y_m: -35.0,
+        };
+        let up = Vec3::Z;
+        let vertical_rocket = Quat::from_rotation_arc(Vec3::Y, up);
+        let (camera_offset, camera_rotation) = compute_chase_camera(
+            Vec3::ZERO,
+            vertical_rocket,
+            up,
+            &geometry,
+            &RocketCameraConfig::default(),
+        );
+        let camera_position_m = DVec3::Z * (radius_m + altitude_m) + camera_offset.as_dvec3();
+        let forward = (camera_rotation * -Vec3::Z).as_dvec3();
+        let b = camera_position_m.dot(forward);
+        let c = camera_position_m.length_squared() - radius_m * radius_m;
+
+        assert!(
+            b * b >= c && -b - (b * b - c).sqrt() >= 0.0,
+            "the pitched chase view must intersect the visible Earth horizon"
+        );
     }
 }

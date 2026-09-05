@@ -766,7 +766,7 @@ pub struct RocketCameraConfig {
     pub chase_distance: f32,
     /// Chase camera height offset
     pub chase_height: f32,
-    /// Chase camera pitch angle (down from horizontal)
+    /// Chase camera pitch angle in radians; negative values aim toward the planet.
     pub chase_pitch: f32,
     /// Cockpit camera offset from rocket center
     pub cockpit_offset: Vec3,
