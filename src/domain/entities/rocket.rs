@@ -133,9 +133,29 @@ pub struct RocketStage {
 /// frame; the engines in `stage` remain stage-local.
 #[derive(Clone, Debug)]
 pub struct ParallelBoosters {
-    pub count: u32,
     pub stage: RocketStage,
-    pub attachment_positions_m: Vec<Vec3>,
+    attachment_positions_m: Vec<Vec3>,
+}
+
+impl ParallelBoosters {
+    pub fn new(stage: RocketStage, attachment_positions_m: Vec<Vec3>) -> Self {
+        Self {
+            stage,
+            attachment_positions_m,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.attachment_positions_m.len()
+    }
+
+    pub fn attachment_positions(&self) -> &[Vec3] {
+        &self.attachment_positions_m
+    }
+
+    pub fn attachment_position_m(&self, booster_index: usize) -> Option<Vec3> {
+        self.attachment_positions_m.get(booster_index).copied()
+    }
 }
 
 impl RocketStage {
@@ -208,14 +228,14 @@ impl Rocket {
         booster_index: usize,
         engine: &RocketEngine,
     ) -> Option<Vec3> {
-        Some(*boosters.attachment_positions_m.get(booster_index)? + engine.position_m)
+        Some(boosters.attachment_position_m(booster_index)? + engine.position_m)
     }
 
     /// Lowest attached cylindrical extent in the full-stack body frame.
     pub fn lower_extent_in_stack_m(&self) -> f32 {
         let mut lower_y_m = -self.height_m * 0.5;
         if let Some(boosters) = &self.parallel_boosters {
-            for attachment in &boosters.attachment_positions_m {
+            for attachment in boosters.attachment_positions() {
                 lower_y_m = lower_y_m.min(attachment.y - boosters.stage.height_m * 0.5);
             }
         }
@@ -303,7 +323,7 @@ impl Rocket {
     pub fn total_dry_mass_kg(&self) -> f32 {
         self.stages.iter().map(|s| s.dry_mass_kg).sum::<f32>()
             + self.parallel_boosters.as_ref().map_or(0.0, |boosters| {
-                boosters.stage.dry_mass_kg * boosters.count as f32
+                boosters.stage.dry_mass_kg * boosters.count() as f32
             })
     }
 
@@ -313,12 +333,12 @@ impl Rocket {
             .map(|s| s.propellant_mass_kg)
             .sum::<f32>()
             + self.parallel_boosters.as_ref().map_or(0.0, |boosters| {
-                boosters.stage.propellant_mass_kg * boosters.count as f32
+                boosters.stage.propellant_mass_kg * boosters.count() as f32
             })
     }
 
     pub fn total_mass_kg(&self) -> f32 {
-        self.stages.iter().map(|s| s.total_mass_kg()).sum()
+        self.total_dry_mass_kg() + self.total_propellant_mass_kg()
     }
 }
 
@@ -343,6 +363,22 @@ mod tests {
         assert!((rated_thrust_kn - 7_607.0).abs() < 1.0);
         assert_eq!(rocket.diameter_m, 3.7);
         assert_eq!(rocket.height_m, 70.0);
+    }
+
+    #[test]
+    fn total_mass_includes_parallel_booster_inventory() {
+        let mut rocket = Rocket::falcon9_test_fixture();
+        let booster_stage = rocket.stages[0].clone();
+        let serial_mass_kg = rocket.total_mass_kg();
+        rocket.parallel_boosters = Some(ParallelBoosters::new(
+            booster_stage.clone(),
+            vec![Vec3::X, Vec3::NEG_X],
+        ));
+
+        assert_eq!(
+            rocket.total_mass_kg(),
+            serial_mass_kg + 2.0 * booster_stage.total_mass_kg()
+        );
     }
 
     #[test]

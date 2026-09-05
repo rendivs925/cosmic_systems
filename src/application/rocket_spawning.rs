@@ -486,7 +486,7 @@ pub(crate) fn build_rocket_mesh(
     }
 
     if let Some(boosters) = &rocket.parallel_boosters {
-        for attachment_m in &boosters.attachment_positions_m {
+        for attachment_m in boosters.attachment_positions() {
             add_cylinder(
                 attachment_m.x,
                 attachment_m.z,
@@ -542,14 +542,14 @@ pub(crate) fn build_rocket_mesh(
     if let Some(boosters) = &rocket.parallel_boosters {
         let bell_height_m = (boosters.stage.diameter_m * 0.35).max(0.2);
         let bell_radius_m = (boosters.stage.diameter_m * 0.16).max(0.08);
-        for booster_index in 0..boosters.count as usize {
+        for booster_index in 0..boosters.count() {
             for engine in &boosters.stage.engines {
                 let engine_station_m = crate::domain::entities::rocket::Rocket::parallel_booster_engine_position_in_stack_m(
                     boosters,
                     booster_index,
                     engine,
                 )
-                .expect("booster index is bounded by its configured count");
+                .expect("booster index is bounded by its attachment inventory");
                 add_cone(
                     engine_station_m.x,
                     engine_station_m.z,

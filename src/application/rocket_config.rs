@@ -734,9 +734,8 @@ impl VehicleDef {
                 height_m: self.height_m,
                 stages,
                 parallel_boosters: self.parallel_boosters.as_ref().map(|boosters| {
-                    ParallelBoosters {
-                        count: boosters.count,
-                        stage: RocketStage {
+                    ParallelBoosters::new(
+                        RocketStage {
                             name: boosters.stage.name.clone(),
                             diameter_m: boosters.stage.diameter_m,
                             height_m: boosters.stage.height_m,
@@ -754,12 +753,12 @@ impl VehicleDef {
                                 .map(EngineDef::to_domain)
                                 .collect(),
                         },
-                        attachment_positions_m: boosters
+                        boosters
                             .attachment_positions
                             .iter()
                             .map(|position| Vec3::from_array(*position))
                             .collect(),
-                    }
+                    )
                 }),
             },
         }
@@ -1296,8 +1295,7 @@ mod tests {
         for engine in &mut boosters.stage.engines {
             engine.state = EngineState::Running;
         }
-        assert_eq!(boosters.count, 2);
-        assert_eq!(boosters.attachment_positions_m.len(), 2);
+        assert_eq!(boosters.count(), 2);
         let core_thrust_n = crate::domain::services::rocket_propulsion::stage_thrust_body(
             &rocket.stages[0].engines,
             1.0,
@@ -1312,7 +1310,7 @@ mod tests {
         )
         .0
         .length()
-            * boosters.count as f64;
+            * boosters.count() as f64;
         let tw_ratio = (core_thrust_n + booster_thrust_n)
             / (rocket.total_mass_kg() as f64
                 * crate::domain::services::rocket_propulsion::STANDARD_GRAVITY_MPS2);

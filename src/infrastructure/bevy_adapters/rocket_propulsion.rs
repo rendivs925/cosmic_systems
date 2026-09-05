@@ -195,7 +195,7 @@ pub fn propulsion_staging(
                         shed_mass_kg: dynamics.mass_kg,
                     });
                 }
-                info!("{} parallel boosters separated", boosters.count);
+                info!("{} parallel boosters separated", boosters.count());
                 continue;
             }
             // A serial core stage remains structurally attached until its
@@ -406,7 +406,7 @@ pub fn propulsion_thrust(
                 rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction;
         }
         if let Some(boosters) = attached_boosters(propulsion) {
-            for booster_index in 0..boosters.count as usize {
+            for booster_index in 0..boosters.count() {
                 if !booster_is_ignitable(propulsion, booster_index) {
                     continue;
                 }
@@ -459,7 +459,7 @@ pub fn propulsion_consumption(
         }
 
         if let Some(boosters) = attached_boosters(&propulsion).cloned() {
-            for booster_index in 0..boosters.count as usize {
+            for booster_index in 0..boosters.count() {
                 if !booster_is_ignitable(&propulsion, booster_index) {
                     continue;
                 }
@@ -522,7 +522,7 @@ pub fn propulsion_gimbal(
             ) * burn_fraction;
         }
         if let Some(boosters) = attached_boosters(propulsion) {
-            for booster_index in 0..boosters.count as usize {
+            for booster_index in 0..boosters.count() {
                 if !booster_is_ignitable(propulsion, booster_index) {
                     continue;
                 }
@@ -538,7 +538,10 @@ pub fn propulsion_gimbal(
                 ) / sim_time.fixed_timestep();
                 torque_accum.0 += stage_gimbal_torque_body(
                     &boosters.stage.engines,
-                    boosters.attachment_positions_m[booster_index].as_dvec3(),
+                    boosters
+                        .attachment_position_m(booster_index)
+                        .expect("booster index is bounded by its attachment inventory")
+                        .as_dvec3(),
                     rocket.dynamics.center_of_mass_m,
                     throttle,
                     conditions.ambient_pressure_pa,

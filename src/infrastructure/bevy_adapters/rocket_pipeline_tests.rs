@@ -86,13 +86,14 @@ mod engine_lifecycle_pipeline_tests {
             FixedUpdate,
             (actuation_system, propulsion_thrust, propulsion_consumption).chain(),
         );
-        let boosters = with_parallel_boosters.then(|| ParallelBoosters {
-            count: 2,
-            stage: stage("Booster", 1),
-            attachment_positions_m: vec![
-                bevy::math::Vec3::new(-2.0, 0.0, 0.0),
-                bevy::math::Vec3::new(2.0, 0.0, 0.0),
-            ],
+        let boosters = with_parallel_boosters.then(|| {
+            ParallelBoosters::new(
+                stage("Booster", 1),
+                vec![
+                    bevy::math::Vec3::new(-2.0, 0.0, 0.0),
+                    bevy::math::Vec3::new(2.0, 0.0, 0.0),
+                ],
+            )
         });
         let vehicle = Rocket {
             name: "Lifecycle test".into(),
@@ -2568,9 +2569,8 @@ mod parallel_booster_pipeline_tests {
                 fairing_dry_mass_kg: None,
                 engines: vec![engine(100.0)],
             }],
-            parallel_boosters: Some(ParallelBoosters {
-                count: 2,
-                stage: RocketStage {
+            parallel_boosters: Some(ParallelBoosters::new(
+                RocketStage {
                     name: "Booster".into(),
                     diameter_m: 2.0,
                     height_m: 8.0,
@@ -2581,11 +2581,11 @@ mod parallel_booster_pipeline_tests {
                     fairing_dry_mass_kg: None,
                     engines: vec![engine(50.0)],
                 },
-                attachment_positions_m: vec![
+                vec![
                     bevy::math::Vec3::new(-3.0, -1.0, 0.0),
                     bevy::math::Vec3::new(3.0, -1.0, 0.0),
                 ],
-            }),
+            )),
         }
     }
 

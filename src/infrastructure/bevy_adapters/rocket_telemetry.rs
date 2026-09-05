@@ -232,7 +232,7 @@ impl<'a> TelemetryContext<'a> {
                 .parallel_boosters
                 .as_ref()
                 .map_or(0.0, |boosters| {
-                    boosters.stage.propellant_mass_kg as f64 * boosters.count as f64
+                    boosters.stage.propellant_mass_kg as f64 * boosters.count() as f64
                 });
         let total_propellant_remaining: f64 =
             self.propulsion.propellant_remaining_kg.iter().sum::<f32>() as f64

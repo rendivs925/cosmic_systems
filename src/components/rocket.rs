@@ -179,7 +179,7 @@ impl RocketPropulsion {
             .parallel_boosters
             .as_ref()
             .map_or_else(Vec::new, |boosters| {
-                vec![boosters.stage.propellant_mass_kg; boosters.count as usize]
+                vec![boosters.stage.propellant_mass_kg; boosters.count()]
             });
         self.boosters_attached = self.vehicle.parallel_boosters.is_some();
         self.active_stage = 0;
@@ -816,11 +816,10 @@ mod propulsion_tests {
     #[test]
     fn propulsion_reset_restores_the_configured_fresh_flight_state() {
         let mut vehicle = Rocket::falcon9_test_fixture();
-        vehicle.parallel_boosters = Some(ParallelBoosters {
-            count: 1,
-            stage: vehicle.stages[0].clone(),
-            attachment_positions_m: vec![Vec3::X],
-        });
+        vehicle.parallel_boosters = Some(ParallelBoosters::new(
+            vehicle.stages[0].clone(),
+            vec![Vec3::X],
+        ));
         let mut propulsion = RocketPropulsion::for_fresh_flight(vehicle, 25.0, 2.0);
 
         assert_eq!(propulsion.active_stage, 0);

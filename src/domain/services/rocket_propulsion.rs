@@ -380,7 +380,7 @@ pub fn active_vehicle_mass_with_payload_and_boosters(
     ) + boosters.map_or(0.0, |boosters| {
         booster_propellant_remaining_kg
             .iter()
-            .take(boosters.count as usize)
+            .take(boosters.count())
             .map(|propellant_kg| {
                 boosters.stage.dry_mass_kg as f64 + (*propellant_kg).max(0.0) as f64
             })
@@ -483,7 +483,7 @@ impl ActiveVehicleMassPropertiesInput<'_> {
 
         let mut weighted_center_m = serial_com * serial_mass_kg;
         for (attachment_m, propellant_kg) in boosters
-            .attachment_positions_m
+            .attachment_positions()
             .iter()
             .zip(self.booster_propellant_remaining_kg.iter())
         {
@@ -505,7 +505,7 @@ impl ActiveVehicleMassPropertiesInput<'_> {
         let mut inertia =
             serial_inertia + parallel_axis(serial_mass_kg, serial_com - center_of_mass_m);
         for (attachment_m, propellant_kg) in boosters
-            .attachment_positions_m
+            .attachment_positions()
             .iter()
             .zip(self.booster_propellant_remaining_kg.iter())
         {
@@ -580,7 +580,7 @@ pub fn separate_parallel_boosters_dynamics(
     let angular_velocity_world_radps =
         pre_separation.orientation * pre_separation.angular_velocity_radps;
     boosters
-        .attachment_positions_m
+        .attachment_positions()
         .iter()
         .zip(booster_propellant_remaining_kg.iter())
         .map(|(attachment_m, propellant_kg)| {
@@ -1249,9 +1249,8 @@ mod tests {
 
     #[test]
     fn parallel_booster_jettison_is_symmetric_non_overlapping_and_momentum_neutral() {
-        let boosters = ParallelBoosters {
-            count: 2,
-            stage: RocketStage {
+        let boosters = ParallelBoosters::new(
+            RocketStage {
                 name: "Pair".into(),
                 diameter_m: 2.0,
                 height_m: 8.0,
@@ -1262,11 +1261,11 @@ mod tests {
                 fairing_dry_mass_kg: None,
                 engines: vec![engine_with_throttle(1.0, 1.0)],
             },
-            attachment_positions_m: vec![
+            vec![
                 bevy::math::Vec3::new(-4.0, -1.0, 0.0),
                 bevy::math::Vec3::new(4.0, -1.0, 0.0),
             ],
-        };
+        );
         let (inertia, com) = rocket_inertia_tensor(1_200.0, 0.0, 1.0, 12.0);
         let pre = RocketDynamicsState::new(
             DVec3::new(10.0, 20.0, 30.0),
@@ -1300,16 +1299,13 @@ mod tests {
         let omega_world = pre.orientation * pre.angular_velocity_radps;
         let mut separation_impulse_kg_mps = DVec3::ZERO;
         for (index, dynamics) in first.iter().enumerate() {
-            let attachment_world =
-                pre.orientation * boosters.attachment_positions_m[index].as_dvec3();
+            let attachment_m = boosters
+                .attachment_position_m(index)
+                .expect("test index is bounded by the attachment inventory");
+            let attachment_world = pre.orientation * attachment_m.as_dvec3();
             let rigid_point_velocity = pre.velocity_mps + omega_world.cross(attachment_world);
             let radial = (pre.orientation
-                * DVec3::new(
-                    boosters.attachment_positions_m[index].x as f64,
-                    0.0,
-                    boosters.attachment_positions_m[index].z as f64,
-                )
-                .normalize())
+                * DVec3::new(attachment_m.x as f64, 0.0, attachment_m.z as f64).normalize())
                 * PARALLEL_BOOSTER_SEPARATION_DV_MPS;
             assert!((dynamics.velocity_mps - (rigid_point_velocity + radial)).length() < 1e-12);
             separation_impulse_kg_mps +=
