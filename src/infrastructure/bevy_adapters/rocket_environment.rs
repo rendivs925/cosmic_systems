@@ -1,6 +1,7 @@
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
 use crate::components::rocket::{RocketFlightConditions, RocketPhysicsState};
 use crate::domain::services::ephemeris::NaifBodyId;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_planet::RocketBoundPlanet;
 use bevy::pbr::{DistanceFog, FogFalloff};
@@ -16,8 +17,8 @@ pub fn setup_rocket_sun_light(
 ) {
     let Some(sun_direction) = bound_planet
         .0
-        .as_deref()
-        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
+        .as_ref()
+        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
     else {
         bevy::log::error!(
             "cannot initialize rocket sunlight without a bound-planet ephemeris state"
@@ -55,8 +56,8 @@ pub fn update_rocket_sky_ambient_light(
 ) {
     let Some(sun_direction) = bound_planet
         .0
-        .as_deref()
-        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
+        .as_ref()
+        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
     else {
         return;
     };
@@ -92,8 +93,8 @@ pub fn update_rocket_sky_color(
 ) {
     let Some(sun_direction) = bound_planet
         .0
-        .as_deref()
-        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
+        .as_ref()
+        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
     else {
         return;
     };
@@ -132,8 +133,8 @@ pub fn update_sun_day_night_cycle(
 ) {
     let Some(sun_direction) = bound_planet
         .0
-        .as_deref()
-        .and_then(|name| sun_direction_for_bound_planet(&ephemeris_snapshot, name))
+        .as_ref()
+        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
     else {
         return;
     };
@@ -149,9 +150,9 @@ pub fn update_sun_day_night_cycle(
 /// frame service performs the one explicit ICRF-to-solar-inertial conversion.
 fn sun_direction_for_bound_planet(
     ephemeris_snapshot: &EphemerisSnapshot,
-    bound_planet_name: &str,
+    bound_planet_id: &CelestialBodyId,
 ) -> Option<bevy::math::DVec3> {
-    let bound_body = NaifBodyId::for_catalog_name(bound_planet_name)?;
+    let bound_body = NaifBodyId::for_catalog_name(bound_planet_id.as_str())?;
     let direction = ephemeris_snapshot
         .solar_inertial_relative_state(NaifBodyId::SUN, bound_body)?
         .position_m;
@@ -187,7 +188,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            sun_direction_for_bound_planet(&snapshot, "Earth"),
+            sun_direction_for_bound_planet(&snapshot, &CelestialBodyId::earth(),),
             Some(-DVec3::X)
         );
     }

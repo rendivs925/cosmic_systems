@@ -18,6 +18,7 @@ use crate::domain::services::physics::calculate_planet_position_f64;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::components::*;
@@ -43,9 +44,9 @@ pub struct RocketMoon {
     pub parent_planet: String,
 }
 
-/// Resource storing the bound planet name for quick lookup.
+/// Resource storing the bound planet identifier for quick lookup.
 #[derive(Resource, Debug, Default)]
-pub struct RocketBoundPlanet(pub Option<String>);
+pub struct RocketBoundPlanet(pub Option<CelestialBodyId>);
 
 /// Rocket Mode keeps shared celestial entities as the simulation authority, but
 /// hides their solar-scale presentation. Flight-frame proxy meshes are the only
@@ -84,7 +85,7 @@ pub fn setup_rocket_planets(
     let Some((binding, _rocket)) = rocket_query.iter().next() else {
         return;
     };
-    bound_planet_res.0 = Some(binding.planet_name.to_string());
+    bound_planet_res.0 = Some(binding.planet_name.clone());
 
     for moon in PlanetFactory::get_moons_of_id(&binding.planet_name) {
         spawn_rocket_moon(
@@ -221,7 +222,7 @@ pub fn update_rocket_planets(
     mut moon_query: Query<(&RocketMoon, &mut Transform)>,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
-    let Some(bound_planet_name) = &bound_planet_res.0 else {
+    let Some(bound_planet_id) = &bound_planet_res.0 else {
         return;
     };
     if rocket_query.is_empty() {
@@ -229,12 +230,12 @@ pub fn update_rocket_planets(
     }
     let Some(bound_planet) = planet_query
         .iter()
-        .find(|planet| planet.domain_planet.name == *bound_planet_name)
+        .find(|planet| planet.domain_planet.name == bound_planet_id.as_str())
     else {
         return;
     };
 
-    let Some(bound_body) = NaifBodyId::for_catalog_name(bound_planet_name) else {
+    let Some(bound_body) = NaifBodyId::for_catalog_name(bound_planet_id.as_str()) else {
         return;
     };
     // Conversion: solar display units -> meters
@@ -246,7 +247,7 @@ pub fn update_rocket_planets(
 
     // Moons: position relative to bound planet
     for (rocket_moon, mut transform) in &mut moon_query {
-        if rocket_moon.parent_planet == *bound_planet_name {
+        if rocket_moon.parent_planet == bound_planet_id.as_str() {
             if let Some(moon_relative_to_bound) = NaifBodyId::for_catalog_name(&rocket_moon.name)
                 .and_then(|body| ephemeris_snapshot.solar_inertial_relative_state(body, bound_body))
             {
@@ -288,8 +289,8 @@ pub fn update_rocket_sun_disc(
 ) {
     let Some(bound_body) = bound_planet
         .0
-        .as_deref()
-        .and_then(NaifBodyId::for_catalog_name)
+        .as_ref()
+        .and_then(|id| NaifBodyId::for_catalog_name(id.as_str()))
     else {
         return;
     };
@@ -365,7 +366,7 @@ mod tests {
         let mut simulation_time = SimulationTime::default();
         simulation_time.sim_time_s = sim_time_s;
         app.insert_resource(simulation_time);
-        app.insert_resource(RocketBoundPlanet(Some("Earth".to_string())));
+        app.insert_resource(RocketBoundPlanet(Some(CelestialBodyId::earth())));
         let epoch = TdbEpoch::j2000();
         app.insert_resource(EphemerisSnapshot::from_states_and_orientations(
             vec![
