@@ -41,7 +41,20 @@ const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
 #[derive(Component, Debug, Clone)]
 pub struct RocketMoon {
     pub name: String,
-    pub parent_planet: String,
+    parent_planet: CelestialBodyId,
+}
+
+impl RocketMoon {
+    fn new(name: String, parent_planet: CelestialBodyId) -> Self {
+        Self {
+            name,
+            parent_planet,
+        }
+    }
+
+    fn orbits(&self, planet_id: &CelestialBodyId) -> bool {
+        &self.parent_planet == planet_id
+    }
 }
 
 /// Resource storing the bound planet identifier for quick lookup.
@@ -115,6 +128,13 @@ fn spawn_rocket_moon(
     asset_server: &AssetServer,
     moon: &crate::domain::entities::planet::Planet,
 ) {
+    let Some(parent_name) = moon.parent_entity.as_ref() else {
+        return;
+    };
+    let Ok(parent_planet) = CelestialBodyId::new(parent_name.clone()) else {
+        return;
+    };
+
     let radius_m = moon.radius_km * 1000.0;
     let mesh_handle = meshes.add(Sphere::new(radius_m));
 
@@ -154,10 +174,7 @@ fn spawn_rocket_moon(
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
         Transform::default(),
-        RocketMoon {
-            name: moon.name.clone(),
-            parent_planet: moon.parent_entity.as_ref().unwrap().clone(),
-        },
+        RocketMoon::new(moon.name.clone(), parent_planet),
     ));
 }
 
@@ -247,7 +264,7 @@ pub fn update_rocket_planets(
 
     // Moons: position relative to bound planet
     for (rocket_moon, mut transform) in &mut moon_query {
-        if rocket_moon.parent_planet == bound_planet_id.as_str() {
+        if rocket_moon.orbits(bound_planet_id) {
             if let Some(moon_relative_to_bound) = NaifBodyId::for_catalog_name(&rocket_moon.name)
                 .and_then(|body| ephemeris_snapshot.solar_inertial_relative_state(body, bound_body))
             {
@@ -421,10 +438,7 @@ mod tests {
         let rocket_moon = app
             .world_mut()
             .spawn((
-                RocketMoon {
-                    name: "Moon".to_string(),
-                    parent_planet: "Earth".to_string(),
-                },
+                RocketMoon::new("Moon".to_string(), CelestialBodyId::earth()),
                 Transform::default(),
             ))
             .id();

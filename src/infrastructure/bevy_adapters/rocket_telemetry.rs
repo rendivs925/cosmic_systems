@@ -378,12 +378,6 @@ pub struct FlightLogEntry {
     pub main_deployed: bool,
 }
 
-/// Trait for flight recording strategies.
-pub trait FlightRecorderStrategy {
-    fn should_record(&self, current_time: f64) -> bool;
-    fn record(&mut self, entry: FlightLogEntry, current_time: f64);
-}
-
 /// A notable flight event captured by the flight recorder.
 #[derive(Debug, Clone)]
 pub struct FlightEventRecord {
@@ -444,12 +438,7 @@ impl FlightRecorder {
         self.events.clear();
         self.last_record_time_s = 0.0;
     }
-}
 
-/// Maximum number of notable events kept in the flight log.
-pub const MAX_RECORDED_EVENTS: usize = 100;
-
-impl FlightRecorderStrategy for FlightRecorder {
     fn should_record(&self, current_time: f64) -> bool {
         self.recording && current_time - self.last_record_time_s >= self.record_interval_s
     }
@@ -462,6 +451,9 @@ impl FlightRecorderStrategy for FlightRecorder {
         self.last_record_time_s = current_time;
     }
 }
+
+/// Maximum number of notable events kept in the flight log.
+pub const MAX_RECORDED_EVENTS: usize = 100;
 
 /// Build a FlightLogEntry from TelemetryContext.
 fn build_flight_log_entry<'a>(ctx: &TelemetryContext<'a>, current_time: f64) -> FlightLogEntry {
