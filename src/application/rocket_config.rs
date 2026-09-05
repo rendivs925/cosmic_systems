@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use ron::error::SpannedError;
 use ron::extensions::Extensions;
 use ron::Options;
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
@@ -780,16 +781,16 @@ impl VehicleDef {
 /// (`falcon9.ron` → key `falcon9`). A BTreeMap keeps listing deterministic.
 #[derive(Resource, Debug, Default)]
 pub struct RocketCatalog {
-    vehicles: BTreeMap<String, LoadedVehicle>,
+    vehicles: BTreeMap<VehicleKey, LoadedVehicle>,
 }
 
 impl RocketCatalog {
     pub(crate) fn insert(&mut self, key: VehicleKey, vehicle: LoadedVehicle) {
-        self.vehicles.insert(key.0, vehicle);
+        self.vehicles.insert(key, vehicle);
     }
 
     pub(crate) fn keys(&self) -> impl Iterator<Item = &str> {
-        self.vehicles.keys().map(String::as_str)
+        self.vehicles.keys().map(VehicleKey::as_str)
     }
 
     pub(crate) fn resolve<'catalog, 'selection>(
@@ -797,7 +798,7 @@ impl RocketCatalog {
         selection: &'selection VehicleSelection,
     ) -> Option<(&'selection str, &'catalog LoadedVehicle)> {
         let key = selection.selected_key();
-        self.vehicles.get(key).map(|vehicle| (key, vehicle))
+        self.vehicles.get::<str>(key).map(|vehicle| (key, vehicle))
     }
 
     fn contains_key(&self, key: &VehicleKey) -> bool {
@@ -856,7 +857,7 @@ const DEFAULT_VEHICLE_KEY: &str = "falcon9";
 
 /// A catalog key derived from a vehicle config-file stem or supplied through
 /// `--vehicle`. It is distinct from the vehicle's user-facing display name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct VehicleKey(String);
 
 impl VehicleKey {
@@ -874,6 +875,12 @@ impl From<String> for VehicleKey {
 impl From<&str> for VehicleKey {
     fn from(value: &str) -> Self {
         Self(value.to_owned())
+    }
+}
+
+impl Borrow<str> for VehicleKey {
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
