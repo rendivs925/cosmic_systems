@@ -326,6 +326,26 @@ pub struct LoadedVehicle {
     pub rocket: Rocket,
 }
 
+impl EngineDef {
+    /// Convert a validated engine definition into its fresh domain state.
+    fn to_domain(&self) -> RocketEngine {
+        RocketEngine {
+            position_m: Vec3::from_array(self.position),
+            thrust_axis: Vec3::from_array(self.thrust_axis).normalize_or_zero(),
+            isp_sea_level: self.isp_sl,
+            isp_vacuum: self.isp_vac,
+            gimbal_range_deg: self.gimbal_range_deg,
+            rated_thrust_kn: self.rated_thrust_n / NEWTONS_PER_KN,
+            thrust_reference: self.thrust_reference.into(),
+            throttle_min: self.throttle_min,
+            throttle_max: self.throttle_max,
+            max_ignitions: self.max_ignitions,
+            ignition_count: 0,
+            state: EngineState::Off,
+        }
+    }
+}
+
 impl VehicleDef {
     /// Fail-fast validation of physical plausibility (AGENTS.md section 65).
     pub fn validate(&self) -> Result<(), RocketConfigError> {
@@ -703,20 +723,7 @@ impl VehicleDef {
                     .engines
                     .values
                     .iter()
-                    .map(|engine| RocketEngine {
-                        position_m: Vec3::from_array(engine.position),
-                        thrust_axis: Vec3::from_array(engine.thrust_axis).normalize_or_zero(),
-                        isp_sea_level: engine.isp_sl,
-                        isp_vacuum: engine.isp_vac,
-                        gimbal_range_deg: engine.gimbal_range_deg,
-                        rated_thrust_kn: engine.rated_thrust_n / NEWTONS_PER_KN,
-                        thrust_reference: engine.thrust_reference.into(),
-                        throttle_min: engine.throttle_min,
-                        throttle_max: engine.throttle_max,
-                        max_ignitions: engine.max_ignitions,
-                        ignition_count: 0,
-                        state: EngineState::Off,
-                    })
+                    .map(EngineDef::to_domain)
                     .collect(),
             })
             .collect();
@@ -744,21 +751,7 @@ impl VehicleDef {
                                 .engines
                                 .values
                                 .iter()
-                                .map(|engine| RocketEngine {
-                                    position_m: Vec3::from_array(engine.position),
-                                    thrust_axis: Vec3::from_array(engine.thrust_axis)
-                                        .normalize_or_zero(),
-                                    isp_sea_level: engine.isp_sl,
-                                    isp_vacuum: engine.isp_vac,
-                                    gimbal_range_deg: engine.gimbal_range_deg,
-                                    rated_thrust_kn: engine.rated_thrust_n / NEWTONS_PER_KN,
-                                    thrust_reference: engine.thrust_reference.into(),
-                                    throttle_min: engine.throttle_min,
-                                    throttle_max: engine.throttle_max,
-                                    max_ignitions: engine.max_ignitions,
-                                    ignition_count: 0,
-                                    state: EngineState::Off,
-                                })
+                                .map(EngineDef::to_domain)
                                 .collect(),
                         },
                         attachment_positions_m: boosters
