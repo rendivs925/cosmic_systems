@@ -244,10 +244,7 @@ pub fn check_fairing_separation(
         // mass, COM, and inertia together.
         propulsion.attached_payload_kg = 0.0;
         let ablation_mass_loss_kg = ablation.map_or(0.0, |state| state.mass_loss_kg);
-        let mass_properties = propulsion.mass_properties(*geometry, ablation_mass_loss_kg);
-        rocket.dynamics.mass_kg = mass_properties.mass_kg;
-        rocket.dynamics.inertia_body = mass_properties.inertia_body;
-        rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
+        rocket.refresh_attached_mass_properties(&propulsion, *geometry, ablation_mass_loss_kg);
         commands.entity(entity).remove::<PayloadFairing>();
 
         // Two halves pushed apart along the body ±X axis.

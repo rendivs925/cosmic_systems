@@ -118,10 +118,7 @@ pub fn compute_ablation(
 
         // Rebuild all rigid-body quantities from the same attached mass
         // inventory. Incremental subtraction left COM/inertia stale.
-        let mass_properties = propulsion.mass_properties(*geometry, ablation.mass_loss_kg);
-        rocket.dynamics.mass_kg = mass_properties.mass_kg;
-        rocket.dynamics.inertia_body = mass_properties.inertia_body;
-        rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
+        rocket.refresh_attached_mass_properties(propulsion, *geometry, ablation.mass_loss_kg);
     }
 }
 

@@ -161,11 +161,8 @@ pub fn apply_relaunch_requests(
             }
 
             // Mass and inertia from the refueled stack.
-            let mass_properties = propulsion.mass_properties(*geometry, 0.0);
-            let total_mass_kg = mass_properties.mass_kg;
-            rocket.dynamics.mass_kg = total_mass_kg;
-            rocket.dynamics.inertia_body = mass_properties.inertia_body;
-            rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
+            let total_mass_kg =
+                rocket.refresh_attached_mass_properties(&propulsion, *geometry, 0.0);
 
             // Upright and co-moving with the rotating pad at the current site.
             let Some(planet) = planet_query

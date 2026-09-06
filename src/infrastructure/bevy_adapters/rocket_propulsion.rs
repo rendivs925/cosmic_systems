@@ -20,30 +20,6 @@ use bevy::prelude::{
     Assets, Commands, Entity, Mesh, Mesh3d, MessageWriter, Query, Res, ResMut, StandardMaterial,
 };
 
-fn booster_is_ignitable(propulsion: &RocketPropulsion, booster_index: usize) -> bool {
-    propulsion
-        .attached_boosters()
-        .is_some_and(|(boosters, inventory)| {
-            propulsion.throttle > 0.0
-                && inventory.get(booster_index).copied().unwrap_or(0.0) > 0.0
-                && boosters.stage.engines.iter().any(|engine| {
-                    engine.state == crate::domain::entities::rocket::EngineState::Running
-                })
-        })
-}
-
-fn refresh_attached_mass_properties(
-    rocket: &mut RocketPhysicsState,
-    geometry: &RocketGeometry,
-    propulsion: &RocketPropulsion,
-    ablation_mass_loss_kg: f64,
-) {
-    let mass_properties = propulsion.mass_properties(*geometry, ablation_mass_loss_kg);
-    rocket.dynamics.mass_kg = mass_properties.mass_kg;
-    rocket.dynamics.inertia_body = mass_properties.inertia_body;
-    rocket.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
-}
-
 /// Separate an empty stage and refresh the surviving vehicle mass.
 /// The spent stage receives the domain separation impulse and is spawned as
 /// independent debris; the upper stage must settle propellant before restart.
@@ -97,10 +73,9 @@ pub fn propulsion_staging(
                 if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
                     *rocket_mesh = Mesh3d(build_rocket_mesh(&mut meshes, &serial_stack));
                 }
-                refresh_attached_mass_properties(
-                    &mut rocket,
-                    &geometry,
+                rocket.refresh_attached_mass_properties(
                     &propulsion,
+                    *geometry,
                     ablation.map_or(0.0, |state| state.mass_loss_kg),
                 );
                 for dynamics in booster_dynamics {
@@ -334,7 +309,7 @@ pub fn propulsion_thrust(
         }
         if let Some((boosters, _)) = propulsion.attached_boosters() {
             for booster_index in 0..boosters.count() {
-                if !booster_is_ignitable(propulsion, booster_index) {
+                if !propulsion.booster_is_ignitable(booster_index) {
                     continue;
                 }
                 let (booster_thrust_body, booster_mass_flow_kg_s) = stage_gimbaled_thrust_body(
@@ -392,7 +367,7 @@ pub fn propulsion_consumption(
         if let Some((boosters, _)) = propulsion.attached_boosters() {
             let boosters = boosters.clone();
             for booster_index in 0..boosters.count() {
-                if !booster_is_ignitable(&propulsion, booster_index) {
+                if !propulsion.booster_is_ignitable(booster_index) {
                     continue;
                 }
                 let (_, mass_flow_kg_s) = stage_thrust_body(
@@ -408,10 +383,9 @@ pub fn propulsion_consumption(
                     consume_propellant(remaining, mass_flow_kg_s, dt).remaining_kg;
             }
         }
-        refresh_attached_mass_properties(
-            &mut rocket,
-            geometry,
+        rocket.refresh_attached_mass_properties(
             &propulsion,
+            *geometry,
             ablation.map_or(0.0, |state| state.mass_loss_kg),
         );
     }
@@ -441,11 +415,11 @@ pub fn propulsion_gimbal(
                 stage_mass_flow_kg_s,
                 sim_time.fixed_timestep(),
             ) / sim_time.fixed_timestep();
-            let attached_stages = &propulsion.vehicle.stages[propulsion.active_stage..];
-            let stage_origin_in_stack_m =
-                Rocket::stage_origin_in_stack_m(attached_stages, geometry.height_m, 0)
-                    .expect("active stage was checked above")
-                    .as_dvec3();
+            let Some(stage_origin_in_stack_m) =
+                propulsion.active_stage_origin_in_stack_m(geometry.height_m)
+            else {
+                continue;
+            };
             torque_accum.0 += stage_gimbal_torque_body(
                 &active_core_stage.stage().engines,
                 stage_origin_in_stack_m,
@@ -458,7 +432,7 @@ pub fn propulsion_gimbal(
         }
         if let Some((boosters, _)) = propulsion.attached_boosters() {
             for booster_index in 0..boosters.count() {
-                if !booster_is_ignitable(propulsion, booster_index) {
+                if !propulsion.booster_is_ignitable(booster_index) {
                     continue;
                 }
                 let (_, booster_mass_flow_kg_s) = stage_thrust_body(

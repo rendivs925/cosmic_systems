@@ -4,7 +4,6 @@ use crate::components::rocket::{
     RocketCommands, RocketFlightConditions, RocketGeometry, RocketMissionState, RocketPhysicsState,
     RocketPropulsion, TorqueAccumulator,
 };
-use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
 use crate::domain::services::control::control_torque_body;
 use crate::domain::services::rocket_propulsion::{
@@ -48,7 +47,7 @@ pub fn control_system(
             &mut autopilot.integral,
             dt,
         );
-        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
+        let Some(stage) = propulsion.active_stage_configuration() else {
             continue;
         };
         let terminal_descent = matches!(
@@ -60,11 +59,11 @@ pub fn control_system(
         } else {
             propulsion.throttle
         };
-        let attached_stages = &propulsion.vehicle.stages[propulsion.active_stage..];
-        let stage_origin_in_stack_m =
-            Rocket::stage_origin_in_stack_m(attached_stages, geometry.height_m, 0)
-                .expect("active stage was checked above")
-                .as_dvec3();
+        let Some(stage_origin_in_stack_m) =
+            propulsion.active_stage_origin_in_stack_m(geometry.height_m)
+        else {
+            continue;
+        };
         let (gimbal_pitch, gimbal_yaw) = allocate_gimbal_deflections_at_stage_origin(
             &stage.engines,
             stage_origin_in_stack_m,

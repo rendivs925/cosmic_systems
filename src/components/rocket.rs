@@ -24,6 +24,24 @@ pub struct RocketPhysicsState {
     pub dynamics: RocketDynamicsState,
 }
 
+impl RocketPhysicsState {
+    /// Rebuild the attached vehicle's mass, inertia, and center of mass from
+    /// one propulsion inventory snapshot. These rigid-body properties must
+    /// always change together.
+    pub(crate) fn refresh_attached_mass_properties(
+        &mut self,
+        propulsion: &RocketPropulsion,
+        geometry: RocketGeometry,
+        ablation_mass_loss_kg: f64,
+    ) -> f64 {
+        let mass_properties = propulsion.mass_properties(geometry, ablation_mass_loss_kg);
+        self.dynamics.mass_kg = mass_properties.mass_kg;
+        self.dynamics.inertia_body = mass_properties.inertia_body;
+        self.dynamics.center_of_mass_m = mass_properties.center_of_mass_m;
+        mass_properties.mass_kg
+    }
+}
+
 /// Previous/current physics snapshots for render interpolation (AGENTS.md
 /// section 49). Physics runs in `FixedUpdate` while rendering runs every frame,
 /// so the mesh is drawn at an interpolated sub-step position instead of
@@ -304,12 +322,38 @@ impl RocketPropulsion {
         self.booster_attachment.detach();
     }
 
+    pub(crate) fn booster_is_ignitable(&self, booster_index: usize) -> bool {
+        self.attached_boosters()
+            .is_some_and(|(boosters, inventory)| {
+                self.throttle > 0.0
+                    && inventory.get(booster_index).copied().unwrap_or(0.0) > 0.0
+                    && boosters.stage.engines.iter().any(|engine| {
+                        engine.state == crate::domain::entities::rocket::EngineState::Running
+                    })
+            })
+    }
+
+    /// Returns active-stage configuration without requiring a matching live
+    /// inventory. Control uses this during command allocation before actuation
+    /// decides whether a tank can support the command.
+    pub(crate) fn active_stage_configuration(&self) -> Option<&RocketStage> {
+        self.vehicle.stages.get(self.active_stage)
+    }
+
+    /// Origin of the active stage's local engine stations in the current
+    /// attached-stack frame. An invalid active-stage index has no origin.
+    pub(crate) fn active_stage_origin_in_stack_m(&self, stack_height_m: f32) -> Option<DVec3> {
+        let attached_stages = self.vehicle.stages.get(self.active_stage..)?;
+        Rocket::stage_origin_in_stack_m(attached_stages, stack_height_m, 0)
+            .map(|origin| origin.as_dvec3())
+    }
+
     /// Returns the active core stage only when its configuration and inventory
     /// remain synchronized. Consumers must not independently index these two
     /// parallel data sources.
     pub(crate) fn active_core_stage(&self) -> Option<ActiveCoreStage<'_>> {
         Some(ActiveCoreStage {
-            stage: self.vehicle.stages.get(self.active_stage)?,
+            stage: self.active_stage_configuration()?,
             remaining_propellant_kg: *self.propellant_remaining_kg.get(self.active_stage)?,
         })
     }
@@ -963,7 +1007,7 @@ mod camera_controller_tests {
 mod propulsion_tests {
     use super::*;
     use crate::domain::entities::rocket::{EngineState, ParallelBoosters};
-    use bevy::math::Vec3;
+    use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 
     fn all_engines_are_fresh(vehicle: &Rocket) -> bool {
         vehicle.stages.iter().all(|stage| {
@@ -1120,6 +1164,35 @@ mod propulsion_tests {
 
         assert!((attached.mass_kg - detached.mass_kg - booster_mass_kg).abs() < 1e-6);
         assert!((detached.mass_kg - ablated.mass_kg - 50.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn physics_state_refreshes_all_attached_mass_properties_together() {
+        let propulsion =
+            RocketPropulsion::for_fresh_flight(Rocket::falcon9_test_fixture(), 25.0, 0.0);
+        let geometry = RocketGeometry {
+            radius_m: 2.0,
+            height_m: 70.0,
+            lower_extent_y_m: -35.0,
+        };
+        let expected = propulsion.mass_properties(geometry, 50.0);
+        let mut rocket = RocketPhysicsState {
+            dynamics: RocketDynamicsState::new(
+                DVec3::ZERO,
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                1.0,
+                DMat3::IDENTITY,
+                DVec3::ZERO,
+            ),
+        };
+
+        let mass_kg = rocket.refresh_attached_mass_properties(&propulsion, geometry, 50.0);
+
+        assert_eq!(mass_kg, expected.mass_kg);
+        assert_eq!(rocket.dynamics.mass_kg, expected.mass_kg);
+        assert_eq!(rocket.dynamics.inertia_body, expected.inertia_body);
+        assert_eq!(rocket.dynamics.center_of_mass_m, expected.center_of_mass_m);
     }
 }
 
