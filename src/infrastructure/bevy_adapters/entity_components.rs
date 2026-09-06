@@ -5,11 +5,20 @@ use crate::domain::services::atmosphere::AtmosphereSource;
 use crate::domain::services::physics_orbital::OrbitShape;
 use crate::domain::services::terrain_source::{EarthTerrainSource, TerrainSource};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
+use bevy::ecs::component::{Component, Mutable, StorageType};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use std::sync::Arc;
 
 pub use crate::domain::entities::rocket::RocketMissionState as DomainRocketMissionState;
+
+// The entity stores the one authoritative domain value without introducing a
+// Bevy-specific duplicate wrapper.
+impl Component for LaunchSiteCoordinates {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+    type Mutability = Mutable;
+}
 
 // Component for planet entities
 #[derive(Component)]

@@ -1,10 +1,7 @@
-//! Simulation time resource for time acceleration and fixed timestep management.
+//! Authoritative simulation time and fixed-timestep management.
 //!
 //! Centralizes simulation time control (AGENTS.md section 12).
 //! Physics systems should consume the simulation timestep from this resource.
-
-use bevy::app::FixedMain;
-use bevy::prelude::*;
 
 use crate::domain::services::ephemeris::TdbEpoch;
 use crate::domain::services::simulation_epoch::{
@@ -31,7 +28,7 @@ pub const DEFAULT_SIMULATION_START_UTC: UtcDateTime = UtcDateTime {
 ///
 /// This is the single authoritative source for time control. Physics systems should
 /// read `fixed_timestep()` rather than using `Time::delta_secs()` directly.
-#[derive(Resource, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SimulationTime {
     /// Real time elapsed since simulation start (seconds).
     pub real_time_s: f64,
@@ -231,84 +228,10 @@ pub fn stepped_time_acceleration(current: f64, direction: i32) -> f64 {
     }
 }
 
-/// Time-acceleration keys for rocket mode (Phase 15): `.` speeds up a decade,
-/// `,` slows down a decade, `0` resets to real time. Centralized here —
-/// physics systems keep consuming the bounded fixed timestep unchanged.
-pub fn handle_time_acceleration_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut sim_time: ResMut<SimulationTime>,
-) {
-    let target = if keyboard.just_pressed(KeyCode::Period) {
-        Some(stepped_time_acceleration(sim_time.time_acceleration, 1))
-    } else if keyboard.just_pressed(KeyCode::Comma) {
-        Some(stepped_time_acceleration(sim_time.time_acceleration, -1))
-    } else if keyboard.just_pressed(KeyCode::Digit0) {
-        Some(SimulationTime::REALTIME)
-    } else {
-        None
-    };
-
-    let Some(target) = target else { return };
-    if (target - sim_time.time_acceleration).abs() > f64::EPSILON {
-        bevy::log::info!("Time acceleration set to ×{}", target);
-    }
-    sim_time.set_time_acceleration(target);
-}
-
 impl Default for SimulationTime {
     fn default() -> Self {
         Self::new(1.0 / 120.0) // 120 Hz physics
     }
-}
-
-/// System to record wall-clock time from the render schedule.
-pub fn advance_real_time(time: Res<Time>, mut sim_time: ResMut<SimulationTime>) {
-    sim_time.advance_real_time(time.delta_secs_f64());
-}
-
-/// Accrue warp demand after Bevy updates [`Time<Real>`]. This system is meant
-/// for `First.after(TimeSystems)` when the bounded runner is installed.
-pub fn accrue_time_warp(time: Res<Time<Real>>, mut sim_time: ResMut<SimulationTime>) {
-    sim_time.accrue_warp(time.delta_secs_f64());
-}
-
-/// System to advance simulation time only after a bounded physics tick.
-pub fn advance_fixed_simulation_time(mut sim_time: ResMut<SimulationTime>) {
-    sim_time.advance_fixed_step();
-}
-
-/// Configure Bevy's fixed timestep. The bounded warp runner consumes queued
-/// simulation time; changing this timer's frequency for warp would reintroduce
-/// unbounded fixed-loop work.
-pub fn sync_fixed_timestep(mut fixed_time: ResMut<Time<Fixed>>, sim_time: Res<SimulationTime>) {
-    fixed_time.set_timestep_hz(sim_time.fixed_update_hz());
-}
-
-/// Replacement for Bevy's default fixed-loop runner when time warp is enabled.
-///
-/// Bevy's standard runner exhausts all accumulated fixed time in one render
-/// pass. At high warp that can run millions of ticks and stall presentation.
-/// This runner executes a deterministic bounded batch and leaves all remaining
-/// demand in [`SimulationTime`]. See `docs/required_plugin_schedule_edits.md`
-/// for the required schedule registration.
-pub fn run_bounded_fixed_main_schedule(world: &mut World) {
-    let steps = world
-        .resource_mut::<SimulationTime>()
-        .take_pending_fixed_steps();
-    if steps == 0 {
-        *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
-        return;
-    }
-
-    let _ = world.try_schedule_scope(FixedMain, |world, schedule| {
-        for _ in 0..steps {
-            let timestep = world.resource::<Time<Fixed>>().timestep();
-            world.resource_mut::<Time<Fixed>>().advance_by(timestep);
-            *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
-            schedule.run(world);
-        }
-    });
-    *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
 }
 
 #[cfg(test)]

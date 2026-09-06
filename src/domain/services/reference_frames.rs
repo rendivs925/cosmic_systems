@@ -6,10 +6,6 @@
 //!
 //! # Frame conventions
 //!
-//! - **Solar-inertial display**: origin at the Sun, axes aligned with the
-//!   shared DE440 snapshot and orbit-ribbon rendering frame. Its X/ecliptic
-//!   north/ecliptic-Y axis ordering is left-handed, so the ICRF conversion is
-//!   an improper orthogonal transform. It uses display units.
 //! - **Solar-inertial physical**: the same origin and axes, expressed as f64
 //!   meters and meters-per-second. Primary-body ephemerides cross into this
 //!   frame directly from ICRF/J2000 before any vehicle force model consumes
@@ -25,20 +21,19 @@
 //!   point, real meters.
 //! - **Rocket-body**: the vehicle's own orientation (`DQuat`).
 //!
-//! Positions in solar-inertial are in the visualization's display units;
-//! positions in every other frame are in real meters. The meter ↔ display-unit
-//! mapping flows exclusively through [`PhysicalScale`].
+//! Positions and velocities in every domain frame use f64 SI units. The
+//! presentation adapter owns meter-to-display conversion.
 
 use crate::domain::entities::planet::Planet;
+use crate::domain::math::{DMat3, DQuat, DVec3};
 use crate::domain::services::body_orientation::BodyOrientation;
 #[cfg(test)]
 use crate::domain::services::ephemeris::TdbEpoch;
 use crate::domain::services::ephemeris::{BodyState, NaifBodyId};
 use crate::domain::services::physics_utils::calculate_planet_rotation_f64;
+use crate::domain::units::AU_IN_METERS;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
-use crate::domain::value_objects::physical_scale::{PhysicalScale, AU_IN_METERS};
-use bevy::math::{DMat3, DQuat, DVec3, Vec3};
 
 /// The frames supported by the reference-frame module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,40 +399,6 @@ pub fn catalog_body_fixed_to_inertial_rotation(planet: &Planet, time_days: f64) 
     DQuat::from_rotation_z(tilt_rad.to_radians()) * DQuat::from_rotation_y(spin_rad)
 }
 
-// ---------------------------------------------------------------------------
-// Planet-centered inertial <-> solar-inertial
-// ---------------------------------------------------------------------------
-
-/// Convert a solar-inertial display position to a planet-centered inertial
-/// position in meters, given the planet's solar-inertial display position.
-pub fn solar_to_planet_inertial(
-    pos_solar_units: Vec3,
-    planet_solar_units: Vec3,
-    scale: &PhysicalScale,
-) -> DVec3 {
-    let delta = pos_solar_units.as_dvec3() - planet_solar_units.as_dvec3();
-    DVec3::new(
-        scale.solar_units_to_meters(delta.x),
-        scale.solar_units_to_meters(delta.y),
-        scale.solar_units_to_meters(delta.z),
-    )
-}
-
-/// Convert a planet-centered inertial position (meters) to a solar-inertial
-/// display position.
-pub fn planet_inertial_to_solar(
-    pos_pci_m: DVec3,
-    planet_solar_units: Vec3,
-    scale: &PhysicalScale,
-) -> Vec3 {
-    let units = DVec3::new(
-        scale.solar_meters_to_units(pos_pci_m.x),
-        scale.solar_meters_to_units(pos_pci_m.y),
-        scale.solar_meters_to_units(pos_pci_m.z),
-    );
-    (planet_solar_units.as_dvec3() + units).as_vec3()
-}
-
 /// Convert a heliocentric J2000 ecliptic position from astronomical units to
 /// the physical solar-inertial frame in meters. The application already maps
 /// the ecliptic plane to X/Z and the north ecliptic pole to +Y, so no axis
@@ -503,7 +464,6 @@ mod tests {
     use super::*;
     use crate::domain::services::ephemeris::SpiceEphemeris;
     use crate::domain::services::planet_factory::PlanetFactory;
-    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
     fn earth() -> Planet {
@@ -581,29 +541,6 @@ mod tests {
         assert!((reference_x.length() - 1.0).abs() < 1e-12);
         assert!(spin_axis.dot(reference_x).abs() < 1e-12);
         assert!((spin_axis - icrf_j2000_to_solar_inertial(DVec3::Z)).length() < 1e-12);
-    }
-
-    #[test]
-    fn solar_round_trips_through_planet_inertial() {
-        let scale = PhysicalScale::default();
-        let planet = earth();
-        let orientation = test_orientation();
-        let site = ksc();
-        let planet_solar_units = Vec3::new(75_000.0, 0.0, 0.0); // Earth at 1 AU
-        let bf = geodetic_to_body_fixed(&site, &planet);
-        let pci = body_fixed_to_planet_inertial(bf, &orientation);
-        let solar = planet_inertial_to_solar(pci, planet_solar_units, &scale);
-        let pci_back = solar_to_planet_inertial(solar, planet_solar_units, &scale);
-        // The solar-inertial frame is an f32 presentation frame. At 1 AU
-        // (~75 000 display units) an f32 ulp is ~7 800 m in real distance, so
-        // the round trip is bounded by that resolution. This is exactly why
-        // dynamics run in f64 against a local origin instead.
-        let f32_solar_resolution_m = 20_000.0;
-        assert!(
-            (pci_back - pci).length() < f32_solar_resolution_m,
-            "solar round trip off by {} m",
-            (pci_back - pci).length()
-        );
     }
 
     #[test]
@@ -730,27 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn full_chain_round_trip_through_solar() {
-        let scale = PhysicalScale::default();
-        let planet = earth();
-        let orientation = test_orientation();
-        let site = ksc();
-        let planet_solar_units = Vec3::new(75_000.0, 0.0, 0.0);
-        let bf = geodetic_to_body_fixed(&site, &planet);
-        let pci = body_fixed_to_planet_inertial(bf, &orientation);
-        let solar = planet_inertial_to_solar(pci, planet_solar_units, &scale);
-        let pci_back = solar_to_planet_inertial(solar, planet_solar_units, &scale);
-        let bf_back = planet_inertial_to_body_fixed(pci_back, &orientation);
-        let back = body_fixed_to_geodetic(bf_back, &planet);
-
-        // Tolerances reflect the f32 solar-inertial presentation frame's
-        // resolution at 1 AU (~7 800 m per ulp at Earth's orbital distance).
-        assert!((back.latitude_deg - site.latitude_deg).abs() < 0.1);
-        assert!((back.longitude_deg - site.longitude_deg).abs() < 0.1);
-        assert!((back.altitude_m - site.altitude_m).abs() < 20_000.0);
-    }
-
-    #[test]
     fn ksc_maps_consistently_to_earth_body_fixed() {
         let planet = earth();
         let orientation = test_orientation();
@@ -848,59 +764,6 @@ mod tests {
         assert!((back.latitude_deg - site.latitude_deg).abs() < 1e-4);
         assert!((back.longitude_deg - site.longitude_deg).abs() < 1e-4);
         assert!((back.altitude_m - site.altitude_m).abs() < 1e-3);
-    }
-
-    #[test]
-    fn render_boundary_avoids_f32_cancellation_at_solar_distances() {
-        let scale = PhysicalScale::default();
-        let planet = earth();
-        let orientation = test_orientation();
-        let site = ksc();
-        let pci =
-            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&site, &planet), &orientation);
-
-        // The f64 dynamics core + local-origin rebasing preserves a 1 m change.
-        let baseline = RocketDynamicsState::new(
-            pci,
-            DVec3::ZERO,
-            DQuat::IDENTITY,
-            1.0,
-            DMat3::IDENTITY,
-            DVec3::ZERO,
-        );
-        let moved = RocketDynamicsState::new(
-            pci + DVec3::new(1.0, 0.0, 0.0),
-            DVec3::ZERO,
-            DQuat::IDENTITY,
-            1.0,
-            DMat3::IDENTITY,
-            DVec3::ZERO,
-        );
-        let render_delta = (moved.render_transform(DVec3::ZERO, &scale).translation
-            - baseline.render_transform(DVec3::ZERO, &scale).translation)
-            .length();
-        assert!(
-            render_delta > 0.5,
-            "1 m change lost by the render boundary: {render_delta}"
-        );
-
-        // Naively adding the same offset to the planet's solar display position
-        // in f32 loses the change at ~75 000 display units.
-        let planet_solar_units = Vec3::new(75_000.0, 0.0, 0.0);
-        let to_units = |v: DVec3| -> Vec3 {
-            Vec3::new(
-                scale.solar_meters_to_units(v.x) as f32,
-                scale.solar_meters_to_units(v.y) as f32,
-                scale.solar_meters_to_units(v.z) as f32,
-            )
-        };
-        let naive_baseline = planet_solar_units + to_units(pci);
-        let naive_moved = planet_solar_units + to_units(pci + DVec3::new(1.0, 0.0, 0.0));
-        let naive_delta = (naive_moved - naive_baseline).length();
-        assert!(
-            naive_delta < 1e-9,
-            "naive f32 should have lost the change but kept {naive_delta}"
-        );
     }
 
     #[test]

@@ -73,8 +73,7 @@ pub fn create_orbit_mesh_ellipse(
         let x_orbital = radius * true_anomaly.cos();
         let z_orbital = radius * true_anomaly.sin();
 
-        // Transform to 3D space using same method as planet position calculation
-        let pos_3d = physics::transform_orbital_point(
+        let pos_3d = transform_orbital_point(
             x_orbital,
             z_orbital,
             orbit_shape.inclination_rad,
@@ -97,6 +96,28 @@ pub fn create_orbit_mesh_ellipse(
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     meshes.add(mesh)
+}
+
+/// Transform a display-space orbital-plane point for mesh construction.
+fn transform_orbital_point(
+    x_orbital: f32,
+    z_orbital: f32,
+    inclination: f32,
+    long_asc_node: f32,
+    arg_periapsis: f32,
+) -> Vec3 {
+    let (sin_w, cos_w) = arg_periapsis.sin_cos();
+    let x1 = x_orbital * cos_w - z_orbital * sin_w;
+    let z1 = x_orbital * sin_w + z_orbital * cos_w;
+    let (sin_i, cos_i) = inclination.sin_cos();
+    let y2 = z1 * sin_i;
+    let z2 = z1 * cos_i;
+    let (sin_omega, cos_omega) = long_asc_node.sin_cos();
+    Vec3::new(
+        x1 * cos_omega - z2 * sin_omega,
+        y2,
+        x1 * sin_omega + z2 * cos_omega,
+    )
 }
 
 pub fn create_orbit_ribbon_mesh(

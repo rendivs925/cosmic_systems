@@ -1,7 +1,6 @@
 use crate::domain::entities::planet::{Planet, PlanetBuilder};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::planet_configs::{PlanetConfig, PLANET_CONFIGS};
-use bevy::prelude::*;
 
 /// Factory service for creating celestial bodies
 pub struct PlanetFactory;
@@ -64,7 +63,6 @@ impl PlanetFactory {
             .name(config.name.to_string())
             .radius_km(config.radius_km)
             .mass_kg(config.mass_kg)
-            .color(config.color)
             .body_class(config.body_class)
             .surface_capability(config.surface_capability())
             .terrain_authority(config.terrain_authority())

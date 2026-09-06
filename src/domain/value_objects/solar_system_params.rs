@@ -1,7 +1,6 @@
 pub use crate::domain::services::ephemeris::J2000_JULIAN_DATE_TDB;
-use bevy::prelude::*;
 
-#[derive(Resource, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct SolarSystemParameters {
     pub sun_radius_km: f32,
     pub scale_factor: f32, // For visualization (e.g., 1 AU = 100 units)

@@ -20,7 +20,7 @@
 //! - Center of pressure is a simple geometric estimate (slightly above the
 //!   mid-length); aerodynamic torque is `τ = (r_CoP − r_COM) × F`.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 
 /// Dynamic pressure: `q = ½·ρ·v²`.
 pub fn dynamic_pressure_q(density_kg_m3: f64, speed_mps: f64) -> f64 {

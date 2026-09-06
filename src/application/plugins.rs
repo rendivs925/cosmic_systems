@@ -21,10 +21,7 @@ use crate::application::solar_system_startup::setup_space;
 use crate::application::solar_system_startup::spawn_bodies_progressively;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::services::ephemeris::NaifBodyId;
-use crate::domain::services::simulation_time::{
-    accrue_time_warp, advance_fixed_simulation_time, handle_time_acceleration_input,
-    run_bounded_fixed_main_schedule, sync_fixed_timestep, SimulationTime,
-};
+use crate::domain::services::simulation_time::SimulationTime;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::camera_systems::{
@@ -135,6 +132,10 @@ use crate::infrastructure::bevy_adapters::rocket::telemetry::{
     RocketEventFeed,
 };
 use crate::infrastructure::bevy_adapters::rocket::terrain_map::RocketTerrainMapPlugin;
+use crate::infrastructure::bevy_adapters::simulation_time::{
+    accrue_time_warp, advance_fixed_simulation_time, handle_time_acceleration_input,
+    run_bounded_fixed_main_schedule, sync_fixed_timestep,
+};
 use crate::infrastructure::bevy_adapters::terrain::render::{
     recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
 };

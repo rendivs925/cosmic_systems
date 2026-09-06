@@ -4,6 +4,7 @@
 //! curated NAIF SPICE/JPL DE kernels. It exposes geometric f64 SI states in the
 //! J2000 frame; rendering and local-flight conversions remain elsewhere.
 
+use crate::domain::math::{DMat3, DQuat, DVec3};
 use anise::constants::frames::SSB_J2000;
 use anise::frames::Frame;
 use anise::naif::kpl::parser::convert_tpc;
@@ -15,7 +16,6 @@ use anise::naif::kpl::tpc::TPCItem;
 use anise::naif::SPK;
 use anise::prelude::Almanac;
 use anise::time::Epoch;
-use bevy::math::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 #[cfg(any(target_arch = "wasm32", test))]

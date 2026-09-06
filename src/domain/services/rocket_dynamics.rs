@@ -1,8 +1,8 @@
 //! 6-DOF rigid-body dynamics for the rocket.
 //!
 //! Physics is the authoritative source of rocket motion: the rendered
-//! [`Transform`](bevy::transform::components::Transform) is derived from this
-//! state, never faked. Translation and rotation are integrated with semi-
+//! rendered transform is derived from this state, never faked. Translation and
+//! rotation are integrated with semi-
 //! implicit (symplectic) Euler in f64; higher-order integrators are a
 //! documented future option once profiling evidence justifies them (AGENTS.md
 //! section 41).
@@ -17,8 +17,7 @@
 //!   its own stage cylinder center and is translated before attached-stack
 //!   torque calculations.
 
-use bevy::math::{DMat3, DQuat, DVec3};
-use bevy::prelude::Transform;
+use crate::domain::math::{DMat3, DQuat, DVec3};
 
 /// Cohesive 6-DOF physical state of the rocket.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -82,26 +81,6 @@ impl RocketDynamicsState {
         self.angular_velocity_radps += alpha * dt;
         let delta = DQuat::from_scaled_axis(self.angular_velocity_radps * dt);
         self.orientation = (self.orientation * delta).normalize();
-    }
-
-    /// Map the f64 physical state to an f32 Bevy [`Transform`].
-    ///
-    /// The position is first rebased to `local_origin` in f64 so magnitudes
-    /// stay small near the vehicle, then scaled to flight display units and
-    /// downcast to f32. This avoids f32 cancellation at large distances.
-    pub fn render_transform(
-        &self,
-        local_origin: DVec3,
-        scale: &crate::domain::value_objects::physical_scale::PhysicalScale,
-    ) -> Transform {
-        let local_m = self.position_m - local_origin;
-        let display = DVec3::new(
-            scale.flight_meters_to_units(local_m.x),
-            scale.flight_meters_to_units(local_m.y),
-            scale.flight_meters_to_units(local_m.z),
-        )
-        .as_vec3();
-        Transform::from_translation(display).with_rotation(self.orientation.as_quat())
     }
 }
 

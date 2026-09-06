@@ -3,8 +3,9 @@
 use super::components::{
     GroundRest, RocketMissionState, RocketPhysicsState, RocketRenderState, TipOverState,
 };
+use crate::domain::math::DVec3;
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
+use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 use bevy::prelude::{Query, Res, Time, Transform};
 use bevy::time::Fixed;
@@ -57,7 +58,49 @@ pub fn interpolate_render_transform(
     let alpha = time.overstep_fraction() as f64;
     for (_rocket, render, mut transform) in rocket_query.iter_mut() {
         let interpolated = render_dynamics_state(*render, alpha);
-        *transform = interpolated.render_transform(render_origin.origin, &physical_scale);
+        *transform = render_transform(interpolated, render_origin.origin, &physical_scale);
+    }
+}
+
+/// Convert an authoritative f64 rocket state to a camera-relative Bevy transform.
+/// Rebase before downcasting so local meter-scale motion survives solar distances.
+pub fn render_transform(
+    dynamics: RocketDynamicsState,
+    local_origin: DVec3,
+    scale: &PhysicalScale,
+) -> Transform {
+    let local_m = dynamics.position_m - local_origin;
+    let display = DVec3::new(
+        scale.flight_meters_to_units(local_m.x),
+        scale.flight_meters_to_units(local_m.y),
+        scale.flight_meters_to_units(local_m.z),
+    )
+    .as_vec3();
+    Transform::from_translation(display).with_rotation(dynamics.orientation.as_quat())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::math::{DMat3, DQuat};
+    use bevy::math::Vec3;
+
+    #[test]
+    fn render_transform_rebases_before_f32_conversion() {
+        let scale = PhysicalScale::default();
+        let local_origin = DVec3::new(1.0e12, -2.0e12, 3.0e12);
+        let dynamics = RocketDynamicsState::new(
+            local_origin + DVec3::new(1.0, -2.0, 3.0),
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            1.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+
+        let transform = render_transform(dynamics, local_origin, &scale);
+
+        assert_eq!(transform.translation, Vec3::new(1.0, -2.0, 3.0));
     }
 }
 

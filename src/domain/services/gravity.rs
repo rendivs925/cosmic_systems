@@ -9,7 +9,7 @@
 //! module's planet-centered inertial or local-tangent frames) and consumes the
 //! real `Planet.mass_kg` values.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 use serde::Deserialize;
 
 /// Validated degree-two Earth gravity-model parameters.

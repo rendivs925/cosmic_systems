@@ -5,7 +5,7 @@
 //! (throttle rate limit, gimbal deflection clamp, RCS torque clamp). Physics
 //! integrates only the bounded outputs.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 
 /// Physical limits of the vehicle's actuators.
 #[derive(Debug, Clone, Copy, PartialEq)]

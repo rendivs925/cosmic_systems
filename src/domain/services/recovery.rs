@@ -16,9 +16,9 @@
 //! [`actuation`](crate::domain::services::actuation), with the boostback
 //! guidance in [`guidance`](crate::domain::services::guidance). Those already
 //! exist. Bevy systems adapt these values into ECS; nothing here depends on
-//! Bevy beyond `bevy::math` vectors.
+//! Bevy while using the shared domain vector representation.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 
 /// A drone ship (drone barge) drifting under current/wind, holding station with
 /// thrusters. `position_m` and `velocity_mps` are in the inertial prediction

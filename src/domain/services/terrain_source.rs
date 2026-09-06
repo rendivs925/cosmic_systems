@@ -11,7 +11,7 @@
 //! runtime state, so identical inputs always produce identical output
 //! independent of frame rate, spawn order, or camera movement.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 

@@ -1,5 +1,4 @@
-use bevy::prelude::*;
-
+use crate::domain::math::Vec3;
 use crate::domain::services::landing_gear::LandingGearSpec;
 
 /// Mission phase of a rocket flight. Drives which guidance targets are

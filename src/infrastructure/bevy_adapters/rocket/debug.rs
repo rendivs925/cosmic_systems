@@ -9,9 +9,9 @@
 use super::components::*;
 use crate::domain::services::cube_sphere::patch_world_size_m;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
 use bevy::math::{DQuat, DVec3, Isometry3d};

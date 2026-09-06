@@ -15,7 +15,7 @@
 //! vehicle scale, whereas absolute-torque gains tuned on a heavy vehicle are
 //! numerically unstable (bang-bang against actuator clamps) on light ones.
 
-use bevy::math::{DQuat, DVec3};
+use crate::domain::math::{DQuat, DVec3};
 
 /// PID gains for the attitude controller, plus anti-windup and output clamps.
 /// Gains are normalized (acceleration-space); see the module docs.
@@ -121,6 +121,7 @@ pub fn control_torque_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::math::DMat3;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 
     /// Falcon-9-class reference vehicle.
@@ -134,7 +135,7 @@ mod tests {
             DVec3::ZERO,
             DQuat::IDENTITY,
             142_200.0,
-            bevy::math::DMat3::from_diagonal(HEAVY_INERTIA),
+            DMat3::from_diagonal(HEAVY_INERTIA),
             DVec3::ZERO,
         )
     }

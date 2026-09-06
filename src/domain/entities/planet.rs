@@ -1,5 +1,3 @@
-use bevy::prelude::*;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BodyClass {
     Star,
@@ -39,7 +37,6 @@ pub struct Planet {
     pub name: String,
     pub radius_km: f32,
     pub mass_kg: f64,
-    pub color: Color,
     pub body_class: BodyClass,
     pub surface_capability: SurfaceCapability,
     pub terrain_authority: Option<TerrainAuthorityId>,
@@ -59,7 +56,6 @@ pub struct PlanetBuilder {
     name: Option<String>,
     radius_km: Option<f32>,
     mass_kg: Option<f64>,
-    color: Option<Color>,
     body_class: Option<BodyClass>,
     surface_capability: Option<SurfaceCapability>,
     terrain_authority: Option<Option<TerrainAuthorityId>>,
@@ -88,11 +84,6 @@ impl PlanetBuilder {
 
     pub fn mass_kg(mut self, mass_kg: f64) -> Self {
         self.mass_kg = Some(mass_kg);
-        self
-    }
-
-    pub fn color(mut self, color: Color) -> Self {
-        self.color = Some(color);
         self
     }
 
@@ -146,7 +137,6 @@ impl PlanetBuilder {
             name: self.name.expect("name is required"),
             radius_km: self.radius_km.expect("radius_km is required"),
             mass_kg: self.mass_kg.expect("mass_kg is required"),
-            color: self.color.expect("color is required"),
             body_class: self.body_class.expect("body_class is required"),
             surface_capability: self
                 .surface_capability

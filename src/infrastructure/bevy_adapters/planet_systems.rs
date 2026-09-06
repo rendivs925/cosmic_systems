@@ -6,9 +6,11 @@ use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, catalog_body_fixed_to_inertial_rotation,
 };
 use crate::domain::services::simulation_time::SimulationTime;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
+#[cfg(test)]
+use crate::domain::units::AU_IN_METERS;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -384,7 +386,7 @@ mod tests {
                 target: NaifBodyId::EARTH,
                 center: NaifBodyId::SOLAR_SYSTEM_BARYCENTER,
                 epoch,
-                position_m: DVec3::X * crate::domain::value_objects::physical_scale::AU_IN_METERS,
+                position_m: DVec3::X * AU_IN_METERS,
                 velocity_mps: DVec3::ZERO,
             },
         ]);

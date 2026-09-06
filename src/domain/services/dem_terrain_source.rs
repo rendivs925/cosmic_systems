@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 
 use crate::domain::services::cube_sphere::{
     face_uv, face_uv_to_direction, CubeFace, PatchGeometricError, TerrainPatch,

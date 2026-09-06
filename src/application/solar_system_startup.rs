@@ -3,10 +3,11 @@ use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
 use crate::domain::services::physics;
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::{EphemerisAuthority, EphemerisSnapshot};
+use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
+use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::planet_systems::{
     solar_map_position_from_snapshot, solar_map_render_translation,
 };
@@ -323,7 +324,8 @@ fn spawn_celestial_body(
     let emissive_handle = load_texture(asset_server, textures.emissive);
 
     let is_sun = planet.name == "Sun";
-    let base_color = planet.color;
+    let base_color = color_for_body(&planet.name)
+        .expect("configured celestial bodies must have a presentation color");
 
     let (metallic, reflectance, perceptual_roughness) = match planet.name.as_str() {
         "Sun" => (0.0, 0.0, 0.0),

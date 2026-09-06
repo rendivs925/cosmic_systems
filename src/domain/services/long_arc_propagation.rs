@@ -5,7 +5,7 @@
 //! it never accepts ECS data or mutates authoritative flight, contact, or
 //! propulsion state.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 
 use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
 use crate::domain::services::gravity::{ForceModelConfig, ForceModelTier};

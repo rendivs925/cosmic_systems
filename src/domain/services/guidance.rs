@@ -23,10 +23,10 @@
 //! - Unpowered descent: parafoil lateral acceleration tracking.
 
 use crate::domain::entities::rocket::RocketMissionState;
+use crate::domain::math::{DQuat, DVec3};
 use crate::domain::services::reference_frames::{
     planet_inertial_enu_basis, PlanetInertialEnuError,
 };
-use bevy::math::{DQuat, DVec3};
 
 /// Autopilot mode for the flight computer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1300,10 +1300,10 @@ pub fn reentry_bank_angle_enhanced(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::math::DVec3;
     use crate::domain::services::gravity::{
         circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
     };
-    use bevy::math::DVec3;
 
     fn profile() -> AscentGuidanceProfile {
         AscentGuidanceProfile::new(0.0, 0.0, 80_000.0, 80.0_f64.to_radians())

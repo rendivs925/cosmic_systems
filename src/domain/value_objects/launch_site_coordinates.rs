@@ -1,7 +1,4 @@
-use crate::domain::entities::planet::Planet;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use bevy::math::Vec3;
-use bevy::prelude::Component;
 
 /// Validation failure for a launch-site coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,9 +9,9 @@ pub enum LaunchSiteCoordinatesError {
     NonFiniteAltitude,
 }
 
-/// Coordinate system for launch sites using latitude, longitude, and altitude
-/// This provides accurate positioning relative to planetary surfaces
-#[derive(Component, Debug, Clone)]
+/// Coordinate system for launch sites using latitude, longitude, and altitude.
+/// The authoritative Cartesian conversion lives in `reference_frames`.
+#[derive(Debug, Clone)]
 pub struct LaunchSiteCoordinates {
     pub planet_id: CelestialBodyId,
     pub latitude_deg: f32,  // -90 to 90 degrees
@@ -64,34 +61,6 @@ impl LaunchSiteCoordinates {
             longitude_deg: (longitude_deg + 180.0).rem_euclid(360.0) - 180.0,
             altitude_m,
         })
-    }
-
-    /// Convert lat/lon/alt coordinates to planet-centered Cartesian coordinates
-    /// Accounts for ellipsoidal planet shape (not just spherical)
-    pub fn to_planet_relative_position(&self, planet: &Planet) -> Vec3 {
-        let planet_radius_km = planet.radius_km;
-        let planet_radius_m = planet_radius_km * 1000.0;
-
-        // Convert degrees to radians
-        let lat_rad = self.latitude_deg.to_radians();
-        let lon_rad = self.longitude_deg.to_radians();
-
-        // For simplicity, treat as spherical. Advanced implementation would use ellipsoidal model
-        // with different equatorial and polar radii
-
-        // Convert to Cartesian coordinates (planet-centered)
-        let x = (planet_radius_m + self.altitude_m) * lat_rad.cos() * lon_rad.cos();
-        let y = (planet_radius_m + self.altitude_m) * lat_rad.sin();
-        let z = (planet_radius_m + self.altitude_m) * lat_rad.cos() * lon_rad.sin();
-
-        Vec3::new(x, y, z)
-    }
-
-    /// Calculate distance to another coordinate (on same planet)
-    pub fn distance_to(&self, other: &LaunchSiteCoordinates, planet: &Planet) -> f32 {
-        let pos1 = self.to_planet_relative_position(planet);
-        let pos2 = other.to_planet_relative_position(planet);
-        pos1.distance(pos2)
     }
 }
 

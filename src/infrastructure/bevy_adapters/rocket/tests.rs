@@ -17,6 +17,8 @@ use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(test)]
 #[cfg(test)]
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+#[cfg(test)]
+use crate::infrastructure::bevy_adapters::simulation_time::sync_fixed_timestep;
 
 #[cfg(test)]
 use bevy::math::{DMat3, DQuat, DVec3};
@@ -2099,10 +2101,7 @@ mod ascent_pipeline_tests {
             )
                 .chain(),
         );
-        app.add_systems(
-            Update,
-            crate::domain::services::simulation_time::sync_fixed_timestep,
-        );
+        app.add_systems(Update, sync_fixed_timestep);
         app
     }
 

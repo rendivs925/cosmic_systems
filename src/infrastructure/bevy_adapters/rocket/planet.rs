@@ -17,10 +17,11 @@ use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
+use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
     create_planet_material, PlanetMaterialConfig,
 };
@@ -146,15 +147,17 @@ fn spawn_rocket_moon(
     let albedo_handle = load_texture(asset_server, textures.albedo);
     let emissive_handle = load_texture(asset_server, textures.emissive);
 
-    let (metallic, reflectance, perceptual_roughness, base_color) = match moon.name.as_str() {
-        "Moon" => (0.05, 0.12, 0.9, moon.color),
-        "Phobos" | "Deimos" => (0.05, 0.1, 0.85, moon.color),
-        "Io" => (0.1, 0.3, 0.7, moon.color),
-        "Europa" => (0.05, 0.5, 0.3, moon.color),
-        "Ganymede" => (0.05, 0.4, 0.5, moon.color),
-        "Callisto" => (0.05, 0.3, 0.6, moon.color),
-        "Titan" => (0.05, 0.5, 0.4, moon.color),
-        _ => (0.05, 0.5, 0.7, moon.color),
+    let base_color = color_for_body(&moon.name)
+        .expect("configured celestial bodies must have a presentation color");
+    let (metallic, reflectance, perceptual_roughness) = match moon.name.as_str() {
+        "Moon" => (0.05, 0.12, 0.9),
+        "Phobos" | "Deimos" => (0.05, 0.1, 0.85),
+        "Io" => (0.1, 0.3, 0.7),
+        "Europa" => (0.05, 0.5, 0.3),
+        "Ganymede" => (0.05, 0.4, 0.5),
+        "Callisto" => (0.05, 0.3, 0.6),
+        "Titan" => (0.05, 0.5, 0.4),
+        _ => (0.05, 0.5, 0.7),
     };
 
     let material = create_planet_material(PlanetMaterialConfig {
@@ -347,10 +350,10 @@ mod tests {
     use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
-    use crate::domain::value_objects::physical_scale::PhysicalScale;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
     use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
     use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+    use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
     use bevy::math::{DMat3, DQuat, DVec3};
 
     fn earth_orientation(epoch: TdbEpoch) -> BodyOrientation {

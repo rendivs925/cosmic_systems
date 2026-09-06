@@ -1,6 +1,6 @@
 use crate::domain::entities::planet::Planet;
+use crate::domain::math::DVec3;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use bevy::math::{DVec3, Vec3};
 
 /// Solar-map moon distances use the same display scale as planetary distances.
 /// The former 60x exaggeration made real eccentric moon paths appear as stray
@@ -165,37 +165,6 @@ pub fn orbit_shape_for_at_time(
             arg_periapsis_rad: 0.0,
         }
     }
-}
-
-// Helper function to transform a point from orbital plane to 3D space
-// This ensures orbit mesh and position calculation use identical transformation
-pub fn transform_orbital_point(
-    x_orbital: f32,
-    z_orbital: f32,
-    inclination: f32,
-    long_asc_node: f32,
-    arg_periapsis: f32,
-) -> Vec3 {
-    // Apply argument of periapsis rotation (in orbital plane)
-    let cos_w = arg_periapsis.cos();
-    let sin_w = arg_periapsis.sin();
-    let x1 = x_orbital * cos_w - z_orbital * sin_w;
-    let z1 = x_orbital * sin_w + z_orbital * cos_w;
-
-    // Apply inclination (tilt the orbital plane)
-    let cos_i = inclination.cos();
-    let sin_i = inclination.sin();
-    let y2 = z1 * sin_i;
-    let z2 = z1 * cos_i;
-    let x2 = x1;
-
-    // Apply longitude of ascending node (rotate around Z-axis)
-    let cos_omega = long_asc_node.cos();
-    let sin_omega = long_asc_node.sin();
-    let x3 = x2 * cos_omega - z2 * sin_omega;
-    let z3 = x2 * sin_omega + z2 * cos_omega;
-
-    Vec3::new(x3, y2, z3)
 }
 
 pub fn orbital_elements_for(planet: &Planet) -> Option<OrbitalElements> {
@@ -768,9 +737,9 @@ pub fn circularize_and_plane_change_dv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::math::DQuat;
     use crate::domain::services::physics_utils::calculate_visual_radius;
     use crate::domain::services::planet_factory::PlanetFactory;
-    use bevy::math::DVec3;
 
     const EARTH_MU: f64 = 3.986004418e14; // m^3/s^2
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
@@ -834,8 +803,7 @@ mod tests {
         let apoapsis_m = 7_071_000.0;
         let semi_major_axis_m = (periapsis_m + apoapsis_m) * 0.5;
         let velocity_mps = (EARTH_MU * (2.0 / periapsis_m - 1.0 / semi_major_axis_m)).sqrt();
-        let rotation =
-            bevy::math::DQuat::from_rotation_arc(DVec3::Y, DVec3::new(0.3, 0.8, 0.5).normalize());
+        let rotation = DQuat::from_rotation_arc(DVec3::Y, DVec3::new(0.3, 0.8, 0.5).normalize());
         let apsides = apsis_endpoints_from_state(
             rotation * DVec3::new(periapsis_m, 0.0, 0.0),
             rotation * DVec3::new(0.0, velocity_mps, 0.0),
@@ -899,8 +867,8 @@ mod tests {
         let radius_m = 6_771_000.0;
         let circular_speed_mps = (EARTH_MU / radius_m).sqrt();
         let tilt = 23.44_f64.to_radians();
-        let spin_axis = bevy::math::DQuat::from_rotation_z(tilt) * DVec3::Y;
-        let reference_x = bevy::math::DQuat::from_rotation_z(tilt) * DVec3::X;
+        let spin_axis = DQuat::from_rotation_z(tilt) * DVec3::Y;
+        let reference_x = DQuat::from_rotation_z(tilt) * DVec3::X;
         let position_m = reference_x * radius_m;
         let velocity_mps = spin_axis.cross(position_m).normalize() * circular_speed_mps;
 

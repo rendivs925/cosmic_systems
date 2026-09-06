@@ -9,9 +9,9 @@
 use crate::domain::entities::rocket::{
     EngineState, ParallelBoosters, RocketEngine, RocketStage, ThrustReference,
 };
+use crate::domain::math::{DMat3, DQuat, DVec3};
 use crate::domain::services::atmosphere::SEA_LEVEL_PRESSURE_PA;
 use crate::domain::services::rocket_dynamics::rocket_inertia_tensor_with_mass_adjustments;
-use bevy::math::{DMat3, DQuat, DVec3};
 
 /// Standard gravity, m/s².
 pub const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
@@ -769,6 +769,7 @@ pub fn stage_gimbaled_thrust_body(
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::Rocket;
+    use crate::domain::math::Vec3;
     use crate::domain::services::rocket_dynamics::{rocket_inertia_tensor, RocketDynamicsState};
 
     #[test]
@@ -993,7 +994,7 @@ mod tests {
     #[test]
     fn gimbaled_force_and_torque_share_the_same_deflected_axis() {
         let engine = RocketEngine {
-            position_m: bevy::math::Vec3::new(0.0, -2.0, 0.0),
+            position_m: Vec3::new(0.0, -2.0, 0.0),
             gimbal_range_deg: 10.0,
             ..engine_with_throttle(0.0, 1.0)
         };
@@ -1261,10 +1262,7 @@ mod tests {
                 fairing_dry_mass_kg: None,
                 engines: vec![engine_with_throttle(1.0, 1.0)],
             },
-            vec![
-                bevy::math::Vec3::new(-4.0, -1.0, 0.0),
-                bevy::math::Vec3::new(4.0, -1.0, 0.0),
-            ],
+            vec![Vec3::new(-4.0, -1.0, 0.0), Vec3::new(4.0, -1.0, 0.0)],
         );
         let (inertia, com) = rocket_inertia_tensor(1_200.0, 0.0, 1.0, 12.0);
         let pre = RocketDynamicsState::new(
@@ -1356,8 +1354,8 @@ mod tests {
 
     fn engine_with_throttle(min: f32, max: f32) -> RocketEngine {
         RocketEngine {
-            position_m: bevy::math::Vec3::ZERO,
-            thrust_axis: bevy::math::Vec3::Y,
+            position_m: Vec3::ZERO,
+            thrust_axis: Vec3::Y,
             isp_sea_level: 282.0,
             isp_vacuum: 311.0,
             gimbal_range_deg: 5.0,

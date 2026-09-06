@@ -14,14 +14,14 @@
 //! *display* aid, so stability and reproducibility matter more than long-horizon
 //! accuracy. Two-body propagation keeps SOI switching clean and testable.
 //!
-//! This module is Bevy-free beyond `bevy::math` vector types (consistent with
+//! This module is Bevy-free and uses the shared domain vector representation.
 //! the other domain services) and unit-tested without an app.
 
+use crate::domain::math::DVec3;
 use crate::domain::services::cube_sphere::direction_to_lat_lon;
 use crate::domain::services::gravity::{
     gravitational_acceleration_from_mu, gravitational_parameter,
 };
-use bevy::math::DVec3;
 
 /// A gravity source (planet / moon / star) in the shared prediction frame.
 #[derive(Debug, Clone)]

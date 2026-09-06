@@ -19,9 +19,9 @@
 //! a real ISA implementation or measured data can replace the formulas behind
 //! the same trait.
 
+use crate::domain::math::DVec3;
 use crate::domain::services::aerodynamics::{dynamic_pressure_q, mach_number};
 use crate::domain::services::rocket_propulsion::STANDARD_GRAVITY_MPS2;
-use bevy::math::DVec3;
 use std::fmt::Debug;
 use std::sync::Arc;
 

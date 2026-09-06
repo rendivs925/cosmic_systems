@@ -20,10 +20,10 @@ use crate::domain::services::trajectory::{
     predict_patched_conics, predict_patched_conics_until_radius,
     predict_patched_conics_with_impulse, GravityBody, ManeuverImpulse, ManeuverPrediction,
 };
-#[cfg(test)]
-use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+#[cfg(test)]
+use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 

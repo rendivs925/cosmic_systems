@@ -8,8 +8,8 @@
 //! This module is pure domain logic (no Bevy ECS); the streaming/render layers
 //! consume it.
 
+use crate::domain::math::DVec3;
 use crate::domain::services::terrain_source::TerrainSource;
-use bevy::math::DVec3;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The six faces of the cube-sphere.

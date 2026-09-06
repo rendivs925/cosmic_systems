@@ -5,8 +5,8 @@
 //! consumers migrate from catalog spin in task 3.3.
 
 use crate::domain::entities::planet::Planet;
+use crate::domain::math::{DQuat, DVec3};
 use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
-use bevy::math::{DQuat, DVec3};
 use std::collections::HashSet;
 use std::fmt;
 

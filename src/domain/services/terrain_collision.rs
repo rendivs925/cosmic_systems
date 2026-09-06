@@ -6,9 +6,9 @@
 //! detection. There is no full-planet physics mesh: heights are sampled on
 //! demand from the source.
 
+use crate::domain::math::DVec3;
 use crate::domain::services::reference_frames::body_fixed_to_terrain_lat_lon;
 use crate::domain::services::terrain_source::TerrainSource;
-use bevy::math::DVec3;
 
 /// A surface sample at a latitude/longitude.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -266,9 +266,9 @@ pub fn liftoff_from_rest(thrust_n: f64, weight_n: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::math::DVec3;
     use crate::domain::services::terrain_source::ElevationBounds;
     use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSource};
-    use bevy::math::DVec3;
 
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
 

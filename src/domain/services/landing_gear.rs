@@ -19,7 +19,7 @@
 //! - Tip-over: quasi-static criterion — the vehicle topples when the center-
 //!   of-mass projection leaves the support polygon formed by the leg bases.
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 
 use crate::domain::services::terrain_collision::TouchdownCriteria;
 

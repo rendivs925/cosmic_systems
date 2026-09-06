@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use bevy::math::DVec3;
+use crate::domain::math::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::services::ephemeris::{NaifBodyId, SpiceEphemeris, TdbEpoch};
