@@ -12,19 +12,20 @@ budgets.
 ## Existing Authority
 
 `src/domain/services/dem_terrain_source.rs` owns optional DEM support behind the
-`dem` feature. It already provides:
+`dem` feature. It currently provides:
 
-- `DemDataset` for SRTM, LRO LOLA, and MOLA;
-- stable `DemTileKey` identity;
-- `DemTile` row-major meter-height buffers and geographic bounds;
-- bounded `DemTileCache` LRU behaviour;
-- `DemTerrainConfig` including dataset, data directory, cache limit, and
-  procedural fallback;
-- `DemTerrainSource` implementing the shared `TerrainSource` contract.
+- `CubeSphereDem`, an immutable versioned CSDEM with six row-major signed-meter
+  faces and a read-only metadata pyramid;
+- deterministic ETOPO1 raw-raster conversion through `etopo1_convert`;
+- `DemTerrainSource` implementing the shared `TerrainSource` contract with no
+  runtime sampling I/O or cache mutation;
+- the Earth manifest at `assets/configs/terrain/earth_etopo1_ice_surface_v1.ron`
+  and provenance at `docs/datasets/earth_etopo1_ice_surface_v1.md`.
 
 `terrain_source.rs` owns layering/source selection and `terrain_streaming.rs`
-owns visible patch scheduling. Extend them rather than creating a data manager,
-second terrain sample API, or independent cache.
+owns visible patch scheduling. Moon has no accepted terrain authority or local
+dataset yet; do not add placeholder LRO LOLA/MOLA support without a reviewed
+manifest, datum, provenance, and validated lunar body-fixed mapping.
 
 ## Data Contract
 
@@ -50,8 +51,9 @@ second terrain sample API, or independent cache.
   worker/scheduling path when it affects visible streaming.
 - Keep returned task data plain Rust; Bevy asset/entity mutation stays on the
   main thread and is bounded.
-- Cache by stable dataset/tile identity under explicit memory budgets and evict
-  through existing LRU ownership. Do not create an unbounded per-dataset cache.
+- Keep future decoded payload caches under explicit memory budgets and existing
+  cache ownership. The current resident CSDEM needs neither a runtime tile cache
+  nor a second terrain-data manager.
 - Prioritize visible/near-camera data over prefetch and background coverage.
 - Preserve a coarse/procedural fallback while detailed data is unavailable. Never
   stall the frame waiting for a tile.

@@ -13,6 +13,9 @@ architecture, determinism, measurement, then optimization is the required order.
 - `src/infrastructure/bevy_adapters/performance_systems.rs`: frame statistics,
   bounded sampling, screenshots, and quality adaptation.
 - `PerformanceStats` and quality resources/components: shared performance state.
+- `PerformanceMetricsConfig` in `performance_components.rs`: opt-in,
+  cadence-limited p50/p95/p99 reports from a bounded 600-frame history when
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`.
 - Terrain streaming/rendering telemetry: terrain task, cache, residency, and
   upload metrics.
 - Bevy task-pool setup in `main.rs` and feature-specific task usage.
@@ -30,6 +33,10 @@ or frame-time history without extending the existing owner.
   pacing, and simulation throughput. FPS alone does not identify a bottleneck.
 - Report p50/p95/p99 frame behaviour where possible, not only an average.
 - Record display/headless limitations. A zero-size X11 window is not visual proof.
+- For terrain tuning, collect a representative native-display flight-camera
+  capture. The present vehicle descends near 52.7 km, so the required 70 km
+  ascent profile remains a measurement prerequisite rather than evidence for
+  changing mesh, upload, or LOD budgets.
 
 ## Performance Rules
 

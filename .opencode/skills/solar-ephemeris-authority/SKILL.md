@@ -5,12 +5,13 @@ description: Use when adding or changing SPICE, DE440, DE441, NAIF kernels, JPL 
 
 # Solar Ephemeris Authority
 
-Use this skill for scientific solar-system state. Known bodies have one runtime
-authority: a curated local NAIF SPICE kernel set backed by a JPL DE ephemeris.
-Do not add a second analytic, N-body, rendering, or network-derived body-state
-path.
+Use this skill for scientific solar-system state. Known bodies already use one
+runtime authority: the curated local DE440 manifest loaded by `EphemerisPlugin`
+into `EphemerisAuthority`, with same-epoch values published in
+`EphemerisSnapshot`. Do not add an analytic, N-body, rendering, or
+network-derived body-state path.
 
-## Target Authority
+## Existing Authority
 
 The authoritative state contract is:
 
@@ -27,12 +28,21 @@ camera-relative frames. Rendering, gravity, telemetry, orbit ribbons, and
 camera systems consume evaluated state; they never load kernels or reconstruct
 orbits independently.
 
+`src/infrastructure/bevy_adapters/ephemeris.rs` owns the resource boundary:
+
+- `EphemerisAuthority` is the immutable manifest-backed evaluator;
+- `EphemerisSnapshot` stores states, PCK orientations, gravitational parameters,
+  and the Earth J2 model for one exact TDB epoch;
+- `EphemerisSet::EvaluateForTick` evaluates force inputs before rocket gravity;
+- `EphemerisSet::RefreshAfterTimeAdvance` refreshes the completed epoch for
+  presentation and the next tick.
+
 ## Required Audit
 
 Before implementation, inspect:
 
 - `Cargo.toml` and `Cargo.lock` for existing SPICE support and dependency policy;
-- `src/domain/services/physics_orbital.rs` for the analytic migration seam;
+- `src/domain/services/ephemeris.rs` and the manifest-backed evaluator;
 - `src/domain/services/reference_frames.rs` for frame/precision conversion;
 - `src/domain/services/simulation_time.rs` for the simulation epoch;
 - `src/infrastructure/plugins/mod.rs` for shared startup and system ordering;
@@ -70,20 +80,20 @@ models.
 - Planet orientation comes from the approved PCK path. Do not combine a DE
   position with the old axial-tilt/spin approximation after migration.
 
-## Migration Rules
+## Extension Rules
 
-1. Add the kernel-backed domain service and pure state tests without changing
-   consumers.
-2. Migrate primary-body state consumers together: solar-map positions, Sun
-   direction, flight proxies, lighting, camera targets, and orbit paths.
-3. Migrate lunar and major-moon consumers using the same authority.
-4. Migrate gravity and other physical consumers only after state/frame tests
-   establish the intended center and differential-force formulation.
-5. Remove the analytic runtime ephemeris path and its call sites. Retain only
-   explicit migration/reference tests if they add scientific value.
+1. Add a reviewed dataset role and manifest entry before exposing a new body or
+   physical model to consumers.
+2. Validate its checksum, coverage, NAIF IDs, frame, center, units, and time
+   scale at startup through the existing authority.
+3. Publish every required state and orientation through the same snapshot epoch.
+4. Migrate all consumers of a new body or quantity together; do not retain a
+   mode-local analytic fallback.
+5. Keep unavailable roles explicit in manifest provenance until their required
+   kernels are reviewed and provisioned.
 
-Do not leave feature flags, fallbacks, or per-mode ephemeris choices that make
-two body-state authorities possible at runtime.
+Do not add feature flags, fallbacks, or per-mode ephemeris choices that make two
+body-state authorities possible at runtime.
 
 ## Validation
 

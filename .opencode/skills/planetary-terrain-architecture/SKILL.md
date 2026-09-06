@@ -30,6 +30,18 @@ Read these modules before creating a terrain abstraction or replacing logic:
 Do not introduce another terrain source, coordinate conversion, LOD hierarchy,
 erosion implementation, or patch cache without first extending these owners.
 
+## Current Data Boundary
+
+- Earth is the sole configured terrain-data authority. It uses the versioned,
+  resident ETOPO1-derived CSDEM behind the `dem` feature, with deterministic
+  procedural terrain only as its explicit missing-file fallback.
+- Earth CSDEM metadata supplies conservative cube-sphere patch error through
+  level 8. It is source metadata, not an alternative height authority or a
+  streamed elevation-payload pyramid.
+- Moon remains solid-surface eligible but has no approved terrain manifest,
+  local data package, datum, or validated body-fixed mapping. Do not create a
+  Moon-specific terrain/collision path or speculative data adapter.
+
 ## Architectural Contract
 
 The terrain pipeline has strict one-way ownership:

@@ -55,6 +55,9 @@ Treat that provenance as simulation input, not asset metadata.
   fixed pipeline.
 - Background terrain/data work may alter readiness or presentation only; it may
   not make fixed physical results depend on completion order.
+- A fixed-tick atmosphere sample is replaced as one complete value before its
+  consumers run. Force and torque budgets are consumed exactly once by
+  integration, so they cannot leak into a later tick.
 
 ## Regression Workflow
 
@@ -82,6 +85,9 @@ Choose the nearest relevant level:
 - Frame/precision: round trips and large-scale precision boundaries.
 - ECS pipeline: staged force accumulation, integration, ground contact, launch,
   recovery, and event ordering.
+- Component authority: reserve-aware active-stage eligibility, atomic mass /
+  inertia / center-of-mass refresh, complete flight-condition replacement, and
+  cleared force/torque budgets after integration.
 - Replay: capture/restore exactness, chronological capacity, lifecycle/seek
   restrictions, and bitwise-identical fresh runs.
 - Regression: baseline signing, tolerances, exact divergence reporting, and
@@ -108,9 +114,9 @@ Run at least:
 
 ```text
 cargo fmt --check
-cargo check
-cargo clippy
-cargo test
+cargo check --features dem
+cargo clippy --features dem -- -D warnings
+cargo test --features dem
 ```
 
 For changes affecting mode/plugin setup, additionally bounded-start `cargo run`,

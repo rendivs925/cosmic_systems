@@ -83,9 +83,9 @@ use the existing mapping between them.
   substitute for global inertial state.
 - Rocket visual planets are presentation proxies evaluated at simulation time;
   neither shared solar-map transforms nor proxy meshes are ephemeris authority.
-- Preserve the current analytic heliocentric presentation path only until its
-  consumers migrate. Do not add new consumers to it once the SPICE/DE authority
-  is introduced.
+- `EphemerisSnapshot` supplies complete same-epoch DE440/PCK states and
+  orientations. Derive solar-inertial presentation state through its existing
+  adapters; do not restore analytic heliocentric presentation consumers.
 
 ## Tests
 

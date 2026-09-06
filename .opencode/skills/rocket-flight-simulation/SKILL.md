@@ -43,6 +43,26 @@ mission/guidance target
 - Actuation maps commands to engines, gimbal, RCS, grid fins, and other hardware.
 - Forces and torques determine the physical outcome through integration.
 
+## Encapsulated Fixed-Tick State
+
+- `RocketPropulsion::active_core_stage` and `running_core_stage` are the sole
+  capability views for synchronized active-stage configuration, inventory,
+  reserve, throttle, and engine eligibility. Do not independently index stage
+  configuration and propellant vectors.
+- `RocketPhysicsState::refresh_attached_mass_properties` atomically refreshes
+  mass, inertia, and center of mass from one propulsion snapshot. Call it after
+  consumption, separation, fairing changes, or ablation changes; do not update
+  individual rigid-body fields in separate systems.
+- `ForceAccumulator` and `TorqueAccumulator` accept only unit-named additions.
+  `integrate_6dof` is their sole production consumer through `take_force_n` and
+  `take_torque_nm`; it clears the completed tick budget as it reads it.
+- `RocketFlightConditions` stores one complete private atmosphere sample.
+  `refresh_flight_conditions` is its sole production writer through
+  `replace_sample`; consumers read the shared snapshot and never overwrite
+  density, Mach, pressure, or air-relative velocity independently.
+- Test fixtures may use the explicitly test-only constructors. Do not make
+  private state public merely to simplify a production system or test.
+
 ## Fixed Pipeline
 
 Rocket authority belongs in `FixedUpdate` and consumes `SimulationTime`'s fixed
@@ -66,7 +86,8 @@ atmosphere/recovery -> guidance -> control -> actuation -> gravity
 - State all physical units in names and documentation: meters, m/s, radians/s,
   kilograms, newtons, pascals, seconds.
 - Use `f64` and `DVec3`/`DQuat` for flight-scale domain state.
-- Forces are accumulated once per fixed step; integration consumes the accumulated value.
+- Forces and torques are accumulated once per fixed step; integration consumes
+  and clears the accumulated value.
 - Mass, propellant, center of mass, and inertia derive from the active stages and
   must remain mutually consistent after consumption/separation.
 - Engine thrust depends on throttle, engine state, gimbal, and ambient pressure
@@ -98,14 +119,16 @@ Run:
 
 ```text
 cargo fmt --check
-cargo check
-cargo clippy
-cargo test
-cargo run -- rocket
+cargo check --features dem
+cargo clippy --features dem -- -D warnings
+cargo test --features dem
+cargo build --release --features dem
+timeout 10s cargo run --features dem --quiet -- rocket
 ```
 
-Also preserve `cargo run` and `cargo run -- craft`. Record display limitations
-instead of claiming visual flight validation where a graphical window is unavailable.
+Also bounded-start `cargo run` and `cargo run -- craft` with the same feature
+set. Record display limitations instead of claiming visual flight validation
+where a graphical window is unavailable.
 
 Reject transform-driven flight, duplicate force calculations, variable-rate
 physics, force application after integration, presentation-controlled physics,

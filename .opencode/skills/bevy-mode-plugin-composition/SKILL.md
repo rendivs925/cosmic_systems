@@ -36,9 +36,10 @@ cargo run -- rocket   rocket flight simulation
   composition. They are not service managers.
 - Reuse an existing plugin/resource first. Create new global state only when it
   is genuinely singular and shared.
-- A kernel-backed ephemeris may use one immutable shared resource for loaded
-  kernel metadata/handles and one shared evaluated-state resource. Do not create
-  an `EphemerisManager`, mode-local kernel loader, or per-consumer body cache.
+- `EphemerisPlugin` owns the immutable `EphemerisAuthority` and the current
+  `EphemerisSnapshot`; all modes consume that one DE440-backed authority. Do
+  not create an `EphemerisManager`, mode-local kernel loader, or per-consumer
+  body cache.
 
 ## ECS Rules
 
@@ -51,6 +52,9 @@ cargo run -- rocket   rocket flight simulation
 - Do not create ECS entities for terrain vertices, droplets, or other data-array
   internals. Use normal Rust structures for those domain details.
 - Do not add locks/global managers where normal ECS data and scheduling suffice.
+- Keep invariant-bearing component state opaque. Extend its narrow API instead
+  of exposing parallel inventories, fixed-tick samples, or force budgets for
+  arbitrary system mutation.
 
 ## Schedule Discipline
 
@@ -71,6 +75,9 @@ PostUpdate:   presentation synchronization where necessary
 - If evaluated ephemeris state is cached in ECS/resources, update it before all
   gravity, orbit, lighting, camera-target, and presentation consumers at the
   same `SimulationTime` epoch. Consumers must not query kernels independently.
+- Preserve the complete chained `RocketSet` pipeline. In particular,
+  `EphemerisSet::EvaluateForTick` precedes `RocketSet::Gravity` and
+  `EphemerisSet::RefreshAfterTimeAdvance` follows `RocketSet::AdvanceTime`.
 
 ## Change Audit
 

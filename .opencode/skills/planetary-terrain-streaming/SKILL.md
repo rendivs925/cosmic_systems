@@ -27,6 +27,17 @@ managers:
 Do not add a `TerrainManager`, second worker queue, second patch cache, or
 parallel LOD implementation.
 
+## Current Earth Data Boundary
+
+- Earth uses a resident, immutable ETOPO1-derived CSDEM through the shared
+  `TerrainSource`. Its per-face metadata pyramid reaches level 8 for the
+  2048-sample source and supplies conservative per-patch geometric error.
+- Geometry remains streamed at selected LODs. Local material enrichment is
+  worker-generated presentation data for level-12-or-finer patches only.
+- The metadata pyramid is not an elevation payload pyramid. Do not introduce
+  tiled elevation payload loading until a representative native-display profile
+  demonstrates that the current resident CSDEM path is insufficient.
+
 ## Non-Negotiable Frame Contract
 
 The Bevy main thread may:
@@ -125,7 +136,9 @@ Maintain explicit budget controls for:
 For a 60 FPS target, terrain scheduling should consume a small bounded portion
 of the 16.67 ms frame budget. Profile actual device behaviour before changing
 limits. Do not make a global quality reduction the first response to an
-individual terrain bottleneck.
+individual terrain bottleneck. Do not tune the current coarse mesh resolution
+or capped viewport leaf budget from CI-style or sub-70-km captures; retain the
+measured baseline until the intended flight camera can exercise it.
 
 ## Prefetching
 

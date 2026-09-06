@@ -15,8 +15,8 @@ simulation; it does not define it.
 - `rocket_presentation.rs`: fixed-state capture and render interpolation.
 - `rocket_camera_systems.rs` and camera adapters: flight camera behaviour.
 - `rocket_environment.rs`, material/texture factories, and presentation UI modules.
-- The shared evaluated ephemeris state is the source for celestial transforms,
-  Sun direction, orbit paths, and camera targets once kernel migration begins.
+- `EphemerisSnapshot` is the shared DE440/PCK-derived source for celestial
+  transforms, Sun direction, orbit paths, and camera targets.
 
 Read these before adding a renderer, camera coordinate conversion, planet proxy,
 material loader, or terrain visual fallback. Preserve the shared solar authority
@@ -68,6 +68,9 @@ authoritative f64 simulation state
 - Culling/LOD decisions use actual camera projection/FOV and conservative patch
   bounds, never an assumed fixed aspect ratio.
 - Keep debug visualization presentation-only and gated behind an explicit mode.
+- Rocket terrain LOD debug centers must be converted with the same body
+  orientation and flight `RenderOrigin` as terrain meshes. The view is shown
+  only when both master debug and its F10 category toggle are enabled.
 
 ## Validation
 

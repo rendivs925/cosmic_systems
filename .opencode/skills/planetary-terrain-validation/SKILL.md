@@ -69,6 +69,8 @@ Terrain telemetry should make bottlenecks explainable, including:
 - task queue depth, stale/cancelled work, and upload backlog;
 - CPU mesh generation and Bevy GPU upload timing;
 - erosion/hydrology generation time when enabled.
+- requested, target, and visible per-LOD patch distributions; replacement-group
+  blocking; and in-flight task age.
 
 Use the existing `terrain_streaming` structured metrics. Add a metric only when
 it identifies a decision the system can make or a real performance question.
@@ -89,6 +91,10 @@ only debug view. It must never alter terrain simulation. Useful views include:
 Keep debug data derived from authoritative state. Gate expensive debug geometry
 behind an explicit mode and do not add per-vertex ECS entities.
 
+In rocket mode, terrain LOD gizmos require both master debug and the explicit
+F10 LOD toggle. Their centers must use the body orientation and flight
+`RenderOrigin` used by terrain meshes.
+
 ## Quality Profiles
 
 If modifying quality settings, retain one algorithm with data-driven budgets:
@@ -108,18 +114,19 @@ Run from the repository root after each terrain change:
 
 ```text
 cargo fmt --check
-cargo check
-cargo clippy
-cargo test
+cargo check --features dem
+cargo clippy --features dem -- -D warnings
+cargo test --features dem
+cargo build --release --features dem
 ```
 
 Also run bounded mode startup checks when a change affects plugins, rendering,
 streaming, or application composition:
 
 ```text
-cargo run
-cargo run -- craft
-cargo run -- rocket
+timeout 10s cargo run --features dem --quiet
+timeout 10s cargo run --features dem --quiet -- craft
+timeout 10s cargo run --features dem --quiet -- rocket
 ```
 
 For graphical environments that cannot display a usable window, record the
