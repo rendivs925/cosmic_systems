@@ -34,10 +34,10 @@ pub fn refresh_flight_conditions(
         let altitude_m = (rocket.dynamics.position_m.length() - radius_m).max(0.0);
         let atmosphere_relative_velocity_mps = rocket.dynamics.velocity_mps
             - surface_velocity_in_planet_inertial(rocket.dynamics.position_m, orientation);
-        conditions.0 = FlightConditions::from_atmosphere(
+        conditions.replace_sample(FlightConditions::from_atmosphere(
             altitude_m,
             atmosphere.source.properties(altitude_m),
             atmosphere_relative_velocity_mps,
-        );
+        ));
     }
 }

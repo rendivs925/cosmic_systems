@@ -567,6 +567,7 @@ pub fn guidance_system(
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::Rocket;
+    use crate::domain::services::atmosphere::FlightConditions;
     use crate::domain::services::body_orientation::BodyOrientation;
     use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
     use crate::domain::services::gravity::gravitational_parameter;
@@ -616,9 +617,11 @@ mod tests {
             .iter()
             .map(|stage| stage.propellant_mass_kg)
             .collect();
-        let mut conditions = RocketFlightConditions::default();
-        conditions.0.atmosphere_relative_velocity_mps = DVec3::ZERO;
-        conditions.0.airspeed_mps = 0.0;
+        let conditions = RocketFlightConditions::from_sample(FlightConditions {
+            atmosphere_relative_velocity_mps: DVec3::ZERO,
+            airspeed_mps: 0.0,
+            ..default()
+        });
 
         app.world_mut()
             .spawn((

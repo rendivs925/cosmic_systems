@@ -461,7 +461,7 @@ mod tests {
                     height_m: final_stage.height_m,
                     lower_extent_y_m: -final_stage.height_m * 0.5,
                 },
-                RocketFlightConditions(FlightConditions {
+                RocketFlightConditions::from_sample(FlightConditions {
                     altitude_m: FAIRING_JETTISON_ALTITUDE_M,
                     ..default()
                 }),

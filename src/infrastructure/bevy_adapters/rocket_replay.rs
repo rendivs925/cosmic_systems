@@ -628,7 +628,7 @@ mod tests {
                     time_since_liftoff_s: 42.0,
                     ..default()
                 },
-                RocketFlightConditions(conditions),
+                RocketFlightConditions::from_sample(conditions),
                 TerrainCollisionState {
                     radar_altitude_m: 12.0,
                     slope_deg: 3.0,
@@ -712,7 +712,7 @@ mod tests {
                     kind: SpentStageKind::Booster,
                 },
                 RocketPhysicsState { dynamics },
-                RocketFlightConditions(FlightConditions {
+                RocketFlightConditions::from_sample(FlightConditions {
                     altitude_m: 1_000.0,
                     ..default()
                 }),
@@ -782,11 +782,11 @@ mod tests {
                 .unwrap()
                 .dynamics
                 .mass_kg = 1.0;
-            stage
-                .get_mut::<RocketFlightConditions>()
-                .unwrap()
-                .0
-                .altitude_m = 0.0;
+            let mut conditions = *stage.get::<RocketFlightConditions>().unwrap();
+            let mut sample = *conditions;
+            sample.altitude_m = 0.0;
+            conditions.replace_sample(sample);
+            *stage.get_mut::<RocketFlightConditions>().unwrap() = conditions;
             stage.get_mut::<GravityAcceleration>().unwrap().value = DVec3::ZERO;
             stage.get_mut::<ForceAccumulator>().unwrap().take_force_n();
         }
@@ -906,11 +906,11 @@ mod tests {
             engine.state = crate::domain::entities::rocket::EngineState::Depleted;
             rocket.get_mut::<RocketCommands>().unwrap().throttle_cmd = 0.0;
             rocket.get_mut::<RocketAutopilot>().unwrap().integral = DVec3::ZERO;
-            rocket
-                .get_mut::<RocketFlightConditions>()
-                .unwrap()
-                .0
-                .altitude_m = 0.0;
+            let mut conditions = *rocket.get::<RocketFlightConditions>().unwrap();
+            let mut sample = *conditions;
+            sample.altitude_m = 0.0;
+            conditions.replace_sample(sample);
+            *rocket.get_mut::<RocketFlightConditions>().unwrap() = conditions;
             rocket
                 .get_mut::<TerrainCollisionState>()
                 .unwrap()

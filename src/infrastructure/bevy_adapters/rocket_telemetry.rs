@@ -1061,7 +1061,7 @@ mod g_load_tests {
         let autopilot = RocketAutopilot::default();
         let orbital = OrbitalElements::default();
         let earth_atmosphere = EarthAtmosphere;
-        let conditions = RocketFlightConditions(FlightConditions::from_atmosphere(
+        let conditions = RocketFlightConditions::from_sample(FlightConditions::from_atmosphere(
             0.0,
             earth_atmosphere.properties(0.0),
             DVec3::ZERO,

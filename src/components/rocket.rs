@@ -535,7 +535,21 @@ pub struct SpecificForceAcceleration {
 
 /// Cached fixed-tick atmosphere sample and atmosphere-relative motion.
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct RocketFlightConditions(pub FlightConditions);
+pub struct RocketFlightConditions(FlightConditions);
+
+impl RocketFlightConditions {
+    /// Replaces the complete fixed-tick atmosphere sample. The refresh system
+    /// is the only production writer so density, Mach, pressure, and airspeed
+    /// always originate from the same atmosphere evaluation.
+    pub(crate) fn replace_sample(&mut self, sample: FlightConditions) {
+        self.0 = sample;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_sample(sample: FlightConditions) -> Self {
+        Self(sample)
+    }
+}
 
 impl Deref for RocketFlightConditions {
     type Target = FlightConditions;
@@ -1237,6 +1251,26 @@ mod propulsion_tests {
         assert_eq!(rocket.dynamics.mass_kg, expected.mass_kg);
         assert_eq!(rocket.dynamics.inertia_body, expected.inertia_body);
         assert_eq!(rocket.dynamics.center_of_mass_m, expected.center_of_mass_m);
+    }
+}
+
+#[cfg(test)]
+mod flight_conditions_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_the_fixed_tick_sample_preserves_the_complete_snapshot() {
+        let sample = FlightConditions {
+            altitude_m: 1_000.0,
+            atmosphere_relative_velocity_mps: DVec3::new(1.0, 2.0, 3.0),
+            airspeed_mps: 3.741_657_386_773_941_3,
+            ..default()
+        };
+        let mut conditions = RocketFlightConditions::default();
+
+        conditions.replace_sample(sample);
+
+        assert_eq!(*conditions, sample);
     }
 }
 
