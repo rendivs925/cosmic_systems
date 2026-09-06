@@ -33,6 +33,7 @@ use crate::infrastructure::bevy_adapters::terrain_surface::{
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Camera/LOD constants.
@@ -193,37 +194,17 @@ pub fn prebake_prelaunch_launchpad_patch(
         patch,
         estimated_patch_bytes(patch, config.patch_resolution_for(patch)),
     );
-    streaming.manager.begin_generation(&patch);
 
-    let source = terrain.source.clone();
-    let patch_resolution = config.patch_resolution_for(patch);
-    let skirt_depth_m = config.skirt_depth_m;
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        let generation_started = Instant::now();
-        let (lat, lon) = direction_to_lat_lon(patch.center_direction());
-        source.prepare_sample(lat, lon);
-        let geometry = build_streamed_patch_geometry(
-            &patch,
-            source.as_ref(),
+    streaming.begin_bake(
+        TerrainPatchBakeRequest {
+            patch,
+            source: terrain.source.clone(),
             radius_m,
-            patch_resolution,
-            skirt_depth_m,
-            &[],
-        );
-        let surface = prepare_patch_surface(source.as_ref(), &patch, &geometry, radius_m);
-        GeneratedTerrainPatch {
-            geometry,
-            surface,
-            stitch_mask: 0,
-            generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
-        }
-    });
-    streaming.inflight.insert(
-        patch,
-        InflightTerrainPatch {
-            task,
-            started_at: Instant::now(),
+            resolution: config.patch_resolution_for(patch),
+            skirt_depth_m: config.skirt_depth_m,
+            stitched_edges: Vec::new(),
         },
+        AsyncComputeTaskPool::get(),
     );
 }
 
@@ -248,6 +229,90 @@ impl TerrainStreamingResource {
     pub fn active_planet(&self) -> Option<Entity> {
         self.active_planet
     }
+
+    fn begin_bake(&mut self, request: TerrainPatchBakeRequest, task_pool: &AsyncComputeTaskPool) {
+        self.manager.begin_generation(&request.patch);
+        self.inflight
+            .insert(request.patch, request.spawn(task_pool));
+    }
+
+    fn collect_completed_generation(&mut self) -> TerrainGenerationBatch {
+        let completed: Vec<_> = self
+            .inflight
+            .iter_mut()
+            .filter_map(|(patch, inflight)| {
+                block_on(future::poll_once(&mut inflight.task)).map(|generated| (*patch, generated))
+            })
+            .collect();
+        let mut batch = TerrainGenerationBatch::default();
+        for (patch, generated) in completed {
+            self.inflight.remove(&patch);
+            self.generated.insert(
+                patch,
+                CachedTerrainGeometry {
+                    geometry: generated.geometry,
+                    surface: Some(generated.surface),
+                    stitch_mask: generated.stitch_mask,
+                },
+            );
+            self.manager.mark_ready(&patch);
+            batch.record(generated.generation_ms);
+        }
+        batch
+    }
+
+    fn cancel_unrequested(&mut self, requested: &BTreeSet<TerrainPatch>) -> TerrainCancellation {
+        let stale_inflight: Vec<_> = self
+            .inflight
+            .keys()
+            .copied()
+            .filter(|patch| !requested.contains(patch))
+            .collect();
+        let mut cancellation = TerrainCancellation {
+            inflight: stale_inflight.len(),
+            ..default()
+        };
+        for patch in stale_inflight {
+            self.inflight.remove(&patch);
+            self.manager.cancel_pending(&patch);
+        }
+
+        let stale_requested: Vec<_> = self
+            .manager
+            .patch_states()
+            .filter_map(|(patch, state)| {
+                (state == PatchState::Requested && !requested.contains(&patch)).then_some(patch)
+            })
+            .collect();
+        cancellation.requested = stale_requested.len();
+        for patch in stale_requested {
+            self.manager.cancel_pending(&patch);
+        }
+        cancellation
+    }
+
+    fn metrics(
+        &mut self,
+        requested: &BTreeSet<TerrainPatch>,
+        target: &BTreeSet<TerrainPatch>,
+        completed: TerrainGenerationBatch,
+        cancellation: TerrainCancellation,
+        evicted_tiles: usize,
+    ) -> Option<TerrainStreamingMetrics> {
+        if !completed.is_reportable() || self.generated.len() < self.next_metrics_report_at {
+            return None;
+        }
+
+        self.next_metrics_report_at = self.generated.len() + METRICS_GENERATED_TILE_INTERVAL;
+        Some(TerrainStreamingMetrics::capture(
+            self,
+            requested,
+            target,
+            completed,
+            cancellation,
+            evicted_tiles,
+        ))
+    }
 }
 
 /// Generated geometry is valid only for the LOD stitch pattern used to build
@@ -262,6 +327,174 @@ pub struct CachedTerrainGeometry {
 struct InflightTerrainPatch {
     task: Task<GeneratedTerrainPatch>,
     started_at: Instant,
+}
+
+struct TerrainPatchBakeRequest {
+    patch: TerrainPatch,
+    source: Arc<dyn TerrainSource>,
+    radius_m: f64,
+    resolution: u32,
+    skirt_depth_m: f64,
+    stitched_edges: Vec<PatchEdge>,
+}
+
+impl TerrainPatchBakeRequest {
+    fn spawn(self, task_pool: &AsyncComputeTaskPool) -> InflightTerrainPatch {
+        let patch = self.patch;
+        let task = task_pool.spawn(async move {
+            let generation_started = Instant::now();
+            let (lat, lon) = direction_to_lat_lon(patch.center_direction());
+            self.source.prepare_sample(lat, lon);
+            let geometry = build_streamed_patch_geometry(
+                &patch,
+                self.source.as_ref(),
+                self.radius_m,
+                self.resolution,
+                self.skirt_depth_m,
+                &self.stitched_edges,
+            );
+            let surface =
+                prepare_patch_surface(self.source.as_ref(), &patch, &geometry, self.radius_m);
+            GeneratedTerrainPatch {
+                geometry,
+                surface,
+                stitch_mask: stitch_mask(&self.stitched_edges),
+                generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
+            }
+        });
+        InflightTerrainPatch {
+            task,
+            started_at: Instant::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TerrainGenerationBatch {
+    completed_tiles: usize,
+    generation_ms: f64,
+}
+
+impl TerrainGenerationBatch {
+    fn record(&mut self, generation_ms: f64) {
+        self.completed_tiles += 1;
+        self.generation_ms += generation_ms;
+    }
+
+    fn is_reportable(self) -> bool {
+        self.completed_tiles > 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TerrainCancellation {
+    inflight: usize,
+    requested: usize,
+}
+
+impl TerrainCancellation {
+    fn total(self) -> usize {
+        self.inflight + self.requested
+    }
+}
+
+#[derive(Debug)]
+struct PatchLevelDistribution(BTreeMap<u32, usize>);
+
+impl PatchLevelDistribution {
+    fn from_patches(patches: impl IntoIterator<Item = TerrainPatch>) -> Self {
+        let mut levels = BTreeMap::new();
+        for patch in patches {
+            *levels.entry(patch.level).or_default() += 1;
+        }
+        Self(levels)
+    }
+}
+
+#[derive(Debug)]
+struct TerrainStreamingMetrics {
+    requested_tiles: usize,
+    target_tiles: usize,
+    visible_tiles: usize,
+    blocked_target_tiles: usize,
+    generated_tiles: usize,
+    resident_tiles: usize,
+    upload_backlog_tiles: usize,
+    estimated_resident_mib: f64,
+    budget_mib: f64,
+    inflight_tiles: usize,
+    oldest_inflight_ms: f64,
+    cancelled_tiles: usize,
+    evicted_tiles: usize,
+    requested_lods: PatchLevelDistribution,
+    target_lods: PatchLevelDistribution,
+    visible_lods: PatchLevelDistribution,
+    completed: TerrainGenerationBatch,
+}
+
+impl TerrainStreamingMetrics {
+    fn capture(
+        streaming: &TerrainStreamingResource,
+        requested: &BTreeSet<TerrainPatch>,
+        target: &BTreeSet<TerrainPatch>,
+        completed: TerrainGenerationBatch,
+        cancellation: TerrainCancellation,
+        evicted_tiles: usize,
+    ) -> Self {
+        let upload_backlog_tiles = streaming
+            .generated
+            .values()
+            .filter(|cached| cached.surface.is_some())
+            .count();
+        Self {
+            requested_tiles: requested.len(),
+            target_tiles: target.len(),
+            visible_tiles: streaming.published.len(),
+            blocked_target_tiles: target.difference(&streaming.published).count(),
+            generated_tiles: streaming.generated.len(),
+            resident_tiles: streaming.manager.ready_patch_count(),
+            upload_backlog_tiles,
+            estimated_resident_mib: streaming.manager.resident_bytes() as f64 / (1024.0 * 1024.0),
+            budget_mib: streaming.budget_bytes as f64 / (1024.0 * 1024.0),
+            inflight_tiles: streaming.inflight.len(),
+            oldest_inflight_ms: streaming
+                .inflight
+                .values()
+                .map(|inflight| inflight.started_at.elapsed().as_secs_f64() * 1_000.0)
+                .fold(0.0, f64::max),
+            cancelled_tiles: cancellation.total(),
+            evicted_tiles,
+            requested_lods: PatchLevelDistribution::from_patches(requested.iter().copied()),
+            target_lods: PatchLevelDistribution::from_patches(target.iter().copied()),
+            visible_lods: PatchLevelDistribution::from_patches(streaming.published.iter().copied()),
+            completed,
+        }
+    }
+
+    fn log(&self) {
+        info!(
+            target: "terrain_streaming",
+            requested_tiles = self.requested_tiles,
+            target_tiles = self.target_tiles,
+            visible_tiles = self.visible_tiles,
+            blocked_target_tiles = self.blocked_target_tiles,
+            generated_tiles = self.generated_tiles,
+            resident_tiles = self.resident_tiles,
+            upload_backlog_tiles = self.upload_backlog_tiles,
+            estimated_resident_mib = self.estimated_resident_mib,
+            budget_mib = self.budget_mib,
+            inflight_tiles = self.inflight_tiles,
+            oldest_inflight_ms = self.oldest_inflight_ms,
+            cancelled_tiles = self.cancelled_tiles,
+            evicted_tiles = self.evicted_tiles,
+            requested_lods = ?self.requested_lods.0,
+            target_lods = ?self.target_lods.0,
+            visible_lods = ?self.visible_lods.0,
+            completed_batch_tiles = self.completed.completed_tiles,
+            completed_batch_ms = self.completed.generation_ms,
+            "Terrain streaming metrics"
+        );
+    }
 }
 
 struct GeneratedTerrainPatch {
@@ -365,7 +598,7 @@ pub fn stream_terrain_patches(
     }
     streaming.active_planet = Some(planet_entity);
 
-    let (completed_batch_count, completed_batch_ms) = collect_completed_generation(&mut streaming);
+    let completed_batch = streaming.collect_completed_generation();
 
     let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
     let elevation_bounds = planet_terrain.source.elevation_bounds_m();
@@ -407,7 +640,7 @@ pub fn stream_terrain_patches(
         focus_direction,
         lod_camera_position_m,
         viewport.as_ref().map(|viewport| viewport.half_fov_rad),
-        completed_batch_count > 0,
+        completed_batch.is_reportable(),
     ) {
         return;
     }
@@ -536,18 +769,7 @@ pub fn stream_terrain_patches(
     // The camera can move before a queued refinement finishes. Cancel obsolete
     // unfinished tasks now; completed geometry follows the cache lifecycle below
     // so it can still be reused if the patch becomes visible again.
-    let stale_inflight: Vec<_> = streaming
-        .inflight
-        .keys()
-        .copied()
-        .filter(|patch| !requested.contains(patch))
-        .collect();
-    let cancelled_inflight_tiles = stale_inflight.len();
-    for patch in stale_inflight {
-        streaming.inflight.remove(&patch);
-        streaming.manager.cancel_pending(&patch);
-    }
-    let cancelled_requested_tiles = cancel_stale_requested(&mut streaming.manager, &requested);
+    let cancellation = streaming.cancel_unrequested(&requested);
 
     // A task may have completed just before the target changed. Keep that
     // geometry reusable, but make it eligible for budget eviction rather than
@@ -590,39 +812,17 @@ pub fn stream_terrain_patches(
         generation_limit,
     );
     for patch in batch {
-        streaming.manager.begin_generation(&patch);
-        let source = planet_terrain.source.clone();
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
-        let stitch_mask = stitch_mask(&stitch_edges);
-        let patch_resolution = config.patch_resolution_for(patch);
-        let skirt_depth_m = config.skirt_depth_m;
-        let task = task_pool.spawn(async move {
-            let generation_started = Instant::now();
-            // DEM loading and erosion baking are allowed only in this worker.
-            let (lat, lon) = direction_to_lat_lon(patch.center_direction());
-            source.prepare_sample(lat, lon);
-            let geometry = build_streamed_patch_geometry(
-                &patch,
-                source.as_ref(),
+        streaming.begin_bake(
+            TerrainPatchBakeRequest {
+                patch,
+                source: planet_terrain.source.clone(),
                 radius_m,
-                patch_resolution,
-                skirt_depth_m,
-                &stitch_edges,
-            );
-            let surface = prepare_patch_surface(source.as_ref(), &patch, &geometry, radius_m);
-            GeneratedTerrainPatch {
-                geometry,
-                surface,
-                stitch_mask,
-                generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
-            }
-        });
-        streaming.inflight.insert(
-            patch,
-            InflightTerrainPatch {
-                task,
-                started_at: Instant::now(),
+                resolution: config.patch_resolution_for(patch),
+                skirt_depth_m: config.skirt_depth_m,
+                stitched_edges: stitch_edges,
             },
+            task_pool,
         );
     }
 
@@ -659,9 +859,6 @@ pub fn stream_terrain_patches(
     }
     streaming.published = current_visible;
 
-    let metrics_due =
-        completed_batch_count > 0 && streaming.generated.len() >= streaming.next_metrics_report_at;
-
     let budget = streaming.budget_bytes;
     // The complete requested chain is progressive render fallback. It may
     // temporarily exceed the cache budget but must never be evicted mid-handoff.
@@ -677,45 +874,14 @@ pub fn stream_terrain_patches(
         });
     }
 
-    if metrics_due {
-        let upload_backlog_tiles = streaming
-            .generated
-            .values()
-            .filter(|cached| cached.surface.is_some())
-            .count();
-        let blocked_target_tiles = selection
-            .target_leaves
-            .difference(&streaming.published)
-            .count();
-        let oldest_inflight_ms = streaming
-            .inflight
-            .values()
-            .map(|inflight| inflight.started_at.elapsed().as_secs_f64() * 1_000.0)
-            .fold(0.0, f64::max);
-        info!(
-            target: "terrain_streaming",
-            requested_tiles = requested.len(),
-            target_tiles = selection.target_leaves.len(),
-            visible_tiles = streaming.published.len(),
-            blocked_target_tiles,
-            generated_tiles = streaming.generated.len(),
-            resident_tiles = streaming.manager.ready_patch_count(),
-            upload_backlog_tiles,
-            estimated_resident_mib = streaming.manager.resident_bytes() as f64 / (1024.0 * 1024.0),
-            budget_mib = streaming.budget_bytes as f64 / (1024.0 * 1024.0),
-            inflight_tiles = streaming.inflight.len(),
-            oldest_inflight_ms,
-            cancelled_tiles = cancelled_inflight_tiles + cancelled_requested_tiles,
-            evicted_tiles = evicted.len(),
-            requested_lods = ?patch_level_distribution(requested.iter().copied()),
-            target_lods = ?patch_level_distribution(selection.target_leaves.iter().copied()),
-            visible_lods = ?patch_level_distribution(streaming.published.iter().copied()),
-            completed_batch_tiles = completed_batch_count,
-            completed_batch_ms,
-            "Terrain streaming metrics"
-        );
-        streaming.next_metrics_report_at =
-            streaming.generated.len() + METRICS_GENERATED_TILE_INTERVAL;
+    if let Some(metrics) = streaming.metrics(
+        &requested,
+        &selection.target_leaves,
+        completed_batch,
+        cancellation,
+        evicted.len(),
+    ) {
+        metrics.log();
     }
 }
 
@@ -771,33 +937,6 @@ fn lod_for_distance_with_hysteresis(previous: Option<u32>, distance_m: f64, radi
         level -= 1;
     }
     level
-}
-
-fn cancel_stale_requested(
-    manager: &mut TerrainPatchManager,
-    requested: &BTreeSet<TerrainPatch>,
-) -> usize {
-    let stale: Vec<_> = manager
-        .patch_states()
-        .filter_map(|(patch, state)| {
-            (state == PatchState::Requested && !requested.contains(&patch)).then_some(patch)
-        })
-        .collect();
-    let cancelled = stale.len();
-    for patch in stale {
-        manager.cancel_pending(&patch);
-    }
-    cancelled
-}
-
-fn patch_level_distribution(
-    patches: impl IntoIterator<Item = TerrainPatch>,
-) -> BTreeMap<u32, usize> {
-    let mut distribution = BTreeMap::new();
-    for patch in patches {
-        *distribution.entry(patch.level).or_default() += 1;
-    }
-    distribution
 }
 
 /// Keep terrain generation within the explicit async-worker budget. Submitting
@@ -1085,32 +1224,6 @@ fn patch_is_behind_horizon(
 
 fn patch_needs_geometry(state: Option<PatchState>, has_geometry: bool) -> bool {
     matches!(state, Some(PatchState::Requested)) && !has_geometry
-}
-
-fn collect_completed_generation(streaming: &mut TerrainStreamingResource) -> (usize, f64) {
-    let completed: Vec<_> = streaming
-        .inflight
-        .iter_mut()
-        .filter_map(|(patch, inflight)| {
-            block_on(future::poll_once(&mut inflight.task)).map(|generated| (*patch, generated))
-        })
-        .collect();
-    let completed_count = completed.len();
-    let mut generation_ms = 0.0;
-    for (patch, generated) in completed {
-        streaming.inflight.remove(&patch);
-        streaming.generated.insert(
-            patch,
-            CachedTerrainGeometry {
-                geometry: generated.geometry,
-                surface: Some(generated.surface),
-                stitch_mask: generated.stitch_mask,
-            },
-        );
-        streaming.manager.mark_ready(&patch);
-        generation_ms += generated.generation_ms;
-    }
-    (completed_count, generation_ms)
 }
 
 /// Drop every patch state associated with the current terrain owner. Render
@@ -1491,26 +1604,31 @@ mod tests {
     fn stale_requested_patches_are_removed_before_generation() {
         let keep = TerrainPatch::root(CubeFace::PosZ);
         let stale = TerrainPatch::root(CubeFace::NegZ);
-        let mut manager = TerrainPatchManager::new();
-        manager.request(keep, 1);
-        manager.request(stale, 1);
+        let mut streaming = TerrainStreamingResource::default();
+        streaming.manager.request(keep, 1);
+        streaming.manager.request(stale, 1);
 
         assert_eq!(
-            cancel_stale_requested(&mut manager, &BTreeSet::from([keep])),
-            1
+            streaming
+                .cancel_unrequested(&BTreeSet::from([keep]))
+                .requested,
+            1,
         );
 
-        assert_eq!(manager.state_of(&keep), Some(PatchState::Requested));
-        assert_eq!(manager.state_of(&stale), None);
+        assert_eq!(
+            streaming.manager.state_of(&keep),
+            Some(PatchState::Requested)
+        );
+        assert_eq!(streaming.manager.state_of(&stale), None);
     }
 
     #[test]
     fn patch_level_distribution_reports_each_selected_lod() {
         let root = TerrainPatch::root(CubeFace::PosZ);
         let children = root.children();
-        let distribution = patch_level_distribution([root, children[0], children[1]]);
+        let distribution = PatchLevelDistribution::from_patches([root, children[0], children[1]]);
 
-        assert_eq!(distribution, BTreeMap::from([(0, 1), (1, 2)]));
+        assert_eq!(distribution.0, BTreeMap::from([(0, 1), (1, 2)]));
     }
 
     #[test]

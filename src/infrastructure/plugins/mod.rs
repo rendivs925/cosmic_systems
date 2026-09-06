@@ -36,8 +36,8 @@ use crate::infrastructure::bevy_adapters::camera_systems::{
     update_starfield_position,
 };
 use crate::infrastructure::bevy_adapters::components::{
-    CameraInputState, NotificationQueue, PerformanceStats, ScreenshotState, SelectedPlanet,
-    UiPointerState, ZenMode,
+    CameraInputState, NotificationQueue, PerformanceMetricsConfig, PerformanceMetricsReporter,
+    PerformanceStats, ScreenshotState, SelectedPlanet, UiPointerState, ZenMode,
 };
 use crate::infrastructure::bevy_adapters::craft_components::{
     CraftCameraState, CraftControlState, CraftEffectsEnabled, CraftTravelTarget,
@@ -194,6 +194,8 @@ impl Plugin for SharedSimulationPlugin {
         });
         app.insert_resource(ScreenshotState { pending: false });
         app.insert_resource(PerformanceStats::default());
+        app.insert_resource(PerformanceMetricsConfig::from_environment());
+        app.init_resource::<PerformanceMetricsReporter>();
         app.insert_resource(UiPointerState::default());
         app.insert_resource(CameraInputState::default());
         app.insert_resource(ZenMode::default());

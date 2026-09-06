@@ -2,7 +2,7 @@ use super::components::*;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use std::{env, time::Instant};
+use std::time::Instant;
 
 /// Request a Bevy framebuffer capture in every simulation mode. This belongs
 /// to shared presentation infrastructure rather than solar-system input so
@@ -273,57 +273,29 @@ fn convert_frames_to_mp4(output_dir: &str, frame_count: u32, duration: f64) {
 /// Correctly measures frame time first, then derives FPS from it.
 /// Uses exponential moving average for stability and responsiveness.
 pub fn update_performance_stats(mut performance_stats: ResMut<PerformanceStats>) {
-    let now = Instant::now();
-    let frame_time_seconds = performance_stats
-        .last_frame_time
-        .map(|last_frame_time| now.duration_since(last_frame_time).as_secs_f64())
-        .unwrap_or(1.0 / 60.0);
-    performance_stats.last_frame_time = Some(now);
-    let frame_time_ms = (frame_time_seconds * 1000.0) as f32;
-    performance_stats.frame_time_ms = frame_time_ms;
-    performance_stats.record_frame_time(frame_time_ms);
-    performance_stats.fps_raw = if frame_time_ms > 0.0 {
-        1000.0 / frame_time_ms
-    } else {
-        0.0
-    };
-    const SMOOTHING_FACTOR: f32 = 0.1;
-    performance_stats.fps_smoothed = performance_stats.fps_smoothed * (1.0 - SMOOTHING_FACTOR)
-        + performance_stats.fps_raw * SMOOTHING_FACTOR;
-    performance_stats.fps_display = performance_stats.fps_smoothed;
+    performance_stats.update_at(Instant::now());
 }
 
 /// Logs a bounded rolling frame-time sample only when explicitly enabled for a
 /// profiling run. The shared UI metrics remain the authority in normal runs.
-pub fn log_performance_metrics(
+pub(crate) fn log_performance_metrics(
     performance_stats: Res<PerformanceStats>,
-    mut last_report: Local<Option<Instant>>,
-    mut metrics_enabled: Local<Option<bool>>,
+    config: Res<PerformanceMetricsConfig>,
+    mut reporter: ResMut<PerformanceMetricsReporter>,
 ) {
-    if !*metrics_enabled.get_or_insert_with(|| {
-        env::var("COSMIC_SYSTEMS_PERFORMANCE_METRICS").is_ok_and(|value| value == "1")
-    }) {
+    if !reporter.report_due(*config, Instant::now()) {
         return;
     }
-
-    let now = Instant::now();
-    if last_report.is_some_and(|previous| now.duration_since(previous).as_secs_f32() < 5.0) {
-        return;
-    }
-    *last_report = Some(now);
-
-    let Some((p50_frame_ms, p95_frame_ms, p99_frame_ms)) =
-        performance_stats.frame_time_percentiles_ms()
-    else {
+    let Some(summary) = performance_stats.frame_time_summary() else {
         return;
     };
 
     bevy::log::info!(
         target: "performance",
-        sample_count = performance_stats.frame_time_sample_count(),
-        p50_frame_ms,
-        p95_frame_ms,
-        p99_frame_ms,
+        sample_count = summary.sample_count,
+        p50_frame_ms = summary.p50_ms,
+        p95_frame_ms = summary.p95_ms,
+        p99_frame_ms = summary.p99_ms,
         "Frame-time metrics"
     );
 }
@@ -343,19 +315,5 @@ mod tests {
         let stats = app.world().resource::<PerformanceStats>();
         assert!(stats.fps_display.is_finite());
         assert!(stats.frame_time_ms.is_finite());
-    }
-
-    #[test]
-    fn frame_time_samples_are_bounded_and_report_percentiles() {
-        let mut stats = PerformanceStats::default();
-        for frame_time_ms in 1..=601 {
-            stats.record_frame_time(frame_time_ms as f32);
-        }
-
-        assert_eq!(stats.frame_time_sample_count(), 600);
-        assert_eq!(
-            stats.frame_time_percentiles_ms(),
-            Some((301.0, 571.0, 595.0))
-        );
     }
 }
