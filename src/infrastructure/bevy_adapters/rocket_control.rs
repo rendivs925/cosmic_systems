@@ -168,13 +168,8 @@ fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bo
         propulsion.ullage_settle_time_s,
     );
     let core_has_propellant = propulsion
-        .propellant_remaining_kg
-        .get(propulsion.active_stage)
-        .copied()
-        .zip(propulsion.vehicle.stages.get(propulsion.active_stage))
-        .is_some_and(|(remaining_kg, stage)| {
-            remaining_kg > stage.recovery_propellant_reserve_kg.unwrap_or(0.0)
-        });
+        .active_core_stage()
+        .is_some_and(|stage| stage.has_burnable_propellant());
     if let Some(stage) = propulsion.vehicle.stages.get_mut(propulsion.active_stage) {
         for engine in &mut stage.engines {
             if core_has_propellant {

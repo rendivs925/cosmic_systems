@@ -21,6 +21,21 @@ use bevy::ecs::query::QueryData;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+/// Guidance can command an engine start, so it uses the stage's available
+/// thrust envelope rather than the currently running engine set. The active
+/// core capability still enforces synchronized inventory and recovery reserve.
+fn available_core_thrust_n(propulsion: &RocketPropulsion, ambient_pressure_pa: f64) -> f64 {
+    let Some(active_core_stage) = propulsion.active_core_stage() else {
+        return 0.0;
+    };
+    if !active_core_stage.has_burnable_propellant() {
+        return 0.0;
+    }
+    stage_available_thrust_body(&active_core_stage.stage().engines, 1.0, ambient_pressure_pa)
+        .0
+        .length()
+}
+
 /// Feed a moving deck's domain prediction into the existing recovery guidance
 /// laws. This adapter does not introduce new guidance mathematics or mutate a
 /// render transform: boostback and terminal guidance continue to consume the
@@ -188,21 +203,8 @@ pub fn guidance_system(
         // engine lifecycle constraints as actuation. A nonzero tank that is
         // wholly reserved or has terminally depleted engines is not thrust
         // availability.
-        let has_active_engines = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .zip(propulsion.vehicle.stages.get(propulsion.active_stage))
-            .is_some_and(|(remaining_kg, stage)| {
-                *remaining_kg > stage.recovery_propellant_reserve_kg.unwrap_or(0.0)
-                    && stage_available_thrust_body(
-                        &stage.engines,
-                        1.0,
-                        conditions.ambient_pressure_pa,
-                    )
-                    .0
-                    .length_squared()
-                        > 0.0
-            });
+        let has_active_engines =
+            available_core_thrust_n(propulsion, conditions.ambient_pressure_pa) > 0.0;
 
         // Guidance constraints use the shared fixed-tick flight conditions.
         let dynamic_pressure_pa = conditions.dynamic_pressure_pa;
@@ -430,19 +432,8 @@ pub fn guidance_system(
                         default_surface_landing_target(position_m, radius_m);
                 }
 
-                let max_thrust = propulsion
-                    .vehicle
-                    .stages
-                    .get(propulsion.active_stage)
-                    .map_or(0.0, |stage| {
-                        stage_available_thrust_body(
-                            &stage.engines,
-                            1.0,
-                            conditions.ambient_pressure_pa,
-                        )
-                        .0
-                        .length()
-                    });
+                let max_thrust =
+                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa);
                 if max_thrust <= 0.0 {
                     *mission_state = RocketMissionState::UnpoweredDescent;
                     autopilot.mode = AutopilotMode::Off;
@@ -472,19 +463,8 @@ pub fn guidance_system(
                 }
             }
             AutopilotMode::Landing => {
-                let max_thrust = propulsion
-                    .vehicle
-                    .stages
-                    .get(propulsion.active_stage)
-                    .map_or(0.0, |stage| {
-                        stage_available_thrust_body(
-                            &stage.engines,
-                            1.0,
-                            conditions.ambient_pressure_pa,
-                        )
-                        .0
-                        .length()
-                    });
+                let max_thrust =
+                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa);
 
                 let gravity_accel = mu_m3_s2 / (radius * radius);
 
@@ -512,13 +492,8 @@ pub fn guidance_system(
                 if autopilot.target_landing_position_m.length() < 1.0 {
                     autopilot.target_landing_position_m = up_dir * radius_m;
                 }
-                let max_thrust = stage_available_thrust_body(
-                    &propulsion.vehicle.stages[propulsion.active_stage].engines,
-                    1.0,
-                    conditions.ambient_pressure_pa,
-                )
-                .0
-                .length();
+                let max_thrust =
+                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa);
 
                 let boostback = boostback_guidance(
                     position_m,

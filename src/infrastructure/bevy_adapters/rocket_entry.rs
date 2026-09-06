@@ -257,28 +257,20 @@ pub fn compute_retro_propulsion(
         if config.retro_propulsion_enabled {
             let mach = conditions.mach_number;
             if mach >= config.retro_propulsion_mach_threshold {
-                // Engines must actually be producing thrust at this tick;
-                // the same stage_thrust_body the physics uses decides that.
-                if let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) {
-                    let remaining = propulsion
-                        .propellant_remaining_kg
-                        .get(propulsion.active_stage)
-                        .copied()
-                        .unwrap_or(0.0);
-                    let throttle = propulsion.throttle.clamp(0.0, 1.0);
-                    if throttle > 0.0 && remaining > 0.0 {
-                        let (thrust_body, _) = stage_thrust_body(
-                            &stage.engines,
-                            throttle,
-                            conditions.ambient_pressure_pa,
+                // The shared running-stage capability applies throttle, engine
+                // lifecycle, synchronized inventory, and recovery reserve.
+                if let Some((active_core_stage, throttle)) = propulsion.running_core_stage() {
+                    let (thrust_body, _) = stage_thrust_body(
+                        &active_core_stage.stage().engines,
+                        throttle,
+                        conditions.ambient_pressure_pa,
+                    );
+                    if thrust_body.length_squared() > 0.0 {
+                        multiplier = retro_propulsion_effectiveness(
+                            mach,
+                            config.retro_propulsion_mach_threshold,
+                            config.base_pressure_coefficient,
                         );
-                        if thrust_body.length_squared() > 0.0 {
-                            multiplier = retro_propulsion_effectiveness(
-                                mach,
-                                config.retro_propulsion_mach_threshold,
-                                config.base_pressure_coefficient,
-                            );
-                        }
                     }
                 }
             }

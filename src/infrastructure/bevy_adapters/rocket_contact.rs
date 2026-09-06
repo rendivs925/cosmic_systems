@@ -388,13 +388,14 @@ pub fn resolve_ground_contact(
             let gravity_mps2 = mu_m3_s2 / rocket.dynamics.position_m.length().powi(2);
             let weight_n = rocket.dynamics.mass_kg * gravity_mps2;
             let upward_thrust_n = propulsion
-                .vehicle
-                .stages
-                .get(propulsion.active_stage)
-                .map(|stage| {
-                    let thrust_body =
-                        stage_thrust_body(&stage.engines, propulsion.throttle, ambient_pressure_pa)
-                            .0;
+                .running_core_stage()
+                .map(|(active_core_stage, throttle)| {
+                    let thrust_body = stage_thrust_body(
+                        &active_core_stage.stage().engines,
+                        throttle,
+                        ambient_pressure_pa,
+                    )
+                    .0;
                     (rocket.dynamics.orientation * thrust_body)
                         .dot(normal)
                         .max(0.0)

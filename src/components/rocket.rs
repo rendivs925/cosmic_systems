@@ -2,7 +2,7 @@
 // Each component has a single responsibility, enabling parallel system execution.
 
 use crate::domain::entities::rocket::{
-    ParallelBoosters, Rocket, RocketMissionState as DomainRocketMissionState,
+    ParallelBoosters, Rocket, RocketMissionState as DomainRocketMissionState, RocketStage,
 };
 use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::gravity::ForceModelReport;
@@ -197,6 +197,40 @@ pub struct RocketPropulsion {
     pub attached_payload_kg: f32,
 }
 
+/// Borrowed read capability for the configured active core stage and its live
+/// inventory. This keeps reserve-aware eligibility aligned across guidance,
+/// actuation, forces, and presentation without exposing parallel vectors.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ActiveCoreStage<'a> {
+    stage: &'a RocketStage,
+    remaining_propellant_kg: f32,
+}
+
+impl ActiveCoreStage<'_> {
+    pub(crate) fn stage(&self) -> &RocketStage {
+        self.stage
+    }
+
+    pub(crate) fn recovery_reserve_kg(&self) -> f32 {
+        self.stage.recovery_propellant_reserve_kg.unwrap_or(0.0)
+    }
+
+    pub(crate) fn burnable_propellant_kg(&self) -> f32 {
+        (self.remaining_propellant_kg - self.recovery_reserve_kg()).max(0.0)
+    }
+
+    pub(crate) fn has_burnable_propellant(&self) -> bool {
+        self.burnable_propellant_kg() > 0.0
+    }
+
+    pub(crate) fn has_running_engines(&self) -> bool {
+        self.stage
+            .engines
+            .iter()
+            .any(|engine| engine.state == crate::domain::entities::rocket::EngineState::Running)
+    }
+}
+
 impl RocketPropulsion {
     /// Create a fully fueled vehicle whose engine-start budget and ullage gate
     /// are ready for its first pad ignition.
@@ -268,6 +302,48 @@ impl RocketPropulsion {
 
     pub(crate) fn detach_boosters(&mut self) {
         self.booster_attachment.detach();
+    }
+
+    /// Returns the active core stage only when its configuration and inventory
+    /// remain synchronized. Consumers must not independently index these two
+    /// parallel data sources.
+    pub(crate) fn active_core_stage(&self) -> Option<ActiveCoreStage<'_>> {
+        Some(ActiveCoreStage {
+            stage: self.vehicle.stages.get(self.active_stage)?,
+            remaining_propellant_kg: *self.propellant_remaining_kg.get(self.active_stage)?,
+        })
+    }
+
+    /// Returns the active core stage only when it can produce thrust this tick.
+    /// Force, torque, consumption, telemetry, and debug presentation share
+    /// this exact engine and reserve eligibility rule.
+    pub(crate) fn running_core_stage(&self) -> Option<(ActiveCoreStage<'_>, f32)> {
+        let stage = self.active_core_stage()?;
+        let throttle = self.throttle.clamp(0.0, 1.0);
+        if throttle <= 0.0 || !stage.has_burnable_propellant() || !stage.has_running_engines() {
+            return None;
+        }
+        Some((stage, throttle))
+    }
+
+    /// Stores the post-burn core inventory while preserving the configured
+    /// recovery reserve. Only propulsion consumption is allowed to call this.
+    pub(crate) fn set_active_core_burnable_propellant_kg(
+        &mut self,
+        burnable_propellant_kg: f32,
+    ) -> bool {
+        let Some(recovery_reserve_kg) = self
+            .active_core_stage()
+            .map(|stage| stage.recovery_reserve_kg())
+        else {
+            return false;
+        };
+        let Some(remaining_propellant_kg) = self.propellant_remaining_kg.get_mut(self.active_stage)
+        else {
+            return false;
+        };
+        *remaining_propellant_kg = recovery_reserve_kg + burnable_propellant_kg.max(0.0);
+        true
     }
 
     /// Derive mass, inertia, and center of mass from the one authoritative
@@ -978,6 +1054,47 @@ mod propulsion_tests {
 
         assert!(attachment.remaining_kg().is_none());
         assert!(!attachment.is_attached());
+    }
+
+    #[test]
+    fn active_core_stage_preserves_its_recovery_reserve() {
+        let vehicle = Rocket::falcon9_test_fixture();
+        let mut propulsion = RocketPropulsion::for_fresh_flight(vehicle, 0.0, 0.0);
+        let reserve_kg = propulsion.vehicle.stages[0]
+            .recovery_propellant_reserve_kg
+            .expect("fixture first stage has a recovery reserve");
+
+        let active_stage = propulsion
+            .active_core_stage()
+            .expect("fresh flight has synchronized active inventory");
+        assert_eq!(active_stage.recovery_reserve_kg(), reserve_kg);
+        assert_eq!(
+            active_stage.burnable_propellant_kg() + active_stage.recovery_reserve_kg(),
+            propulsion.vehicle.stages[0].propellant_mass_kg
+        );
+        assert!(active_stage.has_burnable_propellant());
+
+        propulsion.throttle = 1.0;
+        propulsion.vehicle.stages[0].engines[0].state = EngineState::Running;
+        assert!(propulsion.running_core_stage().is_some());
+
+        assert!(propulsion.set_active_core_burnable_propellant_kg(0.0));
+        let reserved_stage = propulsion
+            .active_core_stage()
+            .expect("reserve-only inventory remains synchronized");
+        assert_eq!(reserved_stage.burnable_propellant_kg(), 0.0);
+        assert!(!reserved_stage.has_burnable_propellant());
+        assert!(propulsion.running_core_stage().is_none());
+    }
+
+    #[test]
+    fn active_core_stage_rejects_unsynchronized_inventory() {
+        let vehicle = Rocket::falcon9_test_fixture();
+        let mut propulsion = RocketPropulsion::for_fresh_flight(vehicle, 0.0, 0.0);
+        propulsion.propellant_remaining_kg.clear();
+
+        assert!(propulsion.active_core_stage().is_none());
+        assert!(!propulsion.set_active_core_burnable_propellant_kg(1.0));
     }
 
     #[test]

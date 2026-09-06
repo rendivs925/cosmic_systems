@@ -233,6 +233,28 @@ mod engine_lifecycle_pipeline_tests {
     }
 
     #[test]
+    fn recovery_reserve_blocks_core_thrust_and_consumption() {
+        let (mut app, entity) = lifecycle_app(false);
+        {
+            let mut propulsion = app.world_mut().get_mut::<RocketPropulsion>(entity).unwrap();
+            propulsion.vehicle.stages[0].recovery_propellant_reserve_kg = Some(100.0);
+        }
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let propulsion = app.world().get::<RocketPropulsion>(entity).unwrap();
+        assert_eq!(propulsion.propellant_remaining_kg[0], 100.0);
+        assert_eq!(
+            propulsion.vehicle.stages[0].engines[0].state,
+            EngineState::Depleted
+        );
+        assert_eq!(
+            app.world().get::<ForceAccumulator>(entity).unwrap().0,
+            DVec3::ZERO
+        );
+    }
+
+    #[test]
     fn serial_upper_stage_waits_for_ullage_before_its_first_start() {
         let (mut app, entity) = lifecycle_app(false);
         {

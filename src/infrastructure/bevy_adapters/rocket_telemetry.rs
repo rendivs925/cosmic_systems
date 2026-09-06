@@ -173,27 +173,17 @@ impl<'a> TelemetryContext<'a> {
     }
 
     fn compute_thrust(&self, ambient_pressure_pa: f64) -> TelemetryThrust {
-        if self.propulsion.active_stage >= self.propulsion.vehicle.stages.len() {
-            return TelemetryThrust {
-                body_force_n: DVec3::ZERO,
-                isp_vacuum_s: 0.0,
-            };
-        }
-        let stage = &self.propulsion.vehicle.stages[self.propulsion.active_stage];
         let throttle = self.propulsion.throttle.clamp(0.0, 1.0);
-        let remaining = self
-            .propulsion
-            .propellant_remaining_kg
-            .get(self.propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        if throttle <= 0.0 || remaining <= 0.0 {
+        if throttle <= 0.0 {
             return TelemetryThrust {
                 body_force_n: DVec3::ZERO,
                 isp_vacuum_s: 0.0,
             };
         }
-        let (mut thrust_body, _) = stage_thrust_body(&stage.engines, throttle, ambient_pressure_pa);
+        let active_core_stage = self.propulsion.running_core_stage();
+        let mut thrust_body = active_core_stage.map_or(DVec3::ZERO, |(stage, core_throttle)| {
+            stage_thrust_body(&stage.stage().engines, core_throttle, ambient_pressure_pa).0
+        });
         if let Some((boosters, inventory)) = self.propulsion.attached_boosters() {
             for propellant_kg in inventory {
                 if *propellant_kg > 0.0 {
@@ -202,11 +192,27 @@ impl<'a> TelemetryContext<'a> {
                 }
             }
         }
-        let isp_vac = stage
-            .engines
-            .iter()
-            .find(|e| e.state == EngineState::Running)
-            .map(|e| e.isp_vacuum as f64)
+        let isp_vac = active_core_stage
+            .and_then(|(stage, _)| {
+                stage
+                    .stage()
+                    .engines
+                    .iter()
+                    .find(|engine| engine.state == EngineState::Running)
+                    .map(|engine| engine.isp_vacuum as f64)
+            })
+            .or_else(|| {
+                self.propulsion
+                    .attached_boosters()
+                    .and_then(|(boosters, _)| {
+                        boosters
+                            .stage
+                            .engines
+                            .iter()
+                            .find(|engine| engine.state == EngineState::Running)
+                            .map(|engine| engine.isp_vacuum as f64)
+                    })
+            })
             .unwrap_or(0.0);
         TelemetryThrust {
             body_force_n: thrust_body,

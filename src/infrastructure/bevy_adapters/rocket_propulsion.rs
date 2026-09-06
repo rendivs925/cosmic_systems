@@ -2,7 +2,7 @@
 
 use crate::application::rocket_spawning::{build_rocket_mesh, build_serial_stage_mesh};
 use crate::components::rocket::*;
-use crate::domain::entities::rocket::{Rocket, RocketStage};
+use crate::domain::entities::rocket::Rocket;
 use crate::domain::events::StageSeparatedEvent;
 use crate::domain::services::guidance::AutopilotMode;
 use crate::domain::services::landing_gear::LandingGear;
@@ -19,44 +19,6 @@ use bevy::math::DVec3;
 use bevy::prelude::{
     Assets, Commands, Entity, Mesh, Mesh3d, MessageWriter, Query, Res, ResMut, StandardMaterial,
 };
-
-/// Select an active stage only when its running engines can produce force this
-/// tick. Every propulsion writer shares this guard so force, torque, and mass
-/// flow use exactly the same engine set.
-fn running_stage(propulsion: &RocketPropulsion) -> Option<(&RocketStage, f32)> {
-    let stage = propulsion.vehicle.stages.get(propulsion.active_stage)?;
-    let remaining = burnable_propellant_kg(propulsion);
-    let throttle = propulsion.throttle.clamp(0.0, 1.0);
-    if throttle <= 0.0
-        || remaining <= 0.0
-        || !stage
-            .engines
-            .iter()
-            .any(|engine| engine.state == crate::domain::entities::rocket::EngineState::Running)
-    {
-        return None;
-    }
-    Some((stage, throttle))
-}
-
-fn recovery_reserve_kg(propulsion: &RocketPropulsion) -> f32 {
-    propulsion
-        .vehicle
-        .stages
-        .get(propulsion.active_stage)
-        .and_then(|stage| stage.recovery_propellant_reserve_kg)
-        .unwrap_or(0.0)
-}
-
-fn burnable_propellant_kg(propulsion: &RocketPropulsion) -> f32 {
-    (propulsion
-        .propellant_remaining_kg
-        .get(propulsion.active_stage)
-        .copied()
-        .unwrap_or(0.0)
-        - recovery_reserve_kg(propulsion))
-    .max(0.0)
-}
 
 fn booster_is_ignitable(propulsion: &RocketPropulsion, booster_index: usize) -> bool {
     propulsion
@@ -171,12 +133,10 @@ pub fn propulsion_staging(
             continue;
         }
 
-        let remaining = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        if remaining > recovery_reserve_kg(&propulsion) {
+        let Some(active_core_stage) = propulsion.active_core_stage() else {
+            continue;
+        };
+        if active_core_stage.has_burnable_propellant() {
             continue;
         }
         let Some((next, shed)) = shed_stage(
@@ -356,16 +316,16 @@ pub fn propulsion_thrust(
 ) {
     for (rocket, conditions, propulsion, retro, mut force_accum) in rocket_query.iter_mut() {
         let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        if let Some((stage, core_throttle)) = running_stage(propulsion) {
+        if let Some((active_core_stage, core_throttle)) = propulsion.running_core_stage() {
             let (thrust_body, mass_flow_kg_s) = stage_gimbaled_thrust_body(
-                &stage.engines,
+                &active_core_stage.stage().engines,
                 core_throttle,
                 conditions.ambient_pressure_pa,
                 propulsion.gimbal_pitch_rad as f64,
                 propulsion.gimbal_yaw_rad as f64,
             );
             let burn_fraction = burn_duration_s(
-                burnable_propellant_kg(propulsion),
+                active_core_stage.burnable_propellant_kg(),
                 mass_flow_kg_s,
                 sim_time.fixed_timestep(),
             ) / sim_time.fixed_timestep();
@@ -413,18 +373,20 @@ pub fn propulsion_consumption(
     let dt = sim_time.fixed_timestep();
     for (mut rocket, geometry, conditions, mut propulsion, ablation) in rocket_query.iter_mut() {
         let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        if let Some((stage, core_throttle)) = running_stage(&propulsion) {
+        if let Some((active_core_stage, core_throttle)) = propulsion.running_core_stage() {
             let (_, mass_flow_kg_s) = stage_thrust_body(
-                &stage.engines,
+                &active_core_stage.stage().engines,
                 core_throttle,
                 conditions.ambient_pressure_pa,
             );
-            let active_stage = propulsion.active_stage;
-            let reserve_kg = recovery_reserve_kg(&propulsion);
-            let remaining = burnable_propellant_kg(&propulsion);
-            let consumption = consume_propellant(remaining, mass_flow_kg_s, dt);
-            propulsion.propellant_remaining_kg[active_stage] =
-                reserve_kg + consumption.remaining_kg;
+            let consumption = consume_propellant(
+                active_core_stage.burnable_propellant_kg(),
+                mass_flow_kg_s,
+                dt,
+            );
+            debug_assert!(
+                propulsion.set_active_core_burnable_propellant_kg(consumption.remaining_kg)
+            );
         }
 
         if let Some((boosters, _)) = propulsion.attached_boosters() {
@@ -468,14 +430,14 @@ pub fn propulsion_gimbal(
 ) {
     for (rocket, geometry, conditions, propulsion, mut torque_accum) in rocket_query.iter_mut() {
         let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        if let Some((stage, core_throttle)) = running_stage(propulsion) {
+        if let Some((active_core_stage, core_throttle)) = propulsion.running_core_stage() {
             let (_, stage_mass_flow_kg_s) = stage_thrust_body(
-                &stage.engines,
+                &active_core_stage.stage().engines,
                 core_throttle,
                 conditions.ambient_pressure_pa,
             );
             let burn_fraction = burn_duration_s(
-                burnable_propellant_kg(propulsion),
+                active_core_stage.burnable_propellant_kg(),
                 stage_mass_flow_kg_s,
                 sim_time.fixed_timestep(),
             ) / sim_time.fixed_timestep();
@@ -485,7 +447,7 @@ pub fn propulsion_gimbal(
                     .expect("active stage was checked above")
                     .as_dvec3();
             torque_accum.0 += stage_gimbal_torque_body(
-                &stage.engines,
+                &active_core_stage.stage().engines,
                 stage_origin_in_stack_m,
                 rocket.dynamics.center_of_mass_m,
                 core_throttle,

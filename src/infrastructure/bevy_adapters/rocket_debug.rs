@@ -361,21 +361,12 @@ fn draw_thrust_vectors(
         let Some((_, planet_transform)) = find_bound_planet(&planet_query, binding) else {
             continue;
         };
-        let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) else {
+        let Some((active_core_stage, throttle)) = propulsion.running_core_stage() else {
             continue;
         };
-        let throttle = propulsion.throttle.clamp(0.0, 1.0);
-        let remaining = propulsion
-            .propellant_remaining_kg
-            .get(propulsion.active_stage)
-            .copied()
-            .unwrap_or(0.0);
-        if throttle <= 0.0 || remaining <= 0.0 {
-            continue;
-        }
 
         let (thrust_body, _) = crate::domain::services::rocket_propulsion::stage_thrust_body(
-            &stage.engines,
+            &active_core_stage.stage().engines,
             throttle,
             atmosphere.ambient_pressure_pa,
         );
