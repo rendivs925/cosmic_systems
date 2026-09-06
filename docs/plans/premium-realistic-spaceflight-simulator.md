@@ -218,6 +218,10 @@ validated on `main`.
   `PerformanceMetricsReporting` configuration is parsed once at startup and
   enables p50/p95/p99 reports at a five-second cadence only when
   `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1` is set.
+- LOD gizmos now require both master debug and the explicit F10 LOD toggle.
+  Their body-fixed centers are converted through the same body orientation and
+  flight render origin used by terrain meshes, preventing solar-map-scaled debug
+  rectangles from overlaying the ascent horizon.
 
 ### Measurements and Validation
 
@@ -231,6 +235,12 @@ validated on `main`.
   537 samples at p50 101.8 ms, p95 114.4 ms, and p99 187.3 ms. The environment
   created a `0x0` X11 window, making this a CI-style frame-pacing baseline, not
   desktop visual-performance evidence.
+- A controlled native-display chase-camera capture reached 52.7 km before the
+  current stage transitioned to descent, rather than the required 70 km. Its
+  rolling 600-frame sample ended at p50 82.9 ms, p95 103.1 ms, and p99 179.3
+  ms. The broad high-altitude terrain facets are expected from the current
+  fixed 33 by 33 coarse meshes and capped viewport leaf budget; do not tune
+  that budget until a representative 70 km capture is available.
 - Focused terrain and performance tests cover deterministic generation,
   cube-face and LOD seams, fallback replacement, cache protection,
   source/collision agreement, local-detail bounds, DEM metadata, reporting

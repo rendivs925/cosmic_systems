@@ -8,10 +8,13 @@
 
 use crate::components::rocket::*;
 use crate::domain::services::cube_sphere::patch_world_size_m;
+use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::terrain_render::RenderOrigin;
 use crate::infrastructure::bevy_adapters::terrain_streaming::TerrainStreamingResource;
-use bevy::math::{DVec3, Isometry3d};
+use bevy::math::{DQuat, DVec3, Isometry3d};
 use bevy::prelude::*;
 
 /// Gizmo configuration group so rocket debugging has independent visibility,
@@ -132,6 +135,10 @@ impl Plugin for RocketDebugPlugin {
 
 fn debug_enabled(config: Res<RocketDebugConfig>) -> bool {
     config.enabled
+}
+
+fn terrain_lod_enabled(config: &RocketDebugConfig) -> bool {
+    config.enabled && config.show_lod
 }
 
 /// Debug category toggles. F1 = master; F2..F10 = categories.
@@ -751,18 +758,25 @@ fn draw_terrain_collision(
 /// Centers come from generated geometry; size from `patch_world_size_m` —
 /// the same inputs the renderer consumes. No second coordinate pipeline.
 fn draw_terrain_lod(
+    config: Res<RocketDebugConfig>,
     streaming: Res<TerrainStreamingResource>,
-    physical_scale: Res<PhysicalScale>,
-    planet_query: Query<(&PlanetComponent, &Transform)>,
+    render_origin: Res<RenderOrigin>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    planet_query: Query<&PlanetComponent>,
     mut gizmos: Gizmos<RocketDebugGizmos>,
 ) {
-    if streaming.generated.is_empty() {
+    if !terrain_lod_enabled(&config) || streaming.generated.is_empty() {
         return;
     }
-    let Some((planet, planet_transform)) = planet_query.iter().next() else {
+    let Some(planet) = planet_query.iter().next() else {
         return;
     };
-    let planet_pos = planet_transform.translation.as_dvec3();
+    let Some(orientation) =
+        ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+    else {
+        return;
+    };
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
     let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
 
     for (patch, cached_geometry) in streaming.generated.iter() {
@@ -781,15 +795,19 @@ fn draw_terrain_lod(
         }
         let center_planet = acc / 3.0;
 
-        let center_world = (planet_pos + center_planet).as_vec3();
+        let center_world = terrain_lod_center_in_flight_frame(
+            center_planet,
+            body_to_inertial,
+            render_origin.origin,
+        )
+        .as_vec3();
         let normal = center_planet.normalize_or_zero();
         if normal.length_squared() < 1e-9 {
             continue;
         }
 
         let size_m = patch_world_size_m(patch.level, radius_m) as f32;
-        let size_units = physical_scale.solar_meters_to_units(size_m as f64) as f32;
-        if !size_units.is_finite() || size_units < 1e-3 {
+        if !size_m.is_finite() || size_m < 1e-3 {
             continue;
         }
 
@@ -806,8 +824,43 @@ fn draw_terrain_lod(
         let rotation = Quat::from_rotation_arc(Vec3::Z, normal.as_vec3());
         gizmos.rect(
             Isometry3d::new(center_world, rotation),
-            Vec2::splat(size_units),
+            Vec2::splat(size_m),
             color,
         );
+    }
+}
+
+fn terrain_lod_center_in_flight_frame(
+    center_body_fixed_m: DVec3,
+    body_to_inertial: DQuat,
+    render_origin_m: DVec3,
+) -> DVec3 {
+    body_to_inertial * center_body_fixed_m - render_origin_m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terrain_lod_requires_the_master_and_category_toggles() {
+        let mut config = RocketDebugConfig::default();
+        assert!(!terrain_lod_enabled(&config));
+
+        config.enabled = true;
+        assert!(!terrain_lod_enabled(&config));
+
+        config.show_lod = true;
+        assert!(terrain_lod_enabled(&config));
+    }
+
+    #[test]
+    fn terrain_lod_center_uses_the_flight_render_origin() {
+        let center = DVec3::new(10.0, 0.0, 0.0);
+        let rotation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let origin = DVec3::new(0.0, 7.0, 0.0);
+
+        assert!(terrain_lod_center_in_flight_frame(center, rotation, origin)
+            .abs_diff_eq(DVec3::new(0.0, 3.0, 0.0), 1.0e-12));
     }
 }
