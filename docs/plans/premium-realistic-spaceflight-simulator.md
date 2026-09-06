@@ -168,66 +168,86 @@ system is genuinely planetary before Mars or other bodies are added.
 
 ## Current Progress
 
-The following terrain foundation is implemented and validated on `main`.
+The following terrain and flight-presentation foundation is implemented and
+validated on `main`.
+
+### Authority and Architecture
 
 - Catalog surface capability prevents terrain and collision from being attached
-  to stars, gas giants, and ice giants. Earth is the only currently configured
-  terrain-data authority; other solid bodies remain eligible but do not receive
-  invented terrain data.
-- `TerrainSource` remains the single height and collision authority. Cube-sphere
-  meshes, local textures, vegetation, cached geometry, and Bevy entities remain
-  disposable presentation data.
-- Terrain streaming uses viewport frustum and horizon rejection, source-derived
-  screen-space error, balanced cube-sphere leaves, bounded asynchronous work,
-  parent fallback coverage, replacement-group-first scheduling, and protected
-  LRU cache eviction.
-- Earth supports a validated ETOPO1 CSDEM source when its local dataset is
-  present, with deterministic procedural terrain retained only as the explicit
+  to stars, gas giants, and ice giants. Earth is the only configured terrain-data
+  authority; other solid bodies remain eligible but do not receive invented data.
+- `TerrainSource` is the single height, normal, collision, and terrain-material
+  authority. Cube-sphere meshes, local textures, vegetation, cached geometry,
+  and Bevy entities remain disposable presentation data.
+- Earth and future solid bodies use the existing cube-sphere topology,
+  body-fixed frame conversion, streaming lifecycle, collision queries, and
+  render path. No second terrain, collision, coordinate, or streaming path was
+  introduced.
+
+### Earth Data and Presentation
+
+- Earth loads a validated ETOPO1 CSDEM source when its local dataset is present.
+  Deterministic procedural terrain is retained only as the explicit
   missing-file fallback. The dataset contract, manifest, provenance, datum, and
   offline converter are documented in the repository.
-- The Earth DEM builds a bounded immutable per-face metadata pyramid through
-  level 8 (256 by 256 regions per 2048-sample face). Streaming consumes its
-  patch-local elevation ranges for conservative geometric error; deeper patches
-  inherit their nearest indexed ancestor. This is metadata over one resident
-  CSDEM raster, not yet an on-disk elevation tile-payload pyramid.
+- The resident Earth DEM produces an immutable per-face metadata pyramid through
+  level 8: 256 by 256 regions per 2048-sample face. Streaming uses patch-local
+  elevation ranges for conservative geometric error; deeper patches inherit the
+  nearest indexed ancestor. This is metadata over one CSDEM raster, not an
+  on-disk elevation tile-payload pyramid.
 - Macro geometry is streamed at every selected LOD. Local 128 by 128 material
   maps plus merged vegetation and scatter are generated in worker tasks only
   for level-12-or-finer patches, then applied as presentation-only detail over
   global Earth imagery.
-- Cadence-limited terrain metrics now report requested, target, generated,
-  published, blocked-replacement, upload-backlog, in-flight-age, cancellation,
-  eviction, and per-LOD distribution data. This extends the existing streaming
-  owner rather than adding a competing profiler.
+
+### Streaming and Telemetry
+
+- Streaming applies viewport frustum and horizon rejection, source-derived
+  screen-space error, balanced cube-sphere leaves, bounded asynchronous work,
+  parent fallback coverage, replacement-group-first scheduling, and protected
+  LRU cache eviction.
+- `TerrainStreamingResource` owns patch bake submission, completed-task
+  collection, stale-request cancellation, and cadence-limited metric snapshots.
+  Typed bake requests, generation batches, cancellation totals, LOD
+  distributions, and metric snapshots replaced duplicated task closures and raw
+  metric tuples.
+- Terrain metrics report requested, target, generated, published,
+  blocked-replacement, upload-backlog, in-flight-age, cancellation, eviction,
+  and per-LOD distribution data without creating a competing profiler.
+- `PerformanceStats` owns a bounded 600-frame history. Typed
+  `PerformanceMetricsReporting` configuration is parsed once at startup and
+  enables p50/p95/p99 reports at a five-second cadence only when
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1` is set.
+
+### Measurements and Validation
+
 - A bounded release rocket prelaunch/ascent capture generated 353 patches in
   roughly 19 seconds, used 67.8 MiB of the 128 MiB terrain budget, retained 21
   pending render uploads, completed two worker bakes in roughly 3.7-4.2 ms, and
-  performed no cache eviction. This is not evidence for an on-disk elevation
+  performed no cache eviction. This does not justify an on-disk elevation
   payload pyramid; the existing CSDEM plus metadata pyramid remains appropriate
-  until a representative flight-camera profile disagrees. The next measured
-  tuning decision is upload pacing rather than terrain payload layout.
-- Shared `PerformanceStats` now retains a rolling 600-frame sample and reports
-  frame-time p50/p95/p99 at five-second intervals only when
-  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`. This extends the existing performance
-  authority without adding a profiling path to ordinary runs.
-- A 60-second release rocket ascent capture with that opt-in metric reached 537
-  samples at p50 101.8 ms, p95 114.4 ms, and p99 187.3 ms. The environment
-  created a `0x0` X11 window, so this is a CI-style frame-pacing baseline rather
-  than desktop visual-performance evidence. It does not justify terrain layout
-  or upload-budget changes; repeat this scenario on a real display before
-  tuning upload pacing.
-- Focused terrain tests cover deterministic generation, cube-face and LOD
-  seams, fallback replacement, cache protection, source/collision agreement,
-  local-detail bounds, and DEM metadata. Formatting, checks, strict Clippy,
-  tests, and bounded normal/craft/rocket mode startups have passed.
+  until a representative flight-camera profile disagrees.
+- A 60-second release rocket ascent capture with opt-in frame metrics reached
+  537 samples at p50 101.8 ms, p95 114.4 ms, and p99 187.3 ms. The environment
+  created a `0x0` X11 window, making this a CI-style frame-pacing baseline, not
+  desktop visual-performance evidence.
+- Focused terrain and performance tests cover deterministic generation,
+  cube-face and LOD seams, fallback replacement, cache protection,
+  source/collision agreement, local-detail bounds, DEM metadata, reporting
+  cadence, and frame-time percentiles. The latest full validation passed 608
+  tests with one ignored test, plus formatting, checks, strict Clippy, a release
+  build, and bounded normal/craft/rocket mode startups.
 
-Remaining work is to capture a driven 70 km flight-camera scenario before
-tuning budgets, build an actual offline elevation payload pyramid only if that
-profile justifies it, and add a reviewed Moon DEM with a validated lunar
-body-fixed frame and datum. Moon is solid-surface eligible but has no terrain
-authority, manifest, local dataset, or terrain-frame validation yet. No second
-terrain, collision, coordinate, or streaming path should be created for Moon.
+Remaining work is a driven 70 km flight-camera capture on a real display before
+tuning upload pacing or terrain budgets. Build an offline elevation payload
+pyramid only if that profile justifies it. Moon remains solid-surface eligible
+but has no terrain authority, manifest, local dataset, or validated lunar
+body-fixed frame and datum; add reviewed lunar data through the existing shared
+pipeline only after those prerequisites are available.
 
 ### Phase 1: Generic Terrain Capability
+
+**Status: complete for the catalog and Earth authority.**
 
 - Replace Earth-only terrain registration with catalog-driven solid-surface
   capability and terrain-authority metadata.
@@ -237,6 +257,8 @@ terrain, collision, coordinate, or streaming path should be created for Moon.
 - Do not attach terrain or terrain collision to `NoSolidSurface` bodies.
 
 ### Phase 2: Responsive Generic Streaming
+
+**Status: implemented; representative desktop flight-camera measurement remains.**
 
 - Measure the current 70 km flight-camera terrain case using existing terrain
   metrics extended with requested/ready/published LOD distribution, task age,
@@ -251,6 +273,9 @@ terrain, collision, coordinate, or streaming path should be created for Moon.
 
 ### Phase 3: Tiled Earth Dataset
 
+**Status: deferred pending evidence that the resident CSDEM plus metadata pyramid
+is insufficient.**
+
 - Evolve the existing CSDEM workflow into an offline-built, versioned
   cube-sphere tile pyramid.
 - Keep data loading and decoding in bounded worker tasks.
@@ -260,6 +285,9 @@ terrain, collision, coordinate, or streaming path should be created for Moon.
 
 ### Phase 4: Moon Validation
 
+**Status: blocked on a reviewed lunar DEM package and validated lunar frame/datum
+contract.**
+
 - Add a lunar manifest and data package using the same tiled terrain contract.
 - Validate frame/datum alignment, seams, source/collision/render agreement,
   and cache behaviour on a second solid body.
@@ -267,6 +295,8 @@ terrain, collision, coordinate, or streaming path should be created for Moon.
   authoritative for additional moons.
 
 ### Phase 5: Additional Bodies
+
+**Status: not started; follows Moon validation.**
 
 - Add Mars and other solid bodies through data manifests and configuration.
 - Add body-specific atmosphere and ocean models where physically applicable.
