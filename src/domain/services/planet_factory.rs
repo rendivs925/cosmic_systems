@@ -66,6 +66,8 @@ impl PlanetFactory {
             .mass_kg(config.mass_kg)
             .color(config.color)
             .body_class(config.body_class)
+            .surface_capability(config.surface_capability())
+            .terrain_authority(config.terrain_authority())
             .orbital_distance_au(config.orbital_distance_au)
             .orbital_period_days(config.orbital_period_days)
             .rotation_period_hours(config.rotation_period_hours)
@@ -101,6 +103,28 @@ mod tests {
         let phobos = PlanetFactory::create_by_name("Phobos").unwrap();
         assert_eq!(phobos.name, "Phobos");
         assert_eq!(phobos.parent_entity, Some("Mars".to_string()));
+    }
+
+    #[test]
+    fn catalog_declares_surface_capability_and_terrain_authority() {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        assert!(earth.surface_capability.supports_terrain());
+        assert_eq!(
+            earth.terrain_authority,
+            Some(crate::domain::entities::planet::TerrainAuthorityId::Earth)
+        );
+
+        let moon = PlanetFactory::create_by_name("Moon").unwrap();
+        assert!(moon.surface_capability.supports_terrain());
+        assert_eq!(moon.terrain_authority, None);
+
+        let sun = PlanetFactory::create_by_name("Sun").unwrap();
+        assert!(!sun.surface_capability.supports_terrain());
+        assert_eq!(sun.terrain_authority, None);
+
+        let jupiter = PlanetFactory::create_by_name("Jupiter").unwrap();
+        assert!(!jupiter.surface_capability.supports_terrain());
+        assert_eq!(jupiter.terrain_authority, None);
     }
 
     #[test]

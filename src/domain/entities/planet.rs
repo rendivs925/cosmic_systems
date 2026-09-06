@@ -10,6 +10,29 @@ pub enum BodyClass {
     Moon,
 }
 
+/// Whether a celestial body has a physical solid surface that may receive a
+/// terrain authority and terrain-contact physics. This is independent of its
+/// visual body class and ocean state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceCapability {
+    NoSolidSurface,
+    SolidSurface,
+}
+
+impl SurfaceCapability {
+    pub const fn supports_terrain(self) -> bool {
+        matches!(self, Self::SolidSurface)
+    }
+}
+
+/// Identifies a configured, versioned terrain authority for a solid body.
+/// Dataset selection stays catalog-driven; rendering and collision still share
+/// the single `TerrainSource` built for the selected authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerrainAuthorityId {
+    Earth,
+}
+
 /// Celestial body entity representing planets, moons, and stars
 #[derive(Clone, Debug)]
 pub struct Planet {
@@ -18,6 +41,8 @@ pub struct Planet {
     pub mass_kg: f64,
     pub color: Color,
     pub body_class: BodyClass,
+    pub surface_capability: SurfaceCapability,
+    pub terrain_authority: Option<TerrainAuthorityId>,
     pub orbital_distance_au: f32, // Average distance from Sun (or parent planet) in AU
     pub orbital_period_days: f32,
     pub rotation_period_hours: f32,
@@ -36,6 +61,8 @@ pub struct PlanetBuilder {
     mass_kg: Option<f64>,
     color: Option<Color>,
     body_class: Option<BodyClass>,
+    surface_capability: Option<SurfaceCapability>,
+    terrain_authority: Option<Option<TerrainAuthorityId>>,
     orbital_distance_au: Option<f32>,
     orbital_period_days: Option<f32>,
     rotation_period_hours: Option<f32>,
@@ -71,6 +98,16 @@ impl PlanetBuilder {
 
     pub fn body_class(mut self, body_class: BodyClass) -> Self {
         self.body_class = Some(body_class);
+        self
+    }
+
+    pub fn surface_capability(mut self, surface_capability: SurfaceCapability) -> Self {
+        self.surface_capability = Some(surface_capability);
+        self
+    }
+
+    pub fn terrain_authority(mut self, terrain_authority: Option<TerrainAuthorityId>) -> Self {
+        self.terrain_authority = Some(terrain_authority);
         self
     }
 
@@ -111,6 +148,12 @@ impl PlanetBuilder {
             mass_kg: self.mass_kg.expect("mass_kg is required"),
             color: self.color.expect("color is required"),
             body_class: self.body_class.expect("body_class is required"),
+            surface_capability: self
+                .surface_capability
+                .expect("surface_capability is required"),
+            terrain_authority: self
+                .terrain_authority
+                .expect("terrain_authority is required"),
             orbital_distance_au: self
                 .orbital_distance_au
                 .expect("orbital_distance_au is required"),

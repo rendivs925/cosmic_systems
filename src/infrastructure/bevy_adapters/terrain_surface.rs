@@ -708,7 +708,7 @@ pub fn build_vegetation_mesh(
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
-    use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use crate::domain::services::terrain_source::{ElevationBounds, ProceduralTerrainSource};
 
     #[derive(Debug)]
     struct RiverTerrain;
@@ -716,6 +716,10 @@ mod tests {
     impl TerrainSource for RiverTerrain {
         fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             300.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(300.0, 300.0)
         }
 
         fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {

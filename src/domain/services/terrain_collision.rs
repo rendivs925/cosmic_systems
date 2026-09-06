@@ -266,6 +266,7 @@ pub fn liftoff_from_rest(thrust_n: f64, weight_n: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::terrain_source::ElevationBounds;
     use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSource};
     use bevy::math::DVec3;
 
@@ -446,6 +447,10 @@ mod tests {
             assert!((-90.0..=90.0).contains(&latitude_deg));
             assert!((-180.0..180.0).contains(&longitude_deg));
             0.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(0.0, 0.0)
         }
     }
 

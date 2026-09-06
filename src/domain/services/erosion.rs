@@ -14,7 +14,7 @@
 //! Scale note (best practice): erosion is simulated coarse→fine at the tile's
 //! own resolution; it is not transferred across scales.
 
-use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
@@ -743,6 +743,12 @@ impl TerrainSource for ErodedTerrainSource {
         }
     }
 
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        // Mesh generation intentionally uses the analytic base at every LOD to
+        // keep patch edges identical, so streaming bounds follow that geometry.
+        self.base.elevation_bounds_m()
+    }
+
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
         // Mesh edges must be independent of LOD: a different radial height at
         // the same geographic sample produces cracks that stitch indices cannot
@@ -1054,6 +1060,10 @@ mod tests {
             // observe the shared in-flight entry.
             thread::sleep(Duration::from_millis(1));
             0.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(0.0, 0.0)
         }
     }
 

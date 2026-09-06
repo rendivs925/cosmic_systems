@@ -100,6 +100,11 @@ impl Default for TerrainSurfaceSample {
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
 
+    /// Conservative elevation interval for this source in meters above the
+    /// body's mean radius. Streaming uses it for culling and LOD; collision and
+    /// mesh sampling remain authoritative through [`Self::height_m`].
+    fn elevation_bounds_m(&self) -> ElevationBounds;
+
     /// Coherent authoritative sample. Existing height and material metadata
     /// methods remain supported as compatibility accessors.
     fn surface_sample(&self, latitude_deg: f64, longitude_deg: f64) -> TerrainSurfaceSample {
@@ -351,6 +356,10 @@ impl TerrainSource for LayeredTerrainSource {
             height_m += layer.source.height_m(latitude_deg, longitude_deg);
         }
         height_m
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        LayeredTerrainSource::elevation_bounds_m(self)
     }
 
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, _patch_level: u32) -> f64 {
@@ -707,6 +716,10 @@ impl TerrainSource for ProceduralTerrainSource {
         h
     }
 
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        ProceduralTerrainSource::elevation_bounds_m(self)
+    }
+
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let p = Self::direction(latitude_deg, longitude_deg) * NOISE_SCALE;
         self.noise
@@ -771,6 +784,12 @@ impl LocalDetailTerrainSource {
 impl TerrainSource for LocalDetailTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.base.height_m(latitude_deg, longitude_deg) + self.detail_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        self.base
+            .elevation_bounds_m()
+            .combine(Self::elevation_bounds_m())
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
@@ -916,6 +935,13 @@ impl TerrainSource for SiteAwareTerrainSource {
             }
         }
         self.base.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        let base = self.base.elevation_bounds_m();
+        // A graded site may carry its center bias across the full declared base
+        // range. Keep culling conservative until per-site tile bounds exist.
+        base.combine(ElevationBounds::new(-base.range_m(), base.range_m()))
     }
 
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
@@ -1106,6 +1132,10 @@ impl TerrainSource for FlatTerrainSource {
     fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.0
     }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        ElevationBounds::new(0.0, 0.0)
+    }
 }
 
 /// Earth's one authoritative terrain composition. Rendering and collision use
@@ -1227,6 +1257,10 @@ impl Default for EarthTerrainSource {
 impl TerrainSource for EarthTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.source.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        self.source.elevation_bounds_m()
     }
 
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
@@ -1355,6 +1389,10 @@ mod tests {
         fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             self.0.fetch_add(1, Ordering::Relaxed);
             10.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(10.0, 10.0)
         }
     }
 
@@ -1514,6 +1552,10 @@ mod tests {
         fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             self.0
         }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(self.0, self.0)
+        }
     }
 
     #[test]
@@ -1631,6 +1673,10 @@ mod tests {
         fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
             latitude_deg * 100.0 + longitude_deg * 20.0
         }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(-12_600.0, 12_600.0)
+        }
     }
 
     #[test]
@@ -1664,6 +1710,10 @@ mod tests {
     impl TerrainSource for SteepOffsetTerrain {
         fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
             2_500.0 + (latitude_deg - 10.0) * 30_000.0 + (longitude_deg - 20.0) * 4_000.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(-4_000_000.0, 4_000_000.0)
         }
     }
 

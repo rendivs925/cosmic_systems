@@ -1,4 +1,4 @@
-use crate::domain::entities::planet::BodyClass;
+use crate::domain::entities::planet::{BodyClass, SurfaceCapability, TerrainAuthorityId};
 use bevy::prelude::*;
 
 /// Configuration data for celestial bodies
@@ -19,6 +19,31 @@ pub struct PlanetConfig {
     /// seas at mean sea level. Replaces the old "terrain ≈ sea level on
     /// Earth" inference. No coastline polygons — documented limitation.
     pub has_ocean: bool,
+}
+
+impl PlanetConfig {
+    /// Solid-surface eligibility is declared alongside the catalog rather than
+    /// inferred by terrain, collision, or presentation systems.
+    pub const fn surface_capability(&self) -> SurfaceCapability {
+        match self.body_class {
+            BodyClass::Star | BodyClass::GasGiant | BodyClass::IceGiant => {
+                SurfaceCapability::NoSolidSurface
+            }
+            BodyClass::Terrestrial | BodyClass::Dwarf | BodyClass::Moon => {
+                SurfaceCapability::SolidSurface
+            }
+        }
+    }
+
+    /// Only bodies with a reviewed terrain dataset receive an authority. Solid
+    /// bodies without one remain non-landable until their data/frame package is
+    /// added; no procedural terrain is silently substituted for them.
+    pub fn terrain_authority(&self) -> Option<TerrainAuthorityId> {
+        match self.name {
+            "Earth" => Some(TerrainAuthorityId::Earth),
+            _ => None,
+        }
+    }
 }
 
 /// All planet and moon configurations. This catalog is the authority for each

@@ -180,7 +180,7 @@ pub fn setup_space(
             entity_map,
             position_map,
             axial_tilts,
-            enable_earth_flight_environment: rocket_mode.is_some(),
+            enable_flight_surface: rocket_mode.is_some(),
             spawn_per_frame: 1,
         });
         return;
@@ -218,7 +218,7 @@ pub(crate) struct SpawnQueue {
     entity_map: HashMap<String, Entity>,
     position_map: HashMap<String, DVec3>,
     axial_tilts: HashMap<String, f32>,
-    enable_earth_flight_environment: bool,
+    enable_flight_surface: bool,
     spawn_per_frame: usize,
 }
 
@@ -238,7 +238,7 @@ pub(crate) fn spawn_bodies_progressively(
         entity_map,
         position_map,
         axial_tilts,
-        enable_earth_flight_environment,
+        enable_flight_surface,
         spawn_per_frame,
     } = &mut *queue;
 
@@ -258,7 +258,7 @@ pub(crate) fn spawn_bodies_progressively(
             entity_map,
             position_map,
             axial_tilts,
-            *enable_earth_flight_environment,
+            *enable_flight_surface,
             render_origin.position_units,
         );
     }
@@ -281,7 +281,7 @@ fn spawn_celestial_body(
     entity_map: &mut HashMap<String, Entity>,
     position_map: &mut HashMap<String, DVec3>,
     axial_tilts: &HashMap<String, f32>,
-    enable_earth_flight_environment: bool,
+    enable_flight_surface: bool,
     render_origin_units: DVec3,
 ) {
     let visual_radius = if planet.name == "Sun" {
@@ -396,10 +396,12 @@ fn spawn_celestial_body(
 
     let material_handle = materials.add(material);
 
-    // Terrain and atmosphere are flight simulation data, not solar-map layers.
-    // Earth is the only body configured for them while Rocket mode is active.
-    let terrain =
-        (enable_earth_flight_environment && planet.name == "Earth").then(PlanetTerrain::earth);
+    // Terrain is flight simulation data, not a solar-map layer. The catalog
+    // selects a reviewed terrain authority only for solid bodies with a dataset.
+    let terrain = (enable_flight_surface && planet.surface_capability.supports_terrain())
+        .then_some(planet.terrain_authority)
+        .flatten()
+        .map(PlanetTerrain::for_authority);
 
     let mut planet_commands = commands.spawn((
         Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
@@ -425,7 +427,7 @@ fn spawn_celestial_body(
     if let Some(terrain) = terrain {
         planet_commands.insert(terrain);
     }
-    if enable_earth_flight_environment && planet.name == "Earth" {
+    if enable_flight_surface && planet.name == "Earth" {
         planet_commands.insert(PlanetAtmosphere::default_for("Earth"));
     }
     let planet_entity = planet_commands.id();

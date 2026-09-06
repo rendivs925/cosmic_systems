@@ -14,7 +14,7 @@ use std::sync::Arc;
 use bevy::math::DVec3;
 
 use crate::domain::services::cube_sphere::{face_uv, face_uv_to_direction, CubeFace};
-use crate::domain::services::terrain_source::{SurfaceClass, TerrainSource};
+use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, TerrainSource};
 
 /// Magic bytes for the versioned cube-sphere DEM format.
 pub const DEM_MAGIC: [u8; 8] = *b"CSDEM\0\0\0";
@@ -249,6 +249,12 @@ impl TerrainSource for DemTerrainSource {
         );
         let (face, u, v) = face_uv(direction);
         self.dem.sample_face_m(face, u, v)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        let min_m = self.dem.heights_m.iter().copied().min().unwrap_or_default() as f64;
+        let max_m = self.dem.heights_m.iter().copied().max().unwrap_or_default() as f64;
+        ElevationBounds::new(min_m, max_m)
     }
 
     fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {

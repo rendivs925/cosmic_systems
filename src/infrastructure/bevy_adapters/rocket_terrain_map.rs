@@ -644,6 +644,7 @@ fn set_track_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::terrain_source::ElevationBounds;
 
     #[derive(Debug)]
     struct FlatTerrain;
@@ -651,6 +652,10 @@ mod tests {
     impl TerrainSource for FlatTerrain {
         fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             -10.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(-10.0, -10.0)
         }
     }
 
@@ -660,6 +665,10 @@ mod tests {
     impl TerrainSource for OverviewOnlyTerrain {
         fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             panic!("map preview must not query authoritative height")
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(0.0, 0.0)
         }
 
         fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {

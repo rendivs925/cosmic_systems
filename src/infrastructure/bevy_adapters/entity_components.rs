@@ -1,4 +1,5 @@
 use crate::components::rocket::*;
+use crate::domain::entities::planet::TerrainAuthorityId;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::atmosphere::atmosphere_for;
 use crate::domain::services::atmosphere::AtmosphereSource;
@@ -131,10 +132,15 @@ pub struct PlanetTerrain {
 }
 
 impl PlanetTerrain {
+    pub fn for_authority(authority: TerrainAuthorityId) -> Self {
+        let source: Arc<dyn TerrainSource> = match authority {
+            TerrainAuthorityId::Earth => Arc::new(EarthTerrainSource::new()),
+        };
+        Self { source }
+    }
+
     pub fn earth() -> Self {
-        Self {
-            source: Arc::new(EarthTerrainSource::new()),
-        }
+        Self::for_authority(TerrainAuthorityId::Earth)
     }
 }
 

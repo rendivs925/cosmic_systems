@@ -19,7 +19,7 @@ use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
 };
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
-use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use crate::infrastructure::bevy_adapters::components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket_contact::TerrainSurfaceSampleCache;
@@ -59,15 +59,6 @@ const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 /// Extra frustum angle retained around the viewport so terrain does not pop at
 /// its edge while the camera is moving between streaming updates.
 const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
-/// The active default Earth source is a layered composition with declared
-/// macro bounds `[-10_000 m, +20_000 m]` and local-detail bounds
-/// `[-36 m, +24 m]`. `TerrainSource` deliberately exposes no runtime bounds,
-/// so streaming uses this bounded default-source envelope rather than sampling
-/// or consulting its non-authoritative overview path on the main thread.
-const DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M: f64 = -10_036.0;
-const DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M: f64 = 20_024.0;
-const DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M: f64 =
-    DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M - DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M;
 /// Admit a bounded pair of CPU terrain bakes per presentation frame. This fills
 /// the reserved worker pool quickly after a camera move without queueing an
 /// unbounded cold-start burst or blocking the render thread.
@@ -366,6 +357,7 @@ pub fn stream_terrain_patches(
     let (completed_batch_count, completed_batch_ms) = collect_completed_generation(&mut streaming);
 
     let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
+    let elevation_bounds = planet_terrain.source.elevation_bounds_m();
 
     let position_m = rocket.dynamics.position_m;
     let r = position_m.length();
@@ -445,14 +437,23 @@ pub fn stream_terrain_patches(
             .as_ref()
             .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
     };
+    let geometry_error = terrain_geometric_error(elevation_bounds);
     let mut errors = if let Some(viewport) = viewport.as_ref() {
-        projected_errors_for_viewport(viewport, max_focus_level, radius_m, camera_projection)
+        projected_errors_for_viewport(
+            viewport,
+            max_focus_level,
+            radius_m,
+            camera_projection,
+            geometry_error,
+            elevation_bounds,
+        )
     } else {
         projected_errors_for_focus(
             focus_direction,
             max_focus_level,
             radius_m,
             camera_projection,
+            geometry_error,
         )
     };
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
@@ -462,6 +463,7 @@ pub fn stream_terrain_patches(
         &streaming.generated,
         viewport.as_ref(),
         radius_m,
+        elevation_bounds,
     );
     let mut state = QuadtreePatchState {
         ready: streaming.generated.keys().copied().collect(),
@@ -513,13 +515,11 @@ pub fn stream_terrain_patches(
     // contribute to the current frame. The focused root remains requested even
     // if a temporarily obstructed camera culls it during prelaunch.
     let focused_root = TerrainPatch::for_direction(focus_direction, 0);
-    let mut requested = root_requests_for_viewport(focused_root, viewport.as_ref(), radius_m);
-    for patch in selection
-        .requested
-        .iter()
-        .copied()
-        .filter(|patch| patch_intersects_viewport(*patch, viewport.as_ref(), radius_m))
-    {
+    let mut requested =
+        root_requests_for_viewport(focused_root, viewport.as_ref(), radius_m, elevation_bounds);
+    for patch in selection.requested.iter().copied().filter(|patch| {
+        patch_intersects_viewport(*patch, viewport.as_ref(), radius_m, elevation_bounds)
+    }) {
         add_viewport_lod_group(patch, &selection.requested, &mut requested);
     }
 
@@ -560,20 +560,16 @@ pub fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
-    let mut generation_order: Vec<_> = requested.iter().copied().collect();
-    generation_order.sort_by_key(|patch| {
-        let center = patch.center_direction();
-        let distance_key = ((1.0 - center.dot(focus_direction)).max(0.0) * 1_000_000.0) as u64;
-        (
-            !patch_intersects_viewport(*patch, viewport.as_ref(), radius_m),
-            patch.level == 0 && *patch != focused_root,
-            patch.level,
-            distance_key,
-            patch.face,
-            patch.tile_y,
-            patch.tile_x,
-        )
-    });
+    let generation_order = prioritize_generation_requests(
+        &requested,
+        &streaming.published,
+        &selection.target_leaves,
+        focus_direction,
+        focused_root,
+        viewport.as_ref(),
+        radius_m,
+        elevation_bounds,
+    );
     let task_pool = AsyncComputeTaskPool::get();
     let generation_limit = generation_capacity(task_pool.thread_num(), streaming.inflight.len());
     let batch = generation_batch(
@@ -847,6 +843,7 @@ fn retain_visible_detail_errors(
     generated: &HashMap<TerrainPatch, CachedTerrainGeometry>,
     viewport: Option<&TerrainViewport>,
     radius_m: f64,
+    elevation_bounds: ElevationBounds,
 ) {
     let Some(viewport) = viewport else {
         return;
@@ -854,7 +851,7 @@ fn retain_visible_detail_errors(
     for leaf in previous_target_leaves {
         if leaf.level == 0
             || !generated.contains_key(leaf)
-            || !patch_intersects_viewport(*leaf, Some(viewport), radius_m)
+            || !patch_intersects_viewport(*leaf, Some(viewport), radius_m, elevation_bounds)
         {
             continue;
         }
@@ -926,10 +923,11 @@ fn root_requests_for_viewport(
     focused_root: TerrainPatch,
     viewport: Option<&TerrainViewport>,
     radius_m: f64,
+    elevation_bounds: ElevationBounds,
 ) -> BTreeSet<TerrainPatch> {
     let mut roots: BTreeSet<_> = TerrainPatch::roots()
         .into_iter()
-        .filter(|root| patch_intersects_viewport(*root, viewport, radius_m))
+        .filter(|root| patch_intersects_viewport(*root, viewport, radius_m, elevation_bounds))
         .collect();
     roots.insert(focused_root);
     roots
@@ -942,6 +940,7 @@ fn patch_intersects_viewport(
     patch: TerrainPatch,
     viewport: Option<&TerrainViewport>,
     radius_m: f64,
+    elevation_bounds: ElevationBounds,
 ) -> bool {
     let Some(viewport) = viewport else {
         return true;
@@ -950,11 +949,12 @@ fn patch_intersects_viewport(
         return true;
     }
 
-    if patch_is_behind_horizon(patch, viewport.position_m, radius_m) {
+    if patch_is_behind_horizon(patch, viewport.position_m, radius_m, elevation_bounds) {
         return false;
     }
 
-    let (bounding_center_m, bounding_radius_m) = patch_bounding_sphere(patch, radius_m);
+    let (bounding_center_m, bounding_radius_m) =
+        patch_bounding_sphere(patch, radius_m, elevation_bounds);
     let to_center = bounding_center_m - viewport.position_m;
     let distance_m = to_center.length();
     if distance_m <= bounding_radius_m {
@@ -969,11 +969,15 @@ fn patch_intersects_viewport(
     view_angle <= viewport.half_fov_rad + sphere_angle_rad + VIEWPORT_PREFETCH_MARGIN_RAD
 }
 
-/// A conservative sphere enclosing the patch at both extrema of the default
+/// A conservative sphere enclosing the patch at both extrema of the terrain
 /// source's elevation interval. Centering at the radial midpoint is much tighter
 /// than adding the entire height range to a mean-radius sphere, while still
 /// retaining silhouettes at either declared source extreme.
-fn patch_bounding_sphere(patch: TerrainPatch, radius_m: f64) -> (DVec3, f64) {
+fn patch_bounding_sphere(
+    patch: TerrainPatch,
+    radius_m: f64,
+    elevation_bounds: ElevationBounds,
+) -> (DVec3, f64) {
     let center = patch.center_direction();
     let (u0, v0, u1, v1) = patch.uv_bounds();
     let patch_radius_rad = [
@@ -986,8 +990,8 @@ fn patch_bounding_sphere(patch: TerrainPatch, radius_m: f64) -> (DVec3, f64) {
     .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
     .fold(0.0, f64::max);
 
-    let min_surface_radius_m = radius_m + DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M;
-    let max_surface_radius_m = radius_m + DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M;
+    let min_surface_radius_m = radius_m + elevation_bounds.min_m;
+    let max_surface_radius_m = radius_m + elevation_bounds.max_m;
     let center_radius_m = (min_surface_radius_m + max_surface_radius_m) * 0.5;
     let radial_half_range_m = (max_surface_radius_m - min_surface_radius_m) * 0.5;
     // The chord reaches the farthest patch corner. An arc-length estimate here
@@ -1004,13 +1008,19 @@ fn patch_bounding_sphere(patch: TerrainPatch, radius_m: f64) -> (DVec3, f64) {
 ///
 /// This runs before queueing a `TerrainSource` bake, including coarse roots.
 /// Nodes behind the limb never consume a task.
-fn patch_is_behind_horizon(patch: TerrainPatch, camera_position_m: DVec3, radius_m: f64) -> bool {
+fn patch_is_behind_horizon(
+    patch: TerrainPatch,
+    camera_position_m: DVec3,
+    radius_m: f64,
+    elevation_bounds: ElevationBounds,
+) -> bool {
     let camera_distance_m = camera_position_m.length();
     if camera_distance_m <= radius_m {
         return false;
     }
 
-    let (bounding_center_m, bounding_radius_m) = patch_bounding_sphere(patch, radius_m);
+    let (bounding_center_m, bounding_radius_m) =
+        patch_bounding_sphere(patch, radius_m, elevation_bounds);
 
     camera_position_m.dot(bounding_center_m) + camera_distance_m * bounding_radius_m
         < radius_m * radius_m
@@ -1091,6 +1101,76 @@ fn generation_batch(
         .collect()
 }
 
+/// Order existing requests by the next visible improvement they unlock. A
+/// complete child group must be ready before it can replace its rendered parent,
+/// so scheduling broad low-level viewport work first leaves the screen coarse
+/// even while useful child tiles wait in the queue.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Priority combines immutable selection, publication, camera, and source-bound inputs without introducing a duplicate streaming resource."
+)]
+fn prioritize_generation_requests(
+    requested: &BTreeSet<TerrainPatch>,
+    published: &BTreeSet<TerrainPatch>,
+    target_leaves: &BTreeSet<TerrainPatch>,
+    focus_direction: DVec3,
+    focused_root: TerrainPatch,
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+    elevation_bounds: ElevationBounds,
+) -> Vec<TerrainPatch> {
+    let mut ordered: Vec<_> = requested.iter().copied().collect();
+    ordered.sort_by_key(|patch| {
+        let (tier, anchor) =
+            generation_priority_group(*patch, published, target_leaves, focus_direction);
+        (
+            (
+                tier,
+                !patch_intersects_viewport(anchor, viewport, radius_m, elevation_bounds),
+                anchor.level == 0 && anchor != focused_root,
+                anchor.level,
+                angular_distance_key(anchor.center_direction(), focus_direction),
+                anchor.face,
+                anchor.tile_y,
+                anchor.tile_x,
+            ),
+            (
+                patch.level,
+                angular_distance_key(patch.center_direction(), focus_direction),
+                patch.face,
+                patch.tile_y,
+                patch.tile_x,
+            ),
+        )
+    });
+    ordered
+}
+
+fn generation_priority_group(
+    patch: TerrainPatch,
+    published: &BTreeSet<TerrainPatch>,
+    target_leaves: &BTreeSet<TerrainPatch>,
+    focus_direction: DVec3,
+) -> (u8, TerrainPatch) {
+    let Some(parent) = patch.parent() else {
+        return (2, patch);
+    };
+
+    if published.contains(&parent) && !target_leaves.contains(&parent) {
+        return (0, parent);
+    }
+
+    if TerrainPatch::for_direction(focus_direction, parent.level) == parent {
+        return (1, parent);
+    }
+
+    (2, patch)
+}
+
+fn angular_distance_key(center_direction: DVec3, focus_direction: DVec3) -> u64 {
+    ((1.0 - center_direction.dot(focus_direction)).max(0.0) * 1_000_000.0) as u64
+}
+
 fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     let resolution = u64::from(resolution.max(2));
     let vertices = resolution * resolution + 4 * (resolution - 1);
@@ -1115,12 +1195,15 @@ fn projected_errors_for_viewport(
     max_level: u32,
     radius_m: f64,
     camera: CameraProjection,
+    geometry_error: PatchGeometricError,
+    elevation_bounds: ElevationBounds,
 ) -> BTreeMap<TerrainPatch, f64> {
     let mut errors = BTreeMap::new();
-    let geometry_error = default_earth_patch_geometric_error();
     let mut pending: VecDeque<_> = TerrainPatch::roots()
         .into_iter()
-        .filter(|patch| patch_intersects_viewport(*patch, Some(viewport), radius_m))
+        .filter(|patch| {
+            patch_intersects_viewport(*patch, Some(viewport), radius_m, elevation_bounds)
+        })
         .collect();
     let mut target_leaf_count = TerrainPatch::roots().len();
 
@@ -1135,12 +1218,9 @@ fn projected_errors_for_viewport(
         }
 
         target_leaf_count += 3;
-        pending.extend(
-            patch
-                .children()
-                .into_iter()
-                .filter(|child| patch_intersects_viewport(*child, Some(viewport), radius_m)),
-        );
+        pending.extend(patch.children().into_iter().filter(|child| {
+            patch_intersects_viewport(*child, Some(viewport), radius_m, elevation_bounds)
+        }));
     }
 
     errors
@@ -1154,9 +1234,9 @@ fn projected_errors_for_focus(
     max_level: u32,
     radius_m: f64,
     camera: CameraProjection,
+    geometry_error: PatchGeometricError,
 ) -> BTreeMap<TerrainPatch, f64> {
     let mut errors = BTreeMap::new();
-    let geometry_error = default_earth_patch_geometric_error();
     for level in 0..max_level {
         let focus = TerrainPatch::for_direction(focus_direction, level);
         for patch in patch_neighborhood(focus) {
@@ -1169,13 +1249,14 @@ fn projected_errors_for_focus(
     errors
 }
 
-/// Bound refinement error without sampling the source from presentation code.
-/// Any child sample can differ from its coarser source representation by the
-/// full declared source range until per-patch source error metadata exists.
-fn default_earth_patch_geometric_error() -> PatchGeometricError {
+/// Bound refinement error from terrain-source metadata without sampling terrain
+/// on the presentation thread. Tiled datasets may later provide a tighter value
+/// for each patch through this same authority boundary.
+fn terrain_geometric_error(elevation_bounds: ElevationBounds) -> PatchGeometricError {
+    let elevation_range_m = elevation_bounds.range_m();
     PatchGeometricError {
-        elevation_range_m: DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M,
-        child_to_parent_deviation_m: DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M,
+        elevation_range_m,
+        child_to_parent_deviation_m: elevation_range_m,
     }
 }
 
@@ -1250,9 +1331,17 @@ mod tests {
     #[derive(Debug)]
     struct DivergentOverviewSource;
 
+    fn test_elevation_bounds() -> ElevationBounds {
+        ElevationBounds::new(-10_036.0, 20_024.0)
+    }
+
     impl TerrainSource for DivergentOverviewSource {
         fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             125.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(125.0, 125.0)
         }
 
         fn overview_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
@@ -1344,6 +1433,60 @@ mod tests {
     }
 
     #[test]
+    fn published_parent_replacement_group_outranks_other_requests() {
+        let replacement_parent = TerrainPatch::root(CubeFace::PosZ);
+        let focus_parent = TerrainPatch::root(CubeFace::PosX);
+        let replacement_children = replacement_parent.children();
+        let focus_children = focus_parent.children();
+        let requested = BTreeSet::from_iter(replacement_children.into_iter().chain(focus_children));
+        let target_leaves = requested.clone();
+
+        let ordered = prioritize_generation_requests(
+            &requested,
+            &BTreeSet::from([replacement_parent]),
+            &target_leaves,
+            DVec3::X,
+            focus_parent,
+            None,
+            6_371_000.0,
+            test_elevation_bounds(),
+        );
+
+        assert_eq!(
+            BTreeSet::from_iter(ordered.into_iter().take(4)),
+            BTreeSet::from(replacement_children),
+            "the complete group needed to replace an on-screen parent must run first"
+        );
+    }
+
+    #[test]
+    fn focus_group_outranks_broad_viewport_requests() {
+        let focus_parent = TerrainPatch::root(CubeFace::PosZ);
+        let broad_parent = TerrainPatch::root(CubeFace::NegZ);
+        let focus_children = focus_parent.children();
+        let broad_children = broad_parent.children();
+        let requested = BTreeSet::from_iter(focus_children.into_iter().chain(broad_children));
+        let target_leaves = requested.clone();
+
+        let ordered = prioritize_generation_requests(
+            &requested,
+            &BTreeSet::new(),
+            &target_leaves,
+            DVec3::Z,
+            focus_parent,
+            None,
+            6_371_000.0,
+            test_elevation_bounds(),
+        );
+
+        assert_eq!(
+            BTreeSet::from_iter(ordered.into_iter().take(4)),
+            BTreeSet::from(focus_children),
+            "camera-facing sibling groups must outrank broad viewport coverage"
+        );
+    }
+
+    #[test]
     fn neighborhood_crosses_face_boundaries_without_losing_coverage() {
         let focus = TerrainPatch {
             face: CubeFace::PosZ,
@@ -1395,11 +1538,13 @@ mod tests {
             TerrainPatch::root(CubeFace::PosZ),
             Some(&viewport),
             radius_m,
+            test_elevation_bounds(),
         ));
         assert!(!patch_intersects_viewport(
             TerrainPatch::root(CubeFace::PosX),
             Some(&viewport),
             radius_m,
+            test_elevation_bounds(),
         ));
 
         assert!(
@@ -1427,6 +1572,8 @@ mod tests {
                 vertical_fov_rad: viewport.vertical_fov_rad,
                 viewport_height_px: viewport.viewport_height_px,
             },
+            terrain_geometric_error(test_elevation_bounds()),
+            test_elevation_bounds(),
         );
 
         assert!(
@@ -1471,7 +1618,8 @@ mod tests {
             vertical_fov_rad: 0.8,
             viewport_height_px: 1080.0,
         };
-        let mut requested = root_requests_for_viewport(parent, Some(&viewport), radius_m);
+        let mut requested =
+            root_requests_for_viewport(parent, Some(&viewport), radius_m, test_elevation_bounds());
 
         add_viewport_lod_group(parent.children()[0], &selected, &mut requested);
 
@@ -1567,6 +1715,7 @@ mod tests {
             &generated,
             Some(&viewport),
             radius_m,
+            test_elevation_bounds(),
         );
 
         let selection = select_quadtree_leaves(
@@ -1622,6 +1771,7 @@ mod tests {
             &generated,
             Some(&viewport),
             radius_m,
+            test_elevation_bounds(),
         );
 
         assert!(errors.is_empty());
@@ -1905,32 +2055,31 @@ mod tests {
         assert!(!patch_is_behind_horizon(
             visible,
             camera_position_m,
-            radius_m
+            radius_m,
+            test_elevation_bounds(),
         ));
-        assert!(patch_is_behind_horizon(hidden, camera_position_m, radius_m));
+        assert!(patch_is_behind_horizon(
+            hidden,
+            camera_position_m,
+            radius_m,
+            test_elevation_bounds(),
+        ));
     }
 
     #[test]
-    fn streaming_bounds_cover_the_default_authoritative_terrain_envelope() {
-        assert_eq!(DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M, -10_036.0);
-        assert_eq!(DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M, 20_024.0);
-
-        let error = default_earth_patch_geometric_error();
-        assert_eq!(
-            error.elevation_range_m,
-            DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M
-        );
-        assert_eq!(
-            error.child_to_parent_deviation_m,
-            DEFAULT_EARTH_TERRAIN_ELEVATION_RANGE_M
-        );
+    fn source_bounds_define_streaming_geometric_error() {
+        let error = terrain_geometric_error(ElevationBounds::new(-500.0, 1_500.0));
+        assert_eq!(error.elevation_range_m, 2_000.0);
+        assert_eq!(error.child_to_parent_deviation_m, 2_000.0);
     }
 
     #[test]
     fn culling_sphere_contains_both_default_source_elevation_extremes() {
         let radius_m = 6_371_000.0;
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 8);
-        let (sphere_center, sphere_radius_m) = patch_bounding_sphere(patch, radius_m);
+        let elevation_bounds = test_elevation_bounds();
+        let (sphere_center, sphere_radius_m) =
+            patch_bounding_sphere(patch, radius_m, elevation_bounds);
         let (u0, v0, u1, v1) = patch.uv_bounds();
 
         for direction in [
@@ -1939,10 +2088,7 @@ mod tests {
             face_uv_to_direction(patch.face, u0, v1),
             face_uv_to_direction(patch.face, u1, v1),
         ] {
-            for elevation_m in [
-                DEFAULT_EARTH_TERRAIN_MIN_ELEVATION_M,
-                DEFAULT_EARTH_TERRAIN_MAX_ELEVATION_M,
-            ] {
+            for elevation_m in [elevation_bounds.min_m, elevation_bounds.max_m] {
                 assert!(
                     (direction * (radius_m + elevation_m)).distance(sphere_center)
                         <= sphere_radius_m + 1e-6

@@ -870,7 +870,9 @@ pub fn direction_to_lat_lon(dir: DVec3) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::{central_angle_deg, ProceduralTerrainSource};
+    use crate::domain::services::terrain_source::{
+        central_angle_deg, ElevationBounds, ProceduralTerrainSource,
+    };
     use std::sync::Mutex;
 
     fn source() -> ProceduralTerrainSource {
@@ -889,6 +891,10 @@ mod tests {
                 .expect("sample trace lock")
                 .push((latitude_deg, longitude_deg));
             0.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(0.0, 0.0)
         }
     }
 
