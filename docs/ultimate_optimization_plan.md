@@ -45,7 +45,7 @@ unsafe fn solve_kepler_avx2(planets: &[Planet], quality: QualityLevel) -> Vec<Ve
 ```
 
 ### 7.2 Quality Controller System
-**File**: `src/infrastructure/bevy_adapters/components.rs` *(extend)*
+**File**: `src/infrastructure/bevy_adapters/performance_components.rs` *(extend)*
 
 ```rust
 #[derive(Resource)]
@@ -170,7 +170,7 @@ impl WebGpuKeplerSolver {
 ```
 
 ### 9.2 Automatic GPU Detection
-**File**: `src/infrastructure/bevy_adapters/components.rs` *(extend)*
+**File**: `src/infrastructure/bevy_adapters/performance_components.rs` *(extend)*
 
 ```rust
 #[derive(Resource)]
@@ -335,7 +335,7 @@ impl VulkanKeplerSolver {
 ```
 
 ### 12.2 Unified Compute Backend
-**File**: `src/infrastructure/bevy_adapters/components.rs` *(extend ComputeBackend)*
+**File**: `src/infrastructure/bevy_adapters/performance_components.rs` *(extend ComputeBackend)*
 
 ```rust
 #[derive(Resource)]

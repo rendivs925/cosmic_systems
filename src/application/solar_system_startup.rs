@@ -1,9 +1,3 @@
-// Re-export functionality from split modules
-pub use super::rocket_spawning::*;
-pub use super::texture_config::*;
-
-use crate::application::material_factory::*;
-use crate::application::mesh_factory::*;
 use crate::application::starfield::spawn_starfield;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
@@ -11,11 +5,15 @@ use crate::domain::services::physics;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::components::*;
+use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::{EphemerisAuthority, EphemerisSnapshot};
 use crate::infrastructure::bevy_adapters::planet_systems::{
     solar_map_position_from_snapshot, solar_map_render_translation,
 };
+use crate::infrastructure::bevy_adapters::rendering::materials::*;
+use crate::infrastructure::bevy_adapters::rendering::meshes::*;
+use crate::infrastructure::bevy_adapters::rendering::textures::*;
+use crate::infrastructure::bevy_adapters::rocket::components::RocketMode;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::math::DVec3;
@@ -806,8 +804,8 @@ fn orbit_sample_window(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::bevy_adapters::components::MoonOrbit;
-    use crate::infrastructure::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
+    use crate::application::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
+    use crate::infrastructure::bevy_adapters::entity_components::MoonOrbit;
 
     #[test]
     fn solar_light_matches_top_of_atmosphere_illuminance_at_one_au() {

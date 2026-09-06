@@ -11,9 +11,10 @@ applications.
 
 ## Existing Authority
 
-`src/infrastructure/plugins/mod.rs` owns application composition. It already
+`src/application/plugins.rs` owns application composition. It already
 defines shared simulation composition and mode-specific plugins. Inspect it,
-`src/application/modes.rs`, `src/main.rs`, and `src/systems/sets.rs` before
+`src/application/modes.rs`, `src/main.rs`, and
+`src/infrastructure/bevy_adapters/rocket/sets.rs` before
 adding plugins, resources, components, schedules, or modes.
 
 Preserve all modes:

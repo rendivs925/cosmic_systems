@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::infrastructure::bevy_adapters::components::NotificationType;
+use crate::infrastructure::bevy_adapters::ui_components::NotificationType;
 use crate::presentation::ui_components::*;
 
 pub fn text_style(font_size: f32, color: Color) -> (TextFont, TextColor) {

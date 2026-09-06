@@ -1,6 +1,7 @@
 // Presentation layer: UI, rendering
 pub mod education_data;
 pub mod education_panel;
+pub mod education_state;
 pub mod knowledge_journal;
 pub mod markdown_renderer;
 pub mod ui;

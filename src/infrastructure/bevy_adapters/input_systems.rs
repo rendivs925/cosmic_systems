@@ -1,5 +1,6 @@
-use super::components::*;
-use super::craft_components::{CraftCameraTag, CraftTravelTarget};
+use super::craft::components::{CraftCameraTag, CraftTravelTarget};
+use super::entity_components::*;
+use super::ui_components::*;
 use crate::domain::services::physics;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -208,7 +209,7 @@ pub fn handle_solar_system_input(
     planet_query: Query<(&PlanetComponent, &SolarMapPosition)>,
     origin: Res<SolarMapRenderOrigin>,
     mut camera_command: ResMut<SolarMapCameraCommand>,
-    mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::components::ZenMode>,
+    mut zen_mode: ResMut<crate::infrastructure::bevy_adapters::ui_components::ZenMode>,
     mut camera_input_state: ResMut<CameraInputState>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyZ) {

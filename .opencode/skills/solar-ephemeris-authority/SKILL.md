@@ -45,7 +45,7 @@ Before implementation, inspect:
 - `src/domain/services/ephemeris.rs` and the manifest-backed evaluator;
 - `src/domain/services/reference_frames.rs` for frame/precision conversion;
 - `src/domain/services/simulation_time.rs` for the simulation epoch;
-- `src/infrastructure/plugins/mod.rs` for shared startup and system ordering;
+- `src/application/plugins.rs` for shared startup and system ordering;
 - current solar-map, rocket-proxy, lighting, orbit, and camera consumers.
 
 State the current authority, every consumer, the proposed kernel files and

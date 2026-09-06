@@ -48,8 +48,8 @@ Relevant existing tests live beside:
 - `src/domain/services/terrain_source.rs`
 - `src/domain/services/terrain_collision.rs`
 - `src/domain/services/terrain_patch_manager.rs`
-- `src/infrastructure/bevy_adapters/terrain_streaming.rs`
-- `src/infrastructure/bevy_adapters/terrain_render.rs`
+- `src/infrastructure/bevy_adapters/terrain/streaming.rs`
+- `src/infrastructure/bevy_adapters/terrain/render.rs`
 
 Extend the nearest existing test module instead of creating disconnected test
 infrastructure.

@@ -14,8 +14,8 @@ Start with these modules:
 
 - `src/domain/services/simulation_time.rs`: fixed timestep, pause, and time acceleration.
 - `src/domain/services/regression.rs`: sample comparison, baseline and tolerance policy.
-- `src/infrastructure/bevy_adapters/rocket_replay.rs`: replay capture/restore and seek rules.
-- `src/infrastructure/bevy_adapters/rocket_pipeline_tests.rs`: full fixed-pipeline tests.
+- `src/infrastructure/bevy_adapters/rocket/replay.rs`: replay capture/restore and seek rules.
+- `src/infrastructure/bevy_adapters/rocket/tests.rs`: full fixed-pipeline tests.
 - `src/domain/services/physics_orbital.rs`: current analytic ephemeris migration
   point until the kernel-backed authority replaces it.
 - Pure domain services for gravity, orbital mechanics, rocket dynamics, propulsion,

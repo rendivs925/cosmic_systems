@@ -2,7 +2,7 @@
 //!
 //! These functions are the single authority for plasma blackout, retro-
 //! propulsion effectiveness, and parachute deployment sequencing. Bevy
-//! systems in `bevy_adapters::rocket_entry` adapt them into ECS execution;
+//! systems in `bevy_adapters::rocket::entry` adapt them into ECS execution;
 //! they never re-implement the math here (AGENTS.md sections 19 and 50).
 //!
 //! ## Models

@@ -1,4 +1,4 @@
-use super::components::*;
+use super::material_components::*;
 use bevy::prelude::*;
 
 // System to apply pending material textures

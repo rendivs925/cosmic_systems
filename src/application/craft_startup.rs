@@ -1,9 +1,9 @@
 use crate::domain::services::{physics, planet_factory::PlanetFactory};
 use crate::domain::value_objects::physical_scale::PhysicalScale;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::components::CameraController;
-use crate::infrastructure::bevy_adapters::craft_components::*;
-use crate::infrastructure::bevy_adapters::craft_ui::*;
+use crate::infrastructure::bevy_adapters::craft::components::*;
+use crate::infrastructure::bevy_adapters::craft::ui::*;
+use crate::infrastructure::bevy_adapters::entity_components::CameraController;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::planet_systems::solar_map_position_from_snapshot;
 use bevy::audio::{PlaybackMode, Volume};

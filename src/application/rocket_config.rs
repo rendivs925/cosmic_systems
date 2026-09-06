@@ -781,11 +781,11 @@ impl RocketCatalog {
         self.vehicles.insert(key, vehicle);
     }
 
-    pub(crate) fn keys(&self) -> impl Iterator<Item = &str> {
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.vehicles.keys().map(VehicleKey::as_str)
     }
 
-    pub(crate) fn resolve<'catalog, 'selection>(
+    pub fn resolve<'catalog, 'selection>(
         &'catalog self,
         selection: &'selection VehicleSelection,
     ) -> Option<(&'selection str, &'catalog LoadedVehicle)> {
@@ -850,10 +850,10 @@ const DEFAULT_VEHICLE_KEY: &str = "falcon9";
 /// A catalog key derived from a vehicle config-file stem or supplied through
 /// `--vehicle`. It is distinct from the vehicle's user-facing display name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct VehicleKey(String);
+pub struct VehicleKey(String);
 
 impl VehicleKey {
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -879,7 +879,7 @@ impl Borrow<str> for VehicleKey {
 /// CLI-selected vehicle key (`--vehicle <key>`). `Default` selects the
 /// configured default catalog entry without storing a sentinel string.
 #[derive(Resource, Debug, Default, Clone)]
-pub(crate) enum VehicleSelection {
+pub enum VehicleSelection {
     #[default]
     Default,
     Requested(VehicleKey),
@@ -892,7 +892,7 @@ impl From<Option<String>> for VehicleSelection {
 }
 
 impl VehicleSelection {
-    pub(crate) fn requested(&self) -> Option<&VehicleKey> {
+    pub fn requested(&self) -> Option<&VehicleKey> {
         match self {
             Self::Default => None,
             Self::Requested(key) => Some(key),

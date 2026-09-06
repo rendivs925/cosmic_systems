@@ -1,4 +1,5 @@
-use super::components::*;
+use super::performance_components::*;
+use super::ui_components::*;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};

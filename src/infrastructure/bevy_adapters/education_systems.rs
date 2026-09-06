@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use crate::domain::value_objects::education::{EducationState, JournalDatabase, UnlockCondition};
-use crate::infrastructure::bevy_adapters::craft_components::{CraftComponent, CraftControlState};
+use crate::infrastructure::bevy_adapters::craft::components::{CraftComponent, CraftControlState};
 use crate::presentation::education_data::create_journal_database;
 use crate::presentation::education_panel::{spawn_education_panel, update_education_panel};
+use crate::presentation::education_state::{EducationState, JournalDatabase, UnlockCondition};
 use crate::presentation::knowledge_journal::handle_journal_selection;
 
 pub fn handle_education_input(

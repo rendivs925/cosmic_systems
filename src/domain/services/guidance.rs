@@ -51,7 +51,7 @@ pub enum AutopilotMode {
     Landing,
     /// Two-impulse orbit transfer (Hohmann, or bi-elliptic when favorable):
     /// departure burn → coast to apsis → arrival burn. Target radius comes
-    /// from [`crate::components::rocket::RocketAutopilot::
+    /// from [`crate::infrastructure::bevy_adapters::rocket::components::RocketAutopilot::
     /// transfer_target_radius_m`].
     Transfer,
     /// Station keeping / orbital maintenance.

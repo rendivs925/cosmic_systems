@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::domain::value_objects::education::EducationState;
+use crate::presentation::education_state::EducationState;
 
 /// Handle keyboard selection of journal entries (1-9).
 pub fn handle_journal_selection(

@@ -5,19 +5,12 @@ use bevy::prelude::*;
 
 use std::env;
 
-pub mod application;
-pub mod components;
-pub mod domain;
-pub mod infrastructure;
-pub mod presentation;
-pub mod systems;
-
-use application::modes::{parse_launch_options, Mode};
-use application::rocket_config::{RocketCatalog, VehicleSelection};
-use application::solar_system_startup::SolarCameraEnabled;
-use infrastructure::plugins::{
+use cosmic_systems_wasm::application::modes::{parse_launch_options, Mode};
+use cosmic_systems_wasm::application::plugins::{
     CraftModePlugin, RocketModePlugin, SharedSimulationPlugin, SolarSystemModePlugin,
 };
+use cosmic_systems_wasm::application::rocket_config::{RocketCatalog, VehicleSelection};
+use cosmic_systems_wasm::application::solar_system_startup::SolarCameraEnabled;
 
 /// Reject an unknown requested vehicle before creating the window or renderer.
 fn validate_vehicle_selection(selection: &VehicleSelection) {

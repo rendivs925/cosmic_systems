@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::domain::services::vacuum_physics;
-use crate::domain::value_objects::education::{EducationState, JournalCategory, JournalDatabase};
-use crate::infrastructure::bevy_adapters::craft_components::{CraftComponent, CraftControlState};
+use crate::infrastructure::bevy_adapters::craft::components::{CraftComponent, CraftControlState};
+use crate::presentation::education_state::{EducationState, JournalCategory, JournalDatabase};
 use crate::presentation::markdown_renderer::{parse_markdown, spawn_markdown_blocks};
 
 #[derive(Component)]

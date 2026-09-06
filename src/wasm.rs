@@ -1,8 +1,8 @@
+use crate::application::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
 use crate::infrastructure::bevy_adapters::material_systems::{
     apply_pending_material_textures, apply_texture_worker_results, queue_pending_material_textures,
 };
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceStats;
-use crate::infrastructure::plugins::{SharedSimulationPlugin, SolarSystemModePlugin};
 use crate::infrastructure::web_workers::texture_worker::TextureDecodeWorker;
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;

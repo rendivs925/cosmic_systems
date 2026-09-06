@@ -2,7 +2,7 @@
 //! tip-over stability, and energy absorption limits.
 //!
 //! Pure f64 domain models (AGENTS.md section 3); Bevy systems in
-//! `bevy_adapters::rocket_contact` adapt them into ECS execution. The single
+//! `bevy_adapters::rocket::contact` adapt them into ECS execution. The single
 //! authority for ground-contact resolution stays in
 //! [`crate::domain::services::terrain_collision`] and the GroundContact set:
 //! this module provides the gear-specific math those systems consume.

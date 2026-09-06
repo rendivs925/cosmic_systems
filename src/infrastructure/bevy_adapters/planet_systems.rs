@@ -1,4 +1,5 @@
-use super::components::*;
+use super::entity_components::*;
+use super::ui_components::SelectedPlanet;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics;
 use crate::domain::services::reference_frames::{

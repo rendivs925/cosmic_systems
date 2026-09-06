@@ -3,11 +3,12 @@ use bevy::prelude::*;
 use bevy::window::{CursorIcon, SystemCursorIcon};
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::components::{
-    NotificationQueue, PerformanceStats, PlanetComponent, ScreenshotState, Selectable,
-    SelectedPlanet, UiPointerState, ZenMode,
+use crate::infrastructure::bevy_adapters::craft::components::CraftTravelTarget;
+use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, Selectable};
+use crate::infrastructure::bevy_adapters::performance_components::PerformanceStats;
+use crate::infrastructure::bevy_adapters::ui_components::{
+    NotificationQueue, ScreenshotState, SelectedPlanet, UiPointerState, ZenMode,
 };
-use crate::infrastructure::bevy_adapters::craft_components::CraftTravelTarget;
 use crate::presentation::ui_components::*;
 use crate::presentation::ui_helpers::*;
 

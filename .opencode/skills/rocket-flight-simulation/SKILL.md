@@ -12,13 +12,13 @@ physical simulation, not a transform animation.
 
 Read and extend these modules before adding any rocket behaviour:
 
-- `src/infrastructure/plugins/mod.rs`: `RocketSet` registration and fixed-pipeline order.
+- `src/application/plugins.rs`: `RocketSet` registration and fixed-pipeline order.
 - `src/domain/services/rocket_dynamics.rs`: pure 6-DOF state and integration maths.
-- `src/infrastructure/bevy_adapters/rocket_dynamics.rs`: ECS force/torque adapters.
-- `src/domain/services/rocket_propulsion.rs` and `rocket_propulsion.rs`: engines, mass flow, gimbal, and staging.
-- `rocket_guidance.rs`, `rocket_control.rs`, and `rocket_contact.rs`: command path and terrain contact authority.
-- `rocket_flight_conditions.rs`, `rocket_gravity_orbit.rs`, `rocket_entry.rs`, and `rocket_recovery.rs`: environment, gravity, entry, and recovery.
-- `src/infrastructure/bevy_adapters/rocket_pipeline_tests.rs`: complete fixed-pipeline integration tests.
+- `src/infrastructure/bevy_adapters/rocket/dynamics.rs`: ECS force/torque adapters.
+- `src/domain/services/rocket_propulsion.rs` and `rocket/propulsion.rs`: engines, mass flow, gimbal, and staging.
+- `rocket/guidance.rs`, `rocket/control.rs`, and `rocket/contact.rs`: command path and terrain contact authority.
+- `rocket/flight_conditions.rs`, `rocket/gravity_orbit.rs`, `rocket/entry.rs`, and `rocket/recovery.rs`: environment, gravity, entry, and recovery.
+- `src/infrastructure/bevy_adapters/rocket/tests.rs`: complete fixed-pipeline integration tests.
 
 Do not add a second gravity calculation, vehicle integrator, flight clock,
 contact solver, rocket manager, or alternate control pipeline.

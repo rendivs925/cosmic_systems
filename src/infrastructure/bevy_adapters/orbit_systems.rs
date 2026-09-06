@@ -1,10 +1,11 @@
-use super::components::*;
-use crate::application::material_factory::ORBIT_LINE_COLOR;
-use crate::application::mesh_factory::{
-    create_orbit_ribbon_mesh, create_sampled_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS,
-};
+use super::entity_components::*;
+use super::ui_components::SelectedPlanet;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::rendering::materials::ORBIT_LINE_COLOR;
+use crate::infrastructure::bevy_adapters::rendering::meshes::{
+    create_orbit_ribbon_mesh, create_sampled_orbit_ribbon_mesh, ORBIT_RIBBON_NEAR_WIDTH_UNITS,
+};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -223,7 +224,8 @@ fn camera_distance_to_orbit_path(
     orbit_rotation: Quat,
     segments: usize,
 ) -> f64 {
-    let segments = segments.max(crate::application::mesh_factory::ORBIT_RIBBON_SEGMENTS);
+    let segments = segments
+        .max(crate::infrastructure::bevy_adapters::rendering::meshes::ORBIT_RIBBON_SEGMENTS);
     let mut closest_distance_squared = f64::INFINITY;
     let mut previous = orbit_point_world(
         orbit_shape,

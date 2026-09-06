@@ -22,9 +22,9 @@ Read these modules before creating a terrain abstraction or replacing logic:
 - `src/domain/services/terrain_collision.rs`: authoritative collision samples.
 - `src/domain/services/terrain_patch_manager.rs`: patch lifecycle and cache
   ownership.
-- `src/infrastructure/bevy_adapters/terrain_streaming.rs`: Bevy scheduling and
+- `src/infrastructure/bevy_adapters/terrain/streaming.rs`: Bevy scheduling and
   async patch generation.
-- `src/infrastructure/bevy_adapters/terrain_render.rs`: presentation-only mesh
+- `src/infrastructure/bevy_adapters/terrain/render.rs`: presentation-only mesh
   upload and render entity lifecycle.
 
 Do not introduce another terrain source, coordinate conversion, LOD hierarchy,

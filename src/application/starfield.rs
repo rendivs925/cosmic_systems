@@ -8,7 +8,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::components::Starfield;
+use crate::infrastructure::bevy_adapters::entity_components::Starfield;
 
 const STAR_SEED: u64 = 0xC05F_1C5A;
 const NEAR_STAR_COUNT: usize = 2_000;

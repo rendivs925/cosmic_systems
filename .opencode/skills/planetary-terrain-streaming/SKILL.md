@@ -5,8 +5,8 @@ description: Use when changing terrain LOD, patch streaming, asynchronous genera
 
 # Planetary Terrain Streaming
 
-Apply this skill for any change in `terrain_streaming.rs`,
-`terrain_patch_manager.rs`, `terrain_render.rs`, terrain task scheduling, patch
+Apply this skill for any change in `terrain/streaming.rs`,
+`terrain_patch_manager.rs`, `terrain/render.rs`, terrain task scheduling, patch
 caches, LOD selection, terrain visibility, or terrain performance telemetry.
 
 ## Existing Project Authority
@@ -15,14 +15,14 @@ Start with these components and extend them rather than adding competing
 managers:
 
 - `TerrainStreamingResource` and streaming systems in
-  `src/infrastructure/bevy_adapters/terrain_streaming.rs`.
+  `src/infrastructure/bevy_adapters/terrain/streaming.rs`.
 - `TerrainPatchManager` in `src/domain/services/terrain_patch_manager.rs`.
 - Cube-sphere patch selection, projected error, neighbour balance, and stitch
   helpers in `src/domain/services/cube_sphere.rs`.
 - Render asset/entity lifetime handling in
-  `src/infrastructure/bevy_adapters/terrain_render.rs`.
+  `src/infrastructure/bevy_adapters/terrain/render.rs`.
 - Terrain registration and schedule ordering in
-  `src/infrastructure/plugins/mod.rs`.
+  `src/application/plugins.rs`.
 
 Do not add a `TerrainManager`, second worker queue, second patch cache, or
 parallel LOD implementation.

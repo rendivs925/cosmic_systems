@@ -1,4 +1,4 @@
-use crate::domain::value_objects::education::{
+use crate::presentation::education_state::{
     JournalCategory, JournalDatabase, JournalEntry, QuranicReference, UnlockCondition,
 };
 

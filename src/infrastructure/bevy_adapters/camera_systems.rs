@@ -1,6 +1,7 @@
-use super::components::*;
-use super::craft_components::CraftCameraTag;
+use super::craft::components::CraftCameraTag;
 use super::entity_components::Starfield;
+use super::entity_components::*;
+use super::ui_components::*;
 use crate::domain::services::physics;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::planet_systems::solar_map_render_translation;
