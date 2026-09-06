@@ -12,8 +12,8 @@ use crate::components::rocket::RocketMissionState;
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{
     build_patch_geometry_with_stitches, direction_to_lat_lon, face_uv_to_direction,
-    projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge,
-    PatchGeometricError, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
+    projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge, PatchGeometry,
+    QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
@@ -437,14 +437,13 @@ pub fn stream_terrain_patches(
             .as_ref()
             .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
     };
-    let geometry_error = terrain_geometric_error(elevation_bounds);
     let mut errors = if let Some(viewport) = viewport.as_ref() {
         projected_errors_for_viewport(
             viewport,
             max_focus_level,
             radius_m,
             camera_projection,
-            geometry_error,
+            planet_terrain.source.as_ref(),
             elevation_bounds,
         )
     } else {
@@ -453,7 +452,7 @@ pub fn stream_terrain_patches(
             max_focus_level,
             radius_m,
             camera_projection,
-            geometry_error,
+            planet_terrain.source.as_ref(),
         )
     };
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
@@ -1195,7 +1194,7 @@ fn projected_errors_for_viewport(
     max_level: u32,
     radius_m: f64,
     camera: CameraProjection,
-    geometry_error: PatchGeometricError,
+    source: &dyn TerrainSource,
     elevation_bounds: ElevationBounds,
 ) -> BTreeMap<TerrainPatch, f64> {
     let mut errors = BTreeMap::new();
@@ -1211,7 +1210,12 @@ fn projected_errors_for_viewport(
         if target_leaf_count + 3 > MAX_VIEWPORT_UNBALANCED_LEAVES {
             break;
         }
-        let error_px = projected_patch_error_px(&patch, geometry_error, radius_m, camera);
+        let error_px = projected_patch_error_px(
+            &patch,
+            source.patch_geometric_error(&patch),
+            radius_m,
+            camera,
+        );
         errors.insert(patch, error_px);
         if patch.level >= max_level || error_px <= SCREEN_ERROR_PX {
             continue;
@@ -1234,7 +1238,7 @@ fn projected_errors_for_focus(
     max_level: u32,
     radius_m: f64,
     camera: CameraProjection,
-    geometry_error: PatchGeometricError,
+    source: &dyn TerrainSource,
 ) -> BTreeMap<TerrainPatch, f64> {
     let mut errors = BTreeMap::new();
     for level in 0..max_level {
@@ -1242,22 +1246,16 @@ fn projected_errors_for_focus(
         for patch in patch_neighborhood(focus) {
             errors.insert(
                 patch,
-                projected_patch_error_px(&patch, geometry_error, radius_m, camera),
+                projected_patch_error_px(
+                    &patch,
+                    source.patch_geometric_error(&patch),
+                    radius_m,
+                    camera,
+                ),
             );
         }
     }
     errors
-}
-
-/// Bound refinement error from terrain-source metadata without sampling terrain
-/// on the presentation thread. Tiled datasets may later provide a tighter value
-/// for each patch through this same authority boundary.
-fn terrain_geometric_error(elevation_bounds: ElevationBounds) -> PatchGeometricError {
-    let elevation_range_m = elevation_bounds.range_m();
-    PatchGeometricError {
-        elevation_range_m,
-        child_to_parent_deviation_m: elevation_range_m,
-    }
 }
 
 fn patch_neighborhood(focus: TerrainPatch) -> BTreeSet<TerrainPatch> {
@@ -1333,6 +1331,19 @@ mod tests {
 
     fn test_elevation_bounds() -> ElevationBounds {
         ElevationBounds::new(-10_036.0, 20_024.0)
+    }
+
+    #[derive(Debug)]
+    struct BoundedTerrainSource(ElevationBounds);
+
+    impl TerrainSource for BoundedTerrainSource {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            self.0
+        }
     }
 
     impl TerrainSource for DivergentOverviewSource {
@@ -1563,6 +1574,7 @@ mod tests {
             vertical_fov_rad: 1.0,
             viewport_height_px: 1_080.0,
         };
+        let source = BoundedTerrainSource(test_elevation_bounds());
         let errors = projected_errors_for_viewport(
             &viewport,
             8,
@@ -1572,7 +1584,7 @@ mod tests {
                 vertical_fov_rad: viewport.vertical_fov_rad,
                 viewport_height_px: viewport.viewport_height_px,
             },
-            terrain_geometric_error(test_elevation_bounds()),
+            &source,
             test_elevation_bounds(),
         );
 
@@ -2068,7 +2080,8 @@ mod tests {
 
     #[test]
     fn source_bounds_define_streaming_geometric_error() {
-        let error = terrain_geometric_error(ElevationBounds::new(-500.0, 1_500.0));
+        let source = BoundedTerrainSource(ElevationBounds::new(-500.0, 1_500.0));
+        let error = source.patch_geometric_error(&TerrainPatch::root(CubeFace::PosX));
         assert_eq!(error.elevation_range_m, 2_000.0);
         assert_eq!(error.child_to_parent_deviation_m, 2_000.0);
     }

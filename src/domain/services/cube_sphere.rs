@@ -360,6 +360,25 @@ pub struct PatchGeometricError {
 }
 
 impl PatchGeometricError {
+    /// Conservative terrain error from one source-wide elevation envelope.
+    /// Sources with indexed terrain data can provide tighter per-patch values.
+    pub fn from_elevation_bounds(elevation_min_m: f64, elevation_max_m: f64) -> Self {
+        let elevation_range_m = elevation_max_m - elevation_min_m;
+        Self {
+            elevation_range_m,
+            child_to_parent_deviation_m: elevation_range_m,
+        }
+    }
+
+    /// Conservatively combine independently sampled terrain elevation layers.
+    pub fn combine(self, other: Self) -> Self {
+        Self {
+            elevation_range_m: self.elevation_range_m + other.elevation_range_m,
+            child_to_parent_deviation_m: self.child_to_parent_deviation_m
+                + other.child_to_parent_deviation_m,
+        }
+    }
+
     /// A conservative world-space approximation error including curvature.
     pub fn conservative_m(self, patch: &TerrainPatch, planet_radius_m: f64) -> f64 {
         let half_face_angle = std::f64::consts::FRAC_PI_4 / (1u64 << patch.level) as f64;

@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use bevy::math::DVec3;
 
-use crate::domain::services::cube_sphere::{face_uv, face_uv_to_direction, CubeFace};
+use crate::domain::services::cube_sphere::{
+    face_uv, face_uv_to_direction, CubeFace, PatchGeometricError, TerrainPatch,
+};
 use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, TerrainSource};
 
 /// Magic bytes for the versioned cube-sphere DEM format.
@@ -27,6 +29,111 @@ pub const ETOPO1_ROWS: usize = 10_801;
 const HEADER_BYTES: usize = 24;
 const FACE_COUNT: usize = 6;
 const HEIGHT_BYTES: usize = std::mem::size_of::<i16>();
+/// Bound startup metadata work and memory while still giving the 2048-sample
+/// Earth DEM 256x256 geographic error regions per cube face.
+const MAX_METADATA_LEVEL: u32 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DemPatchMetadata {
+    min_m: i16,
+    max_m: i16,
+}
+
+impl DemPatchMetadata {
+    fn elevation_bounds_m(self) -> ElevationBounds {
+        ElevationBounds::new(f64::from(self.min_m), f64::from(self.max_m))
+    }
+
+    fn geometric_error(self) -> PatchGeometricError {
+        let bounds = self.elevation_bounds_m();
+        PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
+    }
+
+    fn combine(self, other: Self) -> Self {
+        Self {
+            min_m: self.min_m.min(other.min_m),
+            max_m: self.max_m.max(other.max_m),
+        }
+    }
+}
+
+/// Read-only aggregate DEM ranges in the existing cube-sphere hierarchy.
+/// Levels deeper than `max_level` inherit their nearest indexed ancestor, which
+/// remains conservative without inventing detail beyond the source raster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DemMetadataPyramid {
+    levels: Vec<Vec<DemPatchMetadata>>,
+}
+
+impl DemMetadataPyramid {
+    fn build(resolution: u32, heights_m: &[i16]) -> Self {
+        let max_level = metadata_max_level(resolution);
+        let mut levels = (0..=max_level).map(|_| Vec::new()).collect::<Vec<_>>();
+        let leaf_width = 1usize << max_level;
+        let mut leaves = Vec::with_capacity(FACE_COUNT * leaf_width * leaf_width);
+        for face in CubeFace::ALL {
+            for tile_y in 0..leaf_width {
+                for tile_x in 0..leaf_width {
+                    leaves.push(sample_patch_bounds(
+                        heights_m,
+                        resolution as usize,
+                        face,
+                        max_level,
+                        tile_x,
+                        tile_y,
+                    ));
+                }
+            }
+        }
+        levels[max_level as usize] = leaves;
+
+        for level in (0..max_level).rev() {
+            let width = 1usize << level;
+            let child_width = width * 2;
+            let children = &levels[level as usize + 1];
+            let mut parents = Vec::with_capacity(FACE_COUNT * width * width);
+            for face_index in 0..FACE_COUNT {
+                for tile_y in 0..width {
+                    for tile_x in 0..width {
+                        let child = |x: usize, y: usize| {
+                            children[face_index * child_width * child_width + y * child_width + x]
+                        };
+                        let x = tile_x * 2;
+                        let y = tile_y * 2;
+                        parents.push(
+                            child(x, y)
+                                .combine(child(x + 1, y))
+                                .combine(child(x, y + 1))
+                                .combine(child(x + 1, y + 1)),
+                        );
+                    }
+                }
+            }
+            levels[level as usize] = parents;
+        }
+
+        Self { levels }
+    }
+
+    fn metadata_for(&self, patch: &TerrainPatch) -> DemPatchMetadata {
+        let level = patch.level.min(self.levels.len() as u32 - 1);
+        let shift = patch.level - level;
+        let width = 1usize << level;
+        let face_index = cube_face_index(patch.face);
+        let tile_x = (patch.tile_x >> shift) as usize;
+        let tile_y = (patch.tile_y >> shift) as usize;
+        self.levels[level as usize][face_index * width * width + tile_y * width + tile_x]
+    }
+
+    fn global_bounds(&self) -> ElevationBounds {
+        CubeFace::ALL
+            .into_iter()
+            .map(|face| self.metadata_for(&TerrainPatch::root(face)))
+            .reduce(DemPatchMetadata::combine)
+            .expect("cube-sphere DEM has six root faces")
+            .elevation_bounds_m()
+    }
+}
 
 /// Failures while loading, validating, or converting a cube-sphere DEM.
 #[derive(Debug)]
@@ -65,6 +172,7 @@ impl From<std::io::Error> for DemError {
 pub struct CubeSphereDem {
     resolution: u32,
     heights_m: Vec<i16>,
+    metadata: DemMetadataPyramid,
 }
 
 impl CubeSphereDem {
@@ -78,6 +186,7 @@ impl CubeSphereDem {
         }
         Ok(Self {
             resolution,
+            metadata: DemMetadataPyramid::build(resolution, &heights_m),
             heights_m,
         })
     }
@@ -180,6 +289,10 @@ impl CubeSphereDem {
         west + (east - west) * ty
     }
 
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        self.metadata.metadata_for(patch).geometric_error()
+    }
+
     /// Convert a complete ETOPO1 signed-`i16` little-endian raster into a
     /// cube-sphere DEM. ETOPO1 rows run north to south and its first/last
     /// longitude columns are the same meridian; the converter wraps at the
@@ -252,9 +365,11 @@ impl TerrainSource for DemTerrainSource {
     }
 
     fn elevation_bounds_m(&self) -> ElevationBounds {
-        let min_m = self.dem.heights_m.iter().copied().min().unwrap_or_default() as f64;
-        let max_m = self.dem.heights_m.iter().copied().max().unwrap_or_default() as f64;
-        ElevationBounds::new(min_m, max_m)
+        self.dem.metadata.global_bounds()
+    }
+
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        self.dem.patch_geometric_error(patch)
     }
 
     fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
@@ -288,6 +403,39 @@ fn expected_samples(resolution: u32) -> Result<usize, DemError> {
     side.checked_mul(side)
         .and_then(|samples_per_face| samples_per_face.checked_mul(FACE_COUNT))
         .ok_or_else(|| DemError::InvalidFormat("DEM sample count overflows usize".into()))
+}
+
+fn metadata_max_level(resolution: u32) -> u32 {
+    (resolution - 1).ilog2().min(MAX_METADATA_LEVEL)
+}
+
+fn sample_patch_bounds(
+    heights_m: &[i16],
+    resolution: usize,
+    face: CubeFace,
+    level: u32,
+    tile_x: usize,
+    tile_y: usize,
+) -> DemPatchMetadata {
+    let span = 1usize << level;
+    let max_sample = resolution - 1;
+    let first_x = tile_x * max_sample / span;
+    let first_y = tile_y * max_sample / span;
+    let last_x = ((tile_x + 1) * max_sample).div_ceil(span).min(max_sample);
+    let last_y = ((tile_y + 1) * max_sample).div_ceil(span).min(max_sample);
+    let face_offset = cube_face_index(face) * resolution * resolution;
+    let mut metadata = DemPatchMetadata {
+        min_m: i16::MAX,
+        max_m: i16::MIN,
+    };
+    for row in first_y..=last_y {
+        for column in first_x..=last_x {
+            let height_m = heights_m[face_offset + row * resolution + column];
+            metadata.min_m = metadata.min_m.min(height_m);
+            metadata.max_m = metadata.max_m.max(height_m);
+        }
+    }
+    metadata
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, DemError> {
@@ -390,6 +538,72 @@ mod tests {
             DemTerrainSource::from_dem(CubeSphereDem::new(2, heights).expect("valid faces"));
         assert_eq!(source.dem.sample_face_m(CubeFace::PosX, 0.5, 0.5), 15.0);
         assert_eq!(source.height_m(0.0, 0.0), 15.0);
+    }
+
+    #[test]
+    fn metadata_pyramid_tightens_error_for_local_dem_regions() {
+        let resolution = 17;
+        let mut heights = vec![0; (resolution * resolution * FACE_COUNT as u32) as usize];
+        let face_offset =
+            cube_face_index(CubeFace::PosX) * resolution as usize * resolution as usize;
+        for row in 0..resolution as usize {
+            for column in 0..resolution as usize {
+                heights[face_offset + row * resolution as usize + column] =
+                    if column < 12 { -200 } else { 1_200 };
+            }
+        }
+        let source = DemTerrainSource::from_dem(CubeSphereDem::new(resolution, heights).unwrap());
+        let root = TerrainPatch::root(CubeFace::PosX);
+        let west = TerrainPatch {
+            face: CubeFace::PosX,
+            level: 2,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let east = TerrainPatch { tile_x: 3, ..west };
+
+        assert_eq!(
+            source.patch_geometric_error(&root).elevation_range_m,
+            1_400.0
+        );
+        assert_eq!(source.patch_geometric_error(&west).elevation_range_m, 0.0);
+        assert_eq!(source.patch_geometric_error(&east).elevation_range_m, 0.0);
+    }
+
+    #[test]
+    fn global_bounds_include_every_cube_face() {
+        let source = DemTerrainSource::from_dem(CubeSphereDem::new(2, face_heights(2)).unwrap());
+
+        assert_eq!(
+            source.elevation_bounds_m(),
+            ElevationBounds::new(100.0, 600.0)
+        );
+    }
+
+    #[test]
+    fn deep_patches_inherit_the_nearest_indexed_metadata() {
+        let resolution = 17;
+        let mut heights = face_heights(resolution);
+        let face_offset =
+            cube_face_index(CubeFace::PosX) * resolution as usize * resolution as usize;
+        heights[face_offset] = -400;
+        heights[face_offset + 1] = 900;
+        let source = DemTerrainSource::from_dem(CubeSphereDem::new(resolution, heights).unwrap());
+        let indexed = TerrainPatch {
+            face: CubeFace::PosX,
+            level: 4,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let deep = TerrainPatch {
+            level: 12,
+            ..indexed
+        };
+
+        assert_eq!(
+            source.patch_geometric_error(&deep),
+            source.patch_geometric_error(&indexed)
+        );
     }
 
     #[test]

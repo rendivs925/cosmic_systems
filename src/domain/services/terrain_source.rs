@@ -18,6 +18,9 @@ use std::sync::{Arc, OnceLock};
 #[cfg(feature = "dem")]
 use std::path::Path;
 
+use crate::domain::services::cube_sphere::{
+    face_uv_to_direction, PatchGeometricError, TerrainPatch,
+};
 #[cfg(feature = "dem")]
 use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
 use crate::domain::services::planet_factory::PlanetFactory;
@@ -104,6 +107,14 @@ pub trait TerrainSource: Send + Sync + Debug {
     /// body's mean radius. Streaming uses it for culling and LOD; collision and
     /// mesh sampling remain authoritative through [`Self::height_m`].
     fn elevation_bounds_m(&self) -> ElevationBounds;
+
+    /// Conservative source-specific geometric error for a cube-sphere patch.
+    /// The default retains the global envelope used before terrain sources could
+    /// expose indexed metadata, so all existing sources remain safe.
+    fn patch_geometric_error(&self, _patch: &TerrainPatch) -> PatchGeometricError {
+        let bounds = self.elevation_bounds_m();
+        PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
+    }
 
     /// Coherent authoritative sample. Existing height and material metadata
     /// methods remain supported as compatibility accessors.
@@ -360,6 +371,17 @@ impl TerrainSource for LayeredTerrainSource {
 
     fn elevation_bounds_m(&self) -> ElevationBounds {
         LayeredTerrainSource::elevation_bounds_m(self)
+    }
+
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        let mut error = self.base.source.patch_geometric_error(patch);
+        if let Some(layer) = &self.macro_elevation {
+            error = error.combine(layer.source.patch_geometric_error(patch));
+        }
+        if let Some(layer) = &self.procedural_detail {
+            error = error.combine(layer.source.patch_geometric_error(patch));
+        }
+        error
     }
 
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, _patch_level: u32) -> f64 {
@@ -792,6 +814,16 @@ impl TerrainSource for LocalDetailTerrainSource {
             .combine(Self::elevation_bounds_m())
     }
 
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        let detail = Self::elevation_bounds_m();
+        self.base
+            .patch_geometric_error(patch)
+            .combine(PatchGeometricError::from_elevation_bounds(
+                detail.min_m,
+                detail.max_m,
+            ))
+    }
+
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
         self.base.prepare_sample(latitude_deg, longitude_deg);
     }
@@ -944,6 +976,18 @@ impl TerrainSource for SiteAwareTerrainSource {
         base.combine(ElevationBounds::new(-base.range_m(), base.range_m()))
     }
 
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        if self
+            .sites
+            .iter()
+            .any(|site| patch_may_intersect_site(patch, site.site))
+        {
+            let bounds = self.elevation_bounds_m();
+            return PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m);
+        }
+        self.base.patch_geometric_error(patch)
+    }
+
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
         for calibrated in &self.sites {
             let site = calibrated.site;
@@ -991,6 +1035,31 @@ impl TerrainSource for SiteAwareTerrainSource {
     fn zone_lat(&self, latitude_deg: f64) -> f64 {
         self.base.zone_lat(latitude_deg)
     }
+}
+
+/// A site grade may alter a patch only when its spherical footprint overlaps the
+/// patch's conservative corner radius. All other patches retain base metadata.
+fn patch_may_intersect_site(patch: &TerrainPatch, site: TerrainSite) -> bool {
+    let center = patch.center_direction();
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    let patch_radius_rad = [
+        face_uv_to_direction(patch.face, u0, v0),
+        face_uv_to_direction(patch.face, u1, v0),
+        face_uv_to_direction(patch.face, u0, v1),
+        face_uv_to_direction(patch.face, u1, v1),
+    ]
+    .into_iter()
+    .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
+    .fold(0.0, f64::max);
+    let latitude_rad = site.latitude_deg.to_radians();
+    let longitude_rad = site.longitude_deg.to_radians();
+    let site_direction = DVec3::new(
+        latitude_rad.cos() * longitude_rad.cos(),
+        latitude_rad.sin(),
+        latitude_rad.cos() * longitude_rad.sin(),
+    );
+    let site_distance_rad = center.dot(site_direction).clamp(-1.0, 1.0).acos();
+    site_distance_rad <= patch_radius_rad + site.blend_radius_deg.to_radians()
 }
 
 /// Continuous surface appearance (albedo/roughness/metallic) blended from
@@ -1261,6 +1330,10 @@ impl TerrainSource for EarthTerrainSource {
 
     fn elevation_bounds_m(&self) -> ElevationBounds {
         self.source.elevation_bounds_m()
+    }
+
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        self.source.patch_geometric_error(patch)
     }
 
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
