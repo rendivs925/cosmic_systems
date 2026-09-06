@@ -166,6 +166,45 @@ system is genuinely planetary before Mars or other bodies are added.
 
 ## Phased Delivery
 
+## Current Progress
+
+The following terrain foundation is implemented and validated on `main`.
+
+- Catalog surface capability prevents terrain and collision from being attached
+  to stars, gas giants, and ice giants. Earth is the only currently configured
+  terrain-data authority; other solid bodies remain eligible but do not receive
+  invented terrain data.
+- `TerrainSource` remains the single height and collision authority. Cube-sphere
+  meshes, local textures, vegetation, cached geometry, and Bevy entities remain
+  disposable presentation data.
+- Terrain streaming uses viewport frustum and horizon rejection, source-derived
+  screen-space error, balanced cube-sphere leaves, bounded asynchronous work,
+  parent fallback coverage, replacement-group-first scheduling, and protected
+  LRU cache eviction.
+- Earth supports a validated ETOPO1 CSDEM source when its local dataset is
+  present, with deterministic procedural terrain retained only as the explicit
+  missing-file fallback. The dataset contract, manifest, provenance, datum, and
+  offline converter are documented in the repository.
+- The Earth DEM builds a bounded immutable per-face metadata pyramid through
+  level 8 (256 by 256 regions per 2048-sample face). Streaming consumes its
+  patch-local elevation ranges for conservative geometric error; deeper patches
+  inherit their nearest indexed ancestor. This is metadata over one resident
+  CSDEM raster, not yet an on-disk elevation tile-payload pyramid.
+- Macro geometry is streamed at every selected LOD. Local 128 by 128 material
+  maps plus merged vegetation and scatter are generated in worker tasks only
+  for level-12-or-finer patches, then applied as presentation-only detail over
+  global Earth imagery.
+- Focused terrain tests cover deterministic generation, cube-face and LOD
+  seams, fallback replacement, cache protection, source/collision agreement,
+  local-detail bounds, and DEM metadata. Formatting, checks, strict Clippy,
+  tests, and bounded normal/craft/rocket mode startups have passed.
+
+Remaining work is to measure real flight-camera streaming performance before
+tuning budgets, build an actual offline elevation payload pyramid if profiling
+justifies it, and add a reviewed Moon DEM with a validated lunar body-fixed
+frame and datum. No second terrain, collision, coordinate, or streaming path
+should be created for Moon.
+
 ### Phase 1: Generic Terrain Capability
 
 - Replace Earth-only terrain registration with catalog-driven solid-surface
