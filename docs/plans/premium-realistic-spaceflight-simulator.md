@@ -242,6 +242,13 @@ validated on `main`.
   ms. The broad high-altitude terrain facets are expected from the current
   fixed 33 by 33 coarse meshes and capped viewport leaf budget; do not tune
   that budget until a representative 70 km capture is available.
+- A later bounded 1x Falcon 9 X11 run used the RTX 5070 and reached the 110 km
+  fairing-separation event through the normal launch command. Bevy reported a
+  `0v0` window, and the flight-recorder export was not captured, so this is
+  reproducibility evidence only, not the required visible native-display
+  flight-camera acceptance run. Its rolling 600-frame sample near the end was
+  p50 96.1 ms, p95 102.4 ms, and p99 108.6 ms. No terrain budget or LOD change
+  is justified from this run.
 - Focused terrain and performance tests cover deterministic generation,
   cube-face and LOD seams, fallback replacement, cache protection,
   source/collision agreement, local-detail bounds, DEM metadata, reporting
