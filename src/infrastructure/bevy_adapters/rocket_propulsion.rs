@@ -304,8 +304,9 @@ pub fn propulsion_thrust(
                 mass_flow_kg_s,
                 sim_time.fixed_timestep(),
             ) / sim_time.fixed_timestep();
-            force_accum.0 +=
-                rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction;
+            force_accum.add_force_n(
+                rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction,
+            );
         }
         if let Some((boosters, _)) = propulsion.attached_boosters() {
             for booster_index in 0..boosters.count() {
@@ -325,10 +326,12 @@ pub fn propulsion_thrust(
                 let burn_fraction =
                     burn_duration_s(remaining, booster_mass_flow_kg_s, sim_time.fixed_timestep())
                         / sim_time.fixed_timestep();
-                force_accum.0 += rocket.dynamics.orientation
-                    * booster_thrust_body
-                    * retro.thrust_multiplier
-                    * burn_fraction;
+                force_accum.add_force_n(
+                    rocket.dynamics.orientation
+                        * booster_thrust_body
+                        * retro.thrust_multiplier
+                        * burn_fraction,
+                );
             }
         }
     }
@@ -420,15 +423,17 @@ pub fn propulsion_gimbal(
             else {
                 continue;
             };
-            torque_accum.0 += stage_gimbal_torque_body(
-                &active_core_stage.stage().engines,
-                stage_origin_in_stack_m,
-                rocket.dynamics.center_of_mass_m,
-                core_throttle,
-                conditions.ambient_pressure_pa,
-                propulsion.gimbal_pitch_rad as f64,
-                propulsion.gimbal_yaw_rad as f64,
-            ) * burn_fraction;
+            torque_accum.add_torque_nm(
+                stage_gimbal_torque_body(
+                    &active_core_stage.stage().engines,
+                    stage_origin_in_stack_m,
+                    rocket.dynamics.center_of_mass_m,
+                    core_throttle,
+                    conditions.ambient_pressure_pa,
+                    propulsion.gimbal_pitch_rad as f64,
+                    propulsion.gimbal_yaw_rad as f64,
+                ) * burn_fraction,
+            );
         }
         if let Some((boosters, _)) = propulsion.attached_boosters() {
             for booster_index in 0..boosters.count() {
@@ -448,18 +453,20 @@ pub fn propulsion_gimbal(
                     booster_mass_flow_kg_s,
                     sim_time.fixed_timestep(),
                 ) / sim_time.fixed_timestep();
-                torque_accum.0 += stage_gimbal_torque_body(
-                    &boosters.stage.engines,
-                    boosters
-                        .attachment_position_m(booster_index)
-                        .expect("booster index is bounded by its attachment inventory")
-                        .as_dvec3(),
-                    rocket.dynamics.center_of_mass_m,
-                    throttle,
-                    conditions.ambient_pressure_pa,
-                    propulsion.gimbal_pitch_rad as f64,
-                    propulsion.gimbal_yaw_rad as f64,
-                ) * burn_fraction;
+                torque_accum.add_torque_nm(
+                    stage_gimbal_torque_body(
+                        &boosters.stage.engines,
+                        boosters
+                            .attachment_position_m(booster_index)
+                            .expect("booster index is bounded by its attachment inventory")
+                            .as_dvec3(),
+                        rocket.dynamics.center_of_mass_m,
+                        throttle,
+                        conditions.ambient_pressure_pa,
+                        propulsion.gimbal_pitch_rad as f64,
+                        propulsion.gimbal_yaw_rad as f64,
+                    ) * burn_fraction,
+                );
             }
         }
     }

@@ -25,7 +25,7 @@ pub fn accumulate_forces(
     )>,
 ) {
     for (rocket, gravity, mut force_accum) in rocket_query.iter_mut() {
-        force_accum.0 += gravity.value * rocket.dynamics.mass_kg;
+        force_accum.add_force_n(gravity.value * rocket.dynamics.mass_kg);
     }
 }
 
@@ -48,15 +48,15 @@ pub fn integrate_6dof(
     for (mut rocket, gravity, specific_force, mut force_accum, mut torque_accum) in
         rocket_query.iter_mut()
     {
+        let net_force_n = force_accum.take_force_n();
+        let net_torque_nm = torque_accum.take_torque_nm();
         if let Some(mut specific_force) = specific_force {
             let gravity_mps2 = gravity.map_or(DVec3::ZERO, |gravity| gravity.value);
             specific_force.value =
-                force_accum.0 / rocket.dynamics.mass_kg.max(f64::MIN_POSITIVE) - gravity_mps2;
+                net_force_n / rocket.dynamics.mass_kg.max(f64::MIN_POSITIVE) - gravity_mps2;
         }
-        rocket.dynamics.integrate_translation(force_accum.0, dt);
-        rocket.dynamics.integrate_rotation(torque_accum.0, dt);
-        force_accum.0 = DVec3::ZERO;
-        torque_accum.0 = DVec3::ZERO;
+        rocket.dynamics.integrate_translation(net_force_n, dt);
+        rocket.dynamics.integrate_rotation(net_torque_nm, dt);
     }
 }
 
@@ -102,7 +102,7 @@ pub fn aerodynamic_forces(
             + lift_force_body(q, cl, reference_area_m2, body_velocity)
             + side_force_body(q, cy, reference_area_m2, body_velocity);
         aero.force_body = force_body;
-        force_accum.0 += rocket.dynamics.orientation * force_body;
+        force_accum.add_force_n(rocket.dynamics.orientation * force_body);
     }
 }
 
@@ -116,11 +116,11 @@ pub fn aerodynamic_torque(
 ) {
     for (rocket, aero, mut torque_accum) in rocket_query.iter_mut() {
         if aero.force_body.length_squared() > 0.0 {
-            torque_accum.0 += aerodynamic_torque_body(
+            torque_accum.add_torque_nm(aerodynamic_torque_body(
                 aero.force_body,
                 aero.center_of_pressure_body,
                 rocket.dynamics.center_of_mass_m,
-            );
+            ));
         }
     }
 }
@@ -157,8 +157,8 @@ mod tests {
                 },
                 SpecificForceAcceleration::default(),
                 // 1,000 N of thrust plus the 980.665 N gravitational force.
-                ForceAccumulator(DVec3::new(1_000.0, -980.665, 0.0)),
-                TorqueAccumulator::default(),
+                ForceAccumulator::from_force_n(DVec3::new(1_000.0, -980.665, 0.0)),
+                TorqueAccumulator::from_torque_nm(DVec3::new(0.0, 10.0, 0.0)),
             ))
             .id();
 
@@ -169,5 +169,19 @@ mod tests {
             .get::<SpecificForceAcceleration>(entity)
             .unwrap();
         assert_eq!(specific_force.value, DVec3::new(10.0, 0.0, 0.0));
+        assert_eq!(
+            app.world()
+                .get::<ForceAccumulator>(entity)
+                .unwrap()
+                .force_n(),
+            DVec3::ZERO
+        );
+        assert_eq!(
+            app.world()
+                .get::<TorqueAccumulator>(entity)
+                .unwrap()
+                .torque_nm(),
+            DVec3::ZERO
+        );
     }
 }

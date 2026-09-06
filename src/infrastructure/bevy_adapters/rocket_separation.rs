@@ -145,12 +145,12 @@ pub fn spent_stage_aerodynamics(
             continue;
         }
         let reference_area_m2 = std::f64::consts::PI * (geometry.radius_m as f64).powi(2);
-        force_accum.0 += drag_force_body(
+        force_accum.add_force_n(drag_force_body(
             conditions.dynamic_pressure_pa,
             SPENT_STAGE_DRAG_COEFFICIENT,
             reference_area_m2,
             velocity,
-        );
+        ));
     }
 }
 
@@ -320,7 +320,10 @@ mod tests {
         // (like thrust/aero/parachute writers), then accumulation, then
         // integration.
         fn write_test_force(mut query: Query<&mut ForceAccumulator>) {
-            query.single_mut().unwrap().0 = DVec3::new(0.0, 20_000.0, 0.0);
+            query
+                .single_mut()
+                .unwrap()
+                .add_force_n(DVec3::new(0.0, 20_000.0, 0.0));
         }
         // `.chain()` mirrors the production set ordering: writers before
         // accumulation before integration.
@@ -343,7 +346,7 @@ mod tests {
             RocketPhysicsState { dynamics },
             // Zero gravity isolates the external-force path under test.
             GravityAcceleration::default(),
-            ForceAccumulator(DVec3::new(0.0, 20_000.0, 0.0)),
+            ForceAccumulator::default(),
             TorqueAccumulator::default(),
         ));
 
@@ -366,7 +369,7 @@ mod tests {
 
         // Accumulators are reset after integration (no double-application).
         let mut accum = app.world_mut().query::<&ForceAccumulator>();
-        let remaining = accum.single(app.world()).unwrap().0;
+        let remaining = accum.single(app.world()).unwrap().force_n();
         assert!(remaining.length_squared() < 1e-12);
     }
 

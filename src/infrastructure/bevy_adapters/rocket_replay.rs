@@ -678,8 +678,8 @@ mod tests {
                 ..default()
             },
             PayloadFairing { dry_mass_kg: 6.0 },
-            ForceAccumulator(DVec3::new(10.0, 11.0, 12.0)),
-            TorqueAccumulator(DVec3::new(13.0, 14.0, 15.0)),
+            ForceAccumulator::from_force_n(DVec3::new(10.0, 11.0, 12.0)),
+            TorqueAccumulator::from_torque_nm(DVec3::new(13.0, 14.0, 15.0)),
             RocketRenderState::new(dynamics),
         ));
         (app, entity)
@@ -719,7 +719,7 @@ mod tests {
                 GravityAcceleration {
                     value: DVec3::new(0.0, -9.0, 0.0),
                 },
-                ForceAccumulator(DVec3::new(1.0, 2.0, 3.0)),
+                ForceAccumulator::from_force_n(DVec3::new(1.0, 2.0, 3.0)),
             ))
             .id()
     }
@@ -788,7 +788,7 @@ mod tests {
                 .0
                 .altitude_m = 0.0;
             stage.get_mut::<GravityAcceleration>().unwrap().value = DVec3::ZERO;
-            stage.get_mut::<ForceAccumulator>().unwrap().0 = DVec3::ZERO;
+            stage.get_mut::<ForceAccumulator>().unwrap().take_force_n();
         }
         app.world_mut()
             .entity_mut(drone_ship)
@@ -829,7 +829,7 @@ mod tests {
             DVec3::new(0.0, -9.0, 0.0)
         );
         assert_eq!(
-            stage.get::<ForceAccumulator>().unwrap().0,
+            stage.get::<ForceAccumulator>().unwrap().force_n(),
             DVec3::new(1.0, 2.0, 3.0)
         );
         assert_eq!(
@@ -938,8 +938,11 @@ mod tests {
                 .get_mut::<LandingScorecard>()
                 .unwrap()
                 .touchdown_vertical_speed_mps = 0.0;
-            rocket.get_mut::<ForceAccumulator>().unwrap().0 = DVec3::ZERO;
-            rocket.get_mut::<TorqueAccumulator>().unwrap().0 = DVec3::ZERO;
+            rocket.get_mut::<ForceAccumulator>().unwrap().take_force_n();
+            rocket
+                .get_mut::<TorqueAccumulator>()
+                .unwrap()
+                .take_torque_nm();
             rocket.remove::<PayloadFairing>();
         }
         app.world_mut()
@@ -1015,11 +1018,11 @@ mod tests {
             1.0
         );
         assert_eq!(
-            rocket.get::<ForceAccumulator>().unwrap().0,
+            rocket.get::<ForceAccumulator>().unwrap().force_n(),
             DVec3::new(10.0, 11.0, 12.0)
         );
         assert_eq!(
-            rocket.get::<TorqueAccumulator>().unwrap().0,
+            rocket.get::<TorqueAccumulator>().unwrap().torque_nm(),
             DVec3::new(13.0, 14.0, 15.0)
         );
         assert_eq!(rocket.get::<PayloadFairing>().unwrap().dry_mass_kg, 6.0);

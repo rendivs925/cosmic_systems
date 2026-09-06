@@ -449,12 +449,56 @@ pub struct RocketAutopilot {
 /// Net force accumulator (world/planet-inertial frame), cleared each frame by integrate_6dof.
 /// Written by: gravity, aero, propulsion, parachutes, retro-propulsion.
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct ForceAccumulator(pub DVec3);
+pub struct ForceAccumulator(DVec3);
+
+impl ForceAccumulator {
+    #[cfg(test)]
+    pub(crate) fn from_force_n(force_n: DVec3) -> Self {
+        Self(force_n)
+    }
+
+    pub(crate) fn add_force_n(&mut self, force_n: DVec3) {
+        self.0 += force_n;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_n(&self) -> DVec3 {
+        self.0
+    }
+
+    /// Consumes the completed fixed-tick force budget. Only integration calls
+    /// this, ensuring no force leaks into the following simulation step.
+    pub(crate) fn take_force_n(&mut self) -> DVec3 {
+        std::mem::take(&mut self.0)
+    }
+}
 
 /// Net torque accumulator (body frame), cleared each frame by integrate_6dof.
 /// Written by: aero torque, gimbal, RCS, gimbal actuation.
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct TorqueAccumulator(pub DVec3);
+pub struct TorqueAccumulator(DVec3);
+
+impl TorqueAccumulator {
+    #[cfg(test)]
+    pub(crate) fn from_torque_nm(torque_nm: DVec3) -> Self {
+        Self(torque_nm)
+    }
+
+    pub(crate) fn add_torque_nm(&mut self, torque_nm: DVec3) {
+        self.0 += torque_nm;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn torque_nm(&self) -> DVec3 {
+        self.0
+    }
+
+    /// Consumes the completed fixed-tick torque budget. Only integration calls
+    /// this, ensuring no torque leaks into the following simulation step.
+    pub(crate) fn take_torque_nm(&mut self) -> DVec3 {
+        std::mem::take(&mut self.0)
+    }
+}
 
 /// Binds rocket to its dominant gravity body.
 #[derive(Component, Debug, Clone)]

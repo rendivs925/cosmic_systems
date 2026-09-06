@@ -158,7 +158,14 @@ mod engine_lifecycle_pipeline_tests {
         let engine = &after_start.vehicle.stages[0].engines[0];
         assert_eq!(engine.state, EngineState::Running);
         assert_eq!(engine.ignition_count, 1);
-        assert!(app.world().get::<ForceAccumulator>(entity).unwrap().0.y > 0.0);
+        assert!(
+            app.world()
+                .get::<ForceAccumulator>(entity)
+                .unwrap()
+                .force_n()
+                .y
+                > 0.0
+        );
 
         {
             let mut entity_mut = app.world_mut().entity_mut(entity);
@@ -176,7 +183,10 @@ mod engine_lifecycle_pipeline_tests {
             propellant_after_start
         );
         assert_eq!(
-            app.world().get::<ForceAccumulator>(entity).unwrap().0,
+            app.world()
+                .get::<ForceAccumulator>(entity)
+                .unwrap()
+                .force_n(),
             DVec3::ZERO
         );
 
@@ -210,7 +220,7 @@ mod engine_lifecycle_pipeline_tests {
             .entity_mut(entity)
             .get_mut::<ForceAccumulator>()
             .unwrap()
-            .0 = DVec3::ZERO;
+            .take_force_n();
         let propellant_before_denied_restart = app
             .world()
             .get::<RocketPropulsion>(entity)
@@ -227,7 +237,10 @@ mod engine_lifecycle_pipeline_tests {
             propellant_before_denied_restart
         );
         assert_eq!(
-            app.world().get::<ForceAccumulator>(entity).unwrap().0,
+            app.world()
+                .get::<ForceAccumulator>(entity)
+                .unwrap()
+                .force_n(),
             DVec3::ZERO
         );
     }
@@ -249,7 +262,10 @@ mod engine_lifecycle_pipeline_tests {
             EngineState::Depleted
         );
         assert_eq!(
-            app.world().get::<ForceAccumulator>(entity).unwrap().0,
+            app.world()
+                .get::<ForceAccumulator>(entity)
+                .unwrap()
+                .force_n(),
             DVec3::ZERO
         );
     }
@@ -513,7 +529,7 @@ mod ground_contact_tests {
                 if let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) {
                     let (body_thrust, _) =
                         stage_thrust_body(&stage.engines, propulsion.throttle, 0.0);
-                    force.0 += rocket.dynamics.orientation * body_thrust;
+                    force.add_force_n(rocket.dynamics.orientation * body_thrust);
                 }
             }
         }
@@ -1704,7 +1720,7 @@ mod ascent_pipeline_tests {
                 if let Some(stage) = propulsion.vehicle.stages.get(propulsion.active_stage) {
                     let (body_thrust, _) =
                         stage_thrust_body(&stage.engines, propulsion.throttle, 0.0);
-                    force.0 += rocket.dynamics.orientation * body_thrust;
+                    force.add_force_n(rocket.dynamics.orientation * body_thrust);
                 }
             }
         }
@@ -2516,7 +2532,7 @@ mod stage_coordinate_pipeline_tests {
             .query::<&TorqueAccumulator>()
             .single(app.world())
             .unwrap()
-            .0;
+            .torque_nm();
         let expected = gimbal_torque_body(
             engine.position_m.as_dvec3(),
             center_of_mass_m,

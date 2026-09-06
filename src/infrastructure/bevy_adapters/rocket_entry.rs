@@ -228,7 +228,7 @@ pub fn compute_parachute_forces(
         // Apply combined canopy drag opposite the velocity.
         let drag_magnitude = parachute.deployment.drag_force_n(rho, speed);
         if drag_magnitude > 0.0 {
-            force_accum.0 += (-velocity / speed) * drag_magnitude;
+            force_accum.add_force_n((-velocity / speed) * drag_magnitude);
         }
     }
 }

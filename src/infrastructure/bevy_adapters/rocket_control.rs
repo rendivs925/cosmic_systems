@@ -155,7 +155,10 @@ pub fn actuation_system(
             commands.gimbal_yaw_cmd_rad,
             limits.max_gimbal_deflection_rad,
         );
-        torque_accum.0 += clamp_rcs_torque(commands.rcs_torque_cmd_body, limits.max_rcs_torque_nm);
+        torque_accum.add_torque_nm(clamp_rcs_torque(
+            commands.rcs_torque_cmd_body,
+            limits.max_rcs_torque_nm,
+        ));
     }
 }
 
