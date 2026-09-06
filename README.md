@@ -9,13 +9,30 @@ landing, and exploration.
 ## Status
 
 The project is under active development. It provides solar-system, craft, and
-rocket-flight modes built on a shared Rust and Bevy application.
+rocket-flight modes built on shared Rust domain logic and Bevy application
+adapters. Celestial state uses the repository's provisioned, offline DE440
+scientific-data manifest.
 
 ## Requirements
 
 - A current Rust toolchain with Cargo.
-- The repository assets and scientific data files.
+- The repository assets and provisioned DE440 kernel files.
 - A native desktop environment with a working graphics driver.
+
+## Scientific Data
+
+Provision the pinned offline DE440 kernel set before running the native
+application:
+
+```bash
+scripts/provision_de440_kernels.sh
+```
+
+The manifest validates the downloaded files' sizes and SHA-256 checksums at
+startup. The simulator does not use a network or analytic fallback when the
+required scientific data is unavailable. See
+[Scientific Solar-System Fidelity](docs/scientific_solar_system_fidelity.md)
+for coverage, frame, time, and validation limits.
 
 ## Run
 
@@ -47,9 +64,9 @@ The equivalent Make targets are `make run`, `make run-craft`, and
 
 ## Project Structure
 
-- `src/domain/`: simulation rules and calculations.
-- `src/application/`: startup and configuration.
-- `src/infrastructure/`: Bevy ECS integration, assets, streaming, and rendering.
+- `src/domain/`: pure simulation rules, f64/SI calculations, and frame conversions.
+- `src/application/`: startup, configuration, and mode/plugin composition.
+- `src/infrastructure/`: Bevy ECS adapters, assets, streaming, and rendering.
 - `src/presentation/`: user interface and visual presentation.
 - `assets/`: vehicle configuration, textures, and scientific data configuration.
 
@@ -60,7 +77,7 @@ Run these checks before submitting changes:
 ```bash
 cargo fmt --check
 cargo check --features dem
-cargo clippy --features dem
+cargo clippy --features dem -- -D warnings
 cargo test --features dem
 cargo build --release --features dem
 ```
