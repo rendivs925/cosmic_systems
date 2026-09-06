@@ -15,6 +15,10 @@ simulation; it does not define it.
 - `rocket_presentation.rs`: fixed-state capture and render interpolation.
 - `rocket_camera_systems.rs` and camera adapters: flight camera behaviour.
 - `rocket_environment.rs`, material/texture factories, and presentation UI modules.
+- `src/infrastructure/bevy_adapters/physical_scale.rs`: authoritative
+  meter/display conversion resource for presentation.
+- `src/infrastructure/bevy_adapters/reference_frames.rs`: solar-map f32 display
+  conversion; physical f64 frame conversion remains in the domain service.
 - `EphemerisSnapshot` is the shared DE440/PCK-derived source for celestial
   transforms, Sun direction, orbit paths, and camera targets.
 
@@ -33,8 +37,8 @@ authoritative f64 simulation state
 
 - `Transform`, `GlobalTransform`, mesh vertices, camera pose, and shaders are
   never physics/collision/terrain authority.
-- Convert large positions through `PhysicalScale` and `RenderOrigin`; do not put
-  huge absolute coordinates into `f32` transforms.
+- Convert large positions through the infrastructure `PhysicalScale` and
+  `RenderOrigin`; do not put huge absolute coordinates into `f32` transforms.
 - Render interpolation may smooth fixed snapshots but must not write back to
   authoritative rocket/celestial state.
 - A rocket camera follows physical orientation; it does not steer the vehicle.

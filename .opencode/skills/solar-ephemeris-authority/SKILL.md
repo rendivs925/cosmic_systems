@@ -22,11 +22,12 @@ frame:  ICRF/J2000 barycentric unless an explicit derived frame is requested
 data:   versioned local SPK + PCK + required time kernels
 ```
 
-The kernel-backed service owns state evaluation. `reference_frames.rs` owns
-conversion to heliocentric, planet-centered, body-fixed, local tangent, and
-camera-relative frames. Rendering, gravity, telemetry, orbit ribbons, and
-camera systems consume evaluated state; they never load kernels or reconstruct
-orbits independently.
+The kernel-backed service owns state evaluation.
+`src/domain/services/reference_frames.rs` owns physical conversion to
+heliocentric, planet-centered, body-fixed, and local-tangent frames. The Bevy
+reference-frame adapter owns only solar-map display conversion. Rendering,
+gravity, telemetry, orbit ribbons, and camera systems consume evaluated state;
+they never load kernels or reconstruct orbits independently.
 
 `src/infrastructure/bevy_adapters/ephemeris.rs` owns the resource boundary:
 

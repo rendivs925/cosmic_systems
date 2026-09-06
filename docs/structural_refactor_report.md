@@ -28,6 +28,10 @@ or physics authority.
   `src/infrastructure/bevy_adapters/rendering/`.
 - Moved the presentation-owned education state to
   `src/presentation/education_state.rs`.
+- Completed the domain/Bevy dependency boundary in Phase 18. Pure numerical
+  types now enter domain code through `src/domain/math.rs`, while Bevy resources,
+  schedule/input adapters, display scaling, solar-map conversion, and body
+  colors live under `src/infrastructure/bevy_adapters/`.
 
 ### Removed Legacy Facades
 
@@ -65,7 +69,8 @@ cargo test --features dem
 cargo build --release --features dem
 ```
 
-`cargo test --features dem` completed with 615 passing tests.
+The latest Phase 18 `cargo test --features dem` completed with 610 tests, plus
+binary and doctests.
 
 Each application mode was started with a 15-second bound:
 
@@ -83,9 +88,9 @@ the unavailable Earth-orientation dataset, X11 settings, and gamepad mapping.
 
 ## Residual Risks And Follow-Up
 
-- Some domain entities and value objects still use Bevy types. They were not
-  moved because that would be a separate dependency-boundary refactor rather
-  than a mechanical ownership migration.
-- The refactor is currently uncommitted.
+- No direct `bevy::` reference remains under `src/domain`; domain numerical
+  representations use the direct compatible `glam` dependency instead.
+- The structural refactor is committed at `6b8b636`; its dependency-boundary
+  follow-up is committed at `04a0d5a`.
 - Restart OpenCode before relying on the updated project skills; skills are
   loaded when OpenCode starts.

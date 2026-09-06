@@ -83,7 +83,8 @@ produce equivalent output.
 
 ## Coordinates And Precision
 
-Use the project's existing reference-frame and physical-scale infrastructure.
+Use `src/domain/services/reference_frames.rs` for physical frame conversion and
+the existing Bevy adapters for display conversion and scale.
 
 - Use `DVec3`/`f64` for planetary positions, directions, radii, terrain height,
   and simulation-facing calculations.
@@ -94,8 +95,8 @@ Use the project's existing reference-frame and physical-scale infrastructure.
 - Compute planetary surface position as `direction * (radius_m + height_m)`.
 - Convert to camera-relative Bevy `Vec3` only at the presentation boundary.
 - Never use `Transform` or rendered mesh coordinates as simulation truth.
-- Reuse `reference_frames.rs` and `RenderOrigin`; do not create a second
-  floating-origin system.
+- Reuse the domain reference-frame service, `PhysicalScale`, and `RenderOrigin`;
+  do not create a second floating-origin system.
 
 ## Cube-Sphere And Patches
 

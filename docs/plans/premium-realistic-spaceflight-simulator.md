@@ -23,8 +23,8 @@ rocket, and presentation applications.
 
 - Use authoritative solar-system positions, rotations, radii, gravity, and
   simulation time.
-- Retain `f64`/`DVec3` authoritative simulation state from solar-system scale
-  down to the surface-contact boundary.
+- Retain `f64`/`DVec3` authoritative simulation state, represented through the
+  pure `domain::math` facade, from solar-system scale down to surface contact.
 - Render through the existing camera-relative presentation path, converting to
   `f32` only after the render origin has been applied.
 - Support physically authoritative six-degree-of-freedom rockets: mass,
@@ -41,7 +41,8 @@ rocket, and presentation applications.
 Every physical quantity has one owner.
 
 - The ephemeris service owns celestial-body state at a simulation epoch.
-- `reference_frames.rs` owns frame conversions.
+- `src/domain/services/reference_frames.rs` owns physical frame conversions;
+  its Bevy adapter owns only display-space conversion.
 - Rocket components and fixed-step systems own rocket physical state.
 - A body's `TerrainSource` owns its terrain height, normals, and terrain-facing
   material inputs.

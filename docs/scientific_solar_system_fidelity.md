@@ -36,6 +36,9 @@ authority.
 - Local ENU and camera-relative coordinates are derived presentation or local
   frames. f32/render transforms, scaled solar-map positions, orbit ribbons, and
   artistic lighting are never physical state authorities.
+- Pure physical frame conversion is in `src/domain/services/reference_frames.rs`.
+  The Bevy/display boundary, including `PhysicalScale` and solar-map f32
+  conversion, is in `src/infrastructure/bevy_adapters/`.
 - `SimulationTime` advances the shared epoch after completed fixed ticks. UTC,
   TAI, TT, TDB, and optional UT1 are distinct representations; UTC is never
   silently used as UT1.

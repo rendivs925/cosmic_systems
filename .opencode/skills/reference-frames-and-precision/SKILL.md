@@ -10,20 +10,20 @@ between simulation and rendering precision.
 
 ## Single Authority
 
-`src/domain/services/reference_frames.rs` is the one authoritative conversion
-module. The solar ephemeris owns body states; this module owns the conversions
-between those states and local flight/presentation frames. Read both before
-writing coordinate maths. Reuse:
+`src/domain/services/reference_frames.rs` is the one authoritative physical
+conversion module. The solar ephemeris owns body states; this module owns the
+f64/SI conversions between those states and local flight frames. Read both
+before writing coordinate maths. Reuse:
 
 - geodetic <-> planet body-fixed conversions;
 - body-fixed <-> planet-centered inertial rotations;
 - local ENU tangent frames;
-- planet-centered inertial <-> solar-inertial conversions;
-- camera-relative/render conversion helpers.
+- planet-centered inertial <-> solar-inertial conversions.
 
-`PhysicalScale`, `RenderOrigin`, and rocket camera/planet adapters own the
-simulation-to-presentation boundary. Do not create parallel coordinate helpers
-or a second floating-origin implementation.
+`src/infrastructure/bevy_adapters/reference_frames.rs` owns solar-map f32
+display conversion. `PhysicalScale`, `RenderOrigin`, and rocket camera/planet
+adapters own the wider simulation-to-presentation boundary. Do not create
+parallel coordinate helpers or a second floating-origin implementation.
 
 ## Defined Frames
 
@@ -63,7 +63,9 @@ render:                     camera-relative Bevy Vec3/Transform only
 1. Identify source frame, destination frame, units, and simulation epoch.
 2. For ephemeris inputs, record the NAIF body IDs, kernel frame, center, and
    TDB epoch before converting.
-3. Use an existing converter or extend `reference_frames.rs` with a tested pure function.
+3. Use the existing domain converter for physical frames. Extend it with a
+   tested pure function only for a new physical conversion; display conversion
+   belongs in the existing infrastructure adapter.
 4. Convert position and velocity separately where rotating frames are involved.
 5. Apply body rotation/surface velocity consistently for launch, atmosphere, and contact.
 6. Convert to render coordinates only after authoritative physics is complete.
@@ -89,7 +91,9 @@ use the existing mapping between them.
 
 ## Tests
 
-Add pure regression tests in `reference_frames.rs` for every new conversion:
+Add pure regression tests in `src/domain/services/reference_frames.rs` for
+every new physical conversion. Test Bevy/display conversion at its
+infrastructure boundary:
 
 - forward/backward round trip within tolerance;
 - expected axis direction and rotation at a known epoch;

@@ -4,12 +4,12 @@ Date: 2026-09-06
 
 ## Checkpoint
 
-Phase 17 is frozen at `6b8b636 Reorganize simulator module ownership` on
-`main`. The worktree was clean before this audit. The checkpoint passed the
-DEM-enabled test suite and bounded startup of normal, craft, and rocket modes.
+Phase 17 is frozen at `6b8b636 Reorganize simulator module ownership`. Phase
+18 completed at `04a0d5a Separate domain from Bevy adapters`. The worktree was
+clean before this audit and before the implementation checkpoint.
 
-This document is an audit and migration plan only. It does not change domain
-behavior, numerical models, RON schemas, or Bevy scheduling.
+The migration did not change domain behavior, numerical models, RON schemas,
+or Bevy scheduling.
 
 ## Audit Method
 
@@ -23,9 +23,14 @@ behavior, numerical models, RON schemas, or Bevy scheduling.
 
 The audit found 29 domain files with direct Bevy imports. `src/domain/events/`
 does not exist: rocket events were already moved to
-`src/infrastructure/bevy_adapters/rocket/events.rs` in Phase 17.
+`src/infrastructure/bevy_adapters/rocket/events.rs` in Phase 17. The completed
+migration removed every direct `bevy::` reference beneath `src/domain`.
 
 ## Classification
+
+This is the pre-implementation classification retained as the rationale for
+the completed migration. The current ownership is recorded in
+"Implemented Boundary" below.
 
 ### Domain Math: REPLACE
 
@@ -87,63 +92,57 @@ No direct Bevy dependency in the audited domain has a domain-independent reason
 to remain. This does not require replacing `glam` with custom mathematics or
 moving pure physics out of the domain.
 
-## Current Boundary Violations
+## Implemented Boundary
 
-- `RocketDynamicsState::render_transform` creates an f32 `Transform` inside the
-  authoritative 6-DOF domain module.
-- `LaunchSiteCoordinates` is a domain value object with an ECS `Component`
-  derive and a duplicate low-precision spherical coordinate conversion.
-- `PhysicalScale` models display units and is registered as a Bevy resource
-  despite living in `domain/value_objects`.
-- `SolarSystemParameters` combines physical values, time-warp state, and
-  presentation controls in one Bevy resource.
-- `SimulationTime` contains both the pure clock and Bevy input/schedule runner
-  systems.
-- Planet physical catalog entries own rendering colors.
+- `src/domain/math.rs` re-exports the established `glam` representations used
+  by domain calculations. `src/domain/units.rs` owns the IAU AU-in-meters
+  constant. No custom vector implementation or coordinate authority was added.
+- Pure f64/SI frame conversions remain in
+  `src/domain/services/reference_frames.rs`. Solar-map f32/display conversion
+  moved to `src/infrastructure/bevy_adapters/reference_frames.rs`.
+- Bevy `Resource` implementations for `SimulationTime` and
+  `SolarSystemParameters`, plus fixed-schedule, input, and logging systems,
+  moved to `src/infrastructure/bevy_adapters/simulation_time.rs` and
+  `src/infrastructure/bevy_adapters/solar_system_parameters.rs`.
+- `PhysicalScale` is now the presentation resource in
+  `src/infrastructure/bevy_adapters/physical_scale.rs`. It is the exclusive
+  meter/display conversion boundary.
+- Celestial colors moved to the presentation-owned
+  `src/infrastructure/bevy_adapters/planet_appearance.rs` lookup. The physical
+  planet catalog contains no Bevy color values.
+- Rocket transforms and orbital mesh conversion are infrastructure rendering
+  responsibilities. Domain state remains the f64 physical authority.
 
-## Migration Order
+`SolarSystemParameters` remains one pure configuration value that includes
+physical, time, and visualization settings. Separating that semantic grouping
+is deliberately deferred: Phase 18 removed its ECS dependency without changing
+the established configuration schema or behavior.
 
-1. Add the direct `glam` dependency and a minimal pure `domain::math` facade.
-   Replace only `bevy::math` imports in pure calculations. Keep all concrete
-   types and numerical algorithms unchanged.
-2. Move render conversions out of `rocket_dynamics`, `physics_orbital`, and
-   `reference_frames`. Update presentation and mesh callers to own the final
-   `Vec3` and `Transform` conversion.
-3. Remove ECS derives from domain values. Add infrastructure adapters for
-   launch-site storage and simulation-clock resource access.
-4. Split presentation scale/orbit visibility from physical and time state.
-   Move `PhysicalScale` and the presentation portion of
-   `SolarSystemParameters` out of `domain/value_objects`.
-5. Separate planetary appearance data from the physical catalog, then update
-   the two rendering consumers through one presentation-owned lookup.
-6. Rebuild the project knowledge graph after current-path changes are complete.
-
-Each step is independently reviewable and must preserve the prior step's
-validated behavior. Do not combine a numerical precision migration, new units
-types, color redesign, or scheduler redesign with this boundary migration.
-
-## Required Regression Coverage
+## Regression Coverage And Validation
 
 - Preserve the existing fixed-pipeline and determinism baseline tests.
 - Add pure domain tests for every moved vector/rotation boundary and for launch
   site coordinate conversion through the authoritative reference-frame API.
 - Keep render-boundary tests for f64-to-f32 rebasing, rocket interpolation, and
   orbital mesh generation after adapters move.
-- Verify no `bevy::` import remains below `src/domain` after the final slice.
-- Run `cargo fmt --check`, `cargo check --features dem`,
+- A source search verifies no `bevy::` import remains below `src/domain`.
+- `cargo fmt --check`, `cargo check --features dem`,
   `cargo clippy --features dem -- -D warnings`, `cargo test --features dem`,
-  `cargo build --release --features dem`, and bounded normal, craft, and rocket
-  startups after the implementation phase.
+  and `cargo build --release --features dem` passed. The test suite completed
+  with 610 tests, plus binary and doctests.
+- Bounded normal, craft, and rocket startup checks passed. They retain the
+  existing non-fatal external-kernel metadata, unavailable Earth-orientation,
+  X11, and gamepad warnings.
 
-## Risks
+## Residual Risks
 
-- Direct `glam` and Bevy math must resolve to the same compatible version; a
-  duplicate major version would make boundary conversions explicit and increase
-  migration risk.
-- Moving `SimulationTime` must preserve its bounded fixed-runner ordering and
-  the invariant that simulation time advances only after completed fixed ticks.
-- Moving planet colors must retain existing visible output without creating a
-  second body catalog.
-- Replacing launch-site conversion must preserve frame conventions, ellipsoid
-  handling, and launch-pad placement. `reference_frames.rs` remains the single
-  conversion authority.
+- Direct `glam` must remain compatible with Bevy's math version. The migration
+  uses `glam` 0.30.10, matching Bevy 0.17.3's math layer.
+- The `SimulationTime` adapter must continue to preserve bounded fixed-runner
+  ordering and advance simulation time only after completed fixed ticks.
+- `SolarSystemParameters` has a deliberately retained semantic mix of physical,
+  time, and visualization settings. Split it only with a concrete schema or
+  ownership requirement.
+- `src/domain/services/reference_frames.rs` remains the sole authority for
+  physical frame conversion; new display conversion belongs in the existing
+  infrastructure adapter.
