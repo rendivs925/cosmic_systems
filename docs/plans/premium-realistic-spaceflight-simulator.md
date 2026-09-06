@@ -194,16 +194,38 @@ The following terrain foundation is implemented and validated on `main`.
   maps plus merged vegetation and scatter are generated in worker tasks only
   for level-12-or-finer patches, then applied as presentation-only detail over
   global Earth imagery.
+- Cadence-limited terrain metrics now report requested, target, generated,
+  published, blocked-replacement, upload-backlog, in-flight-age, cancellation,
+  eviction, and per-LOD distribution data. This extends the existing streaming
+  owner rather than adding a competing profiler.
+- A bounded release rocket prelaunch/ascent capture generated 353 patches in
+  roughly 19 seconds, used 67.8 MiB of the 128 MiB terrain budget, retained 21
+  pending render uploads, completed two worker bakes in roughly 3.7-4.2 ms, and
+  performed no cache eviction. This is not evidence for an on-disk elevation
+  payload pyramid; the existing CSDEM plus metadata pyramid remains appropriate
+  until a representative flight-camera profile disagrees. The next measured
+  tuning decision is upload pacing rather than terrain payload layout.
+- Shared `PerformanceStats` now retains a rolling 600-frame sample and reports
+  frame-time p50/p95/p99 at five-second intervals only when
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`. This extends the existing performance
+  authority without adding a profiling path to ordinary runs.
+- A 60-second release rocket ascent capture with that opt-in metric reached 537
+  samples at p50 101.8 ms, p95 114.4 ms, and p99 187.3 ms. The environment
+  created a `0x0` X11 window, so this is a CI-style frame-pacing baseline rather
+  than desktop visual-performance evidence. It does not justify terrain layout
+  or upload-budget changes; repeat this scenario on a real display before
+  tuning upload pacing.
 - Focused terrain tests cover deterministic generation, cube-face and LOD
   seams, fallback replacement, cache protection, source/collision agreement,
   local-detail bounds, and DEM metadata. Formatting, checks, strict Clippy,
   tests, and bounded normal/craft/rocket mode startups have passed.
 
-Remaining work is to measure real flight-camera streaming performance before
-tuning budgets, build an actual offline elevation payload pyramid if profiling
-justifies it, and add a reviewed Moon DEM with a validated lunar body-fixed
-frame and datum. No second terrain, collision, coordinate, or streaming path
-should be created for Moon.
+Remaining work is to capture a driven 70 km flight-camera scenario before
+tuning budgets, build an actual offline elevation payload pyramid only if that
+profile justifies it, and add a reviewed Moon DEM with a validated lunar
+body-fixed frame and datum. Moon is solid-surface eligible but has no terrain
+authority, manifest, local dataset, or terrain-frame validation yet. No second
+terrain, collision, coordinate, or streaming path should be created for Moon.
 
 ### Phase 1: Generic Terrain Capability
 

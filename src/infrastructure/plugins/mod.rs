@@ -66,8 +66,8 @@ use crate::infrastructure::bevy_adapters::orbit_systems::{
     update_planet_reflections,
 };
 use crate::infrastructure::bevy_adapters::performance_systems::{
-    handle_video_recording, request_screenshot_input, take_pending_screenshot,
-    toggle_video_recording, update_performance_stats,
+    handle_video_recording, log_performance_metrics, request_screenshot_input,
+    take_pending_screenshot, toggle_video_recording, update_performance_stats,
 };
 use crate::infrastructure::bevy_adapters::planet_systems::{
     preserve_sun_disc_at_overview_distances, rebase_solar_presentation, update_orbit_positions,
@@ -269,7 +269,10 @@ impl Plugin for SharedSimulationPlugin {
         app.add_systems(Update, apply_pending_material_textures);
 
         // Performance metrics feed the shared UI in every simulation mode.
-        app.add_systems(Update, update_performance_stats);
+        app.add_systems(
+            Update,
+            (update_performance_stats, log_performance_metrics).chain(),
+        );
 
         // Screenshot and recording
         app.add_systems(
