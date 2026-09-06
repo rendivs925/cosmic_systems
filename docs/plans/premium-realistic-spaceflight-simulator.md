@@ -236,12 +236,9 @@ validated on `main`.
   537 samples at p50 101.8 ms, p95 114.4 ms, and p99 187.3 ms. The environment
   created a `0x0` X11 window, making this a CI-style frame-pacing baseline, not
   desktop visual-performance evidence.
-- A controlled native-display chase-camera capture reached 52.7 km before the
-  current stage transitioned to descent, rather than the required 70 km. Its
-  rolling 600-frame sample ended at p50 82.9 ms, p95 103.1 ms, and p99 179.3
-  ms. The broad high-altitude terrain facets are expected from the current
-  fixed 33 by 33 coarse meshes and capped viewport leaf budget; do not tune
-  that budget until a representative 70 km capture is available.
+- An earlier controlled native-display chase-camera capture reached 52.7 km
+  before the current stage transitioned to descent. Its rolling 600-frame
+  sample ended at p50 82.9 ms, p95 103.1 ms, and p99 179.3 ms.
 - A later bounded 1x Falcon 9 X11 run used the RTX 5070 and reached the 110 km
   fairing-separation event through the normal launch command. Bevy reported a
   `0v0` window, and the flight-recorder export was not captured, so this is
@@ -249,6 +246,19 @@ validated on `main`.
   flight-camera acceptance run. Its rolling 600-frame sample near the end was
   p50 96.1 ms, p95 102.4 ms, and p99 108.6 ms. No terrain budget or LOD change
   is justified from this run.
+- A native-display, 1x Falcon 9 flight-camera capture passed the required
+  70 km baseline. The flight recorder export
+  `exports/flight_1788713453_Falcon_9_402.csv` crosses 70 km AGL at T+70.0 s
+  (71.1 km AGL, 1,937.7 m/s), records fairing jettison at T+93.35 s, and reaches
+  266.6 km AGL at T+199.4 s. User-supplied chase-camera frames also show the
+  vehicle at 221.8 km and 288.9 km AGL under 1x acceleration. The capture did
+  not retain `PerformanceStats` or terrain-streaming output, so it validates
+  visible coverage and the flight trajectory but cannot attribute the observed
+  broad high-altitude facets to an LOD, upload, task, or cache bottleneck.
+- No terrain budget, LOD, or upload-pacing change is justified by the current
+  evidence. A future tune must repeat this flight-camera case while retaining
+  the existing cadence-limited frame and terrain metric reports, then compare
+  the relevant before/after values.
 - Focused terrain and performance tests cover deterministic generation,
   cube-face and LOD seams, fallback replacement, cache protection,
   source/collision agreement, local-detail bounds, DEM metadata, reporting
@@ -256,12 +266,12 @@ validated on `main`.
   tests with one ignored test, plus formatting, checks, strict Clippy, a release
   build, and bounded normal/craft/rocket mode startups.
 
-Remaining work is a driven 70 km flight-camera capture on a real display before
-tuning upload pacing or terrain budgets. Build an offline elevation payload
-pyramid only if that profile justifies it. Moon remains solid-surface eligible
-but has no terrain authority, manifest, local dataset, or validated lunar
-body-fixed frame and datum; add reviewed lunar data through the existing shared
-pipeline only after those prerequisites are available.
+The required 70 km flight-camera baseline is complete. Build an offline
+elevation payload pyramid only if a future profile with retained terrain metrics
+shows that the resident CSDEM is insufficient. Moon remains solid-surface
+eligible but has no terrain authority, manifest, local dataset, or validated
+lunar body-fixed frame and datum; add reviewed lunar data through the existing
+shared pipeline only after those prerequisites are available.
 
 ### Phase 1: Generic Terrain Capability
 
@@ -276,11 +286,13 @@ pipeline only after those prerequisites are available.
 
 ### Phase 2: Responsive Generic Streaming
 
-**Status: implemented; representative desktop flight-camera measurement remains.**
+**Status: implemented and visually validated through a native-display 70 km
+flight-camera capture. Performance tuning remains evidence-gated.**
 
-- Measure the current 70 km flight-camera terrain case using existing terrain
-  metrics extended with requested/ready/published LOD distribution, task age,
-  replacement-group blocking, generation time, and upload backlog.
+- Before a terrain-quality or performance tune, repeat the current 70 km
+  flight-camera case while retaining existing frame and terrain metrics:
+  requested/ready/published LOD distribution, task age, replacement-group
+  blocking, generation time, and upload backlog.
 - Replace broad coarse-first request ordering with scored visible replacement
   priority.
 - Separate geometry publication from optional surface enrichment.

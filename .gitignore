@@ -35,6 +35,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Generated flight-recorder exports
+/exports/
+
 # Assets (if large)
 assets/large_files/*
 !assets/large_files/kernels/
