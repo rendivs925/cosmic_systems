@@ -145,7 +145,8 @@ must not affect rocket collision, altitude, landing, or physics.
 
 ## First Complete Vertical Slice
 
-Earth and Moon are the first validation pair.
+Earth and Moon are the first planetary validation pair; Mars extends the same
+shared terrain authority to a second planet.
 
 Earth must support:
 
@@ -163,7 +164,7 @@ Moon must support:
 
 Earth and Moon should differ by catalog configuration and data manifests, not
 by separate terrain or collision implementations. This validates that the
-system is genuinely planetary before Mars or other bodies are added.
+system is genuinely planetary before additional bodies are added.
 
 ## Phased Delivery
 
@@ -175,17 +176,18 @@ validated on `main`.
 ### Authority and Architecture
 
 - Catalog surface capability prevents terrain and collision from being attached
-  to stars, gas giants, and ice giants. Earth is the only configured terrain-data
-  authority; other solid bodies remain eligible but do not receive invented data.
+  to stars, gas giants, and ice giants. Earth, Moon, and Mars have reviewed,
+  feature-gated terrain authorities; other solid bodies remain eligible but do
+  not receive invented data.
 - `TerrainSource` is the single height, normal, collision, and terrain-material
   authority. Cube-sphere meshes, local textures, vegetation, cached geometry,
   and Bevy entities remain disposable presentation data.
-- Earth and future solid bodies use the existing cube-sphere topology,
+- Earth, Moon, Mars, and future solid bodies use the existing cube-sphere topology,
   body-fixed frame conversion, streaming lifecycle, collision queries, and
   render path. No second terrain, collision, coordinate, or streaming path was
   introduced.
 
-### Earth Data and Presentation
+### Earth, Moon, and Mars Data
 
 - Earth loads a validated ETOPO1 CSDEM source when its local dataset is present.
   Deterministic procedural terrain is retained only as the explicit
@@ -200,6 +202,16 @@ validated on `main`.
   maps plus merged vegetation and scatter are generated in worker tasks only
   for level-12-or-finer patches, then applied as presentation-only detail over
   global Earth imagery.
+- Moon loads the NASA PDS LOLA LDEM_16 global shape map from an ignored,
+  offline-generated CSDEM. Its DE421 mean-Earth/polar-axis frame matches the
+  active `pck00011.tpc` Moon orientation approximation, and an unavailable or
+  invalid local CSDEM leaves the Moon non-landable rather than substituting
+  procedural terrain.
+- Mars loads the NASA PDS MOLA MEGR90N000FB global mean-radius map from an
+  ignored, offline-generated CSDEM. It uses the reviewed
+  `mars_iau2000_v1.tpc` orientation override after `pck00011.tpc` so the
+  `IAU2000_MARS` terrain source remains aligned with the body-fixed frame. An
+  unavailable or invalid local CSDEM likewise leaves Mars non-landable.
 
 ### Streaming and Telemetry
 
@@ -268,10 +280,10 @@ validated on `main`.
 
 The required 70 km flight-camera baseline is complete. Build an offline
 elevation payload pyramid only if a future profile with retained terrain metrics
-shows that the resident CSDEM is insufficient. Moon remains solid-surface
-eligible but has no terrain authority, manifest, local dataset, or validated
-lunar body-fixed frame and datum; add reviewed lunar data through the existing
-shared pipeline only after those prerequisites are available.
+shows that the resident CSDEM is insufficient. Moon and Mars terrain sources
+have passed automated and bounded startup validation through the existing shared
+pipeline. The `0x0` X11 environment prevents visual inspection of their surface
+alignment; perform that acceptance check on a native display.
 
 ### Phase 1: Generic Terrain Capability
 
@@ -315,20 +327,24 @@ is insufficient.**
 
 ### Phase 4: Moon Validation
 
-**Status: blocked on a reviewed lunar DEM package and validated lunar frame/datum
-contract.**
+**Status: implemented for the reviewed LOLA package, frame/datum contract, and
+shared terrain path. Native-display visual acceptance remains pending.**
 
-- Add a lunar manifest and data package using the same tiled terrain contract.
-- Validate frame/datum alignment, seams, source/collision/render agreement,
-  and cache behaviour on a second solid body.
-- Require approved body orientation authority before declaring terrain
-  authoritative for additional moons.
+- The LOLA LDEM_16 manifest, provenance, offline converter, and optional local
+  CSDEM use the existing terrain contract.
+- The DE421 mean-Earth/polar-axis datum is validated against the active Moon
+  orientation authority, and render/collision both consume `TerrainSource`.
+- Complete a native-display inspection of frame alignment, seams, and streaming
+  behaviour when a usable display environment is available.
 
 ### Phase 5: Additional Bodies
 
-**Status: not started; follows Moon validation.**
+**Status: Mars implemented; other bodies not started.**
 
-- Add Mars and other solid bodies through data manifests and configuration.
+- Mars uses the MOLA MEGR90N000FB mean-radius dataset, a reviewed IAU 2000
+  orientation override, and the same local-CSDEM terrain authority as Earth and
+  Moon.
+- Add other solid bodies through data manifests and configuration.
 - Add body-specific atmosphere and ocean models where physically applicable.
 - Do not generalize Earth launch sites, vegetation, or ocean assumptions to
   other bodies.
@@ -337,8 +353,8 @@ contract.**
 
 The simulator reaches this target when:
 
-- Earth and Moon use the same solid-body terrain pipeline and no duplicate
-  per-body terrain systems exist.
+- Earth, Moon, and Mars use the same solid-body terrain pipeline and no
+  duplicate per-body terrain systems exist.
 - Every solid-body terrain dataset has explicit provenance, frame, datum,
   coverage, resolution, and error documentation.
 - A flight camera receives immediate coarse coverage and responsive,
