@@ -5,9 +5,9 @@ use crate::domain::services::atmosphere::AtmosphereSource;
 #[cfg(feature = "dem")]
 use crate::domain::services::dem_terrain_source::DemError;
 use crate::domain::services::physics_orbital::OrbitShape;
-#[cfg(feature = "dem")]
-use crate::domain::services::terrain_source::MoonTerrainSource;
 use crate::domain::services::terrain_source::{EarthTerrainSource, TerrainSource};
+#[cfg(feature = "dem")]
+use crate::domain::services::terrain_source::{MarsTerrainSource, MoonTerrainSource};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use bevy::ecs::component::{Component, Mutable, StorageType};
@@ -148,6 +148,7 @@ impl PlanetTerrain {
         let source: Arc<dyn TerrainSource> = match authority {
             TerrainAuthorityId::Earth => Arc::new(EarthTerrainSource::new()),
             TerrainAuthorityId::Moon => Arc::new(MoonTerrainSource::new()?),
+            TerrainAuthorityId::Mars => Arc::new(MarsTerrainSource::new()?),
         };
         Ok(Self { source })
     }
@@ -157,6 +158,7 @@ impl PlanetTerrain {
         let source: Arc<dyn TerrainSource> = match authority {
             TerrainAuthorityId::Earth => Arc::new(EarthTerrainSource::new()),
             TerrainAuthorityId::Moon => unreachable!("Moon terrain requires the dem feature"),
+            TerrainAuthorityId::Mars => unreachable!("Mars terrain requires the dem feature"),
         };
         Self { source }
     }

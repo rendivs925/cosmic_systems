@@ -28,6 +28,11 @@ pub const ETOPO1_ROWS: usize = 10_801;
 /// LOLA LDEM_16's global pixel-registered grid dimensions.
 pub const LOLA_LDEM16_COLUMNS: usize = 5_760;
 pub const LOLA_LDEM16_ROWS: usize = 2_880;
+/// MOLA MEGR's global pixel-registered mean-radius grid dimensions.
+pub const MOLA_MEGR32_COLUMNS: usize = 11_520;
+pub const MOLA_MEGR32_ROWS: usize = 5_760;
+
+const MOLA_MEGR32_RADIUS_OFFSET_M: f64 = 3_396_000.0;
 
 const HEADER_BYTES: usize = 24;
 const FACE_COUNT: usize = 6;
@@ -369,6 +374,53 @@ impl CubeSphereDem {
         }
         Self::new(resolution, heights_m)
     }
+
+    /// Convert the PDS MOLA MEGR 32 signed-`i16` big-endian mean-radius map
+    /// into elevations above the supplied Mars catalog radius. The map is
+    /// pixel-registered with north-to-south rows and east-positive longitudes.
+    pub fn from_mola_megr_32_raw(
+        raw: &[u8],
+        resolution: u32,
+        reference_radius_m: f64,
+    ) -> Result<Self, DemError> {
+        if !reference_radius_m.is_finite() || reference_radius_m <= 0.0 {
+            return Err(DemError::InvalidFormat(
+                "Mars reference radius must be finite and positive".into(),
+            ));
+        }
+        let expected_bytes = MOLA_MEGR32_COLUMNS
+            .checked_mul(MOLA_MEGR32_ROWS)
+            .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
+            .expect("MOLA MEGR 32 raw byte count fits usize on supported targets");
+        if raw.len() != expected_bytes {
+            return Err(DemError::InvalidFormat(format!(
+                "MOLA MEGR 32 raw input must be {expected_bytes} bytes for {MOLA_MEGR32_COLUMNS}x{MOLA_MEGR32_ROWS} signed i16 BE samples, found {}",
+                raw.len()
+            )));
+        }
+
+        let samples = expected_samples(resolution)?;
+        let mut heights_m = Vec::with_capacity(samples);
+        for face in CubeFace::ALL {
+            for row in 0..resolution {
+                let v = row as f64 / (resolution - 1) as f64;
+                for column in 0..resolution {
+                    let u = column as f64 / (resolution - 1) as f64;
+                    let direction = face_uv_to_direction(face, u, v);
+                    let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
+                    let height_m = sample_mola_megr_radius_m(
+                        raw,
+                        MOLA_MEGR32_COLUMNS,
+                        MOLA_MEGR32_ROWS,
+                        latitude_deg,
+                        longitude_deg,
+                    ) - reference_radius_m;
+                    heights_m.push(round_height_m(height_m)?);
+                }
+            }
+        }
+        Self::new(resolution, heights_m)
+    }
 }
 
 /// A `TerrainSource` backed by an entirely resident, immutable cube-sphere
@@ -445,6 +497,19 @@ pub fn convert_lola_ldem_16_raw(
 ) -> Result<(), DemError> {
     let raw = fs::read(input_path)?;
     CubeSphereDem::from_lola_ldem_16_raw(&raw, resolution)?.write_path(output_path)
+}
+
+/// Convert a PDS MOLA MEGR 32 raw radius map into the versioned cube-sphere
+/// format. This is an offline tool; the simulator never reads source rasters.
+pub fn convert_mola_megr_32_raw(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    resolution: u32,
+    reference_radius_m: f64,
+) -> Result<(), DemError> {
+    let raw = fs::read(input_path)?;
+    CubeSphereDem::from_mola_megr_32_raw(&raw, resolution, reference_radius_m)?
+        .write_path(output_path)
 }
 
 fn expected_samples(resolution: u32) -> Result<usize, DemError> {
@@ -568,6 +633,44 @@ fn sample_lola_ldem_m(
 fn lola_ldem_height_m(raw: &[u8], columns: usize, column: usize, row: usize) -> f64 {
     let offset = (row * columns + column) * HEIGHT_BYTES;
     f64::from(i16::from_le_bytes([raw[offset], raw[offset + 1]])) * 0.5
+}
+
+fn sample_mola_megr_radius_m(
+    raw: &[u8],
+    columns: usize,
+    rows: usize,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) -> f64 {
+    let latitude = latitude_deg.clamp(-90.0, 90.0);
+    let longitude = longitude_deg.rem_euclid(360.0);
+    let x = (longitude / 360.0 * columns as f64 - 0.5).rem_euclid(columns as f64);
+    let y = ((90.0 - latitude) / 180.0 * rows as f64 - 0.5).clamp(0.0, (rows - 1) as f64);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1) % columns;
+    let y1 = (y0 + 1).min(rows - 1);
+    let tx = x - x.floor();
+    let ty = y - y0 as f64;
+    let radius = |column, row| mola_megr_radius_m(raw, columns, column, row);
+    let north = radius(x0, y0) + (radius(x1, y0) - radius(x0, y0)) * tx;
+    let south = radius(x0, y1) + (radius(x1, y1) - radius(x0, y1)) * tx;
+    north + (south - north) * ty
+}
+
+fn mola_megr_radius_m(raw: &[u8], columns: usize, column: usize, row: usize) -> f64 {
+    let offset = (row * columns + column) * HEIGHT_BYTES;
+    f64::from(i16::from_be_bytes([raw[offset], raw[offset + 1]])) + MOLA_MEGR32_RADIUS_OFFSET_M
+}
+
+fn round_height_m(height_m: f64) -> Result<i16, DemError> {
+    let rounded = height_m.round();
+    if !rounded.is_finite() || !(f64::from(i16::MIN)..=f64::from(i16::MAX)).contains(&rounded) {
+        return Err(DemError::InvalidFormat(format!(
+            "cube-sphere DEM elevation {height_m} m is outside the signed-meter range"
+        )));
+    }
+    Ok(rounded as i16)
 }
 
 #[cfg(test)]
@@ -720,5 +823,39 @@ mod tests {
         assert_eq!(sample_lola_ldem_m(&raw, 4, 3, 0.0, 135.0), 5.0);
         assert_eq!(sample_lola_ldem_m(&raw, 4, 3, -60.0, 225.0), 10.0);
         assert_eq!(sample_lola_ldem_m(&raw, 4, 3, 60.0, -45.0), 3.0);
+    }
+
+    #[test]
+    fn mola_megr_sampling_uses_big_endian_radius_offsets_and_pixel_centers() {
+        let raw = [
+            0, 0, 0, 1, 0, 2, 0, 3, // north: 3,396,000 through 3,396,003 m
+            0, 4, 0, 5, 0, 6, 0, 7, // equator
+            0, 8, 0, 9, 0, 10, 0, 11, // south
+        ];
+
+        assert_eq!(
+            sample_mola_megr_radius_m(&raw, 4, 3, 60.0, 45.0),
+            3_396_000.0
+        );
+        assert_eq!(
+            sample_mola_megr_radius_m(&raw, 4, 3, 0.0, 135.0),
+            3_396_005.0
+        );
+        assert_eq!(
+            sample_mola_megr_radius_m(&raw, 4, 3, -60.0, 225.0),
+            3_396_010.0
+        );
+        assert_eq!(
+            sample_mola_megr_radius_m(&raw, 4, 3, 60.0, -45.0),
+            3_396_003.0
+        );
+    }
+
+    #[test]
+    fn converted_dem_rejects_elevations_outside_signed_meters() {
+        assert!(matches!(
+            round_height_m(f64::from(i16::MAX) + 1.0),
+            Err(DemError::InvalidFormat(_))
+        ));
     }
 }

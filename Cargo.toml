@@ -58,3 +58,8 @@ required-features = ["dem"]
 name = "lola_ldem_convert"
 path = "src/bin/lola_ldem_convert.rs"
 required-features = ["dem"]
+
+[[bin]]
+name = "mola_megr_convert"
+path = "src/bin/mola_megr_convert.rs"
+required-features = ["dem"]

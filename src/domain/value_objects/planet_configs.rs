@@ -41,6 +41,8 @@ impl PlanetConfig {
             "Earth" => Some(TerrainAuthorityId::Earth),
             #[cfg(feature = "dem")]
             "Moon" => Some(TerrainAuthorityId::Moon),
+            #[cfg(feature = "dem")]
+            "Mars" => Some(TerrainAuthorityId::Mars),
             _ => None,
         }
     }

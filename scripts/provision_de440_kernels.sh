@@ -8,6 +8,8 @@ curl --fail --location --output "$kernel_dir/de440s.bsp" \
     "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp"
 curl --fail --location --output "$kernel_dir/pck00011.tpc" \
     "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc"
+curl --fail --location --output "$kernel_dir/mars_iau2000_v1.tpc" \
+    "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/mars_iau2000_v1.tpc"
 curl --fail --location --output "$kernel_dir/gm_de440.tpc" \
     "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc"
 curl --fail --location --output "$kernel_dir/naif0012.tls" \

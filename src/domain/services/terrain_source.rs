@@ -62,6 +62,8 @@ const DEFAULT_EARTH_DEM_PATH: &str =
     "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem";
 #[cfg(feature = "dem")]
 const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v1.csdem";
+#[cfg(feature = "dem")]
+const DEFAULT_MARS_DEM_PATH: &str = "assets/large_files/terrain/mars_mola_megr_32_cs2048_v1.csdem";
 
 /// Broad surface classification supplied by the authoritative terrain source.
 /// More detailed material or biome distinctions remain presentation concerns.
@@ -1368,6 +1370,47 @@ impl TerrainSource for MoonTerrainSource {
     }
 }
 
+/// Mars terrain is an unlayered, data-backed MOLA CSDEM. Its source radius is
+/// converted to the catalog mean-radius datum before runtime loading, so terrain
+/// meshes and collision use the same physical surface.
+#[cfg(feature = "dem")]
+#[derive(Debug)]
+pub struct MarsTerrainSource {
+    source: Arc<DemTerrainSource>,
+}
+
+#[cfg(feature = "dem")]
+impl MarsTerrainSource {
+    pub fn new() -> Result<Self, DemError> {
+        Self::with_dem_path(DEFAULT_MARS_DEM_PATH)
+    }
+
+    pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
+        Ok(Self {
+            source: Arc::new(DemTerrainSource::from_path(path)?),
+        })
+    }
+}
+
+#[cfg(feature = "dem")]
+impl TerrainSource for MarsTerrainSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        self.source.elevation_bounds_m()
+    }
+
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        self.source.patch_geometric_error(patch)
+    }
+
+    fn surface_class(&self, _latitude_deg: f64, _longitude_deg: f64) -> SurfaceClass {
+        SurfaceClass::Land
+    }
+}
+
 impl TerrainSource for EarthTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.source.height_m(latitude_deg, longitude_deg)
@@ -1459,6 +1502,19 @@ mod tests {
             source.surface_sample(0.0, 0.0).surface_class,
             SurfaceClass::Land
         );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn mars_dem_treats_negative_elevation_as_solid_surface() {
+        let source = MarsTerrainSource {
+            source: Arc::new(DemTerrainSource::from_dem(
+                CubeSphereDem::new(2, vec![-200; 24]).expect("valid cube-sphere DEM"),
+            )),
+        };
+
+        assert_eq!(source.height_m(0.0, 0.0), -200.0);
+        assert_eq!(source.surface_class(0.0, 0.0), SurfaceClass::Land);
     }
 
     #[test]

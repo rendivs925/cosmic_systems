@@ -13,6 +13,7 @@ manifest. Its current identifier is `naif-de440-egm2008-primary-v1`.
 | --- | --- | --- | --- |
 | Translation | NAIF `de440s.bsp` | SSB ICRF/J2000, TDB, f64 SI at the boundary | JD TDB 2415020.5 through 2469807.5 |
 | Orientation | NAIF `pck00011.tpc` | ICRF/J2000 to IAU body-fixed, TDB | Manifest range above |
+| Mars orientation override | NAIF `mars_iau2000_v1.tpc` | ICRF/J2000 to `IAU2000_MARS`, TDB | Manifest range above; used only for Mars MOLA compatibility |
 | GM | NAIF `gm_de440.tpc` | m3/s2 | No epoch range declared |
 | Earth J2 | `egm2008_earth_j2.ron` EGM2008 extract | Planet-centered inertial force calculation | Static model parameters |
 | Leap seconds | NAIF `naif0012.tls` | UTC conversion source | JD 2441317.5 through 2457754.5 |
@@ -30,9 +31,10 @@ authority.
   ICRF/J2000 at one TDB epoch.
 - Planet-centered inertial states are same-epoch differences of authoritative
   body states. Vehicle gravity and long-arc propagation use these SI states.
-- Orientation is inertial-to-IAU body-fixed at the same epoch. Earth geodetic
-  conversion uses WGS-84; bodies without an approved ellipsoid remain explicitly
-  spherical.
+- Orientation is inertial-to-IAU body-fixed at the same epoch. Mars uses the
+  reviewed IAU2000 override required by MOLA; other bodies use `pck00011.tpc`.
+  Earth geodetic conversion uses WGS-84; bodies without an approved ellipsoid
+  remain explicitly spherical.
 - Local ENU and camera-relative coordinates are derived presentation or local
   frames. f32/render transforms, scaled solar-map positions, orbit ribbons, and
   artistic lighting are never physical state authorities.

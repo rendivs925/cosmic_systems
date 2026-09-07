@@ -122,6 +122,15 @@ mod tests {
         #[cfg(not(feature = "dem"))]
         assert_eq!(moon.terrain_authority, None);
 
+        let mars = PlanetFactory::create_by_name("Mars").unwrap();
+        #[cfg(feature = "dem")]
+        assert_eq!(
+            mars.terrain_authority,
+            Some(crate::domain::entities::planet::TerrainAuthorityId::Mars)
+        );
+        #[cfg(not(feature = "dem"))]
+        assert_eq!(mars.terrain_authority, None);
+
         let sun = PlanetFactory::create_by_name("Sun").unwrap();
         assert!(!sun.surface_capability.supports_terrain());
         assert_eq!(sun.terrain_authority, None);

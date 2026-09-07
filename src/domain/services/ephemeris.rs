@@ -7,18 +7,17 @@
 use crate::domain::math::{DMat3, DQuat, DVec3};
 use anise::constants::frames::SSB_J2000;
 use anise::frames::Frame;
-use anise::naif::kpl::parser::convert_tpc;
 #[cfg(any(target_arch = "wasm32", test))]
-use anise::naif::kpl::parser::{convert_tpc_items, parse_bytes};
-#[cfg(any(target_arch = "wasm32", test))]
+use anise::naif::kpl::parser::parse_bytes;
+use anise::naif::kpl::parser::{convert_tpc_items, parse_file};
 use anise::naif::kpl::tpc::TPCItem;
+use anise::naif::kpl::Parameter;
 #[cfg(any(target_arch = "wasm32", test))]
 use anise::naif::SPK;
 use anise::prelude::Almanac;
 use anise::time::Epoch;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-#[cfg(any(target_arch = "wasm32", test))]
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -244,6 +243,7 @@ pub enum ScientificDatasetRole {
     Translation,
     LeapSeconds,
     Orientation,
+    MarsOrientationOverride,
     GravitationalParameters,
     GravityHarmonics,
     EarthOrientation,
@@ -255,6 +255,7 @@ impl fmt::Display for ScientificDatasetRole {
             Self::Translation => "translation",
             Self::LeapSeconds => "leap-second",
             Self::Orientation => "orientation",
+            Self::MarsOrientationOverride => "Mars orientation override",
             Self::GravitationalParameters => "gravitational-parameter",
             Self::GravityHarmonics => "gravity-harmonic",
             Self::EarthOrientation => "Earth-orientation",
@@ -324,6 +325,12 @@ impl KernelFile {
                     && self.time_scale == ScientificDatasetTimeScale::Utc
             }
             ScientificDatasetRole::Orientation => {
+                self.kind == KernelKind::TextPck
+                    && self.coverage.is_some()
+                    && self.frame == ScientificDatasetFrame::IauBodyFixed
+                    && self.time_scale == ScientificDatasetTimeScale::Tdb
+            }
+            ScientificDatasetRole::MarsOrientationOverride => {
                 self.kind == KernelKind::TextPck
                     && self.coverage.is_some()
                     && self.frame == ScientificDatasetFrame::IauBodyFixed
@@ -456,12 +463,46 @@ impl SpiceEphemeris {
                 .find(|kernel| kernel.role == ScientificDatasetRole::GravitationalParameters),
         ) {
             (Some(orientation), Some(gravitational_parameters)) => {
-                let planetary_data = convert_tpc(&orientation.path, &gravitational_parameters.path)
+                let mut orientation_items = parse_file::<_, TPCItem>(&orientation.path, false)
                     .map_err(|error| EphemerisError::KernelLoad {
                         role: ScientificDatasetRole::Orientation,
                         path: orientation.path.clone(),
                         message: error.to_string(),
                     })?;
+                if let Some(mars_override) = provenance
+                    .validated_kernels
+                    .iter()
+                    .find(|kernel| kernel.role == ScientificDatasetRole::MarsOrientationOverride)
+                {
+                    // The NAIF compatibility PCK is loaded after pck00011 so
+                    // only Mars uses the MOLA IAU2000 cartographic orientation.
+                    let mut mars_override_items =
+                        parse_file::<_, TPCItem>(&mars_override.path, false).map_err(|error| {
+                            EphemerisError::KernelLoad {
+                                role: ScientificDatasetRole::MarsOrientationOverride,
+                                path: mars_override.path.clone(),
+                                message: error.to_string(),
+                            }
+                        })?;
+                    sanitize_mars_iau2000_override(&mut mars_override_items);
+                    orientation_items.extend(mars_override_items);
+                }
+                let gravitational_parameter_items =
+                    parse_file::<_, TPCItem>(&gravitational_parameters.path, false).map_err(
+                        |error| EphemerisError::KernelLoad {
+                            role: ScientificDatasetRole::GravitationalParameters,
+                            path: gravitational_parameters.path.clone(),
+                            message: error.to_string(),
+                        },
+                    )?;
+                let planetary_data =
+                    convert_tpc_items(orientation_items, gravitational_parameter_items).map_err(
+                        |error| EphemerisError::KernelLoad {
+                            role: ScientificDatasetRole::Orientation,
+                            path: orientation.path.clone(),
+                            message: error.to_string(),
+                        },
+                    )?;
                 almanac = almanac.with_planetary_data(planetary_data);
             }
             (None, None) => {}
@@ -589,7 +630,19 @@ impl SpiceEphemeris {
         })?;
         let orientation_path =
             embedded_dataset_path(&provenance, ScientificDatasetRole::Orientation)?;
-        let orientation = parse_embedded_tpc(&provenance, ScientificDatasetRole::Orientation)?;
+        let mut orientation = parse_embedded_tpc(&provenance, ScientificDatasetRole::Orientation)?;
+        if provenance
+            .validated_kernels
+            .iter()
+            .any(|kernel| kernel.role == ScientificDatasetRole::MarsOrientationOverride)
+        {
+            // Match native load order: this replaces only Mars-system
+            // orientation data after the generic PCK is parsed.
+            let mut mars_override =
+                parse_embedded_tpc(&provenance, ScientificDatasetRole::MarsOrientationOverride)?;
+            sanitize_mars_iau2000_override(&mut mars_override);
+            orientation.extend(mars_override);
+        }
         let gravitational_parameters =
             parse_embedded_tpc(&provenance, ScientificDatasetRole::GravitationalParameters)?;
         let planetary_data =
@@ -716,12 +769,21 @@ impl SpiceEphemeris {
                 coverage: self.provenance.coverage,
             });
         }
-        let orientation_dataset = self
+        let default_orientation_dataset = self
             .provenance
             .validated_kernels
             .iter()
             .find(|kernel| kernel.role == ScientificDatasetRole::Orientation)
             .ok_or(EphemerisError::OrientationUnavailable)?;
+        let orientation_dataset = if target == NaifBodyId::MARS_BARYCENTER {
+            self.provenance
+                .validated_kernels
+                .iter()
+                .find(|kernel| kernel.role == ScientificDatasetRole::MarsOrientationOverride)
+                .unwrap_or(default_orientation_dataset)
+        } else {
+            default_orientation_dataset
+        };
         let orientation_target = target
             .orientation_target()
             .ok_or(EphemerisError::OrientationUnsupportedBody { target })?;
@@ -803,6 +865,22 @@ impl SpiceEphemeris {
     }
 }
 
+/// ANISE expects nutation/precession coefficients to be vectors. NAIF's v1
+/// compatibility PCK uses scalar zeroes only to neutralize pck00011 variables;
+/// omitting them restores the original IAU2000 Mars orientation semantics.
+fn sanitize_mars_iau2000_override(items: &mut HashMap<i32, TPCItem>) {
+    let Some(mars) = items.get_mut(&499) else {
+        return;
+    };
+    for parameter in [
+        Parameter::NutPrecRa,
+        Parameter::NutPrecDec,
+        Parameter::NutPrecPm,
+    ] {
+        mars.data.remove(&parameter);
+    }
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn embedded_kernel_bytes(file_name: &str) -> Option<&'static [u8]> {
     match file_name {
@@ -813,6 +891,10 @@ fn embedded_kernel_bytes(file_name: &str) -> Option<&'static [u8]> {
         "pck00011.tpc" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/large_files/kernels/de440/pck00011.tpc"
+        ))),
+        "mars_iau2000_v1.tpc" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/large_files/kernels/de440/mars_iau2000_v1.tpc"
         ))),
         "gm_de440.tpc" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1543,6 +1625,24 @@ mod tests {
         assert!(orientation.inertial_to_body_fixed.is_finite());
         assert!(orientation.angular_velocity_inertial_rad_s.is_finite());
         assert!(orientation.angular_velocity_inertial_rad_s.z > 0.0);
+    }
+
+    #[test]
+    fn provisioned_mars_orientation_uses_the_mola_iau2000_override() {
+        let ephemeris = SpiceEphemeris::load("assets/configs/ephemeris/de440.ron").unwrap();
+        let mars = ephemeris
+            .orientation(NaifBodyId::MARS_BARYCENTER, TdbEpoch::j2000())
+            .unwrap();
+        let earth = ephemeris
+            .orientation(NaifBodyId::EARTH, TdbEpoch::j2000())
+            .unwrap();
+
+        assert!(mars.provenance.version.contains(
+            "mars_iau2000_v1.tpc#07ba38b939ae92c085882752a523addd749fde0abb7a3468423099ed02bb3949"
+        ));
+        assert!(earth.provenance.version.contains("pck00011.tpc#"));
+        assert!(mars.inertial_to_body_fixed.is_finite());
+        assert!(mars.angular_velocity_inertial_rad_s.is_finite());
     }
 
     #[test]
