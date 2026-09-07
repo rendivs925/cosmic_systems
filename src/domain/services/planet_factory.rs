@@ -114,6 +114,12 @@ mod tests {
 
         let moon = PlanetFactory::create_by_name("Moon").unwrap();
         assert!(moon.surface_capability.supports_terrain());
+        #[cfg(feature = "dem")]
+        assert_eq!(
+            moon.terrain_authority,
+            Some(crate::domain::entities::planet::TerrainAuthorityId::Moon)
+        );
+        #[cfg(not(feature = "dem"))]
         assert_eq!(moon.terrain_authority, None);
 
         let sun = PlanetFactory::create_by_name("Sun").unwrap();

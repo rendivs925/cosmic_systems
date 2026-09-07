@@ -29,6 +29,7 @@ impl SurfaceCapability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerrainAuthorityId {
     Earth,
+    Moon,
 }
 
 /// Celestial body entity representing planets, moons, and stars

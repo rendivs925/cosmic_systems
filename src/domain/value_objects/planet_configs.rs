@@ -39,6 +39,8 @@ impl PlanetConfig {
     pub fn terrain_authority(&self) -> Option<TerrainAuthorityId> {
         match self.name {
             "Earth" => Some(TerrainAuthorityId::Earth),
+            #[cfg(feature = "dem")]
+            "Moon" => Some(TerrainAuthorityId::Moon),
             _ => None,
         }
     }

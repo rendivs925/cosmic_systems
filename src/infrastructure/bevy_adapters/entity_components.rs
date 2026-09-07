@@ -2,7 +2,11 @@ use crate::domain::entities::planet::TerrainAuthorityId;
 use crate::domain::entities::planet::{BodyClass, Planet};
 use crate::domain::services::atmosphere::atmosphere_for;
 use crate::domain::services::atmosphere::AtmosphereSource;
+#[cfg(feature = "dem")]
+use crate::domain::services::dem_terrain_source::DemError;
 use crate::domain::services::physics_orbital::OrbitShape;
+#[cfg(feature = "dem")]
+use crate::domain::services::terrain_source::MoonTerrainSource;
 use crate::domain::services::terrain_source::{EarthTerrainSource, TerrainSource};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
@@ -139,15 +143,28 @@ pub struct PlanetTerrain {
 }
 
 impl PlanetTerrain {
+    #[cfg(feature = "dem")]
+    pub fn try_for_authority(authority: TerrainAuthorityId) -> Result<Self, DemError> {
+        let source: Arc<dyn TerrainSource> = match authority {
+            TerrainAuthorityId::Earth => Arc::new(EarthTerrainSource::new()),
+            TerrainAuthorityId::Moon => Arc::new(MoonTerrainSource::new()?),
+        };
+        Ok(Self { source })
+    }
+
+    #[cfg(not(feature = "dem"))]
     pub fn for_authority(authority: TerrainAuthorityId) -> Self {
         let source: Arc<dyn TerrainSource> = match authority {
             TerrainAuthorityId::Earth => Arc::new(EarthTerrainSource::new()),
+            TerrainAuthorityId::Moon => unreachable!("Moon terrain requires the dem feature"),
         };
         Self { source }
     }
 
     pub fn earth() -> Self {
-        Self::for_authority(TerrainAuthorityId::Earth)
+        Self {
+            source: Arc::new(EarthTerrainSource::new()),
+        }
     }
 }
 

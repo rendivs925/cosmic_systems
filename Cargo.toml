@@ -53,3 +53,8 @@ dem = []
 name = "etopo1_convert"
 path = "src/bin/etopo1_convert.rs"
 required-features = ["dem"]
+
+[[bin]]
+name = "lola_ldem_convert"
+path = "src/bin/lola_ldem_convert.rs"
+required-features = ["dem"]

@@ -60,6 +60,8 @@ const OROGENY_SCALE: f64 = 0.32;
 #[cfg(feature = "dem")]
 const DEFAULT_EARTH_DEM_PATH: &str =
     "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem";
+#[cfg(feature = "dem")]
+const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v1.csdem";
 
 /// Broad surface classification supplied by the authoritative terrain source.
 /// More detailed material or biome distinctions remain presentation concerns.
@@ -1323,6 +1325,49 @@ impl Default for EarthTerrainSource {
     }
 }
 
+/// Moon terrain is an unlayered, data-backed LOLA CSDEM. Unlike Earth, it has
+/// no procedural local-detail or ocean model: its downloaded DEM is the only
+/// physical surface authority.
+#[cfg(feature = "dem")]
+#[derive(Debug)]
+pub struct MoonTerrainSource {
+    source: Arc<DemTerrainSource>,
+}
+
+#[cfg(feature = "dem")]
+impl MoonTerrainSource {
+    /// Load the reviewed local LOLA CSDEM. Missing data is surfaced to startup
+    /// composition so the Moon remains non-landable rather than procedural.
+    pub fn new() -> Result<Self, DemError> {
+        Self::with_dem_path(DEFAULT_MOON_DEM_PATH)
+    }
+
+    pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
+        Ok(Self {
+            source: Arc::new(DemTerrainSource::from_path(path)?),
+        })
+    }
+}
+
+#[cfg(feature = "dem")]
+impl TerrainSource for MoonTerrainSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        self.source.elevation_bounds_m()
+    }
+
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        self.source.patch_geometric_error(patch)
+    }
+
+    fn surface_class(&self, _latitude_deg: f64, _longitude_deg: f64) -> SurfaceClass {
+        SurfaceClass::Land
+    }
+}
+
 impl TerrainSource for EarthTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.source.height_m(latitude_deg, longitude_deg)
@@ -1373,6 +1418,8 @@ impl TerrainSource for EarthTerrainSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "dem")]
+    use crate::domain::services::dem_terrain_source::CubeSphereDem;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1394,6 +1441,23 @@ mod tests {
                 river_strength: 0.0,
                 surface_class: SurfaceClass::Ocean,
             }
+        );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn moon_dem_treats_negative_elevation_as_solid_surface() {
+        let source = MoonTerrainSource {
+            source: Arc::new(DemTerrainSource::from_dem(
+                CubeSphereDem::new(2, vec![-200; 24]).expect("valid cube-sphere DEM"),
+            )),
+        };
+
+        assert_eq!(source.height_m(0.0, 0.0), -200.0);
+        assert_eq!(source.surface_class(0.0, 0.0), SurfaceClass::Land);
+        assert_eq!(
+            source.surface_sample(0.0, 0.0).surface_class,
+            SurfaceClass::Land
         );
     }
 

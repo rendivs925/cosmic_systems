@@ -1,0 +1,11 @@
+(
+    dataset: "LOLA LDEM 16",
+    source_url: "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/cylindrical/img/ldem_16.img",
+    source_file: "ldem_16.img",
+    horizontal_datum: "DE421 Mean Earth/Polar Axis body-fixed; simple cylindrical; east-positive longitude",
+    vertical_datum: "height above the 1,737,400-meter lunar reference sphere",
+    source_resolution_m: 1895.21,
+    cube_sphere_resolution: 2048,
+    runtime_asset: "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v1.csdem",
+    conversion: "signed i16 LE LDEM_16 samples scaled by 0.5 meters and bilinearly resampled from pixel centers onto CubeFace::ALL",
+)

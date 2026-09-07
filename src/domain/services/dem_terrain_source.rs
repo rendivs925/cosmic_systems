@@ -25,6 +25,9 @@ pub const DEM_FORMAT_VERSION: u32 = 1;
 /// ETOPO1's global raw-grid dimensions, including both longitude seam columns.
 pub const ETOPO1_COLUMNS: usize = 21_601;
 pub const ETOPO1_ROWS: usize = 10_801;
+/// LOLA LDEM_16's global pixel-registered grid dimensions.
+pub const LOLA_LDEM16_COLUMNS: usize = 5_760;
+pub const LOLA_LDEM16_ROWS: usize = 2_880;
 
 const HEADER_BYTES: usize = 24;
 const FACE_COUNT: usize = 6;
@@ -325,6 +328,47 @@ impl CubeSphereDem {
         }
         Self::new(resolution, heights_m)
     }
+
+    /// Convert the PDS LOLA LDEM_16 signed-`i16` little-endian radius map
+    /// into a cube-sphere DEM. Its samples are 0.5-meter offsets above the
+    /// 1,737,400-meter ME/PA reference sphere, with north-to-south rows and
+    /// east-positive longitudes from zero through 360 degrees.
+    pub fn from_lola_ldem_16_raw(raw: &[u8], resolution: u32) -> Result<Self, DemError> {
+        let expected_bytes = LOLA_LDEM16_COLUMNS
+            .checked_mul(LOLA_LDEM16_ROWS)
+            .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
+            .expect("LOLA LDEM_16 raw byte count fits usize on supported targets");
+        if raw.len() != expected_bytes {
+            return Err(DemError::InvalidFormat(format!(
+                "LOLA LDEM_16 raw input must be {expected_bytes} bytes for {LOLA_LDEM16_COLUMNS}x{LOLA_LDEM16_ROWS} signed i16 LE samples, found {}",
+                raw.len()
+            )));
+        }
+
+        let samples = expected_samples(resolution)?;
+        let mut heights_m = Vec::with_capacity(samples);
+        for face in CubeFace::ALL {
+            for row in 0..resolution {
+                let v = row as f64 / (resolution - 1) as f64;
+                for column in 0..resolution {
+                    let u = column as f64 / (resolution - 1) as f64;
+                    let direction = face_uv_to_direction(face, u, v);
+                    let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
+                    heights_m.push(
+                        sample_lola_ldem_m(
+                            raw,
+                            LOLA_LDEM16_COLUMNS,
+                            LOLA_LDEM16_ROWS,
+                            latitude_deg,
+                            longitude_deg,
+                        )
+                        .round() as i16,
+                    );
+                }
+            }
+        }
+        Self::new(resolution, heights_m)
+    }
 }
 
 /// A `TerrainSource` backed by an entirely resident, immutable cube-sphere
@@ -390,6 +434,17 @@ pub fn convert_etopo1_raw(
 ) -> Result<(), DemError> {
     let raw = fs::read(input_path)?;
     CubeSphereDem::from_etopo1_raw(&raw, resolution)?.write_path(output_path)
+}
+
+/// Convert the PDS LOLA LDEM_16 raw radius map into the versioned cube-sphere
+/// format. This is an offline tool; the simulator never reads source rasters.
+pub fn convert_lola_ldem_16_raw(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    resolution: u32,
+) -> Result<(), DemError> {
+    let raw = fs::read(input_path)?;
+    CubeSphereDem::from_lola_ldem_16_raw(&raw, resolution)?.write_path(output_path)
 }
 
 fn expected_samples(resolution: u32) -> Result<usize, DemError> {
@@ -483,6 +538,36 @@ fn sample_etopo1_m(raw: &[u8], latitude_deg: f64, longitude_deg: f64) -> f64 {
 fn etopo1_height_m(raw: &[u8], column: usize, row: usize) -> i16 {
     let offset = (row * ETOPO1_COLUMNS + column) * HEIGHT_BYTES;
     i16::from_le_bytes([raw[offset], raw[offset + 1]])
+}
+
+fn sample_lola_ldem_m(
+    raw: &[u8],
+    columns: usize,
+    rows: usize,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) -> f64 {
+    let latitude = latitude_deg.clamp(-90.0, 90.0);
+    let longitude = longitude_deg.rem_euclid(360.0);
+    // LDEM_16 is pixel registered: its 0/360 and +/-90 degree bounds describe
+    // cell edges, so shift continuous coordinates to the center-sample index.
+    let x = (longitude / 360.0 * columns as f64 - 0.5).rem_euclid(columns as f64);
+    let y = ((90.0 - latitude) / 180.0 * rows as f64 - 0.5).clamp(0.0, (rows - 1) as f64);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1) % columns;
+    let y1 = (y0 + 1).min(rows - 1);
+    let tx = x - x.floor();
+    let ty = y - y0 as f64;
+    let height = |column, row| lola_ldem_height_m(raw, columns, column, row);
+    let north = height(x0, y0) + (height(x1, y0) - height(x0, y0)) * tx;
+    let south = height(x0, y1) + (height(x1, y1) - height(x0, y1)) * tx;
+    north + (south - north) * ty
+}
+
+fn lola_ldem_height_m(raw: &[u8], columns: usize, column: usize, row: usize) -> f64 {
+    let offset = (row * columns + column) * HEIGHT_BYTES;
+    f64::from(i16::from_le_bytes([raw[offset], raw[offset + 1]])) * 0.5
 }
 
 #[cfg(test)]
@@ -621,5 +706,19 @@ mod tests {
             ((90.0 - south_east.0) / 180.0 * (ETOPO1_ROWS - 1) as f64),
             (ETOPO1_ROWS - 1) as f64
         );
+    }
+
+    #[test]
+    fn lola_ldem_sampling_uses_north_to_south_rows_and_east_longitude() {
+        let raw = [
+            0, 0, 2, 0, 4, 0, 6, 0, // north: 0, 1, 2, 3 meters
+            8, 0, 10, 0, 12, 0, 14, 0, // equator: 4, 5, 6, 7 meters
+            16, 0, 18, 0, 20, 0, 22, 0, // south: 8, 9, 10, 11 meters
+        ];
+
+        assert_eq!(sample_lola_ldem_m(&raw, 4, 3, 60.0, 45.0), 0.0);
+        assert_eq!(sample_lola_ldem_m(&raw, 4, 3, 0.0, 135.0), 5.0);
+        assert_eq!(sample_lola_ldem_m(&raw, 4, 3, -60.0, 225.0), 10.0);
+        assert_eq!(sample_lola_ldem_m(&raw, 4, 3, 60.0, -45.0), 3.0);
     }
 }

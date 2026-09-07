@@ -398,10 +398,27 @@ fn spawn_celestial_body(
 
     // Terrain is flight simulation data, not a solar-map layer. The catalog
     // selects a reviewed terrain authority only for solid bodies with a dataset.
-    let terrain = (enable_flight_surface && planet.surface_capability.supports_terrain())
+    let terrain_authority = (enable_flight_surface && planet.surface_capability.supports_terrain())
         .then_some(planet.terrain_authority)
-        .flatten()
-        .map(PlanetTerrain::for_authority);
+        .flatten();
+    #[cfg(feature = "dem")]
+    let terrain = terrain_authority.and_then(|authority| {
+        match PlanetTerrain::try_for_authority(authority) {
+            Ok(terrain) => Some(terrain),
+            Err(crate::domain::services::dem_terrain_source::DemError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                warn!(
+                    "{} terrain authority is configured but its local CSDEM asset is absent; terrain collision remains disabled",
+                    planet.name
+                );
+                None
+            }
+            Err(error) => panic!("{} terrain DEM configuration is invalid: {error}", planet.name),
+        }
+    });
+    #[cfg(not(feature = "dem"))]
+    let terrain = terrain_authority.map(PlanetTerrain::for_authority);
 
     let mut planet_commands = commands.spawn((
         Mesh3d(create_uv_sphere_mesh(meshes, visual_radius)),
