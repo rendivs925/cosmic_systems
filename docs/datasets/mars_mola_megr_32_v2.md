@@ -18,6 +18,7 @@ created 2003-04-11. It is a 32-pixels-per-degree shape map formed from nearly
 - Source raster: <https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg032/megr90n000fb.img>
 - PDS4 label: <https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg032/megr90n000fb.xml>
 - Original PDS3 label: <https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg032/megr90n000fb.lbl>
+- Verified source SHA-256: `42d8b66054cbd06bd24585007fb56a329122be19d9343f67f49db9f6f96c3eb8`
 
 The `MEGR` radius map is intentionally selected instead of the `MEGT`
 topography map. `MEGT` heights are relative to the MOLA areoid, while the
@@ -81,8 +82,11 @@ cargo run --features dem --bin mola_megr_convert -- \
 sha256sum assets/large_files/terrain/mars_mola_megr_32_cs2048_v1.csdem
 ```
 
-Record the two resulting SHA-256 values here before treating the local CSDEM as
-a reviewed terrain package.
+Generated CSDEM SHA-256: `994b3b1fce4a4483c83e80881fb947f9dac4a3f24ebf7634e7527cd59a5018e7`
+
+The source raster and generated CSDEM are ignored local assets. A present but
+invalid CSDEM is a startup configuration error; an absent CSDEM leaves Mars
+non-landable.
 
 Required tests include source byte order/offset, north-to-south row order,
 east-positive antimeridian wrapping, pixel-center behavior, polar clamping,
