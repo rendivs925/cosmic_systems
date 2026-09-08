@@ -7,7 +7,6 @@
 
 struct TerrainSurfaceExtension {
     local_detail_weight: f32,
-    imagery_weight: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -17,6 +16,7 @@ struct TerrainSurfaceExtension {
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> terrain_surface: TerrainSurfaceExtension;
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var terrain_imagery_albedo: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var terrain_imagery_albedo_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var<uniform> terrain_imagery_weight: f32;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -54,7 +54,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         mix(
             pbr_input.material.base_color.rgb,
             imagery_albedo.rgb,
-            terrain_surface.imagery_weight,
+            terrain_imagery_weight,
         ),
         pbr_input.material.base_color.a,
     );
