@@ -46,6 +46,20 @@ close-range sharpness. Runtime HTTP tiles were rejected because availability,
 licensing, determinism, and latency would become simulation presentation
 dependencies.
 
+### Reserve local-detail capacity within the existing LOD cover
+
+The visible viewport retains its current bounded cube-sphere cover, but the
+selection reserves a small, explicit subset of that cover for the current
+camera intersection or prelaunch launch direction. That subset is allowed to
+reach the existing local-surface/vegetation threshold before breadth-first
+refinement consumes the entire leaf budget. Coarser ancestors remain published
+for the rest of the viewport and during every handoff.
+
+Raising the global leaf cap or lowering the local-detail threshold was rejected:
+the former increases CPU/GPU pressure for every view, while the latter produces
+low-resolution surface maps and sparse vegetation across patches too large for
+convincing close presentation.
+
 ### Introduce imagery as a terrain-presentation payload
 
 Imagery is independent of the `TerrainSource` and is attached only to ready
@@ -90,6 +104,9 @@ unbounded disk, decode, and GPU memory without prioritizing the flight path.
 - [Imagery upload delays visual refinement] → Preserve global fallback, bound
   uploads below geometry priority, and compare backlog/frame metrics before
   raising any budget.
+- [Focused refinement causes holes or LOD churn] → Reuse the existing balanced
+  selection, parent fallback, hysteresis, cancellation, and protected-cache
+  rules; add focused-prelaunch regression coverage.
 - [Dataset license or source availability changes] → Require manifest version,
   license, source checksum, and offline local package verification.
 - [A virtual or zero-sized display misrepresents rendering performance] → Treat

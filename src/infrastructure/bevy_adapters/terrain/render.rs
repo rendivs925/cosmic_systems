@@ -7,6 +7,9 @@
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
+use crate::domain::services::terrain_imagery::{
+    TerrainImageryManifest, EARTH_IMAGERY_MANIFEST_PATH,
+};
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
@@ -31,6 +34,7 @@ const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
 /// completed terrain batch from stalling camera and HUD presentation.
 const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
+const MAX_IMAGERY_UPDATES_PER_FRAME: usize = 2;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
@@ -50,6 +54,11 @@ struct TerrainSurfaceExtension {
     local_normal: Handle<Image>,
     #[uniform(104)]
     local_detail_weight: f32,
+    #[texture(105)]
+    #[sampler(106)]
+    imagery_albedo: Handle<Image>,
+    #[uniform(107)]
+    imagery_weight: f32,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -70,6 +79,8 @@ pub struct TerrainPatchRenderState {
     /// Per-patch local surface textures. Shared fallback maps are not stored or
     /// released with a patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
+    imagery_handle: Option<Handle<Image>>,
+    imagery_ready: bool,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
@@ -89,6 +100,11 @@ struct TerrainRenderAssets {
     global_surface_maps: HashMap<String, GlobalSurfaceMaps>,
     fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
 }
+
+/// Optional local offline imagery. Absence deliberately leaves the catalog
+/// albedo fallback untouched, including on platforms without native file I/O.
+#[derive(Resource, Default)]
+struct TerrainImageryPackage(Option<TerrainImageryManifest>);
 
 /// Identifies a terrain render entity independently for every planet. Patch
 /// coordinates alone overlap between planets.
@@ -232,10 +248,12 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<PendingTerrainPatchUploads>()
             .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
+            .init_resource::<TerrainImageryPackage>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
+            .add_systems(Startup, load_terrain_imagery_package)
             .add_systems(
                 Update,
                 recenter_render_origin.before(stream_terrain_patches),
@@ -246,12 +264,70 @@ impl Plugin for TerrainRenderPlugin {
                     update_patch_transforms,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
+                    upgrade_offline_imagery_materials,
                     hide_cached_patch_mesh_system,
                     despawn_patch_mesh_system,
                 )
                     .chain()
                     .after(stream_terrain_patches),
             );
+    }
+}
+
+fn load_terrain_imagery_package(mut package: ResMut<TerrainImageryPackage>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(EARTH_IMAGERY_MANIFEST_PATH);
+        match TerrainImageryManifest::load(path) {
+            Ok(manifest) => {
+                bevy::log::info!(
+                    "terrain imagery package available: {} levels {}-{}",
+                    manifest.source_name,
+                    manifest.min_level,
+                    manifest.max_level
+                );
+                package.0 = Some(manifest);
+            }
+            Err(error) => {
+                bevy::log::info!(
+                    "terrain imagery package unavailable; using global fallback: {error}"
+                );
+            }
+        }
+    }
+}
+
+/// Upgrade a published patch only after Bevy has decoded its offline tile.
+/// Geometry and the global overview never wait for this presentation payload.
+fn upgrade_offline_imagery_materials(
+    package: Res<TerrainImageryPackage>,
+    images: Res<Assets<Image>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+    mut patches: Query<&mut TerrainPatchRenderState>,
+) {
+    if package.0.is_none() {
+        return;
+    }
+    let mut upgrades = 0;
+    for mut patch in &mut patches {
+        if upgrades >= MAX_IMAGERY_UPDATES_PER_FRAME || patch.imagery_ready {
+            continue;
+        }
+        let Some(imagery) = patch.imagery_handle.as_ref() else {
+            continue;
+        };
+        if images.get(imagery).is_none() {
+            continue;
+        }
+        let Some(material) = materials.get_mut(patch.material_handle.id()) else {
+            continue;
+        };
+        material.extension.imagery_albedo = imagery.clone();
+        material.extension.imagery_weight = 1.0;
+        patch.imagery_ready = true;
+        upgrades += 1;
     }
 }
 
@@ -271,6 +347,7 @@ fn spawn_patch_mesh_system(
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
+    imagery_package: Res<TerrainImageryPackage>,
     asset_server: Res<AssetServer>,
     mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
@@ -374,8 +451,15 @@ fn spawn_patch_mesh_system(
                 local_albedo,
                 local_normal,
                 local_detail_weight,
+                imagery_albedo: fallback_surface_maps(&mut render_assets, &mut images).0,
+                imagery_weight: 0.0,
             },
         });
+        let imagery_handle = imagery_package
+            .0
+            .as_ref()
+            .and_then(|package| package.tile_path(patch))
+            .map(|path| asset_server.load(path));
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
@@ -426,6 +510,8 @@ fn spawn_patch_mesh_system(
                     mesh_handle: mesh_handle.clone(),
                     material_handle: material_handle.clone(),
                     local_surface_handles,
+                    imagery_handle,
+                    imagery_ready: false,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
@@ -1210,6 +1296,8 @@ mod tests {
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
                     local_surface_handles: None,
+                    imagery_handle: None,
+                    imagery_ready: false,
                     vegetation_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
@@ -1237,6 +1325,8 @@ mod tests {
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
                     local_surface_handles: None,
+                    imagery_handle: None,
+                    imagery_ready: false,
                     vegetation_mesh_handle: None,
                     planet_entity: other_planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
@@ -1499,6 +1589,8 @@ mod tests {
             mesh_handle: mesh_handle.clone(),
             material_handle: material_handle.clone(),
             local_surface_handles: None,
+            imagery_handle: None,
+            imagery_ready: false,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,

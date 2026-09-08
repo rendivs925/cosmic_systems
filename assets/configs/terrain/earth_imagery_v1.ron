@@ -1,0 +1,15 @@
+// Optional offline imagery package. This template stays disabled until a
+// reviewed source package and matching checksum are supplied locally.
+(
+    package_version: 1,
+    body: "Earth",
+    body_fixed_frame: "IAU_EARTH",
+    source_name: "UNCONFIGURED",
+    source_version: "UNCONFIGURED",
+    license: "UNCONFIGURED",
+    source_sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+    tile_root: "large_files/terrain/earth_imagery_v1/tiles",
+    tile_pixels: 256,
+    min_level: 0,
+    max_level: 12,
+)

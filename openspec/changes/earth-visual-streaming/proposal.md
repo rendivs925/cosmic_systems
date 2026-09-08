@@ -1,14 +1,20 @@
 ## Why
 
 The current Earth terrain path provides authoritative elevation, stable
-cube-sphere geometry, and local procedural material detail, but close views are
-limited by one 2048 by 1024 global albedo texture. It cannot deliver a
+cube-sphere geometry, and local procedural material detail, but breadth-first
+LOD allocation exhausts its leaf budget before close views reach the existing
+local-detail threshold. Close views are also limited by one 2048 by 1024 global
+albedo texture. It cannot deliver a
 Google-Earth-style globe-to-ground experience without provenance-backed,
 multi-resolution Earth imagery that streams within the existing terrain
 budgets.
 
 ## What Changes
 
+- Reserve a bounded portion of existing terrain LOD capacity for the active
+  camera or prelaunch focus, so visible local terrain reaches the configured
+  local-surface and vegetation detail level without sacrificing coarse fallback
+  coverage across the viewport.
 - Add an Earth imagery-source contract with a documented, redistributable source,
   datum, coverage, resolution, license, and offline preparation workflow.
 - Add a prepared, multi-resolution imagery package that maps to the existing

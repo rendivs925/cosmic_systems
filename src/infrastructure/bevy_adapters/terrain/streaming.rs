@@ -30,7 +30,7 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
     prepare_patch_surface, supports_local_surfaces, supports_vegetation, PreparedPatchSurface,
-    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
+    LOCAL_SURFACE_MAP_BYTES, LOCAL_SURFACE_MIN_PATCH_LEVEL, MAX_VEGETATION_MESH_BYTES,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -293,6 +293,10 @@ impl TerrainStreamingResource {
         cancellation
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Metrics intentionally capture the complete cadence-limited streaming snapshot."
+    )]
     fn metrics(
         &mut self,
         requested: &BTreeSet<TerrainPatch>,
@@ -300,6 +304,8 @@ impl TerrainStreamingResource {
         completed: TerrainGenerationBatch,
         cancellation: TerrainCancellation,
         evicted_tiles: usize,
+        prelaunch: bool,
+        focus_max_lod: u32,
     ) -> Option<TerrainStreamingMetrics> {
         if !completed.is_reportable() || self.generated.len() < self.next_metrics_report_at {
             return None;
@@ -313,6 +319,8 @@ impl TerrainStreamingResource {
             completed,
             cancellation,
             evicted_tiles,
+            prelaunch,
+            focus_max_lod,
         ))
     }
 }
@@ -428,6 +436,8 @@ struct TerrainStreamingMetrics {
     oldest_inflight_ms: f64,
     cancelled_tiles: usize,
     evicted_tiles: usize,
+    prelaunch: bool,
+    focus_max_lod: u32,
     requested_lods: PatchLevelDistribution,
     target_lods: PatchLevelDistribution,
     visible_lods: PatchLevelDistribution,
@@ -435,6 +445,10 @@ struct TerrainStreamingMetrics {
 }
 
 impl TerrainStreamingMetrics {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Metrics intentionally capture the complete cadence-limited streaming snapshot."
+    )]
     fn capture(
         streaming: &TerrainStreamingResource,
         requested: &BTreeSet<TerrainPatch>,
@@ -442,6 +456,8 @@ impl TerrainStreamingMetrics {
         completed: TerrainGenerationBatch,
         cancellation: TerrainCancellation,
         evicted_tiles: usize,
+        prelaunch: bool,
+        focus_max_lod: u32,
     ) -> Self {
         let upload_backlog_tiles = streaming
             .generated
@@ -466,6 +482,8 @@ impl TerrainStreamingMetrics {
                 .fold(0.0, f64::max),
             cancelled_tiles: cancellation.total(),
             evicted_tiles,
+            prelaunch,
+            focus_max_lod,
             requested_lods: PatchLevelDistribution::from_patches(requested.iter().copied()),
             target_lods: PatchLevelDistribution::from_patches(target.iter().copied()),
             visible_lods: PatchLevelDistribution::from_patches(streaming.published.iter().copied()),
@@ -489,6 +507,8 @@ impl TerrainStreamingMetrics {
             oldest_inflight_ms = self.oldest_inflight_ms,
             cancelled_tiles = self.cancelled_tiles,
             evicted_tiles = self.evicted_tiles,
+            prelaunch = self.prelaunch,
+            focus_max_lod = self.focus_max_lod,
             requested_lods = ?self.requested_lods.0,
             target_lods = ?self.target_lods.0,
             visible_lods = ?self.visible_lods.0,
@@ -673,6 +693,15 @@ pub fn stream_terrain_patches(
         lod_distance_m,
         radius_m,
     );
+    // The first terrain reconciliation can precede rocket-camera setup and
+    // therefore see the stale solar-system camera. The stationary launch-pad
+    // focus must still reach the level where local material and vegetation are
+    // available before liftoff.
+    let max_focus_level = if prelaunch {
+        max_focus_level.max(LOCAL_SURFACE_MIN_PATCH_LEVEL)
+    } else {
+        max_focus_level
+    };
     streaming.cadence.max_focus_level = Some(max_focus_level);
     let camera_projection = CameraProjection {
         position_m: lod_camera_position_m,
@@ -702,6 +731,10 @@ pub fn stream_terrain_patches(
         )
     };
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
+    // The explicit launch/camera lane is a higher-priority requirement than
+    // merge hysteresis; otherwise a previously coarse viewport cover can clamp
+    // its ancestors back below the local surface level.
+    reserve_focus_detail_errors(&mut errors, focus_direction, max_focus_level);
     retain_visible_detail_errors(
         &mut errors,
         &streaming.target_leaves,
@@ -882,6 +915,8 @@ pub fn stream_terrain_patches(
         completed_batch,
         cancellation,
         evicted.len(),
+        prelaunch,
+        max_focus_level,
     ) {
         metrics.log();
     }
@@ -1029,6 +1064,29 @@ fn apply_selection_hysteresis(
         } else if !was_split && *error_px <= split_threshold {
             *error_px = error_px.min(SCREEN_ERROR_PX);
         }
+    }
+}
+
+/// Reserve a small refinement lane around the active launch/camera focus. The
+/// viewport's broad cover otherwise reaches its leaf budget before it can
+/// request the level-12 local material and vegetation patches near the rocket.
+/// Coarse siblings remain in the selected cover and the normal balancing pass
+/// adds only the neighbors needed to preserve the 2:1 invariant.
+fn reserve_focus_detail_errors(
+    errors: &mut BTreeMap<TerrainPatch, f64>,
+    focus_direction: DVec3,
+    max_focus_level: u32,
+) {
+    let detail_level = LOCAL_SURFACE_MIN_PATCH_LEVEL.min(max_focus_level);
+    // Force ancestors to split, but leave the terminal local-detail patch below
+    // the threshold so it remains a selected leaf instead of refining again.
+    let mut patch = TerrainPatch::for_direction(focus_direction, detail_level).parent();
+    while let Some(current) = patch {
+        errors
+            .entry(current)
+            .and_modify(|error| *error = error.max(SCREEN_ERROR_PX * (1.0 + 1e-12)))
+            .or_insert(SCREEN_ERROR_PX * (1.0 + 1e-12));
+        patch = current.parent();
     }
 }
 
@@ -1496,7 +1554,7 @@ fn stale_cached_stitch_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::cube_sphere::CubeFace;
+    use crate::domain::services::cube_sphere::{patches_are_adjacent, CubeFace};
     use crate::infrastructure::bevy_adapters::terrain::surface::VEGETATION_MIN_PATCH_LEVEL;
 
     #[derive(Debug)]
@@ -1600,6 +1658,49 @@ mod tests {
             held, level,
             "small threshold oscillations must not churn LOD"
         );
+    }
+
+    #[test]
+    fn focus_refinement_reaches_the_local_surface_level_without_more_global_leaves() {
+        let focus = DVec3::new(0.3, 0.2, 1.0).normalize();
+        let mut errors = BTreeMap::new();
+        reserve_focus_detail_errors(&mut errors, focus, MAX_PATCH_LEVEL);
+
+        let selection = select_quadtree_leaves(
+            &QuadtreePatchState {
+                ready: BTreeSet::new(),
+                visible: TerrainPatch::roots().into_iter().collect(),
+            },
+            &errors,
+            QuadtreeSelectionConfig {
+                max_level: MAX_PATCH_LEVEL,
+                max_projected_error_px: SCREEN_ERROR_PX,
+                max_neighbor_level_difference: 1,
+            },
+        );
+
+        let focused_patch = TerrainPatch::for_direction(focus, LOCAL_SURFACE_MIN_PATCH_LEVEL);
+        assert!(
+            selection.target_leaves.contains(&focused_patch),
+            "focused patch {focused_patch:?} was not selected; leaves: {:?}",
+            selection.target_leaves
+        );
+        assert_eq!(
+            selection
+                .target_leaves
+                .iter()
+                .map(|patch| patch.level)
+                .max(),
+            Some(LOCAL_SURFACE_MIN_PATCH_LEVEL)
+        );
+        let leaves: Vec<_> = selection.target_leaves.iter().copied().collect();
+        for (index, patch) in leaves.iter().enumerate() {
+            for neighbor in leaves.iter().skip(index + 1) {
+                if patches_are_adjacent(patch, neighbor) {
+                    assert!(patch.level.abs_diff(neighbor.level) <= 1);
+                }
+            }
+        }
     }
 
     #[test]

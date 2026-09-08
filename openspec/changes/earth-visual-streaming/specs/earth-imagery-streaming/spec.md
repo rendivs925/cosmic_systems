@@ -6,6 +6,23 @@ preserving the existing terrain and collision authorities.
 
 ## ADDED Requirements
 
+### Requirement: Visible Earth terrain receives bounded local refinement
+The system SHALL reserve bounded existing terrain LOD capacity for the active
+camera focus or prelaunch launch-site focus. It MUST refine that visible local
+area to the configured local-surface detail level while retaining coarse
+fallback coverage for the rest of the visible viewport.
+
+#### Scenario: Prelaunch close view
+- **WHEN** the rocket is in prelaunch and the presentation camera views the
+  launch area
+- **THEN** the launch-area terrain reaches the configured local-surface detail
+  level without waiting for every visible coarse terrain patch to refine first
+
+#### Scenario: Camera focus moves
+- **WHEN** the active camera focus moves to another visible terrain area
+- **THEN** the system retains ready fallback coverage while prioritizing bounded
+  refinement around the new focus and cancelling obsolete unfinished work
+
 ### Requirement: Earth imagery has documented provenance and offline availability
 The system SHALL accept an Earth imagery package only when its manifest records
 the body-fixed datum, geographic coverage, source resolution, source version,
