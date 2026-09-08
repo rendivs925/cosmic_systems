@@ -59,6 +59,8 @@ struct TerrainSurfaceExtension {
     imagery_albedo: Handle<Image>,
     #[uniform(107)]
     imagery_weight: f32,
+    #[uniform(108)]
+    imagery_uv_scale_offset: Vec4,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -80,6 +82,7 @@ pub struct TerrainPatchRenderState {
     /// released with a patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     imagery_handle: Option<Handle<Image>>,
+    imagery_uv_scale_offset: Vec4,
     imagery_ready: bool,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
@@ -326,8 +329,12 @@ fn upgrade_offline_imagery_materials(
         };
         material.extension.imagery_albedo = imagery.clone();
         material.extension.imagery_weight = 1.0;
+        material.extension.imagery_uv_scale_offset = patch.imagery_uv_scale_offset;
         patch.imagery_ready = true;
         upgrades += 1;
+    }
+    if upgrades > 0 {
+        bevy::log::info!("upgraded {upgrades} terrain patches with offline imagery");
     }
 }
 
@@ -453,13 +460,19 @@ fn spawn_patch_mesh_system(
                 local_detail_weight,
                 imagery_albedo: fallback_surface_maps(&mut render_assets, &mut images).0,
                 imagery_weight: 0.0,
+                imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
             },
         });
         let imagery_handle = imagery_package
             .0
             .as_ref()
-            .and_then(|package| package.tile_path(patch))
-            .map(|path| asset_server.load(path));
+            .and_then(|package| package.best_tile_for(patch));
+        let imagery_uv_scale_offset = imagery_handle
+            .as_ref()
+            .map_or(Vec4::new(1.0, 1.0, 0.0, 0.0), |tile| {
+                Vec4::from_array(tile.uv_scale_offset)
+            });
+        let imagery_handle = imagery_handle.map(|tile| asset_server.load(tile.asset_path));
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
@@ -511,6 +524,7 @@ fn spawn_patch_mesh_system(
                     material_handle: material_handle.clone(),
                     local_surface_handles,
                     imagery_handle,
+                    imagery_uv_scale_offset,
                     imagery_ready: false,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
@@ -1297,6 +1311,7 @@ mod tests {
                     material_handle: Handle::default(),
                     local_surface_handles: None,
                     imagery_handle: None,
+                    imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
                     imagery_ready: false,
                     vegetation_mesh_handle: None,
                     planet_entity,
@@ -1326,6 +1341,7 @@ mod tests {
                     material_handle: Handle::default(),
                     local_surface_handles: None,
                     imagery_handle: None,
+                    imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
                     imagery_ready: false,
                     vegetation_mesh_handle: None,
                     planet_entity: other_planet_entity,
@@ -1590,6 +1606,7 @@ mod tests {
             material_handle: material_handle.clone(),
             local_surface_handles: None,
             imagery_handle: None,
+            imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
             imagery_ready: false,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             planet_entity: Entity::PLACEHOLDER,

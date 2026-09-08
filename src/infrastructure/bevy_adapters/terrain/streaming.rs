@@ -145,9 +145,10 @@ pub fn collect_terrain_warmup_tasks(mut warmup_tasks: ResMut<TerrainWarmupTasks>
         .retain_mut(|task| block_on(future::poll_once(task)).is_none());
 }
 
-/// Start the root that contains the stationary launch vehicle while it is in
-/// the pre-launch hold. The regular streaming system owns subsequent task
-/// completion and publication, so this only advances the existing lifecycle.
+/// Build and publish the root that contains the stationary launch vehicle
+/// before the first presentation frame. Rocket mode hides the solar-scale Earth
+/// proxy, so deferring this one coarse fallback to the worker queue leaves the
+/// camera looking at clear sky until terrain streaming catches up.
 pub fn prebake_prelaunch_launchpad_patch(
     mut streaming: ResMut<TerrainStreamingResource>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
@@ -161,6 +162,7 @@ pub fn prebake_prelaunch_launchpad_patch(
     >,
     config: Res<TerrainRenderConfig>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
+    mut ready_events: MessageWriter<TerrainPatchReady>,
 ) {
     let Some((mission, binding, rocket)) = rocket_query.iter().next() else {
         return;
@@ -197,17 +199,33 @@ pub fn prebake_prelaunch_launchpad_patch(
         estimated_patch_bytes(patch, config.patch_resolution_for(patch)),
     );
 
-    streaming.begin_bake(
-        TerrainPatchBakeRequest {
-            patch,
-            source: terrain.source.clone(),
-            radius_m,
-            resolution: config.patch_resolution_for(patch),
-            skirt_depth_m: config.skirt_depth_m,
-            stitched_edges: Vec::new(),
-        },
-        AsyncComputeTaskPool::get(),
+    let (latitude_deg, longitude_deg) = direction_to_lat_lon(patch.center_direction());
+    terrain.source.prepare_sample(latitude_deg, longitude_deg);
+    let geometry = build_streamed_patch_geometry(
+        &patch,
+        terrain.source.as_ref(),
+        radius_m,
+        config.patch_resolution_for(patch),
+        config.skirt_depth_m,
+        &[],
     );
+    let surface = prepare_patch_surface(terrain.source.as_ref(), &patch, &geometry, radius_m);
+    streaming.generated.insert(
+        patch,
+        CachedTerrainGeometry {
+            geometry,
+            surface: Some(surface),
+            stitch_mask: 0,
+        },
+    );
+    streaming.manager.mark_ready(&patch);
+    streaming.manager.mark_visible(&patch);
+    streaming.published.insert(patch);
+    ready_events.write(TerrainPatchReady {
+        patch,
+        planet_entity,
+    });
+    bevy::log::info!("published synchronous prelaunch terrain fallback: {patch:?}");
 }
 
 impl Default for TerrainStreamingResource {

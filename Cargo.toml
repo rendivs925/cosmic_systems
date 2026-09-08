@@ -69,3 +69,8 @@ required-features = ["dem"]
 name = "earth_imagery_convert"
 path = "src/bin/earth_imagery_convert.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "earth_imagery_crop_convert"
+path = "src/bin/earth_imagery_crop_convert.rs"
+required-features = ["native"]

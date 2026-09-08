@@ -10,10 +10,11 @@
 
 use crate::domain::math::DVec3;
 use crate::domain::services::terrain_source::TerrainSource;
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The six faces of the cube-sphere.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CubeFace {
     PosX,
     NegX,
@@ -105,7 +106,7 @@ pub fn face_uv_to_direction(face: CubeFace, u: f64, v: f64) -> DVec3 {
 }
 
 /// A quadtree patch on a cube face: face + level + tile coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TerrainPatch {
     pub face: CubeFace,
     pub level: u32,

@@ -17,6 +17,7 @@ struct TerrainSurfaceExtension {
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var terrain_imagery_albedo: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var terrain_imagery_albedo_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var<uniform> terrain_imagery_weight: f32;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var<uniform> terrain_imagery_uv_scale_offset: vec4<f32>;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -45,16 +46,23 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // The offline cube-sphere tile is the final geographic albedo for this
     // exact patch. It replaces the global overview only after the asset loader
     // has decoded it; until then imagery_weight remains zero.
+    let imagery_uv = in.uv_b * terrain_imagery_uv_scale_offset.xy
+        + terrain_imagery_uv_scale_offset.zw;
     let imagery_albedo = textureSample(
         terrain_imagery_albedo,
         terrain_imagery_albedo_sampler,
-        in.uv_b,
+        imagery_uv,
+    );
+    let imagery_coverage = select(
+        0.0,
+        1.0,
+        all(imagery_uv >= vec2<f32>(0.0)) && all(imagery_uv <= vec2<f32>(1.0)),
     );
     pbr_input.material.base_color = vec4(
         mix(
             pbr_input.material.base_color.rgb,
             imagery_albedo.rgb,
-            terrain_imagery_weight,
+            terrain_imagery_weight * imagery_albedo.a * imagery_coverage,
         ),
         pbr_input.material.base_color.a,
     );
