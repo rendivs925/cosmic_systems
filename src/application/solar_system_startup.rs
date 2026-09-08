@@ -87,7 +87,7 @@ pub fn setup_space(
 
     // Camera positioned to view the full set of orbits on load.
     // Craft mode keeps this controller for solar systems that query it, but disables rendering.
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
         Camera {
             is_active: solar_camera_active,
@@ -124,6 +124,11 @@ pub fn setup_space(
             zoom_sensitivity: 50.0,       // Mouse wheel zoom multiplier
         },
     ));
+    // Bevy requires this driver workaround to be present when the camera is
+    // spawned. Inserting it later leaves indirect drawing behavior unspecified.
+    if rocket_mode.is_some() {
+        camera.insert(bevy::render::view::NoIndirectDrawing);
+    }
 
     // The Sun is an isotropic point emitter at solar-map scale. Its luminous
     // power is calibrated to direct sunlight at one rendered AU.

@@ -76,21 +76,16 @@ pub fn setup_rocket_camera_and_origin(
             proj.near = 0.5;
             proj.far = 100_000.0;
         }
-        // Workaround for bevyengine/bevy#18904: with GPU preprocessing on,
-        // meshes that pass CPU visibility (rocket, pad primitives) silently
-        // drop out of the indirect-draw path on this driver. Drawing directly
-        // keeps every visible mesh on screen.
-        commands.entity(entity).insert((
-            bevy::render::view::NoIndirectDrawing,
-            // Presentation-only low-altitude haze makes the distant
-            // terrain recede naturally without changing surface lighting.
+        commands.entity(entity).insert(
+            // Presentation-only low-altitude haze makes the distant terrain
+            // recede naturally without changing surface lighting.
             DistanceFog {
                 color: Color::srgba(0.52, 0.68, 0.9, 1.0),
                 directional_light_color: Color::srgb(1.0, 0.94, 0.8),
                 directional_light_exponent: 8.0,
                 falloff: FogFalloff::from_visibility(25_000.0),
             },
-        ));
+        );
     }
 }
 
