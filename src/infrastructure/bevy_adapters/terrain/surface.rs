@@ -41,25 +41,39 @@ const BOULDER_SEGMENTS: usize = 6;
 const BOULDER_RINGS: usize = 3;
 const VEGETATION_BYTES_PER_VERTEX: u64 = 40;
 const VEGETATION_BYTES_PER_INDEX: u64 = 4;
-
-/// Vegetation is only useful on the finest terrain tiles. Generating it for
-/// coarse parent coverage spends CPU, GPU memory, and draw calls on scatter
-/// that is too distant to resolve.
+/// Vegetation is deferred until close-range geometry is available. Source-based
+/// biome and normal maps remain enabled at every LOD so the first published
+/// terrain root is not an untextured flat presentation.
 pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
-
-/// Local surface maps are reserved for the same close-range terrain level as
-/// vegetation so their source sampling and GPU residency stay bounded.
-pub(crate) const LOCAL_SURFACE_MIN_PATCH_LEVEL: u32 = VEGETATION_MIN_PATCH_LEVEL;
 
 /// Albedo and normal maps are both RGBA8 textures.
 pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 = SURFACE_TEX_RES as u64 * SURFACE_TEX_RES as u64 * 8;
+
+/// Conservative maximum allocation for one merged vegetation mesh. Streaming
+/// reserves it for close patches before worker generation knows their biome.
+pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
+    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + 2 * (FOLIAGE_SEGMENTS + 1);
+    let tree_indices = TRUNK_SEGMENTS * 6 + FOLIAGE_SEGMENTS * 6;
+    let boulder_vertices = (BOULDER_RINGS + 1) * BOULDER_SEGMENTS;
+    let boulder_indices = BOULDER_RINGS * BOULDER_SEGMENTS * 6;
+    let grass_vertices = 6;
+    let grass_indices = 6;
+    let vertices = TREE_COUNT * tree_vertices
+        + ROCK_COUNT * boulder_vertices
+        + GRASS_CLUMP_COUNT * grass_vertices;
+    let indices = TREE_COUNT * tree_indices
+        + ROCK_COUNT * boulder_indices
+        + GRASS_CLUMP_COUNT * grass_indices;
+    vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
+};
 
 pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
     patch_level >= VEGETATION_MIN_PATCH_LEVEL
 }
 
 pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
-    patch_level >= LOCAL_SURFACE_MIN_PATCH_LEVEL
+    let _ = patch_level;
+    true
 }
 
 /// Source-derived patch data built by the streaming worker and consumed once by
@@ -79,9 +93,9 @@ pub(crate) fn prepare_patch_surface(
     geometry: &PatchGeometry,
     radius_m: f64,
 ) -> PreparedPatchSurface {
-    // Global Earth albedo is the macro terrain color at every LOD. Fine patches
-    // add one local modulation map; vertex colors must stay neutral so Bevy's
-    // StandardMaterial path cannot multiply the same biome signal twice.
+    // Global Earth albedo supplies the broad geography; the worker-generated
+    // local map supplies deterministic source-derived terrain character at
+    // every LOD, including the initial coarse root cover.
     let uses_erosion_surface_data = supports_local_surfaces(patch.level);
     let vertex_colors = vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()];
 
@@ -122,25 +136,6 @@ pub(crate) fn prepare_patch_surface(
         vegetation,
     }
 }
-
-/// Conservative maximum allocation for one merged vegetation mesh. The
-/// streaming budget uses this for vegetation-eligible patches before it knows
-/// their biome.
-pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
-    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + 2 * (FOLIAGE_SEGMENTS + 1);
-    let tree_indices = TRUNK_SEGMENTS * 6 + FOLIAGE_SEGMENTS * 6;
-    let boulder_vertices = (BOULDER_RINGS + 1) * BOULDER_SEGMENTS;
-    let boulder_indices = BOULDER_RINGS * BOULDER_SEGMENTS * 6;
-    let grass_vertices = 6;
-    let grass_indices = 6;
-    let vertices = TREE_COUNT * tree_vertices
-        + ROCK_COUNT * boulder_vertices
-        + GRASS_CLUMP_COUNT * grass_vertices;
-    let indices = TREE_COUNT * tree_indices
-        + ROCK_COUNT * boulder_indices
-        + GRASS_CLUMP_COUNT * grass_indices;
-    vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
-};
 
 /// Texture resolution (texels per side) for close-patch surface maps. At the
 /// finest ~10 km Earth tiles this retains material detail below 80 m per texel
@@ -215,10 +210,7 @@ pub fn build_patch_surfaces(
                 source.river_strength(la, lo),
             );
 
-            // The global catalog albedo owns macro geography. Local samples
-            // encode only a bounded linear material modulation, so local detail
-            // enriches that imagery instead of replacing it with procedural tan.
-            let [r, g, b, _] = terrain_albedo_modulation(appearance);
+            let [r, g, b, _] = terrain_albedo(appearance);
             albedo.extend_from_slice(&[
                 (r * 255.0) as u8,
                 (g * 255.0) as u8,
@@ -281,17 +273,15 @@ pub fn build_patch_surfaces(
     (albedo_img, normal_img)
 }
 
-/// Convert procedural biome data into a restrained linear darkening multiplier
-/// for the Earth albedo. Keeping the range within UNorm avoids clipped local
-/// texture data and leaves catalog imagery as the dominant terrain appearance.
-fn terrain_albedo_modulation(
+/// Convert the authoritative biome appearance into unpremultiplied linear color
+/// for the terrain's complete source-derived albedo map.
+fn terrain_albedo(
     appearance: crate::domain::services::terrain_source::SurfaceAppearance,
 ) -> [f32; 4] {
-    let map_channel = |channel: f32| 0.86 + channel.clamp(0.0, 1.0) * 0.14;
     [
-        map_channel(appearance.albedo[0]),
-        map_channel(appearance.albedo[1]),
-        map_channel(appearance.albedo[2]),
+        appearance.albedo[0].clamp(0.0, 1.0),
+        appearance.albedo[1].clamp(0.0, 1.0),
+        appearance.albedo[2].clamp(0.0, 1.0),
         1.0,
     ]
 }
@@ -764,12 +754,12 @@ mod tests {
     }
 
     #[test]
-    fn terrain_modulation_is_subtle_and_representable_as_unorm() {
-        let grass = terrain_albedo_modulation(surface_appearance(300.0, 0.6, 0.5, 5.0));
-        let rock = terrain_albedo_modulation(surface_appearance(1_500.0, 0.4, 0.5, 60.0));
+    fn terrain_albedo_preserves_source_biome_color_in_unorm_range() {
+        let grass = terrain_albedo(surface_appearance(300.0, 0.6, 0.5, 5.0));
+        let rock = terrain_albedo(surface_appearance(1_500.0, 0.4, 0.5, 60.0));
 
         for channel in grass.into_iter().chain(rock) {
-            assert!((0.86..=1.0).contains(&channel));
+            assert!((0.0..=1.0).contains(&channel));
         }
         assert!(grass[1] > grass[0]);
         assert!(rock[0] > grass[0]);
@@ -921,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn vegetation_is_limited_to_the_finest_terrain_tiles() {
+    fn deterministic_vegetation_is_restricted_to_close_range_patches() {
         assert!(!supports_vegetation(VEGETATION_MIN_PATCH_LEVEL - 1));
         assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
     }

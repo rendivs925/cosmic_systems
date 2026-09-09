@@ -8,7 +8,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::entity_components::Starfield;
+use crate::infrastructure::bevy_adapters::entity_components::{FlightStarfield, Starfield};
 
 const STAR_SEED: u64 = 0xC05F_1C5A;
 const NEAR_STAR_COUNT: usize = 2_000;
@@ -18,6 +18,44 @@ const MILKY_WAY_GLOW_COUNT: usize = 80;
 const STARFIELD_NEAR_RADIUS_AU: f32 = 65.0;
 const STARFIELD_FAR_RADIUS_AU: f32 = 110.0;
 const BRIGHT_STAR_GLOW_THRESHOLD: f32 = 0.93;
+
+/// Mark the shared solar-map star mesh for camera-relative flight presentation.
+pub fn configure_flight_starfield(
+    mut commands: Commands,
+    starfield_query: Query<Entity, With<Starfield>>,
+) {
+    for entity in &starfield_query {
+        commands.entity(entity).insert(FlightStarfield);
+    }
+}
+
+/// Keep the solar-map star distribution inside the current flight camera's
+/// depth range. Scaling the mesh preserves each star's angular size while the
+/// current camera transform prevents rebase and camera-transition jitter.
+#[expect(
+    clippy::type_complexity,
+    reason = "The query proves that the active flight camera and star mesh are disjoint."
+)]
+pub fn update_flight_starfield(
+    solar_params: Res<SolarSystemParameters>,
+    camera_query: Query<(&Camera, &Transform, &Projection), (With<Camera3d>, Without<Starfield>)>,
+    mut starfield_query: Query<&mut Transform, (With<Starfield>, With<FlightStarfield>)>,
+) {
+    let Some((_, camera_transform, projection)) =
+        camera_query.iter().find(|(camera, _, _)| camera.is_active)
+    else {
+        return;
+    };
+    let Projection::Perspective(projection) = projection else {
+        return;
+    };
+    let source_radius = solar_params.au_to_units(STARFIELD_FAR_RADIUS_AU).max(1.0);
+    let scale = (projection.far * 0.92 / source_radius).max(f32::MIN_POSITIVE);
+    for mut starfield_transform in &mut starfield_query {
+        starfield_transform.translation = camera_transform.translation;
+        starfield_transform.scale = Vec3::splat(scale);
+    }
+}
 
 pub fn spawn_starfield(
     commands: &mut Commands,

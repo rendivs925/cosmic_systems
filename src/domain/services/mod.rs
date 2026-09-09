@@ -13,6 +13,7 @@ pub mod erosion;
 pub mod gravity;
 pub mod guidance;
 pub mod landing_gear;
+pub mod local_elevation;
 pub mod long_arc_propagation;
 pub mod physics;
 pub mod physics_orbital;

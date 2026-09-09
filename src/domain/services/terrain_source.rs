@@ -19,10 +19,12 @@ use std::sync::{Arc, OnceLock};
 use std::path::Path;
 
 use crate::domain::services::cube_sphere::{
-    face_uv_to_direction, PatchGeometricError, TerrainPatch,
+    face_uv, face_uv_to_direction, PatchGeometricError, TerrainPatch,
 };
 #[cfg(feature = "dem")]
 use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
+#[cfg(feature = "dem")]
+use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -56,6 +58,15 @@ const CONTINENTAL_SCALE: f64 = 1.35;
 const CONTINENTAL_AMPLITUDE: f64 = 1.1;
 const ROLLING_AMPLITUDE: f64 = 1.4;
 const OROGENY_SCALE: f64 = 0.32;
+
+/// Deterministic physical landscape added to Earth's measured ETOPO elevation.
+/// The regional mask in `ProceduralTerrainSource` keeps its mountain chains
+/// localized instead of applying ridges uniformly across the planet.
+const EARTH_SYNTHETIC_LANDSCAPE_SEED: u64 = 0xE4A7_D371;
+const EARTH_SYNTHETIC_ROLLING_AMPLITUDE_M: f64 = 650.0;
+const EARTH_SYNTHETIC_MOUNTAIN_AMPLITUDE_M: f64 = 2_200.0;
+const EARTH_SYNTHETIC_LOCAL_DETAIL_SEED: u64 = 0x5A17_4D09;
+const TERRAIN_DETAIL_BIOME_WEIGHT: f64 = 0.65;
 
 #[cfg(feature = "dem")]
 const DEFAULT_EARTH_DEM_PATH: &str =
@@ -201,6 +212,38 @@ pub trait TerrainSource: Send + Sync + Debug {
     /// latitude linearly; planets cold/temperate callers may override.
     fn zone_lat(&self, latitude_deg: f64) -> f64 {
         ((latitude_deg + 90.0) / 180.0).clamp(0.0, 1.0)
+    }
+}
+
+#[cfg(feature = "dem")]
+impl LocalElevationOverlayTerrainSource {
+    fn local_intersects_patch(&self, patch: &TerrainPatch) -> bool {
+        let (west, south, east, north) = self.local.coverage_bounds_deg();
+        let mut bounds: Option<(f64, f64, f64, f64)> = None;
+        for (latitude_deg, longitude_deg) in
+            [(south, west), (south, east), (north, west), (north, east)]
+        {
+            let latitude_rad = latitude_deg.to_radians();
+            let longitude_rad = longitude_deg.to_radians();
+            let direction = DVec3::new(
+                latitude_rad.cos() * longitude_rad.cos(),
+                latitude_rad.sin(),
+                latitude_rad.cos() * longitude_rad.sin(),
+            );
+            let (face, u, v) = face_uv(direction);
+            if face != patch.face {
+                return true;
+            }
+            bounds = Some(match bounds {
+                Some((u0, v0, u1, v1)) => (u0.min(u), v0.min(v), u1.max(u), v1.max(v)),
+                None => (u, v, u, v),
+            });
+        }
+        let Some((u0, v0, u1, v1)) = bounds else {
+            return true;
+        };
+        let (patch_u0, patch_v0, patch_u1, patch_v1) = patch.uv_bounds();
+        u0 <= patch_u1 && u1 >= patch_u0 && v0 <= patch_v1 && v1 >= patch_v0
     }
 }
 
@@ -417,12 +460,23 @@ impl TerrainSource for LayeredTerrainSource {
     }
 
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.primary_surface().moisture(latitude_deg, longitude_deg)
+        let primary = self.primary_surface().moisture(latitude_deg, longitude_deg);
+        let Some(detail) = &self.procedural_detail else {
+            return primary;
+        };
+        primary
+            + (detail.source.moisture(latitude_deg, longitude_deg) - primary)
+                * TERRAIN_DETAIL_BIOME_WEIGHT
     }
 
     fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.primary_surface()
-            .river_strength(latitude_deg, longitude_deg)
+        let primary = self
+            .primary_surface()
+            .river_strength(latitude_deg, longitude_deg);
+        self.procedural_detail
+            .as_ref()
+            .map(|detail| primary.max(detail.source.river_strength(latitude_deg, longitude_deg)))
+            .unwrap_or(primary)
     }
 
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -793,17 +847,31 @@ impl LocalDetailTerrainSource {
             direction.z * 25_000.0,
             3,
         ) - 0.5;
+        let drainage = self.drainage_strength_for_direction(direction);
+        (ridges * 48.0 - drainage * 12.0).clamp(
+            Self::elevation_bounds_m().min_m,
+            Self::elevation_bounds_m().max_m,
+        )
+    }
+
+    fn drainage_strength_for_direction(&self, direction: DVec3) -> f64 {
         let drainage_noise = self.noise.value_noise3(
             self.seed ^ 0xD2A1_6A6E,
             direction.x * 60_000.0,
             direction.y * 60_000.0,
             direction.z * 60_000.0,
         );
-        let drainage = (1.0 - (drainage_noise * 2.0 - 1.0).abs()).powi(3);
-        (ridges * 48.0 - drainage * 12.0).clamp(
-            Self::elevation_bounds_m().min_m,
-            Self::elevation_bounds_m().max_m,
-        )
+        (1.0 - (drainage_noise * 2.0 - 1.0).abs()).powi(3)
+    }
+
+    fn drainage_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        self.drainage_strength_for_direction(DVec3::new(
+            lat.cos() * lon.cos(),
+            lat.sin(),
+            lat.cos() * lon.sin(),
+        ))
     }
 }
 
@@ -837,7 +905,9 @@ impl TerrainSource for LocalDetailTerrainSource {
     }
 
     fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.river_strength(latitude_deg, longitude_deg)
+        self.base
+            .river_strength(latitude_deg, longitude_deg)
+            .max(self.drainage_strength(latitude_deg, longitude_deg))
     }
 
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -1211,9 +1281,10 @@ impl TerrainSource for FlatTerrainSource {
     }
 }
 
-/// Earth's one authoritative terrain composition. Rendering and collision use
-/// the same deterministic source selected at startup; no runtime download or
-/// per-sample fallback path exists at this boundary.
+/// Earth's one authoritative terrain composition. Measured ETOPO elevation is
+/// enriched by a deterministic physical landscape; rendering and collision use
+/// the same source selected at startup, with no runtime download or per-sample
+/// fallback path at this boundary.
 #[derive(Debug)]
 pub struct EarthTerrainSource {
     source: Arc<SiteAwareTerrainSource>,
@@ -1241,6 +1312,32 @@ impl EarthTerrainSource {
         )))
     }
 
+    /// Use a reviewed local elevation package as an absolute replacement within
+    /// its coverage. Its samples must already use the Earth's terrain datum;
+    /// this constructor does not transform horizontal or vertical reference
+    /// frames. The global DEM remains authoritative outside local coverage.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_and_local_elevation_paths(
+        global_dem_path: impl AsRef<Path>,
+        local_elevation_path: impl AsRef<Path>,
+    ) -> Result<Self, EarthTerrainDataError> {
+        let global = Arc::new(DemTerrainSource::from_path(global_dem_path)?);
+        let local = Arc::new(LocalElevationPackage::from_path(local_elevation_path)?);
+        if local.metadata().body != "Earth" {
+            return Err(EarthTerrainDataError::InvalidLocalElevation(
+                "local elevation package body must be Earth".into(),
+            ));
+        }
+        if local.elevation_bounds_m().is_none() {
+            return Err(EarthTerrainDataError::InvalidLocalElevation(
+                "local elevation package contains no valid samples".into(),
+            ));
+        }
+        Ok(Self::with_global_elevation(Arc::new(
+            LocalElevationOverlayTerrainSource { global, local },
+        )))
+    }
+
     /// Use a local DEM when it exists, otherwise retain the deterministic
     /// procedural Earth source. Corrupt or incompatible files are errors rather
     /// than silently changing terrain authority.
@@ -1256,10 +1353,24 @@ impl EarthTerrainSource {
     }
 
     fn with_global_elevation(global_elevation: Arc<dyn TerrainSource>) -> Self {
-        let detail = Arc::new(LocalDetailTerrainSource::new(
-            Arc::new(FlatTerrainSource),
-            0xE4A7_D371,
+        Self::with_global_elevation_and_sites(global_elevation, Self::sites())
+    }
+
+    fn with_global_elevation_and_sites(
+        global_elevation: Arc<dyn TerrainSource>,
+        sites: Vec<TerrainSite>,
+    ) -> Self {
+        let landscape = Arc::new(ProceduralTerrainSource::new(
+            EARTH_SYNTHETIC_LANDSCAPE_SEED,
+            EARTH_SYNTHETIC_ROLLING_AMPLITUDE_M,
+            EARTH_SYNTHETIC_MOUNTAIN_AMPLITUDE_M,
+            0,
         ));
+        let detail = Arc::new(LocalDetailTerrainSource::new(
+            landscape,
+            EARTH_SYNTHETIC_LOCAL_DETAIL_SEED,
+        ));
+        let detail_bounds = detail.elevation_bounds_m();
         let layered = Arc::new(LayeredTerrainSource::new(
             TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0)),
             Some(TerrainElevationLayer::new(
@@ -1268,12 +1379,12 @@ impl EarthTerrainSource {
             )),
             Some(TerrainDetailLayer::new(
                 detail,
-                LocalDetailTerrainSource::elevation_bounds_m(),
+                detail_bounds,
                 DetailLodFade::new(3, 6),
             )),
         ));
         Self {
-            source: Arc::new(SiteAwareTerrainSource::new(layered, Self::sites())),
+            source: Arc::new(SiteAwareTerrainSource::new(layered, sites)),
         }
     }
 
@@ -1318,6 +1429,78 @@ impl EarthTerrainSource {
                 elevation_m: 0.0,
             },
         ]
+    }
+}
+
+/// Failures when assembling Earth's reviewed global and local elevation data.
+#[cfg(feature = "dem")]
+#[derive(Debug)]
+pub enum EarthTerrainDataError {
+    GlobalDem(DemError),
+    LocalElevation(LocalElevationError),
+    InvalidLocalElevation(String),
+}
+
+#[cfg(feature = "dem")]
+impl From<DemError> for EarthTerrainDataError {
+    fn from(error: DemError) -> Self {
+        Self::GlobalDem(error)
+    }
+}
+
+#[cfg(feature = "dem")]
+impl From<LocalElevationError> for EarthTerrainDataError {
+    fn from(error: LocalElevationError) -> Self {
+        Self::LocalElevation(error)
+    }
+}
+
+/// Selects measured, datum-normalized local elevation over the global source.
+#[cfg(feature = "dem")]
+#[derive(Debug)]
+struct LocalElevationOverlayTerrainSource {
+    global: Arc<DemTerrainSource>,
+    local: Arc<LocalElevationPackage>,
+}
+
+#[cfg(feature = "dem")]
+impl TerrainSource for LocalElevationOverlayTerrainSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let global = self.global.height_m(latitude_deg, longitude_deg);
+        let Some(local) = self.local.sample_m(latitude_deg, longitude_deg) else {
+            return global;
+        };
+        let border_deg = self.local.metadata().blend_border_m / 111_320.0;
+        if border_deg == 0.0 {
+            return local;
+        }
+        let edge_distance = self.local.edge_distance_deg(latitude_deg, longitude_deg);
+        let t = (edge_distance / border_deg).clamp(0.0, 1.0);
+        global + (local - global) * (t * t * (3.0 - 2.0 * t))
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        let global = self.global.elevation_bounds_m();
+        let Some((local_min_m, local_max_m)) = self.local.elevation_bounds_m() else {
+            return global;
+        };
+        ElevationBounds::new(global.min_m.min(local_min_m), global.max_m.max(local_max_m))
+    }
+
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        if !self.local_intersects_patch(patch) {
+            return self.global.patch_geometric_error(patch);
+        }
+        let bounds = self.elevation_bounds_m();
+        PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
+    }
+
+    fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
+        if self.height_m(latitude_deg, longitude_deg) <= 0.0 {
+            SurfaceClass::Ocean
+        } else {
+            SurfaceClass::Land
+        }
     }
 }
 
@@ -1474,6 +1657,51 @@ mod tests {
     }
 
     #[test]
+    fn enriched_earth_landscape_is_shared_by_mesh_and_collision() {
+        let source = EarthTerrainSource::with_global_elevation_and_sites(
+            Arc::new(FlatTerrainSource),
+            Vec::new(),
+        );
+        let samples = [
+            (-48.0, -132.0),
+            (-21.0, 47.0),
+            (8.0, 91.0),
+            (28.5, -80.6),
+            (43.0, 16.0),
+            (67.0, 138.0),
+        ];
+        let heights: Vec<_> = samples
+            .iter()
+            .map(|(latitude_deg, longitude_deg)| source.height_m(*latitude_deg, *longitude_deg))
+            .collect();
+        let range_m = heights.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - heights.iter().copied().fold(f64::INFINITY, f64::min);
+
+        assert!(
+            range_m > 400.0,
+            "the deterministic landscape needs visible regional relief, got {range_m:.1} m"
+        );
+        for ((latitude_deg, longitude_deg), height_m) in samples.into_iter().zip(heights) {
+            assert_eq!(
+                source.mesh_height_m(latitude_deg, longitude_deg, 8),
+                height_m,
+                "mesh generation must sample the authoritative landscape"
+            );
+            let collision = crate::domain::services::terrain_collision::sample_surface(
+                &source,
+                latitude_deg,
+                longitude_deg,
+                6_371_000.0,
+            );
+            assert_eq!(
+                collision.height_m, height_m,
+                "collision must sample the same authoritative landscape"
+            );
+            assert!(collision.normal.is_finite());
+        }
+    }
+
+    #[test]
     fn surface_sample_preserves_legacy_terrain_metadata_defaults() {
         let source = FlatTerrainSource;
         assert_eq!(
@@ -1485,6 +1713,55 @@ mod tests {
                 surface_class: SurfaceClass::Ocean,
             }
         );
+    }
+
+    #[derive(Debug)]
+    struct TerrainMetadataSource {
+        moisture: f64,
+        river_strength: f64,
+    }
+
+    impl TerrainSource for TerrainMetadataSource {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(0.0, 0.0)
+        }
+
+        fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.moisture
+        }
+
+        fn river_strength(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.river_strength
+        }
+    }
+
+    #[test]
+    fn layered_source_exposes_detail_biomes_and_drainage() {
+        let layered = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0)),
+            Some(TerrainElevationLayer::new(
+                Arc::new(TerrainMetadataSource {
+                    moisture: 0.2,
+                    river_strength: 0.1,
+                }),
+                ElevationBounds::new(0.0, 0.0),
+            )),
+            Some(TerrainDetailLayer::new(
+                Arc::new(TerrainMetadataSource {
+                    moisture: 0.8,
+                    river_strength: 0.7,
+                }),
+                ElevationBounds::new(0.0, 0.0),
+                DetailLodFade::new(3, 6),
+            )),
+        );
+
+        assert!((layered.moisture(0.0, 0.0) - 0.59).abs() < 1e-12);
+        assert_eq!(layered.river_strength(0.0, 0.0), 0.7);
     }
 
     #[cfg(feature = "dem")]
@@ -1515,6 +1792,47 @@ mod tests {
 
         assert_eq!(source.height_m(0.0, 0.0), -200.0);
         assert_eq!(source.surface_class(0.0, 0.0), SurfaceClass::Land);
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn local_elevation_overlay_replaces_only_covered_global_samples() {
+        let source = LocalElevationOverlayTerrainSource {
+            global: Arc::new(DemTerrainSource::from_dem(
+                CubeSphereDem::new(2, vec![10; 24]).expect("valid cube-sphere DEM"),
+            )),
+            local: Arc::new(
+                LocalElevationPackage::from_samples(
+                    2,
+                    2,
+                    -1.0,
+                    -1.0,
+                    1.0,
+                    1.0,
+                    crate::domain::services::local_elevation::LocalElevationMetadata {
+                        body: "Earth".into(),
+                        coordinate_frame: "terrain-radial-degrees".into(),
+                        horizontal_datum: "WGS84".into(),
+                        vertical_datum: "test".into(),
+                        source_resolution_m: 1.0,
+                        nodata_policy: "fallback".into(),
+                        source_sha256: "0".repeat(64),
+                        license: "test".into(),
+                        conversion_version: 1,
+                        blend_border_m: 0.0,
+                    },
+                    vec![50.0; 4],
+                )
+                .expect("valid local elevation package"),
+            ),
+        };
+
+        assert_eq!(source.height_m(0.0, 0.0), 50.0);
+        assert_eq!(source.height_m(10.0, 10.0), 10.0);
+        assert_eq!(
+            source.elevation_bounds_m(),
+            ElevationBounds::new(10.0, 50.0)
+        );
     }
 
     #[test]

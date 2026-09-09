@@ -66,6 +66,10 @@ collision, or terrain authority.
   `-80.62843612`, north `28.58676190` degrees in EPSG:4326.
 - Export: `4000×3400` RGBA natural-color PNG from the `exportImage` endpoint.
 - Source SHA-256: `cbcb50518c9aae1ce920d1494af84e219faf08c76f46e3627768af7d7c5f0bf2`.
-- Cube coverage: `NegZ`, level `12`, tile `(2385, 3178)`.
+- Cube coverage: `NegZ`, level `12`, tile `(2385, 3170)`.
 - Baked output: `2048×2048` RGBA PNG, SHA-256
   `4cfd7065a9605ee2ea09afd89215ce6a52f3ba4ec1d7087ff6dfb1f1d395d8e7`.
+
+The prior `2385_3178` output was projected for the wrong cube tile and is not
+valid for KSC. Regenerate the baked output at `2385_3170` from the documented
+source bounds before enabling this sparse local package.

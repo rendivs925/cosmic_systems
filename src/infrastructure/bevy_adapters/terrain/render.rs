@@ -12,9 +12,6 @@ use crate::domain::services::terrain_imagery::{
 };
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
-use crate::infrastructure::bevy_adapters::rendering::textures::{
-    get_planet_textures, load_texture,
-};
 use crate::infrastructure::bevy_adapters::rocket::components::RocketPhysicsState;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
@@ -25,7 +22,6 @@ use bevy::math::{DQuat, DVec3};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -70,16 +66,13 @@ impl MaterialExtension for TerrainSurfaceExtension {
 }
 
 type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
-type GlobalSurfaceMaps = Option<Handle<Image>>;
-
 /// Component tracking the render state of a terrain patch.
 #[derive(Component, Debug, Clone)]
 pub struct TerrainPatchRenderState {
     pub patch: TerrainPatch,
     pub mesh_handle: Handle<Mesh>,
     material_handle: Handle<TerrainMaterial>,
-    /// Per-patch local surface textures. Shared fallback maps are not stored or
-    /// released with a patch.
+    /// Per-patch source-derived surface textures released with the patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     imagery_handle: Option<Handle<Image>>,
     imagery_uv_scale_offset: Vec4,
@@ -98,14 +91,10 @@ pub struct TerrainPatchRenderState {
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
-    /// Catalog imagery is shared by every patch of a planet. `StandardMaterial`
-    /// samples these maps with the mesh's geographic UV0 coordinates.
-    global_surface_maps: HashMap<String, GlobalSurfaceMaps>,
-    fallback_surface_maps: Option<(Handle<Image>, Handle<Image>)>,
 }
 
-/// Optional local offline imagery. Absence deliberately leaves the catalog
-/// albedo fallback untouched, including on platforms without native file I/O.
+/// Optional local offline imagery. It may replace source-derived albedo only
+/// after the image has decoded successfully.
 #[derive(Resource, Default)]
 struct TerrainImageryPackage(Option<TerrainImageryManifest>);
 
@@ -261,6 +250,10 @@ impl Plugin for TerrainRenderPlugin {
                 Update,
                 recenter_render_origin.before(stream_terrain_patches),
             )
+            // Streaming owns the authoritative terrain mesh lifecycle. It must
+            // run after the flight render origin is current and before patch
+            // uploads/transforms consume its ready events.
+            .add_systems(Update, stream_terrain_patches.after(recenter_render_origin))
             .add_systems(
                 Update,
                 (
@@ -283,8 +276,19 @@ fn load_terrain_imagery_package(mut package: ResMut<TerrainImageryPackage>) {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets")
             .join(EARTH_IMAGERY_MANIFEST_PATH);
+        let asset_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
         match TerrainImageryManifest::load(path) {
             Ok(manifest) => {
+                let missing_tile = manifest.coverage_tiles.iter().find_map(|tile| {
+                    let asset_path = manifest.best_tile_for(*tile)?.asset_path;
+                    (!asset_root.join(&asset_path).is_file()).then_some(asset_path)
+                });
+                if let Some(asset_path) = missing_tile {
+                    bevy::log::warn!(
+                        "terrain imagery package disabled; declared tile is unavailable: {asset_path}"
+                    );
+                    return;
+                }
                 bevy::log::info!(
                     "terrain imagery package available: {} levels {}-{}",
                     manifest.source_name,
@@ -294,9 +298,7 @@ fn load_terrain_imagery_package(mut package: ResMut<TerrainImageryPackage>) {
                 package.0 = Some(manifest);
             }
             Err(error) => {
-                bevy::log::info!(
-                    "terrain imagery package unavailable; using global fallback: {error}"
-                );
+                bevy::log::info!("terrain imagery package unavailable: {error}");
             }
         }
     }
@@ -433,32 +435,21 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        // StandardMaterial samples catalog albedo through geographic UV0. UV1
-        // remains reserved for close-range material modulation. City-light
-        // imagery is intentionally not emissive terrain: it would make land
-        // self-illuminate in daylight and defeat physical day/night shading.
-        let global_albedo = global_surface_maps(
-            &mut render_assets,
-            &asset_server,
-            &planet.domain_planet.name,
-        );
-        let base_material = patch_material(surface.roughness, surface.metallic, global_albedo);
-        let (local_albedo, local_normal, local_detail_weight, local_surface_handles) =
-            if let Some((albedo, normal)) = surface.local_surfaces {
-                let albedo = images.add(albedo);
-                let normal = images.add(normal);
-                (albedo.clone(), normal.clone(), 1.0, Some((albedo, normal)))
-            } else {
-                let (albedo, normal) = fallback_surface_maps(&mut render_assets, &mut images);
-                (albedo, normal, 0.0, None)
-            };
+        let Some((albedo, normal)) = surface.local_surfaces else {
+            bevy::log::error!("terrain patch {patch:?} has no source-derived surface maps");
+            continue;
+        };
+        let local_albedo = images.add(albedo);
+        let local_normal = images.add(normal);
+        let local_surface_handles = Some((local_albedo.clone(), local_normal.clone()));
+        let base_material = patch_material(surface.roughness, surface.metallic);
         let material_handle = materials.add(TerrainMaterial {
             base: base_material,
             extension: TerrainSurfaceExtension {
+                imagery_albedo: local_albedo.clone(),
                 local_albedo,
                 local_normal,
-                local_detail_weight,
-                imagery_albedo: fallback_surface_maps(&mut render_assets, &mut images).0,
+                local_detail_weight: 1.0,
                 imagery_weight: 0.0,
                 imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
             },
@@ -837,52 +828,6 @@ fn release_patch_render_assets(
     }
 }
 
-fn fallback_surface_maps(
-    render_assets: &mut TerrainRenderAssets,
-    images: &mut Assets<Image>,
-) -> (Handle<Image>, Handle<Image>) {
-    render_assets
-        .fallback_surface_maps
-        .get_or_insert_with(|| {
-            let extent = Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            };
-            let albedo = images.add(Image::new_fill(
-                extent,
-                TextureDimension::D2,
-                &[255, 255, 255, 255],
-                TextureFormat::Rgba8Unorm,
-                RenderAssetUsages::RENDER_WORLD,
-            ));
-            let normal = images.add(Image::new_fill(
-                extent,
-                TextureDimension::D2,
-                &[128, 128, 255, 255],
-                TextureFormat::Rgba8Unorm,
-                RenderAssetUsages::RENDER_WORLD,
-            ));
-            (albedo, normal)
-        })
-        .clone()
-}
-
-fn global_surface_maps(
-    render_assets: &mut TerrainRenderAssets,
-    asset_server: &AssetServer,
-    planet_name: &str,
-) -> Option<Handle<Image>> {
-    render_assets
-        .global_surface_maps
-        .entry(planet_name.to_owned())
-        .or_insert_with(|| {
-            let textures = get_planet_textures(planet_name);
-            load_texture(asset_server, textures.albedo)
-        })
-        .clone()
-}
-
 /// Convert domain PatchGeometry to Bevy Mesh, rebasing planet-centered positions
 /// into the rocket-local flight frame (`positions - render_origin`). This keeps
 /// f32 vertex magnitudes small near the camera, preserving the spherical surface
@@ -1025,16 +970,11 @@ fn patch_transform_components(
     (rotation, translation)
 }
 
-/// Create the base terrain material. StandardMaterial owns global imagery on
-/// UV0, while the extension supplies UV1 local albedo and normal enhancement.
-fn patch_material(
-    roughness: f32,
-    metallic: f32,
-    base_color_texture: Option<Handle<Image>>,
-) -> StandardMaterial {
+/// Create the terrain PBR material. The extension supplies the complete
+/// source-derived base color and normal maps, with no catalog-image fallback.
+fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
-        base_color_texture,
         perceptual_roughness: roughness,
         metallic,
         unlit: false,
@@ -1227,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn earth_albedo_owns_every_terrain_lod_with_both_uv_sets() {
+    fn source_derived_surface_maps_cover_every_terrain_lod_with_both_uv_sets() {
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
@@ -1265,15 +1205,10 @@ mod tests {
     }
 
     #[test]
-    fn terrain_material_binds_earth_albedo_without_self_illuminating_land() {
-        let textures = get_planet_textures("Earth");
-        assert_eq!(textures.albedo, Some("textures/planets/earth/albedo.png"));
+    fn terrain_material_leaves_albedo_to_the_source_derived_extension() {
+        let material = patch_material(0.7, 0.0);
 
-        let mut images = Assets::<Image>::default();
-        let albedo = images.add(Image::default());
-        let material = patch_material(0.7, 0.0, Some(albedo.clone()));
-
-        assert_eq!(material.base_color_texture, Some(albedo));
+        assert!(material.base_color_texture.is_none());
         assert!(material.emissive_texture.is_none());
         assert_eq!(material.emissive, LinearRgba::BLACK);
     }

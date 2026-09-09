@@ -22,25 +22,16 @@ struct TerrainSurfaceExtension {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    // Tile-local material modulation fades to neutral at each boundary, so
-    // refined leaves retain the same global Earth albedo as their parent.
-    let edge_distance = min(min(in.uv_b.x, 1.0 - in.uv_b.x), min(in.uv_b.y, 1.0 - in.uv_b.y));
-    let edge_fade = smoothstep(0.02, 0.08, edge_distance);
-    let detail_weight = terrain_surface.local_detail_weight * edge_fade;
+    let detail_weight = terrain_surface.local_detail_weight;
     let local_albedo = textureSample(
         terrain_local_albedo,
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // StandardMaterial has already sampled global Earth albedo with UV0. The
-    // local map is a linear, source-derived multiplier, never a replacement;
-    // this preserves continental geography at every terrain LOD.
+    // Source-derived local albedo is the complete terrain color. It cannot fall
+    // back to an unloaded catalog image or fade to white at patch edges.
     pbr_input.material.base_color = vec4(
-        pbr_input.material.base_color.rgb * mix(
-            vec3<f32>(1.0),
-            local_albedo.rgb,
-            detail_weight,
-        ),
+        mix(pbr_input.material.base_color.rgb, local_albedo.rgb, detail_weight),
         pbr_input.material.base_color.a,
     );
     // The offline cube-sphere tile is the final geographic albedo for this

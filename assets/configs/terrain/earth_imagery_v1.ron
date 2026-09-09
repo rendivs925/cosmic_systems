@@ -13,6 +13,6 @@
     min_level: 12,
     max_level: 12,
     coverage_tiles: [
-        (face: NegZ, level: 12, tile_x: 2385, tile_y: 3178),
+        (face: NegZ, level: 12, tile_x: 2385, tile_y: 3170),
     ],
 )

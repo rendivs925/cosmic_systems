@@ -98,6 +98,11 @@ pub struct SolarMapLight;
 #[derive(Component)]
 pub struct Starfield;
 
+/// Marks the shared star mesh when it is presented in the rocket's local
+/// flight frame rather than the solar-map display frame.
+#[derive(Component)]
+pub struct FlightStarfield;
+
 // Marker component for moon orbits (orbits that need to follow their parent planet)
 #[derive(Component)]
 pub struct MoonOrbit;

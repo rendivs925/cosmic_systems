@@ -561,7 +561,7 @@ pub fn update_starfield_position(
         (&Camera, &GlobalTransform),
         Or<(With<CameraController>, With<CraftCameraTag>)>,
     >,
-    mut starfield_query: Query<&mut Transform, With<Starfield>>,
+    mut starfield_query: Query<&mut Transform, (With<Starfield>, Without<FlightStarfield>)>,
 ) {
     if let Some((_, camera_transform)) = camera_query.iter().find(|(camera, _)| camera.is_active) {
         let camera_pos = camera_transform.translation();

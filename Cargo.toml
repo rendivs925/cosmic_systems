@@ -29,7 +29,7 @@ sha2 = "0.10"           # Kernel manifest checksum validation
 tokio = { version = "1.0", features = ["rt", "macros", "io-util", "time"] }  # Async runtime (wasm-compatible features)
 bevy_mesh = "0.17.3"
 bevy_asset = "0.17.3"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"
@@ -73,4 +73,9 @@ required-features = ["native"]
 [[bin]]
 name = "earth_imagery_crop_convert"
 path = "src/bin/earth_imagery_crop_convert.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "local_elevation_convert"
+path = "src/bin/local_elevation_convert.rs"
 required-features = ["native"]

@@ -19,6 +19,7 @@ use crate::application::rocket_spawning::sync_launch_pad_presentation;
 use crate::application::solar_system_startup::setup_space;
 #[cfg(target_arch = "wasm32")]
 use crate::application::solar_system_startup::spawn_bodies_progressively;
+use crate::application::starfield::{configure_flight_starfield, update_flight_starfield};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -452,15 +453,18 @@ impl Plugin for RocketModePlugin {
         // Rocket planet system resource.
         app.init_resource::<RocketBoundPlanet>();
 
-        // Cube-sphere terrain streaming around the rocket.
-        // The packaged flight globe supplies rocket-mode presentation. Keep the
-        // resource for terrain debug and future explicitly requested streaming,
-        // but do not schedule runtime terrain mesh generation.
+        // Cube-sphere terrain streaming around the rocket. It is the visible
+        // Earth surface and shares its source with collision/altitude queries.
         app.insert_resource(TerrainStreamingResource::default());
         app.init_resource::<TerrainSurfaceSampleCache>();
 
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
+
+        // The shared star mesh is authored in solar display units. Re-scale it
+        // into the camera-relative flight frame instead of expanding the
+        // flight depth range to solar-map distances.
+        app.add_systems(Startup, configure_flight_starfield.after(setup_space));
 
         // Rocket debug visualization plugin.
         app.add_plugins(RocketDebugPlugin);
@@ -485,6 +489,10 @@ impl Plugin for RocketModePlugin {
                 update_rocket_camera_projection,
             )
                 .chain(),
+        );
+        app.add_systems(
+            Update,
+            update_flight_starfield.after(update_rocket_camera_projection),
         );
 
         // Rocket HUD UI (runs in Update).

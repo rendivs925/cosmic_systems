@@ -1,0 +1,20 @@
+// USGS 3DEP bare-earth source retained for offline package conversion only.
+// It is intentionally not a runtime terrain manifest until NAVD88-to-terrain
+// datum conversion is defined and validated against KSC control points.
+(
+    dataset: "USGS 3DEP FL Peninsular FDEM 2018 D19 DRRA",
+    source_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/FL_Peninsular_FDEM_2018_D19_DRRA/TIFF/USGS_1M_17_x53y317_FL_Peninsular_FDEM_2018_D19_DRRA.tif",
+    source_file: "USGS_1M_17_x53y317_FL_Peninsular_FDEM_2018_D19_DRRA.tif",
+    source_sha256: "66ccf1c4473b75cfa2f21cc682b3ccaf5dc391eb3b26df1555c57777c16b95d7",
+    body: "Earth",
+    horizontal_datum: "NAD83 / UTM zone 17N (EPSG:26917)",
+    vertical_datum: "NAVD88",
+    horizontal_resolution_m: 1.0,
+    raster_width: 10012,
+    raster_height: 10012,
+    utm_origin_easting_m: 529993.999970,
+    utm_origin_northing_m: 3170006.000030,
+    nodata_elevation_m: -999999.0,
+    runtime_asset: "large_files/terrain/earth_ksc_3dep_v1.csldem",
+    status: "source-verified; launch-site datum transformation unresolved",
+)

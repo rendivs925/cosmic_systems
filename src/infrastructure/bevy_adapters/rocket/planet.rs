@@ -15,7 +15,6 @@ use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -26,7 +25,6 @@ use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
     create_planet_material, PlanetMaterialConfig,
 };
-use crate::infrastructure::bevy_adapters::rendering::meshes::create_flight_globe_mesh;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
 };
@@ -39,13 +37,6 @@ use bevy::prelude::*;
 /// keeps the Sun's true angular diameter.
 #[derive(Component, Debug)]
 pub struct RocketSunDisc;
-
-/// Static packaged Earth presentation for rocket mode. Its mesh and global
-/// albedo are loaded once; the DEM remains the authority for collision only.
-#[derive(Component, Debug)]
-pub struct RocketTerrainGlobe {
-    planet_name: CelestialBodyId,
-}
 
 const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
 const SUN_RADIUS_M: f64 = 696_340_000.0;
@@ -98,20 +89,12 @@ pub fn isolate_rocket_presentation(
 }
 
 /// Startup system: spawn moons and the Sun in flight units.
-///
-/// The static terrain globe owns Earth's visible surface in rocket mode.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Rocket planet setup composes independent asset, frame, and ephemeris resources."
-)]
 pub fn setup_rocket_planets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
-    ephemeris_snapshot: Res<EphemerisSnapshot>,
-    render_origin: Res<RenderOrigin>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
@@ -119,23 +102,6 @@ pub fn setup_rocket_planets(
         return;
     };
     bound_planet_res.0 = Some(binding.planet_name.clone());
-
-    if binding.planet_name == CelestialBodyId::earth() {
-        let earth = PlanetFactory::create_by_id(&binding.planet_name)
-            .expect("rocket Earth binding must resolve to a catalog planet");
-        let orientation = ephemeris_snapshot
-            .orientation_for_catalog_body(&earth.name)
-            .expect("rocket Earth binding must have an evaluated body orientation");
-        spawn_rocket_terrain_globe(
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            &asset_server,
-            &earth,
-            orientation,
-            render_origin.origin,
-        );
-    }
 
     for moon in PlanetFactory::get_moons_of_id(&binding.planet_name) {
         spawn_rocket_moon(
@@ -155,46 +121,6 @@ pub fn setup_rocket_planets(
         &asset_server,
         &solar_params,
     );
-}
-
-fn spawn_rocket_terrain_globe(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    asset_server: &AssetServer,
-    planet: &crate::domain::entities::planet::Planet,
-    orientation: &crate::domain::services::body_orientation::BodyOrientation,
-    render_origin: DVec3,
-) {
-    let radius_m = planet.radius_km * 1_000.0;
-    let mesh = create_flight_globe_mesh(meshes, radius_m);
-    let textures = get_planet_textures(&planet.name);
-    let mut material = create_planet_material(PlanetMaterialConfig {
-        base_color_texture: load_texture(asset_server, textures.albedo),
-        normal_map_texture: None,
-        emissive_texture: None,
-        base_color: Color::WHITE,
-        // Keep the packaged basemap legible across the terminator without
-        // replacing the ephemeris-driven direct day/night lighting.
-        emissive: LinearRgba::new(0.045, 0.045, 0.045, 1.0),
-        unlit: false,
-        metallic: 0.0,
-        reflectance: 0.35,
-        perceptual_roughness: 0.9,
-    });
-    // The flight camera can cross the static globe's near surface during a
-    // rebase. Render both faces so its global coverage never opens a wedge.
-    material.cull_mode = None;
-    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
-    commands.spawn((
-        Mesh3d(mesh),
-        MeshMaterial3d(materials.add(material)),
-        terrain_globe_transform(body_to_inertial, render_origin),
-        RocketTerrainGlobe {
-            planet_name: CelestialBodyId::earth(),
-        },
-        Name::new("RocketTerrainGlobe_Earth"),
-    ));
 }
 
 /// Spawn a moon in flight units.
@@ -305,7 +231,6 @@ fn spawn_rocket_sun(
 /// derive their celestial state from the same `SimulationTime` epoch.
 #[expect(
     clippy::too_many_arguments,
-    clippy::type_complexity,
     reason = "This presentation system synchronizes independent shared and rocket-mode state."
 )]
 pub fn update_rocket_planets(
@@ -316,11 +241,7 @@ pub fn update_rocket_planets(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     rocket_query: Query<(), With<RocketPhysicsState>>,
     planet_query: Query<&PlanetComponent, Without<RocketMoon>>,
-    mut moon_query: Query<
-        (&RocketMoon, &mut Transform),
-        (With<RocketMoon>, Without<RocketTerrainGlobe>),
-    >,
-    mut terrain_globe_query: Query<(&RocketTerrainGlobe, &mut Transform)>,
+    mut moon_query: Query<(&RocketMoon, &mut Transform)>,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
     let Some(bound_planet_id) = &bound_planet_res.0 else {
@@ -345,20 +266,6 @@ pub fn update_rocket_planets(
     // The terrain renderer owns the bound planet's visible surface. The Sun
     // disc is owned by update_rocket_sun_disc; moons share this flight origin.
     let planet_center_flight = -render_origin.origin.as_vec3();
-
-    for (terrain_globe, mut transform) in &mut terrain_globe_query {
-        if terrain_globe.planet_name == *bound_planet_id {
-            let Some(orientation) =
-                ephemeris_snapshot.orientation_for_catalog_body(terrain_globe.planet_name.as_str())
-            else {
-                continue;
-            };
-            *transform = terrain_globe_transform(
-                body_fixed_to_planet_inertial_rotation(orientation),
-                render_origin.origin,
-            );
-        }
-    }
 
     // Moons: position relative to bound planet
     for (rocket_moon, mut transform) in &mut moon_query {
@@ -391,15 +298,6 @@ pub fn update_rocket_planets(
             }
         }
     }
-}
-
-/// Map the UV sphere's +Z north pole and +X seam to the body-fixed terrain
-/// convention: +Y north and longitude -180 degrees at texture U=0.
-fn terrain_globe_transform(body_to_inertial: bevy::math::DQuat, render_origin: DVec3) -> Transform {
-    let texture_to_body_fixed = bevy::math::DQuat::from_rotation_y(std::f64::consts::PI)
-        * bevy::math::DQuat::from_rotation_x(-std::f64::consts::FRAC_PI_2);
-    Transform::from_translation((-render_origin).as_vec3())
-        .with_rotation((body_to_inertial * texture_to_body_fixed).as_quat())
 }
 
 /// Keep the visual Sun inside the local rocket camera depth range while its
@@ -473,22 +371,6 @@ mod tests {
         // 1 AU in meters should map to scale_factor display units
         let au_display = scale.solar_meters_to_units(149_597_870_700.0);
         assert!((au_display - solar.scale_factor as f64).abs() < 1.0);
-    }
-
-    #[test]
-    fn terrain_globe_uses_the_body_fixed_texture_axes_and_render_origin() {
-        let origin = DVec3::new(100.0, -200.0, 300.0);
-        let transform = terrain_globe_transform(DQuat::IDENTITY, origin);
-
-        assert_eq!(transform.translation, (-origin).as_vec3());
-        assert!(
-            (transform.rotation * Vec3::Z).distance(Vec3::Y) < 1e-6,
-            "the texture north pole must map to body-fixed +Y"
-        );
-        assert!(
-            (transform.rotation * Vec3::X).distance(-Vec3::X) < 1e-6,
-            "texture U=0 must map to longitude -180 degrees"
-        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
     prepare_patch_surface, supports_local_surfaces, supports_vegetation, PreparedPatchSurface,
-    LOCAL_SURFACE_MAP_BYTES, LOCAL_SURFACE_MIN_PATCH_LEVEL, MAX_VEGETATION_MESH_BYTES,
+    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -575,16 +575,10 @@ pub fn stream_terrain_patches(
     let position_bf = planet_inertial_to_body_fixed(position_m, orientation);
     let dir = position_bf.normalize_or_zero();
     let viewport = terrain_viewport(&camera_query, &render_origin, orientation);
-    // A chase camera can be temporarily obstructed by the vehicle or launch
-    // tower. During pad hold, the authoritative launch direction is a more
-    // stable refinement focus and guarantees terrain is ready around the site
-    // before the vehicle can lift off.
     let prelaunch = *mission == RocketMissionState::PreLaunch;
-    let focus_direction = if prelaunch {
-        dir
-    } else {
-        viewport_focus_direction(viewport.as_ref(), radius_m, dir)
-    };
+    // The presentation camera determines the visible terrain quality. The
+    // launch direction is only a fallback while no usable viewport exists.
+    let focus_direction = viewport_focus_direction(viewport.as_ref(), radius_m, dir);
     let lod_camera_position_m = viewport
         .as_ref()
         .map(|viewport| viewport.position_m)
@@ -628,15 +622,6 @@ pub fn stream_terrain_patches(
         lod_distance_m,
         radius_m,
     );
-    // The first terrain reconciliation can precede rocket-camera setup and
-    // therefore see the stale solar-system camera. The stationary launch-pad
-    // focus must still reach the level where local material and vegetation are
-    // available before liftoff.
-    let max_focus_level = if prelaunch {
-        max_focus_level.max(LOCAL_SURFACE_MIN_PATCH_LEVEL)
-    } else {
-        max_focus_level
-    };
     streaming.cadence.max_focus_level = Some(max_focus_level);
     let camera_projection = CameraProjection {
         position_m: lod_camera_position_m,
@@ -666,10 +651,6 @@ pub fn stream_terrain_patches(
         )
     };
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
-    // The explicit launch/camera lane is a higher-priority requirement than
-    // merge hysteresis; otherwise a previously coarse viewport cover can clamp
-    // its ancestors back below the local surface level.
-    reserve_focus_detail_errors(&mut errors, focus_direction, max_focus_level);
     retain_visible_detail_errors(
         &mut errors,
         &streaming.target_leaves,
@@ -1002,29 +983,6 @@ fn apply_selection_hysteresis(
     }
 }
 
-/// Reserve a small refinement lane around the active launch/camera focus. The
-/// viewport's broad cover otherwise reaches its leaf budget before it can
-/// request the level-12 local material and vegetation patches near the rocket.
-/// Coarse siblings remain in the selected cover and the normal balancing pass
-/// adds only the neighbors needed to preserve the 2:1 invariant.
-fn reserve_focus_detail_errors(
-    errors: &mut BTreeMap<TerrainPatch, f64>,
-    focus_direction: DVec3,
-    max_focus_level: u32,
-) {
-    let detail_level = LOCAL_SURFACE_MIN_PATCH_LEVEL.min(max_focus_level);
-    // Force ancestors to split, but leave the terminal local-detail patch below
-    // the threshold so it remains a selected leaf instead of refining again.
-    let mut patch = TerrainPatch::for_direction(focus_direction, detail_level).parent();
-    while let Some(current) = patch {
-        errors
-            .entry(current)
-            .and_modify(|error| *error = error.max(SCREEN_ERROR_PX * (1.0 + 1e-12)))
-            .or_insert(SCREEN_ERROR_PX * (1.0 + 1e-12));
-        patch = current.parent();
-    }
-}
-
 /// Keep generated refinement selected until it has actually left the expanded
 /// viewport. The moving 3x3 error neighborhood otherwise drops a tile as soon
 /// as its focus cell changes, even though it remains visible on screen.
@@ -1317,6 +1275,13 @@ fn generation_priority_group(
     target_leaves: &BTreeSet<TerrainPatch>,
     focus_direction: DVec3,
 ) -> (u8, TerrainPatch) {
+    // A refinement cannot become visible until its complete parent chain is
+    // ready. Cold-starting with a deep focus tile therefore leaves the entire
+    // viewport blank for multiple task batches. Publish the requested coarse
+    // roots first; subsequent work retains the normal replacement priority.
+    if patch.level == 0 && !published.contains(&patch) {
+        return (0, patch);
+    }
     let Some(parent) = patch.parent() else {
         return (2, patch);
     };
@@ -1489,7 +1454,7 @@ fn stale_cached_stitch_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::cube_sphere::{patches_are_adjacent, CubeFace};
+    use crate::domain::services::cube_sphere::CubeFace;
     use crate::infrastructure::bevy_adapters::terrain::surface::VEGETATION_MIN_PATCH_LEVEL;
 
     #[derive(Debug)]
@@ -1596,49 +1561,6 @@ mod tests {
     }
 
     #[test]
-    fn focus_refinement_reaches_the_local_surface_level_without_more_global_leaves() {
-        let focus = DVec3::new(0.3, 0.2, 1.0).normalize();
-        let mut errors = BTreeMap::new();
-        reserve_focus_detail_errors(&mut errors, focus, MAX_PATCH_LEVEL);
-
-        let selection = select_quadtree_leaves(
-            &QuadtreePatchState {
-                ready: BTreeSet::new(),
-                visible: TerrainPatch::roots().into_iter().collect(),
-            },
-            &errors,
-            QuadtreeSelectionConfig {
-                max_level: MAX_PATCH_LEVEL,
-                max_projected_error_px: SCREEN_ERROR_PX,
-                max_neighbor_level_difference: 1,
-            },
-        );
-
-        let focused_patch = TerrainPatch::for_direction(focus, LOCAL_SURFACE_MIN_PATCH_LEVEL);
-        assert!(
-            selection.target_leaves.contains(&focused_patch),
-            "focused patch {focused_patch:?} was not selected; leaves: {:?}",
-            selection.target_leaves
-        );
-        assert_eq!(
-            selection
-                .target_leaves
-                .iter()
-                .map(|patch| patch.level)
-                .max(),
-            Some(LOCAL_SURFACE_MIN_PATCH_LEVEL)
-        );
-        let leaves: Vec<_> = selection.target_leaves.iter().copied().collect();
-        for (index, patch) in leaves.iter().enumerate() {
-            for neighbor in leaves.iter().skip(index + 1) {
-                if patches_are_adjacent(patch, neighbor) {
-                    assert!(patch.level.abs_diff(neighbor.level) <= 1);
-                }
-            }
-        }
-    }
-
-    #[test]
     fn stale_requested_patches_are_removed_before_generation() {
         let keep = TerrainPatch::root(CubeFace::PosZ);
         let stale = TerrainPatch::root(CubeFace::NegZ);
@@ -1720,6 +1642,67 @@ mod tests {
             BTreeSet::from_iter(ordered.into_iter().take(4)),
             BTreeSet::from(focus_children),
             "camera-facing sibling groups must outrank broad viewport coverage"
+        );
+    }
+
+    #[test]
+    fn cold_start_roots_outrank_deep_focus_refinement() {
+        let focused_root = TerrainPatch::root(CubeFace::PosZ);
+        let requested = BTreeSet::from_iter(
+            TerrainPatch::roots()
+                .into_iter()
+                .chain(focused_root.children()),
+        );
+        let target_leaves = BTreeSet::from_iter(focused_root.children());
+
+        let ordered = prioritize_generation_requests(
+            &requested,
+            &BTreeSet::new(),
+            &target_leaves,
+            DVec3::Z,
+            focused_root,
+            None,
+            6_371_000.0,
+            test_elevation_bounds(),
+        );
+
+        assert_eq!(
+            BTreeSet::from_iter(ordered.into_iter().take(TerrainPatch::roots().len())),
+            BTreeSet::from_iter(TerrainPatch::roots()),
+            "cold start must generate a publishable coarse cover before refinement"
+        );
+    }
+
+    #[test]
+    fn incomplete_root_cover_outranks_refinement_after_the_first_publish() {
+        let focused_root = TerrainPatch::root(CubeFace::PosZ);
+        let published_root = TerrainPatch::root(CubeFace::NegZ);
+        let requested = BTreeSet::from_iter(
+            TerrainPatch::roots()
+                .into_iter()
+                .chain(focused_root.children()),
+        );
+        let target_leaves = BTreeSet::from_iter(focused_root.children());
+
+        let ordered = prioritize_generation_requests(
+            &requested,
+            &BTreeSet::from([published_root]),
+            &target_leaves,
+            DVec3::Z,
+            focused_root,
+            None,
+            6_371_000.0,
+            test_elevation_bounds(),
+        );
+
+        let missing_roots: BTreeSet<_> = TerrainPatch::roots()
+            .into_iter()
+            .filter(|root| *root != published_root)
+            .collect();
+        assert_eq!(
+            BTreeSet::from_iter(ordered.into_iter().take(missing_roots.len())),
+            missing_roots,
+            "a partial root cover must not be abandoned for deep focus refinement"
         );
     }
 
@@ -2213,32 +2196,30 @@ mod tests {
     #[test]
     fn patch_byte_estimate_accounts_for_skirts_and_render_meshes() {
         let resolution = 33;
-        let patch = TerrainPatch::root(CubeFace::PosZ);
         let grid_vertices = u64::from(resolution) * u64::from(resolution);
         let skirt_vertices = 4 * (u64::from(resolution) - 1);
 
         assert!(
-            estimated_patch_bytes(patch, resolution)
+            estimated_patch_bytes(TerrainPatch::root(CubeFace::PosZ), resolution)
                 > (grid_vertices + skirt_vertices) * DOMAIN_BYTES_PER_VERTEX,
             "the budget must include the renderer copy and index buffers"
         );
     }
 
     #[test]
-    fn vegetation_budget_only_applies_at_the_finest_detail_level() {
+    fn vegetation_budget_applies_only_to_close_range_patches() {
         let coarse = TerrainPatch::root(CubeFace::PosZ);
-        let non_vegetated_refined =
-            TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL - 1);
-        let vegetation_detail = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL);
+        let non_vegetated = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL - 1);
+        let vegetated = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL);
 
         assert_eq!(
-            estimated_patch_bytes(non_vegetated_refined, 33),
+            estimated_patch_bytes(non_vegetated, 33),
             estimated_patch_bytes(coarse, 33),
-            "lower-detail patches must not reserve invisible vegetation"
+            "every patch has local material maps, but only close patches reserve scatter"
         );
         assert_eq!(
-            estimated_patch_bytes(vegetation_detail, 33),
-            estimated_patch_bytes(coarse, 33) + LOCAL_SURFACE_MAP_BYTES + MAX_VEGETATION_MESH_BYTES
+            estimated_patch_bytes(vegetated, 33),
+            estimated_patch_bytes(coarse, 33) + MAX_VEGETATION_MESH_BYTES
         );
     }
 
