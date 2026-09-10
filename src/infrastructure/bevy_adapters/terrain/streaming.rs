@@ -72,7 +72,7 @@ const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
 const MAX_VIEWPORT_TARGET_LEAVES: usize = 512;
 /// Reserve leaf budget for 2:1 neighbour balancing at the viewport boundary.
 /// The visible traversal itself stops below the published-cover limit.
-const MAX_VIEWPORT_UNBALANCED_LEAVES: usize = MAX_VIEWPORT_TARGET_LEAVES - 62;
+const MAX_VIEWPORT_UNBALANCED_LEAVES: usize = MAX_VIEWPORT_TARGET_LEAVES - 87;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;
@@ -241,6 +241,7 @@ impl TerrainStreamingResource {
         evicted_tiles: usize,
         prelaunch: bool,
         focus_max_lod: u32,
+        culling: TerrainCullingStats,
     ) -> Option<TerrainStreamingMetrics> {
         if !completed.is_reportable() || self.generated.len() < self.next_metrics_report_at {
             return None;
@@ -256,6 +257,7 @@ impl TerrainStreamingResource {
             evicted_tiles,
             prelaunch,
             focus_max_lod,
+            culling,
         ))
     }
 }
@@ -373,6 +375,7 @@ struct TerrainStreamingMetrics {
     evicted_tiles: usize,
     prelaunch: bool,
     focus_max_lod: u32,
+    culling: TerrainCullingStats,
     requested_lods: PatchLevelDistribution,
     target_lods: PatchLevelDistribution,
     visible_lods: PatchLevelDistribution,
@@ -393,6 +396,7 @@ impl TerrainStreamingMetrics {
         evicted_tiles: usize,
         prelaunch: bool,
         focus_max_lod: u32,
+        culling: TerrainCullingStats,
     ) -> Self {
         let upload_backlog_tiles = streaming
             .generated
@@ -419,6 +423,7 @@ impl TerrainStreamingMetrics {
             evicted_tiles,
             prelaunch,
             focus_max_lod,
+            culling,
             requested_lods: PatchLevelDistribution::from_patches(requested.iter().copied()),
             target_lods: PatchLevelDistribution::from_patches(target.iter().copied()),
             visible_lods: PatchLevelDistribution::from_patches(streaming.published.iter().copied()),
@@ -444,6 +449,9 @@ impl TerrainStreamingMetrics {
             evicted_tiles = self.evicted_tiles,
             prelaunch = self.prelaunch,
             focus_max_lod = self.focus_max_lod,
+            culling_candidates = self.culling.candidates,
+            horizon_rejected = self.culling.horizon_rejected,
+            frustum_rejected = self.culling.frustum_rejected,
             requested_lods = ?self.requested_lods.0,
             target_lods = ?self.target_lods.0,
             visible_lods = ?self.visible_lods.0,
@@ -467,9 +475,43 @@ struct GeneratedTerrainPatch {
 struct TerrainViewport {
     position_m: DVec3,
     forward: DVec3,
+    right: DVec3,
+    up: DVec3,
     half_fov_rad: f64,
     vertical_fov_rad: f64,
     viewport_height_px: f64,
+    horizontal_tan: f64,
+    vertical_tan: f64,
+    horizontal_sec: f64,
+    vertical_sec: f64,
+}
+
+/// Per-reconciliation traversal decisions. This is intentionally a small,
+/// cadence-limited diagnostic for deciding whether visibility work is removing
+/// enough terrain work to justify its CPU cost.
+#[derive(Debug, Clone, Copy, Default)]
+struct TerrainCullingStats {
+    candidates: usize,
+    horizon_rejected: usize,
+    frustum_rejected: usize,
+}
+
+impl TerrainCullingStats {
+    fn record(&mut self, visibility: PatchViewportVisibility) {
+        self.candidates += 1;
+        match visibility {
+            PatchViewportVisibility::Visible => {}
+            PatchViewportVisibility::BehindHorizon => self.horizon_rejected += 1,
+            PatchViewportVisibility::OutsideFrustum => self.frustum_rejected += 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchViewportVisibility {
+    Visible,
+    BehindHorizon,
+    OutsideFrustum,
 }
 
 #[derive(Default)]
@@ -635,7 +677,7 @@ pub fn stream_terrain_patches(
             .as_ref()
             .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
     };
-    let mut errors = if let Some(viewport) = viewport.as_ref() {
+    let (mut errors, culling) = if let Some(viewport) = viewport.as_ref() {
         projected_errors_for_viewport(
             viewport,
             max_focus_level,
@@ -645,12 +687,15 @@ pub fn stream_terrain_patches(
             elevation_bounds,
         )
     } else {
-        projected_errors_for_focus(
-            focus_direction,
-            max_focus_level,
-            radius_m,
-            camera_projection,
-            planet_terrain.source.as_ref(),
+        (
+            projected_errors_for_focus(
+                focus_direction,
+                max_focus_level,
+                radius_m,
+                camera_projection,
+                planet_terrain.source.as_ref(),
+            ),
+            TerrainCullingStats::default(),
         )
     };
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
@@ -835,6 +880,7 @@ pub fn stream_terrain_patches(
         evicted.len(),
         prelaunch,
         max_focus_level,
+        culling,
     ) {
         metrics.log();
     }
@@ -955,15 +1001,26 @@ fn terrain_viewport(
         .map_or(SCREEN_HEIGHT_PX, |size| f64::from(size.y));
     let horizontal_fov_rad = 2.0 * ((vertical_fov_rad * 0.5).tan() * aspect_ratio).atan();
     let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+    let inertial_to_body = body_to_inertial.inverse();
     let camera_position_inertial = render_origin.origin + transform.translation.as_dvec3();
     let forward_inertial = transform.forward().as_vec3().as_dvec3();
+    let right_inertial = transform.right().as_vec3().as_dvec3();
+    let up_inertial = transform.up().as_vec3().as_dvec3();
+    let horizontal_half_fov_rad = horizontal_fov_rad * 0.5 + VIEWPORT_PREFETCH_MARGIN_RAD;
+    let vertical_half_fov_rad = vertical_fov_rad * 0.5 + VIEWPORT_PREFETCH_MARGIN_RAD;
 
     Some(TerrainViewport {
-        position_m: body_to_inertial.inverse() * camera_position_inertial,
-        forward: (body_to_inertial.inverse() * forward_inertial).normalize_or_zero(),
+        position_m: inertial_to_body * camera_position_inertial,
+        forward: (inertial_to_body * forward_inertial).normalize_or_zero(),
+        right: (inertial_to_body * right_inertial).normalize_or_zero(),
+        up: (inertial_to_body * up_inertial).normalize_or_zero(),
         half_fov_rad: vertical_fov_rad.max(horizontal_fov_rad) * 0.5,
         vertical_fov_rad,
         viewport_height_px,
+        horizontal_tan: horizontal_half_fov_rad.tan(),
+        vertical_tan: vertical_half_fov_rad.tan(),
+        horizontal_sec: horizontal_half_fov_rad.cos().recip(),
+        vertical_sec: vertical_half_fov_rad.cos().recip(),
     })
 }
 
@@ -1092,31 +1149,59 @@ fn patch_intersects_viewport(
     radius_m: f64,
     elevation_bounds: ElevationBounds,
 ) -> bool {
+    matches!(
+        patch_viewport_visibility(patch, viewport, radius_m, elevation_bounds),
+        PatchViewportVisibility::Visible
+    )
+}
+
+fn patch_viewport_visibility(
+    patch: TerrainPatch,
+    viewport: Option<&TerrainViewport>,
+    radius_m: f64,
+    elevation_bounds: ElevationBounds,
+) -> PatchViewportVisibility {
     let Some(viewport) = viewport else {
-        return true;
+        return PatchViewportVisibility::Visible;
     };
     if viewport.forward.length_squared() < 0.5 {
-        return true;
+        return PatchViewportVisibility::Visible;
     }
 
     if patch_is_behind_horizon(patch, viewport.position_m, radius_m, elevation_bounds) {
-        return false;
+        return PatchViewportVisibility::BehindHorizon;
     }
 
     let (bounding_center_m, bounding_radius_m) =
         patch_bounding_sphere(patch, radius_m, elevation_bounds);
+    sphere_intersects_viewport_frustum(viewport, bounding_center_m, bounding_radius_m)
+        .then_some(PatchViewportVisibility::Visible)
+        .unwrap_or(PatchViewportVisibility::OutsideFrustum)
+}
+
+/// Conservative rectangular-frustum test for a terrain bounding sphere. The
+/// viewport coefficients include the streaming prefetch margin, while the
+/// radius expansion keeps limb and edge tiles intact.
+fn sphere_intersects_viewport_frustum(
+    viewport: &TerrainViewport,
+    bounding_center_m: DVec3,
+    bounding_radius_m: f64,
+) -> bool {
     let to_center = bounding_center_m - viewport.position_m;
-    let distance_m = to_center.length();
-    if distance_m <= bounding_radius_m {
+    if to_center.length_squared() <= bounding_radius_m * bounding_radius_m {
         return true;
     }
-    let view_angle = viewport
-        .forward
-        .dot(to_center.normalize())
-        .clamp(-1.0, 1.0)
-        .acos();
-    let sphere_angle_rad = (bounding_radius_m / distance_m).clamp(0.0, 1.0).asin();
-    view_angle <= viewport.half_fov_rad + sphere_angle_rad + VIEWPORT_PREFETCH_MARGIN_RAD
+
+    let forward_distance_m = viewport.forward.dot(to_center);
+    if forward_distance_m + bounding_radius_m <= 0.0 {
+        return false;
+    }
+
+    let depth_m = forward_distance_m.max(0.0);
+    viewport.right.dot(to_center).abs()
+        <= depth_m * viewport.horizontal_tan + bounding_radius_m * viewport.horizontal_sec
+        && viewport.up.dot(to_center).abs()
+            <= depth_m * viewport.vertical_tan + bounding_radius_m * viewport.vertical_sec
 }
 
 /// A conservative sphere enclosing the patch at both extrema of the terrain
@@ -1328,14 +1413,18 @@ fn projected_errors_for_viewport(
     camera: CameraProjection,
     source: &dyn TerrainSource,
     elevation_bounds: ElevationBounds,
-) -> BTreeMap<TerrainPatch, f64> {
+) -> (BTreeMap<TerrainPatch, f64>, TerrainCullingStats) {
     let mut errors = BTreeMap::new();
-    let mut pending: VecDeque<_> = TerrainPatch::roots()
-        .into_iter()
-        .filter(|patch| {
-            patch_intersects_viewport(*patch, Some(viewport), radius_m, elevation_bounds)
-        })
-        .collect();
+    let mut culling = TerrainCullingStats::default();
+    let mut pending = VecDeque::new();
+    for patch in TerrainPatch::roots() {
+        let visibility =
+            patch_viewport_visibility(patch, Some(viewport), radius_m, elevation_bounds);
+        culling.record(visibility);
+        if visibility == PatchViewportVisibility::Visible {
+            pending.push_back(patch);
+        }
+    }
     let mut target_leaf_count = TerrainPatch::roots().len();
 
     while let Some(patch) = pending.pop_front() {
@@ -1354,12 +1443,17 @@ fn projected_errors_for_viewport(
         }
 
         target_leaf_count += 3;
-        pending.extend(patch.children().into_iter().filter(|child| {
-            patch_intersects_viewport(*child, Some(viewport), radius_m, elevation_bounds)
-        }));
+        for child in patch.children() {
+            let visibility =
+                patch_viewport_visibility(child, Some(viewport), radius_m, elevation_bounds);
+            culling.record(visibility);
+            if visibility == PatchViewportVisibility::Visible {
+                pending.push_back(child);
+            }
+        }
     }
 
-    errors
+    (errors, culling)
 }
 
 /// Populate the camera focus neighborhood when no presentation camera is
@@ -1463,6 +1557,29 @@ mod tests {
 
     fn test_elevation_bounds() -> ElevationBounds {
         ElevationBounds::new(-10_036.0, 20_024.0)
+    }
+
+    fn test_viewport(
+        position_m: DVec3,
+        forward: DVec3,
+        half_fov_rad: f64,
+        vertical_fov_rad: f64,
+    ) -> TerrainViewport {
+        let half_horizontal_fov_rad = half_fov_rad + VIEWPORT_PREFETCH_MARGIN_RAD;
+        let half_vertical_fov_rad = vertical_fov_rad * 0.5 + VIEWPORT_PREFETCH_MARGIN_RAD;
+        TerrainViewport {
+            position_m,
+            forward,
+            right: DVec3::X,
+            up: DVec3::Y,
+            half_fov_rad,
+            vertical_fov_rad,
+            viewport_height_px: 1_080.0,
+            horizontal_tan: half_horizontal_fov_rad.tan(),
+            vertical_tan: half_vertical_fov_rad.tan(),
+            horizontal_sec: half_horizontal_fov_rad.cos().recip(),
+            vertical_sec: half_vertical_fov_rad.cos().recip(),
+        }
     }
 
     #[derive(Debug)]
@@ -1747,13 +1864,12 @@ mod tests {
     #[test]
     fn viewport_selection_rejects_terrain_outside_the_camera_frustum() {
         let radius_m = 6_371_000.0;
-        let viewport = TerrainViewport {
-            position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
-            forward: -DVec3::Z,
-            half_fov_rad: 0.5,
-            vertical_fov_rad: 0.8,
-            viewport_height_px: 1080.0,
-        };
+        let viewport = test_viewport(
+            DVec3::new(0.0, 0.0, radius_m + 1_000.0),
+            -DVec3::Z,
+            0.5,
+            0.8,
+        );
 
         assert!(patch_intersects_viewport(
             TerrainPatch::root(CubeFace::PosZ),
@@ -1775,17 +1891,31 @@ mod tests {
     }
 
     #[test]
+    fn rectangular_frustum_rejects_circular_cone_corner_but_retains_edge_spheres() {
+        let viewport = test_viewport(DVec3::ZERO, -DVec3::Z, 0.5, 0.4);
+
+        // This point is inside the old widest-FOV circular cone but outside the
+        // actual vertical viewport extent.
+        assert!(!sphere_intersects_viewport_frustum(
+            &viewport,
+            DVec3::new(5.0, 5.0, -10.0),
+            0.0,
+        ));
+        // A sphere touching the viewport edge remains visible after radius
+        // expansion, preventing frustum-edge popping.
+        assert!(sphere_intersects_viewport_frustum(
+            &viewport,
+            DVec3::new(0.0, 5.0, -10.0),
+            1.0,
+        ));
+    }
+
+    #[test]
     fn viewport_error_traversal_distributes_detail_across_the_visible_surface() {
         let radius_m = 6_371_000.0;
-        let viewport = TerrainViewport {
-            position_m: DVec3::Z * (radius_m + 307_000.0),
-            forward: -DVec3::Z,
-            half_fov_rad: 0.65,
-            vertical_fov_rad: 1.0,
-            viewport_height_px: 1_080.0,
-        };
+        let viewport = test_viewport(DVec3::Z * (radius_m + 307_000.0), -DVec3::Z, 0.65, 1.0);
         let source = BoundedTerrainSource(test_elevation_bounds());
-        let errors = projected_errors_for_viewport(
+        let (errors, culling) = projected_errors_for_viewport(
             &viewport,
             8,
             radius_m,
@@ -1797,6 +1927,8 @@ mod tests {
             &source,
             test_elevation_bounds(),
         );
+
+        assert!(culling.candidates > culling.horizon_rejected + culling.frustum_rejected);
 
         assert!(
             errors.len() > 9 * 8,
@@ -1833,13 +1965,12 @@ mod tests {
         let parent = TerrainPatch::root(CubeFace::PosZ);
         let selected: BTreeSet<_> = parent.children().into_iter().collect();
         let radius_m = 6_371_000.0;
-        let viewport = TerrainViewport {
-            position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
-            forward: -DVec3::Z,
-            half_fov_rad: 0.5,
-            vertical_fov_rad: 0.8,
-            viewport_height_px: 1080.0,
-        };
+        let viewport = test_viewport(
+            DVec3::new(0.0, 0.0, radius_m + 1_000.0),
+            -DVec3::Z,
+            0.5,
+            0.8,
+        );
         let mut requested =
             root_requests_for_viewport(parent, Some(&viewport), radius_m, test_elevation_bounds());
 
@@ -1907,13 +2038,7 @@ mod tests {
     fn generated_detail_stays_selected_while_it_remains_in_the_viewport() {
         let radius_m = 6_371_000.0;
         let detail = TerrainPatch::for_direction(DVec3::Z, 2);
-        let viewport = TerrainViewport {
-            position_m: DVec3::Z * (radius_m + 1_000.0),
-            forward: -DVec3::Z,
-            half_fov_rad: 0.8,
-            vertical_fov_rad: 0.8,
-            viewport_height_px: 1_080.0,
-        };
+        let viewport = test_viewport(DVec3::Z * (radius_m + 1_000.0), -DVec3::Z, 0.8, 0.8);
         let mut generated = HashMap::new();
         generated.insert(
             detail,
@@ -1963,13 +2088,7 @@ mod tests {
     fn generated_detail_can_coarsen_after_leaving_the_viewport() {
         let radius_m = 6_371_000.0;
         let detail = TerrainPatch::root(CubeFace::NegZ).children()[0];
-        let viewport = TerrainViewport {
-            position_m: DVec3::Z * (radius_m + 1_000.0),
-            forward: -DVec3::Z,
-            half_fov_rad: 0.5,
-            vertical_fov_rad: 0.8,
-            viewport_height_px: 1_080.0,
-        };
+        let viewport = test_viewport(DVec3::Z * (radius_m + 1_000.0), -DVec3::Z, 0.5, 0.8);
         let mut generated = HashMap::new();
         generated.insert(
             detail,
@@ -2017,13 +2136,12 @@ mod tests {
     #[test]
     fn viewport_roots_retain_the_focused_fallback() {
         let radius_m = 6_371_000.0;
-        let viewport = TerrainViewport {
-            position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
-            forward: -DVec3::Z,
-            half_fov_rad: 0.5,
-            vertical_fov_rad: 0.8,
-            viewport_height_px: 1_080.0,
-        };
+        let viewport = test_viewport(
+            DVec3::new(0.0, 0.0, radius_m + 1_000.0),
+            -DVec3::Z,
+            0.5,
+            0.8,
+        );
         let roots = root_requests_for_viewport(
             TerrainPatch::root(CubeFace::NegZ),
             Some(&viewport),

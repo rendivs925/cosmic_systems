@@ -12,6 +12,7 @@ use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
 };
+use crate::infrastructure::bevy_adapters::rocket::camera::update_rocket_camera_projection;
 use crate::infrastructure::bevy_adapters::rocket::components::RocketPhysicsState;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
@@ -246,7 +247,12 @@ impl Plugin for TerrainRenderPlugin {
             // Streaming owns the authoritative terrain mesh lifecycle. It must
             // run after the flight render origin is current and before patch
             // uploads/transforms consume its ready events.
-            .add_systems(Update, stream_terrain_patches.after(recenter_render_origin))
+            .add_systems(
+                Update,
+                stream_terrain_patches
+                    .after(recenter_render_origin)
+                    .after(update_rocket_camera_projection),
+            )
             .add_systems(
                 Update,
                 (
