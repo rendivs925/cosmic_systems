@@ -585,6 +585,10 @@ pub fn stream_terrain_patches(
         .unwrap_or(position_bf);
     let altitude_m = (lod_camera_position_m.length() - radius_m).max(0.0);
 
+    // Age the LRU on every presentation frame rather than only on the 30 Hz
+    // selection cadence. This keeps eviction order representative of actual
+    // residency time during a stationary camera view.
+    streaming.manager.tick();
     if !should_reconcile_terrain(
         &streaming.cadence,
         time.elapsed_secs_f64(),
@@ -595,7 +599,6 @@ pub fn stream_terrain_patches(
     ) {
         return;
     }
-    streaming.manager.tick();
     let previous_max_focus_level = streaming.cadence.max_focus_level;
     streaming.cadence = TerrainStreamingCadence {
         last_reconcile_at_s: time.elapsed_secs_f64(),
@@ -2234,11 +2237,11 @@ mod tests {
         assert_eq!(
             estimated_patch_bytes(non_vegetated, 33),
             estimated_patch_bytes(coarse, 33),
-            "every patch has local material maps, but only close patches reserve scatter"
+            "only close patches reserve local material maps and scatter"
         );
         assert_eq!(
             estimated_patch_bytes(vegetated, 33),
-            estimated_patch_bytes(coarse, 33) + MAX_VEGETATION_MESH_BYTES
+            estimated_patch_bytes(coarse, 33) + LOCAL_SURFACE_MAP_BYTES + MAX_VEGETATION_MESH_BYTES
         );
     }
 

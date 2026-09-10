@@ -41,9 +41,9 @@ const BOULDER_SEGMENTS: usize = 6;
 const BOULDER_RINGS: usize = 3;
 const VEGETATION_BYTES_PER_VERTEX: u64 = 40;
 const VEGETATION_BYTES_PER_INDEX: u64 = 4;
-/// Vegetation is deferred until close-range geometry is available. Source-based
-/// biome and normal maps remain enabled at every LOD so the first published
-/// terrain root is not an untextured flat presentation.
+/// Local surface maps and vegetation are deferred until close-range geometry is
+/// available. Coarser patches retain the global geographic albedo, avoiding
+/// expensive source sampling for detail that is below their screen-space size.
 pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
 
 /// Albedo and normal maps are both RGBA8 textures.
@@ -72,8 +72,7 @@ pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
 }
 
 pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
-    let _ = patch_level;
-    true
+    patch_level >= VEGETATION_MIN_PATCH_LEVEL
 }
 
 /// Source-derived patch data built by the streaming worker and consumed once by
@@ -93,9 +92,8 @@ pub(crate) fn prepare_patch_surface(
     geometry: &PatchGeometry,
     radius_m: f64,
 ) -> PreparedPatchSurface {
-    // Global Earth albedo supplies the broad geography; the worker-generated
-    // local map supplies deterministic source-derived terrain character at
-    // every LOD, including the initial coarse root cover.
+    // Global Earth albedo supplies broad geography. Source-derived local maps
+    // are generated only once their detail is visible at close range.
     let uses_erosion_surface_data = supports_local_surfaces(patch.level);
     let vertex_colors = vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()];
 
@@ -914,6 +912,12 @@ mod tests {
     fn deterministic_vegetation_is_restricted_to_close_range_patches() {
         assert!(!supports_vegetation(VEGETATION_MIN_PATCH_LEVEL - 1));
         assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
+    }
+
+    #[test]
+    fn local_surface_maps_are_restricted_to_close_range_patches() {
+        assert!(!supports_local_surfaces(VEGETATION_MIN_PATCH_LEVEL - 1));
+        assert!(supports_local_surfaces(VEGETATION_MIN_PATCH_LEVEL));
     }
 
     #[test]

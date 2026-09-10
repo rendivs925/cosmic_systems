@@ -21,7 +21,7 @@ use bevy::ecs::message::Message;
 use bevy::math::{DQuat, DVec3};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
-use bevy::render::render_resource::AsBindGroup;
+use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -86,6 +86,10 @@ pub struct TerrainPatchRenderState {
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     global_earth_albedo: Option<Handle<Image>>,
+    /// Shared neutral maps let coarse patches use the terrain material without
+    /// allocating local images whose detail is not visible at their LOD.
+    neutral_local_albedo: Option<Handle<Image>>,
+    neutral_local_normal: Option<Handle<Image>>,
 }
 
 /// Identifies a terrain render entity independently for every planet. Patch
@@ -263,9 +267,40 @@ impl Plugin for TerrainRenderPlugin {
 fn load_terrain_global_albedo(
     asset_server: Res<AssetServer>,
     mut render_assets: ResMut<TerrainRenderAssets>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     render_assets.global_earth_albedo =
         load_texture(&asset_server, get_planet_textures("Earth").albedo);
+    ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
+}
+
+fn ensure_neutral_local_surface_maps(
+    render_assets: &mut TerrainRenderAssets,
+    images: &mut Assets<Image>,
+) -> (Handle<Image>, Handle<Image>) {
+    let albedo = render_assets
+        .neutral_local_albedo
+        .get_or_insert_with(|| images.add(neutral_surface_image([255, 255, 255, 255])))
+        .clone();
+    let normal = render_assets
+        .neutral_local_normal
+        .get_or_insert_with(|| images.add(neutral_surface_image([128, 128, 255, 255])))
+        .clone();
+    (albedo, normal)
+}
+
+fn neutral_surface_image(data: [u8; 4]) -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data.to_vec(),
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
 }
 
 /// System that spawns Bevy mesh/material entities when a terrain patch
@@ -298,9 +333,24 @@ fn spawn_patch_mesh_system(
             pending_uploads.enqueue(event);
         }
     }
-    // A bounded queue can reject a burst of ready events. Refill from the
-    // streaming resource's authoritative visible set so those patches retry.
-    if let Some(planet_entity) = active_planet {
+    // A bounded queue can reject a burst of ready events. Recover only after a
+    // real capacity rejection; scanning every published patch at steady state
+    // turns a rare recovery path into per-frame main-thread work.
+    let mut needs_backfill = false;
+    for event in events.read().cloned() {
+        if active_planet == Some(event.planet_entity) && streaming.published.contains(&event.patch)
+        {
+            let key = TerrainPatchRenderKey::from(&event);
+            let already_queued = pending_uploads.queued.contains(&key);
+            if !pending_uploads.enqueue(event) && !already_queued {
+                needs_backfill = true;
+            }
+        }
+    }
+    if needs_backfill {
+        let Some(planet_entity) = active_planet else {
+            return;
+        };
         for patch in streaming.published.iter().copied() {
             let event = TerrainPatchReady {
                 patch,
@@ -310,7 +360,11 @@ fn spawn_patch_mesh_system(
                 .0
                 .contains_key(&TerrainPatchRenderKey::from(&event))
             {
-                pending_uploads.enqueue(event);
+                let key = TerrainPatchRenderKey::from(&event);
+                let already_queued = pending_uploads.queued.contains(&key);
+                if !pending_uploads.enqueue(event) && !already_queued {
+                    break;
+                }
             }
         }
     }
@@ -361,13 +415,16 @@ fn spawn_patch_mesh_system(
         );
         let mesh_handle = meshes.add(mesh);
 
-        let Some((albedo, normal)) = surface.local_surfaces else {
-            bevy::log::error!("terrain patch {patch:?} has no source-derived surface maps");
-            continue;
-        };
-        let local_albedo = images.add(albedo);
-        let local_normal = images.add(normal);
-        let local_surface_handles = Some((local_albedo.clone(), local_normal.clone()));
+        let (local_albedo, local_normal, local_surface_handles, local_detail_weight) =
+            if let Some((albedo, normal)) = surface.local_surfaces {
+                let albedo = images.add(albedo);
+                let normal = images.add(normal);
+                (albedo.clone(), normal.clone(), Some((albedo, normal)), 1.0)
+            } else {
+                let (albedo, normal) =
+                    ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
+                (albedo, normal, None, 0.0)
+            };
         let base_material = patch_material(surface.roughness, surface.metallic);
         let global_albedo = render_assets.global_earth_albedo.clone().unwrap_or_else(|| {
             bevy::log::warn!("Earth global albedo is unavailable; terrain will use source-derived color only");
@@ -378,7 +435,7 @@ fn spawn_patch_mesh_system(
             extension: TerrainSurfaceExtension {
                 local_albedo,
                 local_normal,
-                local_detail_weight: 1.0,
+                local_detail_weight,
                 global_albedo,
             },
         });
@@ -1082,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn source_derived_surface_maps_cover_every_terrain_lod_with_both_uv_sets() {
+    fn close_terrain_surface_maps_preserve_both_uv_sets() {
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
@@ -1106,6 +1163,7 @@ mod tests {
             .iter()
             .all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
         assert_eq!(coarse.vertex_colors, fine.vertex_colors);
+        assert!(coarse.local_surfaces.is_none());
         assert!(fine.local_surfaces.is_some());
         assert_eq!(geometry.uvs.len(), geometry.local_uvs.len());
 

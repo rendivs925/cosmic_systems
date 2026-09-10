@@ -24,10 +24,13 @@ use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
-    create_planet_material, PlanetMaterialConfig,
+    create_cloud_material, create_planet_material, PlanetMaterialConfig,
+};
+use crate::infrastructure::bevy_adapters::rendering::meshes::{
+    create_flight_globe_mesh, create_uv_sphere_mesh,
 };
 use crate::infrastructure::bevy_adapters::rendering::textures::{
-    get_planet_textures, load_texture,
+    get_cloud_layer_config, get_planet_textures, load_texture,
 };
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 use bevy::math::DVec3;
@@ -170,16 +173,40 @@ fn spawn_rocket_bound_planet_surface(
         reflectance: 0.4,
         perceptual_roughness: 0.55,
     });
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(planet.radius_km * 1_000.0))),
-        MeshMaterial3d(materials.add(material)),
-        Transform::default(),
-        RocketBoundPlanetSurface {
-            body: CelestialBodyId::new(planet.name.clone())
-                .expect("configured bound planet must have a valid identifier"),
-        },
-        Name::new(format!("RocketFarField{}", planet.name)),
-    ));
+    let surface_entity = commands
+        .spawn((
+            Mesh3d(create_flight_globe_mesh(meshes, planet.radius_km * 1_000.0)),
+            MeshMaterial3d(materials.add(material)),
+            Transform::default(),
+            RocketBoundPlanetSurface {
+                body: CelestialBodyId::new(planet.name.clone())
+                    .expect("configured bound planet must have a valid identifier"),
+            },
+            Name::new(format!("RocketFarField{}", planet.name)),
+        ))
+        .id();
+
+    // Rocket mode hides the shared solar-map Earth, including its cloud layer.
+    // Reuse that same geographic cloud asset in the flight-frame proxy so the
+    // far-field planet remains continuous with local terrain presentation.
+    if let Some(clouds) = get_cloud_layer_config(&planet.name) {
+        let cloud_texture = load_texture(asset_server, Some(clouds.texture_path));
+        if let Some(cloud_texture) = cloud_texture {
+            let cloud_material =
+                materials.add(create_cloud_material(Some(cloud_texture), clouds.alpha));
+            commands.entity(surface_entity).with_children(|parent| {
+                parent.spawn((
+                    Mesh3d(create_uv_sphere_mesh(
+                        meshes,
+                        planet.radius_km * 1_000.0 * clouds.scale,
+                    )),
+                    MeshMaterial3d(cloud_material),
+                    Transform::default(),
+                    Name::new(format!("RocketFarField{}Clouds", planet.name)),
+                ));
+            });
+        }
+    }
 }
 
 /// Spawn a moon in flight units.
