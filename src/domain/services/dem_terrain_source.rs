@@ -20,8 +20,9 @@ use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, Ter
 
 /// Magic bytes for the versioned cube-sphere DEM format.
 pub const DEM_MAGIC: [u8; 8] = *b"CSDEM\0\0\0";
-/// The only format version currently accepted by this reader.
-pub const DEM_FORMAT_VERSION: u32 = 1;
+/// The format version that persists the precomputed patch metadata pyramid.
+pub const DEM_FORMAT_VERSION: u32 = 2;
+const LEGACY_DEM_FORMAT_VERSION: u32 = 1;
 /// ETOPO1's global raw-grid dimensions, including both longitude seam columns.
 pub const ETOPO1_COLUMNS: usize = 21_601;
 pub const ETOPO1_ROWS: usize = 10_801;
@@ -141,6 +142,66 @@ impl DemMetadataPyramid {
             .expect("cube-sphere DEM has six root faces")
             .elevation_bounds_m()
     }
+
+    fn byte_len(resolution: u32) -> Result<usize, DemError> {
+        Self::record_count(resolution)?
+            .checked_mul(4)
+            .ok_or_else(|| {
+                DemError::InvalidFormat("metadata payload byte count overflows usize".into())
+            })
+    }
+
+    fn record_count(resolution: u32) -> Result<usize, DemError> {
+        let max_level = metadata_max_level(resolution);
+        (0..=max_level).try_fold(0usize, |total, level| {
+            let width = 1usize << level;
+            let records = FACE_COUNT
+                .checked_mul(width)
+                .and_then(|value| value.checked_mul(width))
+                .ok_or_else(|| {
+                    DemError::InvalidFormat("metadata record count overflows usize".into())
+                })?;
+            total.checked_add(records).ok_or_else(|| {
+                DemError::InvalidFormat("metadata record count overflows usize".into())
+            })
+        })
+    }
+
+    fn from_bytes(resolution: u32, bytes: &[u8]) -> Result<Self, DemError> {
+        let expected_bytes = Self::byte_len(resolution)?;
+        if bytes.len() != expected_bytes {
+            return Err(DemError::InvalidFormat(format!(
+                "expected {expected_bytes} metadata bytes, found {}",
+                bytes.len()
+            )));
+        }
+        let max_level = metadata_max_level(resolution);
+        let mut offset = 0;
+        let mut levels = Vec::with_capacity(max_level as usize + 1);
+        for level in 0..=max_level {
+            let width = 1usize << level;
+            let records = FACE_COUNT * width * width;
+            let mut metadata = Vec::with_capacity(records);
+            for _ in 0..records {
+                metadata.push(DemPatchMetadata {
+                    min_m: i16::from_le_bytes([bytes[offset], bytes[offset + 1]]),
+                    max_m: i16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]),
+                });
+                offset += 4;
+            }
+            levels.push(metadata);
+        }
+        Ok(Self { levels })
+    }
+
+    fn append_bytes(&self, bytes: &mut Vec<u8>) {
+        for level in &self.levels {
+            for metadata in level {
+                bytes.extend_from_slice(&metadata.min_m.to_le_bytes());
+                bytes.extend_from_slice(&metadata.max_m.to_le_bytes());
+            }
+        }
+    }
 }
 
 /// Failures while loading, validating, or converting a cube-sphere DEM.
@@ -216,7 +277,7 @@ impl CubeSphereDem {
         let version = read_u32(bytes, 8)?;
         if version != DEM_FORMAT_VERSION {
             return Err(DemError::InvalidFormat(format!(
-                "unsupported version {version}; expected {DEM_FORMAT_VERSION}"
+                "unsupported version {version}; expected preprocessed version {DEM_FORMAT_VERSION}"
             )));
         }
         let resolution = read_u32(bytes, 12)?;
@@ -237,8 +298,10 @@ impl CubeSphereDem {
         let payload_bytes = sample_count.checked_mul(HEIGHT_BYTES).ok_or_else(|| {
             DemError::InvalidFormat("height payload byte count overflows usize".into())
         })?;
+        let metadata_bytes = DemMetadataPyramid::byte_len(resolution)?;
         let expected_bytes = HEADER_BYTES
             .checked_add(payload_bytes)
+            .and_then(|bytes| bytes.checked_add(metadata_bytes))
             .ok_or_else(|| DemError::InvalidFormat("DEM byte count overflows usize".into()))?;
         if bytes.len() != expected_bytes {
             return Err(DemError::InvalidFormat(format!(
@@ -247,18 +310,27 @@ impl CubeSphereDem {
             )));
         }
 
-        let (samples, remainder) = bytes[HEADER_BYTES..].as_chunks::<HEIGHT_BYTES>();
+        let payload_end = HEADER_BYTES + payload_bytes;
+        let (samples, remainder) = bytes[HEADER_BYTES..payload_end].as_chunks::<HEIGHT_BYTES>();
         debug_assert!(remainder.is_empty());
         let heights_m = samples
             .iter()
             .map(|sample| i16::from_le_bytes(*sample))
             .collect();
-        Self::new(resolution, heights_m)
+        let metadata = DemMetadataPyramid::from_bytes(resolution, &bytes[payload_end..])?;
+        Ok(Self {
+            resolution,
+            heights_m,
+            metadata,
+        })
     }
 
     /// Encode the stable versioned format.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(HEADER_BYTES + self.heights_m.len() * HEIGHT_BYTES);
+        let metadata_bytes = DemMetadataPyramid::byte_len(self.resolution)
+            .expect("validated DEM resolution has a representable metadata payload");
+        let mut bytes =
+            Vec::with_capacity(HEADER_BYTES + self.heights_m.len() * HEIGHT_BYTES + metadata_bytes);
         bytes.extend_from_slice(&DEM_MAGIC);
         bytes.extend_from_slice(&DEM_FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&self.resolution.to_le_bytes());
@@ -267,6 +339,7 @@ impl CubeSphereDem {
         for height_m in &self.heights_m {
             bytes.extend_from_slice(&height_m.to_le_bytes());
         }
+        self.metadata.append_bytes(&mut bytes);
         bytes
     }
 
@@ -277,6 +350,54 @@ impl CubeSphereDem {
     pub fn write_path(&self, path: impl AsRef<Path>) -> Result<(), DemError> {
         fs::write(path, self.to_bytes())?;
         Ok(())
+    }
+
+    /// Upgrade a legacy v1 package offline. The runtime reader deliberately
+    /// rejects v1 because rebuilding immutable metadata belongs in asset
+    /// preparation, not application startup.
+    pub fn upgrade_legacy_v1_path(
+        input_path: impl AsRef<Path>,
+        output_path: impl AsRef<Path>,
+    ) -> Result<(), DemError> {
+        let bytes = fs::read(input_path)?;
+        Self::from_legacy_v1_bytes(&bytes)?.write_path(output_path)
+    }
+
+    fn from_legacy_v1_bytes(bytes: &[u8]) -> Result<Self, DemError> {
+        if bytes.len() < HEADER_BYTES {
+            return Err(DemError::InvalidFormat(
+                "legacy file is shorter than the header".into(),
+            ));
+        }
+        if bytes[0..8] != DEM_MAGIC || read_u32(bytes, 8)? != LEGACY_DEM_FORMAT_VERSION {
+            return Err(DemError::InvalidFormat(
+                "expected a legacy version 1 CSDEM package".into(),
+            ));
+        }
+        let resolution = read_u32(bytes, 12)?;
+        if read_u32(bytes, 16)? != FACE_COUNT as u32 || read_u32(bytes, 20)? != HEIGHT_BYTES as u32
+        {
+            return Err(DemError::InvalidFormat("invalid legacy DEM header".into()));
+        }
+        let payload_bytes = expected_samples(resolution)?
+            .checked_mul(HEIGHT_BYTES)
+            .ok_or_else(|| {
+                DemError::InvalidFormat("height payload byte count overflows usize".into())
+            })?;
+        if bytes.len() != HEADER_BYTES + payload_bytes {
+            return Err(DemError::InvalidFormat(
+                "invalid legacy DEM payload length".into(),
+            ));
+        }
+        let (samples, remainder) = bytes[HEADER_BYTES..].as_chunks::<HEIGHT_BYTES>();
+        debug_assert!(remainder.is_empty());
+        Self::new(
+            resolution,
+            samples
+                .iter()
+                .map(|sample| i16::from_le_bytes(*sample))
+                .collect(),
+        )
     }
 
     /// Bake the complete authoritative height field into the resident
@@ -730,10 +851,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_packages_upgrade_offline_to_the_preprocessed_format() {
+        let dem = CubeSphereDem::new(2, face_heights(2)).expect("valid faces");
+        let mut legacy = dem.to_bytes();
+        legacy[8..12].copy_from_slice(&LEGACY_DEM_FORMAT_VERSION.to_le_bytes());
+        legacy.truncate(HEADER_BYTES + dem.heights_m.len() * HEIGHT_BYTES);
+
+        assert!(matches!(
+            CubeSphereDem::from_bytes(&legacy),
+            Err(DemError::InvalidFormat(_))
+        ));
+        assert_eq!(CubeSphereDem::from_legacy_v1_bytes(&legacy).unwrap(), dem);
+    }
+
+    #[test]
     fn parser_rejects_unknown_versions_and_invalid_payloads() {
         let dem = CubeSphereDem::new(2, face_heights(2)).expect("valid faces");
         let mut unknown_version = dem.to_bytes();
-        unknown_version[8..12].copy_from_slice(&2u32.to_le_bytes());
+        unknown_version[8..12].copy_from_slice(&3u32.to_le_bytes());
         assert!(matches!(
             CubeSphereDem::from_bytes(&unknown_version),
             Err(DemError::InvalidFormat(_))

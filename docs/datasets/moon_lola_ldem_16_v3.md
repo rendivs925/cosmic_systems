@@ -33,16 +33,25 @@ offline:
 ```sh
 cargo run --features dem --bin lola_ldem_convert -- \
   assets/large_files/terrain/moon_lola_ldem_16_v3.img \
-  assets/large_files/terrain/moon_lola_ldem_16_cs2048_v1.csdem 2048
+  assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem 2048
 ```
 
 The generated CSDEM stores signed integer-meter elevations on six cube-sphere
-faces in `CubeFace::ALL` order. Its resampling adds at most 0.25 meters of
-rounding error beyond the source's published sampling and interpolation limits.
+faces in `CubeFace::ALL` order and a precomputed patch-metadata pyramid. Runtime
+only validates and deserializes this package. Its resampling adds at most 0.25
+meters of rounding error beyond the source's published sampling and interpolation limits.
 The PDS product documents possible artifacts at 45-degree latitude-band edges;
 it does not provide a global numeric vertical-error bound.
 
-Generated runtime SHA-256: `c804b5b3cbe7509803cc676a613e9ea38dab2454e97e0cc6b026d1b55b2573e4`
+Generated runtime SHA-256: `7ceb6be8a4b20e656f1d0b20ba6bbbe04ec4087d36c852cf9f37339de694c63c`
+
+Rocket Mode's non-authoritative body-fixed overview is generated offline with:
+
+```sh
+cargo run --features dem --bin terrain_overview_bake -- moon assets/large_files/terrain/moon_terrain_overview_v1.png
+```
+
+Generated overview SHA-256: `106aebd619c368cebd205b2165542b7571dec40755e994852854938fe8362f86`
 
 No simulator path downloads terrain data. If the local CSDEM is absent, the
 Moon receives no `PlanetTerrain` component and remains non-landable; it never

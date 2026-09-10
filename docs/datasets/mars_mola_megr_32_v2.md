@@ -78,11 +78,21 @@ curl --fail --location --continue-at - \
 sha256sum assets/large_files/terrain/mars_mola_megr_32_v2.img
 cargo run --features dem --bin mola_megr_convert -- \
   assets/large_files/terrain/mars_mola_megr_32_v2.img \
-  assets/large_files/terrain/mars_mola_megr_32_cs2048_v1.csdem 2048
-sha256sum assets/large_files/terrain/mars_mola_megr_32_cs2048_v1.csdem
+  assets/large_files/terrain/mars_mola_megr_32_cs2048_v2.csdem 2048
+sha256sum assets/large_files/terrain/mars_mola_megr_32_cs2048_v2.csdem
 ```
 
-Generated CSDEM SHA-256: `994b3b1fce4a4483c83e80881fb947f9dac4a3f24ebf7634e7527cd59a5018e7`
+Generated CSDEM v2 includes the precomputed patch-metadata pyramid, so runtime only validates and deserializes the package.
+
+Generated CSDEM SHA-256: `c7c992fa2edfa19b4824dd9eff1c0c8d99ec3fbe45e527a339cd19d7b7b9651c`
+
+Rocket Mode's non-authoritative body-fixed overview is generated offline with:
+
+```sh
+cargo run --features dem --bin terrain_overview_bake -- mars assets/large_files/terrain/mars_terrain_overview_v1.png
+```
+
+Generated overview SHA-256: `48379be94e681c18022bedc491e01478bd9fa4b124cd14390f333515e8ee608f`
 
 The source raster and generated CSDEM are ignored local assets. A present but
 invalid CSDEM is a startup configuration error; an absent CSDEM leaves Mars

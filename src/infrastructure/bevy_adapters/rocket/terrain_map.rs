@@ -15,20 +15,19 @@ use crate::domain::services::reference_frames::{
     body_fixed_to_terrain_lat_lon, catalog_body_fixed_to_inertial_rotation,
     geodetic_to_terrain_lat_lon, planet_inertial_to_body_fixed,
 };
-use crate::domain::services::terrain_source::{surface_appearance, TerrainSource};
+pub use crate::domain::services::terrain_overview::terrain_overview_raster as terrain_map_raster;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, PlanetTerrain};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
-use bevy::asset::RenderAssetUsages;
 use bevy::math::{DVec3, Rot2, Vec2};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::collections::HashMap;
 
 /// Global raster dimensions. The UI displays this at 1.5x for a compact but
 /// legible panel while retaining a small, body-keyed cache.
-pub const MAP_RASTER_WIDTH: u32 = 192;
-pub const MAP_RASTER_HEIGHT: u32 = 96;
+pub const MAP_RASTER_WIDTH: u32 = crate::domain::services::terrain_overview::TERRAIN_OVERVIEW_WIDTH;
+pub const MAP_RASTER_HEIGHT: u32 =
+    crate::domain::services::terrain_overview::TERRAIN_OVERVIEW_HEIGHT;
 const MAP_WIDTH_PX: f32 = 288.0;
 const MAP_HEIGHT_PX: f32 = 144.0;
 const HISTORY_SEGMENTS: usize = 64;
@@ -36,6 +35,9 @@ const PREDICTION_SEGMENTS: usize = 96;
 /// Presentation uncertainty only, not an input to landing guidance.
 const ACTIVE_LANDING_UNCERTAINTY_M: f64 = 1_000.0;
 const MAP_UPDATE_INTERVAL_S: f32 = 0.1;
+const EARTH_OVERVIEW_ASSET: &str = "large_files/terrain/earth_terrain_overview_v1.png";
+const MOON_OVERVIEW_ASSET: &str = "large_files/terrain/moon_terrain_overview_v1.png";
+const MARS_OVERVIEW_ASSET: &str = "large_files/terrain/mars_terrain_overview_v1.png";
 
 /// A point in the map panel's top-left pixel coordinate system.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,29 +99,6 @@ pub fn map_segment(
         length_px,
         angle_rad: dy.atan2(dx),
     })
-}
-
-/// Build an RGBA non-authoritative overview raster from the shared terrain
-/// visual law. This is a pure function so cache creation does not introduce
-/// another terrain model or initialize local terrain caches.
-pub fn terrain_map_raster(source: &dyn TerrainSource, width: u32, height: u32) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height {
-        let latitude_deg = 90.0 - (y as f64 + 0.5) * 180.0 / height as f64;
-        for x in 0..width {
-            let longitude_deg = -180.0 + (x as f64 + 0.5) * 360.0 / width as f64;
-            let elevation_m = source.overview_height_m(latitude_deg, longitude_deg);
-            let appearance = surface_appearance(
-                elevation_m,
-                source.overview_moisture(latitude_deg, longitude_deg),
-                source.zone_lat(latitude_deg),
-                source.overview_slope_deg(latitude_deg, longitude_deg),
-            );
-            pixels.extend(appearance.albedo.map(|channel| (channel * 255.0) as u8));
-            pixels.push(255);
-        }
-    }
-    pixels
 }
 
 /// Pixel radii for a circular ground uncertainty region projected to the map.
@@ -344,6 +323,15 @@ fn spawn_track_segment(
     ));
 }
 
+fn terrain_overview_asset(body_name: &str) -> Option<&'static str> {
+    match body_name {
+        "Earth" => Some(EARTH_OVERVIEW_ASSET),
+        "Moon" => Some(MOON_OVERVIEW_ASSET),
+        "Mars" => Some(MARS_OVERVIEW_ASSET),
+        _ => None,
+    }
+}
+
 #[allow(clippy::type_complexity)]
 #[expect(
     clippy::too_many_arguments,
@@ -352,7 +340,7 @@ fn spawn_track_segment(
 fn update_terrain_map_panel(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     real_time: Res<Time>,
-    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
+    planet_query: Query<(Entity, &PlanetComponent), With<PlanetTerrain>>,
     rocket_query: Query<(
         &RocketPlanetBinding,
         &RocketPhysicsState,
@@ -366,7 +354,7 @@ fn update_terrain_map_panel(
     prediction_cache: Res<OrbitPredictionCache>,
     mut cache: ResMut<TerrainMapRasterCache>,
     mut update_state: ResMut<TerrainMapUpdateState>,
-    mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
     mut raster_query: Query<&mut ImageNode, With<TerrainMapRasterImage>>,
     mut overlay_query: Query<(&TerrainMapOverlay, &mut Node, &mut UiTransform)>,
 ) {
@@ -375,9 +363,9 @@ fn update_terrain_map_panel(
     else {
         return;
     };
-    let Some((planet_entity, planet, terrain)) = planet_query
+    let Some((planet_entity, planet)) = planet_query
         .iter()
-        .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
+        .find(|(_, planet)| planet.matches_body(&binding.planet_name))
     else {
         return;
     };
@@ -429,18 +417,10 @@ fn update_terrain_map_panel(
     let raster = if let Some(raster) = cache.images.get(&planet.domain_planet.name) {
         raster.clone()
     } else {
-        let data = terrain_map_raster(&*terrain.source, MAP_RASTER_WIDTH, MAP_RASTER_HEIGHT);
-        let raster = images.add(Image::new(
-            Extent3d {
-                width: MAP_RASTER_WIDTH,
-                height: MAP_RASTER_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            data,
-            TextureFormat::Rgba8Unorm,
-            RenderAssetUsages::RENDER_WORLD,
-        ));
+        let Some(asset_path) = terrain_overview_asset(&planet.domain_planet.name) else {
+            return;
+        };
+        let raster = asset_server.load(asset_path);
         cache
             .images
             .insert(planet.domain_planet.name.clone(), raster.clone());
@@ -642,7 +622,7 @@ fn set_track_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::terrain_source::ElevationBounds;
+    use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 
     #[derive(Debug)]
     struct FlatTerrain;

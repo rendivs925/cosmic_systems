@@ -6,6 +6,6 @@
     vertical_datum: "mean sea level / EPSG:5715",
     source_resolution_arcmin: 1,
     cube_sphere_resolution: 2048,
-    runtime_asset: "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem",
-    conversion: "signed i16 LE ETOPO1 grid resampled bilinearly onto CubeFace::ALL",
+    runtime_asset: "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem",
+    conversion: "signed i16 LE ETOPO1 grid resampled bilinearly onto CubeFace::ALL; CSDEM v2 persists its patch metadata pyramid",
 )
