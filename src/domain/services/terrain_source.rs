@@ -13,26 +13,18 @@
 
 use crate::domain::math::DVec3;
 use std::fmt::Debug;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[cfg(feature = "dem")]
 use std::path::Path;
 
 #[cfg(feature = "dem")]
 use crate::domain::services::cube_sphere::face_uv;
-use crate::domain::services::cube_sphere::{
-    face_uv_to_direction, PatchGeometricError, TerrainPatch,
-};
+use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 #[cfg(feature = "dem")]
 use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
 #[cfg(feature = "dem")]
 use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
-use crate::domain::services::planet_factory::PlanetFactory;
-use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
-use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::domain::value_objects::launch_site_coordinates::{
-    predefined_sites, LaunchSiteCoordinates,
-};
 
 /// Feature-scale of the 3D value-noise field on the unit sphere: higher values
 /// produce more, smaller features across the planet.
@@ -61,17 +53,6 @@ const CONTINENTAL_AMPLITUDE: f64 = 1.1;
 const ROLLING_AMPLITUDE: f64 = 1.4;
 const OROGENY_SCALE: f64 = 0.32;
 
-/// Deterministic physical landscape added to Earth's measured ETOPO elevation.
-/// The regional mask in `ProceduralTerrainSource` keeps its mountain chains
-/// localized instead of applying ridges uniformly across the planet.
-#[cfg(any(test, not(feature = "dem")))]
-const EARTH_SYNTHETIC_LANDSCAPE_SEED: u64 = 0xE4A7_D371;
-#[cfg(any(test, not(feature = "dem")))]
-const EARTH_SYNTHETIC_ROLLING_AMPLITUDE_M: f64 = 650.0;
-#[cfg(any(test, not(feature = "dem")))]
-const EARTH_SYNTHETIC_MOUNTAIN_AMPLITUDE_M: f64 = 2_200.0;
-#[cfg(any(test, not(feature = "dem")))]
-const EARTH_SYNTHETIC_LOCAL_DETAIL_SEED: u64 = 0x5A17_4D09;
 const TERRAIN_DETAIL_BIOME_WEIGHT: f64 = 0.65;
 
 #[cfg(feature = "dem")]
@@ -933,215 +914,6 @@ impl TerrainSource for LocalDetailTerrainSource {
     }
 }
 
-/// A flat detailed launch/landing site inside the global terrain.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TerrainSite {
-    pub name: &'static str,
-    pub latitude_deg: f64,
-    pub longitude_deg: f64,
-    /// Radius of the exactly flat pad surface.
-    pub radius_deg: f64,
-    /// Outer radius of the C1 grade back to the unmodified terrain. Must be
-    /// greater than `radius_deg`.
-    pub blend_radius_deg: f64,
-    pub elevation_m: f64,
-}
-
-impl TerrainSite {
-    pub fn contains(&self, lat: f64, lon: f64) -> bool {
-        central_angle_deg(lat, lon, self.latitude_deg, self.longitude_deg) <= self.radius_deg
-    }
-
-    fn flat_weight(&self, lat: f64, lon: f64) -> f64 {
-        let distance_deg = central_angle_deg(lat, lon, self.latitude_deg, self.longitude_deg);
-        if distance_deg <= self.radius_deg {
-            return 1.0;
-        }
-        if self.blend_radius_deg <= self.radius_deg {
-            return 0.0;
-        }
-        1.0 - ss(self.radius_deg, self.blend_radius_deg, distance_deg)
-    }
-}
-
-/// A site whose base-terrain center height is calibrated once on first use in
-/// its grade band. Exact pad samples need no calibration and must not force a
-/// synchronous terrain bake while the scene is being constructed.
-#[derive(Debug, Clone)]
-struct CalibratedTerrainSite {
-    site: TerrainSite,
-    base_center_height_m: Arc<OnceLock<f64>>,
-}
-
-/// Detailed launch-site patches overlaid on a base terrain source. Sites
-/// stay flat while a broad, smooth grade rejoins the unmodified base terrain.
-#[derive(Debug, Clone)]
-pub struct SiteAwareTerrainSource {
-    base: std::sync::Arc<dyn TerrainSource>,
-    sites: Vec<CalibratedTerrainSite>,
-}
-
-impl SiteAwareTerrainSource {
-    pub fn new(base: std::sync::Arc<dyn TerrainSource>, sites: Vec<TerrainSite>) -> Self {
-        let sites: Vec<_> = sites
-            .into_iter()
-            .map(|site| {
-                assert!(
-                    site.latitude_deg.is_finite()
-                        && (-90.0..=90.0).contains(&site.latitude_deg)
-                        && site.longitude_deg.is_finite()
-                        && site.elevation_m.is_finite()
-                        && site.radius_deg.is_finite()
-                        && site.blend_radius_deg.is_finite()
-                        && site.radius_deg >= 0.0
-                        && site.blend_radius_deg > site.radius_deg
-                        && site.blend_radius_deg <= 180.0,
-                    "terrain site '{}' must have finite coordinates/elevation, a non-negative flat radius, and a larger blend radius no greater than 180 degrees",
-                    site.name
-                );
-                CalibratedTerrainSite {
-                    site,
-                    base_center_height_m: Arc::new(OnceLock::new()),
-                }
-            })
-            .collect();
-
-        for (index, site) in sites.iter().enumerate() {
-            for other in sites.iter().skip(index + 1) {
-                assert!(
-                    central_angle_deg(
-                        site.site.latitude_deg,
-                        site.site.longitude_deg,
-                        other.site.latitude_deg,
-                        other.site.longitude_deg,
-                    ) >= site.site.blend_radius_deg + other.site.blend_radius_deg,
-                    "terrain grade regions '{}' and '{}' overlap",
-                    site.site.name,
-                    other.site.name,
-                );
-            }
-        }
-        Self { base, sites }
-    }
-}
-
-impl TerrainSource for SiteAwareTerrainSource {
-    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        for calibrated in &self.sites {
-            let site = calibrated.site;
-            let flat_weight = site.flat_weight(latitude_deg, longitude_deg);
-            if flat_weight > 0.0 {
-                if flat_weight == 1.0 {
-                    return site.elevation_m;
-                }
-                let base = self.base.height_m(latitude_deg, longitude_deg);
-                // Preserve local relief while carrying the center-height bias
-                // across the whole grade. The smoothstep-derived flat weight
-                // has zero slope at both ends, avoiding a pad-edge shelf.
-                let base_center_height_m = *calibrated
-                    .base_center_height_m
-                    .get_or_init(|| self.base.height_m(site.latitude_deg, site.longitude_deg));
-                let center_bias_m = site.elevation_m - base_center_height_m;
-                let corrected_base = base + center_bias_m * flat_weight;
-                return corrected_base + (site.elevation_m - corrected_base) * flat_weight;
-            }
-        }
-        self.base.height_m(latitude_deg, longitude_deg)
-    }
-
-    fn elevation_bounds_m(&self) -> ElevationBounds {
-        let base = self.base.elevation_bounds_m();
-        // A graded site may carry its center bias across the full declared base
-        // range. Keep culling conservative until per-site tile bounds exist.
-        base.combine(ElevationBounds::new(-base.range_m(), base.range_m()))
-    }
-
-    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
-        if self
-            .sites
-            .iter()
-            .any(|site| patch_may_intersect_site(patch, site.site))
-        {
-            let bounds = self.elevation_bounds_m();
-            return PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m);
-        }
-        self.base.patch_geometric_error(patch)
-    }
-
-    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
-        for calibrated in &self.sites {
-            let site = calibrated.site;
-            let flat_weight = site.flat_weight(latitude_deg, longitude_deg);
-            if flat_weight > 0.0 {
-                if flat_weight == 1.0 {
-                    return site.elevation_m;
-                }
-                let base = self
-                    .base
-                    .mesh_height_m(latitude_deg, longitude_deg, patch_level);
-                let base_center_height_m = *calibrated
-                    .base_center_height_m
-                    .get_or_init(|| self.base.height_m(site.latitude_deg, site.longitude_deg));
-                let center_bias_m = site.elevation_m - base_center_height_m;
-                let corrected_base = base + center_bias_m * flat_weight;
-                return corrected_base + (site.elevation_m - corrected_base) * flat_weight;
-            }
-        }
-        self.base
-            .mesh_height_m(latitude_deg, longitude_deg, patch_level)
-    }
-
-    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
-        self.base.prepare_sample(latitude_deg, longitude_deg);
-    }
-
-    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.moisture(latitude_deg, longitude_deg)
-    }
-
-    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        // Launch-pad flattening is too local to be meaningful in a global map.
-        self.base.overview_height_m(latitude_deg, longitude_deg)
-    }
-
-    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.overview_moisture(latitude_deg, longitude_deg)
-    }
-
-    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.overview_slope_deg(latitude_deg, longitude_deg)
-    }
-
-    fn zone_lat(&self, latitude_deg: f64) -> f64 {
-        self.base.zone_lat(latitude_deg)
-    }
-}
-
-/// A site grade may alter a patch only when its spherical footprint overlaps the
-/// patch's conservative corner radius. All other patches retain base metadata.
-fn patch_may_intersect_site(patch: &TerrainPatch, site: TerrainSite) -> bool {
-    let center = patch.center_direction();
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let patch_radius_rad = [
-        face_uv_to_direction(patch.face, u0, v0),
-        face_uv_to_direction(patch.face, u1, v0),
-        face_uv_to_direction(patch.face, u0, v1),
-        face_uv_to_direction(patch.face, u1, v1),
-    ]
-    .into_iter()
-    .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
-    .fold(0.0, f64::max);
-    let latitude_rad = site.latitude_deg.to_radians();
-    let longitude_rad = site.longitude_deg.to_radians();
-    let site_direction = DVec3::new(
-        latitude_rad.cos() * longitude_rad.cos(),
-        latitude_rad.sin(),
-        latitude_rad.cos() * longitude_rad.sin(),
-    );
-    let site_distance_rad = center.dot(site_direction).clamp(-1.0, 1.0).acos();
-    site_distance_rad <= patch_radius_rad + site.blend_radius_deg.to_radians()
-}
-
 /// Continuous surface appearance (albedo/roughness/metallic) blended from
 /// elevation, soil moisture, latitude zone and local slope — the "one
 /// continuous law" terrain best-practice (glassy wash → soft hills → textured
@@ -1274,11 +1046,11 @@ pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg
     grad.atan().to_degrees()
 }
 
-#[cfg(any(test, not(feature = "dem")))]
+#[cfg(test)]
 #[derive(Debug)]
 struct FlatTerrainSource;
 
-#[cfg(any(test, not(feature = "dem")))]
+#[cfg(test)]
 impl TerrainSource for FlatTerrainSource {
     fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.0
@@ -1304,12 +1076,11 @@ impl EarthTerrainSource {
             panic!("Earth measured terrain authority is unavailable or invalid: {error}")
         });
         #[cfg(not(feature = "dem"))]
-        Self::with_global_elevation_and_sites(
-            Arc::new(ProceduralTerrainSource::from_config(
+        Self {
+            source: Arc::new(ProceduralTerrainSource::from_config(
                 ProceduralTerrainConfig::earth(),
             )),
-            Self::sites(),
-        )
+        }
     }
 
     /// Construct Earth terrain from a validated local cube-sphere DEM. The
@@ -1317,10 +1088,9 @@ impl EarthTerrainSource {
     /// elevations without adding a synthetic landscape or local-detail layer.
     #[cfg(feature = "dem")]
     pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
-        Ok(Self::with_site_overrides(
-            Arc::new(DemTerrainSource::from_path(path)?),
-            Self::sites(),
-        ))
+        Ok(Self {
+            source: Arc::new(DemTerrainSource::from_path(path)?),
+        })
     }
 
     /// Use a reviewed local elevation package as an absolute replacement within
@@ -1344,93 +1114,9 @@ impl EarthTerrainSource {
                 "local elevation package contains no valid samples".into(),
             ));
         }
-        Ok(Self::with_site_overrides(
-            Arc::new(LocalElevationOverlayTerrainSource { global, local }),
-            Self::sites(),
-        ))
-    }
-
-    #[cfg(any(test, not(feature = "dem")))]
-    fn with_global_elevation_and_sites(
-        global_elevation: Arc<dyn TerrainSource>,
-        sites: Vec<TerrainSite>,
-    ) -> Self {
-        let landscape = Arc::new(ProceduralTerrainSource::new(
-            EARTH_SYNTHETIC_LANDSCAPE_SEED,
-            EARTH_SYNTHETIC_ROLLING_AMPLITUDE_M,
-            EARTH_SYNTHETIC_MOUNTAIN_AMPLITUDE_M,
-            0,
-        ));
-        let detail = Arc::new(LocalDetailTerrainSource::new(
-            landscape,
-            EARTH_SYNTHETIC_LOCAL_DETAIL_SEED,
-        ));
-        let detail_bounds = detail.elevation_bounds_m();
-        let layered = Arc::new(LayeredTerrainSource::new(
-            TerrainElevationLayer::new(Arc::new(FlatTerrainSource), ElevationBounds::new(0.0, 0.0)),
-            Some(TerrainElevationLayer::new(
-                global_elevation,
-                ElevationBounds::new(-10_000.0, 20_000.0),
-            )),
-            Some(TerrainDetailLayer::new(
-                detail,
-                detail_bounds,
-                DetailLodFade::new(3, 6),
-            )),
-        ));
-        Self::with_site_overrides(layered, sites)
-    }
-
-    /// Launch and recovery pads are sub-grid features at the 2048-face package
-    /// resolution. Keep their surveyed, static flattening as an overlay so the
-    /// fixed rocket baseline and the physical pad contract remain exact.
-    fn with_site_overrides(source: Arc<dyn TerrainSource>, sites: Vec<TerrainSite>) -> Self {
-        Self {
-            source: Arc::new(SiteAwareTerrainSource::new(source, sites)),
-        }
-    }
-
-    fn sites() -> Vec<TerrainSite> {
-        let earth_id = CelestialBodyId::earth();
-        let earth = PlanetFactory::create_by_id(&earth_id)
-            .expect("Earth terrain requires the Earth catalog entry");
-        let terrain_coordinates = |latitude_deg, longitude_deg| {
-            let site =
-                LaunchSiteCoordinates::new(earth_id.clone(), latitude_deg, longitude_deg, 0.0);
-            geodetic_to_terrain_lat_lon(&site, &earth)
-        };
-        let ksc = predefined_sites::kennedy_space_center();
-        let (ksc_latitude_deg, ksc_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
-        let (rtls_latitude_deg, rtls_longitude_deg) = terrain_coordinates(28.61, -80.55);
-        let (drone_ship_latitude_deg, drone_ship_longitude_deg) =
-            terrain_coordinates(28.50, -80.05);
-
-        vec![
-            TerrainSite {
-                name: "Kennedy Space Center",
-                latitude_deg: ksc_latitude_deg,
-                longitude_deg: ksc_longitude_deg,
-                radius_deg: 0.00015,
-                blend_radius_deg: 0.04,
-                elevation_m: 2.0,
-            },
-            TerrainSite {
-                name: "RTLS Landing Pad",
-                latitude_deg: rtls_latitude_deg,
-                longitude_deg: rtls_longitude_deg,
-                radius_deg: 0.00015,
-                blend_radius_deg: 0.05,
-                elevation_m: 3.0,
-            },
-            TerrainSite {
-                name: "Drone Ship",
-                latitude_deg: drone_ship_latitude_deg,
-                longitude_deg: drone_ship_longitude_deg,
-                radius_deg: 0.00025,
-                blend_radius_deg: 0.03,
-                elevation_m: 0.0,
-            },
-        ]
+        Ok(Self {
+            source: Arc::new(LocalElevationOverlayTerrainSource { global, local }),
+        })
     }
 }
 
@@ -1648,7 +1334,6 @@ mod tests {
     use super::*;
     #[cfg(feature = "dem")]
     use crate::domain::services::dem_terrain_source::CubeSphereDem;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn procedural_regeneration_is_identical() {
@@ -1656,51 +1341,6 @@ mod tests {
         let a = source.height_m(12.34, -45.67);
         let b = source.height_m(12.34, -45.67);
         assert_eq!(a, b);
-    }
-
-    #[test]
-    fn enriched_earth_landscape_is_shared_by_mesh_and_collision() {
-        let source = EarthTerrainSource::with_global_elevation_and_sites(
-            Arc::new(FlatTerrainSource),
-            Vec::new(),
-        );
-        let samples = [
-            (-48.0, -132.0),
-            (-21.0, 47.0),
-            (8.0, 91.0),
-            (28.5, -80.6),
-            (43.0, 16.0),
-            (67.0, 138.0),
-        ];
-        let heights: Vec<_> = samples
-            .iter()
-            .map(|(latitude_deg, longitude_deg)| source.height_m(*latitude_deg, *longitude_deg))
-            .collect();
-        let range_m = heights.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-            - heights.iter().copied().fold(f64::INFINITY, f64::min);
-
-        assert!(
-            range_m > 400.0,
-            "the deterministic landscape needs visible regional relief, got {range_m:.1} m"
-        );
-        for ((latitude_deg, longitude_deg), height_m) in samples.into_iter().zip(heights) {
-            assert_eq!(
-                source.mesh_height_m(latitude_deg, longitude_deg, 8),
-                height_m,
-                "mesh generation must sample the authoritative landscape"
-            );
-            let collision = crate::domain::services::terrain_collision::sample_surface(
-                &source,
-                latitude_deg,
-                longitude_deg,
-                6_371_000.0,
-            );
-            assert_eq!(
-                collision.height_m, height_m,
-                "collision must sample the same authoritative landscape"
-            );
-            assert!(collision.normal.is_finite());
-        }
     }
 
     #[test]
@@ -1862,39 +1502,6 @@ mod tests {
         assert_ne!(a.height_m(la, lo), b.height_m(la, lo));
     }
 
-    #[test]
-    fn site_aware_source_flattens_launch_sites() {
-        let source = EarthTerrainSource::new();
-        let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
-            .expect("Earth exists");
-        let ksc = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
-        let (latitude_deg, longitude_deg) =
-            crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon(&ksc, &earth);
-        // Inside the KSC site the height is the flat pad elevation.
-        let ksc_height = source.height_m(latitude_deg, longitude_deg);
-        assert!((ksc_height - 2.0).abs() < 1e-9);
-        // Far from any site the procedural base applies.
-        let far = source.height_m(-40.0, 100.0);
-        assert!(
-            far.abs() > 10.0,
-            "expected non-flat global terrain, got {far}"
-        );
-    }
-
-    #[test]
-    fn earth_configured_pads_have_their_configured_elevations() {
-        let source = EarthTerrainSource::new();
-
-        for site in EarthTerrainSource::sites() {
-            assert_eq!(
-                source.height_m(site.latitude_deg, site.longitude_deg),
-                site.elevation_m,
-                "{} pad must retain its configured elevation",
-                site.name
-            );
-        }
-    }
-
     #[cfg(feature = "dem")]
     #[test]
     fn default_earth_source_uses_the_required_measured_dem_package() {
@@ -1916,140 +1523,6 @@ mod tests {
                 package_source.river_strength(latitude_deg, longitude_deg),
             );
         }
-    }
-
-    #[derive(Debug, Default)]
-    struct CountingTerrainSource(AtomicUsize);
-
-    impl TerrainSource for CountingTerrainSource {
-        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            10.0
-        }
-
-        fn elevation_bounds_m(&self) -> ElevationBounds {
-            ElevationBounds::new(10.0, 10.0)
-        }
-    }
-
-    #[test]
-    fn site_calibration_is_lazy_and_exact_pad_samples_do_not_touch_the_base() {
-        let base = Arc::new(CountingTerrainSource::default());
-        let source = SiteAwareTerrainSource::new(
-            base.clone(),
-            vec![TerrainSite {
-                name: "test pad",
-                latitude_deg: 0.0,
-                longitude_deg: 0.0,
-                radius_deg: 0.01,
-                blend_radius_deg: 0.02,
-                elevation_m: 2.0,
-            }],
-        );
-
-        assert_eq!(base.0.load(Ordering::Relaxed), 0);
-        assert_eq!(source.height_m(0.0, 0.0), 2.0);
-        assert_eq!(base.0.load(Ordering::Relaxed), 0);
-
-        let _ = source.height_m(0.015, 0.0);
-        assert!(base.0.load(Ordering::Relaxed) >= 2);
-    }
-
-    #[test]
-    fn terrain_site_validation_rejects_invalid_coordinates_elevation_and_radii() {
-        let valid = TerrainSite {
-            name: "valid",
-            latitude_deg: 0.0,
-            longitude_deg: 0.0,
-            radius_deg: 0.01,
-            blend_radius_deg: 0.02,
-            elevation_m: 0.0,
-        };
-        let invalid_sites = [
-            TerrainSite {
-                latitude_deg: f64::NAN,
-                ..valid
-            },
-            TerrainSite {
-                longitude_deg: f64::INFINITY,
-                ..valid
-            },
-            TerrainSite {
-                elevation_m: f64::NEG_INFINITY,
-                ..valid
-            },
-            TerrainSite {
-                radius_deg: -0.01,
-                ..valid
-            },
-            TerrainSite {
-                blend_radius_deg: 181.0,
-                ..valid
-            },
-        ];
-
-        for site in invalid_sites {
-            assert!(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    SiteAwareTerrainSource::new(Arc::new(FlatTerrainSource), vec![site]);
-                }))
-                .is_err(),
-                "invalid site {site:?} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn site_aware_source_rejects_overlapping_grade_regions() {
-        let sites = vec![
-            TerrainSite {
-                name: "first",
-                latitude_deg: 0.0,
-                longitude_deg: 0.0,
-                radius_deg: 0.001,
-                blend_radius_deg: 0.02,
-                elevation_m: 1.0,
-            },
-            TerrainSite {
-                name: "second",
-                latitude_deg: 0.03,
-                longitude_deg: 0.0,
-                radius_deg: 0.001,
-                blend_radius_deg: 0.02,
-                elevation_m: 2.0,
-            },
-        ];
-
-        assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                SiteAwareTerrainSource::new(Arc::new(FlatTerrainSource), sites);
-            }))
-            .is_err(),
-            "overlapping grade regions must be rejected rather than selecting by site order"
-        );
-    }
-
-    #[test]
-    fn ksc_spawn_surface_sample_matches_the_authoritative_pad_height() {
-        let source = EarthTerrainSource::new();
-        let launch_site = crate::domain::value_objects::launch_site_coordinates::predefined_sites::kennedy_space_center();
-        let earth = crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
-            .expect("Earth exists");
-        let (latitude_deg, longitude_deg) =
-            crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon(
-                &launch_site,
-                &earth,
-            );
-        let sample = crate::domain::services::terrain_collision::sample_surface(
-            &source,
-            latitude_deg,
-            longitude_deg,
-            earth.radius_km as f64 * 1_000.0,
-        );
-        assert_eq!(
-            sample.height_m, 2.0,
-            "rocket spawning must use the authoritative KSC pad elevation"
-        );
     }
 
     #[test]
@@ -2200,105 +1673,6 @@ mod tests {
             6_371_000.0,
         );
         assert_eq!(collision.height_m, render_height);
-    }
-
-    #[derive(Debug)]
-    struct SlopedTerrain;
-
-    impl TerrainSource for SlopedTerrain {
-        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-            latitude_deg * 100.0 + longitude_deg * 20.0
-        }
-
-        fn elevation_bounds_m(&self) -> ElevationBounds {
-            ElevationBounds::new(-12_600.0, 12_600.0)
-        }
-    }
-
-    #[test]
-    fn site_pad_is_flat_and_grades_continuously_to_calibrated_base() {
-        let site = TerrainSite {
-            name: "Test pad",
-            latitude_deg: 10.0,
-            longitude_deg: 20.0,
-            radius_deg: 0.001,
-            blend_radius_deg: 0.02,
-            elevation_m: 7.0,
-        };
-        let base = std::sync::Arc::new(SlopedTerrain);
-        let source = SiteAwareTerrainSource::new(base.clone(), vec![site]);
-
-        assert_eq!(source.height_m(10.0005, 20.0), 7.0);
-        let outer = 10.0 + site.blend_radius_deg;
-        assert!((source.height_m(outer, 20.0) - base.height_m(outer, 20.0)).abs() < 1e-9);
-
-        let inside = source.height_m(outer - 0.000001, 20.0);
-        let outside = source.height_m(outer + 0.000001, 20.0);
-        assert!(
-            (inside - outside).abs() < 0.01,
-            "pad boundary must be continuous: {inside} vs {outside}"
-        );
-    }
-
-    #[derive(Debug)]
-    struct SteepOffsetTerrain;
-
-    impl TerrainSource for SteepOffsetTerrain {
-        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-            2_500.0 + (latitude_deg - 10.0) * 30_000.0 + (longitude_deg - 20.0) * 4_000.0
-        }
-
-        fn elevation_bounds_m(&self) -> ElevationBounds {
-            ElevationBounds::new(-4_000_000.0, 4_000_000.0)
-        }
-    }
-
-    #[test]
-    fn calibrated_site_avoids_a_cliff_at_the_pad_and_grade_boundaries() {
-        let site = TerrainSite {
-            name: "Calibrated test pad",
-            latitude_deg: 10.0,
-            longitude_deg: 20.0,
-            radius_deg: 0.001,
-            blend_radius_deg: 0.1,
-            elevation_m: 7.0,
-        };
-        let base = std::sync::Arc::new(SteepOffsetTerrain);
-        let source = SiteAwareTerrainSource::new(base.clone(), vec![site]);
-        let step_deg = 0.00001;
-
-        assert_eq!(source.height_m(10.0, 20.0), site.elevation_m);
-        assert_eq!(
-            source.height_m(10.0 + site.radius_deg * 0.5, 20.0),
-            site.elevation_m
-        );
-
-        let pad_edge_inside = source.height_m(10.0 + site.radius_deg, 20.0);
-        let pad_edge_outside = source.height_m(10.0 + site.radius_deg + step_deg, 20.0);
-        assert!(
-            (pad_edge_outside - pad_edge_inside).abs() < 0.01,
-            "C1 pad edge must not become a shelf: {pad_edge_inside} vs {pad_edge_outside}"
-        );
-
-        let grade_edge = 10.0 + site.blend_radius_deg;
-        let before_grade_edge = source.height_m(grade_edge - step_deg, 20.0);
-        let after_grade_edge = source.height_m(grade_edge + step_deg, 20.0);
-        assert!(
-            (source.height_m(grade_edge - step_deg, 20.0)
-                - base.height_m(grade_edge - step_deg, 20.0))
-            .abs()
-                < 0.01,
-            "grade must converge to the base without a hard wall"
-        );
-        assert!(
-            (after_grade_edge - before_grade_edge - 2.0 * step_deg * 30_000.0).abs() < 0.01,
-            "grade boundary must retain the base terrain slope: {before_grade_edge} vs {after_grade_edge}"
-        );
-        assert_eq!(
-            source.height_m(grade_edge + 0.01, 20.0),
-            base.height_m(grade_edge + 0.01, 20.0),
-            "terrain relief outside the grade must remain the base terrain"
-        );
     }
 
     #[test]

@@ -20,8 +20,6 @@ use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, Ter
 
 /// Magic bytes for the versioned cube-sphere DEM format.
 pub const DEM_MAGIC: [u8; 8] = *b"CSDEM\0\0\0";
-/// Magic bytes for the paired cube-sphere surface-channel format.
-pub const SURFACE_MAGIC: [u8; 8] = *b"CSSURF\0\0";
 /// The only format version currently accepted by this reader.
 pub const DEM_FORMAT_VERSION: u32 = 1;
 /// ETOPO1's global raw-grid dimensions, including both longitude seam columns.
@@ -37,10 +35,8 @@ pub const MOLA_MEGR32_ROWS: usize = 5_760;
 const MOLA_MEGR32_RADIUS_OFFSET_M: f64 = 3_396_000.0;
 
 const HEADER_BYTES: usize = 24;
-const SURFACE_HEADER_BYTES: usize = 24;
 const FACE_COUNT: usize = 6;
 const HEIGHT_BYTES: usize = std::mem::size_of::<i16>();
-const SURFACE_CHANNEL_COUNT: usize = 2;
 /// Bound startup metadata work and memory while still giving the 2048-sample
 /// Earth DEM 256x256 geographic error regions per cube face.
 const MAX_METADATA_LEVEL: u32 = 8;
@@ -453,226 +449,6 @@ impl CubeSphereDem {
     }
 }
 
-/// Immutable normalized moisture and river-strength channels that accompany a
-/// baked CSDEM height field. Channels are sampled with the same cube-sphere
-/// coordinates as elevation, so material generation needs no procedural field
-/// evaluation at runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CubeSphereSurface {
-    resolution: u32,
-    moisture: Vec<u8>,
-    river_strength: Vec<u8>,
-}
-
-impl CubeSphereSurface {
-    pub fn new(
-        resolution: u32,
-        moisture: Vec<u8>,
-        river_strength: Vec<u8>,
-    ) -> Result<Self, DemError> {
-        let expected_samples = expected_samples(resolution)?;
-        if moisture.len() != expected_samples || river_strength.len() != expected_samples {
-            return Err(DemError::InvalidFormat(format!(
-                "expected {expected_samples} surface samples per channel, found moisture={} river={}",
-                moisture.len(), river_strength.len()
-            )));
-        }
-        Ok(Self {
-            resolution,
-            moisture,
-            river_strength,
-        })
-    }
-
-    pub const fn resolution(&self) -> u32 {
-        self.resolution
-    }
-
-    pub fn from_terrain_source(
-        source: &dyn TerrainSource,
-        resolution: u32,
-    ) -> Result<Self, DemError> {
-        let sample_count = expected_samples(resolution)?;
-        let mut moisture = Vec::with_capacity(sample_count);
-        let mut river_strength = Vec::with_capacity(sample_count);
-        for face in CubeFace::ALL {
-            for row in 0..resolution {
-                let v = row as f64 / (resolution - 1) as f64;
-                for column in 0..resolution {
-                    let u = column as f64 / (resolution - 1) as f64;
-                    let direction = face_uv_to_direction(face, u, v);
-                    let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
-                    moisture.push(encode_surface_channel(
-                        source.moisture(latitude_deg, longitude_deg),
-                    ));
-                    river_strength.push(encode_surface_channel(
-                        source.river_strength(latitude_deg, longitude_deg),
-                    ));
-                }
-            }
-        }
-        Self::new(resolution, moisture, river_strength)
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DemError> {
-        if bytes.len() < SURFACE_HEADER_BYTES {
-            return Err(DemError::InvalidFormat(
-                "surface package is shorter than the header".into(),
-            ));
-        }
-        if bytes[0..8] != SURFACE_MAGIC {
-            return Err(DemError::InvalidFormat(
-                "unexpected surface package magic bytes".into(),
-            ));
-        }
-        let version = read_u32(bytes, 8)?;
-        if version != DEM_FORMAT_VERSION {
-            return Err(DemError::InvalidFormat(format!(
-                "unsupported surface package version {version}; expected {DEM_FORMAT_VERSION}"
-            )));
-        }
-        let resolution = read_u32(bytes, 12)?;
-        let face_count = read_u32(bytes, 16)?;
-        let channel_count = read_u32(bytes, 20)?;
-        if face_count != FACE_COUNT as u32 || channel_count != SURFACE_CHANNEL_COUNT as u32 {
-            return Err(DemError::InvalidFormat(
-                "surface package must contain six faces and two channels".into(),
-            ));
-        }
-        let samples = expected_samples(resolution)?;
-        let expected_bytes = SURFACE_HEADER_BYTES
-            .checked_add(samples.checked_mul(SURFACE_CHANNEL_COUNT).ok_or_else(|| {
-                DemError::InvalidFormat("surface package byte count overflows usize".into())
-            })?)
-            .ok_or_else(|| {
-                DemError::InvalidFormat("surface package byte count overflows usize".into())
-            })?;
-        if bytes.len() != expected_bytes {
-            return Err(DemError::InvalidFormat(format!(
-                "expected {expected_bytes} surface bytes, found {}",
-                bytes.len()
-            )));
-        }
-        let moisture_start = SURFACE_HEADER_BYTES;
-        let river_start = moisture_start + samples;
-        Self::new(
-            resolution,
-            bytes[moisture_start..river_start].to_vec(),
-            bytes[river_start..].to_vec(),
-        )
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes =
-            Vec::with_capacity(SURFACE_HEADER_BYTES + self.moisture.len() * SURFACE_CHANNEL_COUNT);
-        bytes.extend_from_slice(&SURFACE_MAGIC);
-        bytes.extend_from_slice(&DEM_FORMAT_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&self.resolution.to_le_bytes());
-        bytes.extend_from_slice(&(FACE_COUNT as u32).to_le_bytes());
-        bytes.extend_from_slice(&(SURFACE_CHANNEL_COUNT as u32).to_le_bytes());
-        bytes.extend_from_slice(&self.moisture);
-        bytes.extend_from_slice(&self.river_strength);
-        bytes
-    }
-
-    pub fn read_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
-        Self::from_bytes(&fs::read(path)?)
-    }
-
-    pub fn write_path(&self, path: impl AsRef<Path>) -> Result<(), DemError> {
-        fs::write(path, self.to_bytes())?;
-        Ok(())
-    }
-
-    fn sample_channel(&self, channel: &[u8], face: CubeFace, u: f64, v: f64) -> f64 {
-        let resolution = self.resolution as usize;
-        let coordinate = |value: f64| value.clamp(0.0, 1.0) * (resolution - 1) as f64;
-        let x = coordinate(u);
-        let y = coordinate(v);
-        let x0 = x.floor() as usize;
-        let y0 = y.floor() as usize;
-        let x1 = (x0 + 1).min(resolution - 1);
-        let y1 = (y0 + 1).min(resolution - 1);
-        let tx = x - x0 as f64;
-        let ty = y - y0 as f64;
-        let offset = cube_face_index(face) * resolution * resolution;
-        let sample = |column, row| f64::from(channel[offset + row * resolution + column]) / 255.0;
-        let west = sample(x0, y0) + (sample(x1, y0) - sample(x0, y0)) * tx;
-        let east = sample(x0, y1) + (sample(x1, y1) - sample(x0, y1)) * tx;
-        west + (east - west) * ty
-    }
-}
-
-fn encode_surface_channel(value: f64) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-/// One immutable height/surface package used by simulation, collision, mesh
-/// generation, and material workers. Runtime sampling is bounded interpolation
-/// over resident arrays; no procedural terrain work or data I/O occurs here.
-#[derive(Debug, Clone)]
-pub struct PreprocessedTerrainSource {
-    height: DemTerrainSource,
-    surface: Arc<CubeSphereSurface>,
-}
-
-impl PreprocessedTerrainSource {
-    pub fn from_paths(
-        height_path: impl AsRef<Path>,
-        surface_path: impl AsRef<Path>,
-    ) -> Result<Self, DemError> {
-        let height = DemTerrainSource::from_path(height_path)?;
-        let surface = CubeSphereSurface::read_path(surface_path)?;
-        if height.resolution() != surface.resolution() {
-            return Err(DemError::InvalidFormat(format!(
-                "height resolution {} does not match surface resolution {}",
-                height.resolution(),
-                surface.resolution()
-            )));
-        }
-        Ok(Self {
-            height,
-            surface: Arc::new(surface),
-        })
-    }
-
-    fn coordinates(latitude_deg: f64, longitude_deg: f64) -> (CubeFace, f64, f64) {
-        let latitude_rad = latitude_deg.clamp(-90.0, 90.0).to_radians();
-        let longitude_rad = longitude_deg.to_radians();
-        face_uv(DVec3::new(
-            latitude_rad.cos() * longitude_rad.cos(),
-            latitude_rad.sin(),
-            latitude_rad.cos() * longitude_rad.sin(),
-        ))
-    }
-}
-
-impl TerrainSource for PreprocessedTerrainSource {
-    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.height.height_m(latitude_deg, longitude_deg)
-    }
-
-    fn elevation_bounds_m(&self) -> ElevationBounds {
-        self.height.elevation_bounds_m()
-    }
-
-    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
-        self.height.patch_geometric_error(patch)
-    }
-
-    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let (face, u, v) = Self::coordinates(latitude_deg, longitude_deg);
-        self.surface
-            .sample_channel(&self.surface.moisture, face, u, v)
-    }
-
-    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let (face, u, v) = Self::coordinates(latitude_deg, longitude_deg);
-        self.surface
-            .sample_channel(&self.surface.river_strength, face, u, v)
-    }
-}
-
 /// A `TerrainSource` backed by an entirely resident, immutable cube-sphere
 /// DEM. Sampling never performs file I/O, cache mutation, or fallback lookup.
 #[derive(Debug, Clone)]
@@ -951,35 +727,6 @@ mod tests {
                 (index as f64 + 1.0) * 100.0
             );
         }
-    }
-
-    #[test]
-    fn surface_package_round_trips_and_interpolates_channels() {
-        let moisture = vec![0, 255, 128, 64].into_iter().cycle().take(24).collect();
-        let river_strength = vec![255, 0, 64, 128].into_iter().cycle().take(24).collect();
-        let surface = CubeSphereSurface::new(2, moisture, river_strength).expect("valid surface");
-        let decoded =
-            CubeSphereSurface::from_bytes(&surface.to_bytes()).expect("valid surface bytes");
-
-        assert_eq!(decoded, surface);
-        assert!(
-            (decoded.sample_channel(&decoded.moisture, CubeFace::PosX, 0.5, 0.5) - 0.438_235).abs()
-                < 1e-6
-        );
-    }
-
-    #[test]
-    fn preprocessed_source_uses_paired_height_and_surface_channels() {
-        let height = DemTerrainSource::from_dem(CubeSphereDem::new(2, face_heights(2)).unwrap());
-        let surface = CubeSphereSurface::new(2, vec![204; 24], vec![51; 24]).unwrap();
-        let source = PreprocessedTerrainSource {
-            height: height.clone(),
-            surface: Arc::new(surface),
-        };
-
-        assert_eq!(source.height_m(0.0, 0.0), height.height_m(0.0, 0.0));
-        assert!((source.moisture(0.0, 0.0) - 0.8).abs() < 1e-12);
-        assert!((source.river_strength(0.0, 0.0) - 0.2).abs() < 1e-12);
     }
 
     #[test]

@@ -18,6 +18,9 @@ const MILKY_WAY_GLOW_COUNT: usize = 80;
 const STARFIELD_NEAR_RADIUS_AU: f32 = 65.0;
 const STARFIELD_FAR_RADIUS_AU: f32 = 110.0;
 const BRIGHT_STAR_GLOW_THRESHOLD: f32 = 0.93;
+/// Rendering star sprites as masked geometry keeps them in the depth-writing
+/// opaque pass, so planets reliably occlude stars behind their discs.
+const STAR_ALPHA_CUTOFF: f32 = 0.01;
 
 /// Mark the shared solar-map star mesh for camera-relative flight presentation.
 pub fn configure_flight_starfield(
@@ -68,16 +71,7 @@ pub fn spawn_starfield(
     let far_radius = solar_params.au_to_units(STARFIELD_FAR_RADIUS_AU);
     let mesh = meshes.add(create_starfield_mesh(near_radius, far_radius));
     let star_texture = images.add(create_gaussian_star_texture());
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(star_texture),
-        emissive: LinearRgba::rgb(0.25, 0.28, 0.34),
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        double_sided: true,
-        cull_mode: None,
-        ..default()
-    });
+    let material = materials.add(starfield_material(star_texture));
 
     commands.spawn((
         Mesh3d(mesh),
@@ -89,6 +83,19 @@ pub fn spawn_starfield(
         Starfield,
         Name::new("Procedural Starfield"),
     ));
+}
+
+fn starfield_material(star_texture: Handle<Image>) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(star_texture),
+        emissive: LinearRgba::rgb(0.25, 0.28, 0.34),
+        unlit: true,
+        alpha_mode: AlphaMode::Mask(STAR_ALPHA_CUTOFF),
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
 }
 
 fn create_starfield_mesh(near_radius: f32, far_radius: f32) -> Mesh {
@@ -447,4 +454,17 @@ fn push_star_quad(
         base_index + 2,
         base_index + 3,
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starfield_material_writes_depth_for_planetary_occlusion() {
+        assert!(matches!(
+            starfield_material(Handle::default()).alpha_mode,
+            AlphaMode::Mask(cutoff) if cutoff == STAR_ALPHA_CUTOFF
+        ));
+    }
 }
