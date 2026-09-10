@@ -578,7 +578,7 @@ pub fn balance_visible_leaves(
         let mut coarser = None;
         'pairs: for (index, a) in patches.iter().enumerate() {
             for b in patches.iter().skip(index + 1) {
-                if patches_are_adjacent(a, b) && a.level.abs_diff(b.level) > max_level_difference {
+                if a.level.abs_diff(b.level) > max_level_difference && patches_are_adjacent(a, b) {
                     coarser = Some(if a.level < b.level { *a } else { *b });
                     break 'pairs;
                 }
