@@ -242,6 +242,7 @@ impl TerrainStreamingResource {
         prelaunch: bool,
         focus_max_lod: u32,
         culling: TerrainCullingStats,
+        main_thread_ms: f64,
     ) -> Option<TerrainStreamingMetrics> {
         if !completed.is_reportable() || self.generated.len() < self.next_metrics_report_at {
             return None;
@@ -258,6 +259,7 @@ impl TerrainStreamingResource {
             prelaunch,
             focus_max_lod,
             culling,
+            main_thread_ms,
         ))
     }
 }
@@ -376,6 +378,7 @@ struct TerrainStreamingMetrics {
     prelaunch: bool,
     focus_max_lod: u32,
     culling: TerrainCullingStats,
+    main_thread_ms: f64,
     requested_lods: PatchLevelDistribution,
     target_lods: PatchLevelDistribution,
     visible_lods: PatchLevelDistribution,
@@ -397,6 +400,7 @@ impl TerrainStreamingMetrics {
         prelaunch: bool,
         focus_max_lod: u32,
         culling: TerrainCullingStats,
+        main_thread_ms: f64,
     ) -> Self {
         let upload_backlog_tiles = streaming
             .generated
@@ -424,6 +428,7 @@ impl TerrainStreamingMetrics {
             prelaunch,
             focus_max_lod,
             culling,
+            main_thread_ms,
             requested_lods: PatchLevelDistribution::from_patches(requested.iter().copied()),
             target_lods: PatchLevelDistribution::from_patches(target.iter().copied()),
             visible_lods: PatchLevelDistribution::from_patches(streaming.published.iter().copied()),
@@ -452,6 +457,7 @@ impl TerrainStreamingMetrics {
             culling_candidates = self.culling.candidates,
             horizon_rejected = self.culling.horizon_rejected,
             frustum_rejected = self.culling.frustum_rejected,
+            main_thread_ms = self.main_thread_ms,
             requested_lods = ?self.requested_lods.0,
             target_lods = ?self.target_lods.0,
             visible_lods = ?self.visible_lods.0,
@@ -552,6 +558,7 @@ pub fn stream_terrain_patches(
     render_origin: Res<RenderOrigin>,
     camera_query: Query<(&Camera, &Transform, &Projection), With<Camera3d>>,
 ) {
+    let streaming_started = Instant::now();
     // No rocket yet: keep the manager tidy and return.
     let Some((binding, rocket, mission)) = rocket_query.iter().next() else {
         let active_planet = streaming.active_planet.take();
@@ -881,6 +888,7 @@ pub fn stream_terrain_patches(
         prelaunch,
         max_focus_level,
         culling,
+        streaming_started.elapsed().as_secs_f64() * 1_000.0,
     ) {
         metrics.log();
     }
@@ -1174,9 +1182,11 @@ fn patch_viewport_visibility(
 
     let (bounding_center_m, bounding_radius_m) =
         patch_bounding_sphere(patch, radius_m, elevation_bounds);
-    sphere_intersects_viewport_frustum(viewport, bounding_center_m, bounding_radius_m)
-        .then_some(PatchViewportVisibility::Visible)
-        .unwrap_or(PatchViewportVisibility::OutsideFrustum)
+    if sphere_intersects_viewport_frustum(viewport, bounding_center_m, bounding_radius_m) {
+        PatchViewportVisibility::Visible
+    } else {
+        PatchViewportVisibility::OutsideFrustum
+    }
 }
 
 /// Conservative rectangular-frustum test for a terrain bounding sphere. The

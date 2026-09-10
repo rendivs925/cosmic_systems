@@ -574,13 +574,21 @@ pub fn balance_visible_leaves(
 ) -> BTreeSet<TerrainPatch> {
     let mut balanced = leaves.clone();
     loop {
-        let patches: Vec<_> = balanced.iter().copied().collect();
         let mut coarser = None;
-        'pairs: for (index, a) in patches.iter().enumerate() {
-            for b in patches.iter().skip(index + 1) {
-                if a.level.abs_diff(b.level) > max_level_difference && patches_are_adjacent(a, b) {
-                    coarser = Some(if a.level < b.level { *a } else { *b });
-                    break 'pairs;
+        'patches: for patch in &balanced {
+            for edge in PatchEdge::ALL {
+                // A finer patch identifies a coarser neighbor by walking the
+                // same-level neighbor's ancestor chain. This covers cube-face
+                // seams through `neighbor` without comparing every leaf pair.
+                let mut neighbor_ancestor = patch.neighbor(edge).patch.parent();
+                while let Some(candidate) = neighbor_ancestor {
+                    if candidate.level + max_level_difference < patch.level
+                        && balanced.contains(&candidate)
+                    {
+                        coarser = Some(candidate);
+                        break 'patches;
+                    }
+                    neighbor_ancestor = candidate.parent();
                 }
             }
         }
