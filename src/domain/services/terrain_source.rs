@@ -1,7 +1,7 @@
 //! Authoritative terrain height source (AGENTS.md sections 20-21).
 //!
 //! `TerrainSource` is the single terrain-data boundary. Render meshes and
-//! collision queries consume the same deterministic procedural source.
+//! collision queries consume the same authoritative source.
 //!
 //! Heights are in meters above the planet's mean radius (geocentric). The
 //! source is planet-scoped: the planet is bound when the source is attached to
@@ -18,13 +18,13 @@ use std::sync::{Arc, OnceLock};
 #[cfg(feature = "dem")]
 use std::path::Path;
 
+#[cfg(feature = "dem")]
+use crate::domain::services::cube_sphere::face_uv;
 use crate::domain::services::cube_sphere::{
-    face_uv, face_uv_to_direction, PatchGeometricError, TerrainPatch,
+    face_uv_to_direction, PatchGeometricError, TerrainPatch,
 };
 #[cfg(feature = "dem")]
-use crate::domain::services::dem_terrain_source::{
-    DemError, DemTerrainSource, PreprocessedTerrainSource,
-};
+use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
 #[cfg(feature = "dem")]
 use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
 use crate::domain::services::planet_factory::PlanetFactory;
@@ -64,21 +64,19 @@ const OROGENY_SCALE: f64 = 0.32;
 /// Deterministic physical landscape added to Earth's measured ETOPO elevation.
 /// The regional mask in `ProceduralTerrainSource` keeps its mountain chains
 /// localized instead of applying ridges uniformly across the planet.
+#[cfg(any(test, not(feature = "dem")))]
 const EARTH_SYNTHETIC_LANDSCAPE_SEED: u64 = 0xE4A7_D371;
+#[cfg(any(test, not(feature = "dem")))]
 const EARTH_SYNTHETIC_ROLLING_AMPLITUDE_M: f64 = 650.0;
+#[cfg(any(test, not(feature = "dem")))]
 const EARTH_SYNTHETIC_MOUNTAIN_AMPLITUDE_M: f64 = 2_200.0;
+#[cfg(any(test, not(feature = "dem")))]
 const EARTH_SYNTHETIC_LOCAL_DETAIL_SEED: u64 = 0x5A17_4D09;
 const TERRAIN_DETAIL_BIOME_WEIGHT: f64 = 0.65;
 
 #[cfg(feature = "dem")]
 const DEFAULT_EARTH_DEM_PATH: &str =
     "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem";
-#[cfg(feature = "dem")]
-const DEFAULT_EARTH_PREPROCESSED_HEIGHT_PATH: &str =
-    "assets/large_files/terrain/earth_preprocessed_cs2048_v1.csdem";
-#[cfg(feature = "dem")]
-const DEFAULT_EARTH_PREPROCESSED_SURFACE_PATH: &str =
-    "assets/large_files/terrain/earth_preprocessed_cs2048_v1.cssurf";
 #[cfg(feature = "dem")]
 const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v1.csdem";
 #[cfg(feature = "dem")]
@@ -1276,9 +1274,11 @@ pub fn slope_deg_at(source: &dyn TerrainSource, latitude_deg: f64, longitude_deg
     grad.atan().to_degrees()
 }
 
+#[cfg(any(test, not(feature = "dem")))]
 #[derive(Debug)]
 struct FlatTerrainSource;
 
+#[cfg(any(test, not(feature = "dem")))]
 impl TerrainSource for FlatTerrainSource {
     fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.0
@@ -1289,10 +1289,9 @@ impl TerrainSource for FlatTerrainSource {
     }
 }
 
-/// Earth's one authoritative terrain composition. Measured ETOPO elevation is
-/// enriched by a deterministic physical landscape; rendering and collision use
-/// the same source selected at startup, with no runtime download or per-sample
-/// fallback path at this boundary.
+/// Earth's one authoritative terrain composition. Native builds require the
+/// resident measured ETOPO1 height package; rendering and collision use the
+/// same source with no runtime download or procedural substitution.
 #[derive(Debug)]
 pub struct EarthTerrainSource {
     source: Arc<dyn TerrainSource>,
@@ -1301,47 +1300,25 @@ pub struct EarthTerrainSource {
 impl EarthTerrainSource {
     pub fn new() -> Self {
         #[cfg(feature = "dem")]
-        match Self::with_preprocessed_paths(
-            DEFAULT_EARTH_PREPROCESSED_HEIGHT_PATH,
-            DEFAULT_EARTH_PREPROCESSED_SURFACE_PATH,
-        ) {
-            Ok(source) => return source,
-            Err(DemError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => panic!("Earth preprocessed terrain configuration is invalid: {error}"),
-        }
-        #[cfg(feature = "dem")]
-        match Self::with_dem_path(DEFAULT_EARTH_DEM_PATH) {
-            Ok(source) => return source,
-            Err(DemError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => panic!("Earth DEM configuration is invalid: {error}"),
-        }
-        Self::with_global_elevation(Arc::new(ProceduralTerrainSource::from_config(
-            ProceduralTerrainConfig::earth(),
-        )))
+        return Self::with_dem_path(DEFAULT_EARTH_DEM_PATH).unwrap_or_else(|error| {
+            panic!("Earth measured terrain authority is unavailable or invalid: {error}")
+        });
+        #[cfg(not(feature = "dem"))]
+        Self::with_global_elevation_and_sites(
+            Arc::new(ProceduralTerrainSource::from_config(
+                ProceduralTerrainConfig::earth(),
+            )),
+            Self::sites(),
+        )
     }
 
     /// Construct Earth terrain from a validated local cube-sphere DEM. The
-    /// caller chooses this configuration at startup; sampling itself is pure.
+    /// caller chooses this configuration at startup; it preserves measured
+    /// elevations without adding a synthetic landscape or local-detail layer.
     #[cfg(feature = "dem")]
     pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
-        Ok(Self::with_global_elevation(Arc::new(
-            DemTerrainSource::from_path(path)?,
-        )))
-    }
-
-    /// Load the immutable baked Earth height and surface package. This is the
-    /// runtime path used after offline preprocessing; sampling performs no
-    /// procedural landscape evaluation.
-    #[cfg(feature = "dem")]
-    pub fn with_preprocessed_paths(
-        height_path: impl AsRef<Path>,
-        surface_path: impl AsRef<Path>,
-    ) -> Result<Self, DemError> {
         Ok(Self::with_site_overrides(
-            Arc::new(PreprocessedTerrainSource::from_paths(
-                height_path,
-                surface_path,
-            )?),
+            Arc::new(DemTerrainSource::from_path(path)?),
             Self::sites(),
         ))
     }
@@ -1367,29 +1344,13 @@ impl EarthTerrainSource {
                 "local elevation package contains no valid samples".into(),
             ));
         }
-        Ok(Self::with_global_elevation(Arc::new(
-            LocalElevationOverlayTerrainSource { global, local },
-        )))
+        Ok(Self::with_site_overrides(
+            Arc::new(LocalElevationOverlayTerrainSource { global, local }),
+            Self::sites(),
+        ))
     }
 
-    /// Use a local DEM when it exists, otherwise retain the deterministic
-    /// procedural Earth source. Corrupt or incompatible files are errors rather
-    /// than silently changing terrain authority.
-    #[cfg(feature = "dem")]
-    pub fn with_dem_path_or_procedural(path: impl AsRef<Path>) -> Result<Self, DemError> {
-        match Self::with_dem_path(path) {
-            Ok(source) => Ok(source),
-            Err(DemError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Self::new())
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    fn with_global_elevation(global_elevation: Arc<dyn TerrainSource>) -> Self {
-        Self::with_global_elevation_and_sites(global_elevation, Self::sites())
-    }
-
+    #[cfg(any(test, not(feature = "dem")))]
     fn with_global_elevation_and_sites(
         global_elevation: Arc<dyn TerrainSource>,
         sites: Vec<TerrainSite>,
@@ -1930,6 +1891,29 @@ mod tests {
                 site.elevation_m,
                 "{} pad must retain its configured elevation",
                 site.name
+            );
+        }
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn default_earth_source_uses_the_required_measured_dem_package() {
+        let default_source = EarthTerrainSource::new();
+        let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
+            .expect("resident Earth ETOPO1 terrain package must load");
+
+        for (latitude_deg, longitude_deg) in [(-40.0, 100.0), (62.0, -35.0), (-12.0, 145.0)] {
+            assert_eq!(
+                default_source.height_m(latitude_deg, longitude_deg),
+                package_source.height_m(latitude_deg, longitude_deg),
+            );
+            assert_eq!(
+                default_source.moisture(latitude_deg, longitude_deg),
+                package_source.moisture(latitude_deg, longitude_deg),
+            );
+            assert_eq!(
+                default_source.river_strength(latitude_deg, longitude_deg),
+                package_source.river_strength(latitude_deg, longitude_deg),
             );
         }
     }

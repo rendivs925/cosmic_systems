@@ -17,8 +17,8 @@ cargo run --features dem --bin etopo1_convert -- etopo1_ice_g_i2.bin assets/larg
 ```
 
 The runtime file stores signed 16-bit metre elevations on six cube-sphere faces
-in `CubeFace::ALL` order. No simulator path downloads data at runtime. If the
-file is intentionally omitted, native startup uses the deterministic procedural
-Earth fallback; a present but invalid file is a startup configuration error.
+in `CubeFace::ALL` order. Native Earth startup samples this measured package
+directly. No simulator path downloads data at runtime; a missing or invalid
+package is a native startup configuration error.
 
 Generated runtime SHA-256: `cc20e13cf65d10b856e9697960922951f6943585b9be74d5b6bd28d75f88e141`

@@ -3,14 +3,12 @@
 ## Purpose
 
 `earth_preprocessed_cs2048_v1.csdem` and
-`earth_preprocessed_cs2048_v1.cssurf` are the immutable Earth terrain
-authority used at runtime when the `dem` feature is enabled. They replace
-per-sample evaluation of the deterministic synthetic landscape and surface
-fields with resident cube-sphere arrays.
+`earth_preprocessed_cs2048_v1.cssurf` are optional offline packages for
+resident cube-sphere elevation and surface-channel arrays.
 
 The terrain streamer remains responsible for LOD selection, worker scheduling,
-mesh construction, collision queries, and GPU uploads. These packages only
-change the data source it samples.
+mesh construction, collision queries, and GPU uploads. These packages are
+retained for offline use and are not selected by native Earth startup.
 
 ## Contents
 
@@ -19,13 +17,12 @@ change the data source it samples.
 - `earth_preprocessed_cs2048_v1.cssurf`: normalized `u8` moisture and river
   strength samples using the same face order, resolution, and sample locations.
 
-The height package includes ETOPO1 elevation plus the deterministic landscape
-model defined by `EarthTerrainSource`. Meshes and collision therefore query the
-same baked heights. Surface material generation consumes the paired metadata,
-so it does not evaluate hydrology or biome fields while streaming a patch. The
-three surveyed launch/recovery pad overrides remain a static runtime overlay:
-their footprints are much smaller than a 2048-face sample and must retain exact
-configured elevations for fixed rocket simulation baselines.
+Native Earth startup instead uses the resident measured ETOPO1 CSDEM directly
+for mesh and collision height sampling. The optional package is not an Earth
+height authority. The three surveyed launch/recovery pad overrides remain a
+static runtime overlay: their footprints are much smaller than a 2048-face
+sample and must retain exact configured elevations for fixed rocket simulation
+baselines.
 
 ## Regeneration
 
@@ -40,13 +37,11 @@ cargo run --release --features dem --bin earth_terrain_bake -- \
   2048
 ```
 
-The bake is deterministic for a fixed source package and
-`EARTH_SYNTHETIC_LANDSCAPE_SEED`. Change the package version and regenerate the
-files whenever the source elevation model, synthetic model, face resolution, or
-surface-channel encoding changes.
+The bake is deterministic for a fixed source package. Change the package
+version and regenerate the files whenever the source elevation model, face
+resolution, or surface-channel encoding changes.
 
 ## Limitations
 
-The synthetic relief remains an authored deterministic supplement to ETOPO1,
-not measured topography. KSC local 3DEP data remains inactive until its vertical
-datum is converted and validated against surveyed control points.
+KSC local 3DEP data remains inactive until its vertical datum is converted and
+validated against surveyed control points.

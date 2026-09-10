@@ -388,9 +388,6 @@ pub fn package_tile_root(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::planet_factory::PlanetFactory;
-    use crate::domain::services::reference_frames::geodetic_to_body_fixed;
-    use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
     fn manifest() -> TerrainImageryManifest {
         TerrainImageryManifest {
@@ -418,25 +415,6 @@ mod tests {
         assert_eq!(
             path,
             "large_files/terrain/earth_imagery_v1/tiles/pos_z/0/0_0.png"
-        );
-    }
-
-    #[test]
-    fn ksc_imagery_tile_matches_the_rocket_terrain_coordinate() {
-        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets")
-            .join(EARTH_IMAGERY_MANIFEST_PATH);
-        let manifest = TerrainImageryManifest::load(manifest_path).expect("valid Earth imagery");
-        let launch_site = predefined_sites::kennedy_space_center();
-        let earth = PlanetFactory::create_by_id(&launch_site.planet_id).expect("Earth exists");
-        let patch = TerrainPatch::for_direction(
-            geodetic_to_body_fixed(&launch_site, &earth).normalize(),
-            manifest.max_level,
-        );
-
-        assert!(
-            manifest.coverage_tiles.contains(&patch),
-            "KSC rocket terrain coordinate {patch:?} must use the declared imagery tile"
         );
     }
 

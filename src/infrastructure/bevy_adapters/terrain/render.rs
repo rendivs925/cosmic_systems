@@ -7,9 +7,6 @@
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
-use crate::domain::services::terrain_imagery::{
-    TerrainImageryManifest, EARTH_IMAGERY_MANIFEST_PATH,
-};
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
@@ -33,7 +30,6 @@ const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
 /// completed terrain batch from stalling camera and HUD presentation.
 const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
-const MAX_IMAGERY_UPDATES_PER_FRAME: usize = 2;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
@@ -53,17 +49,10 @@ struct TerrainSurfaceExtension {
     local_normal: Handle<Image>,
     #[uniform(104)]
     local_detail_weight: f32,
-    #[texture(105)]
-    #[sampler(106)]
-    imagery_albedo: Handle<Image>,
-    #[uniform(107)]
-    imagery_weight: f32,
-    #[uniform(108)]
-    imagery_uv_scale_offset: Vec4,
     /// The shared equirectangular Earth albedo sampled with mesh UV0. Local
     /// source-derived maps enrich it, but do not replace global geography.
-    #[texture(109)]
-    #[sampler(110)]
+    #[texture(105)]
+    #[sampler(106)]
     global_albedo: Handle<Image>,
 }
 
@@ -82,9 +71,6 @@ pub struct TerrainPatchRenderState {
     material_handle: Handle<TerrainMaterial>,
     /// Per-patch source-derived surface textures released with the patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
-    imagery_handle: Option<Handle<Image>>,
-    imagery_uv_scale_offset: Vec4,
-    imagery_ready: bool,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
@@ -101,11 +87,6 @@ struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     global_earth_albedo: Option<Handle<Image>>,
 }
-
-/// Optional local offline imagery. It may replace source-derived albedo only
-/// after the image has decoded successfully.
-#[derive(Resource, Default)]
-struct TerrainImageryPackage(Option<TerrainImageryManifest>);
 
 /// Identifies a terrain render entity independently for every planet. Patch
 /// coordinates alone overlap between planets.
@@ -249,15 +230,11 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<PendingTerrainPatchUploads>()
             .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
-            .init_resource::<TerrainImageryPackage>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
-            .add_systems(
-                Startup,
-                (load_terrain_imagery_package, load_terrain_global_albedo),
-            )
+            .add_systems(Startup, load_terrain_global_albedo)
             .add_systems(
                 Update,
                 recenter_render_origin.before(stream_terrain_patches),
@@ -272,47 +249,12 @@ impl Plugin for TerrainRenderPlugin {
                     update_patch_transforms,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
-                    upgrade_offline_imagery_materials,
                     hide_cached_patch_mesh_system,
                     despawn_patch_mesh_system,
                 )
                     .chain()
                     .after(stream_terrain_patches),
             );
-    }
-}
-
-fn load_terrain_imagery_package(mut package: ResMut<TerrainImageryPackage>) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets")
-            .join(EARTH_IMAGERY_MANIFEST_PATH);
-        let asset_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-        match TerrainImageryManifest::load(path) {
-            Ok(manifest) => {
-                let missing_tile = manifest.coverage_tiles.iter().find_map(|tile| {
-                    let asset_path = manifest.best_tile_for(*tile)?.asset_path;
-                    (!asset_root.join(&asset_path).is_file()).then_some(asset_path)
-                });
-                if let Some(asset_path) = missing_tile {
-                    bevy::log::warn!(
-                        "terrain imagery package disabled; declared tile is unavailable: {asset_path}"
-                    );
-                    return;
-                }
-                bevy::log::info!(
-                    "terrain imagery package available: {} levels {}-{}",
-                    manifest.source_name,
-                    manifest.min_level,
-                    manifest.max_level
-                );
-                package.0 = Some(manifest);
-            }
-            Err(error) => {
-                bevy::log::info!("terrain imagery package unavailable: {error}");
-            }
-        }
     }
 }
 
@@ -324,42 +266,6 @@ fn load_terrain_global_albedo(
 ) {
     render_assets.global_earth_albedo =
         load_texture(&asset_server, get_planet_textures("Earth").albedo);
-}
-
-/// Upgrade a published patch only after Bevy has decoded its offline tile.
-/// Geometry and the global overview never wait for this presentation payload.
-fn upgrade_offline_imagery_materials(
-    package: Res<TerrainImageryPackage>,
-    images: Res<Assets<Image>>,
-    mut materials: ResMut<Assets<TerrainMaterial>>,
-    mut patches: Query<&mut TerrainPatchRenderState>,
-) {
-    if package.0.is_none() {
-        return;
-    }
-    let mut upgrades = 0;
-    for mut patch in &mut patches {
-        if upgrades >= MAX_IMAGERY_UPDATES_PER_FRAME || patch.imagery_ready {
-            continue;
-        }
-        let Some(imagery) = patch.imagery_handle.as_ref() else {
-            continue;
-        };
-        if images.get(imagery).is_none() {
-            continue;
-        }
-        let Some(material) = materials.get_mut(patch.material_handle.id()) else {
-            continue;
-        };
-        material.extension.imagery_albedo = imagery.clone();
-        material.extension.imagery_weight = 1.0;
-        material.extension.imagery_uv_scale_offset = patch.imagery_uv_scale_offset;
-        patch.imagery_ready = true;
-        upgrades += 1;
-    }
-    if upgrades > 0 {
-        bevy::log::info!("upgraded {upgrades} terrain patches with offline imagery");
-    }
 }
 
 /// System that spawns Bevy mesh/material entities when a terrain patch
@@ -378,8 +284,6 @@ fn spawn_patch_mesh_system(
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
-    imagery_package: Res<TerrainImageryPackage>,
-    asset_server: Res<AssetServer>,
     mut streaming: ResMut<TerrainStreamingResource>,
     _config: Res<TerrainRenderConfig>,
     render_origin: Res<RenderOrigin>,
@@ -472,25 +376,12 @@ fn spawn_patch_mesh_system(
         let material_handle = materials.add(TerrainMaterial {
             base: base_material,
             extension: TerrainSurfaceExtension {
-                imagery_albedo: local_albedo.clone(),
                 local_albedo,
                 local_normal,
                 local_detail_weight: 1.0,
-                imagery_weight: 0.0,
-                imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
                 global_albedo,
             },
         });
-        let imagery_handle = imagery_package
-            .0
-            .as_ref()
-            .and_then(|package| package.best_tile_for(patch));
-        let imagery_uv_scale_offset = imagery_handle
-            .as_ref()
-            .map_or(Vec4::new(1.0, 1.0, 0.0, 0.0), |tile| {
-                Vec4::from_array(tile.uv_scale_offset)
-            });
-        let imagery_handle = imagery_handle.map(|tile| asset_server.load(tile.asset_path));
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
@@ -541,9 +432,6 @@ fn spawn_patch_mesh_system(
                     mesh_handle: mesh_handle.clone(),
                     material_handle: material_handle.clone(),
                     local_surface_handles,
-                    imagery_handle,
-                    imagery_uv_scale_offset,
-                    imagery_ready: false,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
@@ -998,7 +886,7 @@ fn patch_transform_components(
 }
 
 /// Create the terrain PBR material. The extension starts from the shared global
-/// Earth albedo, then layers source-derived detail and optional local imagery.
+/// Earth albedo, then layers source-derived detail.
 fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
@@ -1272,9 +1160,6 @@ mod tests {
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
                     local_surface_handles: None,
-                    imagery_handle: None,
-                    imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
-                    imagery_ready: false,
                     vegetation_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
@@ -1302,9 +1187,6 @@ mod tests {
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
                     local_surface_handles: None,
-                    imagery_handle: None,
-                    imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
-                    imagery_ready: false,
                     vegetation_mesh_handle: None,
                     planet_entity: other_planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
@@ -1567,9 +1449,6 @@ mod tests {
             mesh_handle: mesh_handle.clone(),
             material_handle: material_handle.clone(),
             local_surface_handles: None,
-            imagery_handle: None,
-            imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
-            imagery_ready: false,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,

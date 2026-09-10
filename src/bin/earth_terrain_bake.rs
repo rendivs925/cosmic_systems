@@ -1,5 +1,5 @@
-//! Offline bake of Earth's measured elevation plus deterministic landscape into
-//! immutable height and surface-channel packages.
+//! Offline bake of Earth's measured elevation into immutable height and
+//! surface-channel packages.
 
 use cosmic_systems_wasm::domain::services::dem_terrain_source::{CubeSphereDem, CubeSphereSurface};
 use cosmic_systems_wasm::domain::services::terrain_source::EarthTerrainSource;
