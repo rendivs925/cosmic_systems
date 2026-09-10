@@ -12,6 +12,9 @@ use crate::domain::services::terrain_imagery::{
 };
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::rendering::textures::{
+    get_planet_textures, load_texture,
+};
 use crate::infrastructure::bevy_adapters::rocket::components::RocketPhysicsState;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
@@ -57,6 +60,11 @@ struct TerrainSurfaceExtension {
     imagery_weight: f32,
     #[uniform(108)]
     imagery_uv_scale_offset: Vec4,
+    /// The shared equirectangular Earth albedo sampled with mesh UV0. Local
+    /// source-derived maps enrich it, but do not replace global geography.
+    #[texture(109)]
+    #[sampler(110)]
+    global_albedo: Handle<Image>,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -91,6 +99,7 @@ pub struct TerrainPatchRenderState {
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
+    global_earth_albedo: Option<Handle<Image>>,
 }
 
 /// Optional local offline imagery. It may replace source-derived albedo only
@@ -245,7 +254,10 @@ impl Plugin for TerrainRenderPlugin {
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
-            .add_systems(Startup, load_terrain_imagery_package)
+            .add_systems(
+                Startup,
+                (load_terrain_imagery_package, load_terrain_global_albedo),
+            )
             .add_systems(
                 Update,
                 recenter_render_origin.before(stream_terrain_patches),
@@ -302,6 +314,16 @@ fn load_terrain_imagery_package(mut package: ResMut<TerrainImageryPackage>) {
             }
         }
     }
+}
+
+/// Load the catalog's geographic Earth albedo once. Terrain meshes retain UV0
+/// specifically for this continuous, equirectangular image.
+fn load_terrain_global_albedo(
+    asset_server: Res<AssetServer>,
+    mut render_assets: ResMut<TerrainRenderAssets>,
+) {
+    render_assets.global_earth_albedo =
+        load_texture(&asset_server, get_planet_textures("Earth").albedo);
 }
 
 /// Upgrade a published patch only after Bevy has decoded its offline tile.
@@ -443,6 +465,10 @@ fn spawn_patch_mesh_system(
         let local_normal = images.add(normal);
         let local_surface_handles = Some((local_albedo.clone(), local_normal.clone()));
         let base_material = patch_material(surface.roughness, surface.metallic);
+        let global_albedo = render_assets.global_earth_albedo.clone().unwrap_or_else(|| {
+            bevy::log::warn!("Earth global albedo is unavailable; terrain will use source-derived color only");
+            local_albedo.clone()
+        });
         let material_handle = materials.add(TerrainMaterial {
             base: base_material,
             extension: TerrainSurfaceExtension {
@@ -452,6 +478,7 @@ fn spawn_patch_mesh_system(
                 local_detail_weight: 1.0,
                 imagery_weight: 0.0,
                 imagery_uv_scale_offset: Vec4::new(1.0, 1.0, 0.0, 0.0),
+                global_albedo,
             },
         });
         let imagery_handle = imagery_package
@@ -970,8 +997,8 @@ fn patch_transform_components(
     (rotation, translation)
 }
 
-/// Create the terrain PBR material. The extension supplies the complete
-/// source-derived base color and normal maps, with no catalog-image fallback.
+/// Create the terrain PBR material. The extension starts from the shared global
+/// Earth albedo, then layers source-derived detail and optional local imagery.
 fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,

@@ -22,7 +22,9 @@ use crate::domain::services::cube_sphere::{
     face_uv, face_uv_to_direction, PatchGeometricError, TerrainPatch,
 };
 #[cfg(feature = "dem")]
-use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
+use crate::domain::services::dem_terrain_source::{
+    DemError, DemTerrainSource, PreprocessedTerrainSource,
+};
 #[cfg(feature = "dem")]
 use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
 use crate::domain::services::planet_factory::PlanetFactory;
@@ -71,6 +73,12 @@ const TERRAIN_DETAIL_BIOME_WEIGHT: f64 = 0.65;
 #[cfg(feature = "dem")]
 const DEFAULT_EARTH_DEM_PATH: &str =
     "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v1.csdem";
+#[cfg(feature = "dem")]
+const DEFAULT_EARTH_PREPROCESSED_HEIGHT_PATH: &str =
+    "assets/large_files/terrain/earth_preprocessed_cs2048_v1.csdem";
+#[cfg(feature = "dem")]
+const DEFAULT_EARTH_PREPROCESSED_SURFACE_PATH: &str =
+    "assets/large_files/terrain/earth_preprocessed_cs2048_v1.cssurf";
 #[cfg(feature = "dem")]
 const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v1.csdem";
 #[cfg(feature = "dem")]
@@ -1287,11 +1295,20 @@ impl TerrainSource for FlatTerrainSource {
 /// fallback path at this boundary.
 #[derive(Debug)]
 pub struct EarthTerrainSource {
-    source: Arc<SiteAwareTerrainSource>,
+    source: Arc<dyn TerrainSource>,
 }
 
 impl EarthTerrainSource {
     pub fn new() -> Self {
+        #[cfg(feature = "dem")]
+        match Self::with_preprocessed_paths(
+            DEFAULT_EARTH_PREPROCESSED_HEIGHT_PATH,
+            DEFAULT_EARTH_PREPROCESSED_SURFACE_PATH,
+        ) {
+            Ok(source) => return source,
+            Err(DemError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("Earth preprocessed terrain configuration is invalid: {error}"),
+        }
         #[cfg(feature = "dem")]
         match Self::with_dem_path(DEFAULT_EARTH_DEM_PATH) {
             Ok(source) => return source,
@@ -1310,6 +1327,23 @@ impl EarthTerrainSource {
         Ok(Self::with_global_elevation(Arc::new(
             DemTerrainSource::from_path(path)?,
         )))
+    }
+
+    /// Load the immutable baked Earth height and surface package. This is the
+    /// runtime path used after offline preprocessing; sampling performs no
+    /// procedural landscape evaluation.
+    #[cfg(feature = "dem")]
+    pub fn with_preprocessed_paths(
+        height_path: impl AsRef<Path>,
+        surface_path: impl AsRef<Path>,
+    ) -> Result<Self, DemError> {
+        Ok(Self::with_site_overrides(
+            Arc::new(PreprocessedTerrainSource::from_paths(
+                height_path,
+                surface_path,
+            )?),
+            Self::sites(),
+        ))
     }
 
     /// Use a reviewed local elevation package as an absolute replacement within
@@ -1383,8 +1417,15 @@ impl EarthTerrainSource {
                 DetailLodFade::new(3, 6),
             )),
         ));
+        Self::with_site_overrides(layered, sites)
+    }
+
+    /// Launch and recovery pads are sub-grid features at the 2048-face package
+    /// resolution. Keep their surveyed, static flattening as an overlay so the
+    /// fixed rocket baseline and the physical pad contract remain exact.
+    fn with_site_overrides(source: Arc<dyn TerrainSource>, sites: Vec<TerrainSite>) -> Self {
         Self {
-            source: Arc::new(SiteAwareTerrainSource::new(layered, sites)),
+            source: Arc::new(SiteAwareTerrainSource::new(source, sites)),
         }
     }
 

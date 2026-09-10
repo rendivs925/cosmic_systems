@@ -18,6 +18,8 @@ struct TerrainSurfaceExtension {
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var terrain_imagery_albedo_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var<uniform> terrain_imagery_weight: f32;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var<uniform> terrain_imagery_uv_scale_offset: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var terrain_global_albedo: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var terrain_global_albedo_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -28,10 +30,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_local_albedo_sampler,
         in.uv_b,
     );
-    // Source-derived local albedo is the complete terrain color. It cannot fall
-    // back to an unloaded catalog image or fade to white at patch edges.
+    // UV0 is the continuous body-fixed equirectangular coordinate. Preserve the
+    // catalog Earth image as the geographic base; UV1 only adds local character.
+    let global_albedo = textureSample(
+        terrain_global_albedo,
+        terrain_global_albedo_sampler,
+        in.uv,
+    );
     pbr_input.material.base_color = vec4(
-        mix(pbr_input.material.base_color.rgb, local_albedo.rgb, detail_weight),
+        mix(global_albedo.rgb, local_albedo.rgb, 0.28 * detail_weight),
         pbr_input.material.base_color.a,
     );
     // The offline cube-sphere tile is the final geographic albedo for this

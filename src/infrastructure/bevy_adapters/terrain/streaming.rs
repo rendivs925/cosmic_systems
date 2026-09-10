@@ -704,10 +704,9 @@ pub fn stream_terrain_patches(
     }
     streaming.target_leaves = selection.target_leaves.clone();
 
-    // Keep source-authoritative roots only for the active viewport. Generating
-    // far-side roots would make every worker bake erosion tiles that cannot
-    // contribute to the current frame. The focused root remains requested even
-    // if a temporarily obstructed camera culls it during prelaunch.
+    // Retain the focused root as an asynchronous fallback even when the launch
+    // camera is temporarily blocked by vehicle geometry. This is bounded to one
+    // root and prevents a prelaunch view from losing all ground coverage.
     let focused_root = TerrainPatch::for_direction(focus_direction, 0);
     let mut requested =
         root_requests_for_viewport(focused_root, viewport.as_ref(), radius_m, elevation_bounds);
@@ -1044,7 +1043,7 @@ fn viewport_focus_direction(
 /// Refinement is published only when every child replacing a parent is ready.
 /// Once a child intersects the viewport, retain its selected sibling group and
 /// ancestors as a bounded prefetch unit. Culling individual siblings would
-/// strand the parent forever and make close terrain arrive late.
+/// strand the parent forever because publication requires a complete group.
 fn add_viewport_lod_group(
     patch: TerrainPatch,
     selected: &BTreeSet<TerrainPatch>,
@@ -1066,8 +1065,7 @@ fn add_viewport_lod_group(
 }
 
 /// Root coverage is scoped to the camera's conservative viewport. The root
-/// containing the active focus is retained as an async fallback for launch-site
-/// presentation when the camera is temporarily blocked by vehicle geometry.
+/// containing the active focus is retained as an asynchronous launch fallback.
 fn root_requests_for_viewport(
     focused_root: TerrainPatch,
     viewport: Option<&TerrainViewport>,
@@ -2011,6 +2009,27 @@ mod tests {
             .into_iter()
             .all(|child| requested.contains(&child)));
         assert!(requested.contains(&parent));
+    }
+
+    #[test]
+    fn viewport_roots_retain_the_focused_fallback() {
+        let radius_m = 6_371_000.0;
+        let viewport = TerrainViewport {
+            position_m: DVec3::new(0.0, 0.0, radius_m + 1_000.0),
+            forward: -DVec3::Z,
+            half_fov_rad: 0.5,
+            vertical_fov_rad: 0.8,
+            viewport_height_px: 1_080.0,
+        };
+        let roots = root_requests_for_viewport(
+            TerrainPatch::root(CubeFace::NegZ),
+            Some(&viewport),
+            radius_m,
+            test_elevation_bounds(),
+        );
+
+        assert!(roots.contains(&TerrainPatch::root(CubeFace::PosZ)));
+        assert!(roots.contains(&TerrainPatch::root(CubeFace::NegZ)));
     }
 
     #[test]

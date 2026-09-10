@@ -256,6 +256,14 @@ fn spawn_procedural_launch_pad(
         ))
         .id();
     commands.entity(root).with_children(|parent| {
+        // The deck is centered on the authoritative terrain anchor. It remains
+        // visible while coarse streamed tiles refine around the meter-scale pad.
+        parent.spawn((
+            Mesh3d(meshes.add(Cuboid::new(36.0, 0.2, 36.0))),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_xyz(0.0, -0.1, 0.0),
+            Name::new("LaunchPadDeck"),
+        ));
         for x in [-4.0_f32, 4.0] {
             for z in [-4.0_f32, 4.0] {
                 parent.spawn((

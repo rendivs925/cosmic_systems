@@ -15,6 +15,7 @@ use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
 use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
+use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -41,6 +42,14 @@ pub struct RocketSunDisc;
 const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
 const SUN_RADIUS_M: f64 = 696_340_000.0;
 const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
+
+/// A low-detail geographic Earth shell beneath streamed terrain. It is a
+/// presentation fallback only: terrain meshes remain the sole source for
+/// elevation, collision, and surface queries.
+#[derive(Component, Debug, Clone)]
+pub struct RocketBoundPlanetSurface {
+    body: CelestialBodyId,
+}
 
 /// Component marking a moon entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
@@ -88,7 +97,12 @@ pub fn isolate_rocket_presentation(
     }
 }
 
-/// Startup system: spawn moons and the Sun in flight units.
+/// Startup system: spawn the bound planet's far-field shell, moons, and Sun in
+/// flight units.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rocket startup composes independent render assets and shared authority queries."
+)]
 pub fn setup_rocket_planets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -96,12 +110,26 @@ pub fn setup_rocket_planets(
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
     rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
+    planet_query: Query<&PlanetComponent>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
     let Some((binding, _rocket)) = rocket_query.iter().next() else {
         return;
     };
     bound_planet_res.0 = Some(binding.planet_name.clone());
+
+    if let Some(planet) = planet_query
+        .iter()
+        .find(|planet| planet.domain_planet.name == binding.planet_name.as_str())
+    {
+        spawn_rocket_bound_planet_surface(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &asset_server,
+            &planet.domain_planet,
+        );
+    }
 
     for moon in PlanetFactory::get_moons_of_id(&binding.planet_name) {
         spawn_rocket_moon(
@@ -121,6 +149,37 @@ pub fn setup_rocket_planets(
         &asset_server,
         &solar_params,
     );
+}
+
+fn spawn_rocket_bound_planet_surface(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    asset_server: &AssetServer,
+    planet: &crate::domain::entities::planet::Planet,
+) {
+    let albedo = load_texture(asset_server, get_planet_textures(&planet.name).albedo);
+    let material = create_planet_material(PlanetMaterialConfig {
+        base_color_texture: albedo,
+        normal_map_texture: None,
+        emissive_texture: None,
+        base_color: Color::WHITE,
+        emissive: LinearRgba::BLACK,
+        unlit: false,
+        metallic: 0.0,
+        reflectance: 0.4,
+        perceptual_roughness: 0.55,
+    });
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::new(planet.radius_km * 1_000.0))),
+        MeshMaterial3d(materials.add(material)),
+        Transform::default(),
+        RocketBoundPlanetSurface {
+            body: CelestialBodyId::new(planet.name.clone())
+                .expect("configured bound planet must have a valid identifier"),
+        },
+        Name::new(format!("RocketFarField{}", planet.name)),
+    ));
 }
 
 /// Spawn a moon in flight units.
@@ -241,7 +300,11 @@ pub fn update_rocket_planets(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     rocket_query: Query<(), With<RocketPhysicsState>>,
     planet_query: Query<&PlanetComponent, Without<RocketMoon>>,
-    mut moon_query: Query<(&RocketMoon, &mut Transform)>,
+    mut moon_query: Query<(&RocketMoon, &mut Transform), Without<RocketBoundPlanetSurface>>,
+    mut bound_surface_query: Query<
+        (&RocketBoundPlanetSurface, &mut Transform),
+        Without<RocketMoon>,
+    >,
     bound_planet_res: Res<RocketBoundPlanet>,
 ) {
     let Some(bound_planet_id) = &bound_planet_res.0 else {
@@ -263,9 +326,21 @@ pub fn update_rocket_planets(
     // Conversion: solar display units -> meters
     let display_to_meters = physical_scale.solar_meters_per_display_unit;
 
-    // The terrain renderer owns the bound planet's visible surface. The Sun
-    // disc is owned by update_rocket_sun_disc; moons share this flight origin.
+    // Streamed terrain displaces the authoritative surface; this geographic
+    // shell remains beneath it so the Earth is continuous while terrain jobs
+    // refine and beyond the active patch coverage.
     let planet_center_flight = -render_origin.origin.as_vec3();
+    for (surface, mut transform) in &mut bound_surface_query {
+        let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(surface.body.as_str())
+        else {
+            continue;
+        };
+        *transform = bound_planet_surface_transform(
+            render_origin.origin,
+            body_fixed_to_planet_inertial_rotation(orientation),
+        );
+    }
 
     // Moons: position relative to bound planet
     for (rocket_moon, mut transform) in &mut moon_query {
@@ -298,6 +373,14 @@ pub fn update_rocket_planets(
             }
         }
     }
+}
+
+fn bound_planet_surface_transform(
+    render_origin: DVec3,
+    body_to_inertial: bevy::math::DQuat,
+) -> Transform {
+    Transform::from_translation((-render_origin).as_vec3())
+        .with_rotation(body_to_inertial.as_quat())
 }
 
 /// Keep the visual Sun inside the local rocket camera depth range while its
@@ -470,5 +553,15 @@ mod tests {
         let expected_angular_radius_rad = (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M).asin();
 
         assert!((angular_radius_rad - expected_angular_radius_rad).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bound_planet_surface_uses_the_terrain_render_frame() {
+        let render_origin = DVec3::new(1_000.0, -2_000.0, 3_000.0);
+        let rotation = DQuat::from_rotation_y(0.25);
+        let transform = bound_planet_surface_transform(render_origin, rotation);
+
+        assert_eq!(transform.translation, (-render_origin).as_vec3());
+        assert_eq!(transform.rotation, rotation.as_quat());
     }
 }
