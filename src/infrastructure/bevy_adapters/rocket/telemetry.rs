@@ -9,7 +9,9 @@ use crate::domain::entities::rocket::EngineState;
 use crate::domain::services::aerodynamics::{angle_of_attack, angle_of_sideslip};
 use crate::domain::services::regression::RocketStateSample;
 use crate::domain::services::rocket_propulsion::{stage_thrust_body, STANDARD_GRAVITY_MPS2};
-use crate::domain::services::simulation_artifact::SimulationTelemetryFrame;
+use crate::domain::services::simulation_artifact::{
+    SimulationEventType, SimulationTelemetryEvent, SimulationTelemetryFrame,
+};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, Selectable};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -21,6 +23,55 @@ use bevy::prelude::*;
 #[derive(Resource, Debug, Default)]
 pub struct SimulationTelemetryRecorder {
     pub frames: Vec<SimulationTelemetryFrame>,
+    pub events: Vec<SimulationTelemetryEvent>,
+}
+
+pub fn record_simulation_events_system(
+    time: Res<SimulationTime>,
+    mut recorder: ResMut<SimulationTelemetryRecorder>,
+    mut stages: MessageReader<StageSeparatedEvent>,
+    mut fairings: MessageReader<FairingSeparatedEvent>,
+    mut splashdowns: MessageReader<SplashdownDetectedEvent>,
+    mut blackouts: MessageReader<CommsBlackoutEvent>,
+) {
+    let event_time = time.sim_time_s;
+    for event in stages.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "stage_separation".into(),
+            detail: format!("shed_mass_kg={}", event.shed_mass_kg),
+            event_type: Some(SimulationEventType::StageSeparation),
+        });
+    }
+    for event in fairings.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "fairing_separation".into(),
+            detail: format!("fairing_mass_kg={}", event.fairing_mass_kg),
+            event_type: Some(SimulationEventType::FairingSeparation),
+        });
+    }
+    for event in splashdowns.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "splashdown".into(),
+            detail: format!("vertical_speed_mps={}", event.touchdown_vertical_speed_mps),
+            event_type: Some(SimulationEventType::Splashdown),
+        });
+    }
+    for event in blackouts.read() {
+        let event_type = if event.blackout_active {
+            SimulationEventType::BlackoutStarted
+        } else {
+            SimulationEventType::BlackoutEnded
+        };
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "blackout".into(),
+            detail: format!("active={}", event.blackout_active),
+            event_type: Some(event_type),
+        });
+    }
 }
 
 const MAX_SHARED_TELEMETRY_FRAMES: usize = 20_000;
@@ -109,6 +160,9 @@ pub fn record_simulation_telemetry_system(
             collision.ground_contact,
             crate::domain::services::terrain_collision::GroundContact::None
         ),
+        angle_of_attack_rad: None,
+        total_heat_flux_w_m2: None,
+        gravitational_parameter_m3_s2: None,
     });
 }
 

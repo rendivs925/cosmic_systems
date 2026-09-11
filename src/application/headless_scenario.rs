@@ -3,6 +3,7 @@
 use crate::application::plugins::RocketFixedSimulationPlugin;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rocket_physics;
+use crate::domain::services::aerodynamics::angle_of_attack;
 use crate::domain::services::regression::RocketStateSample;
 use crate::domain::services::simulation_artifact::{SimulationArtifact, SimulationTelemetryFrame};
 use crate::domain::services::simulation_run::SimulationRunIdentity;
@@ -17,8 +18,9 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketFlightConditions, RocketMissionState, RocketPhysicsState, RocketPropulsion,
-    TerrainCollisionState,
+    TerrainCollisionState, ThermalState,
 };
+use crate::infrastructure::bevy_adapters::rocket::telemetry::SimulationTelemetryRecorder;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 #[cfg(feature = "dem")]
@@ -181,8 +183,9 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
         &RocketPropulsion,
         &RocketFlightConditions,
         &TerrainCollisionState,
+        &ThermalState,
     )>();
-    let (physics, mission, propulsion, conditions, collision) =
+    let (physics, mission, propulsion, conditions, collision, thermal) =
         query.single(world).map_err(|error| error.to_string())?;
     let dynamics = &physics.dynamics;
     Ok(SimulationTelemetryFrame {
@@ -228,6 +231,11 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
             collision.ground_contact,
             crate::domain::services::terrain_collision::GroundContact::None
         ),
+        angle_of_attack_rad: Some(angle_of_attack(
+            physics.dynamics.orientation.inverse() * conditions.atmosphere_relative_velocity_mps,
+        )),
+        total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
+        gravitational_parameter_m3_s2: None,
     })
 }
 
@@ -336,6 +344,11 @@ pub fn run_headless_scenario_artifact(
         app.world_mut().run_schedule(FixedUpdate);
         artifact.telemetry.push(capture_telemetry_frame(&mut app)?);
     }
+    artifact.events = app
+        .world()
+        .resource::<SimulationTelemetryRecorder>()
+        .events
+        .clone();
     artifact.validate()?;
     Ok(artifact)
 }

@@ -6,7 +6,7 @@ use ron::de::from_str;
 use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
 
-pub const SIMULATION_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const SIMULATION_ARTIFACT_SCHEMA_VERSION: u32 = 2;
 
 /// One authoritative fixed-tick engineering sample. SI units and the
 /// planet-centered inertial frame are declared by the enclosing run identity.
@@ -23,6 +23,16 @@ pub struct SimulationTelemetryFrame {
     pub atmospheric_density_kg_m3: f64,
     pub terrain_altitude_m: f64,
     pub ground_contact: bool,
+    /// Body-frame angle of attack, radians, from the authoritative aerodynamic
+    /// telemetry calculation. Absent in v1 artifacts.
+    #[serde(default)]
+    pub angle_of_attack_rad: Option<f64>,
+    /// Authoritative total aerodynamic/entry heat flux, W/m².
+    #[serde(default)]
+    pub total_heat_flux_w_m2: Option<f64>,
+    /// Bound central body's validated gravitational parameter, m³/s².
+    #[serde(default)]
+    pub gravitational_parameter_m3_s2: Option<f64>,
 }
 
 /// Structured simulation occurrence. The stable kind is for consumers; detail
@@ -32,6 +42,17 @@ pub struct SimulationTelemetryEvent {
     pub simulation_time_s: f64,
     pub kind: String,
     pub detail: String,
+    #[serde(default)]
+    pub event_type: Option<SimulationEventType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimulationEventType {
+    StageSeparation,
+    FairingSeparation,
+    Splashdown,
+    BlackoutStarted,
+    BlackoutEnded,
 }
 
 /// A complete recorded-data artifact. Replay consumes these samples directly;
@@ -55,7 +76,7 @@ impl SimulationArtifact {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != SIMULATION_ARTIFACT_SCHEMA_VERSION {
+        if self.schema_version != 1 && self.schema_version != SIMULATION_ARTIFACT_SCHEMA_VERSION {
             return Err(format!(
                 "unsupported simulation artifact schema {}",
                 self.schema_version
@@ -189,6 +210,9 @@ mod tests {
             atmospheric_density_kg_m3: 0.0,
             terrain_altitude_m: 0.0,
             ground_contact: true,
+            angle_of_attack_rad: None,
+            total_heat_flux_w_m2: None,
+            gravitational_parameter_m3_s2: None,
         });
         artifact
     }
@@ -205,7 +229,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_schema() {
         let mut artifact = artifact();
-        artifact.schema_version = 2;
+        artifact.schema_version = 3;
         assert!(artifact.validate().is_err());
     }
 }

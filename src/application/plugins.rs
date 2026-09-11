@@ -141,8 +141,8 @@ use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,
     handle_flight_recorder_input_system, record_flight_data_system,
-    record_simulation_telemetry_system, rocket_event_feed_system, RocketEventFeed,
-    SimulationTelemetryRecorder,
+    record_simulation_events_system, record_simulation_telemetry_system, rocket_event_feed_system,
+    RocketEventFeed, SimulationTelemetryRecorder,
 };
 use crate::infrastructure::bevy_adapters::rocket::terrain_map::RocketTerrainMapPlugin;
 use crate::infrastructure::bevy_adapters::simulation_time::{
@@ -536,6 +536,7 @@ impl Plugin for RocketFixedSimulationPlugin {
                 compute_rocket_telemetry_system.in_set(RocketSet::Telemetry),
                 record_flight_data_system.in_set(RocketSet::Telemetry),
                 record_simulation_telemetry_system.in_set(RocketSet::Telemetry),
+                record_simulation_events_system.in_set(RocketSet::Telemetry),
                 record_replay_snapshot_system.in_set(RocketSet::Replay),
             ),
         );

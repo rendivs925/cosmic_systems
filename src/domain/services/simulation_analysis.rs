@@ -7,7 +7,7 @@ use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SIMULATION_ANALYSIS_SCHEMA_VERSION: u32 = 1;
+pub const SIMULATION_ANALYSIS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EngineeringConstraint {
@@ -39,6 +39,10 @@ pub struct SimulationAnalysisResult {
     pub maximum_acceleration_mps2: Option<f64>,
     pub maximum_mach: f64,
     pub maximum_dynamic_pressure_pa: f64,
+    #[serde(default)]
+    pub maximum_angle_of_attack_rad: Option<f64>,
+    #[serde(default)]
+    pub maximum_heat_flux_w_m2: Option<f64>,
     pub minimum_terrain_clearance_m: f64,
     pub propellant_consumed_kg: f64,
     pub final_position_m: [f64; 3],
@@ -54,7 +58,8 @@ impl SimulationAnalysisResult {
     }
     pub fn from_ron(text: &str) -> Result<Self, String> {
         let result: Self = from_str(text).map_err(|error| error.to_string())?;
-        if result.schema_version != SIMULATION_ANALYSIS_SCHEMA_VERSION {
+        if result.schema_version != 1 && result.schema_version != SIMULATION_ANALYSIS_SCHEMA_VERSION
+        {
             return Err(format!(
                 "unsupported simulation analysis schema {}",
                 result.schema_version
@@ -103,6 +108,8 @@ pub fn analyze_simulation_artifact(
     let mut minimum_clearance = first.terrain_altitude_m;
     let mut maximum_acceleration = None;
     let mut max_q_time = first.simulation_time_s;
+    let mut maximum_aoa = None;
+    let mut maximum_heat = None;
     let mut max_mach_time = first.simulation_time_s;
     let mut min_clearance_time = first.simulation_time_s;
     for (index, frame) in artifact.telemetry.iter().enumerate() {
@@ -122,6 +129,12 @@ pub fn analyze_simulation_artifact(
         if frame.dynamic_pressure_pa > maximum_q {
             maximum_q = frame.dynamic_pressure_pa;
             max_q_time = frame.simulation_time_s;
+        }
+        if let Some(value) = frame.angle_of_attack_rad {
+            maximum_aoa = Some(maximum_aoa.unwrap_or(0.0_f64).max(value.abs()));
+        }
+        if let Some(value) = frame.total_heat_flux_w_m2 {
+            maximum_heat = Some(maximum_heat.unwrap_or(0.0_f64).max(value));
         }
         if frame.terrain_altitude_m < minimum_clearance {
             minimum_clearance = frame.terrain_altitude_m;
@@ -177,8 +190,24 @@ pub fn analyze_simulation_artifact(
                 .into(),
         );
     }
-    warnings.push("orbital elements are unavailable because artifact telemetry does not carry a gravitational parameter".into());
-    warnings.push("angle of attack and heating are unavailable because artifact telemetry does not carry those channels".into());
+    if artifact
+        .telemetry
+        .iter()
+        .all(|frame| frame.gravitational_parameter_m3_s2.is_none())
+    {
+        warnings.push("orbital elements are unavailable because artifact telemetry does not carry a gravitational parameter".into());
+    }
+    if maximum_aoa.is_none() {
+        warnings.push(
+            "angle of attack is unavailable because artifact telemetry does not carry that channel"
+                .into(),
+        );
+    }
+    if maximum_heat.is_none() {
+        warnings.push(
+            "heating is unavailable because artifact telemetry does not carry that channel".into(),
+        );
+    }
     let artifact_text = artifact.to_ron()?;
     Ok(SimulationAnalysisResult {
         schema_version: SIMULATION_ANALYSIS_SCHEMA_VERSION,
@@ -191,6 +220,8 @@ pub fn analyze_simulation_artifact(
         maximum_acceleration_mps2: maximum_acceleration,
         maximum_mach,
         maximum_dynamic_pressure_pa: maximum_q,
+        maximum_angle_of_attack_rad: maximum_aoa,
+        maximum_heat_flux_w_m2: maximum_heat,
         minimum_terrain_clearance_m: minimum_clearance,
         propellant_consumed_kg: (first.propellant_remaining_kg - last.propellant_remaining_kg)
             .max(0.0),
@@ -250,6 +281,9 @@ mod tests {
                 atmospheric_density_kg_m3: 1.0,
                 terrain_altitude_m: altitude,
                 ground_contact: false,
+                angle_of_attack_rad: None,
+                total_heat_flux_w_m2: None,
+                gravitational_parameter_m3_s2: None,
             });
         }
         artifact
