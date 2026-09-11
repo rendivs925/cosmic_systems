@@ -1,0 +1,56 @@
+(
+    name: "leo-insertion-safe",
+    git_commit: "uncommitted",
+    audit: (
+        change_description: "add a deterministic safe low-Earth-orbit insertion regression recording for the existing ascent completion predicate",
+        expected_improvement: "pins the authoritative orbit-completion transition and thrust cutoff for a valid inclined circular target state",
+        numerical_tradeoffs: "records two existing fixed-update calls from a constructed target state without changing orbital mechanics, tolerances, or guidance behavior",
+        affected_scenarios: [
+            "leo-insertion-safe",
+            "authoritative orbit completion",
+            "ascent thrust cutoff",
+        ],
+        affected_external_case_ids: [
+            ("earth-ssb-j2000-de441"),
+        ],
+        intended_baseline_divergence: Expected(
+            description: "new deterministic scenario; no predecessor recording exists",
+        ),
+        scientific_acceptance_output: Unverified(
+            reason: "this internal insertion-state recording is not an external orbit-propagation accuracy claim",
+        ),
+        reviewer_approved: true,
+        recorded_by: "opencode-determinism",
+    ),
+    samples: [
+        (
+            position_m: (6571000.0, 0.0, 0.0),
+            velocity_mps: (0.0, 6132.241620863787, -4801.504594021632),
+            orientation: (-0.5051576086036371, 0.0, -0.08319353797597404, 0.859007931109425),
+            angular_velocity_radps: (0.0, 0.0, 0.0),
+            mass_kg: 12500.0,
+            guidance_code: 2,
+        ),
+        (
+            position_m: (6571000.0, 0.0, 0.0),
+            velocity_mps: (0.0, 6132.241620863787, -4801.504594021632),
+            orientation: (-0.5051576086036371, 0.0, -0.08319353797597404, 0.859007931109425),
+            angular_velocity_radps: (0.0, 0.0, 0.0),
+            mass_kg: 12500.0,
+            guidance_code: 2,
+        ),
+        (
+            position_m: (6570999.999657685, 95.81513580144677, -75.02143071889856),
+            velocity_mps: (-0.2530006074252804, 5083.870953098462, -3980.3557216697363),
+            orientation: (-0.5042288436250708, -0.0000000000000000005421010862427522, -0.08498968884056539, 0.8593776969687471),
+            angular_velocity_radps: (0.0, 0.0, 0.0),
+            mass_kg: 12500.0,
+            guidance_code: 3,
+        ),
+    ],
+    hash_chain: [
+        6068713942594238783,
+        6068713942594238783,
+        6234821173797274921,
+    ],
+)

@@ -40,12 +40,16 @@ COMPARE_COMMAND="cargo test ${FILTER} -- --nocapture"
 echo "Starting bisect from good=$GOOD bad=$BAD"
 export REGRESSION_BASELINE_DIR="$BASELINE_DIR"
 git bisect start "$BAD" "$GOOD"
-if git bisect run bash -c "$COMPARE_COMMAND >/dev/null 2>&1"; then
-  echo "No deterministic divergence found between $GOOD and $BAD."
+set +e
+git bisect run bash -c "$COMPARE_COMMAND >/dev/null 2>&1"
+BISECT_STATUS=$?
+set -e
+if [[ $BISECT_STATUS -ne 0 ]]; then
+  echo "git bisect run failed with status $BISECT_STATUS."
   git bisect reset >/dev/null 2>&1
-  exit 0
+  exit "$BISECT_STATUS"
 fi
 
 echo "First bad commit:"
-git bisect log | tail -20
+git show -s --format='%H %s' HEAD
 git bisect reset >/dev/null 2>&1

@@ -5,8 +5,8 @@ use bevy::prelude::*;
 
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::ephemeris::{
-    BodyState, EphemerisError, NaifBodyId, ScientificDatasetAvailability, ScientificDatasetStatus,
-    SpiceEphemeris, TdbEpoch,
+    BodyState, EphemerisError, NaifBodyId, ScientificDatasetAvailability, ScientificDatasetRole,
+    ScientificDatasetStatus, SpiceEphemeris, TdbEpoch,
 };
 use crate::domain::services::gravity::EarthJ2GravityModel;
 use crate::domain::services::reference_frames::{
@@ -284,7 +284,11 @@ impl Plugin for EphemerisPlugin {
                     status.file_name.as_deref().unwrap_or("not-applicable"),
                 ),
                 ScientificDatasetAvailability::Unavailable => {
-                    bevy::log::warn!("scientific dataset role={} status=unavailable", status.role,)
+                    bevy::log::warn!(
+                        "scientific dataset role={} status=unavailable; {}",
+                        status.role,
+                        unavailable_dataset_detail(status.role),
+                    )
                 }
                 ScientificDatasetAvailability::OutOfCoverage => panic!(
                     "scientific dataset role={} file={} is outside startup TDB coverage",
@@ -305,6 +309,15 @@ impl Plugin for EphemerisPlugin {
                     .in_set(EphemerisSet::RefreshAfterTimeAdvance),
             ),
         );
+    }
+}
+
+fn unavailable_dataset_detail(role: ScientificDatasetRole) -> &'static str {
+    match role {
+        ScientificDatasetRole::EarthOrientation => {
+            "UT1/polar-motion data is not provisioned; validated PCK IAU orientation remains available"
+        }
+        _ => "the manifest declares this capability unavailable",
     }
 }
 
@@ -412,6 +425,31 @@ mod tests {
             DEFAULT_SIMULATION_START_UTC.julian_date().unwrap()
         );
         assert_eq!(epoch.ut1_julian_date(), None);
+    }
+
+    #[test]
+    fn pck_orientation_and_unavailable_earth_orientation_role_are_distinct() {
+        let mut app = App::new();
+        app.init_resource::<SimulationTime>();
+        app.add_plugins(EphemerisPlugin);
+        app.update();
+
+        let report = app.world().resource::<ScientificDatasetReport>();
+        assert!(report.0.iter().any(|status| {
+            status.role == ScientificDatasetRole::Orientation
+                && status.availability == ScientificDatasetAvailability::Validated
+                && status.file_name.as_deref() == Some("pck00011.tpc")
+        }));
+        assert!(report.0.iter().any(|status| {
+            status.role == ScientificDatasetRole::EarthOrientation
+                && status.availability == ScientificDatasetAvailability::Unavailable
+                && status.file_name.is_none()
+        }));
+        assert!(app
+            .world()
+            .resource::<EphemerisSnapshot>()
+            .orientation(NaifBodyId::EARTH)
+            .is_some());
     }
 
     #[test]

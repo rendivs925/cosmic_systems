@@ -121,6 +121,7 @@ struct TerrainPatchRenderIndex(HashMap<TerrainPatchRenderKey, Entity>);
 struct PendingTerrainPatchUploads {
     queue: VecDeque<TerrainPatchReady>,
     queued: HashSet<TerrainPatchRenderKey>,
+    needs_backfill: bool,
 }
 
 impl PendingTerrainPatchUploads {
@@ -137,7 +138,11 @@ impl PendingTerrainPatchUploads {
 
     fn enqueue(&mut self, event: TerrainPatchReady) -> bool {
         let key = TerrainPatchRenderKey::from(&event);
-        if self.queued.contains(&key) || self.queue.len() >= MAX_PENDING_PATCH_UPLOADS {
+        if self.queued.contains(&key) {
+            return false;
+        }
+        if self.queue.len() >= MAX_PENDING_PATCH_UPLOADS {
+            self.needs_backfill = true;
             return false;
         }
         self.queued.insert(key);
@@ -149,6 +154,32 @@ impl PendingTerrainPatchUploads {
         let event = self.queue.pop_front()?;
         self.queued.remove(&TerrainPatchRenderKey::from(&event));
         Some(event)
+    }
+
+    fn backfill_published(
+        &mut self,
+        planet_entity: Entity,
+        published: &std::collections::BTreeSet<TerrainPatch>,
+        render_index: &TerrainPatchRenderIndex,
+    ) {
+        if !self.needs_backfill {
+            return;
+        }
+
+        self.needs_backfill = false;
+        for patch in published.iter().copied() {
+            let event = TerrainPatchReady {
+                patch,
+                planet_entity,
+            };
+            let key = TerrainPatchRenderKey::from(&event);
+            if render_index.0.contains_key(&key) || self.queued.contains(&key) {
+                continue;
+            }
+            if !self.enqueue(event) {
+                break;
+            }
+        }
     }
 }
 
@@ -339,40 +370,14 @@ fn spawn_patch_mesh_system(
             pending_uploads.enqueue(event);
         }
     }
-    // A bounded queue can reject a burst of ready events. Recover only after a
-    // real capacity rejection; scanning every published patch at steady state
-    // turns a rare recovery path into per-frame main-thread work.
-    let mut needs_backfill = false;
-    for event in events.read().cloned() {
-        if active_planet == Some(event.planet_entity) && streaming.published.contains(&event.patch)
-        {
-            let key = TerrainPatchRenderKey::from(&event);
-            let already_queued = pending_uploads.queued.contains(&key);
-            if !pending_uploads.enqueue(event) && !already_queued {
-                needs_backfill = true;
-            }
-        }
-    }
-    if needs_backfill {
+    // A ready-event burst can exceed the bounded queue. Keep the recovery flag
+    // until every published patch is queued or rendered; MessageReader cannot
+    // replay the events that overflowed in an earlier frame.
+    if pending_uploads.needs_backfill {
         let Some(planet_entity) = active_planet else {
             return;
         };
-        for patch in streaming.published.iter().copied() {
-            let event = TerrainPatchReady {
-                patch,
-                planet_entity,
-            };
-            if !render_index
-                .0
-                .contains_key(&TerrainPatchRenderKey::from(&event))
-            {
-                let key = TerrainPatchRenderKey::from(&event);
-                let already_queued = pending_uploads.queued.contains(&key);
-                if !pending_uploads.enqueue(event) && !already_queued {
-                    break;
-                }
-            }
-        }
+        pending_uploads.backfill_published(planet_entity, &streaming.published, &render_index);
     }
     for _ in 0..MAX_PATCH_UPLOADS_PER_FRAME {
         let Some(event) = pending_uploads.pop_front() else {
@@ -1490,6 +1495,58 @@ mod tests {
             planet_entity,
         }));
         assert_eq!(pending.queue.len(), MAX_PENDING_PATCH_UPLOADS);
+        assert!(pending.needs_backfill);
+
+        pending.pop_front();
+        assert!(pending.needs_backfill);
+    }
+
+    #[test]
+    fn ready_event_overflow_backfills_every_published_patch_without_duplicates() {
+        let planet_entity = Entity::PLACEHOLDER;
+        let first = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 12,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let published = (0..=MAX_PENDING_PATCH_UPLOADS as u32)
+            .map(|tile_x| TerrainPatch { tile_x, ..first })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut pending = PendingTerrainPatchUploads::default();
+        let mut render_index = TerrainPatchRenderIndex::default();
+
+        for patch in &published {
+            pending.enqueue(TerrainPatchReady {
+                patch: *patch,
+                planet_entity,
+            });
+        }
+        assert!(pending.needs_backfill);
+
+        while pending.needs_backfill || !pending.queue.is_empty() {
+            pending.backfill_published(planet_entity, &published, &render_index);
+            for _ in 0..MAX_PATCH_UPLOADS_PER_FRAME {
+                let Some(event) = pending.pop_front() else {
+                    break;
+                };
+                let key = TerrainPatchRenderKey::from(&event);
+                assert!(
+                    render_index.0.insert(key, Entity::PLACEHOLDER).is_none(),
+                    "a patch must never activate twice"
+                );
+            }
+        }
+
+        assert!(!pending.needs_backfill);
+        assert!(pending.queue.is_empty());
+        assert_eq!(render_index.0.len(), published.len());
+        assert!(published.iter().all(|patch| {
+            render_index.0.contains_key(&TerrainPatchRenderKey {
+                planet_entity,
+                patch: *patch,
+            })
+        }));
     }
 
     #[test]

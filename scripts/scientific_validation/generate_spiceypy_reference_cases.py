@@ -6,6 +6,7 @@ repository, then run it from the repository root with the pinned kernels
 provisioned. It neither participates in runtime simulation nor updates cases.
 """
 
+import argparse
 import math
 
 import spiceypy as spice
@@ -24,31 +25,49 @@ def values(items):
     return " ".join(format(value, ".17g") for value in items)
 
 
+CASE_IDS = (
+    "earth-orientation-j2000-cspice",
+    "ksc-earth-fixed-cspice",
+    "sun-from-earth-j2000-cspice",
+    "earth-two-body-7000km-cspice",
+    "earth-two-body-leo-one-day-cspice",
+)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--case", choices=CASE_IDS)
+    selected_case = parser.parse_args().case
+
     load("naif0012.tls", "pck00011.tpc", "gm_de440.tpc", "de440s.bsp")
     epoch = spice.str2et("JD 2451545.0 TDB")
 
     rotation, angular_velocity = spice.xf2rav(spice.sxform("J2000", "IAU_EARTH", epoch))
-    print("earth-orientation-j2000-cspice quaternion_wxyz", values(spice.m2q(rotation)))
-    print("earth-orientation-j2000-cspice angular_velocity_rad_s", values(angular_velocity))
+    if selected_case in (None, "earth-orientation-j2000-cspice"):
+        print("earth-orientation-j2000-cspice quaternion_wxyz", values(spice.m2q(rotation)))
+        print("earth-orientation-j2000-cspice angular_velocity_rad_s", values(angular_velocity))
 
     radii_km = spice.bodvrd("EARTH", "RADII", 3)[1]
     flattening = (radii_km[0] - radii_km[2]) / radii_km[0]
     ksc_position_km = spice.georec(
         math.radians(-80.6480), math.radians(28.5721), 0.003, radii_km[0], flattening
     )
-    print("ksc-earth-fixed-cspice position_km", values(ksc_position_km))
+    if selected_case in (None, "ksc-earth-fixed-cspice"):
+        print("ksc-earth-fixed-cspice position_km", values(ksc_position_km))
 
     sun_state_km_kmps, _ = spice.spkezr("SUN", epoch, "J2000", "NONE", "EARTH")
-    print("sun-from-earth-j2000-cspice direction", values(spice.vhat(sun_state_km_kmps[:3])))
+    if selected_case in (None, "sun-from-earth-j2000-cspice"):
+        print("sun-from-earth-j2000-cspice direction", values(spice.vhat(sun_state_km_kmps[:3])))
 
     earth_gm_km3_s2 = spice.bodvrd("EARTH", "GM", 1)[1][0]
-    print("earth-two-body-7000km-cspice gm_km3_s2", format(earth_gm_km3_s2, ".17g"))
+    if selected_case in (None, "earth-two-body-7000km-cspice"):
+        print("earth-two-body-7000km-cspice gm_km3_s2", format(earth_gm_km3_s2, ".17g"))
     state_km_kmps = [7000.0, 0.0, 0.0, 0.0, math.sqrt(earth_gm_km3_s2 / 7000.0), 0.0]
     propagated_km_kmps = spice.conics(
         spice.oscelt(state_km_kmps, epoch, earth_gm_km3_s2), epoch + 86_400.0
     )
-    print("earth-two-body-leo-one-day-cspice state_km_kmps", values(propagated_km_kmps))
+    if selected_case in (None, "earth-two-body-leo-one-day-cspice"):
+        print("earth-two-body-leo-one-day-cspice state_km_kmps", values(propagated_km_kmps))
 
 
 if __name__ == "__main__":

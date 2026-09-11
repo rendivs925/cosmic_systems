@@ -658,6 +658,7 @@ mod ground_contact_tests {
     /// Deployed landing gear absorb a gentle touchdown through strut
     /// compression instead of the rigid point-contact snap.
     #[test]
+    #[cfg(feature = "dem")]
     fn deployed_legs_absorb_touchdown_softly() {
         let surface_r;
         let mut app = {
@@ -2927,27 +2928,36 @@ mod render_interpolation_tests {
 /// Baseline recording is intentionally outside this test module so changing a
 /// fixture always requires an explicit reviewed audit trail.
 #[cfg(test)]
+#[cfg(feature = "dem")]
 mod determinism_regression_tests {
     use super::ascent_pipeline_tests::ascent_app;
+    use super::*;
     use crate::domain::entities::rocket::RocketMissionState as DomainMission;
+    use crate::domain::services::gravity::gravitational_parameter;
+    use crate::domain::services::guidance::AutopilotMode;
+    use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
+    use crate::domain::services::reference_frames::{
+        planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+    };
     use crate::domain::services::regression::{
         load_baseline_ron, save_baseline_ron, RegressionConfig, RocketStateSample,
     };
     use crate::infrastructure::bevy_adapters::rocket::components::{
-        RocketMissionState, RocketPhysicsState,
+        RocketAutopilot, RocketMissionState, RocketPhysicsState,
     };
-    use bevy::prelude::*;
 
     /// Fixed-physics ticks captured in the baseline window (~4 s of ascent:
     /// liftoff, throttle slew, gravity-turn entry). Kept short so the fixture
     /// stays small while still exercising the full Guidance→Control→Forces→
     /// Integrate→GroundContact chain.
     const RECORD_TICKS: usize = 256;
+    const GRAVITY_TURN_RECORD_TICKS: usize = 1_280;
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
-    fn default_baseline_path() -> std::path::PathBuf {
+    fn baseline_path(name: &str) -> std::path::PathBuf {
         let dir =
             std::env::var("REGRESSION_BASELINE_DIR").unwrap_or_else(|_| "tests/baselines".into());
-        std::path::PathBuf::from(dir).join("ascent.ron")
+        std::path::PathBuf::from(dir).join(format!("{name}.ron"))
     }
 
     /// Map the mission phase to a stable, order-independent code byte. The
@@ -2995,44 +3005,84 @@ mod determinism_regression_tests {
         )
     }
 
-    /// Run the ascent harness and record `RECORD_TICKS` samples (one per
-    /// fixed physics step), including the initial t=0 sample.
-    fn record_ascent_samples() -> Vec<RocketStateSample> {
-        let mut app = ascent_app();
-        let mut samples = Vec::with_capacity(RECORD_TICKS + 1);
+    /// Run one fixed-step scenario and capture the initial state plus every
+    /// completed tick. The sampled state remains the authoritative physics
+    /// state, not a render transform or a presentation checkpoint.
+    fn record_app_samples(mut app: App, ticks: usize) -> Vec<RocketStateSample> {
+        let mut samples = Vec::with_capacity(ticks + 1);
         samples.push(capture_sample(&mut app));
-        for _ in 0..RECORD_TICKS {
+        for _ in 0..ticks {
             app.update();
             samples.push(capture_sample(&mut app));
         }
         samples
     }
 
-    /// The CI gate: the freshly simulated ascent must match the committed
-    /// baseline within the documented per-variable tolerances. Baselines are
-    /// deliberately immutable in tests: recording requires an explicit,
-    /// reviewed maintenance workflow outside CI.
-    #[test]
-    fn ascent_matches_committed_baseline_within_tolerances() {
-        let path = default_baseline_path();
+    fn record_ascent_samples() -> Vec<RocketStateSample> {
+        record_app_samples(ascent_app(), RECORD_TICKS)
+    }
+
+    fn record_ascent_gravity_turn_samples() -> Vec<RocketStateSample> {
+        record_app_samples(ascent_app(), GRAVITY_TURN_RECORD_TICKS)
+    }
+
+    fn safe_leo_insertion_app() -> App {
+        let target = LowEarthOrbitTarget::default();
+        let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
+        let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
+        let orientation = super::test_earth_orientation();
+        let reference_normal = planet_inertial_spin_axis(&orientation);
+        let reference_x_axis = planet_equatorial_reference_x_axis(&orientation);
+        let position_m = reference_x_axis * radius_m;
+        let orbit_normal = reference_normal * target.target_inclination_rad.cos()
+            - reference_normal.cross(reference_x_axis) * target.target_inclination_rad.sin();
+        let velocity_mps = orbit_normal.cross(position_m).normalize() * circular_speed_mps;
+
+        let mut app = ascent_app();
+        let entity = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).expect("one ascent vehicle")
+        };
+        let world = app.world_mut();
+        let mut rocket = world
+            .get_mut::<RocketPhysicsState>(entity)
+            .expect("ascent vehicle physics state");
+        rocket.dynamics.position_m = position_m;
+        rocket.dynamics.velocity_mps = velocity_mps;
+        *world
+            .get_mut::<RocketMissionState>(entity)
+            .expect("ascent vehicle mission") = RocketMissionState::Ascent;
+        world
+            .get_mut::<RocketAutopilot>(entity)
+            .expect("ascent vehicle autopilot")
+            .mode = AutopilotMode::Ascent;
+        app
+    }
+
+    fn record_safe_leo_insertion_samples() -> Vec<RocketStateSample> {
+        // One update initializes Bevy's fixed clock; the second runs the
+        // insertion predicate and cuts thrust for the verified orbit state.
+        record_app_samples(safe_leo_insertion_app(), 2)
+    }
+
+    fn compare_or_record_baseline(name: &str, current: Vec<RocketStateSample>) {
+        let path = baseline_path(name);
         assert!(
             path.exists(),
-            "committed ascent baseline is missing; record and review it outside the test suite"
+            "committed {name} baseline is missing; record and review it outside the test suite"
         );
         let ron = std::fs::read_to_string(&path).expect("baseline readable");
         let baseline = load_baseline_ron(&ron).expect("baseline RON valid");
-
         assert!(
             baseline.audit.is_signed_off(),
-            "committed baseline audit trail is incomplete or unapproved"
+            "baseline audit trail is incomplete"
         );
-
         assert!(
             baseline.hash_chain_consistent(),
-            "committed baseline hash chain is internally inconsistent"
+            "baseline hash chain is inconsistent"
         );
 
-        let current = record_ascent_samples();
         if std::env::var_os("REGRESSION_RECORD").is_some() {
             let mut recorded = baseline;
             recorded.git_commit = std::process::Command::new("git")
@@ -3047,23 +3097,42 @@ mod determinism_regression_tests {
             recorded.samples = current;
             recorded.hash_chain = recorded.recompute_hash_chain();
             std::fs::write(
-                &path,
+                path,
                 save_baseline_ron(&recorded).expect("baseline serializes"),
             )
             .expect("baseline writes");
             return;
         }
-        let divergences = baseline.compare(&current, &RegressionConfig::default());
 
+        let divergences = baseline.compare(&current, &RegressionConfig::default());
         assert!(
             divergences.is_empty(),
-            "ascent diverged from committed baseline:\n{}",
+            "{name} diverged from committed baseline:\n{}",
             divergences
                 .iter()
                 .map(|d| d.describe())
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+
+    /// The CI gate: the freshly simulated ascent must match the committed
+    /// baseline within the documented per-variable tolerances. Baselines are
+    /// deliberately immutable in tests: recording requires an explicit,
+    /// reviewed maintenance workflow outside CI.
+    #[test]
+    fn ascent_matches_committed_baseline_within_tolerances() {
+        compare_or_record_baseline("ascent", record_ascent_samples());
+    }
+
+    #[test]
+    fn ascent_gravity_turn_matches_committed_baseline_within_tolerances() {
+        compare_or_record_baseline("ascent-gravity-turn", record_ascent_gravity_turn_samples());
+    }
+
+    #[test]
+    fn safe_leo_insertion_matches_committed_baseline_within_tolerances() {
+        compare_or_record_baseline("leo-insertion-safe", record_safe_leo_insertion_samples());
     }
 
     /// Two independent fresh-run recordings of the same flight must be
@@ -3090,6 +3159,30 @@ mod determinism_regression_tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+
+    #[test]
+    fn two_fresh_ascent_gravity_turn_runs_are_bitwise_identical() {
+        let a = record_ascent_gravity_turn_samples();
+        let b = record_ascent_gravity_turn_samples();
+        assert!(crate::domain::services::regression::compare_trajectory(
+            &a,
+            &b,
+            &RegressionConfig::default(),
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn two_fresh_safe_leo_insertion_runs_are_bitwise_identical() {
+        let a = record_safe_leo_insertion_samples();
+        let b = record_safe_leo_insertion_samples();
+        assert!(crate::domain::services::regression::compare_trajectory(
+            &a,
+            &b,
+            &RegressionConfig::default(),
+        )
+        .is_empty());
     }
 
     /// A deliberately injected perturbation well beyond the per-variable
@@ -3126,9 +3219,9 @@ mod determinism_regression_tests {
     /// exercises the launch machinery and the samples are not all identical.
     #[test]
     fn recorded_baseline_is_a_real_flight() {
-        let samples = match default_baseline_path().exists() {
+        let samples = match baseline_path("ascent").exists() {
             true => {
-                let ron = std::fs::read_to_string(default_baseline_path()).unwrap();
+                let ron = std::fs::read_to_string(baseline_path("ascent")).unwrap();
                 load_baseline_ron(&ron).unwrap().samples
             }
             false => record_ascent_samples(),

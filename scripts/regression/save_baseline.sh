@@ -17,7 +17,7 @@ FILTER="${REGRESSION_TEST_FILTER:-determinism_regression_tests::ascent_matches_c
 
 echo "Recording test filter:             ${FILTER}"
 
-REGRESSION_RECORD=1 cargo test "${FILTER}" -- --nocapture
+REGRESSION_RECORD=1 cargo test --features dem "${FILTER}" -- --nocapture
 
 echo "Baseline(s) written. Verify with:"
 echo "  git status tests/baselines/"

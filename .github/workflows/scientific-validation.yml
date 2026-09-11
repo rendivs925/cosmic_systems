@@ -10,6 +10,31 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: Rust quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Provision required DEM and ephemeris datasets
+        run: scripts/provision_de440_kernels.sh
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Check
+        run: cargo check --features dem
+
+      - name: Lint
+        run: cargo clippy --features dem -- -D warnings
+
+      - name: Test
+        run: cargo test --features dem
+
   external-scientific-validation:
     name: External scientific validation (provisioned)
     runs-on: ubuntu-latest

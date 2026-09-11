@@ -59,8 +59,9 @@ download_texture() {
         return 0
     fi
 
-    echo "⚠️  Skipping ${name} (not found)."
+    echo "Missing required texture ${name}."
     rm -f "$temp"
+    return 1
 }
 
 echo "🌌 Downloading Solar System Scope 2k textures..."
