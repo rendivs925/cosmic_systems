@@ -25,6 +25,7 @@ pub mod regression;
 pub mod rocket_dynamics;
 pub mod rocket_propulsion;
 pub mod scientific_validation;
+pub mod simulation_analysis;
 pub mod simulation_artifact;
 pub mod simulation_epoch;
 pub mod simulation_run;

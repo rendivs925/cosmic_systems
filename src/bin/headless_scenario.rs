@@ -3,11 +3,45 @@
 use cosmic_systems_wasm::application::headless_scenario::{
     run_headless_scenario_artifact, HeadlessScenario,
 };
+use cosmic_systems_wasm::domain::services::simulation_analysis::analyze_simulation_artifact;
+use cosmic_systems_wasm::domain::services::simulation_artifact::SimulationArtifact;
 
 fn main() {
+    let mut raw_arguments = std::env::args().skip(1).collect::<Vec<_>>().into_iter();
+    let first = raw_arguments.next();
+    if first.as_deref() == Some("analyze") {
+        let input = raw_arguments
+            .next()
+            .unwrap_or_else(|| panic!("analyze requires an artifact path"));
+        let mut output = None;
+        while let Some(argument) = raw_arguments.next() {
+            match argument.as_str() {
+                "--output" => {
+                    output = Some(
+                        raw_arguments
+                            .next()
+                            .unwrap_or_else(|| panic!("--output requires a path")),
+                    )
+                }
+                _ => panic!("unknown analysis argument '{argument}'"),
+            }
+        }
+        let text = std::fs::read_to_string(&input)
+            .unwrap_or_else(|error| panic!("cannot read {input}: {error}"));
+        let artifact = SimulationArtifact::from_ron(&text)
+            .unwrap_or_else(|error| panic!("invalid artifact: {error}"));
+        let result = analyze_simulation_artifact(&artifact, &[])
+            .unwrap_or_else(|error| panic!("analysis failed: {error}"));
+        if let Some(path) = output {
+            std::fs::write(&path, result.to_ron().unwrap())
+                .unwrap_or_else(|error| panic!("cannot write {path}: {error}"));
+        }
+        print!("{}", result.engineering_summary());
+        return;
+    }
     let mut scenario = HeadlessScenario::default();
     let mut output = None;
-    let mut arguments = std::env::args().skip(1);
+    let mut arguments = first.into_iter().chain(raw_arguments);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--vehicle" => {
