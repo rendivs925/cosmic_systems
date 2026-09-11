@@ -66,13 +66,14 @@ const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
 /// the reserved worker pool quickly after a camera move without queueing an
 /// unbounded cold-start burst or blocking the render thread.
 const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
-/// Bound the target leaf cover to the configured terrain cache's practical
-/// capacity. Refinement is distributed breadth-first across the viewport so a
-/// high-altitude camera does not spend the entire budget beneath the rocket.
-const MAX_VIEWPORT_TARGET_LEAVES: usize = 512;
+/// Bound active coverage, including its protected progressive fallback chain,
+/// to the 128 MiB cache budget. The previous 512-leaf limit could make active
+/// coverage alone exceed that budget, leaving LRU eviction with no legal
+/// candidate during an orbital camera view.
+const MAX_VIEWPORT_TARGET_LEAVES: usize = 300;
 /// Reserve leaf budget for 2:1 neighbour balancing at the viewport boundary.
 /// The visible traversal itself stops below the published-cover limit.
-const MAX_VIEWPORT_UNBALANCED_LEAVES: usize = MAX_VIEWPORT_TARGET_LEAVES - 87;
+const MAX_VIEWPORT_UNBALANCED_LEAVES: usize = MAX_VIEWPORT_TARGET_LEAVES - 64;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
 const STREAM_RECONCILE_INTERVAL_S: f64 = 1.0 / 30.0;

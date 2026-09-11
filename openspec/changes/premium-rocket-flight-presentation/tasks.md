@@ -29,7 +29,7 @@
 
 - [x] 5.1 Add derived Rocket audio control parameters for engine, ground rumble, staging, and interior/external atmospheric attenuation at a bounded update cadence.
 - [x] 5.2 Evaluate selected external non-terrain assets and record source URL, exact license, attribution/notice requirements, modification status, and intended use before adding each asset.
-- [ ] 5.3 Add approved Rocket-specific audio sources and lifecycle-controlled playback only after provenance review; do not reuse the UFO electronic loop.
+- [x] 5.3 Add approved Rocket-specific audio sources and lifecycle-controlled playback only after provenance review; do not reuse the UFO electronic loop.
 
 ## 6. Performance And Validation
 

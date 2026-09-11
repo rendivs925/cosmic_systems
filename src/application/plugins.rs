@@ -66,7 +66,8 @@ use crate::infrastructure::bevy_adapters::planet_systems::{
     update_planet_positions, update_planet_rotations,
 };
 use crate::infrastructure::bevy_adapters::rocket::audio::{
-    update_rocket_audio_controls, RocketAudioControlCadence,
+    apply_rocket_audio_playback, ensure_rocket_audio_playback, update_rocket_audio_controls,
+    RocketAudioControlCadence,
 };
 use crate::infrastructure::bevy_adapters::rocket::camera::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
@@ -503,6 +504,8 @@ impl Plugin for RocketModePlugin {
                     .after(handle_rocket_launch_input),
                 update_rocket_engine_effects.after(interpolate_render_transform),
                 update_rocket_audio_controls.after(update_rocket_engine_effects),
+                ensure_rocket_audio_playback.after(update_rocket_audio_controls),
+                apply_rocket_audio_playback.after(ensure_rocket_audio_playback),
                 sync_launch_pad_presentation.after(recenter_render_origin),
                 update_rocket_ground_presentation.after(sync_launch_pad_presentation),
                 capture_rocket_presentation_metrics

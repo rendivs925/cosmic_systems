@@ -1,17 +1,36 @@
-//! Rocket-only audio control derivation.
+//! Rocket-only derived controls and playback for locally reviewed engine audio.
 //!
-//! This module deliberately creates no audio players or source assets. It
-//! provides bounded controls for future licensed Rocket audio at a fixed render
-//! cadence, without reusing the craft/UFO audio loop.
+//! The fixed 20 Hz control pass samples authoritative state. Playback owns one
+//! stable external engine loop per Rocket and only creates a short one-shot on
+//! ignition or staging, so audio never participates in flight authority.
 
 use super::components::{
     RocketAudioControls, RocketCameraMode, RocketFlightConditions, RocketPropulsion, ThermalState,
 };
 use super::presentation_parameters::{map_presentation_parameters, RocketPresentationInputs};
+use bevy::audio::{AudioSinkPlayback, PlaybackMode, Volume};
 use bevy::prelude::*;
 
 const AUDIO_CONTROL_UPDATE_INTERVAL_S: f32 = 0.05;
 const STAGING_AUDIO_DURATION_S: f32 = 2.0;
+const ENGINE_LOOP_VOLUME: f32 = 0.72;
+const INTERIOR_EXTERIOR_MIX: f32 = 0.35;
+const ENGINE_AUDIO_SMOOTHING_UNIT: f32 = 0.45;
+const IGNITION_TRIGGER_THRESHOLD: f32 = 0.01;
+
+/// Marks the stable engine-loop source owned by a Rocket entity.
+#[derive(Component)]
+pub(crate) struct RocketEngineAudioLoop {
+    owner: Entity,
+}
+
+/// Tracks event edges and the smoothed output gain for one Rocket's audio.
+#[derive(Component, Default)]
+pub(crate) struct RocketAudioPlaybackState {
+    was_engine_running: bool,
+    was_staging: bool,
+    engine_gain_unit: f32,
+}
 
 /// Bounded cadence state for Rocket audio-control derivation.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -27,7 +46,7 @@ impl Default for RocketAudioControlCadence {
     }
 }
 
-/// Samples Rocket presentation and authoritative state for future audio playback.
+/// Samples Rocket presentation and authoritative state for playback controls.
 ///
 /// This runs at most 20 Hz because gain and pitch controls do not need per-frame
 /// updates. It writes only presentation components and does not create playback.
@@ -90,6 +109,84 @@ pub(crate) fn update_rocket_audio_controls(
     }
 }
 
+/// Adds one muted looping source for each Rocket. This runs once per vehicle;
+/// gain and pitch changes are applied through its sink rather than respawning it.
+pub(crate) fn ensure_rocket_audio_playback(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    rockets: Query<Entity, (With<RocketAudioControls>, Without<RocketAudioPlaybackState>)>,
+) {
+    for rocket in &rockets {
+        commands
+            .entity(rocket)
+            .insert(RocketAudioPlaybackState::default());
+        commands.entity(rocket).with_children(|parent| {
+            parent.spawn((
+                RocketEngineAudioLoop { owner: rocket },
+                AudioPlayer::new(asset_server.load("sounds/rocket_engine_loop.ogg")),
+                PlaybackSettings {
+                    mode: PlaybackMode::Loop,
+                    volume: Volume::Linear(0.0),
+                    ..default()
+                },
+                Name::new("RocketExternalEngineAudio"),
+            ));
+        });
+    }
+}
+
+/// Applies the current bounded controls to existing audio sinks. The external
+/// loop is intentionally silent in vacuum; cockpit view retains only a quiet
+/// approximation of exterior sound until a modeled interior source exists.
+pub(crate) fn apply_rocket_audio_playback(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut rockets: Query<
+        (Entity, &RocketAudioControls, &mut RocketAudioPlaybackState),
+        Changed<RocketAudioControls>,
+    >,
+    mut engine_loops: Query<(&RocketEngineAudioLoop, &mut AudioSink)>,
+) {
+    for (rocket, controls, mut playback) in &mut rockets {
+        let target_gain = external_engine_gain_unit(*controls);
+        playback.engine_gain_unit +=
+            (target_gain - playback.engine_gain_unit) * ENGINE_AUDIO_SMOOTHING_UNIT;
+        let engine_running = target_gain > IGNITION_TRIGGER_THRESHOLD;
+        let staging = controls.staging_gain_unit > IGNITION_TRIGGER_THRESHOLD;
+
+        if (engine_running && !playback.was_engine_running) || (staging && !playback.was_staging) {
+            // Transitions are rare lifecycle events, unlike the steady loop.
+            commands.spawn((
+                AudioPlayer::new(asset_server.load("sounds/rocket_ignition.ogg")),
+                PlaybackSettings {
+                    mode: PlaybackMode::Despawn,
+                    volume: Volume::Linear((0.18 + 0.52 * target_gain).clamp(0.0, 0.7)),
+                    speed: (0.88 + controls.engine_pitch_ratio * 0.12).clamp(0.8, 1.2),
+                    ..default()
+                },
+                Name::new("RocketEngineTransitionAudio"),
+            ));
+        }
+        playback.was_engine_running = engine_running;
+        playback.was_staging = staging;
+
+        for (source, mut sink) in &mut engine_loops {
+            if source.owner != rocket {
+                continue;
+            }
+            sink.set_volume(Volume::Linear(
+                (ENGINE_LOOP_VOLUME * playback.engine_gain_unit).clamp(0.0, ENGINE_LOOP_VOLUME),
+            ));
+            sink.set_speed(controls.engine_pitch_ratio.clamp(0.8, 1.2));
+        }
+    }
+}
+
+fn external_engine_gain_unit(controls: RocketAudioControls) -> f32 {
+    let cockpit_mix = 1.0 - controls.interior_attenuation_unit * (1.0 - INTERIOR_EXTERIOR_MIX);
+    (controls.engine_gain_unit * controls.external_attenuation_unit * cockpit_mix).clamp(0.0, 1.0)
+}
+
 fn nearest_camera_distance_m(
     rocket_transform: &Transform,
     cameras: &Query<&Transform, With<Camera3d>>,
@@ -124,5 +221,26 @@ mod tests {
 
         propulsion.time_since_separation_s = 5.0;
         assert_eq!(staging_gain_unit(&propulsion), 0.0);
+    }
+
+    #[test]
+    fn external_engine_mix_respects_atmospheric_and_cockpit_attenuation() {
+        let exterior = RocketAudioControls {
+            engine_gain_unit: 1.0,
+            external_attenuation_unit: 1.0,
+            ..default()
+        };
+        let cockpit = RocketAudioControls {
+            interior_attenuation_unit: 1.0,
+            ..exterior
+        };
+        let vacuum = RocketAudioControls {
+            external_attenuation_unit: 0.0,
+            ..exterior
+        };
+
+        assert_eq!(external_engine_gain_unit(exterior), 1.0);
+        assert!(external_engine_gain_unit(cockpit) < external_engine_gain_unit(exterior));
+        assert_eq!(external_engine_gain_unit(vacuum), 0.0);
     }
 }

@@ -19,3 +19,10 @@ Before adding an external asset, append an entry with the asset name, direct
 source URL, exact license text/version, required attribution or notices,
 whether and how it was modified, intended repository/runtime use, and reviewer
 date. Reject the asset when any of these facts cannot be established.
+
+## Approved Rocket Audio
+
+| Asset | Direct source URL | Exact license / guidance | Attribution and notice | Modification status | Intended use / constraints | Reviewed |
+| --- | --- | --- | --- | --- | --- | --- |
+| `assets/sounds/rocket_engine_loop.ogg` | Not applicable: original project audio generated locally with FFmpeg `aevalsrc`; source equation is `0.34*tanh(3*(0.45*sin(2*PI*47*t)+0.25*sin(2*PI*94*t)+0.15*sin(2*PI*141*t)+0.12*sin(2*PI*283*t)+0.08*sin(2*PI*611*t)))`, then 28 Hz high-pass and 1.8 kHz low-pass. | Original project asset; no third-party media or license applies. | No external attribution required. | Vorbis-encoded 12-second, periodic engine-loop approximation. | Rocket-mode exterior engine loop only; its gain is attenuated by atmospheric density and observer distance. | 2026-09-11 |
+| `assets/sounds/rocket_ignition.ogg` | Not applicable: original project audio generated locally with FFmpeg `aevalsrc`; source equation is `(0.7*exp(-2.1*t)*sin(2*PI*(38+42*t)*t)+0.22*exp(-2.8*t)*sin(2*PI*127*t)+0.18*exp(-3.5*t)*sin(2*PI*431*t))`, then 24 Hz high-pass, 2.4 kHz low-pass, and endpoint fades. | Original project asset; no third-party media or license applies. | No external attribution required. | Vorbis-encoded 2.2-second transition accent. | Spawned only on Rocket ignition/staging state edges; never loops. | 2026-09-11 |

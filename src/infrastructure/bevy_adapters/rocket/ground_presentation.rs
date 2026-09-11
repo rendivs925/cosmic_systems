@@ -67,6 +67,10 @@ fn ground_effect_material(color: Color, alpha: f32) -> StandardMaterial {
     clippy::too_many_arguments,
     reason = "The adapter reads shared presentation state and writes only bounded pad children."
 )]
+#[expect(
+    clippy::type_complexity,
+    reason = "The disjoint presentation queries make Bevy access explicit and prevent Transform aliasing."
+)]
 pub(crate) fn update_rocket_ground_presentation(
     mut commands: Commands,
     quality: Res<RocketPresentationQuality>,
