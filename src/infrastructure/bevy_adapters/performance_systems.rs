@@ -1,6 +1,7 @@
 use super::performance_components::*;
 use super::ui_components::*;
 use crate::infrastructure::bevy_adapters::rocket::effects::RocketPresentationMetrics;
+use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -285,6 +286,7 @@ pub(crate) fn log_performance_metrics(
     config: Res<PerformanceMetricsConfig>,
     mut reporter: ResMut<PerformanceMetricsReporter>,
     rocket_presentation: Option<Res<RocketPresentationMetrics>>,
+    terrain_performance: Option<Res<TerrainPerformanceTelemetry>>,
 ) {
     if !reporter.report_due(*config, Instant::now()) {
         return;
@@ -315,6 +317,77 @@ pub(crate) fn log_performance_metrics(
             p95_frame_ms = summary.p95_ms,
             p99_frame_ms = summary.p99_ms,
             "Frame-time metrics"
+        );
+    }
+
+    if let Some(summary) = terrain_performance.and_then(|telemetry| telemetry.summary()) {
+        let aggregate = summary.aggregate;
+        let top = summary.top;
+        let percentiles = summary.percentiles;
+        bevy::log::info!(
+            target: "terrain_performance",
+            sample_count = summary.sample_count,
+            completion_poll_ms = aggregate.completion_poll_ms,
+            viewport_culling_ms = aggregate.viewport_culling_ms,
+            lod_selection_ms = aggregate.lod_selection_ms,
+            scheduling_ms = aggregate.scheduling_ms,
+            task_admission_ms = aggregate.task_admission_ms,
+            publication_ms = aggregate.publication_ms,
+            eviction_ms = aggregate.eviction_ms,
+            cpu_mesh_construction_ms = aggregate.cpu_mesh_construction_ms,
+            material_ms = aggregate.material_ms,
+            image_asset_creation_ms = aggregate.image_asset_creation_ms,
+            cpu_to_gpu_submission_proxy_ms = aggregate.cpu_to_gpu_submission_ms,
+            activation_ms = aggregate.activation_ms,
+            queue_start_total = aggregate.queue_start,
+            queue_end_total = aggregate.queue_end,
+            queue_peak = aggregate.queue_peak,
+            ready_received = aggregate.ready_received,
+            ready_backfilled = aggregate.ready_backfilled,
+            ready_rejected = aggregate.ready_rejected,
+            top_frame_cpu_ms = top.total_cpu_ms(),
+            top_frame_id = top.frame_id,
+            top_frame_mesh_ms = top.cpu_mesh_construction_ms,
+            top_frame_cpu_to_gpu_submission_proxy_ms = top.cpu_to_gpu_submission_ms,
+            terrain_counters = ?aggregate,
+            completion_poll_p50_ms = percentiles.completion_poll_ms.p50_ms,
+            completion_poll_p95_ms = percentiles.completion_poll_ms.p95_ms,
+            completion_poll_p99_ms = percentiles.completion_poll_ms.p99_ms,
+            viewport_culling_p50_ms = percentiles.viewport_culling_ms.p50_ms,
+            viewport_culling_p95_ms = percentiles.viewport_culling_ms.p95_ms,
+            viewport_culling_p99_ms = percentiles.viewport_culling_ms.p99_ms,
+            lod_selection_p50_ms = percentiles.lod_selection_ms.p50_ms,
+            lod_selection_p95_ms = percentiles.lod_selection_ms.p95_ms,
+            lod_selection_p99_ms = percentiles.lod_selection_ms.p99_ms,
+            scheduling_p50_ms = percentiles.scheduling_ms.p50_ms,
+            scheduling_p95_ms = percentiles.scheduling_ms.p95_ms,
+            scheduling_p99_ms = percentiles.scheduling_ms.p99_ms,
+            task_admission_p50_ms = percentiles.task_admission_ms.p50_ms,
+            task_admission_p95_ms = percentiles.task_admission_ms.p95_ms,
+            task_admission_p99_ms = percentiles.task_admission_ms.p99_ms,
+            publication_p50_ms = percentiles.publication_ms.p50_ms,
+            publication_p95_ms = percentiles.publication_ms.p95_ms,
+            publication_p99_ms = percentiles.publication_ms.p99_ms,
+            eviction_p50_ms = percentiles.eviction_ms.p50_ms,
+            eviction_p95_ms = percentiles.eviction_ms.p95_ms,
+            eviction_p99_ms = percentiles.eviction_ms.p99_ms,
+            cpu_mesh_construction_p50_ms = percentiles.cpu_mesh_construction_ms.p50_ms,
+            cpu_mesh_construction_p95_ms = percentiles.cpu_mesh_construction_ms.p95_ms,
+            cpu_mesh_construction_p99_ms = percentiles.cpu_mesh_construction_ms.p99_ms,
+            material_p50_ms = percentiles.material_ms.p50_ms,
+            material_p95_ms = percentiles.material_ms.p95_ms,
+            material_p99_ms = percentiles.material_ms.p99_ms,
+            image_asset_creation_p50_ms = percentiles.image_asset_creation_ms.p50_ms,
+            image_asset_creation_p95_ms = percentiles.image_asset_creation_ms.p95_ms,
+            image_asset_creation_p99_ms = percentiles.image_asset_creation_ms.p99_ms,
+            cpu_to_gpu_submission_proxy_p50_ms = percentiles.cpu_to_gpu_submission_ms.p50_ms,
+            cpu_to_gpu_submission_proxy_p95_ms = percentiles.cpu_to_gpu_submission_ms.p95_ms,
+            cpu_to_gpu_submission_proxy_p99_ms = percentiles.cpu_to_gpu_submission_ms.p99_ms,
+            activation_p50_ms = percentiles.activation_ms.p50_ms,
+            activation_p95_ms = percentiles.activation_ms.p95_ms,
+            activation_p99_ms = percentiles.activation_ms.p99_ms,
+            top_frame = ?top,
+            "Terrain CPU attribution; CPU-to-GPU submission is a CPU-side proxy, not GPU completion"
         );
     }
 }

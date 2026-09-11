@@ -21,10 +21,12 @@ use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchMan
 use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketMissionState, RocketPhysicsState, RocketPlanetBinding, SpentStage,
 };
 use crate::infrastructure::bevy_adapters::rocket::contact::TerrainSurfaceSampleCache;
+use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::terrain::render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
@@ -539,7 +541,7 @@ struct TerrainStreamingCadence {
     clippy::too_many_arguments,
     reason = "This streaming system coordinates independent ECS resources, events, and views."
 )]
-pub fn stream_terrain_patches(
+pub(crate) fn stream_terrain_patches(
     mut streaming: ResMut<TerrainStreamingResource>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     rocket_query: Query<
@@ -558,7 +560,11 @@ pub fn stream_terrain_patches(
     time: Res<Time>,
     render_origin: Res<RenderOrigin>,
     camera_query: Query<(&Camera, &Transform, &Projection), With<Camera3d>>,
+    performance_config: Res<PerformanceMetricsConfig>,
+    mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
 ) {
+    let instrumentation_enabled = performance_config.instrumentation_enabled();
+    terrain_performance.begin_frame(instrumentation_enabled);
     let streaming_started = Instant::now();
     // No rocket yet: keep the manager tidy and return.
     let Some((binding, rocket, mission)) = rocket_query.iter().next() else {
@@ -605,7 +611,15 @@ pub fn stream_terrain_patches(
     }
     streaming.active_planet = Some(planet_entity);
 
+    let completion_poll_started = instrumentation_enabled.then(Instant::now);
     let completed_batch = streaming.collect_completed_generation();
+    if let (Some(started), Some(record)) = (
+        completion_poll_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.completion_poll_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.tasks_completed += completed_batch.completed_tiles;
+    }
 
     let radius_m = planet.domain_planet.radius_km as f64 * 1000.0;
     let elevation_bounds = planet_terrain.source.elevation_bounds_m();
@@ -624,7 +638,14 @@ pub fn stream_terrain_patches(
     };
     let position_bf = planet_inertial_to_body_fixed(position_m, orientation);
     let dir = position_bf.normalize_or_zero();
+    let viewport_started = instrumentation_enabled.then(Instant::now);
     let viewport = terrain_viewport(&camera_query, &render_origin, orientation);
+    if let (Some(started), Some(record)) = (
+        viewport_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.viewport_culling_ms += started.elapsed().as_secs_f64() * 1_000.0;
+    }
     let prelaunch = *mission == RocketMissionState::PreLaunch;
     // The presentation camera determines the visible terrain quality. The
     // launch direction is only a fallback while no usable viewport exists.
@@ -639,6 +660,9 @@ pub fn stream_terrain_patches(
     // selection cadence. This keeps eviction order representative of actual
     // residency time during a stationary camera view.
     streaming.manager.tick();
+    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+        record.visible_patches = streaming.published.len();
+    }
     if !should_reconcile_terrain(
         &streaming.cadence,
         time.elapsed_secs_f64(),
@@ -685,6 +709,7 @@ pub fn stream_terrain_patches(
             .as_ref()
             .map_or(SCREEN_HEIGHT_PX, |viewport| viewport.viewport_height_px),
     };
+    let culling_started = instrumentation_enabled.then(Instant::now);
     let (mut errors, culling) = if let Some(viewport) = viewport.as_ref() {
         projected_errors_for_viewport(
             viewport,
@@ -706,6 +731,13 @@ pub fn stream_terrain_patches(
             TerrainCullingStats::default(),
         )
     };
+    if let (Some(started), Some(record)) = (
+        culling_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.viewport_culling_ms += started.elapsed().as_secs_f64() * 1_000.0;
+    }
+    let lod_selection_started = instrumentation_enabled.then(Instant::now);
     apply_selection_hysteresis(&mut errors, &streaming.target_leaves);
     retain_visible_detail_errors(
         &mut errors,
@@ -735,6 +767,7 @@ pub fn stream_terrain_patches(
     // published variant during a render handoff: its skirt remains a safe
     // fallback until the patch leaves publication and can be regenerated.
     let stale_stitch_variants = stale_cached_stitch_variants(&streaming, &selection.target_leaves);
+    let stale_stitch_variant_count = stale_stitch_variants.len();
     let invalidated_stitch_variants = !stale_stitch_variants.is_empty();
     for patch in stale_stitch_variants {
         streaming.manager.mark_cached(&patch);
@@ -758,11 +791,43 @@ pub fn stream_terrain_patches(
             },
         );
     }
+    let lod_splits = selection
+        .target_leaves
+        .iter()
+        .filter(|patch| {
+            patch
+                .parent()
+                .is_some_and(|parent| streaming.target_leaves.contains(&parent))
+        })
+        .count();
+    let lod_merges = streaming
+        .target_leaves
+        .iter()
+        .filter(|patch| {
+            patch
+                .parent()
+                .is_some_and(|parent| selection.target_leaves.contains(&parent))
+        })
+        .count();
     streaming.target_leaves = selection.target_leaves.clone();
+    if let (Some(started), Some(record)) = (
+        lod_selection_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.lod_selection_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.visible_candidates += culling
+            .candidates
+            .saturating_sub(culling.horizon_rejected + culling.frustum_rejected);
+        record.culled_nodes += culling.horizon_rejected + culling.frustum_rejected;
+        record.lod_evaluations += errors.len();
+        record.lod_splits += lod_splits;
+        record.lod_merges += lod_merges;
+    }
 
     // Retain the focused root as an asynchronous fallback even when the launch
     // camera is temporarily blocked by vehicle geometry. This is bounded to one
     // root and prevents a prelaunch view from losing all ground coverage.
+    let scheduling_started = instrumentation_enabled.then(Instant::now);
     let focused_root = TerrainPatch::for_direction(focus_direction, 0);
     let mut requested =
         root_requests_for_viewport(focused_root, viewport.as_ref(), radius_m, elevation_bounds);
@@ -794,7 +859,11 @@ pub fn stream_terrain_patches(
         streaming.manager.mark_cached(&patch);
     }
 
+    let mut duplicate_requests = 0;
     for patch in &requested {
+        if streaming.manager.state_of(patch) == Some(PatchState::Requested) {
+            duplicate_requests += 1;
+        }
         let size_bytes = estimated_patch_bytes(*patch, config.patch_resolution_for(*patch));
         streaming.manager.request(*patch, size_bytes);
     }
@@ -809,6 +878,16 @@ pub fn stream_terrain_patches(
         radius_m,
         elevation_bounds,
     );
+    if let (Some(started), Some(record)) = (
+        scheduling_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.scheduling_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.requests += requested.len();
+        record.duplicate_requests += duplicate_requests;
+        record.tasks_cancelled += cancellation.total();
+    }
+    let task_admission_started = instrumentation_enabled.then(Instant::now);
     let task_pool = AsyncComputeTaskPool::get();
     let generation_limit = generation_capacity(task_pool.thread_num(), streaming.inflight.len());
     let batch = generation_batch(
@@ -817,6 +896,7 @@ pub fn stream_terrain_patches(
         &streaming.generated,
         generation_limit,
     );
+    let tasks_started = batch.len();
     for patch in batch {
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
         streaming.begin_bake(
@@ -831,10 +911,18 @@ pub fn stream_terrain_patches(
             task_pool,
         );
     }
+    if let (Some(started), Some(record)) = (
+        task_admission_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.task_admission_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.tasks_started += tasks_started;
+    }
 
     // Publish only a complete ready leaf cover. Cached child meshes are never
     // spawned until every sibling can replace the parent, preventing z-fighting
     // and blank-space transitions.
+    let publication_started = instrumentation_enabled.then(Instant::now);
     let current_visible: BTreeSet<_> = selection
         .visible_leaves
         .into_iter()
@@ -856,6 +944,7 @@ pub fn stream_terrain_patches(
         .difference(&streaming.published)
         .copied()
         .collect();
+    let patches_published = arrived.len();
     for patch in arrived {
         streaming.manager.mark_visible(&patch);
         ready_events.write(TerrainPatchReady {
@@ -864,7 +953,16 @@ pub fn stream_terrain_patches(
         });
     }
     streaming.published = current_visible;
+    if let (Some(started), Some(record)) = (
+        publication_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.publication_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.visible_patches = streaming.published.len();
+        record.patches_published += patches_published;
+    }
 
+    let eviction_started = instrumentation_enabled.then(Instant::now);
     let budget = streaming.budget_bytes;
     // The complete requested chain is progressive render fallback. It may
     // temporarily exceed the cache budget but must never be evicted mid-handoff.
@@ -878,6 +976,13 @@ pub fn stream_terrain_patches(
             patch: *patch,
             planet_entity,
         });
+    }
+    if let (Some(started), Some(record)) = (
+        eviction_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.eviction_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.patches_evicted += stale_stitch_variant_count + evicted.len();
     }
 
     if let Some(metrics) = streaming.metrics(

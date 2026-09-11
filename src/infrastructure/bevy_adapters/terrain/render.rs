@@ -9,11 +9,14 @@ use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
+use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsSet;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
 };
 use crate::infrastructure::bevy_adapters::rocket::camera::update_rocket_camera_projection;
 use crate::infrastructure::bevy_adapters::rocket::components::RocketPhysicsState;
+use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
@@ -26,6 +29,7 @@ use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, Tex
 use bevy::shader::ShaderRef;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
@@ -124,6 +128,19 @@ struct PendingTerrainPatchUploads {
     needs_backfill: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerrainUploadEnqueueResult {
+    Queued,
+    Duplicate,
+    Rejected,
+}
+
+#[derive(Default)]
+struct TerrainUploadBackfill {
+    queued: usize,
+    rejected: usize,
+}
+
 impl PendingTerrainPatchUploads {
     fn retain_published_for_planet(
         &mut self,
@@ -136,18 +153,18 @@ impl PendingTerrainPatchUploads {
         self.queued = self.queue.iter().map(TerrainPatchRenderKey::from).collect();
     }
 
-    fn enqueue(&mut self, event: TerrainPatchReady) -> bool {
+    fn enqueue(&mut self, event: TerrainPatchReady) -> TerrainUploadEnqueueResult {
         let key = TerrainPatchRenderKey::from(&event);
         if self.queued.contains(&key) {
-            return false;
+            return TerrainUploadEnqueueResult::Duplicate;
         }
         if self.queue.len() >= MAX_PENDING_PATCH_UPLOADS {
             self.needs_backfill = true;
-            return false;
+            return TerrainUploadEnqueueResult::Rejected;
         }
         self.queued.insert(key);
         self.queue.push_back(event);
-        true
+        TerrainUploadEnqueueResult::Queued
     }
 
     fn pop_front(&mut self) -> Option<TerrainPatchReady> {
@@ -161,9 +178,10 @@ impl PendingTerrainPatchUploads {
         planet_entity: Entity,
         published: &std::collections::BTreeSet<TerrainPatch>,
         render_index: &TerrainPatchRenderIndex,
-    ) {
+    ) -> TerrainUploadBackfill {
+        let mut backfill = TerrainUploadBackfill::default();
         if !self.needs_backfill {
-            return;
+            return backfill;
         }
 
         self.needs_backfill = false;
@@ -176,10 +194,16 @@ impl PendingTerrainPatchUploads {
             if render_index.0.contains_key(&key) || self.queued.contains(&key) {
                 continue;
             }
-            if !self.enqueue(event) {
-                break;
+            match self.enqueue(event) {
+                TerrainUploadEnqueueResult::Queued => backfill.queued += 1,
+                TerrainUploadEnqueueResult::Duplicate => {}
+                TerrainUploadEnqueueResult::Rejected => {
+                    backfill.rejected += 1;
+                    break;
+                }
             }
         }
+        backfill
     }
 }
 
@@ -264,6 +288,7 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainRenderConfig>()
             .init_resource::<TerrainRenderAssets>()
             .init_resource::<PendingTerrainPatchUploads>()
+            .init_resource::<TerrainPerformanceTelemetry>()
             .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
@@ -292,11 +317,20 @@ impl Plugin for TerrainRenderPlugin {
                     spawn_patch_mesh_system,
                     hide_cached_patch_mesh_system,
                     despawn_patch_mesh_system,
+                    finish_terrain_performance_frame,
                 )
                     .chain()
-                    .after(stream_terrain_patches),
+                    .after(stream_terrain_patches)
+                    .before(PerformanceMetricsSet::Report),
             );
     }
+}
+
+fn finish_terrain_performance_frame(
+    performance_config: Res<PerformanceMetricsConfig>,
+    mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
+) {
+    terrain_performance.finish_frame(performance_config.instrumentation_enabled());
 }
 
 /// Load the catalog's geographic Earth albedo once. Terrain meshes retain UV0
@@ -361,13 +395,27 @@ fn spawn_patch_mesh_system(
     render_origin: Res<RenderOrigin>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
+    performance_config: Res<PerformanceMetricsConfig>,
+    mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
 ) {
+    let instrumentation_enabled = performance_config.instrumentation_enabled();
     let active_planet = streaming.active_planet();
+    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+        record.queue_start = pending_uploads.queue.len();
+        record.queue_peak = record.queue_start;
+    }
     pending_uploads.retain_published_for_planet(active_planet, &streaming.published);
     for event in events.read().cloned() {
-        if active_planet == Some(event.planet_entity) && streaming.published.contains(&event.patch)
+        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+            record.ready_received += 1;
+        }
+        if active_planet == Some(event.planet_entity)
+            && streaming.published.contains(&event.patch)
+            && pending_uploads.enqueue(event) == TerrainUploadEnqueueResult::Rejected
         {
-            pending_uploads.enqueue(event);
+            if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+                record.ready_rejected += 1;
+            }
         }
     }
     // A ready-event burst can exceed the bounded queue. Keep the recovery flag
@@ -377,7 +425,15 @@ fn spawn_patch_mesh_system(
         let Some(planet_entity) = active_planet else {
             return;
         };
-        pending_uploads.backfill_published(planet_entity, &streaming.published, &render_index);
+        let backfill =
+            pending_uploads.backfill_published(planet_entity, &streaming.published, &render_index);
+        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+            record.ready_backfilled += backfill.queued;
+            record.ready_rejected += backfill.rejected;
+        }
+    }
+    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+        record.queue_peak = record.queue_peak.max(pending_uploads.queue.len());
     }
     for _ in 0..MAX_PATCH_UPLOADS_PER_FRAME {
         let Some(event) = pending_uploads.pop_front() else {
@@ -418,13 +474,23 @@ fn spawn_patch_mesh_system(
         // small near the camera (avoids precision loss at ~6371 km magnitudes
         // that degrades the sphere into a flat plane with broken triangles).
         let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+        let mesh_construction_started = instrumentation_enabled.then(Instant::now);
         let mesh = patch_geometry_to_mesh(
             geometry,
             &render_origin.origin,
             body_to_inertial,
             &surface.vertex_colors,
         );
+        if let (Some(started), Some(record)) = (
+            mesh_construction_started,
+            terrain_performance.current_mut(instrumentation_enabled),
+        ) {
+            record.cpu_mesh_construction_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        }
+        let asset_submission_started = instrumentation_enabled.then(Instant::now);
         let mesh_handle = meshes.add(mesh);
+        let image_asset_creation_started = instrumentation_enabled.then(Instant::now);
+        let local_image_asset_count = usize::from(surface.local_surfaces.is_some()) * 2;
 
         let (local_albedo, local_normal, local_surface_handles, local_detail_weight) =
             if let Some((albedo, normal)) = surface.local_surfaces {
@@ -436,6 +502,13 @@ fn spawn_patch_mesh_system(
                     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
                 (albedo, normal, None, 0.0)
             };
+        if let (Some(started), Some(record)) = (
+            image_asset_creation_started,
+            terrain_performance.current_mut(instrumentation_enabled),
+        ) {
+            record.image_asset_creation_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        }
+        let material_started = instrumentation_enabled.then(Instant::now);
         let base_material = patch_material(surface.roughness, surface.metallic);
         let global_albedo = render_assets.global_earth_albedo.clone().unwrap_or_else(|| {
             bevy::log::warn!("Earth global albedo is unavailable; terrain will use source-derived color only");
@@ -450,12 +523,21 @@ fn spawn_patch_mesh_system(
                 global_albedo,
             },
         });
+        if let (Some(started), Some(record)) = (
+            material_started,
+            terrain_performance.current_mut(instrumentation_enabled),
+        ) {
+            record.material_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        }
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
         let transform = Transform::IDENTITY;
 
         let vegetation = surface.vegetation;
+        let vegetation_mesh_asset_count = usize::from(vegetation.is_some());
+        let vegetation_material_asset_count =
+            usize::from(vegetation.is_some() && render_assets.vegetation_material.is_none());
         let vegetation_mesh_handle = vegetation
             .as_ref()
             .map(|(mesh, _)| meshes.add(mesh.clone()));
@@ -475,6 +557,15 @@ fn spawn_patch_mesh_system(
                 })
                 .clone()
         });
+        if let (Some(started), Some(record)) = (
+            asset_submission_started,
+            terrain_performance.current_mut(instrumentation_enabled),
+        ) {
+            record.cpu_to_gpu_submission_ms += started.elapsed().as_secs_f64() * 1_000.0;
+            record.mesh_assets_created += 1 + vegetation_mesh_asset_count;
+            record.material_assets_created += 1 + vegetation_material_asset_count;
+            record.image_assets_created += local_image_asset_count;
+        }
         // A departing parent remains the visible fallback until a complete
         // descendant cover has reached the renderer. Spawning each replacement
         // hidden avoids depth fighting while the upload budget spreads that
@@ -490,6 +581,7 @@ fn spawn_patch_mesh_system(
             Visibility::Visible
         };
 
+        let activation_started = instrumentation_enabled.then(Instant::now);
         let entity = commands
             .spawn((
                 Mesh3d(mesh_handle.clone()),
@@ -539,6 +631,17 @@ fn spawn_patch_mesh_system(
                 ));
             });
         }
+        if let (Some(started), Some(record)) = (
+            activation_started,
+            terrain_performance.current_mut(instrumentation_enabled),
+        ) {
+            record.activation_ms += started.elapsed().as_secs_f64() * 1_000.0;
+            record.patches_activated += 1;
+        }
+    }
+    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+        record.queue_end = pending_uploads.queue.len();
+        record.queue_peak = record.queue_peak.max(record.queue_end);
     }
 }
 
@@ -1433,10 +1536,13 @@ mod tests {
         ];
         let mut pending = PendingTerrainPatchUploads::default();
         for patch in patches {
-            assert!(pending.enqueue(TerrainPatchReady {
-                patch,
-                planet_entity,
-            }));
+            assert_eq!(
+                pending.enqueue(TerrainPatchReady {
+                    patch,
+                    planet_entity,
+                }),
+                TerrainUploadEnqueueResult::Queued
+            );
         }
 
         assert_eq!(pending.pop_front().unwrap().patch, patches[0]);
@@ -1473,27 +1579,39 @@ mod tests {
             tile_y: 0,
         };
 
-        assert!(pending.enqueue(TerrainPatchReady {
-            patch: first,
-            planet_entity,
-        }));
-        assert!(!pending.enqueue(TerrainPatchReady {
-            patch: first,
-            planet_entity,
-        }));
-        for tile_x in 1..MAX_PENDING_PATCH_UPLOADS as u32 {
-            assert!(pending.enqueue(TerrainPatchReady {
-                patch: TerrainPatch { tile_x, ..first },
+        assert_eq!(
+            pending.enqueue(TerrainPatchReady {
+                patch: first,
                 planet_entity,
-            }));
+            }),
+            TerrainUploadEnqueueResult::Queued
+        );
+        assert_eq!(
+            pending.enqueue(TerrainPatchReady {
+                patch: first,
+                planet_entity,
+            }),
+            TerrainUploadEnqueueResult::Duplicate
+        );
+        for tile_x in 1..MAX_PENDING_PATCH_UPLOADS as u32 {
+            assert_eq!(
+                pending.enqueue(TerrainPatchReady {
+                    patch: TerrainPatch { tile_x, ..first },
+                    planet_entity,
+                }),
+                TerrainUploadEnqueueResult::Queued
+            );
         }
-        assert!(!pending.enqueue(TerrainPatchReady {
-            patch: TerrainPatch {
-                tile_x: MAX_PENDING_PATCH_UPLOADS as u32,
-                ..first
-            },
-            planet_entity,
-        }));
+        assert_eq!(
+            pending.enqueue(TerrainPatchReady {
+                patch: TerrainPatch {
+                    tile_x: MAX_PENDING_PATCH_UPLOADS as u32,
+                    ..first
+                },
+                planet_entity,
+            }),
+            TerrainUploadEnqueueResult::Rejected
+        );
         assert_eq!(pending.queue.len(), MAX_PENDING_PATCH_UPLOADS);
         assert!(pending.needs_backfill);
 

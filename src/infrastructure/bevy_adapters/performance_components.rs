@@ -36,6 +36,10 @@ impl PerformanceMetricsConfig {
             PerformanceMetricsReporting::Enabled => Some(PERFORMANCE_METRICS_REPORT_INTERVAL),
         }
     }
+
+    pub(crate) fn instrumentation_enabled(self) -> bool {
+        self.reporting == PerformanceMetricsReporting::Enabled
+    }
 }
 
 /// A typed summary of the bounded frame-time history.
