@@ -36,3 +36,12 @@
 - [x] 6.1 Extend cadence-limited presentation telemetry with actionable effect counts and update cost, preserving existing shared performance metrics ownership.
 - [x] 6.2 Run formatting, native DEM check/test/release build, strict OpenSpec validation, and all three bounded mode startup checks. Clippy was not rerun per user instruction.
 - [ ] 6.3 Capture native release Rocket measurements for prelaunch, ignition/liftoff, ascent, thin atmosphere, staging, and render-origin/camera stress; report p50/p95/p99 and any unmeasured limitations.
+
+  Partial native-release evidence, 2026-09-11, default quality, `--features dem`,
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 600-frame windows:
+  prelaunch reported p50/p95/p99 frame times of 9.56/17.81/21.73 ms with
+  0 visible effects; after Space-launched ascent it reported
+  17.12/23.17/26.06 ms with 27 visible effects and 0.069 ms effect-update cost.
+  GPU timings, terrain generation/upload costs, queue depths, thin-atmosphere,
+  staging, and render-origin/camera-stress measurements are still unmeasured,
+  so this task remains incomplete.
