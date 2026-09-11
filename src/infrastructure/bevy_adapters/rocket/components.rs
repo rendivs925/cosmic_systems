@@ -65,6 +65,49 @@ impl RocketRenderState {
     }
 }
 
+/// Render-only smoothed controls for Rocket effects. A future Update system
+/// may write these from pure presentation mappings; they never affect flight.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct RocketPresentationSmoothing {
+    pub plume_intensity_unit: f32,
+    pub ignition_intensity_unit: f32,
+    pub ground_effect_intensity_unit: f32,
+    pub shock_intensity_unit: f32,
+    pub heating_intensity_unit: f32,
+    pub external_audio_attenuation_unit: f32,
+}
+
+/// Bounded Rocket audio controls derived from authoritative state for a future
+/// licensed playback adapter. This component neither owns an audio source nor
+/// affects simulation state.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+pub struct RocketAudioControls {
+    pub engine_gain_unit: f32,
+    pub engine_pitch_ratio: f32,
+    pub ground_rumble_gain_unit: f32,
+    pub staging_gain_unit: f32,
+    /// One in cockpit view and zero for exterior camera views.
+    pub interior_attenuation_unit: f32,
+    pub external_attenuation_unit: f32,
+}
+
+/// Rocket-mode presentation quality limits. This resource bounds future
+/// render-only effect work without storing or duplicating simulation state.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct RocketPresentationQuality {
+    pub max_effect_distance_m: f32,
+    pub minimum_screen_coverage_unit: f32,
+}
+
+impl Default for RocketPresentationQuality {
+    fn default() -> Self {
+        Self {
+            max_effect_distance_m: 20_000.0,
+            minimum_screen_coverage_unit: 0.001,
+        }
+    }
+}
+
 /// Exterior geometry of the currently attached vehicle assembly. It starts as
 /// the full launch stack and changes atomically at stage separation so every
 /// aerodynamic, inertia, recovery, and contact consumer sees the same body.
@@ -368,6 +411,16 @@ impl RocketPropulsion {
             return None;
         }
         Some((stage, throttle))
+    }
+
+    /// Returns whether any currently attached engine is eligible and running.
+    /// Presentation consumers share propulsion's live inventory checks instead
+    /// of inferring engine state from visual children.
+    pub(crate) fn has_running_engines(&self) -> bool {
+        self.running_core_stage().is_some()
+            || self.attached_boosters().is_some_and(|(boosters, _)| {
+                (0..boosters.count()).any(|index| self.booster_is_ignitable(index))
+            })
     }
 
     /// Stores the post-burn core inventory while preserving the configured

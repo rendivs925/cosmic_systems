@@ -1,5 +1,6 @@
 use super::performance_components::*;
 use super::ui_components::*;
+use crate::infrastructure::bevy_adapters::rocket::effects::RocketPresentationMetrics;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -283,6 +284,7 @@ pub(crate) fn log_performance_metrics(
     performance_stats: Res<PerformanceStats>,
     config: Res<PerformanceMetricsConfig>,
     mut reporter: ResMut<PerformanceMetricsReporter>,
+    rocket_presentation: Option<Res<RocketPresentationMetrics>>,
 ) {
     if !reporter.report_due(*config, Instant::now()) {
         return;
@@ -291,14 +293,30 @@ pub(crate) fn log_performance_metrics(
         return;
     };
 
-    bevy::log::info!(
-        target: "performance",
-        sample_count = summary.sample_count,
-        p50_frame_ms = summary.p50_ms,
-        p95_frame_ms = summary.p95_ms,
-        p99_frame_ms = summary.p99_ms,
-        "Frame-time metrics"
-    );
+    if let Some(rocket_presentation) = rocket_presentation {
+        bevy::log::info!(
+            target: "performance",
+            sample_count = summary.sample_count,
+            p50_frame_ms = summary.p50_ms,
+            p95_frame_ms = summary.p95_ms,
+            p99_frame_ms = summary.p99_ms,
+            rocket_effects_total = rocket_presentation.effect_count,
+            rocket_effects_visible = rocket_presentation.visible_effect_count,
+            rocket_engine_effect_update_ms = rocket_presentation.engine_effect_update_ms,
+            rocket_ground_effect_update_ms = rocket_presentation.ground_effect_update_ms,
+            rocket_effect_update_ms = rocket_presentation.total_update_ms(),
+            "Frame-time and Rocket presentation metrics"
+        );
+    } else {
+        bevy::log::info!(
+            target: "performance",
+            sample_count = summary.sample_count,
+            p50_frame_ms = summary.p50_ms,
+            p95_frame_ms = summary.p95_ms,
+            p99_frame_ms = summary.p99_ms,
+            "Frame-time metrics"
+        );
+    }
 }
 
 #[cfg(test)]

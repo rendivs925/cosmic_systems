@@ -142,6 +142,47 @@ const SURFACE_TEX_RES: u32 = 128;
 /// Blend a restrained amount of source micro-normal into the rendered mesh
 /// normal. Macro slopes remain in mesh geometry; this map only adds grain.
 const NORMAL_DETAIL_WEIGHT: f64 = 0.2;
+const PAPUA_LATITUDE_MIN_DEG: f64 = -10.0;
+const PAPUA_LATITUDE_MAX_DEG: f64 = 2.0;
+const PAPUA_LONGITUDE_MIN_DEG: f64 = 128.0;
+const PAPUA_LONGITUDE_MAX_DEG: f64 = 146.0;
+const PAPUA_PROFILE_EDGE_DEG: f64 = 1.5;
+
+/// Deterministic visual-only profile derived from the existing terrain source
+/// samples. It is intentionally a broad regional approximation, not land-cover
+/// data, and does not affect terrain geometry, collision, or streaming.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct PapuaTropicalProfile {
+    tropical_lowland_unit: f64,
+    wet_vegetation_unit: f64,
+}
+
+fn papua_tropical_profile(
+    latitude_deg: f64,
+    longitude_deg: f64,
+    height_m: f64,
+    moisture_unit: f64,
+    slope_deg: f64,
+) -> PapuaTropicalProfile {
+    let regional = interval_weight(latitude_deg, PAPUA_LATITUDE_MIN_DEG, PAPUA_LATITUDE_MAX_DEG)
+        * interval_weight(
+            longitude_deg,
+            PAPUA_LONGITUDE_MIN_DEG,
+            PAPUA_LONGITUDE_MAX_DEG,
+        );
+    let lowland = 1.0 - (height_m.max(0.0) / 1_400.0).clamp(0.0, 1.0);
+    let gentle_ground = 1.0 - (slope_deg.max(0.0) / 38.0).clamp(0.0, 1.0);
+    let wet = ((moisture_unit.clamp(0.0, 1.0) - 0.32) / 0.68).clamp(0.0, 1.0);
+    PapuaTropicalProfile {
+        tropical_lowland_unit: regional * lowland,
+        wet_vegetation_unit: regional * lowland * gentle_ground * wet,
+    }
+}
+
+fn interval_weight(value: f64, min: f64, max: f64) -> f64 {
+    let inside = (value - min).min(max - value);
+    (inside / PAPUA_PROFILE_EDGE_DEG).clamp(0.0, 1.0)
+}
 
 /// Deterministic pseudo-noise used only to vary scatter silhouettes. Terrain
 /// color comes exclusively from the shared `surface_appearance` authority.
@@ -208,7 +249,8 @@ pub fn build_patch_surfaces(
                 source.river_strength(la, lo),
             );
 
-            let [r, g, b, _] = terrain_albedo(appearance);
+            let profile = papua_tropical_profile(la, lo, hi, moisture, source_slope_deg);
+            let [r, g, b, _] = terrain_albedo(appearance, profile);
             albedo.extend_from_slice(&[
                 (r * 255.0) as u8,
                 (g * 255.0) as u8,
@@ -275,11 +317,16 @@ pub fn build_patch_surfaces(
 /// for the terrain's complete source-derived albedo map.
 fn terrain_albedo(
     appearance: crate::domain::services::terrain_source::SurfaceAppearance,
+    profile: PapuaTropicalProfile,
 ) -> [f32; 4] {
+    // Papua's humid lowlands bias existing source-derived material toward wet,
+    // deeply vegetated soil. This leaves slope/river/rock classification intact.
+    let wet_soil = [0.055, 0.18, 0.045];
+    let blend = profile.wet_vegetation_unit as f32 * 0.38;
     [
-        appearance.albedo[0].clamp(0.0, 1.0),
-        appearance.albedo[1].clamp(0.0, 1.0),
-        appearance.albedo[2].clamp(0.0, 1.0),
+        (appearance.albedo[0] * (1.0 - blend) + wet_soil[0] * blend).clamp(0.0, 1.0),
+        (appearance.albedo[1] * (1.0 - blend) + wet_soil[1] * blend).clamp(0.0, 1.0),
+        (appearance.albedo[2] * (1.0 - blend) + wet_soil[2] * blend).clamp(0.0, 1.0),
         1.0,
     ]
 }
@@ -574,6 +621,10 @@ pub fn build_vegetation_mesh(
         {
             continue;
         }
+        let profile = papua_tropical_profile(lat, lon, h, source.moisture(lat, lon), local_slope);
+        if profile.tropical_lowland_unit > 0.0 && profile.wet_vegetation_unit < 0.1 {
+            continue;
+        }
         let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
         let up = surface_normal(source, lat, lon, radius_m);
         // Vary tree size a little.
@@ -585,10 +636,11 @@ pub fn build_vegetation_mesh(
         let base = flight;
         let foliage_tint = 0.8 + hash01(k as u64, patch.tile_y as u64, patch.tile_x as u64) * 0.3;
         let trunk_color = [0.16f32, 0.07f32, 0.025f32];
+        let tropical = profile.wet_vegetation_unit as f32;
         let foliage_color = [
-            0.035f32 * foliage_tint as f32,
-            0.19f32 * foliage_tint as f32,
-            0.022f32 * foliage_tint as f32,
+            (0.035 + tropical * 0.01) * foliage_tint as f32,
+            (0.19 + tropical * 0.09) * foliage_tint as f32,
+            (0.022 + tropical * 0.025) * foliage_tint as f32,
         ];
         accum.push_prism(
             base,
@@ -642,10 +694,15 @@ pub fn build_vegetation_mesh(
         {
             continue;
         }
+        let profile = papua_tropical_profile(lat, lon, h, source.moisture(lat, lon), slope_deg);
         let base = dir * (radius_m + h) - *mesh_origin_body_fixed;
         let up = surface_normal(source, lat, lon, radius_m);
         let scale = 0.55 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.65;
-        let grass_color = [0.045, 0.24, 0.025];
+        let grass_color = [
+            0.045 + profile.wet_vegetation_unit as f32 * 0.01,
+            0.24 + profile.wet_vegetation_unit as f32 * 0.08,
+            0.025 + profile.wet_vegetation_unit as f32 * 0.02,
+        ];
         accum.push_grass_clump(
             base,
             up,
@@ -753,14 +810,31 @@ mod tests {
 
     #[test]
     fn terrain_albedo_preserves_source_biome_color_in_unorm_range() {
-        let grass = terrain_albedo(surface_appearance(300.0, 0.6, 0.5, 5.0));
-        let rock = terrain_albedo(surface_appearance(1_500.0, 0.4, 0.5, 60.0));
+        let grass = terrain_albedo(surface_appearance(300.0, 0.6, 0.5, 5.0), Default::default());
+        let rock = terrain_albedo(
+            surface_appearance(1_500.0, 0.4, 0.5, 60.0),
+            Default::default(),
+        );
 
         for channel in grass.into_iter().chain(rock) {
             assert!((0.0..=1.0).contains(&channel));
         }
         assert!(grass[1] > grass[0]);
         assert!(rock[0] > grass[0]);
+    }
+
+    #[test]
+    fn papua_tropical_profile_is_deterministic_and_source_input_bounded() {
+        let coastal_lowland = papua_tropical_profile(-7.2, 139.4, 20.0, 0.9, 4.0);
+        let repeat = papua_tropical_profile(-7.2, 139.4, 20.0, 0.9, 4.0);
+        let highland = papua_tropical_profile(-7.2, 139.4, 2_000.0, 0.9, 4.0);
+        let outside = papua_tropical_profile(35.0, 139.4, 20.0, 0.9, 4.0);
+
+        assert_eq!(coastal_lowland, repeat);
+        assert!((0.0..=1.0).contains(&coastal_lowland.tropical_lowland_unit));
+        assert!((0.0..=1.0).contains(&coastal_lowland.wet_vegetation_unit));
+        assert!(coastal_lowland.wet_vegetation_unit > highland.wet_vegetation_unit);
+        assert_eq!(outside, Default::default());
     }
 
     #[test]

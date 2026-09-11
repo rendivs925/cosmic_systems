@@ -55,7 +55,7 @@ use crate::infrastructure::bevy_adapters::orbit_systems::{
     update_planet_reflections,
 };
 use crate::infrastructure::bevy_adapters::performance_components::{
-    PerformanceMetricsConfig, PerformanceMetricsReporter, PerformanceStats,
+    PerformanceMetricsConfig, PerformanceMetricsReporter, PerformanceMetricsSet, PerformanceStats,
 };
 use crate::infrastructure::bevy_adapters::performance_systems::{
     handle_video_recording, log_performance_metrics, request_screenshot_input,
@@ -65,12 +65,15 @@ use crate::infrastructure::bevy_adapters::planet_systems::{
     preserve_sun_disc_at_overview_distances, rebase_solar_presentation, update_orbit_positions,
     update_planet_positions, update_planet_rotations,
 };
+use crate::infrastructure::bevy_adapters::rocket::audio::{
+    update_rocket_audio_controls, RocketAudioControlCadence,
+};
 use crate::infrastructure::bevy_adapters::rocket::camera::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    RocketCameraConfig, RocketCameraMode, RocketMode, RocketTelemetry,
+    RocketCameraConfig, RocketCameraMode, RocketMode, RocketPresentationQuality, RocketTelemetry,
 };
 use crate::infrastructure::bevy_adapters::rocket::contact::{
     advance_topple, deploy_landing_legs, resolve_ground_contact, TerrainSurfaceSampleCache,
@@ -79,6 +82,10 @@ use crate::infrastructure::bevy_adapters::rocket::control::{actuation_system, co
 use crate::infrastructure::bevy_adapters::rocket::debug::RocketDebugPlugin;
 use crate::infrastructure::bevy_adapters::rocket::dynamics::{
     accumulate_forces, aerodynamic_forces, aerodynamic_torque, integrate_6dof,
+};
+use crate::infrastructure::bevy_adapters::rocket::effects::{
+    capture_rocket_presentation_metrics, update_rocket_engine_effects, RocketEngineEffectAssets,
+    RocketPresentationMetrics,
 };
 use crate::infrastructure::bevy_adapters::rocket::entry::{
     compute_ablation, compute_heating, compute_parachute_forces, compute_plasma_blackout,
@@ -94,6 +101,9 @@ use crate::infrastructure::bevy_adapters::rocket::events::{
 use crate::infrastructure::bevy_adapters::rocket::flight_conditions::refresh_flight_conditions;
 use crate::infrastructure::bevy_adapters::rocket::gravity_orbit::{
     update_orbital_elements, update_rocket_gravity, ActiveForceModel,
+};
+use crate::infrastructure::bevy_adapters::rocket::ground_presentation::{
+    update_rocket_ground_presentation, RocketGroundPresentationAssets,
 };
 use crate::infrastructure::bevy_adapters::rocket::guidance::{
     guidance_system, update_drone_ship_landing_targets,
@@ -273,7 +283,9 @@ impl Plugin for SharedSimulationPlugin {
         // Performance metrics feed the shared UI in every simulation mode.
         app.add_systems(
             Update,
-            (update_performance_stats, log_performance_metrics).chain(),
+            (update_performance_stats, log_performance_metrics)
+                .chain()
+                .in_set(PerformanceMetricsSet::Report),
         );
 
         // Screenshot and recording
@@ -427,6 +439,11 @@ impl Plugin for RocketModePlugin {
 
         // Rocket telemetry resource for HUD and flight log.
         app.init_resource::<RocketTelemetry>();
+        app.init_resource::<RocketPresentationQuality>();
+        app.init_resource::<RocketAudioControlCadence>();
+        app.init_resource::<RocketEngineEffectAssets>();
+        app.init_resource::<RocketGroundPresentationAssets>();
+        app.init_resource::<RocketPresentationMetrics>();
         app.init_resource::<ActiveForceModel>();
         app.init_resource::<RocketEventFeed>();
         app.init_resource::<ReplaySnapshotStream>();
@@ -484,7 +501,13 @@ impl Plugin for RocketModePlugin {
                 interpolate_render_transform
                     .after(recenter_render_origin)
                     .after(handle_rocket_launch_input),
+                update_rocket_engine_effects.after(interpolate_render_transform),
+                update_rocket_audio_controls.after(update_rocket_engine_effects),
                 sync_launch_pad_presentation.after(recenter_render_origin),
+                update_rocket_ground_presentation.after(sync_launch_pad_presentation),
+                capture_rocket_presentation_metrics
+                    .after(update_rocket_ground_presentation)
+                    .before(PerformanceMetricsSet::Report),
                 update_rocket_camera,
                 update_rocket_camera_projection,
             )

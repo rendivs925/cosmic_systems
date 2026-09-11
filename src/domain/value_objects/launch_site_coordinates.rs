@@ -109,9 +109,19 @@ mod tests {
             Err(LaunchSiteCoordinatesError::NonFiniteAltitude)
         ));
     }
+
+    #[test]
+    fn papua_coastal_lowland_presentation_site_has_stable_coordinates() {
+        let site = predefined_sites::papua_indonesia_coastal_lowland();
+
+        assert_eq!(site.planet_id, CelestialBodyId::earth());
+        assert_eq!(site.latitude_deg, -8.0);
+        assert_eq!(site.longitude_deg, 139.5);
+        assert_eq!(site.altitude_m, 0.0);
+    }
 }
 
-/// Predefined launch site coordinates for common launch facilities
+/// Predefined launch-site coordinate presets.
 pub mod predefined_sites {
     use super::LaunchSiteCoordinates;
     use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -149,6 +159,16 @@ pub mod predefined_sites {
             5.2360,   // Latitude
             -52.7750, // Longitude
             10.0,     // Altitude above sea level (meters)
+        )
+    }
+
+    /// Remote South Papua coastal-lowland presentation site, not a real spaceport.
+    pub fn papua_indonesia_coastal_lowland() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(
+            CelestialBodyId::earth(),
+            -8.0,  // Latitude
+            139.5, // Longitude
+            0.0,   // Terrain elevation is sampled at startup.
         )
     }
 }

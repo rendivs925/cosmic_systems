@@ -78,10 +78,10 @@ pub(crate) fn spawn_rockets(
     // The launch site is defined in Earth body-fixed geodetic coordinates, then
     // converted once into the authoritative planet-centered inertial frame.
     // Collision and terrain convert back through the same reference-frame API.
-    let ksc = predefined_sites::kennedy_space_center();
-    let earth = PlanetFactory::create_by_id(&ksc.planet_id).unwrap();
+    let papua = predefined_sites::papua_indonesia_coastal_lowland();
+    let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
     let earth_radius_m = earth.radius_km as f64 * 1000.0;
-    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&ksc, &earth);
+    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&papua, &earth);
     let terrain_sample = sample_surface(
         terrain_source,
         terrain_latitude_deg,
@@ -90,9 +90,9 @@ pub(crate) fn spawn_rockets(
     );
     let terrain_elevation_m = terrain_sample.height_m;
     let launch_site = LaunchSiteCoordinates::new(
-        ksc.planet_id.clone(),
-        ksc.latitude_deg,
-        ksc.longitude_deg,
+        papua.planet_id.clone(),
+        papua.latitude_deg,
+        papua.longitude_deg,
         terrain_elevation_m as f32,
     );
     // Terrain elevations are radial offsets from the catalog mean radius. Use
@@ -105,10 +105,10 @@ pub(crate) fn spawn_rockets(
     // northward heading. This is the held physical prelaunch attitude, not a
     // presentation rotation.
     let launch_up = body_to_inertial * terrain_sample.normal;
-    let (_, pad_north_bf, _) = enu_basis(ksc.latitude_deg, ksc.longitude_deg);
+    let (_, pad_north_bf, _) = enu_basis(papua.latitude_deg, papua.longitude_deg);
     let launch_attitude =
         orientation_from_up_and_heading(launch_up, body_to_inertial * pad_north_bf)
-            .expect("Kennedy Space Center has a finite nonpolar pad heading");
+            .expect("Papua coastal-lowland presentation site has a finite nonpolar pad heading");
 
     // The fairing rides as structure until jettison, so it joins the dry
     // input of the geometric inertia model (documented approximation).
@@ -245,6 +245,24 @@ fn spawn_procedural_launch_pad(
         reflectance: 0.5,
         ..default()
     });
+    let concrete = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.18, 0.19, 0.18),
+        perceptual_roughness: 0.88,
+        ..default()
+    });
+    let water = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.62, 0.74, 0.78, 0.55),
+        metallic: 0.0,
+        perceptual_roughness: 0.28,
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+    let warning_light = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.17, 0.03),
+        emissive: Color::srgb(1.0, 0.06, 0.01).to_linear() * 5.0,
+        perceptual_roughness: 0.35,
+        ..default()
+    });
     let tower_height_m = rocket_height_m * 0.82;
     let tower_offset_m = rocket_diameter_m * 0.5 + 10.0;
     let root = commands
@@ -260,10 +278,32 @@ fn spawn_procedural_launch_pad(
         // visible while coarse streamed tiles refine around the meter-scale pad.
         parent.spawn((
             Mesh3d(meshes.add(Cuboid::new(36.0, 0.2, 36.0))),
-            MeshMaterial3d(steel.clone()),
+            MeshMaterial3d(concrete.clone()),
             Transform::from_xyz(0.0, -0.1, 0.0),
             Name::new("LaunchPadDeck"),
         ));
+        // These are local procedural facility details only. The terrain and pad
+        // anchor remain the sole source of surface placement.
+        parent.spawn((
+            Mesh3d(meshes.add(Cuboid::new(9.0, 5.0, 16.0))),
+            MeshMaterial3d(concrete.clone()),
+            Transform::from_xyz(0.0, -2.55, 0.0),
+            Name::new("LaunchPadFlameTrench"),
+        ));
+        parent.spawn((
+            Mesh3d(meshes.add(Cuboid::new(10.0, 2.5, 1.0))),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_xyz(0.0, -1.15, -7.0),
+            Name::new("LaunchPadFlameDeflector"),
+        ));
+        for x in [-11.0_f32, 11.0] {
+            parent.spawn((
+                Mesh3d(meshes.add(Cuboid::new(0.35, 1.4, 26.0))),
+                MeshMaterial3d(water.clone()),
+                Transform::from_xyz(x, 0.45, 0.0),
+                Name::new("LaunchPadDelugeRail"),
+            ));
+        }
         for x in [-4.0_f32, 4.0] {
             for z in [-4.0_f32, 4.0] {
                 parent.spawn((
@@ -279,6 +319,26 @@ fn spawn_procedural_launch_pad(
                 Mesh3d(meshes.add(Cuboid::new(9.0, 0.35, 9.0))),
                 MeshMaterial3d(steel.clone()),
                 Transform::from_xyz(tower_offset_m, y, 0.0),
+            ));
+        }
+        for level in [
+            tower_height_m * 0.25,
+            tower_height_m * 0.55,
+            tower_height_m * 0.85,
+        ] {
+            parent.spawn((
+                Mesh3d(meshes.add(Cuboid::new(12.0, 0.22, 0.22))),
+                MeshMaterial3d(steel.clone()),
+                Transform::from_xyz(tower_offset_m, level, 0.0),
+                Name::new("LaunchPadTowerBrace"),
+            ));
+        }
+        for z in [-4.0_f32, 4.0] {
+            parent.spawn((
+                Mesh3d(meshes.add(Sphere::new(0.28))),
+                MeshMaterial3d(warning_light.clone()),
+                Transform::from_xyz(tower_offset_m + 4.4, tower_height_m + 0.4, z),
+                Name::new("LaunchPadTowerBeacon"),
             ));
         }
     });

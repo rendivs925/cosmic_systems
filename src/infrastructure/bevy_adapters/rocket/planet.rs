@@ -54,6 +54,11 @@ pub struct RocketBoundPlanetSurface {
     body: CelestialBodyId,
 }
 
+/// Marks the Rocket-mode cloud shell so atmospheric presentation can fade its
+/// visual contribution without changing ephemeris placement or cloud geometry.
+#[derive(Component, Debug)]
+pub struct RocketBoundPlanetCloud;
+
 /// Component marking a moon entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
 pub struct RocketMoon {
@@ -202,6 +207,7 @@ fn spawn_rocket_bound_planet_surface(
                     )),
                     MeshMaterial3d(cloud_material),
                     Transform::default(),
+                    RocketBoundPlanetCloud,
                     Name::new(format!("RocketFarField{}Clouds", planet.name)),
                 ));
             });

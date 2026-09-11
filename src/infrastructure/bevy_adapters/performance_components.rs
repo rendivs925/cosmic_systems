@@ -90,6 +90,12 @@ pub(crate) struct PerformanceMetricsReporter {
     last_report_at: Option<Instant>,
 }
 
+/// Ordering point for shared, cadence-limited performance reporting.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PerformanceMetricsSet {
+    Report,
+}
+
 impl PerformanceMetricsReporter {
     pub(crate) fn report_due(&mut self, config: PerformanceMetricsConfig, now: Instant) -> bool {
         let Some(report_interval) = config.report_interval() else {
