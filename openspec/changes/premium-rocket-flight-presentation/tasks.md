@@ -45,3 +45,9 @@
   GPU timings, terrain generation/upload costs, queue depths, thin-atmosphere,
   staging, and render-origin/camera-stress measurements are still unmeasured,
   so this task remains incomplete.
+
+  The native-display follow-up is recorded in
+  `docs/native_release_performance_audit.md`. It confirms discrete-GPU release
+  rendering and bounded terrain streaming, but preserves this unchecked task
+  because its GPU pass timing, staging, high-altitude, and isolated camera
+  evidence remain unavailable.
