@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use ron::error::SpannedError;
 use ron::extensions::Extensions;
 use ron::Options;
+use sha2::{Digest, Sha256};
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::env;
@@ -324,6 +325,8 @@ impl std::error::Error for RocketConfigError {
 #[derive(Debug, Clone)]
 pub struct LoadedVehicle {
     pub rocket: Rocket,
+    /// SHA-256 of the exact local RON bytes parsed into `rocket`.
+    pub configuration_sha256: String,
 }
 
 impl EngineDef {
@@ -761,6 +764,7 @@ impl VehicleDef {
                     )
                 }),
             },
+            configuration_sha256: String::new(),
         }
     }
 }
@@ -830,7 +834,9 @@ impl RocketCatalog {
                     path,
                 });
             }
-            for vehicle in RocketConfigFile::parse(&text)? {
+            let configuration_sha256 = format!("{:x}", Sha256::digest(text.as_bytes()));
+            for mut vehicle in RocketConfigFile::parse(&text)? {
+                vehicle.configuration_sha256 = configuration_sha256.clone();
                 catalog.insert(key.clone(), vehicle);
             }
         }
@@ -1687,6 +1693,7 @@ mod tests {
                     stages: vec![],
                     parallel_boosters: None,
                 },
+                configuration_sha256: String::new(),
             },
         );
         catalog.insert(
@@ -1699,6 +1706,7 @@ mod tests {
                     stages: vec![],
                     parallel_boosters: None,
                 },
+                configuration_sha256: String::new(),
             },
         );
         catalog.insert(
@@ -1711,6 +1719,7 @@ mod tests {
                     stages: vec![],
                     parallel_boosters: None,
                 },
+                configuration_sha256: String::new(),
             },
         );
         let keys: Vec<&str> = catalog.keys().collect();

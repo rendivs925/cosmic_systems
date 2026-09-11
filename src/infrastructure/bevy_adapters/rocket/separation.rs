@@ -49,28 +49,8 @@ pub struct SpentStageSpec {
     pub kind: SpentStageKind,
 }
 
-/// Spawn one jettisoned-hardware entity: authoritative f64 dynamics (already
-/// including its separation impulse), simplified drag-only flight, and a
-/// cylinder mesh scaled to the piece. Rendering reuses the same cylinder
-/// primitive as the active vehicle.
-pub fn spawn_spent_stage(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    spec: SpentStageSpec,
-) -> Entity {
-    let base_color = match spec.kind {
-        SpentStageKind::Booster => Color::srgb(0.45, 0.45, 0.48),
-        SpentStageKind::FairingHalf => Color::srgb(0.9, 0.9, 0.92),
-    };
-    let material = materials.add(StandardMaterial {
-        base_color,
-        metallic: 0.6,
-        perceptual_roughness: 0.4,
-        ..default()
-    });
-    let mesh = meshes.add(Mesh::from(Cylinder::new(spec.radius_m, spec.height_m)));
-
+/// Spawn detached hardware's authoritative state without render components.
+pub fn spawn_spent_stage_physics(commands: &mut Commands, spec: &SpentStageSpec) -> Entity {
     let entity = commands
         .spawn((
             SpentStage {
@@ -91,12 +71,8 @@ pub fn spawn_spent_stage(
             SpecificForceAcceleration::default(),
             RocketFlightConditions::default(),
             RocketPlanetBinding {
-                planet_name: spec.planet_id,
+                planet_name: spec.planet_id.clone(),
             },
-            Mesh3d(mesh),
-            MeshMaterial3d(material.clone()),
-            Transform::default(),
-            RocketRenderState::new(spec.dynamics),
         ))
         .id();
     if let Some(gear_spec) = spec.landing_gear {
@@ -106,6 +82,43 @@ pub fn spawn_spent_stage(
                 gear_spec,
                 spec.dynamics.mass_kg,
             )));
+    }
+    entity
+}
+
+/// Spawn one jettisoned-hardware entity: authoritative f64 dynamics (already
+/// including its separation impulse), simplified drag-only flight, and a
+/// cylinder mesh scaled to the piece. Rendering reuses the same cylinder
+/// primitive as the active vehicle.
+pub fn spawn_spent_stage(
+    commands: &mut Commands,
+    meshes: Option<&mut Assets<Mesh>>,
+    materials: Option<&mut Assets<StandardMaterial>>,
+    spec: SpentStageSpec,
+) -> Entity {
+    let (Some(meshes), Some(materials)) = (meshes, materials) else {
+        return spawn_spent_stage_physics(commands, &spec);
+    };
+    let base_color = match spec.kind {
+        SpentStageKind::Booster => Color::srgb(0.45, 0.45, 0.48),
+        SpentStageKind::FairingHalf => Color::srgb(0.9, 0.9, 0.92),
+    };
+    let material = materials.add(StandardMaterial {
+        base_color,
+        metallic: 0.6,
+        perceptual_roughness: 0.4,
+        ..default()
+    });
+    let mesh = meshes.add(Mesh::from(Cylinder::new(spec.radius_m, spec.height_m)));
+
+    let entity = spawn_spent_stage_physics(commands, &spec);
+    commands.entity(entity).insert((
+        Mesh3d(mesh),
+        MeshMaterial3d(material.clone()),
+        Transform::default(),
+        RocketRenderState::new(spec.dynamics),
+    ));
+    if let Some(gear_spec) = spec.landing_gear {
         // Detached recovery bodies own their visual legs. The full launch
         // stack never parents lower-stage leg visuals to its upper stage.
         spawn_landing_leg_meshes(
@@ -220,8 +233,8 @@ fn planet_terrain_radius(
 pub fn check_fairing_separation(
     mut commands: Commands,
     mut fairing_writer: MessageWriter<FairingSeparatedEvent>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     mut rocket_query: Query<(
         Entity,
         &RocketPlanetBinding,
@@ -261,8 +274,8 @@ pub fn check_fairing_separation(
         for sign in [1.0, -1.0] {
             spawn_spent_stage(
                 &mut commands,
-                &mut meshes,
-                &mut materials,
+                meshes.as_deref_mut(),
+                materials.as_deref_mut(),
                 SpentStageSpec {
                     parent_rocket: entity,
                     planet_id: binding.planet_name.clone(),

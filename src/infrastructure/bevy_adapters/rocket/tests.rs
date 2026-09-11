@@ -2942,6 +2942,7 @@ mod determinism_regression_tests {
     use crate::domain::services::regression::{
         load_baseline_ron, save_baseline_ron, RegressionConfig, RocketStateSample,
     };
+    use crate::domain::services::simulation_run::SimulationRunIdentity;
     use crate::infrastructure::bevy_adapters::rocket::components::{
         RocketAutopilot, RocketMissionState, RocketPhysicsState,
     };
@@ -2953,6 +2954,24 @@ mod determinism_regression_tests {
     const RECORD_TICKS: usize = 256;
     const GRAVITY_TURN_RECORD_TICKS: usize = 1_280;
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+    fn ascent_run_identity(name: &str, software_revision: &str) -> SimulationRunIdentity {
+        SimulationRunIdentity {
+            scenario_id: name.into(),
+            vehicle_model_id: "electron-like-test-fixture".into(),
+            vehicle_configuration_sha256: None,
+            launch_site_id: "ksc-default-geodetic".into(),
+            environment_model_id: "test-earth-default-flight-conditions".into(),
+            terrain_source_id: "planet-terrain-earth-default".into(),
+            ephemeris_authority_id: "synthetic-earth-orientation-j2000".into(),
+            start_epoch_tdb_seconds_since_j2000: 0.0,
+            state_reference_frame: "Earth-centered inertial".into(),
+            numerical_integrator: "semi-implicit Euler".into(),
+            fixed_timestep_s: 1.0 / 64.0,
+            random_seed: None,
+            software_revision: software_revision.into(),
+        }
+    }
 
     fn baseline_path(name: &str) -> std::path::PathBuf {
         let dir =
@@ -3082,6 +3101,9 @@ mod determinism_regression_tests {
             baseline.hash_chain_consistent(),
             "baseline hash chain is inconsistent"
         );
+        baseline
+            .validate_comparison_identity(&ascent_run_identity(name, "current"))
+            .unwrap_or_else(|error| panic!("baseline run identity is incompatible: {error}"));
 
         if std::env::var_os("REGRESSION_RECORD").is_some() {
             let mut recorded = baseline;
@@ -3094,6 +3116,7 @@ mod determinism_regression_tests {
                 .map(|commit| commit.trim().to_owned())
                 .filter(|commit| !commit.is_empty())
                 .unwrap_or_else(|| "uncommitted".to_string());
+            recorded.run_identity = ascent_run_identity(name, &recorded.git_commit);
             recorded.samples = current;
             recorded.hash_chain = recorded.recompute_hash_chain();
             std::fs::write(

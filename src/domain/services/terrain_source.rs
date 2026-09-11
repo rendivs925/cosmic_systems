@@ -56,7 +56,7 @@ const OROGENY_SCALE: f64 = 0.32;
 const TERRAIN_DETAIL_BIOME_WEIGHT: f64 = 0.65;
 
 #[cfg(feature = "dem")]
-const DEFAULT_EARTH_DEM_PATH: &str =
+pub const DEFAULT_EARTH_DEM_PATH: &str =
     "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem";
 #[cfg(feature = "dem")]
 const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";

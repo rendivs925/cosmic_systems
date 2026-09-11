@@ -368,6 +368,19 @@ pub struct KernelProvenance {
 }
 
 impl KernelProvenance {
+    /// Stable identifier for the validated kernel set used by a run. Kernel
+    /// records are sorted so manifest ordering cannot change the result.
+    pub fn run_identity(&self) -> String {
+        let mut kernels: Vec<_> = self
+            .validated_kernels
+            .iter()
+            .map(|kernel| format!("{}:{}:{}", kernel.role, kernel.file_name, kernel.sha256))
+            .collect();
+        kernels.sort();
+        let kernel_set_sha256 = format!("{:x}", Sha256::digest(kernels.join("\n")));
+        format!("{}:{kernel_set_sha256}", self.manifest_id)
+    }
+
     pub fn dataset_statuses_at_tdb(&self, epoch: TdbEpoch) -> Vec<ScientificDatasetStatus> {
         let mut statuses: Vec<_> = self
             .validated_kernels

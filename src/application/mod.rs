@@ -1,4 +1,5 @@
 pub mod craft_startup;
+pub mod headless_scenario;
 pub mod modes;
 pub mod plugins;
 pub mod rocket_config;

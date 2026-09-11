@@ -29,8 +29,8 @@ use bevy::prelude::{
 )]
 pub fn propulsion_staging(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     sim_time: Res<SimulationTime>,
     mut separated_writer: MessageWriter<StageSeparatedEvent>,
     mut rocket_query: Query<(
@@ -70,8 +70,10 @@ pub fn propulsion_staging(
                 propulsion.detach_boosters();
                 let mut serial_stack = propulsion.vehicle.clone();
                 serial_stack.parallel_boosters = None;
-                if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
-                    *rocket_mesh = Mesh3d(build_rocket_mesh(&mut meshes, &serial_stack));
+                if let (Some(rocket_mesh), Some(meshes)) =
+                    (rocket_mesh.as_deref_mut(), meshes.as_deref_mut())
+                {
+                    *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &serial_stack));
                 }
                 rocket.refresh_attached_mass_properties(
                     &propulsion,
@@ -81,8 +83,8 @@ pub fn propulsion_staging(
                 for dynamics in booster_dynamics {
                     let spent_entity = spawn_spent_stage(
                         &mut commands,
-                        &mut meshes,
-                        &mut materials,
+                        meshes.as_deref_mut(),
+                        materials.as_deref_mut(),
                         SpentStageSpec {
                             parent_rocket: entity,
                             planet_id: binding.planet_name.clone(),
@@ -131,7 +133,9 @@ pub fn propulsion_staging(
         geometry.radius_m = active_stage.diameter_m * 0.5;
         geometry.height_m = active_stage.height_m;
         geometry.lower_extent_y_m = -active_stage.height_m * 0.5;
-        if let Some(rocket_mesh) = rocket_mesh.as_deref_mut() {
+        if let (Some(rocket_mesh), Some(meshes)) =
+            (rocket_mesh.as_deref_mut(), meshes.as_deref_mut())
+        {
             let attached_upper_envelope_height_m = (propulsion.vehicle.height_m
                 - propulsion.vehicle.stages[..=propulsion.active_stage]
                     .iter()
@@ -139,7 +143,7 @@ pub fn propulsion_staging(
                     .sum::<f32>())
             .max(0.0);
             *rocket_mesh = Mesh3d(build_serial_stage_mesh(
-                &mut meshes,
+                meshes,
                 active_stage,
                 attached_upper_envelope_height_m,
             ));
@@ -196,8 +200,8 @@ pub fn propulsion_staging(
 
         let spent_entity = spawn_spent_stage(
             &mut commands,
-            &mut meshes,
-            &mut materials,
+            meshes.as_deref_mut(),
+            materials.as_deref_mut(),
             SpentStageSpec {
                 parent_rocket: entity,
                 planet_id: binding.planet_name.clone(),

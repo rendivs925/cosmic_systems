@@ -10,6 +10,13 @@ Provides a deterministic regression suite: saved baseline trajectories, a CI gat
 
 The system SHALL provide a set of canonical flight recordings (launch, orbit, reentry, landing) with full state histories at fixed physics timesteps.
 
+Each baseline SHALL record a simulation-run identity containing the scenario,
+vehicle and environment model identifiers, terrain and ephemeris authorities,
+TDB start epoch, state reference frame, integrator, fixed timestep, stochastic
+seed state, and software revision. A regression comparison SHALL reject a
+mismatch in physical or numerical inputs; it MAY compare a later software
+revision against the recorded baseline.
+
 #### Scenario: Baseline flight set
 
 - **WHEN** the regression suite runs

@@ -140,8 +140,9 @@ use crate::infrastructure::bevy_adapters::rocket::separation::{
 use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,
-    handle_flight_recorder_input_system, record_flight_data_system, rocket_event_feed_system,
-    RocketEventFeed,
+    handle_flight_recorder_input_system, record_flight_data_system,
+    record_simulation_telemetry_system, rocket_event_feed_system, RocketEventFeed,
+    SimulationTelemetryRecorder,
 };
 use crate::infrastructure::bevy_adapters::rocket::terrain_map::RocketTerrainMapPlugin;
 use crate::infrastructure::bevy_adapters::simulation_time::{
@@ -415,6 +416,132 @@ fn spawn_rockets_system(
 /// rocket-only systems.
 pub struct RocketModePlugin;
 
+/// Authoritative fixed rocket simulation shared by interactive and headless
+/// composition. It intentionally excludes cameras, rendering, audio, and UI.
+pub struct RocketFixedSimulationPlugin;
+
+impl Plugin for RocketFixedSimulationPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<RocketTelemetry>();
+        app.init_resource::<SimulationTelemetryRecorder>();
+        app.init_resource::<ActiveForceModel>();
+        app.init_resource::<RocketEventFeed>();
+        app.init_resource::<ReplaySnapshotStream>();
+        app.init_resource::<EntryPhysicsConfig>();
+        app.init_resource::<TerrainSurfaceSampleCache>();
+        app.init_resource::<RelaunchCommandQueue>();
+        app.add_message::<ReplayAction>();
+        app.add_message::<CommsBlackoutEvent>();
+        app.add_message::<SplashdownDetectedEvent>();
+        app.add_message::<StageSeparatedEvent>();
+        app.add_message::<FairingSeparatedEvent>();
+        app.configure_sets(
+            FixedUpdate,
+            (
+                RocketSet::Atmosphere,
+                RocketSet::Recovery,
+                RocketSet::Guidance,
+                RocketSet::Control,
+                RocketSet::Actuation,
+                RocketSet::Gravity,
+                RocketSet::TerrainInteraction,
+                RocketSet::SpentStage,
+                RocketSet::EntryPhysics,
+                RocketSet::AeroForces,
+                RocketSet::AeroTorque,
+                RocketSet::PropulsionThrust,
+                RocketSet::PropulsionGimbal,
+                RocketSet::AccumulateForces,
+                RocketSet::Integrate,
+                RocketSet::PropulsionConsumption,
+                RocketSet::PropulsionStaging,
+                RocketSet::AdvanceTime,
+                EphemerisSet::RefreshAfterTimeAdvance,
+                RocketSet::OrbitalElements,
+            )
+                .chain()
+                .run_if(simulation_unpaused),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            (
+                RocketSet::GroundContact,
+                RocketSet::SyncRender,
+                RocketSet::Telemetry,
+                RocketSet::Replay,
+            )
+                .chain()
+                .run_if(simulation_unpaused),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            RocketSet::OrbitalElements.before(RocketSet::GroundContact),
+        );
+        app.configure_sets(
+            FixedUpdate,
+            EphemerisSet::EvaluateForTick.before(RocketSet::Gravity),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                refresh_flight_conditions.in_set(RocketSet::Atmosphere),
+                station_keep_drone_ships.in_set(RocketSet::Recovery),
+                update_drone_ship_landing_targets.in_set(RocketSet::Recovery),
+                apply_relaunch_requests
+                    .in_set(RocketSet::Guidance)
+                    .before(guidance_system),
+                guidance_system.in_set(RocketSet::Guidance),
+                control_system.in_set(RocketSet::Control),
+                actuation_system.in_set(RocketSet::Actuation),
+                update_rocket_gravity.in_set(RocketSet::Gravity),
+                spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
+                update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
+                check_fairing_separation.in_set(RocketSet::SpentStage),
+                initialize_thermal_protection.in_set(RocketSet::EntryPhysics),
+                compute_heating.in_set(RocketSet::EntryPhysics),
+                compute_ablation.in_set(RocketSet::EntryPhysics),
+                compute_plasma_blackout.in_set(RocketSet::EntryPhysics),
+                compute_parachute_forces.in_set(RocketSet::EntryPhysics),
+                compute_retro_propulsion.in_set(RocketSet::EntryPhysics),
+                deploy_landing_legs.in_set(RocketSet::EntryPhysics),
+            )
+                .chain(),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                aerodynamic_forces.in_set(RocketSet::AeroForces),
+                aerodynamic_torque.in_set(RocketSet::AeroTorque),
+                propulsion_thrust.in_set(RocketSet::PropulsionThrust),
+                propulsion_gimbal.in_set(RocketSet::PropulsionGimbal),
+                accumulate_forces.in_set(RocketSet::AccumulateForces),
+                integrate_6dof.in_set(RocketSet::Integrate),
+                propulsion_consumption.in_set(RocketSet::PropulsionConsumption),
+                propulsion_staging.in_set(RocketSet::PropulsionStaging),
+                advance_fixed_simulation_time.in_set(RocketSet::AdvanceTime),
+                update_orbital_elements.in_set(RocketSet::OrbitalElements),
+                resolve_ground_contact.in_set(RocketSet::GroundContact),
+                resolve_drone_ship_deck_contact
+                    .in_set(RocketSet::GroundContact)
+                    .before(resolve_ground_contact),
+                advance_topple
+                    .in_set(RocketSet::GroundContact)
+                    .after(resolve_ground_contact),
+                capture_render_state.in_set(RocketSet::SyncRender),
+            ),
+        );
+        app.add_systems(
+            FixedUpdate,
+            (
+                compute_rocket_telemetry_system.in_set(RocketSet::Telemetry),
+                record_flight_data_system.in_set(RocketSet::Telemetry),
+                record_simulation_telemetry_system.in_set(RocketSet::Telemetry),
+                record_replay_snapshot_system.in_set(RocketSet::Replay),
+            ),
+        );
+    }
+}
+
 impl Plugin for RocketModePlugin {
     fn build(&self, app: &mut App) {
         // Vehicle catalog: data-driven definitions from assets/configs/rockets
@@ -580,114 +707,7 @@ impl Plugin for RocketModePlugin {
         // Event feed: domain messages → HUD line + flight-log entries (Update).
         app.add_systems(Update, rocket_event_feed_system);
 
-        // Total execution order for the fixed-step flight loop (AGENTS.md
-        // sections 9 and 47). `.chain()` gives real pairwise ordering — the
-        // previous chained-`.before()` form only ordered Guidance against
-        // each set, leaving force writers ambiguous against accumulation.
-        app.configure_sets(
-            FixedUpdate,
-            (
-                RocketSet::Atmosphere,
-                RocketSet::Recovery,
-                RocketSet::Guidance,
-                RocketSet::Control,
-                RocketSet::Actuation,
-                RocketSet::Gravity,
-                RocketSet::TerrainInteraction,
-                RocketSet::SpentStage,
-                RocketSet::EntryPhysics,
-                RocketSet::AeroForces,
-                RocketSet::AeroTorque,
-                RocketSet::PropulsionThrust,
-                RocketSet::PropulsionGimbal,
-                RocketSet::AccumulateForces,
-                RocketSet::Integrate,
-                RocketSet::PropulsionConsumption,
-                RocketSet::PropulsionStaging,
-                RocketSet::AdvanceTime,
-                EphemerisSet::RefreshAfterTimeAdvance,
-                RocketSet::OrbitalElements,
-            )
-                .chain()
-                .run_if(simulation_unpaused),
-        );
-        app.configure_sets(
-            FixedUpdate,
-            (
-                RocketSet::GroundContact,
-                RocketSet::SyncRender,
-                RocketSet::Telemetry,
-                RocketSet::Replay,
-            )
-                .chain()
-                .run_if(simulation_unpaused),
-        );
-        app.configure_sets(
-            FixedUpdate,
-            RocketSet::OrbitalElements.before(RocketSet::GroundContact),
-        );
-        app.configure_sets(
-            FixedUpdate,
-            EphemerisSet::EvaluateForTick.before(RocketSet::Gravity),
-        );
-
-        app.add_systems(
-            FixedUpdate,
-            (
-                refresh_flight_conditions.in_set(RocketSet::Atmosphere),
-                station_keep_drone_ships.in_set(RocketSet::Recovery),
-                update_drone_ship_landing_targets.in_set(RocketSet::Recovery),
-                apply_relaunch_requests
-                    .in_set(RocketSet::Guidance)
-                    .before(guidance_system),
-                guidance_system.in_set(RocketSet::Guidance),
-                control_system.in_set(RocketSet::Control),
-                actuation_system.in_set(RocketSet::Actuation),
-                update_rocket_gravity.in_set(RocketSet::Gravity),
-                spent_stage_aerodynamics.in_set(RocketSet::SpentStage),
-                update_spent_stage_lifecycle.in_set(RocketSet::SpentStage),
-                check_fairing_separation.in_set(RocketSet::SpentStage),
-                initialize_thermal_protection.in_set(RocketSet::EntryPhysics),
-                compute_heating.in_set(RocketSet::EntryPhysics),
-                compute_ablation.in_set(RocketSet::EntryPhysics),
-                compute_plasma_blackout.in_set(RocketSet::EntryPhysics),
-                compute_parachute_forces.in_set(RocketSet::EntryPhysics),
-                compute_retro_propulsion.in_set(RocketSet::EntryPhysics),
-                deploy_landing_legs.in_set(RocketSet::EntryPhysics),
-            )
-                .chain(),
-        );
-        app.add_systems(
-            FixedUpdate,
-            (
-                aerodynamic_forces.in_set(RocketSet::AeroForces),
-                aerodynamic_torque.in_set(RocketSet::AeroTorque),
-                propulsion_thrust.in_set(RocketSet::PropulsionThrust),
-                propulsion_gimbal.in_set(RocketSet::PropulsionGimbal),
-                accumulate_forces.in_set(RocketSet::AccumulateForces),
-                integrate_6dof.in_set(RocketSet::Integrate),
-                propulsion_consumption.in_set(RocketSet::PropulsionConsumption),
-                propulsion_staging.in_set(RocketSet::PropulsionStaging),
-                advance_fixed_simulation_time.in_set(RocketSet::AdvanceTime),
-                update_orbital_elements.in_set(RocketSet::OrbitalElements),
-                resolve_ground_contact.in_set(RocketSet::GroundContact),
-                resolve_drone_ship_deck_contact
-                    .in_set(RocketSet::GroundContact)
-                    .before(resolve_ground_contact),
-                advance_topple
-                    .in_set(RocketSet::GroundContact)
-                    .after(resolve_ground_contact),
-                capture_render_state.in_set(RocketSet::SyncRender),
-            ),
-        );
-        app.add_systems(
-            FixedUpdate,
-            (
-                compute_rocket_telemetry_system.in_set(RocketSet::Telemetry),
-                record_flight_data_system.in_set(RocketSet::Telemetry),
-                record_replay_snapshot_system.in_set(RocketSet::Replay),
-            ),
-        );
+        app.add_plugins(RocketFixedSimulationPlugin);
 
         // Rocket-specific startup: camera controller, sun light, planets, and sky color.
         // Must run AFTER setup_space (spawns camera + planets) and spawn_rockets_system

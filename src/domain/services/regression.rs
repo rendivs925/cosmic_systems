@@ -31,6 +31,7 @@ use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::services::scientific_validation::ScientificReferenceCaseId;
+use crate::domain::services::simulation_run::SimulationRunIdentity;
 
 /// FNV-1a offset basis and prime (64-bit). Chosen for speed and stability —
 /// it is not cryptographic; the goal is a cheap, deterministic fingerprint.
@@ -514,6 +515,9 @@ pub struct FlightBaseline {
     pub name: String,
     /// Git commit the baseline was recorded against.
     pub git_commit: String,
+    /// Complete identity of the run that produced this recording. The baseline
+    /// is not comparable evidence unless its inputs match the current run.
+    pub run_identity: SimulationRunIdentity,
     /// The signed-off justification for why this revision of the baseline
     /// exists (the audit trail entry).
     pub audit: BaselineJustification,
@@ -529,16 +533,29 @@ impl FlightBaseline {
     pub fn record(
         name: impl Into<String>,
         git_commit: impl Into<String>,
+        run_identity: SimulationRunIdentity,
         audit: BaselineJustification,
         samples: Vec<RocketStateSample>,
     ) -> Result<Self, String> {
         if !audit.is_signed_off() {
             return Err("baseline audit trail is not signed off".to_string());
         }
+        let name = name.into();
+        let git_commit = git_commit.into();
+        run_identity.validate()?;
+        if run_identity.scenario_id != name {
+            return Err("baseline name must match simulation run scenario_id".to_string());
+        }
+        if run_identity.software_revision != git_commit {
+            return Err(
+                "baseline git_commit must match simulation run software_revision".to_string(),
+            );
+        }
         let hash_chain = samples.iter().map(|s| s.hash()).collect();
         Ok(Self {
-            name: name.into(),
-            git_commit: git_commit.into(),
+            name,
+            git_commit,
+            run_identity,
             audit,
             samples,
             hash_chain,
@@ -555,6 +572,38 @@ impl FlightBaseline {
     /// a recording of deterministic physics.
     pub fn hash_chain_consistent(&self) -> bool {
         self.hash_chain == self.recompute_hash_chain()
+    }
+
+    /// Verify this fixture was recorded from the same engineering inputs as a
+    /// current run before comparing numerical state.
+    pub fn validate_run_identity(&self, current: &SimulationRunIdentity) -> Result<(), String> {
+        self.run_identity.validate()?;
+        current.validate()?;
+        if self.run_identity != *current {
+            return Err("baseline simulation run identity differs from current run".to_string());
+        }
+        Ok(())
+    }
+
+    /// Verify the physical/numerical inputs needed for a regression comparison.
+    /// A baseline intentionally compares different software revisions, so the
+    /// revision is recorded but not required to match at this gate.
+    pub fn validate_comparison_identity(
+        &self,
+        current: &SimulationRunIdentity,
+    ) -> Result<(), String> {
+        self.run_identity.validate()?;
+        current.validate()?;
+        let mut baseline_inputs = self.run_identity.clone();
+        let mut current_inputs = current.clone();
+        baseline_inputs.software_revision.clear();
+        current_inputs.software_revision.clear();
+        if baseline_inputs != current_inputs {
+            return Err(
+                "baseline physical or numerical inputs differ from current run".to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Compare a freshly simulated trajectory against this baseline.
@@ -581,6 +630,24 @@ pub fn save_baseline_ron(baseline: &FlightBaseline) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_identity(scenario_id: &str, software_revision: &str) -> SimulationRunIdentity {
+        SimulationRunIdentity {
+            scenario_id: scenario_id.into(),
+            vehicle_model_id: "test-vehicle".into(),
+            vehicle_configuration_sha256: None,
+            launch_site_id: "test-site".into(),
+            environment_model_id: "test-environment".into(),
+            terrain_source_id: "test-terrain".into(),
+            ephemeris_authority_id: "test-ephemeris".into(),
+            start_epoch_tdb_seconds_since_j2000: 0.0,
+            state_reference_frame: "Earth-centered inertial".into(),
+            numerical_integrator: "semi-implicit Euler".into(),
+            fixed_timestep_s: 1.0 / 64.0,
+            random_seed: None,
+            software_revision: software_revision.into(),
+        }
+    }
 
     fn sample(pos: [f64; 3], mass: f64, code: u8) -> RocketStateSample {
         RocketStateSample::new(
@@ -726,6 +793,7 @@ mod tests {
         let base = FlightBaseline::record(
             "ascent",
             "abc123",
+            run_identity("ascent", "abc123"),
             audit.clone(),
             vec![sample([1.0, 0.0, 0.0], 14_000.0, 1)],
         )
@@ -735,6 +803,7 @@ mod tests {
         let loaded = load_baseline_ron(&ron_text).unwrap();
         assert_eq!(loaded.name, base.name);
         assert_eq!(loaded.git_commit, base.git_commit);
+        assert_eq!(loaded.run_identity, base.run_identity);
         assert_eq!(loaded.samples, base.samples);
         assert_eq!(loaded.hash_chain, base.hash_chain);
         assert_eq!(loaded.audit, audit);
@@ -755,7 +824,13 @@ mod tests {
             reviewer_approved: false,
             recorded_by: "opencode".into(),
         };
-        let result = FlightBaseline::record("ascent", "abc", audit, Vec::new());
+        let result = FlightBaseline::record(
+            "ascent",
+            "abc",
+            run_identity("ascent", "abc"),
+            audit,
+            Vec::new(),
+        );
         assert!(result.is_err());
     }
 
@@ -819,7 +894,14 @@ mod tests {
                 1,
             ));
         }
-        let baseline = FlightBaseline::record("ascent", "abc", audit, samples.clone()).unwrap();
+        let baseline = FlightBaseline::record(
+            "ascent",
+            "abc",
+            run_identity("ascent", "abc"),
+            audit,
+            samples.clone(),
+        )
+        .unwrap();
 
         // Injected physics regression: one tick drifts 1 mm in position.
         let mut regressed = samples.clone();
@@ -828,5 +910,61 @@ mod tests {
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].tick, 50);
         assert_eq!(d[0].variable, RegressionVariable::Position);
+    }
+
+    #[test]
+    fn baseline_rejects_a_different_run_identity() {
+        let audit = BaselineJustification {
+            change_description: "identity gate".into(),
+            expected_improvement: "rejects mismatched inputs".into(),
+            numerical_tradeoffs: "none".into(),
+            affected_scenarios: vec!["ascent".into()],
+            affected_external_case_ids: vec![ScientificReferenceCaseId::new("case-a")],
+            intended_baseline_divergence: IntendedBaselineDivergence::NoDivergence,
+            scientific_acceptance_output: ScientificAcceptanceOutput::Unverified {
+                reason: "unit test".into(),
+            },
+            reviewer_approved: true,
+            recorded_by: "opencode".into(),
+        };
+        let baseline = FlightBaseline::record(
+            "ascent",
+            "abc",
+            run_identity("ascent", "abc"),
+            audit,
+            Vec::new(),
+        )
+        .unwrap();
+        let mut different = run_identity("ascent", "abc");
+        different.fixed_timestep_s = 1.0 / 120.0;
+        assert!(baseline.validate_run_identity(&different).is_err());
+    }
+
+    #[test]
+    fn comparison_identity_permits_only_a_software_revision_change() {
+        let audit = BaselineJustification {
+            change_description: "identity gate".into(),
+            expected_improvement: "permits regression comparisons".into(),
+            numerical_tradeoffs: "none".into(),
+            affected_scenarios: vec!["ascent".into()],
+            affected_external_case_ids: vec![ScientificReferenceCaseId::new("case-a")],
+            intended_baseline_divergence: IntendedBaselineDivergence::NoDivergence,
+            scientific_acceptance_output: ScientificAcceptanceOutput::Unverified {
+                reason: "unit test".into(),
+            },
+            reviewer_approved: true,
+            recorded_by: "opencode".into(),
+        };
+        let baseline = FlightBaseline::record(
+            "ascent",
+            "abc",
+            run_identity("ascent", "abc"),
+            audit,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(baseline
+            .validate_comparison_identity(&run_identity("ascent", "def"))
+            .is_ok());
     }
 }

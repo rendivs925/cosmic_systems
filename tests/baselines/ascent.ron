@@ -1,6 +1,21 @@
 (
     name: "ascent",
     git_commit: "18d5669",
+    run_identity: (
+        scenario_id: "ascent",
+        vehicle_model_id: "electron-like-test-fixture",
+        vehicle_configuration_sha256: None,
+        launch_site_id: "ksc-default-geodetic",
+        environment_model_id: "test-earth-default-flight-conditions",
+        terrain_source_id: "planet-terrain-earth-default",
+        ephemeris_authority_id: "synthetic-earth-orientation-j2000",
+        start_epoch_tdb_seconds_since_j2000: 0.0,
+        state_reference_frame: "Earth-centered inertial",
+        numerical_integrator: "semi-implicit Euler",
+        fixed_timestep_s: 0.015625,
+        random_seed: None,
+        software_revision: "18d5669",
+    ),
     audit: (
         change_description: "use geometric cylinder centers as rocket positions and evaluate terrain contact at the lower cylindrical extent",
         expected_improvement: "keeps spawned, separated, and recovered rocket geometry consistent with the authoritative stage-centered physics frame",

@@ -7,12 +7,110 @@ use super::events::{
 use super::gravity_orbit::ActiveForceModel;
 use crate::domain::entities::rocket::EngineState;
 use crate::domain::services::aerodynamics::{angle_of_attack, angle_of_sideslip};
+use crate::domain::services::regression::RocketStateSample;
 use crate::domain::services::rocket_propulsion::{stage_thrust_body, STANDARD_GRAVITY_MPS2};
+use crate::domain::services::simulation_artifact::SimulationTelemetryFrame;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, Selectable};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+
+/// Bounded presentation-free fixed-tick capture shared by interactive and
+/// headless composition. Durable artifacts own their run identity separately.
+#[derive(Resource, Debug, Default)]
+pub struct SimulationTelemetryRecorder {
+    pub frames: Vec<SimulationTelemetryFrame>,
+}
+
+const MAX_SHARED_TELEMETRY_FRAMES: usize = 20_000;
+
+fn telemetry_mission_code(mission: RocketMissionState) -> u8 {
+    use crate::domain::entities::rocket::RocketMissionState as State;
+    match mission.0 {
+        State::PreLaunch => 0,
+        State::Launch => 1,
+        State::Ascent => 2,
+        State::Orbit => 3,
+        State::DeorbitBurn => 4,
+        State::ReentryCorridor => 5,
+        State::PoweredDescent => 6,
+        State::UnpoweredDescent => 7,
+        State::Landing => 8,
+        State::Landed => 9,
+        State::Crashed => 10,
+    }
+}
+
+/// Capture one authoritative primary-vehicle frame after fixed integration.
+pub fn record_simulation_telemetry_system(
+    sim_time: Res<SimulationTime>,
+    mut recorder: ResMut<SimulationTelemetryRecorder>,
+    query: Query<
+        (
+            &RocketPhysicsState,
+            &RocketMissionState,
+            &RocketPropulsion,
+            &RocketFlightConditions,
+            &TerrainCollisionState,
+        ),
+        Without<SpentStage>,
+    >,
+) {
+    let Ok((physics, mission, propulsion, conditions, collision)) = query.single() else {
+        return;
+    };
+    if recorder.frames.len() == MAX_SHARED_TELEMETRY_FRAMES {
+        recorder.frames.remove(0);
+    }
+    let dynamics = &physics.dynamics;
+    recorder.frames.push(SimulationTelemetryFrame {
+        simulation_time_s: sim_time.sim_time_s,
+        epoch_tdb_seconds_since_j2000: sim_time
+            .tdb_epoch()
+            .map_or(f64::NAN, |epoch| epoch.seconds_since_j2000()),
+        state: RocketStateSample::new(
+            [
+                dynamics.position_m.x,
+                dynamics.position_m.y,
+                dynamics.position_m.z,
+            ],
+            [
+                dynamics.velocity_mps.x,
+                dynamics.velocity_mps.y,
+                dynamics.velocity_mps.z,
+            ],
+            [
+                dynamics.orientation.x,
+                dynamics.orientation.y,
+                dynamics.orientation.z,
+                dynamics.orientation.w,
+            ],
+            [
+                dynamics.angular_velocity_radps.x,
+                dynamics.angular_velocity_radps.y,
+                dynamics.angular_velocity_radps.z,
+            ],
+            dynamics.mass_kg,
+            telemetry_mission_code(*mission),
+        ),
+        active_stage: propulsion.active_stage as u32,
+        propellant_remaining_kg: propulsion
+            .propellant_remaining_kg
+            .iter()
+            .map(|value| f64::from(*value))
+            .sum(),
+        throttle_unit: f64::from(propulsion.throttle),
+        mach_number: conditions.mach_number,
+        dynamic_pressure_pa: conditions.dynamic_pressure_pa,
+        atmospheric_density_kg_m3: conditions.density_kg_m3,
+        terrain_altitude_m: collision.radar_altitude_m,
+        ground_contact: !matches!(
+            collision.ground_contact,
+            crate::domain::services::terrain_collision::GroundContact::None
+        ),
+    });
+}
 
 /// Context containing all data needed for telemetry computation.
 #[derive(Debug, Clone)]

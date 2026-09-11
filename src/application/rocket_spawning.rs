@@ -31,6 +31,131 @@ const RECORDER_MAX_ENTRIES: usize = 2_048;
 /// Flight-recorder sampling interval (s): ~10 physics ticks at 60 Hz.
 const RECORDER_INTERVAL_S: f64 = 1.0 / 6.0;
 
+/// Spawn the authoritative rocket state without presentation components.
+///
+/// The graphical launcher still owns mesh, material, and pad creation. This
+/// path deliberately uses the same launch-frame and mass-property calculations
+/// so headless execution does not have a second physical spawn model.
+pub fn spawn_rocket_physics(
+    commands: &mut Commands,
+    catalog: &RocketCatalog,
+    selection: &VehicleSelection,
+    terrain_source: &dyn TerrainSource,
+    earth_orientation: &BodyOrientation,
+) -> Entity {
+    let requested_key = selection.selected_key();
+    let Some((_, vehicle)) = catalog.resolve(selection) else {
+        let available = catalog.keys().collect::<Vec<_>>().join(", ");
+        panic!("Unknown vehicle '{requested_key}'. Available vehicles: {available}");
+    };
+    let rocket = vehicle.rocket.clone();
+    let final_stage_fairing_mass_kg = rocket
+        .stages
+        .last()
+        .and_then(|stage| stage.fairing_dry_mass_kg);
+    let attached_payload_kg = final_stage_fairing_mass_kg.unwrap_or(0.0);
+    let propulsion = RocketPropulsion::for_fresh_flight(
+        rocket.clone(),
+        attached_payload_kg,
+        DEFAULT_ULLAGE_SETTLE_TIME_S,
+    );
+    let papua = predefined_sites::papua_indonesia_coastal_lowland();
+    let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
+    let earth_radius_m = earth.radius_km as f64 * 1000.0;
+    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&papua, &earth);
+    let terrain_sample = sample_surface(
+        terrain_source,
+        terrain_latitude_deg,
+        terrain_longitude_deg,
+        earth_radius_m,
+    );
+    let launch_site = LaunchSiteCoordinates::new(
+        papua.planet_id.clone(),
+        papua.latitude_deg,
+        papua.longitude_deg,
+        terrain_sample.height_m as f32,
+    );
+    let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
+        * (earth_radius_m + terrain_sample.height_m);
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
+    let launch_up = body_to_inertial * terrain_sample.normal;
+    let (_, pad_north_bf, _) = enu_basis(papua.latitude_deg, papua.longitude_deg);
+    let launch_attitude =
+        orientation_from_up_and_heading(launch_up, body_to_inertial * pad_north_bf)
+            .expect("Papua coastal-lowland launch heading is finite");
+    let geometry = RocketGeometry {
+        radius_m: rocket.diameter_m / 2.0,
+        height_m: rocket.height_m,
+        lower_extent_y_m: rocket.lower_extent_in_stack_m(),
+    };
+    let mass_properties = propulsion.mass_properties(geometry, 0.0);
+    let position_m = body_to_inertial * position_bf + launch_up * (rocket.height_m as f64 * 0.5);
+    let dynamics = RocketDynamicsState::new(
+        position_m,
+        surface_velocity_in_planet_inertial(position_m, earth_orientation),
+        launch_attitude,
+        mass_properties.mass_kg,
+        mass_properties.inertia_body,
+        mass_properties.center_of_mass_m,
+    );
+    let entity = commands
+        .spawn((
+            RocketPhysicsState { dynamics },
+            geometry,
+            RocketMissionState::PreLaunch,
+            propulsion,
+            ForceAccumulator::default(),
+            TorqueAccumulator::default(),
+            GravityAcceleration::default(),
+            SpecificForceAcceleration::default(),
+            RocketPlanetBinding {
+                planet_name: CelestialBodyId::earth(),
+            },
+            launch_site,
+        ))
+        .id();
+    commands.entity(entity).insert((
+        RocketFlightConditions::default(),
+        AerodynamicForces::default(),
+        MaxQTracker::default(),
+        RocketCommands::default(),
+        RocketAutopilot::default(),
+        TerrainCollisionState::default(),
+        GroundRest { active: true },
+        OrbitalElements::default(),
+        ThermalState::default(),
+        AblationState::default(),
+        ParachuteState::default(),
+        TipOverState::default(),
+        LandingScorecard::default(),
+        CommsState::default(),
+        RetroPropulsionEffect::default(),
+    ));
+    commands.entity(entity).insert((FlightRecorder::new(
+        RECORDER_MAX_ENTRIES,
+        RECORDER_INTERVAL_S,
+    ),));
+    if let Some(fairing_dry_mass_kg) = final_stage_fairing_mass_kg {
+        commands.entity(entity).insert((
+            PayloadFairing {
+                dry_mass_kg: fairing_dry_mass_kg,
+            },
+            InitialPayloadFairing {
+                dry_mass_kg: fairing_dry_mass_kg,
+            },
+        ));
+    }
+    if let Some(spec) = rocket.stages.first().and_then(|stage| stage.landing_gear) {
+        commands
+            .entity(entity)
+            .insert(LandingLegs::new(LandingGear::new(
+                spec,
+                mass_properties.mass_kg,
+            )));
+    }
+    entity
+}
+
 pub(crate) fn spawn_rockets(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
