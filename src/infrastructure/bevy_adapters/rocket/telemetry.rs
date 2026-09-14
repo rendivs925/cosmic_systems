@@ -96,19 +96,24 @@ fn telemetry_mission_code(mission: RocketMissionState) -> u8 {
 /// Capture one authoritative primary-vehicle frame after fixed integration.
 pub fn record_simulation_telemetry_system(
     sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     mut recorder: ResMut<SimulationTelemetryRecorder>,
     query: Query<
         (
             &RocketPhysicsState,
             &RocketMissionState,
+            &RocketPlanetBinding,
             &RocketPropulsion,
             &RocketFlightConditions,
             &TerrainCollisionState,
+            &ThermalState,
         ),
         Without<SpentStage>,
     >,
 ) {
-    let Ok((physics, mission, propulsion, conditions, collision)) = query.single() else {
+    let Ok((physics, mission, binding, propulsion, conditions, collision, thermal)) =
+        query.single()
+    else {
         return;
     };
     if recorder.frames.len() == MAX_SHARED_TELEMETRY_FRAMES {
@@ -160,9 +165,12 @@ pub fn record_simulation_telemetry_system(
             collision.ground_contact,
             crate::domain::services::terrain_collision::GroundContact::None
         ),
-        angle_of_attack_rad: None,
-        total_heat_flux_w_m2: None,
-        gravitational_parameter_m3_s2: None,
+        angle_of_attack_rad: Some(angle_of_attack(
+            dynamics.orientation.inverse() * conditions.atmosphere_relative_velocity_mps,
+        )),
+        total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
+        gravitational_parameter_m3_s2: ephemeris_snapshot
+            .gravitational_parameter_for_catalog_body(binding.planet_name.as_str()),
     });
 }
 

@@ -1,6 +1,10 @@
 //! Deterministic engineering analysis of recorded simulation artifacts.
 
-use crate::domain::services::simulation_artifact::SimulationArtifact;
+use crate::domain::math::DVec3;
+use crate::domain::services::physics_orbital::{
+    orbital_elements_from_state, specific_orbital_energy,
+};
+use crate::domain::services::simulation_artifact::{SimulationArtifact, SimulationEventType};
 use crate::domain::services::simulation_run::SimulationRunIdentity;
 use ron::de::from_str;
 use ron::ser::{to_string_pretty, PrettyConfig};
@@ -43,6 +47,18 @@ pub struct SimulationAnalysisResult {
     pub maximum_angle_of_attack_rad: Option<f64>,
     #[serde(default)]
     pub maximum_heat_flux_w_m2: Option<f64>,
+    #[serde(default)]
+    pub final_specific_orbital_energy_j_kg: Option<f64>,
+    #[serde(default)]
+    pub final_orbital_semi_major_axis_m: Option<f64>,
+    #[serde(default)]
+    pub final_orbital_eccentricity: Option<f64>,
+    #[serde(default)]
+    pub stage_separation_count: usize,
+    #[serde(default)]
+    pub fairing_separation_count: usize,
+    #[serde(default)]
+    pub splashdown_count: usize,
     pub minimum_terrain_clearance_m: f64,
     pub propellant_consumed_kg: f64,
     pub final_position_m: [f64; 3],
@@ -190,11 +206,18 @@ pub fn analyze_simulation_artifact(
                 .into(),
         );
     }
-    if artifact
-        .telemetry
-        .iter()
-        .all(|frame| frame.gravitational_parameter_m3_s2.is_none())
-    {
+    let final_position_m = DVec3::from_array(last.state.position_m);
+    let final_velocity_mps = DVec3::from_array(last.state.velocity_mps);
+    let final_orbit = last
+        .gravitational_parameter_m3_s2
+        .filter(|mu| mu.is_finite() && *mu > 0.0)
+        .and_then(|mu| {
+            let energy = specific_orbital_energy(final_position_m, final_velocity_mps, mu)?;
+            let elements = orbital_elements_from_state(final_position_m, final_velocity_mps, mu);
+            (elements.semi_major_axis_m.is_finite() && elements.eccentricity.is_finite())
+                .then_some((energy, elements.semi_major_axis_m, elements.eccentricity))
+        });
+    if final_orbit.is_none() {
         warnings.push("orbital elements are unavailable because artifact telemetry does not carry a gravitational parameter".into());
     }
     if maximum_aoa.is_none() {
@@ -222,6 +245,24 @@ pub fn analyze_simulation_artifact(
         maximum_dynamic_pressure_pa: maximum_q,
         maximum_angle_of_attack_rad: maximum_aoa,
         maximum_heat_flux_w_m2: maximum_heat,
+        final_specific_orbital_energy_j_kg: final_orbit.map(|orbit| orbit.0),
+        final_orbital_semi_major_axis_m: final_orbit.map(|orbit| orbit.1),
+        final_orbital_eccentricity: final_orbit.map(|orbit| orbit.2),
+        stage_separation_count: artifact
+            .events
+            .iter()
+            .filter(|event| event.event_type == Some(SimulationEventType::StageSeparation))
+            .count(),
+        fairing_separation_count: artifact
+            .events
+            .iter()
+            .filter(|event| event.event_type == Some(SimulationEventType::FairingSeparation))
+            .count(),
+        splashdown_count: artifact
+            .events
+            .iter()
+            .filter(|event| event.event_type == Some(SimulationEventType::Splashdown))
+            .count(),
         minimum_terrain_clearance_m: minimum_clearance,
         propellant_consumed_kg: (first.propellant_remaining_kg - last.propellant_remaining_kg)
             .max(0.0),
@@ -238,7 +279,7 @@ mod tests {
     use super::*;
     use crate::domain::services::regression::RocketStateSample;
     use crate::domain::services::simulation_artifact::{
-        SimulationArtifact, SimulationTelemetryFrame,
+        SimulationArtifact, SimulationEventType, SimulationTelemetryEvent, SimulationTelemetryFrame,
     };
     use crate::domain::services::simulation_run::SimulationRunIdentity;
     fn artifact() -> SimulationArtifact {
@@ -314,5 +355,36 @@ mod tests {
             &[]
         )
         .is_err());
+    }
+
+    #[test]
+    fn derives_final_orbit_and_typed_event_counts_when_recorded() {
+        let mut artifact = artifact();
+        let final_frame = artifact.telemetry.last_mut().unwrap();
+        final_frame.state.position_m = [7_000_000.0, 0.0, 0.0];
+        final_frame.state.velocity_mps = [0.0, 7_546.053_290_107_542, 0.0];
+        final_frame.gravitational_parameter_m3_s2 = Some(3.986_004_418e14);
+        artifact.events = vec![
+            SimulationTelemetryEvent {
+                simulation_time_s: 1.0,
+                kind: "stage_separation".into(),
+                detail: String::new(),
+                event_type: Some(SimulationEventType::StageSeparation),
+            },
+            SimulationTelemetryEvent {
+                simulation_time_s: 1.0,
+                kind: "fairing_separation".into(),
+                detail: String::new(),
+                event_type: Some(SimulationEventType::FairingSeparation),
+            },
+        ];
+
+        let result = analyze_simulation_artifact(&artifact, &[]).unwrap();
+        assert!(result.final_specific_orbital_energy_j_kg.is_some());
+        assert!((result.final_orbital_semi_major_axis_m.unwrap() - 7_000_000.0).abs() < 1.0);
+        assert!(result.final_orbital_eccentricity.unwrap() < 1e-6);
+        assert_eq!(result.stage_separation_count, 1);
+        assert_eq!(result.fairing_separation_count, 1);
+        assert_eq!(result.splashdown_count, 0);
     }
 }

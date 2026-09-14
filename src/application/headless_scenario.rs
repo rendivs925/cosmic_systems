@@ -5,6 +5,9 @@ use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rocket_physics;
 use crate::domain::services::aerodynamics::angle_of_attack;
 use crate::domain::services::regression::RocketStateSample;
+use crate::domain::services::simulation_analysis::{
+    analyze_simulation_artifact, EngineeringConstraint, SimulationAnalysisResult,
+};
 use crate::domain::services::simulation_artifact::{SimulationArtifact, SimulationTelemetryFrame};
 use crate::domain::services::simulation_run::SimulationRunIdentity;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -17,8 +20,8 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    RocketFlightConditions, RocketMissionState, RocketPhysicsState, RocketPropulsion,
-    TerrainCollisionState, ThermalState,
+    RocketFlightConditions, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
+    RocketPropulsion, TerrainCollisionState, ThermalState,
 };
 use crate::infrastructure::bevy_adapters::rocket::telemetry::SimulationTelemetryRecorder;
 use bevy::math::DVec3;
@@ -79,6 +82,14 @@ pub struct BatchScenarioResult {
     pub result: Result<SimulationArtifact, String>,
 }
 
+/// Per-scenario analysis preserves batch isolation: artifacts are analyzed
+/// after their fresh simulation worlds have completed.
+#[derive(Debug)]
+pub struct BatchScenarioAnalysisResult {
+    pub scenario_id: String,
+    pub result: Result<SimulationAnalysisResult, String>,
+}
+
 pub fn run_headless_batch(
     scenarios: impl IntoIterator<Item = HeadlessScenario>,
 ) -> Vec<BatchScenarioResult> {
@@ -91,6 +102,23 @@ pub fn run_headless_batch(
                 scenario_id,
                 result,
             }
+        })
+        .collect()
+}
+
+pub fn analyze_headless_batch(
+    batch: &[BatchScenarioResult],
+    constraints: &[EngineeringConstraint],
+) -> Vec<BatchScenarioAnalysisResult> {
+    batch
+        .iter()
+        .map(|scenario| BatchScenarioAnalysisResult {
+            scenario_id: scenario.scenario_id.clone(),
+            result: scenario
+                .result
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|artifact| analyze_simulation_artifact(artifact, constraints)),
         })
         .collect()
 }
@@ -180,13 +208,17 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
     let mut query = world.query::<(
         &RocketPhysicsState,
         &RocketMissionState,
+        &RocketPlanetBinding,
         &RocketPropulsion,
         &RocketFlightConditions,
         &TerrainCollisionState,
         &ThermalState,
     )>();
-    let (physics, mission, propulsion, conditions, collision, thermal) =
+    let (physics, mission, binding, propulsion, conditions, collision, thermal) =
         query.single(world).map_err(|error| error.to_string())?;
+    let gravitational_parameter_m3_s2 = world
+        .resource::<EphemerisSnapshot>()
+        .gravitational_parameter_for_catalog_body(binding.planet_name.as_str());
     let dynamics = &physics.dynamics;
     Ok(SimulationTelemetryFrame {
         simulation_time_s,
@@ -235,7 +267,7 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
             physics.dynamics.orientation.inverse() * conditions.atmosphere_relative_velocity_mps,
         )),
         total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
-        gravitational_parameter_m3_s2: None,
+        gravitational_parameter_m3_s2,
     })
 }
 
@@ -425,5 +457,16 @@ mod tests {
             runs[0].result.as_ref().unwrap().run_identity.scenario_id,
             runs[1].result.as_ref().unwrap().run_identity.scenario_id
         );
+    }
+
+    #[test]
+    fn batch_analysis_uses_each_completed_artifact() {
+        let batch = run_headless_batch([HeadlessScenario {
+            fixed_steps: 1,
+            ..default()
+        }]);
+        let analysis = analyze_headless_batch(&batch, &[]);
+        assert_eq!(analysis.len(), 1);
+        assert!(analysis[0].result.is_ok());
     }
 }
