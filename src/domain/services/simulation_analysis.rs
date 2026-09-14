@@ -4,7 +4,9 @@ use crate::domain::math::DVec3;
 use crate::domain::services::physics_orbital::{
     orbital_elements_from_state, specific_orbital_energy,
 };
-use crate::domain::services::simulation_artifact::{SimulationArtifact, SimulationEventType};
+use crate::domain::services::simulation_artifact::{
+    SimulationArtifact, SimulationEventType, SimulationTelemetryEvent,
+};
 use crate::domain::services::simulation_run::SimulationRunIdentity;
 use ron::de::from_str;
 use ron::ser::{to_string_pretty, PrettyConfig};
@@ -59,6 +61,8 @@ pub struct SimulationAnalysisResult {
     pub fairing_separation_count: usize,
     #[serde(default)]
     pub splashdown_count: usize,
+    #[serde(default)]
+    pub event_timeline: Vec<SimulationTelemetryEvent>,
     pub minimum_terrain_clearance_m: f64,
     pub propellant_consumed_kg: f64,
     pub final_position_m: [f64; 3],
@@ -86,15 +90,50 @@ impl SimulationAnalysisResult {
     }
 
     pub fn engineering_summary(&self) -> String {
-        format!(
-            "RUN\nscenario={} vehicle={} terrain={} ephemeris={}\n\nFLIGHT\nduration_s={:.3}\nmax_altitude_m={:.3}\nmax_speed_mps={:.3}\nmax_mach={:.3}\nmax_q_pa={:.3}\nfinal_mass_kg={:.3}\n\nCONSTRAINTS\npassed={}/{}\n\nPROVENANCE\nartifact_sha256={}\n",
+        use std::fmt::Write;
+
+        let mut summary = format!(
+            "RUN\nscenario={} vehicle={} terrain={} ephemeris={}\n\nFLIGHT\nduration_s={:.3}\nmax_altitude_m={:.3}\nmax_speed_mps={:.3}\nmax_mach={:.3}\nmax_q_pa={:.3}\nfinal_mass_kg={:.3}\n",
             self.run_identity.scenario_id, self.run_identity.vehicle_model_id,
             self.run_identity.terrain_source_id, self.run_identity.ephemeris_authority_id,
             self.duration_s, self.maximum_terrain_altitude_m, self.maximum_speed_mps,
             self.maximum_mach, self.maximum_dynamic_pressure_pa, self.final_mass_kg,
-            self.constraints.iter().filter(|result| result.passed).count(), self.constraints.len(),
+        );
+        if let Some(value) = self.maximum_angle_of_attack_rad {
+            let _ = writeln!(summary, "max_abs_aoa_rad={value:.6}");
+        }
+        if let Some(value) = self.maximum_heat_flux_w_m2 {
+            let _ = writeln!(summary, "max_heat_flux_w_m2={value:.3}");
+        }
+        if let (Some(energy), Some(axis), Some(eccentricity)) = (
+            self.final_specific_orbital_energy_j_kg,
+            self.final_orbital_semi_major_axis_m,
+            self.final_orbital_eccentricity,
+        ) {
+            let _ = writeln!(
+                summary,
+                "final_specific_orbital_energy_j_kg={energy:.3}\nfinal_orbital_semi_major_axis_m={axis:.3}\nfinal_orbital_eccentricity={eccentricity:.8}"
+            );
+        }
+        let _ = writeln!(
+            summary,
+            "\nEVENTS\nstage_separations={} fairing_separations={} splashdowns={} total={}",
+            self.stage_separation_count,
+            self.fairing_separation_count,
+            self.splashdown_count,
+            self.event_timeline.len(),
+        );
+        let _ = writeln!(
+            summary,
+            "\nCONSTRAINTS\npassed={}/{}\n\nPROVENANCE\nartifact_sha256={}",
+            self.constraints
+                .iter()
+                .filter(|result| result.passed)
+                .count(),
+            self.constraints.len(),
             self.source_artifact_sha256,
-        )
+        );
+        summary
     }
 }
 
@@ -218,7 +257,7 @@ pub fn analyze_simulation_artifact(
                 .then_some((energy, elements.semi_major_axis_m, elements.eccentricity))
         });
     if final_orbit.is_none() {
-        warnings.push("orbital elements are unavailable because artifact telemetry does not carry a gravitational parameter".into());
+        warnings.push("orbital elements are unavailable because the final artifact frame lacks a valid gravitational parameter or inertial state".into());
     }
     if maximum_aoa.is_none() {
         warnings.push(
@@ -263,6 +302,7 @@ pub fn analyze_simulation_artifact(
             .iter()
             .filter(|event| event.event_type == Some(SimulationEventType::Splashdown))
             .count(),
+        event_timeline: artifact.events.clone(),
         minimum_terrain_clearance_m: minimum_clearance,
         propellant_consumed_kg: (first.propellant_remaining_kg - last.propellant_remaining_kg)
             .max(0.0),
@@ -386,5 +426,7 @@ mod tests {
         assert_eq!(result.stage_separation_count, 1);
         assert_eq!(result.fairing_separation_count, 1);
         assert_eq!(result.splashdown_count, 0);
+        assert_eq!(result.event_timeline, artifact.events);
+        assert!(result.engineering_summary().contains("stage_separations=1"));
     }
 }
