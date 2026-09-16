@@ -20,8 +20,8 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    RocketFlightConditions, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
-    RocketPropulsion, TerrainCollisionState, ThermalState,
+    AppliedPropulsionState, RocketFlightConditions, RocketMissionState, RocketPhysicsState,
+    RocketPlanetBinding, RocketPropulsion, TerrainCollisionState, ThermalState,
 };
 use crate::infrastructure::bevy_adapters::rocket::telemetry::SimulationTelemetryRecorder;
 use bevy::math::DVec3;
@@ -213,8 +213,9 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
         &RocketFlightConditions,
         &TerrainCollisionState,
         &ThermalState,
+        &AppliedPropulsionState,
     )>();
-    let (physics, mission, binding, propulsion, conditions, collision, thermal) =
+    let (physics, mission, binding, propulsion, conditions, collision, thermal, applied) =
         query.single(world).map_err(|error| error.to_string())?;
     let gravitational_parameter_m3_s2 = world
         .resource::<EphemerisSnapshot>()
@@ -268,6 +269,8 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
         )),
         total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
         gravitational_parameter_m3_s2,
+        applied_thrust_n: Some(applied.thrust_n),
+        active_engine_count: Some(applied.active_engine_count),
     })
 }
 

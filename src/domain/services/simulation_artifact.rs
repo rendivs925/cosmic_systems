@@ -33,6 +33,10 @@ pub struct SimulationTelemetryFrame {
     /// Bound central body's validated gravitational parameter, m³/s².
     #[serde(default)]
     pub gravitational_parameter_m3_s2: Option<f64>,
+    #[serde(default)]
+    pub applied_thrust_n: Option<f64>,
+    #[serde(default)]
+    pub active_engine_count: Option<u32>,
 }
 
 /// Structured simulation occurrence. The stable kind is for consumers; detail
@@ -213,6 +217,8 @@ mod tests {
             angle_of_attack_rad: None,
             total_heat_flux_w_m2: None,
             gravitational_parameter_m3_s2: None,
+            applied_thrust_n: None,
+            active_engine_count: None,
         });
         artifact
     }

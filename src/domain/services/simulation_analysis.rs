@@ -50,6 +50,10 @@ pub struct SimulationAnalysisResult {
     #[serde(default)]
     pub maximum_heat_flux_w_m2: Option<f64>,
     #[serde(default)]
+    pub maximum_applied_thrust_n: Option<f64>,
+    #[serde(default)]
+    pub maximum_active_engine_count: Option<u32>,
+    #[serde(default)]
     pub final_specific_orbital_energy_j_kg: Option<f64>,
     #[serde(default)]
     pub final_orbital_semi_major_axis_m: Option<f64>,
@@ -104,6 +108,12 @@ impl SimulationAnalysisResult {
         }
         if let Some(value) = self.maximum_heat_flux_w_m2 {
             let _ = writeln!(summary, "max_heat_flux_w_m2={value:.3}");
+        }
+        if let Some(value) = self.maximum_applied_thrust_n {
+            let _ = writeln!(summary, "max_applied_thrust_n={value:.3}");
+        }
+        if let Some(value) = self.maximum_active_engine_count {
+            let _ = writeln!(summary, "max_active_engine_count={value}");
         }
         if let (Some(energy), Some(axis), Some(eccentricity)) = (
             self.final_specific_orbital_energy_j_kg,
@@ -165,6 +175,8 @@ pub fn analyze_simulation_artifact(
     let mut max_q_time = first.simulation_time_s;
     let mut maximum_aoa = None;
     let mut maximum_heat = None;
+    let mut maximum_thrust = None;
+    let mut maximum_engine_count = None;
     let mut max_mach_time = first.simulation_time_s;
     let mut min_clearance_time = first.simulation_time_s;
     for (index, frame) in artifact.telemetry.iter().enumerate() {
@@ -190,6 +202,12 @@ pub fn analyze_simulation_artifact(
         }
         if let Some(value) = frame.total_heat_flux_w_m2 {
             maximum_heat = Some(maximum_heat.unwrap_or(0.0_f64).max(value));
+        }
+        if let Some(value) = frame.applied_thrust_n {
+            maximum_thrust = Some(maximum_thrust.unwrap_or(0.0_f64).max(value));
+        }
+        if let Some(value) = frame.active_engine_count {
+            maximum_engine_count = Some(maximum_engine_count.unwrap_or(0).max(value));
         }
         if frame.terrain_altitude_m < minimum_clearance {
             minimum_clearance = frame.terrain_altitude_m;
@@ -270,6 +288,9 @@ pub fn analyze_simulation_artifact(
             "heating is unavailable because artifact telemetry does not carry that channel".into(),
         );
     }
+    if maximum_thrust.is_none() || maximum_engine_count.is_none() {
+        warnings.push("propulsion output is unavailable because artifact telemetry does not carry applied thrust and engine-count channels".into());
+    }
     let artifact_text = artifact.to_ron()?;
     Ok(SimulationAnalysisResult {
         schema_version: SIMULATION_ANALYSIS_SCHEMA_VERSION,
@@ -284,6 +305,8 @@ pub fn analyze_simulation_artifact(
         maximum_dynamic_pressure_pa: maximum_q,
         maximum_angle_of_attack_rad: maximum_aoa,
         maximum_heat_flux_w_m2: maximum_heat,
+        maximum_applied_thrust_n: maximum_thrust,
+        maximum_active_engine_count: maximum_engine_count,
         final_specific_orbital_energy_j_kg: final_orbit.map(|orbit| orbit.0),
         final_orbital_semi_major_axis_m: final_orbit.map(|orbit| orbit.1),
         final_orbital_eccentricity: final_orbit.map(|orbit| orbit.2),
@@ -365,6 +388,8 @@ mod tests {
                 angle_of_attack_rad: None,
                 total_heat_flux_w_m2: None,
                 gravitational_parameter_m3_s2: None,
+                applied_thrust_n: Some(velocity * 1_000.0),
+                active_engine_count: Some(9),
             });
         }
         artifact
@@ -380,6 +405,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.maximum_speed_mps, 10.0);
+        assert_eq!(result.maximum_applied_thrust_n, Some(10_000.0));
+        assert_eq!(result.maximum_active_engine_count, Some(9));
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("propulsion output is unavailable")));
         assert_eq!(result.propellant_consumed_kg, 6.0);
         assert!(!result.constraints[0].passed);
         assert!(result.constraints[1].passed);
@@ -428,5 +459,34 @@ mod tests {
         assert_eq!(result.splashdown_count, 0);
         assert_eq!(result.event_timeline, artifact.events);
         assert!(result.engineering_summary().contains("stage_separations=1"));
+    }
+
+    #[test]
+    fn legacy_frames_without_optional_channels_report_unavailable_warnings() {
+        let mut artifact = artifact();
+        for frame in &mut artifact.telemetry {
+            frame.angle_of_attack_rad = None;
+            frame.total_heat_flux_w_m2 = None;
+            frame.applied_thrust_n = None;
+            frame.active_engine_count = None;
+            frame.gravitational_parameter_m3_s2 = None;
+        }
+        let result = analyze_simulation_artifact(&artifact, &[]).unwrap();
+        assert!(result.maximum_angle_of_attack_rad.is_none());
+        assert!(result.maximum_heat_flux_w_m2.is_none());
+        assert!(result.maximum_applied_thrust_n.is_none());
+        assert!(result.maximum_active_engine_count.is_none());
+        assert!(result.final_specific_orbital_energy_j_kg.is_none());
+        let summary = result.engineering_summary();
+        assert!(!summary.contains("max_applied_thrust_n"));
+        assert!(!summary.contains("max_abs_aoa_rad"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("propulsion output is unavailable")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("orbital elements are unavailable")));
     }
 }

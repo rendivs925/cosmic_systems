@@ -38,8 +38,17 @@ pub fn mach_number(speed_mps: f64, speed_of_sound_mps: f64) -> f64 {
 
 /// Angle of attack (pitch), radians, in the body frame. Positive when the nose
 /// is above the velocity vector.
+///
+/// A zero air-relative velocity has no defined pitch angle. Returning `atan2`
+/// on the signed-zero vector yields an arbitrary ±π, so the degenerate case is
+/// reported as zero, matching [`angle_of_sideslip`]. Aerodynamic forces already
+/// gate on airspeed, so this only affects recorded/sensed attitude telemetry.
 pub fn angle_of_attack(body_velocity: DVec3) -> f64 {
-    (-body_velocity.x).atan2(body_velocity.y)
+    if body_velocity.length_squared() < 1e-18 {
+        0.0
+    } else {
+        (-body_velocity.x).atan2(body_velocity.y)
+    }
 }
 
 /// Sideslip angle, radians, in the body frame. Positive when the velocity has
@@ -202,6 +211,15 @@ mod tests {
         let alpha_down = angle_of_attack(DVec3::new(1.0, 10.0, 0.0));
         assert!(alpha_down < 0.0);
         assert!((alpha + alpha_down).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zero_air_relative_velocity_has_zero_angle_of_attack() {
+        assert_eq!(angle_of_attack(DVec3::ZERO), 0.0);
+        // Signed zeros must not produce ±π from atan2.
+        assert_eq!(angle_of_attack(DVec3::new(-0.0, -0.0, 0.0)), 0.0);
+        assert_eq!(angle_of_attack(DVec3::new(0.0, -0.0, -0.0)), 0.0);
+        assert_eq!(angle_of_sideslip(DVec3::new(-0.0, -0.0, -0.0)), 0.0);
     }
 
     #[test]

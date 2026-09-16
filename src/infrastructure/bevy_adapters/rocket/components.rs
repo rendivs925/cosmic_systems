@@ -636,6 +636,14 @@ pub struct ThermalState {
     pub stagnation_point_heat_flux_w_m2: f64,
 }
 
+/// Propulsion output applied during the current fixed tick. Written only by
+/// `propulsion_thrust`, which is also the sole propulsion force writer.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct AppliedPropulsionState {
+    pub thrust_n: f64,
+    pub active_engine_count: u32,
+}
+
 /// Ablation state tracking TPS recession and mass loss.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct AblationState {

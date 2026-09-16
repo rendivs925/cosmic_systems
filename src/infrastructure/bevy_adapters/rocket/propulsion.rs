@@ -290,10 +290,16 @@ pub fn propulsion_thrust(
         &RocketFlightConditions,
         &RocketPropulsion,
         &RetroPropulsionEffect,
+        Option<&mut AppliedPropulsionState>,
         &mut ForceAccumulator,
     )>,
 ) {
-    for (rocket, conditions, propulsion, retro, mut force_accum) in rocket_query.iter_mut() {
+    for (rocket, conditions, propulsion, retro, applied, mut force_accum) in rocket_query.iter_mut()
+    {
+        // Diagnostic output is optional so minimal test fixtures without the
+        // channel still apply authoritative thrust. Production always spawns it.
+        let mut thrust_n = 0.0;
+        let mut active_engine_count = 0_u32;
         let throttle = propulsion.throttle.clamp(0.0, 1.0);
         if let Some((active_core_stage, core_throttle)) = propulsion.running_core_stage() {
             let (thrust_body, mass_flow_kg_s) = stage_gimbaled_thrust_body(
@@ -308,6 +314,15 @@ pub fn propulsion_thrust(
                 mass_flow_kg_s,
                 sim_time.fixed_timestep(),
             ) / sim_time.fixed_timestep();
+            thrust_n += thrust_body.length() * retro.thrust_multiplier * burn_fraction;
+            active_engine_count += active_core_stage
+                .stage()
+                .engines
+                .iter()
+                .filter(|engine| {
+                    engine.state == crate::domain::entities::rocket::EngineState::Running
+                })
+                .count() as u32;
             force_accum.add_force_n(
                 rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction,
             );
@@ -336,7 +351,22 @@ pub fn propulsion_thrust(
                         * retro.thrust_multiplier
                         * burn_fraction,
                 );
+                thrust_n += booster_thrust_body.length() * retro.thrust_multiplier * burn_fraction;
+                active_engine_count += boosters
+                    .stage
+                    .engines
+                    .iter()
+                    .filter(|engine| {
+                        engine.state == crate::domain::entities::rocket::EngineState::Running
+                    })
+                    .count() as u32;
             }
+        }
+        if let Some(mut applied) = applied {
+            *applied = AppliedPropulsionState {
+                thrust_n,
+                active_engine_count,
+            };
         }
     }
 }

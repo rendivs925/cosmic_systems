@@ -107,11 +107,12 @@ pub fn record_simulation_telemetry_system(
             &RocketFlightConditions,
             &TerrainCollisionState,
             &ThermalState,
+            Option<&AppliedPropulsionState>,
         ),
         Without<SpentStage>,
     >,
 ) {
-    let Ok((physics, mission, binding, propulsion, conditions, collision, thermal)) =
+    let Ok((physics, mission, binding, propulsion, conditions, collision, thermal, applied)) =
         query.single()
     else {
         return;
@@ -171,6 +172,8 @@ pub fn record_simulation_telemetry_system(
         total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
         gravitational_parameter_m3_s2: ephemeris_snapshot
             .gravitational_parameter_for_catalog_body(binding.planet_name.as_str()),
+        applied_thrust_n: applied.map(|value| value.thrust_n),
+        active_engine_count: applied.map(|value| value.active_engine_count),
     });
 }
 

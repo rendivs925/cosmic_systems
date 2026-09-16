@@ -131,6 +131,9 @@ pub fn spawn_rocket_physics(
         CommsState::default(),
         RetroPropulsionEffect::default(),
     ));
+    commands
+        .entity(entity)
+        .insert(AppliedPropulsionState::default());
     commands.entity(entity).insert((FlightRecorder::new(
         RECORDER_MAX_ENTRIES,
         RECORDER_INTERVAL_S,
@@ -302,6 +305,9 @@ pub(crate) fn spawn_rockets(
         TipOverState::default(),
         LandingScorecard::default(),
     ));
+    commands
+        .entity(entity)
+        .insert(AppliedPropulsionState::default());
 
     // Phase 3: Entry/comms state + render primitives. Vehicles that define a
     // final-stage fairing carry one at spawn; `check_fairing_separation`
