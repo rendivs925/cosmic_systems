@@ -54,11 +54,6 @@ pub fn vacuum_density(mass_kg: f64, distance_m: f64) -> f64 {
     (1.0 + correction).min(2.0)
 }
 
-/// Net energy harvested per pulse cycle (MJ).
-pub fn pulse_energy_gain(pulse: f32, dc: f32, period_seconds: f32) -> f32 {
-    zpe_power(pulse, dc) * period_seconds / 1000.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

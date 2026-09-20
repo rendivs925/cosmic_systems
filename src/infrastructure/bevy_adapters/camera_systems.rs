@@ -327,10 +327,6 @@ pub fn auto_inspect_selected_planet(
         }
     }
 
-    // if controller.mode != CameraMode::FreeFlight {
-    //     return;
-    // }
-
     // A selection change starts a new framing transition. Do not clear this on
     // every frame: user input must be allowed to take control without the
     // inspection camera immediately overwriting it again.

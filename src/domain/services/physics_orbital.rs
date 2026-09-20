@@ -720,20 +720,6 @@ pub fn plane_change_dv(velocity_mps: f64, inclination_change_rad: f64) -> f64 {
     2.0 * velocity_mps * (inclination_change_rad / 2.0).sin()
 }
 
-/// Combined circularize + plane change delta-v (more efficient than separate burns).
-pub fn circularize_and_plane_change_dv(
-    position_m: DVec3,
-    velocity_mps: DVec3,
-    target_inclination_rad: f64,
-    mu: f64,
-) -> f64 {
-    let elements = orbital_elements_from_state(position_m, velocity_mps, mu);
-    let v = velocity_mps.length();
-    let circular_dv = circularize_burn_dv(position_m, velocity_mps, mu).0;
-    let plane_dv = plane_change_dv(v, (target_inclination_rad - elements.inclination_rad).abs());
-    circular_dv + plane_dv
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

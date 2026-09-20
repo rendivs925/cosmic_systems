@@ -15,8 +15,6 @@ pub enum OrientationInertialFrame {
 /// The rotating axes an orientation model maps into an inertial frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrientationBodyFixedFrame {
-    /// Legacy catalog body-fixed axes, retained only as an explicit approximation.
-    CatalogBodyFixed,
     /// NAIF IAU body-fixed axes.
     IauBodyFixed,
 }
@@ -30,8 +28,6 @@ pub enum OrientationTimeScale {
 /// Source category for an orientation model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrientationDataSource {
-    /// Rotation period and axial tilt from the visual/catalog model.
-    CatalogApproximation,
     /// A validated local PCK or BPC dataset.
     Kernel,
 }
@@ -39,7 +35,6 @@ pub enum OrientationDataSource {
 /// Pole definition used by an orientation model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PoleModel {
-    CatalogAxialTilt,
     KernelDefined,
 }
 

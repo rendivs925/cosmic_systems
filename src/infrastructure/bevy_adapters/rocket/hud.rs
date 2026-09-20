@@ -195,11 +195,6 @@ impl HudBuilder {
         Self::default()
     }
 
-    pub fn with_colors(mut self, colors: HudColors) -> Self {
-        self.colors = colors;
-        self
-    }
-
     fn txt(
         &self,
         text: impl Into<String>,

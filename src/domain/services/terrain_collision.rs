@@ -132,9 +132,6 @@ pub enum GroundContact {
 // Multi-criteria touchdown evaluation
 // ---------------------------------------------------------------------------
 
-/// Radar-altitude band within which a touchdown verdict is evaluated.
-pub const TOUCHDOWN_BAND_M: f64 = 3.0;
-
 /// Exponential tangential damping rate while resting (1/s). Applied as
 /// `v_t *= exp(-rate*dt)`, so it is deterministic and frame-rate independent.
 pub const REST_TANGENTIAL_DAMPING_PER_S: f64 = 12.0;

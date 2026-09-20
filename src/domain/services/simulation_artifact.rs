@@ -150,13 +150,6 @@ impl ReplayTimeline {
     pub fn is_paused(&self) -> bool {
         self.paused
     }
-    pub fn set_playback_rate(&mut self, rate: f64) -> Result<(), String> {
-        if !rate.is_finite() || rate <= 0.0 {
-            return Err("playback rate must be positive".to_string());
-        }
-        self.playback_rate = rate;
-        Ok(())
-    }
     pub fn playback_rate(&self) -> f64 {
         self.playback_rate
     }

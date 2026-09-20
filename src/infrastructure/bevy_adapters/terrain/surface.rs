@@ -30,11 +30,15 @@ use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
 /// Maximum scatter counts for a level-12 patch. Finer leaves scale their count
 /// by patch area so refinement preserves density rather than multiplying it.
-const TREE_COUNT: usize = 64;
+const TREE_COUNT: usize = 128;
 /// A bounded carpet of crossed billboards makes close vegetation read as grass
 /// without adding entities or unique materials.
-const GRASS_CLUMP_COUNT: usize = 512;
-const ROCK_COUNT: usize = 14;
+const GRASS_CLUMP_COUNT: usize = 1024;
+const ROCK_COUNT: usize = 28;
+/// Scatter candidates below this land-cover density are dropped entirely; above
+/// it they are thinned probabilistically so density falls off smoothly.
+const TREE_MIN_DENSITY: f64 = 0.08;
+const GRASS_MIN_DENSITY: f64 = 0.05;
 /// Maximum lumps in one boulder/scree cluster.
 const ROCK_MAX_LUMPS: usize = 3;
 /// Solid trunk prisms share the single boulder tessellation budget.
@@ -841,29 +845,26 @@ pub fn build_vegetation_mesh(
         let v = v0 + (v1 - v0) * rv;
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
-        let h = source.height_m(lat, lon);
-        if h < 0.5 || h > 2600.0 {
+        // Sample the same LOD-faded height as the rendered mesh so scatter never
+        // floats above or sinks below the surface it sits on.
+        let h = source.mesh_height_m(lat, lon, patch.level);
+        if h < 0.5 {
             continue;
         }
         let local_slope = slope_deg_at(source, lat, lon);
         if local_slope > 34.0 {
             continue;
         }
-        let appearance = surface_appearance(
-            h,
-            source.moisture(lat, lon),
-            source.zone_lat(lat),
-            local_slope,
-        );
-        if appearance.albedo[1] <= appearance.albedo[0]
-            || appearance.albedo[1] <= appearance.albedo[2]
+        // Land cover is an explicit climate signal, not the greenness of the
+        // synthesized albedo. Candidates are thinned by density so wet forest is
+        // dense and dry or cold ground is sparse.
+        let density = source.vegetation_density(lat, lon);
+        if density < TREE_MIN_DENSITY
+            || hash01(k as u64, patch.face as u64, patch.tile_y as u64) > density
         {
             continue;
         }
         let profile = papua_tropical_profile(lat, lon, h, source.moisture(lat, lon), local_slope);
-        if profile.tropical_lowland_unit > 0.0 && profile.wet_vegetation_unit < 0.1 {
-            continue;
-        }
         let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
         let up = surface_normal(source, lat, lon, radius_m);
         // Vary tree size a little.
@@ -934,19 +935,13 @@ pub fn build_vegetation_mesh(
         let v = v0 + (v1 - v0) * rv;
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
-        let h = source.height_m(lat, lon);
+        let h = source.mesh_height_m(lat, lon, patch.level);
         let slope_deg = slope_deg_at(source, lat, lon);
-        let appearance = surface_appearance(
-            h,
-            source.moisture(lat, lon),
-            source.zone_lat(lat),
-            slope_deg,
-        );
+        let density = source.vegetation_density(lat, lon);
         if h < 0.5
-            || h > 2_800.0
-            || slope_deg > 28.0
-            || appearance.albedo[1] <= appearance.albedo[0]
-            || appearance.albedo[1] <= appearance.albedo[2]
+            || slope_deg > 30.0
+            || density < GRASS_MIN_DENSITY
+            || hash01(k as u64, patch.face as u64 ^ 0x6A11, patch.tile_x as u64) > density
         {
             continue;
         }
@@ -986,18 +981,17 @@ pub fn build_vegetation_mesh(
         let v = v0 + (v1 - v0) * rv;
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
-        let h = source.height_m(lat, lon);
+        let h = source.mesh_height_m(lat, lon, patch.level);
         if h < 0.5 {
             continue;
         }
         let slope_deg = slope_deg_at(source, lat, lon);
         let moisture = source.moisture(lat, lon);
-        // Exposed rock concentrates on steeper, drier ground; on gentle vegetated
-        // terrain most scatter slots stay empty so rocks read as outcrops rather
-        // than evenly sprinkled spheres.
-        let exposed = ((slope_deg - 10.0) / 25.0).clamp(0.0, 1.0);
-        if exposed < 0.2
-            && hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64 ^ 0x5EED) > 0.3
+        // Exposed rock concentrates on steeper ground, but scree and outcrops
+        // still occur on gentle terrain, so only a fraction of flat slots drop.
+        let exposed = ((slope_deg - 8.0) / 24.0).clamp(0.0, 1.0);
+        if exposed < 0.15
+            && hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64 ^ 0x5EED) > 0.55
         {
             continue;
         }
@@ -1457,23 +1451,74 @@ mod tests {
     fn scatter_density_stays_stable_as_patches_refine() {
         assert_eq!(
             scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL),
-            64
+            128
         );
         assert_eq!(
             scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 1),
-            16
+            32
         );
         assert_eq!(
             scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 2),
-            4
+            8
         );
         assert_eq!(
             scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 3),
-            1
+            2
         );
         assert_eq!(
             scatter_count_for_level(ROCK_COUNT, VEGETATION_MIN_PATCH_LEVEL + 2),
             1
         );
+    }
+
+    /// The real Earth composition (measured base + procedural detail/climate)
+    /// must place visible scatter at the Papua launch site at close LOD. The
+    /// synthetic lush source used by the older test cannot catch a regression
+    /// where the launch biome is bare.
+    #[test]
+    fn earth_launch_site_is_vegetated_at_close_lod() {
+        use crate::domain::services::terrain_source::{
+            DetailLodFade, LayeredTerrainSource, ProceduralDetailSource, TerrainDetailLayer,
+            TerrainElevationLayer,
+        };
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct CoastalBase;
+        impl TerrainSource for CoastalBase {
+            fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+                15.0
+            }
+            fn elevation_bounds_m(&self) -> ElevationBounds {
+                ElevationBounds::new(15.0, 15.0)
+            }
+        }
+
+        let detail: Arc<dyn TerrainSource> = Arc::new(ProceduralDetailSource::new(0x00E4_27A6));
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(Arc::new(CoastalBase), ElevationBounds::new(15.0, 15.0)),
+            None,
+            Some(TerrainDetailLayer::new(
+                detail,
+                ProceduralDetailSource::elevation_bounds_m(),
+                DetailLodFade::new(11, 14),
+            )),
+        );
+
+        let latitude_deg = -8.0;
+        let longitude_deg = 139.5;
+        let density = source.vegetation_density(latitude_deg, longitude_deg);
+        assert!(
+            density >= TREE_MIN_DENSITY,
+            "Papua launch lowland must be vegetated, got density {density}"
+        );
+
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        let patch = TerrainPatch::for_direction(direction, VEGETATION_MIN_PATCH_LEVEL);
+        let mesh = build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO)
+            .expect("the launch-site patch must produce a vegetation mesh");
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
     }
 }

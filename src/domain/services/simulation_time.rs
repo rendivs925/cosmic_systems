@@ -141,11 +141,6 @@ impl SimulationTime {
         self.time_acceleration = factor.clamp(TIME_ACCELERATION_MIN, Self::ACCEL_10000X);
     }
 
-    /// Toggle pause state.
-    pub fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
-    }
-
     /// Record real time and accrue the corresponding simulation-time demand.
     /// Physics systems must advance `sim_time_s` only through completed fixed
     /// ticks, using [`Self::advance_fixed_step`].
@@ -209,8 +204,6 @@ impl SimulationTime {
     /// Predefined time acceleration presets.
     pub const REALTIME: f64 = 1.0;
     pub const ACCEL_10X: f64 = 10.0;
-    pub const ACCEL_100X: f64 = 100.0;
-    pub const ACCEL_1000X: f64 = 1000.0;
     pub const ACCEL_10000X: f64 = 10000.0;
 }
 

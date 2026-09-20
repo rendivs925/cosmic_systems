@@ -123,63 +123,6 @@ pub fn analyze_headless_batch(
         .collect()
 }
 
-pub fn write_simulation_artifact(
-    path: impl AsRef<std::path::Path>,
-    artifact: &SimulationArtifact,
-) -> Result<(), String> {
-    std::fs::write(path.as_ref(), artifact.to_ron()?).map_err(|error| error.to_string())
-}
-
-/// Execute sequentially and write one deterministic RON artifact per success.
-/// The file stem combines the scenario id and file-backed vehicle checksum so
-/// wall-clock time is never part of artifact identity.
-pub fn run_headless_batch_to_directory(
-    scenarios: impl IntoIterator<Item = HeadlessScenario>,
-    directory: impl AsRef<std::path::Path>,
-) -> Vec<BatchScenarioResult> {
-    let directory = directory.as_ref();
-    let mut results = run_headless_batch(scenarios);
-    for batch in &mut results {
-        let Ok(artifact) = &batch.result else {
-            continue;
-        };
-        let scenario = batch
-            .scenario_id
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        let vehicle = artifact
-            .run_identity
-            .vehicle_configuration_sha256
-            .as_deref()
-            .unwrap_or("in-memory");
-        let path = directory.join(format!(
-            "{scenario}-{}-v{}.ron",
-            &vehicle[..vehicle.len().min(12)],
-            artifact.schema_version
-        ));
-        let text = match artifact.to_ron() {
-            Ok(text) => text,
-            Err(error) => {
-                batch.result = Err(format!("cannot serialize batch artifact: {error}"));
-                continue;
-            }
-        };
-        if let Err(error) =
-            std::fs::create_dir_all(directory).and_then(|_| std::fs::write(path, text))
-        {
-            batch.result = Err(format!("cannot write batch artifact: {error}"));
-        }
-    }
-    results
-}
-
 fn mission_code(mission: RocketMissionState) -> u8 {
     mission.0.code()
 }

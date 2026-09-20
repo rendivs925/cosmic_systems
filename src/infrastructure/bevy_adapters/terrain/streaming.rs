@@ -25,7 +25,6 @@ use crate::infrastructure::bevy_adapters::performance_components::PerformanceMet
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketMissionState, RocketPhysicsState, RocketPlanetBinding, SpentStage,
 };
-use crate::infrastructure::bevy_adapters::rocket::contact::TerrainSurfaceSampleCache;
 use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::terrain::render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
@@ -111,41 +110,6 @@ pub struct TerrainStreamingResource {
     /// Next generated-tile count at which streaming metrics are reported.
     next_metrics_report_at: usize,
     cadence: TerrainStreamingCadence,
-}
-
-/// Startup warmup work remains off the main thread. Holding the tasks until
-/// completion prevents their cancellation while the first presentation frame
-/// is being prepared.
-#[derive(Resource, Default)]
-pub struct TerrainWarmupTasks(Vec<Task<()>>);
-
-/// Prime the shared terrain evaluator before first presentation. `sample` also
-/// computes the source normal, which exercises the same height probes used by
-/// ground contact while preallocating the exact 512-entry contact cache.
-pub fn warmup_terrain_system(
-    surface_cache: Res<TerrainSurfaceSampleCache>,
-    planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
-    mut warmup_tasks: ResMut<TerrainWarmupTasks>,
-) {
-    if !warmup_tasks.0.is_empty() {
-        return;
-    }
-    let task_pool = AsyncComputeTaskPool::get();
-    for (planet_entity, planet, terrain) in &planet_query {
-        let radius_m = planet.domain_planet.radius_km as f64 * 1_000.0;
-        let source = terrain.source.clone();
-        let surface_cache = surface_cache.clone();
-        warmup_tasks.0.push(task_pool.spawn(async move {
-            surface_cache.sample(planet_entity, source.as_ref(), 0.0, 0.0, radius_m);
-        }));
-    }
-}
-
-/// Drop completed startup warmup tasks without blocking presentation.
-pub fn collect_terrain_warmup_tasks(mut warmup_tasks: ResMut<TerrainWarmupTasks>) {
-    warmup_tasks
-        .0
-        .retain_mut(|task| block_on(future::poll_once(task)).is_none());
 }
 
 impl Default for TerrainStreamingResource {

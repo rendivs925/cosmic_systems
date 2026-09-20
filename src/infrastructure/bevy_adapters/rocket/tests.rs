@@ -474,7 +474,6 @@ mod ground_contact_tests {
     use crate::infrastructure::bevy_adapters::rocket::dynamics::{
         accumulate_forces, integrate_6dof,
     };
-    use crate::infrastructure::bevy_adapters::rocket::events::SplashdownDetectedEvent;
     use crate::infrastructure::bevy_adapters::rocket::lifecycle::{
         apply_relaunch_requests, RelaunchCommandQueue,
     };
@@ -1268,7 +1267,6 @@ mod recovery_pipeline_tests {
     use crate::infrastructure::bevy_adapters::rocket::dynamics::{
         accumulate_forces, integrate_6dof,
     };
-    use crate::infrastructure::bevy_adapters::rocket::events::SplashdownDetectedEvent;
     use crate::infrastructure::bevy_adapters::rocket::guidance::{
         guidance_system, update_drone_ship_landing_targets,
     };
@@ -1616,9 +1614,6 @@ mod ascent_pipeline_tests {
     use crate::infrastructure::bevy_adapters::rocket::control::{actuation_system, control_system};
     use crate::infrastructure::bevy_adapters::rocket::dynamics::{
         accumulate_forces, integrate_6dof,
-    };
-    use crate::infrastructure::bevy_adapters::rocket::events::{
-        SplashdownDetectedEvent, StageSeparatedEvent,
     };
     use crate::infrastructure::bevy_adapters::rocket::guidance::guidance_system;
     use crate::infrastructure::bevy_adapters::rocket::propulsion::{
@@ -2643,7 +2638,6 @@ mod parallel_booster_pipeline_tests {
     use crate::infrastructure::bevy_adapters::rocket::dynamics::{
         accumulate_forces, integrate_6dof,
     };
-    use crate::infrastructure::bevy_adapters::rocket::events::StageSeparatedEvent;
     use crate::infrastructure::bevy_adapters::rocket::propulsion::{
         propulsion_consumption, propulsion_staging, propulsion_thrust,
     };

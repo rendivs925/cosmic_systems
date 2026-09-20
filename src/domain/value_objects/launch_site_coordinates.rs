@@ -135,33 +135,6 @@ pub mod predefined_sites {
         )
     }
 
-    pub fn cape_canaveral() -> LaunchSiteCoordinates {
-        LaunchSiteCoordinates::new(
-            CelestialBodyId::earth(),
-            28.4889,  // Latitude
-            -80.5778, // Longitude
-            3.0,      // Altitude above sea level (meters)
-        )
-    }
-
-    pub fn baikonur_cosmodrome() -> LaunchSiteCoordinates {
-        LaunchSiteCoordinates::new(
-            CelestialBodyId::earth(),
-            45.9650, // Latitude
-            63.3050, // Longitude
-            90.0,    // Altitude above sea level (meters)
-        )
-    }
-
-    pub fn guiana_space_centre() -> LaunchSiteCoordinates {
-        LaunchSiteCoordinates::new(
-            CelestialBodyId::earth(),
-            5.2360,   // Latitude
-            -52.7750, // Longitude
-            10.0,     // Altitude above sea level (meters)
-        )
-    }
-
     /// Remote South Papua coastal-lowland presentation site, not a real spaceport.
     pub fn papua_indonesia_coastal_lowland() -> LaunchSiteCoordinates {
         LaunchSiteCoordinates::new(

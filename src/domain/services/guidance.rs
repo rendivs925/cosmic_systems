@@ -124,12 +124,6 @@ impl AscentGuidanceProfile {
             pitch_gate_min_vertical_speed_mps: 30.0,
         }
     }
-
-    /// Create a profile for a specific launch site inclination.
-    pub fn with_inclination(mut self, inclination_rad: f64) -> Self {
-        self.target_inclination_rad = inclination_rad;
-        self
-    }
 }
 
 /// A prograde, ascending-node horizontal launch solution in the local
@@ -265,18 +259,6 @@ pub fn gravity_turn_direction(
     altitude_m: f64,
 ) -> DVec3 {
     let angle = gravity_turn_pitch_angle(profile, altitude_m);
-    (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
-}
-
-/// Desired body-axis direction for gravity turn using combined altitude/time schedule.
-pub fn gravity_turn_direction_combined(
-    profile: &AscentGuidanceProfile,
-    up_dir: DVec3,
-    pitch_axis: DVec3,
-    altitude_m: f64,
-    time_since_liftoff_s: f64,
-) -> DVec3 {
-    let angle = gravity_turn_pitch_angle_combined(profile, altitude_m, time_since_liftoff_s);
     (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
 }
 
@@ -693,42 +675,6 @@ pub fn powered_descent_guidance(
     // Attitude aligns body +Y with thrust direction.
     let attitude = DQuat::from_rotation_arc(DVec3::Y, thrust_dir);
     (thrust_dir * thrust_mag, attitude)
-}
-
-/// Unpowered descent guidance for parafoil/parachute.
-/// Computes lateral acceleration command to steer toward landing target.
-pub fn unpowered_descent_guidance(
-    position_m: DVec3,
-    velocity_mps: DVec3,
-    target_position_m: DVec3,
-    parafoil_max_lat_accel_mps2: f64,
-) -> DVec3 {
-    // Predict impact point assuming constant wind.
-    let altitude = position_m.length();
-    let downrange_vel = velocity_mps.length();
-    let t_go = if downrange_vel > 1.0 {
-        altitude / downrange_vel
-    } else {
-        1.0
-    }
-    .max(1.0);
-
-    let predicted_impact = position_m + velocity_mps * t_go;
-    let miss_distance = (target_position_m - predicted_impact).length();
-
-    // Lateral acceleration command proportional to miss distance.
-    let lat_accel_cmd = (miss_distance / (t_go * t_go)).min(parafoil_max_lat_accel_mps2);
-
-    // Direction perpendicular to velocity in horizontal plane.
-    let up = position_m.normalize_or_zero();
-    let vel_horizontal = velocity_mps - up * velocity_mps.dot(up);
-    let lat_dir = if vel_horizontal.length() > 1e-6 {
-        up.cross(vel_horizontal.normalize())
-    } else {
-        DVec3::Z
-    };
-
-    lat_dir * lat_accel_cmd
 }
 
 /// Advance the ascent mission phase from the current state:

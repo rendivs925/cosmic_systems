@@ -183,6 +183,15 @@ pub trait TerrainSource: Send + Sync + Debug {
         0.0
     }
 
+    /// Normalized vegetation cover in `[0, 1]` used to place scatter. This is
+    /// the authoritative presentation signal for whether ground is forest,
+    /// grassland, or bare. It is deliberately independent of the rendered
+    /// albedo, and defaults to bare so a source without a climate model grows no
+    /// scatter until it explicitly overrides this or composes one.
+    fn vegetation_density(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+
     /// Coarse, non-authoritative moisture for whole-body presentation.
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.moisture(latitude_deg, longitude_deg)
@@ -261,10 +270,6 @@ impl ElevationBounds {
     /// Conservative bounds for the sum of two independent elevation layers.
     pub fn combine(self, other: Self) -> Self {
         Self::new(self.min_m + other.min_m, self.max_m + other.max_m)
-    }
-
-    pub fn range_m(self) -> f64 {
-        self.max_m - self.min_m
     }
 }
 
@@ -479,6 +484,27 @@ impl TerrainSource for LayeredTerrainSource {
         primary
             + (detail.source.moisture(latitude_deg, longitude_deg) - primary)
                 * TERRAIN_DETAIL_BIOME_WEIGHT
+    }
+
+    /// Vegetation cover composes the primary surface's land cover with the
+    /// detail layer's climate, then removes it above the treeline. Collision and
+    /// mesh generation never consume this; it only selects scatter placement.
+    fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let primary = self
+            .primary_surface()
+            .vegetation_density(latitude_deg, longitude_deg);
+        let combined = match &self.procedural_detail {
+            Some(detail) => {
+                let detail_density = detail
+                    .source
+                    .vegetation_density(latitude_deg, longitude_deg);
+                primary + (detail_density - primary) * TERRAIN_DETAIL_BIOME_WEIGHT
+            }
+            None => primary,
+        };
+        let height_m = self.height_m(latitude_deg, longitude_deg);
+        let treeline = 1.0 - ss(3_600.0, 4_800.0, height_m);
+        (combined * treeline).clamp(0.0, 1.0)
     }
 
     fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -818,6 +844,16 @@ impl TerrainSource for ProceduralTerrainSource {
             .fbm(self.config.seed ^ SEED_MOISTURE, p.x, p.y, p.z, 3)
             .clamp(0.0, 1.0)
     }
+
+    /// Land cover for a fully procedural planet: moisture, thinned toward the
+    /// cold poles and above the treeline so scatter follows the climate rather
+    /// than the rendered color.
+    fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let moisture = self.moisture(latitude_deg, longitude_deg);
+        let cold = 1.0 - ss(45.0, 72.0, latitude_deg.abs());
+        let altitude = 1.0 - ss(3_000.0, 4_500.0, self.height_m(latitude_deg, longitude_deg));
+        (moisture * cold * altitude).clamp(0.0, 1.0)
+    }
 }
 
 /// A graded flat zone around a launch site, in the terrain-radial
@@ -981,76 +1017,30 @@ impl TerrainSource for ProceduralDetailSource {
     fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.drainage_strength(latitude_deg, longitude_deg)
     }
-}
 
-/// A base elevation source with [`ProceduralDetailSource`] added on top. Kept
-/// for callers that want one composed source instead of the explicit
-/// [`LayeredTerrainSource`] layer list.
-#[derive(Debug, Clone)]
-pub struct LocalDetailTerrainSource {
-    base: std::sync::Arc<dyn TerrainSource>,
-    detail: ProceduralDetailSource,
-}
-
-impl LocalDetailTerrainSource {
-    pub fn new(base: std::sync::Arc<dyn TerrainSource>, seed: u64) -> Self {
-        Self {
-            base,
-            detail: ProceduralDetailSource::new(seed),
-        }
-    }
-
-    pub const fn elevation_bounds_m() -> ElevationBounds {
-        ProceduralDetailSource::elevation_bounds_m()
-    }
-}
-
-impl TerrainSource for LocalDetailTerrainSource {
-    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.height_m(latitude_deg, longitude_deg)
-            + self.detail.height_m(latitude_deg, longitude_deg)
-    }
-
-    fn elevation_bounds_m(&self) -> ElevationBounds {
-        self.base
-            .elevation_bounds_m()
-            .combine(self.detail.elevation_bounds_m())
-    }
-
-    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
-        self.base
-            .patch_geometric_error(patch)
-            .combine(self.detail.patch_geometric_error(patch))
-    }
-
-    fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
-        self.base.prepare_sample(latitude_deg, longitude_deg);
-    }
-
-    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.moisture(latitude_deg, longitude_deg)
-    }
-
-    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base
-            .river_strength(latitude_deg, longitude_deg)
-            .max(self.detail.river_strength(latitude_deg, longitude_deg))
-    }
-
-    fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.overview_height_m(latitude_deg, longitude_deg)
-    }
-
-    fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.overview_moisture(latitude_deg, longitude_deg)
-    }
-
-    fn overview_slope_deg(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.overview_slope_deg(latitude_deg, longitude_deg)
-    }
-
-    fn zone_lat(&self, latitude_deg: f64) -> f64 {
-        self.base.zone_lat(latitude_deg)
+    /// Broad climate cover for the procedural detail layer: humid tropics, dry
+    /// subtropical belts, temperate and boreal forest, modulated by regional
+    /// noise and biased greener along drainage. Presentation-only land cover,
+    /// not measured vegetation data.
+    fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        let abs_lat = latitude_deg.abs();
+        let tropics = 1.0 - ss(12.0, 32.0, abs_lat);
+        let subtropical_dry = ss(14.0, 26.0, abs_lat) * (1.0 - ss(34.0, 48.0, abs_lat));
+        let temperate = ss(34.0, 50.0, abs_lat) * (1.0 - ss(58.0, 70.0, abs_lat));
+        let boreal = ss(52.0, 64.0, abs_lat) * (1.0 - ss(66.0, 74.0, abs_lat));
+        let base = (tropics * 0.95 + temperate * 0.8 + boreal * 0.55 - subtropical_dry * 0.5)
+            .clamp(0.0, 1.0);
+        let regional = self.noise.value_noise3(
+            self.seed ^ 0x5EED_1EAF,
+            direction.x * 9_000.0,
+            direction.y * 9_000.0,
+            direction.z * 9_000.0,
+        );
+        let drainage = self.drainage_strength_for_direction(direction);
+        (base * (0.5 + 0.5 * regional) + drainage * 0.35).clamp(0.0, 1.0)
     }
 }
 
@@ -1756,17 +1746,16 @@ mod tests {
     }
 
     #[test]
-    fn local_detail_is_deterministic_seam_safe_and_varied_nearby() {
-        let base = std::sync::Arc::new(ProceduralTerrainSource::new(42, 0.0, 0.0, 0));
-        let source = LocalDetailTerrainSource::new(base, 99);
+    fn procedural_detail_is_deterministic_seam_safe_and_varied_nearby() {
+        let detail = ProceduralDetailSource::new(99);
         let point = (28.573, -80.647);
         assert_eq!(
-            source.height_m(point.0, point.1),
-            source.height_m(point.0, point.1)
+            detail.height_m(point.0, point.1),
+            detail.height_m(point.0, point.1)
         );
 
         let nearby: Vec<f64> = (0..8)
-            .map(|step| source.height_m(point.0, point.1 + step as f64 * 0.0005))
+            .map(|step| detail.height_m(point.0, point.1 + step as f64 * 0.0005))
             .collect();
         let range = nearby.iter().copied().fold(f64::NEG_INFINITY, f64::max)
             - nearby.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1776,11 +1765,11 @@ mod tests {
             "local detail exceeded its bounded envelope: {nearby:?}"
         );
 
-        let east = source.height_m(10.0, 179.9999);
-        let west = source.height_m(10.0, -179.9999);
+        let east = detail.height_m(10.0, 179.9999);
+        let west = detail.height_m(10.0, -179.9999);
         assert!(
             (east - west).abs() < 1.0,
-            "local detail must remain continuous across the longitude seam: {east} vs {west}"
+            "detail must remain continuous across the longitude seam: {east} vs {west}"
         );
     }
 
@@ -1848,16 +1837,13 @@ mod tests {
     fn layered_source_is_deterministic_and_continuous_at_the_longitude_seam() {
         let make_source = || {
             let base = Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0));
-            let detail = Arc::new(LocalDetailTerrainSource::new(
-                Arc::new(FlatTerrainSource),
-                99,
-            ));
+            let detail = Arc::new(ProceduralDetailSource::new(99));
             LayeredTerrainSource::new(
                 TerrainElevationLayer::new(base.clone(), base.elevation_bounds_m()),
                 None,
                 Some(TerrainDetailLayer::new(
                     detail,
-                    LocalDetailTerrainSource::elevation_bounds_m(),
+                    ProceduralDetailSource::elevation_bounds_m(),
                     DetailLodFade::new(3, 6),
                 )),
             )
@@ -1881,16 +1867,13 @@ mod tests {
     #[test]
     fn collision_and_render_samples_agree_on_composed_height() {
         let base = Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0));
-        let detail = Arc::new(LocalDetailTerrainSource::new(
-            Arc::new(FlatTerrainSource),
-            99,
-        ));
+        let detail = Arc::new(ProceduralDetailSource::new(99));
         let source = LayeredTerrainSource::new(
             TerrainElevationLayer::new(base.clone(), base.elevation_bounds_m()),
             None,
             Some(TerrainDetailLayer::new(
                 detail,
-                LocalDetailTerrainSource::elevation_bounds_m(),
+                ProceduralDetailSource::elevation_bounds_m(),
                 DetailLodFade::new(3, 6),
             )),
         );
@@ -2058,6 +2041,20 @@ mod tests {
         );
         // Seafloor below sea level.
         assert_eq!(surface_appearance(-100.0, 0.5, 0.5, 0.0).metallic, 0.0);
+    }
+
+    #[test]
+    fn vegetation_density_tracks_climate_not_rendered_color() {
+        let detail = ProceduralDetailSource::new(0x00E4_27A6);
+        // Humid tropics outrank the dry subtropical belt regardless of how the
+        // albedo happens to render there.
+        let tropics = detail.vegetation_density(-8.0, 139.5);
+        let subtropics = detail.vegetation_density(25.0, 10.0);
+        assert!(
+            tropics > subtropics,
+            "tropical lowland {tropics} should exceed dry subtropics {subtropics}"
+        );
+        assert!((0.0..=1.0).contains(&tropics));
     }
 
     #[test]

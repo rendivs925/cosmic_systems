@@ -400,32 +400,6 @@ impl CubeSphereDem {
         )
     }
 
-    /// Bake the complete authoritative height field into the resident
-    /// cube-sphere payload. This is intentionally offline-only; simulation and
-    /// rendering load the resulting immutable package without evaluating the
-    /// source's procedural layers.
-    pub fn from_terrain_source(
-        source: &dyn TerrainSource,
-        resolution: u32,
-    ) -> Result<Self, DemError> {
-        let sample_count = expected_samples(resolution)?;
-        let mut heights_m = Vec::with_capacity(sample_count);
-        for face in CubeFace::ALL {
-            for row in 0..resolution {
-                let v = row as f64 / (resolution - 1) as f64;
-                for column in 0..resolution {
-                    let u = column as f64 / (resolution - 1) as f64;
-                    let direction = face_uv_to_direction(face, u, v);
-                    let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
-                    heights_m.push(round_height_m(
-                        source.height_m(latitude_deg, longitude_deg),
-                    )?);
-                }
-            }
-        }
-        Self::new(resolution, heights_m)
-    }
-
     fn sample_face_m(&self, face: CubeFace, u: f64, v: f64) -> f64 {
         let resolution = self.resolution as usize;
         let coordinate = |value: f64| value.clamp(0.0, 1.0) * (resolution - 1) as f64;

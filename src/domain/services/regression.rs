@@ -130,14 +130,6 @@ impl RegressionConfig {
             RegressionVariable::SampleCount => 0.0,
         }
     }
-
-    /// All variables with strict (exact) tolerance, for reporting.
-    pub fn exact_variables(&self) -> Vec<RegressionVariable> {
-        RegressionVariable::ALL
-            .into_iter()
-            .filter(|v| self.tolerance(*v) == 0.0)
-            .collect()
-    }
 }
 
 /// Atomic authorized-cosmic state captured at a single fixed physics tick.

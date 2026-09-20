@@ -49,12 +49,6 @@ impl SolarSystemParameters {
         au * self.scale_factor
     }
 
-    /// Convert astronomical units to solar-map display units without reducing
-    /// the propagated f64 position to render precision.
-    pub fn au_to_units_f64(&self, au: f64) -> f64 {
-        au * self.scale_factor as f64
-    }
-
     /// Current solar-map time acceleration relative to the fixed clock.
     pub fn time_scale(&self) -> f32 {
         self.time_scale
@@ -68,11 +62,6 @@ impl SolarSystemParameters {
         let epoch_days = self.time_to_days_f64(elapsed_seconds);
         self.time_scale = time_scale.max(0.0001);
         self.epoch_offset_days = epoch_days - elapsed_seconds * self.time_scale as f64 / 86_400.0;
-    }
-
-    /// Convert fixed-clock elapsed time to the phase-continuous solar epoch.
-    pub fn time_to_days(&self, time_seconds: f32) -> f32 {
-        self.time_to_days_f64(time_seconds as f64) as f32
     }
 
     /// Convert elapsed presentation time to simulation days without losing the

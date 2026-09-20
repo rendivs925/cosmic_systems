@@ -27,8 +27,6 @@ use std::sync::Arc;
 
 /// Standard atmosphere sea-level density, kg/m³.
 pub const SEA_LEVEL_DENSITY_KG_M3: f64 = 1.225;
-/// Standard atmosphere sea-level temperature, kelvin.
-pub const SEA_LEVEL_TEMPERATURE_K: f64 = 288.15;
 /// Standard atmosphere sea-level pressure, pascals.
 pub const SEA_LEVEL_PRESSURE_PA: f64 = 101_325.0;
 /// ISA-1976 specific gas constant of dry air, J/(kg·K).

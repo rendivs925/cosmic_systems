@@ -35,17 +35,6 @@ use crate::domain::units::AU_IN_METERS;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 
-/// The frames supported by the reference-frame module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReferenceFrame {
-    SolarSystemBarycentric,
-    SolarInertial,
-    PlanetCenteredInertial,
-    PlanetBodyFixed,
-    LocalTangent,
-    RocketBody,
-}
-
 /// Reasons two scientific body states cannot form a physical relative state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelativeStateError {

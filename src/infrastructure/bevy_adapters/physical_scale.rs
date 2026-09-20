@@ -39,10 +39,6 @@ impl PhysicalScale {
         meters * self.flight_display_units_per_meter as f64
     }
 
-    pub fn flight_units_to_meters(&self, units: f64) -> f64 {
-        units * self.flight_meters_per_display_unit as f64
-    }
-
     pub fn solar_meters_to_units(&self, meters: f64) -> f64 {
         meters * self.solar_display_units_per_meter
     }

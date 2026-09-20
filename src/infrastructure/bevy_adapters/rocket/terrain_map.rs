@@ -23,11 +23,7 @@ use bevy::math::{DVec3, Rot2, Vec2};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-/// Global raster dimensions. The UI displays this at 1.5x for a compact but
-/// legible panel while retaining a small, body-keyed cache.
-pub const MAP_RASTER_WIDTH: u32 = crate::domain::services::terrain_overview::TERRAIN_OVERVIEW_WIDTH;
-pub const MAP_RASTER_HEIGHT: u32 =
-    crate::domain::services::terrain_overview::TERRAIN_OVERVIEW_HEIGHT;
+/// UI panel dimensions for the terrain overview.
 const MAP_WIDTH_PX: f32 = 288.0;
 const MAP_HEIGHT_PX: f32 = 144.0;
 const HISTORY_SEGMENTS: usize = 64;
