@@ -204,6 +204,19 @@ pub fn body_fixed_to_terrain_lat_lon(body_fixed: DVec3) -> (f64, f64) {
     )
 }
 
+/// Inverse of [`body_fixed_to_terrain_lat_lon`]: the unit body-fixed direction
+/// at a terrain latitude/longitude in degrees. This is the single authority for
+/// lat/lon-to-direction terrain mapping used by terrain sampling and imagery.
+pub fn terrain_lat_lon_to_body_fixed(latitude_deg: f64, longitude_deg: f64) -> DVec3 {
+    let latitude = latitude_deg.to_radians();
+    let longitude = longitude_deg.to_radians();
+    DVec3::new(
+        latitude.cos() * longitude.cos(),
+        latitude.sin(),
+        latitude.cos() * longitude.sin(),
+    )
+}
+
 /// Map a terrain body-fixed position (meters) back to its body's
 /// documented geodetic datum.
 pub fn body_fixed_to_geodetic(pos_bf: DVec3, planet: &Planet) -> LaunchSiteCoordinates {

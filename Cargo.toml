@@ -79,3 +79,8 @@ required-features = ["dem"]
 name = "local_elevation_convert"
 path = "src/bin/local_elevation_convert.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "imagery_convert"
+path = "src/bin/imagery_convert.rs"
+required-features = ["native"]

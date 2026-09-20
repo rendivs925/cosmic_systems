@@ -1,0 +1,45 @@
+// Earth imagery source manifest. It records the offline-prepared presentation
+// imagery hierarchy for Earth: one public-domain global overview and one bounded
+// high-detail local region. The simulator never downloads imagery at runtime.
+//
+// This manifest is NOT accepted for rendering until every `source_sha256` and
+// `runtime_sha256` is a real 64-character SHA-256 recorded during package
+// production. The `pending` placeholders intentionally fail verification.
+(
+    body: "Earth",
+    version: 1,
+    coordinate_frame: "body-fixed",
+    horizontal_datum: "WGS 84 / EPSG:4326",
+    runtime_download: false,
+    status: "source-selected; package not yet produced",
+    global_overview: (
+        dataset: "NASA Blue Marble: Next Generation",
+        source_url: "https://science.nasa.gov/earth/earth-observatory/blue-marble/",
+        source_version: "August 2004 base map, 500 m global composite",
+        license: "Public domain (NASA)",
+        attribution: "NASA Earth Observatory / Reto Stockli (NASA GSFC)",
+        source_resolution_m: 500.0,
+        runtime_asset: "assets/large_files/terrain/earth_imagery_v1/global_overview.png",
+        source_sha256: "pending",
+        runtime_sha256: "pending",
+    ),
+    local_regions: [
+        (
+            id: "papua_coastal_lowland",
+            dataset: "Copernicus Sentinel-2 L2A",
+            source_url: "https://dataspace.copernicus.eu/",
+            source_version: "Sentinel-2 L2A granule containing 8.0S 139.5E",
+            license: "Copernicus Sentinel Data (free, full and open; attribution required)",
+            attribution: "Contains modified Copernicus Sentinel data 2026",
+            source_resolution_m: 10.0,
+            west_deg: 139.0,
+            south_deg: -8.6,
+            east_deg: 140.0,
+            north_deg: -7.4,
+            max_level: 14,
+            runtime_tiles: "assets/large_files/terrain/earth_imagery_v1/tiles",
+            source_sha256: "pending",
+            runtime_sha256: "pending",
+        ),
+    ],
+)
