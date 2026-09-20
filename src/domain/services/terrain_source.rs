@@ -1486,6 +1486,10 @@ impl TerrainSource for MarsTerrainSource {
 }
 
 impl TerrainSource for EarthTerrainSource {
+    fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.vegetation_density(latitude_deg, longitude_deg)
+    }
+
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.source.height_m(latitude_deg, longitude_deg)
     }

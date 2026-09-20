@@ -818,8 +818,8 @@ fn scatter_count_for_level(max_count: usize, patch_level: u32) -> usize {
 
 /// Build the merged vegetation/scatter mesh for a patch, or `None` if the patch
 /// is not vegetated (water, snow, bare rock, or too steep). Positions are in the
-/// rocket-local flight frame (planet-centered minus `render_origin`), matching
-/// the terrain mesh so plants sit exactly on the surface.
+/// body-fixed offsets from `mesh_origin_body_fixed`. Heights use the terrain's
+/// LOD field; grounding against the triangulated mesh is still approximate.
 pub fn build_vegetation_mesh(
     source: &dyn TerrainSource,
     patch: &TerrainPatch,
@@ -845,8 +845,7 @@ pub fn build_vegetation_mesh(
         let v = v0 + (v1 - v0) * rv;
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
-        // Sample the same LOD-faded height as the rendered mesh so scatter never
-        // floats above or sinks below the surface it sits on.
+        // Match the mesh's LOD-faded field rather than its full-detail height.
         let h = source.mesh_height_m(lat, lon, patch.level);
         if h < 0.5 {
             continue;
@@ -1144,7 +1143,16 @@ pub fn build_river_mesh(
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
+    #[cfg(feature = "dem")]
+    use crate::domain::services::planet_factory::PlanetFactory;
+    #[cfg(feature = "dem")]
+    use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
+    #[cfg(feature = "dem")]
+    use crate::domain::services::terrain_source::EarthTerrainSource;
     use crate::domain::services::terrain_source::{ElevationBounds, ProceduralTerrainSource};
+    #[cfg(feature = "dem")]
+    use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
+    use bevy_mesh::VertexAttributeValues;
 
     #[derive(Debug)]
     struct RiverTerrain;
@@ -1169,8 +1177,6 @@ mod tests {
 
     #[test]
     fn boulder_vertices_use_the_supplied_color() {
-        use bevy_mesh::VertexAttributeValues;
-
         let mut accum = MeshAccum::new();
         accum.push_boulder(DVec3::ZERO, DVec3::Y, 1.0, 1, [0.1, 0.2, 0.3]);
         let mesh = accum.into_mesh();
@@ -1471,42 +1477,15 @@ mod tests {
         );
     }
 
-    /// The real Earth composition (measured base + procedural detail/climate)
-    /// must place visible scatter at the Papua launch site at close LOD. The
-    /// synthetic lush source used by the older test cannot catch a regression
-    /// where the launch biome is bare.
+    /// Exercise the public Earth wrapper and resident data used at startup.
+    /// Atlas corners distinguish plant geometry from rocks in the merged mesh.
+    #[cfg(feature = "dem")]
     #[test]
     fn earth_launch_site_is_vegetated_at_close_lod() {
-        use crate::domain::services::terrain_source::{
-            DetailLodFade, LayeredTerrainSource, ProceduralDetailSource, TerrainDetailLayer,
-            TerrainElevationLayer,
-        };
-        use std::sync::Arc;
-
-        #[derive(Debug)]
-        struct CoastalBase;
-        impl TerrainSource for CoastalBase {
-            fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
-                15.0
-            }
-            fn elevation_bounds_m(&self) -> ElevationBounds {
-                ElevationBounds::new(15.0, 15.0)
-            }
-        }
-
-        let detail: Arc<dyn TerrainSource> = Arc::new(ProceduralDetailSource::new(0x00E4_27A6));
-        let source = LayeredTerrainSource::new(
-            TerrainElevationLayer::new(Arc::new(CoastalBase), ElevationBounds::new(15.0, 15.0)),
-            None,
-            Some(TerrainDetailLayer::new(
-                detail,
-                ProceduralDetailSource::elevation_bounds_m(),
-                DetailLodFade::new(11, 14),
-            )),
-        );
-
-        let latitude_deg = -8.0;
-        let longitude_deg = 139.5;
+        let source = EarthTerrainSource::new();
+        let site = predefined_sites::papua_indonesia_coastal_lowland();
+        let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
+        let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
         let density = source.vegetation_density(latitude_deg, longitude_deg);
         assert!(
             density >= TREE_MIN_DENSITY,
@@ -1516,9 +1495,29 @@ mod tests {
         let lat = latitude_deg.to_radians();
         let lon = longitude_deg.to_radians();
         let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
-        let patch = TerrainPatch::for_direction(direction, VEGETATION_MIN_PATCH_LEVEL);
-        let mesh = build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO)
-            .expect("the launch-site patch must produce a vegetation mesh");
-        assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
+        for level in 12..=14 {
+            let patch = TerrainPatch::for_direction(direction, level);
+            let origin = direction * 6_371_000.0;
+            let mesh = build_vegetation_mesh(&source, &patch, 6_371_000.0, &origin)
+                .expect("the launch-site patch must produce a vegetation mesh");
+            let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+            else {
+                panic!("scatter must carry atlas coordinates");
+            };
+            let grass_cards = uvs
+                .iter()
+                .filter(|uv| **uv == [GRASS_UV[0], GRASS_UV[1]])
+                .count();
+            let tree_cards = uvs
+                .iter()
+                .filter(|uv| {
+                    **uv == [BROADLEAF_UV[0], BROADLEAF_UV[3]]
+                        || **uv == [CONIFER_UV[2], CONIFER_UV[1]]
+                })
+                .count();
+            println!("Papua L{level}: cover={density:.3}, grass cards={grass_cards}, tree cards={tree_cards}");
+            assert!(grass_cards > 0, "no grass at L{level}");
+            assert!(tree_cards > 0, "no trees at L{level}");
+        }
     }
 }

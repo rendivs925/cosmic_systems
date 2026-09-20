@@ -54,3 +54,41 @@ updates remain below 0.1 ms. That correlation is insufficient to attribute the
 tail to a single terrain phase, so no optimization was made. Task 6.3 remains
 incomplete until GPU timestamps, an exact staging marker, altitude checkpoints,
 and isolated camera/terrain timing are available.
+
+## Papua Scatter Follow-up — 2026-09-20
+
+The production `EarthTerrainSource` wrapper did not forward
+`vegetation_density`, so its default zero value rejected all tree and grass
+candidates. Forwarding now exposes the existing layered cover model. A regression
+test loads the resident Earth DEM through the public wrapper and uses the same
+Papua geodetic-to-terrain conversion as rocket startup. It distinguishes grass
+and tree atlas geometry from rocks in the merged mesh.
+
+| Patch containing the launch site | Trees | Grass clumps |
+|---|---:|---:|
+| L12 | 68 | 560 |
+| L13 | 16 | 147 |
+| L14 | 3 | 36 |
+
+These are generated patch-wide counts, not camera-visible instances. The sampled
+launch cover is 0.650. This test validates generation, not runtime publication or
+exact grounding on triangulated terrain.
+
+Bounded normal/craft/rocket startup runs used Xvfb at 1280x720 with Vulkan.
+The renderer reported the NVIDIA RTX 5070 Laptop GPU, driver 610.43.03; Xvfb
+does not imply software rendering. No panic or renderer validation error was
+found in those logs. Concurrent mode startup makes these runs unsuitable as
+frame-time baselines.
+
+The rocket capture still did not establish visible vegetation. Its streaming
+metrics requested/targeted levels only through L6 despite a focus maximum of
+L14; scatter begins at L12. The viewport breadth-first traversal exhausts its
+unbalanced leaf allowance before reaching local detail. A highest-projected-error
+traversal experiment reached close levels in a focused test, but violated the
+existing orbital-view balanced budget (366 target leaves versus the 300 limit).
+That experiment was removed; the original streaming policy remains in place.
+
+**Acceptance remains open.** The next LOD change must budget the neighbor-balance
+closure of refinements, preserve viewport coverage and parent fallbacks, and
+demonstrate published L12–L14 terrain and visible scatter in the prelaunch view.
+Do not treat source-generation tests or startup success as visual acceptance.
