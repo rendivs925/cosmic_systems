@@ -1,4 +1,5 @@
 use super::components::*;
+use super::events::MissionPhaseChangedEvent;
 use super::telemetry::FlightRecorder;
 use crate::application::rocket_spawning::build_rocket_mesh;
 use crate::domain::services::landing_gear::LandingGear;
@@ -122,6 +123,7 @@ pub fn apply_relaunch_requests(
         &mut TorqueAccumulator,
         Option<&mut SpecificForceAcceleration>,
         &mut OrbitalElements,
+        Option<&mut MissionPhaseTracker>,
     )>,
 ) {
     for rocket_entity in std::mem::take(&mut relaunch_queue.0) {
@@ -240,6 +242,7 @@ pub fn apply_relaunch_requests(
             mut torque_accumulator,
             specific_force,
             mut orbital_elements,
+            mission_phase_tracker,
         )) = reset_query.get_mut(entity)
         else {
             continue;
@@ -261,6 +264,9 @@ pub fn apply_relaunch_requests(
             *specific_force = SpecificForceAcceleration::default();
         }
         *orbital_elements = OrbitalElements::default();
+        if let Some(mut tracker) = mission_phase_tracker {
+            tracker.last = None;
+        }
         bevy::log::info!(
             "Relaunch ready: {:.0} kg refueled, vehicle upright and held on the pad",
             total_mass_kg
@@ -328,6 +334,31 @@ pub fn handle_rocket_launch_input(
                 *render = RocketRenderState::new(rocket.dynamics);
                 *mission = RocketMissionState::Launch;
             }
+        }
+    }
+}
+
+/// Publish one [`MissionPhaseChangedEvent`] whenever the authoritative mission
+/// phase changes. Running late in the fixed tick means every phase writer
+/// (guidance, ground contact, recovery) has already produced its final value,
+/// so the domain state machine keeps sole ownership of phase decisions and no
+/// writer duplicates transition bookkeeping.
+pub fn emit_mission_phase_events_system(
+    mut writer: MessageWriter<MissionPhaseChangedEvent>,
+    mut query: Query<(Entity, &RocketMissionState, &mut MissionPhaseTracker)>,
+) {
+    for (entity, mission, mut tracker) in query.iter_mut() {
+        match tracker.last {
+            Some(previous) if previous != *mission => {
+                writer.write(MissionPhaseChangedEvent {
+                    rocket: entity,
+                    previous: previous.0,
+                    current: mission.0,
+                });
+                tracker.last = Some(*mission);
+            }
+            None => tracker.last = Some(*mission),
+            Some(_) => {}
         }
     }
 }

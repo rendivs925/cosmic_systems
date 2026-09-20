@@ -4,6 +4,8 @@ use super::components::{
     RocketAutopilot, RocketCommands, RocketFlightConditions, RocketGeometry, RocketMissionState,
     RocketPhysicsState, RocketPropulsion, TorqueAccumulator,
 };
+use super::events::{EngineCutoffEvent, EngineIgnitionEvent};
+use crate::domain::entities::rocket::EngineState;
 use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
 use crate::domain::services::control::control_torque_body;
 use crate::domain::services::rocket_propulsion::{
@@ -12,7 +14,7 @@ use crate::domain::services::rocket_propulsion::{
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use bevy::math::DVec3;
-use bevy::prelude::{Query, Res};
+use bevy::prelude::{Entity, MessageWriter, Query, Res};
 
 /// Convert guidance attitude targets into gimbal and RCS commands.
 pub fn control_system(
@@ -105,7 +107,10 @@ pub fn control_system(
 /// Apply actuator slew and mechanical limits to guidance-control commands.
 pub fn actuation_system(
     sim_time: Res<SimulationTime>,
+    mut ignition_writer: MessageWriter<EngineIgnitionEvent>,
+    mut cutoff_writer: MessageWriter<EngineCutoffEvent>,
     mut rocket_query: Query<(
+        Entity,
         &RocketCommands,
         &mut RocketPropulsion,
         &mut TorqueAccumulator,
@@ -114,14 +119,24 @@ pub fn actuation_system(
     )>,
 ) {
     let dt = sim_time.fixed_timestep_f32();
-    for (commands, mut propulsion, mut torque_accum, autopilot, mission) in rocket_query.iter_mut()
+    for (entity, commands, mut propulsion, mut torque_accum, autopilot, mission) in
+        rocket_query.iter_mut()
     {
         if matches!(
             *mission,
             RocketMissionState::Landed | RocketMissionState::Crashed
         ) {
             propulsion.throttle = 0.0;
-            command_engine_lifecycle(&mut propulsion, false);
+            let stage_index = propulsion.active_stage as u32;
+            let (started, stopped) = command_engine_lifecycle(&mut propulsion, false);
+            write_engine_lifecycle_events(
+                entity,
+                stage_index,
+                started,
+                stopped,
+                &mut ignition_writer,
+                &mut cutoff_writer,
+            );
             propulsion.gimbal_pitch_rad = 0.0;
             propulsion.gimbal_yaw_rad = 0.0;
             continue;
@@ -145,7 +160,16 @@ pub fn actuation_system(
             clamp_throttle_range(slewed, envelope.0, envelope.1)
         };
         let run_commanded = commands.throttle_cmd > 0.0 && propulsion.throttle > 0.0;
-        command_engine_lifecycle(&mut propulsion, run_commanded);
+        let stage_index = propulsion.active_stage as u32;
+        let (started, stopped) = command_engine_lifecycle(&mut propulsion, run_commanded);
+        write_engine_lifecycle_events(
+            entity,
+            stage_index,
+            started,
+            stopped,
+            &mut ignition_writer,
+            &mut cutoff_writer,
+        );
         propulsion.gimbal_pitch_rad = clamp_deflection(
             commands.gimbal_pitch_cmd_rad,
             limits.max_gimbal_deflection_rad,
@@ -163,7 +187,9 @@ pub fn actuation_system(
 
 /// Actuation is the sole owner of commanded starts and cutoffs. The lifecycle
 /// state then drives every downstream force, torque, and mass-flow calculation.
-fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bool) {
+/// Returns `(engines_started, engines_stopped)` so the caller can publish the
+/// authoritative ignition/cutoff events without re-deriving them elsewhere.
+fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bool) -> (u32, u32) {
     let ignition_permitted = ignition_allowed_during_ullage(
         propulsion.time_since_separation_s,
         propulsion.ullage_settle_time_s,
@@ -171,13 +197,17 @@ fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bo
     let core_has_propellant = propulsion
         .active_core_stage()
         .is_some_and(|stage| stage.has_burnable_propellant());
+    let mut started = 0;
+    let mut stopped = 0;
     if let Some(stage) = propulsion.vehicle.stages.get_mut(propulsion.active_stage) {
         for engine in &mut stage.engines {
+            let was_running = engine.state == EngineState::Running;
             if core_has_propellant {
                 engine.command_lifecycle(run_commanded, ignition_permitted);
             } else {
                 engine.deplete();
             }
+            count_lifecycle_transition(was_running, engine.state, &mut started, &mut stopped);
         }
     }
     if propulsion.boosters_attached() {
@@ -188,12 +218,53 @@ fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bo
             .any(|remaining_kg| *remaining_kg > 0.0);
         if let Some(boosters) = &mut propulsion.vehicle.parallel_boosters {
             for engine in &mut boosters.stage.engines {
+                let was_running = engine.state == EngineState::Running;
                 if boosters_have_propellant {
                     engine.command_lifecycle(run_commanded, ignition_permitted);
                 } else {
                     engine.deplete();
                 }
+                count_lifecycle_transition(was_running, engine.state, &mut started, &mut stopped);
             }
         }
+    }
+    (started, stopped)
+}
+
+fn count_lifecycle_transition(
+    was_running: bool,
+    state: EngineState,
+    started: &mut u32,
+    stopped: &mut u32,
+) {
+    let is_running = state == EngineState::Running;
+    if !was_running && is_running {
+        *started += 1;
+    } else if was_running && !is_running {
+        *stopped += 1;
+    }
+}
+
+fn write_engine_lifecycle_events(
+    rocket: Entity,
+    stage_index: u32,
+    started: u32,
+    stopped: u32,
+    ignition_writer: &mut MessageWriter<EngineIgnitionEvent>,
+    cutoff_writer: &mut MessageWriter<EngineCutoffEvent>,
+) {
+    if started > 0 {
+        ignition_writer.write(EngineIgnitionEvent {
+            rocket,
+            stage_index,
+            engines_started: started,
+        });
+    }
+    if stopped > 0 {
+        cutoff_writer.write(EngineCutoffEvent {
+            rocket,
+            stage_index,
+            engines_stopped: stopped,
+        });
     }
 }

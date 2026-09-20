@@ -13,7 +13,7 @@ use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SIMULATION_ANALYSIS_SCHEMA_VERSION: u32 = 2;
+pub const SIMULATION_ANALYSIS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EngineeringConstraint {
@@ -66,6 +66,18 @@ pub struct SimulationAnalysisResult {
     #[serde(default)]
     pub splashdown_count: usize,
     #[serde(default)]
+    pub ignition_count: usize,
+    #[serde(default)]
+    pub cutoff_count: usize,
+    #[serde(default)]
+    pub liftoff_count: usize,
+    #[serde(default)]
+    pub touchdown_count: usize,
+    #[serde(default)]
+    pub crash_count: usize,
+    #[serde(default)]
+    pub mission_phase_change_count: usize,
+    #[serde(default)]
     pub event_timeline: Vec<SimulationTelemetryEvent>,
     pub minimum_terrain_clearance_m: f64,
     pub propellant_consumed_kg: f64,
@@ -82,8 +94,7 @@ impl SimulationAnalysisResult {
     }
     pub fn from_ron(text: &str) -> Result<Self, String> {
         let result: Self = from_str(text).map_err(|error| error.to_string())?;
-        if result.schema_version != 1 && result.schema_version != SIMULATION_ANALYSIS_SCHEMA_VERSION
-        {
+        if !(1..=SIMULATION_ANALYSIS_SCHEMA_VERSION).contains(&result.schema_version) {
             return Err(format!(
                 "unsupported simulation analysis schema {}",
                 result.schema_version
@@ -127,12 +138,28 @@ impl SimulationAnalysisResult {
         }
         let _ = writeln!(
             summary,
-            "\nEVENTS\nstage_separations={} fairing_separations={} splashdowns={} total={}",
+            "\nEVENTS\nstage_separations={} fairing_separations={} splashdowns={} ignitions={} cutoffs={} liftoffs={} touchdowns={} crashes={} phase_changes={} total={}",
             self.stage_separation_count,
             self.fairing_separation_count,
             self.splashdown_count,
+            self.ignition_count,
+            self.cutoff_count,
+            self.liftoff_count,
+            self.touchdown_count,
+            self.crash_count,
+            self.mission_phase_change_count,
             self.event_timeline.len(),
         );
+        if !self.event_timeline.is_empty() {
+            let _ = writeln!(summary, "\nEVENT TIMELINE");
+            for event in &self.event_timeline {
+                let _ = writeln!(
+                    summary,
+                    "t+{:.3} {} {}",
+                    event.simulation_time_s, event.kind, event.detail
+                );
+            }
+        }
         let _ = writeln!(
             summary,
             "\nCONSTRAINTS\npassed={}/{}\n\nPROVENANCE\nartifact_sha256={}",
@@ -310,21 +337,21 @@ pub fn analyze_simulation_artifact(
         final_specific_orbital_energy_j_kg: final_orbit.map(|orbit| orbit.0),
         final_orbital_semi_major_axis_m: final_orbit.map(|orbit| orbit.1),
         final_orbital_eccentricity: final_orbit.map(|orbit| orbit.2),
-        stage_separation_count: artifact
-            .events
-            .iter()
-            .filter(|event| event.event_type == Some(SimulationEventType::StageSeparation))
-            .count(),
-        fairing_separation_count: artifact
-            .events
-            .iter()
-            .filter(|event| event.event_type == Some(SimulationEventType::FairingSeparation))
-            .count(),
-        splashdown_count: artifact
-            .events
-            .iter()
-            .filter(|event| event.event_type == Some(SimulationEventType::Splashdown))
-            .count(),
+        stage_separation_count: count_typed(&artifact.events, SimulationEventType::StageSeparation),
+        fairing_separation_count: count_typed(
+            &artifact.events,
+            SimulationEventType::FairingSeparation,
+        ),
+        splashdown_count: count_typed(&artifact.events, SimulationEventType::Splashdown),
+        ignition_count: count_typed(&artifact.events, SimulationEventType::Ignition),
+        cutoff_count: count_typed(&artifact.events, SimulationEventType::Cutoff),
+        liftoff_count: count_typed(&artifact.events, SimulationEventType::Liftoff),
+        touchdown_count: count_typed(&artifact.events, SimulationEventType::Touchdown),
+        crash_count: count_typed(&artifact.events, SimulationEventType::Crash),
+        mission_phase_change_count: count_typed(
+            &artifact.events,
+            SimulationEventType::MissionPhaseChange,
+        ),
         event_timeline: artifact.events.clone(),
         minimum_terrain_clearance_m: minimum_clearance,
         propellant_consumed_kg: (first.propellant_remaining_kg - last.propellant_remaining_kg)
@@ -335,6 +362,13 @@ pub fn analyze_simulation_artifact(
         constraints: results,
         warnings,
     })
+}
+
+fn count_typed(events: &[SimulationTelemetryEvent], kind: SimulationEventType) -> usize {
+    events
+        .iter()
+        .filter(|event| event.event_type.as_ref() == Some(&kind))
+        .count()
 }
 
 #[cfg(test)]
@@ -459,6 +493,70 @@ mod tests {
         assert_eq!(result.splashdown_count, 0);
         assert_eq!(result.event_timeline, artifact.events);
         assert!(result.engineering_summary().contains("stage_separations=1"));
+    }
+
+    #[test]
+    fn reports_typed_lifecycle_events_with_timeline_section() {
+        let mut artifact = artifact();
+        artifact.events = vec![
+            SimulationTelemetryEvent {
+                simulation_time_s: 0.5,
+                kind: "ignition".into(),
+                detail: "stage=0 engines_started=9".into(),
+                event_type: Some(SimulationEventType::Ignition),
+            },
+            SimulationTelemetryEvent {
+                simulation_time_s: 1.5,
+                kind: "liftoff".into(),
+                detail: "upward_thrust_n=1 weight_n=0".into(),
+                event_type: Some(SimulationEventType::Liftoff),
+            },
+            SimulationTelemetryEvent {
+                simulation_time_s: 2.0,
+                kind: "mission_phase".into(),
+                detail: "previous=Launch current=Ascent".into(),
+                event_type: Some(SimulationEventType::MissionPhaseChange),
+            },
+            SimulationTelemetryEvent {
+                simulation_time_s: 3.0,
+                kind: "cutoff".into(),
+                detail: "stage=0 engines_stopped=9".into(),
+                event_type: Some(SimulationEventType::Cutoff),
+            },
+            SimulationTelemetryEvent {
+                simulation_time_s: 4.0,
+                kind: "touchdown".into(),
+                detail: "vertical_speed_mps=-1".into(),
+                event_type: Some(SimulationEventType::Touchdown),
+            },
+            SimulationTelemetryEvent {
+                simulation_time_s: 5.0,
+                kind: "crash".into(),
+                detail: "vertical_speed_mps=-80".into(),
+                event_type: Some(SimulationEventType::Crash),
+            },
+        ];
+        let result = analyze_simulation_artifact(&artifact, &[]).unwrap();
+        assert_eq!(result.ignition_count, 1);
+        assert_eq!(result.cutoff_count, 1);
+        assert_eq!(result.liftoff_count, 1);
+        assert_eq!(result.touchdown_count, 1);
+        assert_eq!(result.crash_count, 1);
+        assert_eq!(result.mission_phase_change_count, 1);
+        let summary = result.engineering_summary();
+        assert!(summary.contains("ignitions=1"));
+        assert!(summary.contains("phase_changes=1"));
+        assert!(summary.contains("EVENT TIMELINE"));
+        assert!(summary.contains("t+0.500 ignition"));
+        assert!(summary.contains("t+5.000 crash"));
+    }
+
+    #[test]
+    fn accepts_legacy_analysis_schema_two() {
+        let mut result = analyze_simulation_artifact(&artifact(), &[]).unwrap();
+        result.schema_version = 2;
+        let decoded = SimulationAnalysisResult::from_ron(&result.to_ron().unwrap()).unwrap();
+        assert_eq!(decoded.schema_version, 2);
     }
 
     #[test]

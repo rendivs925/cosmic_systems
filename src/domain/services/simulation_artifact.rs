@@ -57,6 +57,12 @@ pub enum SimulationEventType {
     Splashdown,
     BlackoutStarted,
     BlackoutEnded,
+    Ignition,
+    Cutoff,
+    Liftoff,
+    Touchdown,
+    Crash,
+    MissionPhaseChange,
 }
 
 /// A complete recorded-data artifact. Replay consumes these samples directly;

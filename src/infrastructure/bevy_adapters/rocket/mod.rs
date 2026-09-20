@@ -14,6 +14,7 @@ pub mod gravity_orbit;
 pub mod ground_presentation;
 pub mod guidance;
 pub mod hud;
+pub mod hud_units;
 pub mod lifecycle;
 pub mod orbit;
 pub mod planet;

@@ -10,12 +10,13 @@ use super::components::{
     RocketGeometry, RocketMissionState, RocketPhysicsState, TerrainCollisionState,
 };
 use super::contact::record_scorecard;
+use super::events::{CrashEvent, TouchdownEvent};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
     decompose_velocity, evaluate_touchdown, GroundContact, TouchdownCriteria,
 };
 use bevy::math::DVec3;
-use bevy::prelude::{Query, Res};
+use bevy::prelude::{Entity, MessageWriter, Query, Res};
 
 /// Integrate each vessel from its bounded station-keeping thrust. The domain
 /// controller supplies the command; this adapter owns only ECS state updates.
@@ -45,8 +46,11 @@ pub fn station_keep_drone_ships(sim_time: Res<SimulationTime>, mut ships: Query<
 )]
 pub fn resolve_drone_ship_deck_contact(
     sim_time: Res<SimulationTime>,
+    mut touchdown_writer: MessageWriter<TouchdownEvent>,
+    mut crash_writer: MessageWriter<CrashEvent>,
     ships: Query<&DroneShip>,
     mut rockets: Query<(
+        Entity,
         &mut DroneShipLandingTarget,
         &mut RocketPhysicsState,
         &RocketGeometry,
@@ -60,6 +64,7 @@ pub fn resolve_drone_ship_deck_contact(
 ) {
     let dt = sim_time.fixed_timestep();
     for (
+        rocket_entity,
         mut target,
         mut rocket,
         geometry,
@@ -183,11 +188,25 @@ pub fn resolve_drone_ship_deck_contact(
                         | RocketMissionState::ReentryCorridor
                 ) {
                     *mission = RocketMissionState::Landed;
+                    touchdown_writer.write(TouchdownEvent {
+                        rocket: rocket_entity,
+                        position_m: rocket.dynamics.position_m,
+                        vertical_speed_mps: -components.normal_mps,
+                        lateral_speed_mps: components.lateral_mps,
+                        tilt_deg,
+                        slope_deg: 0.0,
+                    });
                 }
             }
             GroundContact::Crash => {
                 if *mission != RocketMissionState::PreLaunch {
                     *mission = RocketMissionState::Crashed;
+                    crash_writer.write(CrashEvent {
+                        rocket: rocket_entity,
+                        position_m: rocket.dynamics.position_m,
+                        vertical_speed_mps: -components.normal_mps,
+                        tilt_deg,
+                    });
                 }
             }
             GroundContact::None => {}

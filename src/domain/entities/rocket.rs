@@ -19,6 +19,26 @@ pub enum RocketMissionState {
     Crashed,
 }
 
+impl RocketMissionState {
+    /// Stable numeric code recorded in telemetry and events so consumer
+    /// formats never depend on the enum's declaration order.
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::PreLaunch => 0,
+            Self::Launch => 1,
+            Self::Ascent => 2,
+            Self::Orbit => 3,
+            Self::DeorbitBurn => 4,
+            Self::ReentryCorridor => 5,
+            Self::PoweredDescent => 6,
+            Self::UnpoweredDescent => 7,
+            Self::Landing => 8,
+            Self::Landed => 9,
+            Self::Crashed => 10,
+        }
+    }
+}
+
 /// A single rocket engine. Positions/axes are expressed in the stage-local
 /// body frame where +Y is the longitudinal axis (nose-up).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

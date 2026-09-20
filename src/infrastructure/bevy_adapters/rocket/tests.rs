@@ -18,12 +18,34 @@ use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(test)]
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 #[cfg(test)]
+use crate::infrastructure::bevy_adapters::rocket::events::{
+    CommsBlackoutEvent, CrashEvent, EngineCutoffEvent, EngineIgnitionEvent, FairingSeparatedEvent,
+    LiftoffEvent, MissionPhaseChangedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+    TouchdownEvent,
+};
+#[cfg(test)]
 use crate::infrastructure::bevy_adapters::simulation_time::sync_fixed_timestep;
 
 #[cfg(test)]
 use bevy::math::{DMat3, DQuat, DVec3};
 #[cfg(test)]
 use bevy::prelude::*;
+
+/// Register every rocket message channel a test app may exercise. Idempotent,
+/// so builders that already add a subset may call it unconditionally.
+#[cfg(test)]
+fn register_rocket_messages(app: &mut App) {
+    app.add_message::<CommsBlackoutEvent>();
+    app.add_message::<CrashEvent>();
+    app.add_message::<EngineCutoffEvent>();
+    app.add_message::<EngineIgnitionEvent>();
+    app.add_message::<FairingSeparatedEvent>();
+    app.add_message::<LiftoffEvent>();
+    app.add_message::<MissionPhaseChangedEvent>();
+    app.add_message::<SplashdownDetectedEvent>();
+    app.add_message::<StageSeparatedEvent>();
+    app.add_message::<TouchdownEvent>();
+}
 
 #[cfg(test)]
 fn test_earth_orientation() -> BodyOrientation {
@@ -80,12 +102,37 @@ mod engine_lifecycle_pipeline_tests {
         }
     }
 
+    #[derive(Resource, Default)]
+    struct RecordedLifecycleEvents {
+        ignitions: u32,
+        cutoffs: u32,
+    }
+
+    fn record_lifecycle_events(
+        mut ignitions: MessageReader<EngineIgnitionEvent>,
+        mut cutoffs: MessageReader<EngineCutoffEvent>,
+        mut recorded: ResMut<RecordedLifecycleEvents>,
+    ) {
+        for _ in ignitions.read() {
+            recorded.ignitions += 1;
+        }
+        for _ in cutoffs.read() {
+            recorded.cutoffs += 1;
+        }
+    }
+
     fn lifecycle_app(with_parallel_boosters: bool) -> (App, Entity) {
         let mut app = App::new();
+        register_rocket_messages(&mut app);
+        app.init_resource::<RecordedLifecycleEvents>();
         app.insert_resource(SimulationTime::new(0.25));
         app.add_systems(
             FixedUpdate,
             (actuation_system, propulsion_thrust, propulsion_consumption).chain(),
+        );
+        app.add_systems(
+            FixedUpdate,
+            record_lifecycle_events.after(propulsion_consumption),
         );
         let boosters = with_parallel_boosters.then(|| {
             ParallelBoosters::new(
@@ -167,6 +214,30 @@ mod engine_lifecycle_pipeline_tests {
             after.propellant_remaining_kg[0] < load_before,
             "active-stage propellant must decrease after a burn: before {load_before}, after {}",
             after.propellant_remaining_kg[0]
+        );
+    }
+
+    #[test]
+    fn ignition_and_cutoff_are_published_as_events() {
+        let (mut app, entity) = lifecycle_app(false);
+        app.world_mut().run_schedule(FixedUpdate);
+        let recorded = app.world().resource::<RecordedLifecycleEvents>();
+        assert_eq!(
+            recorded.ignitions, 1,
+            "the first burn must publish ignition"
+        );
+        assert_eq!(recorded.cutoffs, 0);
+
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<RocketCommands>()
+            .unwrap()
+            .throttle_cmd = 0.0;
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(
+            app.world().resource::<RecordedLifecycleEvents>().cutoffs,
+            1,
+            "commanded shutdown must publish cutoff"
         );
     }
 
@@ -456,7 +527,7 @@ mod ground_contact_tests {
     fn pad_app(throttle: f32, rated_thrust_kn: f32) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_message::<SplashdownDetectedEvent>();
+        register_rocket_messages(&mut app);
         app.insert_resource(SimulationTime::new(DT));
         app.insert_resource(test_ephemeris_snapshot());
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -1249,7 +1320,7 @@ mod recovery_pipeline_tests {
     fn recovery_app(deck_altitude_m: f64) -> (App, DVec3) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_message::<SplashdownDetectedEvent>();
+        register_rocket_messages(&mut app);
         app.insert_resource(SimulationTime::new(DT));
         app.insert_resource(test_ephemeris_snapshot());
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -1634,7 +1705,7 @@ mod ascent_pipeline_tests {
     pub(super) fn ascent_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_message::<SplashdownDetectedEvent>();
+        register_rocket_messages(&mut app);
         app.insert_resource(SimulationTime::new(DT));
         app.insert_resource(test_ephemeris_snapshot());
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -2054,7 +2125,7 @@ mod ascent_pipeline_tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
-        app.add_message::<StageSeparatedEvent>();
+        register_rocket_messages(&mut app);
         let mut sim_time = SimulationTime::new(DT);
         sim_time.set_time_acceleration(acceleration);
         app.insert_resource(sim_time);
@@ -2237,7 +2308,7 @@ mod ascent_pipeline_tests {
         app.insert_resource(SimulationTime::new(DT));
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<StandardMaterial>>();
-        app.add_message::<StageSeparatedEvent>();
+        register_rocket_messages(&mut app);
         app.add_systems(FixedUpdate, propulsion_staging);
 
         let mut vehicle = Rocket::falcon9_test_fixture();
@@ -2635,7 +2706,7 @@ mod parallel_booster_pipeline_tests {
         app.insert_resource(SimulationTime::new(0.1));
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<StandardMaterial>>();
-        app.add_message::<StageSeparatedEvent>();
+        register_rocket_messages(&mut app);
         app.add_systems(
             FixedUpdate,
             (

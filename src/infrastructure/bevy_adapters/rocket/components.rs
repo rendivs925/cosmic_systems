@@ -159,6 +159,14 @@ impl From<DomainRocketMissionState> for RocketMissionState {
     }
 }
 
+/// Last mission phase observed by [`super::lifecycle::emit_mission_phase_events_system`].
+/// `None` before the first observation records the phase without publishing a
+/// spurious transition event.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MissionPhaseTracker {
+    pub last: Option<RocketMissionState>,
+}
+
 impl From<RocketMissionState> for DomainRocketMissionState {
     fn from(state: RocketMissionState) -> Self {
         state.0

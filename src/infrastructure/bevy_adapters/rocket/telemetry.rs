@@ -2,7 +2,9 @@
 
 use super::components::*;
 use super::events::{
-    CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+    CommsBlackoutEvent, CrashEvent, EngineCutoffEvent, EngineIgnitionEvent, FairingSeparatedEvent,
+    LiftoffEvent, MissionPhaseChangedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+    TouchdownEvent,
 };
 use super::gravity_orbit::ActiveForceModel;
 use crate::domain::entities::rocket::EngineState;
@@ -26,6 +28,7 @@ pub struct SimulationTelemetryRecorder {
     pub events: Vec<SimulationTelemetryEvent>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_simulation_events_system(
     time: Res<SimulationTime>,
     mut recorder: ResMut<SimulationTelemetryRecorder>,
@@ -33,8 +36,77 @@ pub fn record_simulation_events_system(
     mut fairings: MessageReader<FairingSeparatedEvent>,
     mut splashdowns: MessageReader<SplashdownDetectedEvent>,
     mut blackouts: MessageReader<CommsBlackoutEvent>,
+    mut ignitions: MessageReader<EngineIgnitionEvent>,
+    mut cutoffs: MessageReader<EngineCutoffEvent>,
+    mut liftoffs: MessageReader<LiftoffEvent>,
+    mut touchdowns: MessageReader<TouchdownEvent>,
+    mut crashes: MessageReader<CrashEvent>,
+    mut mission_phases: MessageReader<MissionPhaseChangedEvent>,
 ) {
     let event_time = time.sim_time_s;
+    for event in ignitions.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "ignition".into(),
+            detail: format!(
+                "stage={} engines_started={}",
+                event.stage_index, event.engines_started
+            ),
+            event_type: Some(SimulationEventType::Ignition),
+        });
+    }
+    for event in cutoffs.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "cutoff".into(),
+            detail: format!(
+                "stage={} engines_stopped={}",
+                event.stage_index, event.engines_stopped
+            ),
+            event_type: Some(SimulationEventType::Cutoff),
+        });
+    }
+    for event in liftoffs.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "liftoff".into(),
+            detail: format!(
+                "upward_thrust_n={} weight_n={}",
+                event.upward_thrust_n, event.weight_n
+            ),
+            event_type: Some(SimulationEventType::Liftoff),
+        });
+    }
+    for event in touchdowns.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "touchdown".into(),
+            detail: format!(
+                "vertical_speed_mps={} lateral_mps={} tilt_deg={} slope_deg={}",
+                event.vertical_speed_mps, event.lateral_speed_mps, event.tilt_deg, event.slope_deg
+            ),
+            event_type: Some(SimulationEventType::Touchdown),
+        });
+    }
+    for event in crashes.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "crash".into(),
+            detail: format!(
+                "vertical_speed_mps={} tilt_deg={}",
+                event.vertical_speed_mps, event.tilt_deg
+            ),
+            event_type: Some(SimulationEventType::Crash),
+        });
+    }
+    for event in mission_phases.read() {
+        recorder.events.push(SimulationTelemetryEvent {
+            simulation_time_s: event_time,
+            kind: "mission_phase".into(),
+            detail: format!("previous={:?} current={:?}", event.previous, event.current),
+            event_type: Some(SimulationEventType::MissionPhaseChange),
+        });
+    }
     for event in stages.read() {
         recorder.events.push(SimulationTelemetryEvent {
             simulation_time_s: event_time,
@@ -77,20 +149,7 @@ pub fn record_simulation_events_system(
 const MAX_SHARED_TELEMETRY_FRAMES: usize = 20_000;
 
 fn telemetry_mission_code(mission: RocketMissionState) -> u8 {
-    use crate::domain::entities::rocket::RocketMissionState as State;
-    match mission.0 {
-        State::PreLaunch => 0,
-        State::Launch => 1,
-        State::Ascent => 2,
-        State::Orbit => 3,
-        State::DeorbitBurn => 4,
-        State::ReentryCorridor => 5,
-        State::PoweredDescent => 6,
-        State::UnpoweredDescent => 7,
-        State::Landing => 8,
-        State::Landed => 9,
-        State::Crashed => 10,
-    }
+    mission.0.code()
 }
 
 /// Capture one authoritative primary-vehicle frame after fixed integration.
@@ -970,17 +1029,31 @@ pub enum FlightRecorderAction {
 /// How long the latest event stays visible on the HUD (s).
 pub const EVENT_FEED_VISIBLE_S: f32 = 5.0;
 
-/// Latest notable flight event for HUD display (empty = none recent).
+/// Maximum retained timeline entries for the HUD event panel.
+pub const EVENT_FEED_HISTORY: usize = 10;
+
+/// One timestamped entry in the HUD event timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventFeedLine {
+    pub sim_time_s: f64,
+    pub label: String,
+}
+
+/// Latest notable flight event plus a bounded newest-first history for HUD
+/// display (empty latest = none recent).
 #[derive(Resource, Debug, Clone, Default)]
 pub struct RocketEventFeed {
     pub latest: String,
     pub visible_for_s: f32,
+    pub history: Vec<EventFeedLine>,
 }
 
 impl RocketEventFeed {
-    fn push(&mut self, label: String) {
-        self.latest = label;
+    fn push_at(&mut self, sim_time_s: f64, label: String) {
+        self.latest = label.clone();
         self.visible_for_s = EVENT_FEED_VISIBLE_S;
+        self.history.insert(0, EventFeedLine { sim_time_s, label });
+        self.history.truncate(EVENT_FEED_HISTORY);
     }
 
     fn tick(&mut self, dt: f32) {
@@ -1004,6 +1077,12 @@ pub fn rocket_event_feed_system(
     mut fairing_reader: MessageReader<FairingSeparatedEvent>,
     mut splashdown_reader: MessageReader<SplashdownDetectedEvent>,
     mut blackout_reader: MessageReader<CommsBlackoutEvent>,
+    mut ignition_reader: MessageReader<EngineIgnitionEvent>,
+    mut cutoff_reader: MessageReader<EngineCutoffEvent>,
+    mut liftoff_reader: MessageReader<LiftoffEvent>,
+    mut touchdown_reader: MessageReader<TouchdownEvent>,
+    mut crash_reader: MessageReader<CrashEvent>,
+    mut mission_phase_reader: MessageReader<MissionPhaseChangedEvent>,
     mut feed: ResMut<RocketEventFeed>,
     mut recorders: Query<&mut FlightRecorder>,
 ) {
@@ -1011,21 +1090,21 @@ pub fn rocket_event_feed_system(
 
     for event in staging_reader.read() {
         let label = format!("STAGE SEPARATED (-{:.0} kg)", event.shed_mass_kg);
-        feed.push(label.clone());
+        feed.push_at(now, label.clone());
         if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
             recorder.note_event(now, label);
         }
     }
     for event in fairing_reader.read() {
         let label = format!("FAIRING JETTISONED (-{:.0} kg)", event.fairing_mass_kg);
-        feed.push(label.clone());
+        feed.push_at(now, label.clone());
         if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
             recorder.note_event(now, label);
         }
     }
     for event in splashdown_reader.read() {
         let label = "SPLASHDOWN".to_string();
-        feed.push(label.clone());
+        feed.push_at(now, label.clone());
         if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
             recorder.note_event(now, label);
         }
@@ -1036,7 +1115,49 @@ pub fn rocket_event_feed_system(
         } else {
             "COMMS REACQUIRED".to_string()
         };
-        feed.push(label.clone());
+        feed.push_at(now, label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in ignition_reader.read() {
+        let label = format!("STAGE {} IGNITION", event.stage_index + 1);
+        feed.push_at(now, label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in cutoff_reader.read() {
+        let label = format!("STAGE {} CUTOFF", event.stage_index + 1);
+        feed.push_at(now, label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in liftoff_reader.read() {
+        let label = "LIFTOFF".to_string();
+        feed.push_at(now, label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in touchdown_reader.read() {
+        let label = format!("TOUCHDOWN ({:.1} m/s)", event.vertical_speed_mps);
+        feed.push_at(now, label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in crash_reader.read() {
+        let label = format!("CRASH ({:.1} m/s)", event.vertical_speed_mps);
+        feed.push_at(now, label.clone());
+        if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
+            recorder.note_event(now, label);
+        }
+    }
+    for event in mission_phase_reader.read() {
+        let label = format!("PHASE {:?}", event.current).to_uppercase();
+        feed.push_at(now, label.clone());
         if let Ok(mut recorder) = recorders.get_mut(event.rocket) {
             recorder.note_event(now, label);
         }

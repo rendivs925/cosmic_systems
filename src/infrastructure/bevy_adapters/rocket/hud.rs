@@ -1,6 +1,7 @@
 // Rocket HUD UI - encapsulated, type-driven design.
 
 use super::components::*;
+use super::hud_units::HudUnits;
 use super::telemetry::RocketEventFeed;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::ui_components::ZenMode;
@@ -66,7 +67,7 @@ pub enum HudField {
     TouchdownScorecard,
     // Meta / status
     TimeAndCamera,
-    EventLog,
+    EventTimeline,
     Warnings,
 }
 
@@ -94,6 +95,73 @@ impl Default for HudColors {
     }
 }
 
+/// HUD color accessibility palette. The high-contrast variant replaces the
+/// red/green pairing with magenta/blue so the good/bad distinction survives
+/// red-green color vision deficiency (AGENTS.md section 29 presentation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HudPalette {
+    #[default]
+    Standard,
+    HighContrast,
+}
+
+impl HudColors {
+    pub fn for_palette(palette: HudPalette) -> Self {
+        match palette {
+            HudPalette::Standard => Self::default(),
+            HudPalette::HighContrast => Self {
+                bright: Color::WHITE,
+                dim: Color::srgb(0.78, 0.80, 0.84),
+                warning: Color::srgb(1.0, 0.86, 0.10),
+                caution: Color::srgb(1.0, 0.80, 0.20),
+                success: Color::srgb(0.30, 0.72, 1.0),
+                danger: Color::srgb(1.0, 0.36, 0.78),
+            },
+        }
+    }
+}
+
+/// Presentation-only HUD display settings: unit system, accessibility palette,
+/// and text scale. Never part of simulation state.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct HudDisplaySettings {
+    pub units: HudUnits,
+    pub palette: HudPalette,
+    pub text_scale: f32,
+}
+
+impl Default for HudDisplaySettings {
+    fn default() -> Self {
+        Self {
+            units: HudUnits::Metric,
+            palette: HudPalette::Standard,
+            text_scale: 1.0,
+        }
+    }
+}
+
+/// Bounds the operator can select with the HUD text-scale keys.
+pub const HUD_TEXT_SCALE_MIN: f32 = 0.8;
+pub const HUD_TEXT_SCALE_MAX: f32 = 1.6;
+pub const HUD_TEXT_SCALE_STEP: f32 = 0.1;
+
+/// Base (unscaled) font size of one HUD text entity, so text scale can be
+/// applied and reversed without storing per-row state elsewhere.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HudBaseFontSize(pub f32);
+
+/// Role of a static HUD text entity so the accessibility palette can recolor
+/// labels/headers/titles without touching dynamic value colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HudStaticRole {
+    Label,
+    Header,
+    Title,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HudStaticText(pub HudStaticRole);
+
 /// Text style configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct TextStyle {
@@ -110,7 +178,7 @@ impl TextStyle {
 const PANEL_BG: Color = Color::srgba(0.02, 0.03, 0.06, 0.72);
 const PANEL_BORDER: Color = Color::srgba(0.20, 0.30, 0.50, 0.35);
 const FLIGHT_PANEL_WIDTH_PX: f32 = 248.0;
-const PRIMARY_PANEL_WIDTH_PX: f32 = 168.0;
+const PRIMARY_PANEL_WIDTH_PX: f32 = 200.0;
 const PANEL_MARGIN_PX: f32 = 12.0;
 const LABEL_FONT_PX: f32 = 10.0;
 const VALUE_FONT_PX: f32 = 12.0;
@@ -132,7 +200,11 @@ impl HudBuilder {
         self
     }
 
-    fn txt(&self, text: impl Into<String>, style: TextStyle) -> (Text, TextFont, TextColor) {
+    fn txt(
+        &self,
+        text: impl Into<String>,
+        style: TextStyle,
+    ) -> (Text, TextFont, TextColor, HudBaseFontSize) {
         (
             Text::new(text),
             TextFont {
@@ -140,19 +212,33 @@ impl HudBuilder {
                 ..default()
             },
             TextColor(style.color),
+            HudBaseFontSize(style.font_size),
         )
     }
 
-    fn label(&self, text: &str) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(LABEL_FONT_PX, self.colors.dim))
+    fn label(&self, text: &str) -> (Text, TextFont, TextColor, HudBaseFontSize, HudStaticText) {
+        let (text, font, color, base) =
+            self.txt(text, TextStyle::new(LABEL_FONT_PX, self.colors.dim));
+        (text, font, color, base, HudStaticText(HudStaticRole::Label))
     }
 
-    fn section_header(&self, text: &str) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(9.0, self.colors.dim))
+    fn section_header(
+        &self,
+        text: &str,
+    ) -> (Text, TextFont, TextColor, HudBaseFontSize, HudStaticText) {
+        let (text, font, color, base) = self.txt(text, TextStyle::new(9.0, self.colors.dim));
+        (
+            text,
+            font,
+            color,
+            base,
+            HudStaticText(HudStaticRole::Header),
+        )
     }
 
-    fn title(&self, text: &str) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(13.0, self.colors.bright))
+    fn title(&self, text: &str) -> (Text, TextFont, TextColor, HudBaseFontSize, HudStaticText) {
+        let (text, font, color, base) = self.txt(text, TextStyle::new(13.0, self.colors.bright));
+        (text, font, color, base, HudStaticText(HudStaticRole::Title))
     }
 }
 
@@ -173,16 +259,25 @@ pub struct HudRoot {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct HudDetailRow;
 
+/// The event timeline rows, toggled independently of the diagnostic detail.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HudTimelineRow;
+
 /// Presentation-only HUD options (never part of simulation state).
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct HudOptions {
     /// Show diagnostic rows (orbital elements, attitude, thermal, recovery).
     pub detail: bool,
+    /// Show the flight event timeline.
+    pub timeline: bool,
 }
 
 impl Default for HudOptions {
     fn default() -> Self {
-        Self { detail: false }
+        Self {
+            detail: false,
+            timeline: true,
+        }
     }
 }
 
@@ -307,6 +402,27 @@ fn status_row(
             RocketHudMarker { panel, field },
         ));
     });
+}
+
+/// Multi-line event timeline value (newest first), toggled with `L`.
+fn timeline_row(
+    parent: &mut ChildSpawnerCommands,
+    builder: &HudBuilder,
+    panel: HudPanel,
+    field: HudField,
+) {
+    parent
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            ..default()
+        })
+        .insert(HudTimelineRow)
+        .with_children(|r| {
+            r.spawn((
+                builder.txt("", TextStyle::new(10.0, builder.colors.dim)),
+                RocketHudMarker { panel, field },
+            ));
+        });
 }
 
 /// Section header for a section whose rows are all diagnostic.
@@ -613,7 +729,8 @@ fn spawn_flight_panel(parent: &mut ChildSpawnerCommands, builder: &HudBuilder) {
                 false,
             );
 
-            status_row(p, builder, HudPanel::Left, HudField::EventLog, false);
+            p.spawn((builder.section_header("EVENTS"), HudTimelineRow));
+            timeline_row(p, builder, HudPanel::Left, HudField::EventTimeline);
             status_row(p, builder, HudPanel::Left, HudField::Warnings, false);
         });
 }
@@ -713,6 +830,7 @@ fn spawn_primary_panel(parent: &mut ChildSpawnerCommands, builder: &HudBuilder) 
 struct FieldFormatters;
 
 impl FieldFormatters {
+    #[allow(clippy::too_many_arguments)]
     fn format_field(
         field: HudField,
         telemetry: &RocketTelemetry,
@@ -721,29 +839,41 @@ impl FieldFormatters {
         event_feed: &RocketEventFeed,
         time_acceleration: f64,
         pending_simulation_s: f64,
+        colors: &HudColors,
+        units: HudUnits,
     ) -> (String, Color) {
-        let colors = HudColors::default();
+        let colors = *colors;
         let white = Color::WHITE;
         match field {
-            HudField::AltitudeAgl => (format!("{:.0} m", telemetry.altitude_agl_m), white),
-            HudField::AltitudeMsl => (format!("{:.0} m", telemetry.altitude_msl_m), white),
-            HudField::RadarAltitude => (format!("{:.1} m", telemetry.radar_altitude_m), white),
-            HudField::VelocityTotal => (format!("{:.0} m/s", telemetry.velocity_total_mps), white),
+            HudField::AltitudeAgl => {
+                let (value, unit) = units.altitude(telemetry.altitude_agl_m);
+                (format!("{value:.0} {unit}"), white)
+            }
+            HudField::AltitudeMsl => {
+                let (value, unit) = units.altitude(telemetry.altitude_msl_m);
+                (format!("{value:.0} {unit}"), white)
+            }
+            HudField::RadarAltitude => {
+                let (value, unit) = units.altitude(telemetry.radar_altitude_m);
+                (format!("{value:.1} {unit}"), white)
+            }
+            HudField::VelocityTotal => {
+                let (value, unit) = units.speed(telemetry.velocity_total_mps);
+                (format!("{value:.0} {unit}"), white)
+            }
             HudField::VelocityVertical => {
                 let color = if telemetry.velocity_vertical_mps >= 0.0 {
                     colors.success
                 } else {
                     colors.danger
                 };
-                (
-                    format!("{:+.1} m/s", telemetry.velocity_vertical_mps),
-                    color,
-                )
+                let (value, unit) = units.speed(telemetry.velocity_vertical_mps);
+                (format!("{value:+.1} {unit}"), color)
             }
-            HudField::VelocityHorizontal => (
-                format!("{:.0} m/s", telemetry.velocity_horizontal_mps),
-                white,
-            ),
+            HudField::VelocityHorizontal => {
+                let (value, unit) = units.speed(telemetry.velocity_horizontal_mps);
+                (format!("{value:.0} {unit}"), white)
+            }
             HudField::MachNumber => (format!("{:.2}", telemetry.mach_number), white),
             HudField::DynamicPressure => {
                 let color = if telemetry.dynamic_pressure_pa > 50_000.0 {
@@ -772,7 +902,8 @@ impl FieldFormatters {
             HudField::BankAngle => (format!("{:+.1} deg", telemetry.bank_angle_deg), white),
             HudField::Apoapsis => (
                 if telemetry.apoapsis_altitude_m.is_finite() {
-                    format!("{:.0} km", telemetry.apoapsis_altitude_m / 1000.0)
+                    let (value, unit) = units.distance_km(telemetry.apoapsis_altitude_m);
+                    format!("{value:.0} {unit}")
                 } else {
                     "N/A".to_string()
                 },
@@ -789,7 +920,8 @@ impl FieldFormatters {
                 };
                 (
                     if telemetry.periapsis_altitude_m.is_finite() {
-                        format!("{:.0} km", telemetry.periapsis_altitude_m / 1000.0)
+                        let (value, unit) = units.distance_km(telemetry.periapsis_altitude_m);
+                        format!("{value:.0} {unit}")
                     } else {
                         "N/A".to_string()
                     },
@@ -798,7 +930,8 @@ impl FieldFormatters {
             }
             HudField::SemiMajorAxis => (
                 if telemetry.orbital_semi_major_axis_m.is_finite() {
-                    format!("{:.0} km", telemetry.orbital_semi_major_axis_m / 1000.0)
+                    let (value, unit) = units.distance_km(telemetry.orbital_semi_major_axis_m);
+                    format!("{value:.0} {unit}")
                 } else {
                     "N/A".to_string()
                 },
@@ -853,7 +986,10 @@ impl FieldFormatters {
                 white,
             ),
             HudField::TwRatio => (format!("{:.2}", telemetry.tw_ratio), white),
-            HudField::DeltaV => (format!("{:.0} m/s", telemetry.delta_v_remaining_mps), white),
+            HudField::DeltaV => {
+                let (value, unit) = units.speed(telemetry.delta_v_remaining_mps);
+                (format!("{value:.0} {unit}"), white)
+            }
             HudField::PropellantFraction => {
                 // The active stage is the tank draining right now, so its
                 // fraction is the precise gauge reading; the whole-vehicle
@@ -866,12 +1002,17 @@ impl FieldFormatters {
                 } else {
                     white
                 };
+                let (mass_value, mass_unit) = match units {
+                    HudUnits::Metric => (telemetry.total_propellant_kg / 1000.0, "t"),
+                    HudUnits::Imperial => units.mass(telemetry.total_propellant_kg),
+                };
                 (
                     format!(
-                        "{:.1}%  S{}  {:.1} t",
+                        "{:.1}%  S{}  {:.1} {}",
                         fraction * 100.0,
                         telemetry.active_stage + 1,
-                        telemetry.total_propellant_kg / 1000.0,
+                        mass_value,
+                        mass_unit,
                     ),
                     color,
                 )
@@ -889,11 +1030,14 @@ impl FieldFormatters {
                 // value rather than the wrapper's derived Debug.
                 other => (format!("{:?}", other.0).to_uppercase(), white),
             },
-            HudField::Mass => (format!("{:.0} kg", telemetry.mass_kg), white),
-            HudField::Thrust => (
-                format!("{:.1} kN", telemetry.total_thrust_n / 1000.0),
-                white,
-            ),
+            HudField::Mass => {
+                let (value, unit) = units.mass(telemetry.mass_kg);
+                (format!("{value:.0} {unit}"), white)
+            }
+            HudField::Thrust => {
+                let (value, unit) = units.thrust_kn(telemetry.total_thrust_n / 1000.0);
+                (format!("{value:.1} {unit}"), white)
+            }
             HudField::AngularRates => (
                 format!(
                     "{:.1} / {:.1} / {:.1} deg/s",
@@ -999,11 +1143,17 @@ impl FieldFormatters {
                     (format!("! {}", warnings.join("  |  ")), colors.danger)
                 }
             }
-            HudField::EventLog => {
-                if event_feed.latest.is_empty() {
-                    (String::new(), white)
+            HudField::EventTimeline => {
+                if event_feed.history.is_empty() {
+                    ("(no events yet)".to_string(), colors.dim)
                 } else {
-                    (format!(">> {}", event_feed.latest), colors.warning)
+                    let text = event_feed
+                        .history
+                        .iter()
+                        .map(|line| format!("t+{:.1}  {}", line.sim_time_s, line.label))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    (text, colors.bright)
                 }
             }
         }
@@ -1058,6 +1208,7 @@ pub(crate) struct HudUpdateState {
 pub(crate) fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
+    display: Res<HudDisplaySettings>,
     time: Res<Time>,
     sim_time: Res<SimulationTime>,
     event_feed: Res<RocketEventFeed>,
@@ -1072,6 +1223,7 @@ pub(crate) fn update_rocket_hud_system(
 
     // Presentation-only flash phase for the blackout banner.
     let flash_on = ((time.elapsed_secs() * BLACKOUT_FLASH_HZ) as usize).is_multiple_of(2);
+    let colors = HudColors::for_palette(display.palette);
     for (marker, mut text, mut text_color) in hud_query.iter_mut() {
         let (formatted, color) = FieldFormatters::format_field(
             marker.field,
@@ -1081,6 +1233,8 @@ pub(crate) fn update_rocket_hud_system(
             &event_feed,
             sim_time.time_acceleration,
             sim_time.pending_simulation_s(),
+            &colors,
+            display.units,
         );
         if text.0 != formatted {
             text.0 = formatted;
@@ -1091,17 +1245,81 @@ pub(crate) fn update_rocket_hud_system(
     }
 }
 
-/// H toggles the diagnostic detail view; Z hides the whole HUD (Zen mode).
+/// H toggles diagnostics, L the event timeline, Z Zen mode, U metric/imperial
+/// units, N the accessibility palette, and `[`/`]` the HUD text scale.
 pub fn toggle_hud_options_system(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut options: ResMut<HudOptions>,
+    mut display: ResMut<HudDisplaySettings>,
     mut zen_mode: ResMut<ZenMode>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyH) {
         options.detail = !options.detail;
     }
+    if keyboard.just_pressed(KeyCode::KeyL) {
+        options.timeline = !options.timeline;
+    }
     if keyboard.just_pressed(KeyCode::KeyZ) {
         zen_mode.enabled = !zen_mode.enabled;
+    }
+    if keyboard.just_pressed(KeyCode::KeyU) {
+        display.units = match display.units {
+            HudUnits::Metric => HudUnits::Imperial,
+            HudUnits::Imperial => HudUnits::Metric,
+        };
+    }
+    if keyboard.just_pressed(KeyCode::KeyN) {
+        display.palette = match display.palette {
+            HudPalette::Standard => HudPalette::HighContrast,
+            HudPalette::HighContrast => HudPalette::Standard,
+        };
+    }
+    if keyboard.just_pressed(KeyCode::BracketLeft) {
+        display.text_scale = (display.text_scale - HUD_TEXT_SCALE_STEP)
+            .clamp(HUD_TEXT_SCALE_MIN, HUD_TEXT_SCALE_MAX);
+    }
+    if keyboard.just_pressed(KeyCode::BracketRight) {
+        display.text_scale = (display.text_scale + HUD_TEXT_SCALE_STEP)
+            .clamp(HUD_TEXT_SCALE_MIN, HUD_TEXT_SCALE_MAX);
+    }
+}
+
+/// Apply the presentation text scale to every HUD text entity from its stored
+/// base size. Runs only when the display settings change.
+pub fn apply_hud_text_scale_system(
+    display: Res<HudDisplaySettings>,
+    mut text_query: Query<(&HudBaseFontSize, &mut TextFont)>,
+) {
+    if !display.is_changed() {
+        return;
+    }
+    for (base, mut font) in &mut text_query {
+        let scaled = base.0 * display.text_scale;
+        if (font.font_size - scaled).abs() > f32::EPSILON {
+            font.font_size = scaled;
+        }
+    }
+}
+
+/// Recolor static labels/headers/titles when the accessibility palette
+/// changes. Dynamic value colors are produced by the HUD update system, which
+/// already reads the active palette.
+pub fn apply_hud_palette_system(
+    display: Res<HudDisplaySettings>,
+    mut query: Query<(&HudStaticText, &mut TextColor)>,
+) {
+    if !display.is_changed() {
+        return;
+    }
+    let colors = HudColors::for_palette(display.palette);
+    for (static_text, mut color) in &mut query {
+        let target = match static_text.0 {
+            HudStaticRole::Label | HudStaticRole::Header => colors.dim,
+            HudStaticRole::Title => colors.bright,
+        };
+        if color.0 != target {
+            color.0 = target;
+        }
     }
 }
 
@@ -1110,18 +1328,24 @@ pub fn toggle_hud_options_system(
 pub fn apply_hud_visibility_system(
     options: Res<HudOptions>,
     zen_mode: Res<ZenMode>,
-    mut roots: Query<(&HudRoot, &mut Node), Without<HudDetailRow>>,
-    mut detail_rows: Query<&mut Node, With<HudDetailRow>>,
+    mut roots: Query<(&HudRoot, &mut Node), (Without<HudDetailRow>, Without<HudTimelineRow>)>,
+    mut detail_rows: Query<&mut Node, (With<HudDetailRow>, Without<HudTimelineRow>)>,
+    mut timeline_rows: Query<&mut Node, (With<HudTimelineRow>, Without<HudDetailRow>)>,
 ) {
     let visible = UiDisplay::Flex;
     let hidden = UiDisplay::None;
 
+    let hud_visible = !zen_mode.enabled;
     for (_root, mut node) in &mut roots {
-        node.display = if zen_mode.enabled { hidden } else { visible };
+        node.display = if hud_visible { visible } else { hidden };
     }
-    let show_detail = options.detail && !zen_mode.enabled;
+    let show_detail = options.detail && hud_visible;
     for mut node in &mut detail_rows {
         node.display = if show_detail { visible } else { hidden };
+    }
+    let show_timeline = options.timeline && hud_visible;
+    for mut node in &mut timeline_rows {
+        node.display = if show_timeline { visible } else { hidden };
     }
 }
 
@@ -1164,6 +1388,8 @@ mod tests {
             &RocketEventFeed::default(),
             1.0,
             0.0,
+            &HudColors::default(),
+            HudUnits::Metric,
         );
         assert_eq!(text, "87.5%  S1  105.0 t");
     }
@@ -1189,6 +1415,8 @@ mod tests {
                 &RocketEventFeed::default(),
                 1.0,
                 0.0,
+                &HudColors::default(),
+                HudUnits::Metric,
             );
             assert_eq!(text, "N/A", "field {field:?} must read N/A prelaunch");
         }
@@ -1208,8 +1436,49 @@ mod tests {
             &RocketEventFeed::default(),
             1.0,
             0.0,
+            &HudColors::default(),
+            HudUnits::Metric,
         );
         assert!(warnings.contains("HIGH G-LOAD"));
         assert_eq!(color, HudColors::default().danger);
+    }
+
+    #[test]
+    fn imperial_units_change_display_suffixes() {
+        let telemetry = RocketTelemetry {
+            altitude_agl_m: 1_000.0,
+            velocity_total_mps: 100.0,
+            mass_kg: 10_000.0,
+            ..default()
+        };
+        let format = |field, units| {
+            FieldFormatters::format_field(
+                field,
+                &telemetry,
+                &RocketCameraMode::default(),
+                false,
+                &RocketEventFeed::default(),
+                1.0,
+                0.0,
+                &HudColors::default(),
+                units,
+            )
+            .0
+        };
+        assert!(format(HudField::AltitudeAgl, HudUnits::Metric).ends_with(" m"));
+        assert!(format(HudField::AltitudeAgl, HudUnits::Imperial).ends_with(" ft"));
+        assert!(format(HudField::VelocityTotal, HudUnits::Metric).ends_with(" m/s"));
+        assert!(format(HudField::VelocityTotal, HudUnits::Imperial).ends_with(" mph"));
+        assert!(format(HudField::Mass, HudUnits::Metric).ends_with(" kg"));
+        assert!(format(HudField::Mass, HudUnits::Imperial).ends_with(" lb"));
+    }
+
+    #[test]
+    fn high_contrast_palette_replaces_red_green_pairing() {
+        let standard = HudColors::for_palette(HudPalette::Standard);
+        let contrast = HudColors::for_palette(HudPalette::HighContrast);
+        assert_ne!(standard.success, contrast.success);
+        assert_ne!(standard.danger, contrast.danger);
+        assert_eq!(contrast.bright, Color::WHITE);
     }
 }

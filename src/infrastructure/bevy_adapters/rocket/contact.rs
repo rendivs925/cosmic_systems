@@ -5,7 +5,7 @@ use super::components::{
     RocketAutopilot, RocketFlightConditions, RocketGeometry, RocketMissionState,
     RocketPhysicsState, RocketPlanetBinding, RocketPropulsion, TerrainCollisionState, TipOverState,
 };
-use super::events::SplashdownDetectedEvent;
+use super::events::{CrashEvent, LiftoffEvent, SplashdownDetectedEvent, TouchdownEvent};
 use crate::domain::services::landing_gear::{topple_critical_angle_rad, ToppleFall};
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, body_fixed_to_terrain_lat_lon, enu_basis,
@@ -219,6 +219,9 @@ pub fn resolve_ground_contact(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     surface_cache: Option<Res<TerrainSurfaceSampleCache>>,
     mut splashdown_writer: MessageWriter<SplashdownDetectedEvent>,
+    mut liftoff_writer: MessageWriter<LiftoffEvent>,
+    mut touchdown_writer: MessageWriter<TouchdownEvent>,
+    mut crash_writer: MessageWriter<CrashEvent>,
     planet_query: Query<(Entity, &PlanetComponent, &PlanetTerrain)>,
     mut rocket_query: Query<GroundContactAccess>,
 ) {
@@ -402,6 +405,12 @@ pub fn resolve_ground_contact(
             if liftoff_from_rest(upward_thrust_n, weight_n) {
                 rest.active = false;
                 collision.ground_contact = GroundContact::None;
+                liftoff_writer.write(LiftoffEvent {
+                    rocket: rocket_entity,
+                    position_m: contact_position_m,
+                    upward_thrust_n,
+                    weight_n,
+                });
                 bevy::log::info!(
                     "Liftoff: upward thrust {:.0} N exceeds weight {:.0} N, released from surface",
                     upward_thrust_n,
@@ -574,12 +583,27 @@ pub fn resolve_ground_contact(
                             "Splashdown detected at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s",
                             -components.normal_mps
                         );
+                    } else {
+                        touchdown_writer.write(TouchdownEvent {
+                            rocket: rocket_entity,
+                            position_m: contact_position_m,
+                            vertical_speed_mps: -components.normal_mps,
+                            lateral_speed_mps: components.lateral_mps,
+                            tilt_deg,
+                            slope_deg: sample.slope_deg,
+                        });
                     }
                 }
             }
             GroundContact::Crash => {
                 if *mission_state != RocketMissionState::PreLaunch {
                     *mission_state = RocketMissionState::Crashed;
+                    crash_writer.write(CrashEvent {
+                        rocket: rocket_entity,
+                        position_m: contact_position_m,
+                        vertical_speed_mps: -components.normal_mps,
+                        tilt_deg,
+                    });
                     record_scorecard(
                         scorecard,
                         -components.normal_mps,

@@ -181,20 +181,7 @@ pub fn run_headless_batch_to_directory(
 }
 
 fn mission_code(mission: RocketMissionState) -> u8 {
-    use crate::domain::entities::rocket::RocketMissionState as State;
-    match mission.0 {
-        State::PreLaunch => 0,
-        State::Launch => 1,
-        State::Ascent => 2,
-        State::Orbit => 3,
-        State::DeorbitBurn => 4,
-        State::ReentryCorridor => 5,
-        State::PoweredDescent => 6,
-        State::UnpoweredDescent => 7,
-        State::Landing => 8,
-        State::Landed => 9,
-        State::Crashed => 10,
-    }
+    mission.0.code()
 }
 
 fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, String> {
@@ -398,6 +385,7 @@ pub fn run_headless_scenario_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::simulation_artifact::SimulationEventType;
     use crate::infrastructure::bevy_adapters::rocket::components::RocketTelemetry;
 
     #[test]
@@ -499,6 +487,30 @@ mod tests {
             "engines must be producing thrust, got {}",
             telemetry.total_thrust_n
         );
+    }
+
+    #[test]
+    fn recorded_event_timeline_is_deterministic_and_ordered() {
+        let scenario = HeadlessScenario {
+            fixed_steps: 64 * 10,
+            ..default()
+        };
+        let first = run_headless_scenario_artifact(scenario.clone()).expect("first run");
+        let second = run_headless_scenario_artifact(scenario).expect("second run");
+
+        assert_eq!(first.events, second.events);
+        assert!(
+            !first.events.is_empty(),
+            "an ascent must record authoritative lifecycle events"
+        );
+        assert_eq!(
+            first.events[0].event_type,
+            Some(SimulationEventType::Ignition),
+            "the first recorded event must be the engine ignition"
+        );
+        for window in first.events.windows(2) {
+            assert!(window[1].simulation_time_s >= window[0].simulation_time_s);
+        }
     }
 
     #[test]

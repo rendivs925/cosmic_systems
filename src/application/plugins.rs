@@ -97,7 +97,9 @@ use crate::infrastructure::bevy_adapters::rocket::environment::{
     update_rocket_sky_color, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket::events::{
-    CommsBlackoutEvent, FairingSeparatedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+    CommsBlackoutEvent, CrashEvent, EngineCutoffEvent, EngineIgnitionEvent, FairingSeparatedEvent,
+    LiftoffEvent, MissionPhaseChangedEvent, SplashdownDetectedEvent, StageSeparatedEvent,
+    TouchdownEvent,
 };
 use crate::infrastructure::bevy_adapters::rocket::flight_conditions::refresh_flight_conditions;
 use crate::infrastructure::bevy_adapters::rocket::gravity_orbit::{
@@ -110,12 +112,13 @@ use crate::infrastructure::bevy_adapters::rocket::guidance::{
     guidance_system, update_drone_ship_landing_targets,
 };
 use crate::infrastructure::bevy_adapters::rocket::hud::{
-    apply_hud_visibility_system, spawn_rocket_hud_system, toggle_hud_options_system,
-    update_rocket_hud_system, HudOptions,
+    apply_hud_palette_system, apply_hud_text_scale_system, apply_hud_visibility_system,
+    spawn_rocket_hud_system, toggle_hud_options_system, update_rocket_hud_system,
+    HudDisplaySettings, HudOptions,
 };
 use crate::infrastructure::bevy_adapters::rocket::lifecycle::{
-    apply_relaunch_requests, constrain_terminal_time_warp, handle_relaunch_input_system,
-    handle_rocket_launch_input, RelaunchCommandQueue,
+    apply_relaunch_requests, constrain_terminal_time_warp, emit_mission_phase_events_system,
+    handle_relaunch_input_system, handle_rocket_launch_input, RelaunchCommandQueue,
 };
 use crate::infrastructure::bevy_adapters::rocket::orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket::planet::{
@@ -436,6 +439,12 @@ impl Plugin for RocketFixedSimulationPlugin {
         app.add_message::<SplashdownDetectedEvent>();
         app.add_message::<StageSeparatedEvent>();
         app.add_message::<FairingSeparatedEvent>();
+        app.add_message::<EngineIgnitionEvent>();
+        app.add_message::<EngineCutoffEvent>();
+        app.add_message::<LiftoffEvent>();
+        app.add_message::<TouchdownEvent>();
+        app.add_message::<CrashEvent>();
+        app.add_message::<MissionPhaseChangedEvent>();
         app.configure_sets(
             FixedUpdate,
             (
@@ -537,6 +546,10 @@ impl Plugin for RocketFixedSimulationPlugin {
                 compute_rocket_telemetry_system.in_set(RocketSet::Telemetry),
                 record_flight_data_system.in_set(RocketSet::Telemetry),
                 record_simulation_telemetry_system.in_set(RocketSet::Telemetry),
+                emit_mission_phase_events_system
+                    .in_set(RocketSet::Telemetry)
+                    .before(record_simulation_events_system)
+                    .run_if(replay_inactive),
                 record_simulation_events_system.in_set(RocketSet::Telemetry),
                 record_replay_snapshot_system.in_set(RocketSet::Replay),
             ),
@@ -653,12 +666,15 @@ impl Plugin for RocketModePlugin {
         // Rocket HUD UI (runs in Update). Options/visibility are presentation
         // only and are applied before the cadence-limited value writer.
         app.init_resource::<HudOptions>();
+        app.init_resource::<HudDisplaySettings>();
         app.add_systems(Startup, spawn_rocket_hud_system);
         app.add_systems(
             Update,
             (
                 toggle_hud_options_system,
                 apply_hud_visibility_system,
+                apply_hud_text_scale_system,
+                apply_hud_palette_system,
                 update_rocket_hud_system,
             )
                 .chain(),
