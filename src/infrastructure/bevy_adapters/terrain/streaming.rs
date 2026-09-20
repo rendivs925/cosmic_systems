@@ -25,6 +25,9 @@ use crate::infrastructure::bevy_adapters::performance_components::PerformanceMet
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketMissionState, RocketPhysicsState, RocketPlanetBinding, SpentStage,
 };
+use crate::infrastructure::bevy_adapters::terrain::imagery::{
+    ImageryMetrics, TerrainImageryResource,
+};
 use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::terrain::render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
@@ -210,6 +213,7 @@ impl TerrainStreamingResource {
         focus_max_lod: u32,
         culling: TerrainCullingStats,
         main_thread_ms: f64,
+        imagery: ImageryMetrics,
     ) -> Option<TerrainStreamingMetrics> {
         if !completed.is_reportable() || self.generated.len() < self.next_metrics_report_at {
             return None;
@@ -227,6 +231,7 @@ impl TerrainStreamingResource {
             focus_max_lod,
             culling,
             main_thread_ms,
+            imagery,
         ))
     }
 }
@@ -350,6 +355,7 @@ struct TerrainStreamingMetrics {
     target_lods: PatchLevelDistribution,
     visible_lods: PatchLevelDistribution,
     completed: TerrainGenerationBatch,
+    imagery: ImageryMetrics,
 }
 
 impl TerrainStreamingMetrics {
@@ -368,6 +374,7 @@ impl TerrainStreamingMetrics {
         focus_max_lod: u32,
         culling: TerrainCullingStats,
         main_thread_ms: f64,
+        imagery: ImageryMetrics,
     ) -> Self {
         let upload_backlog_tiles = streaming
             .generated
@@ -400,6 +407,7 @@ impl TerrainStreamingMetrics {
             target_lods: PatchLevelDistribution::from_patches(target.iter().copied()),
             visible_lods: PatchLevelDistribution::from_patches(streaming.published.iter().copied()),
             completed,
+            imagery,
         }
     }
 
@@ -430,6 +438,11 @@ impl TerrainStreamingMetrics {
             visible_lods = ?self.visible_lods.0,
             completed_batch_tiles = self.completed.completed_tiles,
             completed_batch_ms = self.completed.generation_ms,
+            imagery_resident_tiles = self.imagery.resident_tiles,
+            imagery_pending_tiles = self.imagery.pending_tiles,
+            imagery_resident_mib = self.imagery.resident_mib,
+            imagery_budget_mib = self.imagery.budget_mib,
+            imagery_evicted_tiles = self.imagery.evicted_tiles,
             "Terrain streaming metrics"
         );
     }
@@ -526,6 +539,7 @@ pub(crate) fn stream_terrain_patches(
     camera_query: Query<(&Camera, &Transform, &Projection), With<Camera3d>>,
     performance_config: Res<PerformanceMetricsConfig>,
     mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
+    imagery: Res<TerrainImageryResource>,
 ) {
     let instrumentation_enabled = performance_config.instrumentation_enabled();
     terrain_performance.begin_frame(instrumentation_enabled);
@@ -965,6 +979,7 @@ pub(crate) fn stream_terrain_patches(
         max_focus_level,
         culling,
         streaming_started.elapsed().as_secs_f64() * 1_000.0,
+        imagery.metrics(),
     ) {
         metrics.log();
     }

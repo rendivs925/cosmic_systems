@@ -79,15 +79,22 @@
   `TerrainImageryConfig` sets `budget_bytes` (64 MiB) and
   `max_uploads_per_frame` (4); admission is skipped when the next tile would
   exceed the budget, and imagery streams after geometry in the frame.
-- [ ] 4.2 Add cadence-limited imagery residency, pending, eviction, and upload
-  backlog fields to the existing terrain streaming metrics. A cadence-limited
-  `terrain_imagery` line reports residency, pending, budget, and evictions, but
-  it is not yet folded into the unified `terrain_streaming` metrics snapshot.
-- [ ] 4.3 Add focused tests for manifest validation, cube-face mapping,
+- [x] 4.2 Add cadence-limited imagery residency, pending, eviction, and upload
+  backlog fields to the existing terrain streaming metrics. `ImageryMetrics`
+  is captured into `TerrainStreamingMetrics` and logged as
+  `imagery_resident_tiles`, `imagery_pending_tiles`, `imagery_resident_mib`,
+  `imagery_budget_mib`, and `imagery_evicted_tiles` on the existing cadence.
+- [x] 4.3 Add focused tests for manifest validation, cube-face mapping,
   antimeridian/polar behavior, seam continuity, fallback retention, budgeted
-  eviction, and source/collision independence.
+  eviction, and source/collision independence. Covered by imagery manifest,
+  tile, and package tests plus `imagery_admission_stays_within_budget`.
+  Source/collision independence is structural: imagery lives only in
+  presentation modules and no imagery type is referenced by `TerrainSource`,
+  terrain collision, or rocket physics.
 - [ ] 4.4 Add render lifecycle tests proving that detailed imagery upgrades a
   patch without recreating terrain geometry or leaving a blank material.
+  Not yet covered; the upgrade path was verified end to end at runtime with a
+  synthetic package but has no automated Bevy-world test.
 
 ## 5. Validation And Acceptance
 

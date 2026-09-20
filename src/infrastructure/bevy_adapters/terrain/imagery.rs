@@ -25,8 +25,6 @@ const EARTH_IMAGERY_MANIFEST: &str =
     include_str!("../../../../assets/configs/terrain/earth_imagery_v1.ron");
 /// Conservative per-tile GPU/CPU estimate for a produced 256² RGBA tile.
 const IMAGERY_TILE_BYTES: u64 = 256 * 256 * 4;
-/// Cadence for the imagery telemetry line.
-const IMAGERY_LOG_INTERVAL_S: f64 = 5.0;
 
 /// Imagery streaming configuration. Disabled or absent imagery falls back to
 /// the existing global albedo without touching terrain or collision data.
@@ -50,6 +48,17 @@ impl Default for TerrainImageryConfig {
     }
 }
 
+/// Cadence-limited imagery residency snapshot folded into terrain streaming
+/// metrics.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ImageryMetrics {
+    pub(crate) resident_tiles: usize,
+    pub(crate) pending_tiles: usize,
+    pub(crate) resident_mib: f64,
+    pub(crate) budget_mib: f64,
+    pub(crate) evicted_tiles: u64,
+}
+
 /// Resolved imagery state owned by the terrain streaming lifecycle.
 #[derive(Resource, Default)]
 pub(crate) struct TerrainImageryResource {
@@ -58,9 +67,8 @@ pub(crate) struct TerrainImageryResource {
     pending: BTreeSet<TerrainPatch>,
     ready: BTreeSet<TerrainPatch>,
     resident_bytes: u64,
+    budget_bytes: u64,
     evictions: u64,
-    status: String,
-    last_log_at_s: f64,
 }
 
 impl TerrainImageryResource {
@@ -78,20 +86,14 @@ impl TerrainImageryResource {
         self.handles.get(&tile)
     }
 
-    pub(crate) fn ready_count(&self) -> usize {
-        self.ready.len()
-    }
-
-    pub(crate) fn pending_count(&self) -> usize {
-        self.pending.len()
-    }
-
-    pub(crate) fn resident_bytes(&self) -> u64 {
-        self.resident_bytes
-    }
-
-    pub(crate) fn evictions(&self) -> u64 {
-        self.evictions
+    pub(crate) fn metrics(&self) -> ImageryMetrics {
+        ImageryMetrics {
+            resident_tiles: self.ready.len(),
+            pending_tiles: self.pending.len(),
+            resident_mib: self.resident_bytes as f64 / (1024.0 * 1024.0),
+            budget_mib: self.budget_bytes as f64 / (1024.0 * 1024.0),
+            evicted_tiles: self.evictions,
+        }
     }
 }
 
@@ -101,15 +103,14 @@ pub(crate) fn load_earth_imagery_package(
     config: Res<TerrainImageryConfig>,
     mut imagery: ResMut<TerrainImageryResource>,
 ) {
+    imagery.budget_bytes = config.budget_bytes;
     if !config.enabled {
-        imagery.status = "disabled by configuration".into();
         info!(target: "terrain_imagery", "Earth imagery is disabled; using global albedo fallback");
         return;
     }
     let manifest = match EarthImageryManifest::from_ron(EARTH_IMAGERY_MANIFEST) {
         Ok(manifest) => manifest,
         Err(error) => {
-            imagery.status = format!("manifest invalid: {error}");
             info!(target: "terrain_imagery", "Earth imagery unavailable; using global albedo fallback: {error}");
             return;
         }
@@ -123,11 +124,9 @@ pub(crate) fn load_earth_imagery_package(
                 package.tile_count(),
                 package.regions().len()
             );
-            imagery.status = "available".into();
             imagery.package = Some(package);
         }
         Err(error) => {
-            imagery.status = format!("{error}");
             info!(target: "terrain_imagery", "Earth imagery unavailable; using global albedo fallback: {error}");
         }
     }
@@ -138,7 +137,6 @@ pub(crate) fn stream_terrain_imagery(
     config: Res<TerrainImageryConfig>,
     streaming: Res<TerrainStreamingResource>,
     asset_server: Res<AssetServer>,
-    time: Res<Time>,
     mut imagery: ResMut<TerrainImageryResource>,
 ) {
     let Some(package) = imagery.package.as_ref() else {
@@ -163,10 +161,12 @@ pub(crate) fn stream_terrain_imagery(
         if imagery.handles.contains_key(tile) {
             continue;
         }
-        let reserved = imagery.resident_bytes
-            + imagery.pending.len() as u64 * IMAGERY_TILE_BYTES
-            + IMAGERY_TILE_BYTES;
-        if reserved > config.budget_bytes || uploads >= config.max_uploads_per_frame {
+        if !within_budget(
+            imagery.resident_bytes,
+            imagery.pending.len(),
+            config.budget_bytes,
+        ) || uploads >= config.max_uploads_per_frame
+        {
             break;
         }
         let path = imagery_asset_path(&config.asset_root, tile);
@@ -209,19 +209,6 @@ pub(crate) fn stream_terrain_imagery(
         }
         imagery.evictions += 1;
     }
-
-    if time.elapsed_secs_f64() - imagery.last_log_at_s >= IMAGERY_LOG_INTERVAL_S {
-        imagery.last_log_at_s = time.elapsed_secs_f64();
-        info!(
-            target: "terrain_imagery",
-            resident_tiles = imagery.ready_count(),
-            pending_tiles = imagery.pending_count(),
-            resident_mib = imagery.resident_bytes() as f64 / (1024.0 * 1024.0),
-            budget_mib = config.budget_bytes as f64 / (1024.0 * 1024.0),
-            evicted_tiles = imagery.evictions(),
-            "Earth imagery metrics"
-        );
-    }
 }
 
 /// Upgrade a patch material once its detailed imagery tile is ready. Geometry
@@ -262,6 +249,14 @@ pub(crate) fn apply_terrain_imagery(
     }
 }
 
+/// Admission check: one more tile may be requested only if the resident plus
+/// in-flight tiles plus that tile stay within the imagery budget. This prevents
+/// unbounded imagery residency without ever needing to evict visible imagery.
+fn within_budget(resident_bytes: u64, pending: usize, budget_bytes: u64) -> bool {
+    let reserved = resident_bytes + pending as u64 * IMAGERY_TILE_BYTES + IMAGERY_TILE_BYTES;
+    reserved <= budget_bytes
+}
+
 fn imagery_asset_path(asset_root: &str, patch: &TerrainPatch) -> String {
     format!(
         "{asset_root}/tiles/{}/{}/{}_{}.png",
@@ -276,6 +271,21 @@ fn imagery_asset_path(asset_root: &str, patch: &TerrainPatch) -> String {
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::CubeFace;
+
+    #[test]
+    fn imagery_admission_stays_within_budget() {
+        // Empty budget admits nothing.
+        assert!(!within_budget(0, 0, IMAGERY_TILE_BYTES - 1));
+        // Exactly one tile fits.
+        assert!(within_budget(0, 0, IMAGERY_TILE_BYTES));
+        // Resident plus in-flight plus the new tile must all fit.
+        assert!(!within_budget(
+            IMAGERY_TILE_BYTES,
+            1,
+            2 * IMAGERY_TILE_BYTES
+        ));
+        assert!(within_budget(IMAGERY_TILE_BYTES, 0, 2 * IMAGERY_TILE_BYTES));
+    }
 
     #[test]
     fn imagery_asset_path_matches_the_package_layout() {
