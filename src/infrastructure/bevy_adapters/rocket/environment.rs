@@ -18,6 +18,13 @@ const ROCKET_SHADOW_MIN_DISTANCE_M: f32 = 1.0;
 const ROCKET_SHADOW_FIRST_CASCADE_FAR_M: f32 = 250.0;
 const ROCKET_SHADOW_MAX_DISTANCE_M: f32 = 20_000.0;
 
+/// Ratio of mean sky radiance to direct solar illuminance for a clear Earth
+/// atmosphere. A single-scattering integration of the shared optics gives
+/// roughly 1% at the zenith and 13% at the horizon, so the hemisphere average
+/// is a few percent; that is the ambient fill used for shadows and the night
+/// side. This keeps ambient and direct lighting in one radiometric scale.
+const SKY_AMBIENT_FRACTION: f32 = 0.025;
+
 /// Spawns a directional sunlight source. The Sun's inertial direction comes
 /// from the shared ephemeris; the rotating planet moves terrain through that
 /// fixed direction to produce the physical day/night cycle.
@@ -87,9 +94,14 @@ pub fn update_rocket_sky_ambient_light(
     ));
     let presentation = atmospheric_presentation(conditions, daylight);
     ambient.color = Color::srgb(0.56, 0.68, 0.82);
-    // The atmosphere controls diffuse sky fill while a tiny floor preserves a
-    // readable but genuinely dark vacuum/night presentation.
-    ambient.brightness = 0.01 + presentation.ambient_unit * 34.99;
+    // `AmbientLight::brightness` is a sky radiance in cd/m^2, so it must scale
+    // with the same solar illuminance that drives the directional light. A
+    // 127 klx sun needs a few percent of that as sky fill (~10% of the sunlit
+    // surface radiance); the previous fixed 35 cd/m^2 was ~100x too dark and
+    // crushed every shadow to black. A tiny floor preserves a genuinely dark
+    // vacuum/night presentation.
+    let sky_ambient_cd_m2 = solar_illuminance_lux(sun.distance_m) * SKY_AMBIENT_FRACTION;
+    ambient.brightness = 0.01 + sky_ambient_cd_m2 * presentation.ambient_unit;
 }
 
 /// Tag component marking the sun directional light for day/night rotation.
@@ -177,14 +189,17 @@ fn apply_aerial_perspective(
 ) {
     let daylight = daylight.clamp(0.0, 1.0);
     // Rayleigh-dominated airlight: blue-biased base with a warm sun lobe for Mie
-    // forward scattering.
+    // forward scattering. Bevy adds `pow(NdotL, exponent) * light.color *
+    // exposure` on top of the base, and `light.color` is premultiplied by the
+    // solar illuminance, so the lobe alpha must stay small or the haze saturates
+    // to white. The base color alone already matches the sky's radiance scale.
     fog.color = Color::srgba(
         0.45 * daylight + 0.002,
         0.55 * daylight + 0.002,
         0.72 * daylight + 0.006,
         daylight,
     );
-    fog.directional_light_color = Color::srgba(1.0, 0.94, 0.82, 0.35 * daylight);
+    fog.directional_light_color = Color::srgba(1.0, 0.94, 0.82, 0.04 * daylight);
     fog.directional_light_exponent = 16.0;
     fog.falloff = match optics {
         Some(optics) => {

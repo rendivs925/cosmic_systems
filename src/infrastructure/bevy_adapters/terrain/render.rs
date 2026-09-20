@@ -90,7 +90,9 @@ pub struct TerrainPatchRenderState {
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
-    global_earth_albedo: Option<Handle<Image>>,
+    /// Equirectangular global albedo per body name, loaded from the catalog on
+    /// demand so Moon/Mars terrain is not tinted by Earth's image.
+    global_albedo: HashMap<String, Handle<Image>>,
     /// Shared neutral maps let coarse patches use the terrain material without
     /// allocating local images whose detail is not visible at their LOD.
     neutral_local_albedo: Option<Handle<Image>>,
@@ -295,7 +297,7 @@ impl Plugin for TerrainRenderPlugin {
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
-            .add_systems(Startup, load_terrain_global_albedo)
+            .add_systems(Startup, prepare_terrain_render_assets)
             .add_systems(
                 Update,
                 recenter_render_origin.before(stream_terrain_patches),
@@ -333,15 +335,32 @@ fn finish_terrain_performance_frame(
     terrain_performance.finish_frame(performance_config.instrumentation_enabled());
 }
 
-/// Load the catalog's geographic Earth albedo once. Terrain meshes retain UV0
-/// specifically for this continuous, equirectangular image.
-fn load_terrain_global_albedo(
+/// The catalog's geographic albedo for one body, loaded once and cached. Terrain
+/// meshes retain UV0 specifically for this continuous, equirectangular image.
+fn global_albedo_for(
+    render_assets: &mut TerrainRenderAssets,
+    asset_server: &AssetServer,
+    body_name: &str,
+) -> Option<Handle<Image>> {
+    if let Some(handle) = render_assets.global_albedo.get(body_name) {
+        return Some(handle.clone());
+    }
+    let handle = load_texture(asset_server, get_planet_textures(body_name).albedo)?;
+    render_assets
+        .global_albedo
+        .insert(body_name.to_owned(), handle.clone());
+    Some(handle)
+}
+
+/// Preload the default Earth albedo and the shared neutral surface maps so the
+/// first terrain patch does not wait on an asset load. Non-default bodies load
+/// on demand through [`global_albedo_for`].
+fn prepare_terrain_render_assets(
     asset_server: Res<AssetServer>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    render_assets.global_earth_albedo =
-        load_texture(&asset_server, get_planet_textures("Earth").albedo);
+    let _ = global_albedo_for(&mut render_assets, &asset_server, "Earth");
     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
 }
 
@@ -391,7 +410,7 @@ fn spawn_patch_mesh_system(
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut streaming: ResMut<TerrainStreamingResource>,
-    _config: Res<TerrainRenderConfig>,
+    asset_server: Res<AssetServer>,
     render_origin: Res<RenderOrigin>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
@@ -510,10 +529,14 @@ fn spawn_patch_mesh_system(
         }
         let material_started = instrumentation_enabled.then(Instant::now);
         let base_material = patch_material(surface.roughness, surface.metallic);
-        let global_albedo = render_assets.global_earth_albedo.clone().unwrap_or_else(|| {
-            bevy::log::warn!("Earth global albedo is unavailable; terrain will use source-derived color only");
-            local_albedo.clone()
-        });
+        let body_name = planet.domain_planet.name.clone();
+        let global_albedo = global_albedo_for(&mut render_assets, &asset_server, &body_name)
+            .unwrap_or_else(|| {
+                bevy::log::warn!(
+                    "{body_name} global albedo is unavailable; terrain will use source-derived color only"
+                );
+                local_albedo.clone()
+            });
         let material_handle = materials.add(TerrainMaterial {
             base: base_material,
             extension: TerrainSurfaceExtension {

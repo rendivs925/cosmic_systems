@@ -14,6 +14,7 @@ use crate::domain::services::rocket_propulsion::{
     PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
+use bevy::camera::primitives::Aabb;
 use bevy::log::info;
 use bevy::math::DVec3;
 use bevy::prelude::{
@@ -74,6 +75,10 @@ pub fn propulsion_staging(
                     (rocket_mesh.as_deref_mut(), meshes.as_deref_mut())
                 {
                     *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &serial_stack));
+                    // Bevy only inserts an `Aabb` for entities that lack one, so
+                    // an in-place mesh swap must drop the stale bounds or the
+                    // vehicle can be frustum-culled against its former size.
+                    commands.entity(entity).remove::<Aabb>();
                 }
                 rocket.refresh_attached_mass_properties(
                     &propulsion,
@@ -147,6 +152,9 @@ pub fn propulsion_staging(
                 active_stage,
                 attached_upper_envelope_height_m,
             ));
+            // Drop the stale bounds so Bevy recomputes them for the smaller
+            // upper-stage mesh (see the parallel-booster swap above).
+            commands.entity(entity).remove::<Aabb>();
         }
 
         let ablation_mass_loss_kg = ablation.map_or(0.0, |ablation| ablation.mass_loss_kg);

@@ -7,6 +7,7 @@ use crate::domain::services::reference_frames::surface_velocity_in_planet_inerti
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use bevy::camera::primitives::Aabb;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -107,6 +108,7 @@ pub fn apply_relaunch_requests(
         &mut TipOverState,
         &mut FlightRecorder,
         Option<&InitialPayloadFairing>,
+        Option<&mut RocketRenderState>,
     )>,
     mut reset_query: Query<(
         &mut RocketCommands,
@@ -142,6 +144,7 @@ pub fn apply_relaunch_requests(
                 mut tip_over,
                 mut recorder,
                 initial_fairing,
+                mut render_state,
             )) = rocket_query.get_mut(rocket_entity)
             else {
                 continue;
@@ -160,6 +163,10 @@ pub fn apply_relaunch_requests(
             propulsion.reset_for_relaunch(attached_payload_kg);
             if let (Some(mut rocket_mesh), Some(meshes)) = (rocket_mesh, meshes.as_deref_mut()) {
                 *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &propulsion.vehicle));
+                // Bevy never refreshes an existing `Aabb`, so the mesh swap must
+                // drop it or the full refueled stack can be culled against the
+                // spent upper stage's smaller bounds.
+                commands.entity(entity).remove::<Aabb>();
             }
 
             // Mass and inertia from the refueled stack.
@@ -187,6 +194,11 @@ pub fn apply_relaunch_requests(
             rocket.dynamics.velocity_mps =
                 surface_velocity_in_planet_inertial(rocket.dynamics.position_m, orientation);
             rocket.dynamics.angular_velocity_radps = DVec3::ZERO;
+            // Reset the interpolation buffer so the first post-relaunch frame
+            // cannot blend between the pre-relaunch pose and the pad.
+            if let Some(render_state) = render_state.as_deref_mut() {
+                *render_state = RocketRenderState::new(rocket.dynamics);
+            }
 
             // Mission and lifecycle state back to a fresh pad.
             *mission_state = RocketMissionState::PreLaunch;

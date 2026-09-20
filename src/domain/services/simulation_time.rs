@@ -12,14 +12,15 @@ use crate::domain::services::simulation_epoch::{
 /// Unprocessed time remains queued, rather than being discarded.
 pub const MAX_FIXED_STEPS_PER_RENDER_FRAME: u32 = 32;
 
-/// Shared physical start instant for every application mode. It places the
-/// Kennedy Space Center launch scene in daylight while remaining inside the
+/// Shared physical start instant for every application mode. 03:00 UTC is
+/// roughly local solar noon at the Papua coastal launch site (139.5 degrees
+/// east), placing the launch scene in high daylight while remaining inside the
 /// pinned DE440/LSK epoch authority.
 pub const DEFAULT_SIMULATION_START_UTC: UtcDateTime = UtcDateTime {
     year: 2000,
     month: 1,
     day: 1,
-    hour: 17,
+    hour: 3,
     minute: 0,
     second: 0.0,
 };

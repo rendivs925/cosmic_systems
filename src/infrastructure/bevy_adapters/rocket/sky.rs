@@ -31,11 +31,14 @@ const SKY_DOME_FAR_FRACTION: f32 = 0.9;
 /// dome is centred on the camera, so it must be biased far behind every other
 /// transparent surface to be drawn first as the background.
 const SKY_SORT_DEPTH_BIAS: f32 = -1.0e6;
-/// Calibration between the radiometric single-scattering integral and the
-/// camera's exposure. The integral is linear in the solar irradiance; this
-/// factor places a clear daytime sky at a natural fraction of a sunlit surface
-/// so it does not clip to white and lose its Rayleigh colour.
-const SKY_RADIANCE_SCALE: f32 = 0.03;
+/// Global scale for the sky radiance. The single-scattering integral is
+/// already linear in the same solar irradiance that drives the PBR directional
+/// light, so the physical value is `1.0`: the integral alone yields a clear
+/// daytime sky (zenith ~1.2e3, horizon ~1.7e4) against a sunlit white surface
+/// of ~4.0e4 in the same units. It is kept as a named calibration so an
+/// artistic adjustment stays in one place; reducing it darkens the sky without
+/// changing the Rayleigh/Mie colour balance.
+const SKY_RADIANCE_SCALE: f32 = 1.0;
 
 /// Uniform parameters for the sky shader. Field order and types must match the
 /// `SkyParams` WGSL struct exactly.

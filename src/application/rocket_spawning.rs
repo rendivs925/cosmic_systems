@@ -597,8 +597,8 @@ pub(crate) fn build_rocket_mesh(
             let base_b = section_start + next_seg;
             let top_a = section_start + rings * segments + seg;
             let top_b = section_start + rings * segments + next_seg;
-            indices.extend_from_slice(&[base_cap, base_b, base_a]);
-            indices.extend_from_slice(&[top_cap, top_a, top_b]);
+            indices.extend_from_slice(&[base_cap, base_a, base_b]);
+            indices.extend_from_slice(&[top_cap, top_b, top_a]);
         }
         *index_offset = top_cap + 1;
     };
@@ -629,8 +629,10 @@ pub(crate) fn build_rocket_mesh(
             let nx = angle.cos();
             let nz = angle.sin();
             positions.push([x, base_y, z]);
+            // Apex-up cone outward normal is radial plus up, matching the
+            // triangle winding corrected below.
             let normal_len = (nx * nx + nz * nz + 0.25).sqrt();
-            normals.push([nx / normal_len, -0.5 / normal_len, nz / normal_len]);
+            normals.push([nx / normal_len, 0.5 / normal_len, nz / normal_len]);
             uvs.push([seg as f32 / segments as f32, 0.0]);
         }
         for seg in 0..segments {
@@ -638,7 +640,9 @@ pub(crate) fn build_rocket_mesh(
             let a = apex_idx;
             let b = *index_offset + seg;
             let c = *index_offset + next_seg;
-            indices.extend_from_slice(&[a, b, c]);
+            // Outward-facing lateral triangle: (apex, next, seg) rather than
+            // (apex, seg, next), which faced inward and was back-face culled.
+            indices.extend_from_slice(&[a, c, b]);
         }
         *index_offset += segments;
         let base_cap = *index_offset;
@@ -649,7 +653,7 @@ pub(crate) fn build_rocket_mesh(
             let next_seg = (seg + 1) % segments;
             let a = base_cap - segments + seg;
             let b = base_cap - segments + next_seg;
-            indices.extend_from_slice(&[base_cap, b, a]);
+            indices.extend_from_slice(&[base_cap, a, b]);
         }
         *index_offset += 1;
     };

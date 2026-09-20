@@ -25,6 +25,14 @@ use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
 #[cfg(feature = "dem")]
 use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
+#[cfg(feature = "dem")]
+use crate::domain::services::planet_factory::PlanetFactory;
+#[cfg(feature = "dem")]
+use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
+#[cfg(feature = "dem")]
+use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+#[cfg(feature = "dem")]
+use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
 /// Feature-scale of the 3D value-noise field on the unit sphere: higher values
 /// produce more, smaller features across the planet.
@@ -418,11 +426,28 @@ impl TerrainSource for LayeredTerrainSource {
         error
     }
 
-    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, _patch_level: u32) -> f64 {
-        // Meshes, collision, and radar altitude share one final physical surface.
-        // The cube-sphere topology already keeps matching source samples aligned
-        // along adjacent patch edges, irrespective of LOD.
-        self.height_m(latitude_deg, longitude_deg)
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
+        // The base/macro surface is representable at every LOD, but the bounded
+        // procedural detail is only worth sampling once a patch is fine enough
+        // to represent it. Attenuating it by the declared LOD fade removes
+        // far-field shimmer; collision keeps the full physical detail through
+        // `height_m`, which is authoritative near the vehicle where patches are
+        // fine. The cube-sphere topology keeps matching samples aligned along
+        // adjacent patch edges irrespective of LOD.
+        let mut height_m = self
+            .base
+            .source
+            .mesh_height_m(latitude_deg, longitude_deg, patch_level);
+        if let Some(layer) = &self.macro_elevation {
+            height_m += layer
+                .source
+                .mesh_height_m(latitude_deg, longitude_deg, patch_level);
+        }
+        if let Some(detail) = &self.procedural_detail {
+            let weight = detail.lod_fade.weight_for_level(patch_level);
+            height_m += detail.source.height_m(latitude_deg, longitude_deg) * weight;
+        }
+        height_m
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
@@ -795,22 +820,89 @@ impl TerrainSource for ProceduralTerrainSource {
     }
 }
 
-/// Adds bounded near-surface relief after Earth-scale erosion. Sampling seeded
-/// 3D noise on the unit sphere keeps this layer continuous across longitude and
-/// cube-sphere face boundaries.
-#[derive(Debug, Clone)]
-pub struct LocalDetailTerrainSource {
-    base: std::sync::Arc<dyn TerrainSource>,
-    seed: u64,
-    noise: ValueNoise,
+/// A graded flat zone around a launch site, in the terrain-radial
+/// latitude/longitude convention used by [`TerrainSource`]. Detail is fully
+/// suppressed inside `flat_radius_m` and restored smoothly by `blend_radius_m`,
+/// so a vehicle always stands on a level prepared pad instead of a synthetic
+/// 250 m ridge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PadFlatZone {
+    direction: DVec3,
+    flat_cos: f64,
+    blend_cos: f64,
 }
 
-impl LocalDetailTerrainSource {
-    pub fn new(base: std::sync::Arc<dyn TerrainSource>, seed: u64) -> Self {
+impl PadFlatZone {
+    /// Build a zone from terrain-radial coordinates. Radii are great-circle
+    /// distances on a sphere of `reference_radius_m`.
+    pub fn new(
+        latitude_deg: f64,
+        longitude_deg: f64,
+        reference_radius_m: f64,
+        flat_radius_m: f64,
+        blend_radius_m: f64,
+    ) -> Self {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        let reference_radius_m = reference_radius_m.max(1.0);
+        let flat_angle = (flat_radius_m / reference_radius_m).clamp(0.0, std::f64::consts::PI);
+        let blend_angle =
+            (blend_radius_m / reference_radius_m).clamp(flat_angle, std::f64::consts::PI);
         Self {
-            base,
+            direction,
+            flat_cos: flat_angle.cos(),
+            blend_cos: blend_angle.cos(),
+        }
+    }
+
+    /// `0` inside the graded pad, `1` beyond the blend, smooth in between.
+    fn attenuation(&self, direction: DVec3) -> f64 {
+        let cos = direction.dot(self.direction).clamp(-1.0, 1.0);
+        if cos >= self.flat_cos {
+            return 0.0;
+        }
+        if cos <= self.blend_cos {
+            return 1.0;
+        }
+        let span = self.flat_cos - self.blend_cos;
+        let t = ((self.flat_cos - cos) / span).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
+/// Deterministic bounded procedural detail contribution at Earth's surface:
+/// ~250 m ridges plus ~100 m drainage-like troughs, sampled as seeded 3D value
+/// noise on the unit sphere so it stays continuous across longitude and
+/// cube-sphere face boundaries. Optional [`PadFlatZone`]s grade launch sites
+/// level.
+///
+/// This is a *contribution* source: [`TerrainSource::height_m`] returns only the
+/// detail offset relative to whatever base elevation the composition supplies,
+/// so it can be installed as a [`TerrainDetailLayer`] over measured terrain.
+/// Collision, mesh generation, and altitude all consume the same summed surface.
+#[derive(Debug, Clone)]
+pub struct ProceduralDetailSource {
+    seed: u64,
+    noise: ValueNoise,
+    flat_zones: Vec<PadFlatZone>,
+}
+
+impl ProceduralDetailSource {
+    pub fn new(seed: u64) -> Self {
+        Self {
             seed,
             noise: ValueNoise,
+            flat_zones: Vec::new(),
+        }
+    }
+
+    /// Detail source that grades the given launch sites level.
+    pub fn with_flat_zones(seed: u64, flat_zones: Vec<PadFlatZone>) -> Self {
+        Self {
+            seed,
+            noise: ValueNoise,
+            flat_zones,
         }
     }
 
@@ -835,7 +927,12 @@ impl LocalDetailTerrainSource {
             3,
         ) - 0.5;
         let drainage = self.drainage_strength_for_direction(direction);
-        (ridges * 48.0 - drainage * 12.0).clamp(
+        let raw = ridges * 48.0 - drainage * 12.0;
+        let attenuation = self
+            .flat_zones
+            .iter()
+            .fold(1.0_f64, |acc, zone| acc.min(zone.attenuation(direction)));
+        (raw * attenuation).clamp(
             Self::elevation_bounds_m().min_m,
             Self::elevation_bounds_m().max_m,
         )
@@ -862,25 +959,68 @@ impl LocalDetailTerrainSource {
     }
 }
 
+impl TerrainSource for ProceduralDetailSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.detail_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        Self::elevation_bounds_m()
+    }
+
+    fn patch_geometric_error(&self, _patch: &TerrainPatch) -> PatchGeometricError {
+        let bounds = Self::elevation_bounds_m();
+        PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
+    }
+
+    /// Drainage troughs double as a wetness signal for the continuous biome law.
+    fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.drainage_strength(latitude_deg, longitude_deg)
+    }
+
+    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.drainage_strength(latitude_deg, longitude_deg)
+    }
+}
+
+/// A base elevation source with [`ProceduralDetailSource`] added on top. Kept
+/// for callers that want one composed source instead of the explicit
+/// [`LayeredTerrainSource`] layer list.
+#[derive(Debug, Clone)]
+pub struct LocalDetailTerrainSource {
+    base: std::sync::Arc<dyn TerrainSource>,
+    detail: ProceduralDetailSource,
+}
+
+impl LocalDetailTerrainSource {
+    pub fn new(base: std::sync::Arc<dyn TerrainSource>, seed: u64) -> Self {
+        Self {
+            base,
+            detail: ProceduralDetailSource::new(seed),
+        }
+    }
+
+    pub const fn elevation_bounds_m() -> ElevationBounds {
+        ProceduralDetailSource::elevation_bounds_m()
+    }
+}
+
 impl TerrainSource for LocalDetailTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.base.height_m(latitude_deg, longitude_deg) + self.detail_m(latitude_deg, longitude_deg)
+        self.base.height_m(latitude_deg, longitude_deg)
+            + self.detail.height_m(latitude_deg, longitude_deg)
     }
 
     fn elevation_bounds_m(&self) -> ElevationBounds {
         self.base
             .elevation_bounds_m()
-            .combine(Self::elevation_bounds_m())
+            .combine(self.detail.elevation_bounds_m())
     }
 
     fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
-        let detail = Self::elevation_bounds_m();
         self.base
             .patch_geometric_error(patch)
-            .combine(PatchGeometricError::from_elevation_bounds(
-                detail.min_m,
-                detail.max_m,
-            ))
+            .combine(self.detail.patch_geometric_error(patch))
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {
@@ -894,7 +1034,7 @@ impl TerrainSource for LocalDetailTerrainSource {
     fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.base
             .river_strength(latitude_deg, longitude_deg)
-            .max(self.drainage_strength(latitude_deg, longitude_deg))
+            .max(self.detail.river_strength(latitude_deg, longitude_deg))
     }
 
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
@@ -1061,9 +1201,70 @@ impl TerrainSource for FlatTerrainSource {
     }
 }
 
+/// Deterministic seed for Earth's procedural detail contribution.
+#[cfg(feature = "dem")]
+const EARTH_PROCEDURAL_DETAIL_SEED: u64 = 0x00E4_27A6_1E5E_ED01;
+/// Radius around a launch site where the procedural detail is graded flat.
+#[cfg(feature = "dem")]
+const EARTH_PAD_FLAT_RADIUS_M: f64 = 750.0;
+/// Radius over which the graded pad blends back into natural relief.
+#[cfg(feature = "dem")]
+const EARTH_PAD_BLEND_RADIUS_M: f64 = 3_000.0;
+
+/// Compose Earth's measured base terrain with the bounded procedural detail
+/// contribution. Rendering, collision, radar altitude, and biome metadata all
+/// sample this one surface; the detail is deterministic and never changes with
+/// camera movement or frame rate. The measured ETOPO1 package stays the base
+/// elevation authority, and the detail is documented presentation-scale relief.
+#[cfg(feature = "dem")]
+fn earth_layered_terrain(base: Arc<dyn TerrainSource>) -> LayeredTerrainSource {
+    let base_bounds = base.elevation_bounds_m();
+    let detail: Arc<dyn TerrainSource> = Arc::new(ProceduralDetailSource::with_flat_zones(
+        EARTH_PROCEDURAL_DETAIL_SEED,
+        earth_pad_flat_zones(),
+    ));
+    LayeredTerrainSource::new(
+        TerrainElevationLayer::new(base, base_bounds),
+        None,
+        Some(TerrainDetailLayer::new(
+            detail,
+            ProceduralDetailSource::elevation_bounds_m(),
+            DetailLodFade::new(11, 14),
+        )),
+    )
+}
+
+/// Level pads at the predefined Earth launch sites. The sites are declared in
+/// geodetic coordinates, so they are converted to the terrain-radial
+/// convention that the height function samples before becoming flat zones.
+#[cfg(feature = "dem")]
+fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
+    let Some(earth) = PlanetFactory::create_by_id(&CelestialBodyId::earth()) else {
+        return Vec::new();
+    };
+    let radius_m = earth.radius_km as f64 * 1_000.0;
+    [
+        predefined_sites::kennedy_space_center(),
+        predefined_sites::papua_indonesia_coastal_lowland(),
+    ]
+    .into_iter()
+    .map(|site| {
+        let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
+        PadFlatZone::new(
+            latitude_deg,
+            longitude_deg,
+            radius_m,
+            EARTH_PAD_FLAT_RADIUS_M,
+            EARTH_PAD_BLEND_RADIUS_M,
+        )
+    })
+    .collect()
+}
+
 /// Earth's one authoritative terrain composition. Native builds require the
-/// resident measured ETOPO1 height package; rendering and collision use the
-/// same source with no runtime download or procedural substitution.
+/// resident measured ETOPO1 height package as the base surface and add a
+/// deterministic bounded procedural detail layer; rendering and collision use
+/// the same source with no runtime download.
 #[derive(Debug)]
 pub struct EarthTerrainSource {
     source: Arc<dyn TerrainSource>,
@@ -1088,8 +1289,9 @@ impl EarthTerrainSource {
     /// elevations without adding a synthetic landscape or local-detail layer.
     #[cfg(feature = "dem")]
     pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
+        let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path(path)?);
         Ok(Self {
-            source: Arc::new(DemTerrainSource::from_path(path)?),
+            source: Arc::new(earth_layered_terrain(base)),
         })
     }
 
@@ -1114,8 +1316,10 @@ impl EarthTerrainSource {
                 "local elevation package contains no valid samples".into(),
             ));
         }
+        let base: Arc<dyn TerrainSource> =
+            Arc::new(LocalElevationOverlayTerrainSource { global, local });
         Ok(Self {
-            source: Arc::new(LocalElevationOverlayTerrainSource { global, local }),
+            source: Arc::new(earth_layered_terrain(base)),
         })
     }
 }
@@ -1504,23 +1708,40 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
-    fn default_earth_source_uses_the_required_measured_dem_package() {
+    fn default_earth_source_adds_bounded_detail_over_the_measured_dem_package() {
         let default_source = EarthTerrainSource::new();
         let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
             .expect("resident Earth ETOPO1 terrain package must load");
 
         for (latitude_deg, longitude_deg) in [(-40.0, 100.0), (62.0, -35.0), (-12.0, 145.0)] {
+            let detail_m = default_source.height_m(latitude_deg, longitude_deg)
+                - package_source.height_m(latitude_deg, longitude_deg);
+            assert!(
+                (ProceduralDetailSource::elevation_bounds_m().min_m
+                    ..=ProceduralDetailSource::elevation_bounds_m().max_m)
+                    .contains(&detail_m),
+                "procedural detail must stay within its declared bounds: {detail_m}"
+            );
+        }
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn default_earth_source_grades_launch_pads_level() {
+        let source = EarthTerrainSource::new();
+        let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
+            .expect("resident Earth ETOPO1 terrain package must load");
+        let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).expect("Earth exists");
+
+        for site in [
+            predefined_sites::kennedy_space_center(),
+            predefined_sites::papua_indonesia_coastal_lowland(),
+        ] {
+            let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
             assert_eq!(
-                default_source.height_m(latitude_deg, longitude_deg),
+                source.height_m(latitude_deg, longitude_deg),
                 package_source.height_m(latitude_deg, longitude_deg),
-            );
-            assert_eq!(
-                default_source.moisture(latitude_deg, longitude_deg),
-                package_source.moisture(latitude_deg, longitude_deg),
-            );
-            assert_eq!(
-                default_source.river_strength(latitude_deg, longitude_deg),
-                package_source.river_strength(latitude_deg, longitude_deg),
+                "a graded pad must suppress procedural detail at {latitude_deg}, {longitude_deg}"
             );
         }
     }

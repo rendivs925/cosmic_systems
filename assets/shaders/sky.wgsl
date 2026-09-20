@@ -173,11 +173,12 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         }
     }
 
-    var radiance = in_scatter * sky.sun_irradiance * sky.sky_strength;
-
-    // Ground bounce for rays that reach the surface without geometry coverage
-    // (for example beyond streamed terrain). Physically it is the surface
-    // radiance attenuated back through the atmosphere.
+    // Single-scattering in-scattered radiance plus the surface-radiance
+    // bounce for rays that reach the ground without geometry coverage (for
+    // example beyond streamed terrain). Both terms are already expressed in
+    // the directional light's radiometric scale, so one shared factor scales
+    // them together and preserves their physical ratio.
+    var radiance = in_scatter * sky.sun_irradiance;
     if hits_ground {
         let ground_position = position + ray_dir * segment_end;
         let ground_normal = normalize(ground_position);
@@ -188,6 +189,7 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
             * cos_sun;
         radiance += transmittance * ground_radiance;
     }
+    radiance *= sky.sky_strength;
 
     let opacity = saturate(1.0 - dot(transmittance, vec3(1.0 / 3.0)));
     out.color = vec4(radiance, opacity);

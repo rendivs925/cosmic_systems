@@ -1,6 +1,6 @@
 (
     name: "ascent",
-    git_commit: "18d5669",
+    git_commit: "be9497d",
     run_identity: (
         scenario_id: "ascent",
         vehicle_model_id: "electron-like-test-fixture",
@@ -14,7 +14,7 @@
         numerical_integrator: "semi-implicit Euler",
         fixed_timestep_s: 0.015625,
         random_seed: None,
-        software_revision: "18d5669",
+        software_revision: "be9497d",
     ),
     audit: (
         change_description: "use geometric cylinder centers as rocket positions and evaluate terrain contact at the lower cylindrical extent",
