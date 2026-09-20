@@ -4,6 +4,7 @@ use bevy::log::LogPlugin;
 use bevy::prelude::*;
 
 use std::env;
+use std::num::NonZero;
 
 use cosmic_systems_wasm::application::modes::{parse_launch_options, Mode};
 use cosmic_systems_wasm::application::plugins::{
@@ -66,6 +67,12 @@ fn main() {
         primary_window: Some(Window {
             title: mode.title().to_string(),
             resolution: (1280, 720).into(),
+            // Bevy's default is hard FIFO vsync, which quantizes any frame that
+            // overruns a vblank to the next one and reads as judder. AutoVsync
+            // selects relaxed FIFO where the driver supports it, and a short
+            // present queue keeps pacing and input latency consistent.
+            present_mode: bevy::window::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: NonZero::<u32>::new(2),
             ..default()
         }),
         ..default()

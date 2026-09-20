@@ -27,8 +27,7 @@ use bevy::ecs::query::QueryData;
 use bevy::log::info;
 use bevy::math::{DMat3, DQuat, DVec3};
 use bevy::prelude::{Entity, MessageWriter, Query, Res, Resource};
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const TERRAIN_SURFACE_SAMPLE_CACHE_CAPACITY: usize = 512;
@@ -104,8 +103,10 @@ impl TerrainSurfaceSampleKey {
 }
 
 struct TerrainSurfaceSampleLru {
-    samples: HashMap<TerrainSurfaceSampleKey, SurfaceSample>,
-    recency: VecDeque<TerrainSurfaceSampleKey>,
+    /// Sample plus the monotonic use stamp; the largest stamp is the most
+    /// recently used entry.
+    samples: HashMap<TerrainSurfaceSampleKey, (SurfaceSample, u64)>,
+    clock: u64,
     capacity: usize,
 }
 
@@ -113,40 +114,37 @@ impl TerrainSurfaceSampleLru {
     fn new(capacity: usize) -> Self {
         Self {
             samples: HashMap::with_capacity(capacity),
-            recency: VecDeque::with_capacity(capacity),
+            clock: 0,
             capacity,
         }
     }
 
     fn get(&mut self, key: &TerrainSurfaceSampleKey) -> Option<SurfaceSample> {
-        let sample = self.samples.get(key).copied()?;
-        self.touch(*key);
-        Some(sample)
+        self.clock += 1;
+        let entry = self.samples.get_mut(key)?;
+        entry.1 = self.clock;
+        Some(entry.0)
     }
 
     fn insert(&mut self, key: TerrainSurfaceSampleKey, sample: SurfaceSample) {
-        match self.samples.entry(key) {
-            Entry::Occupied(mut entry) => {
-                entry.insert(sample);
-                self.touch(key);
-                return;
-            }
-            Entry::Vacant(_) => {}
+        self.clock += 1;
+        if let Some(entry) = self.samples.get_mut(&key) {
+            *entry = (sample, self.clock);
+            return;
         }
-        if self.samples.len() == self.capacity {
-            if let Some(oldest) = self.recency.pop_front() {
+        if self.samples.len() >= self.capacity {
+            // Touch is O(1); only a full cache scans for the least-recently
+            // used stamp, which keeps hot fixed-step contact probes cheap.
+            let oldest = self
+                .samples
+                .iter()
+                .min_by_key(|(_, (_, stamp))| *stamp)
+                .map(|(key, _)| *key);
+            if let Some(oldest) = oldest {
                 self.samples.remove(&oldest);
             }
         }
-        self.samples.insert(key, sample);
-        self.recency.push_back(key);
-    }
-
-    fn touch(&mut self, key: TerrainSurfaceSampleKey) {
-        if let Some(index) = self.recency.iter().position(|candidate| *candidate == key) {
-            self.recency.remove(index);
-        }
-        self.recency.push_back(key);
+        self.samples.insert(key, (sample, self.clock));
     }
 }
 

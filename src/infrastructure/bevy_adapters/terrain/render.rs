@@ -4,7 +4,6 @@
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
 
-use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::infrastructure::bevy_adapters::entity_components::*;
@@ -20,8 +19,10 @@ use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerforman
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
+use crate::infrastructure::bevy_adapters::terrain::water::{WaterExtension, WaterMaterial};
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::{DQuat, DVec3};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
@@ -38,6 +39,13 @@ const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
+/// Sea level is the terrain datum: height 0 above the catalog mean radius.
+const WATER_SEA_LEVEL_M: f64 = 0.0;
+/// Small lift so the translucent water cap wins the depth test against the
+/// coincident far-field fallback globe instead of z-fighting it.
+const WATER_SURFACE_OFFSET_M: f64 = 0.5;
+/// Depth mapped to full deep-water colour and opacity. Deeper samples clamp.
+const WATER_MAX_VISIBLE_DEPTH_M: f64 = 4_000.0;
 /// Cached parents stay visible until every visible descendant has a render
 /// entity. CPU streaming readiness alone is not sufficient: asset creation is
 /// deliberately spread across frames.
@@ -77,6 +85,9 @@ pub struct TerrainPatchRenderState {
     /// Per-patch source-derived surface textures released with the patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
+    /// Sea-level water cap for patches that contain ocean, released with the
+    /// patch. The water material itself is shared.
+    pub water_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
     pub body_to_inertial_at_spawn: DQuat,
@@ -90,6 +101,11 @@ pub struct TerrainPatchRenderState {
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
+    /// One shared water material; every ocean patch reuses it.
+    water_material: Option<Handle<WaterMaterial>>,
+    /// Core grid resolution of a patch, mirrored from `TerrainRenderConfig` so
+    /// water generation does not need another system parameter.
+    patch_resolution: u32,
     /// Equirectangular global albedo per body name, loaded from the catalog on
     /// demand so Moon/Mars terrain is not tinted by Earth's image.
     global_albedo: HashMap<String, Handle<Image>>,
@@ -149,10 +165,16 @@ impl PendingTerrainPatchUploads {
         active_planet: Option<Entity>,
         published: &std::collections::BTreeSet<TerrainPatch>,
     ) {
+        let before = self.queue.len();
         self.queue.retain(|event| {
             active_planet == Some(event.planet_entity) && published.contains(&event.patch)
         });
-        self.queued = self.queue.iter().map(TerrainPatchRenderKey::from).collect();
+        // Rebuilding the dedup set is only necessary when the retain actually
+        // removed queued work; the common case (nothing stale) skips the
+        // per-frame allocation entirely.
+        if self.queue.len() != before {
+            self.queued = self.queue.iter().map(TerrainPatchRenderKey::from).collect();
+        }
     }
 
     fn enqueue(&mut self, event: TerrainPatchReady) -> TerrainUploadEnqueueResult {
@@ -294,13 +316,17 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
+            .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
             .add_systems(Startup, prepare_terrain_render_assets)
             .add_systems(
                 Update,
-                recenter_render_origin.before(stream_terrain_patches),
+                (
+                    recenter_render_origin.before(stream_terrain_patches),
+                    update_water_material,
+                ),
             )
             // Streaming owns the authoritative terrain mesh lifecycle. It must
             // run after the flight render origin is current and before patch
@@ -356,12 +382,47 @@ fn global_albedo_for(
 /// first terrain patch does not wait on an asset load. Non-default bodies load
 /// on demand through [`global_albedo_for`].
 fn prepare_terrain_render_assets(
+    config: Res<TerrainRenderConfig>,
     asset_server: Res<AssetServer>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut images: ResMut<Assets<Image>>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
+    render_assets.patch_resolution = config.patch_resolution;
     let _ = global_albedo_for(&mut render_assets, &asset_server, "Earth");
     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
+    render_assets.water_material = Some(water_materials.add(WaterMaterial {
+        base: water_base_material(),
+        extension: WaterExtension::default(),
+    }));
+}
+
+/// Shared base material for the water surface: blended, double-sided, and very
+/// smooth so the fragment shader's ripple normal drives a tight sun glint.
+fn water_base_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::WHITE,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        perceptual_roughness: 0.05,
+        metallic: 0.0,
+        ..default()
+    }
+}
+
+/// Advance the shared water wave phase. Presentation only; never read by the
+/// simulation, terrain source, or collision.
+fn update_water_material(
+    time: Res<Time>,
+    render_assets: Res<TerrainRenderAssets>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
+) {
+    let Some(handle) = &render_assets.water_material else {
+        return;
+    };
+    if let Some(material) = water_materials.get_mut(handle) {
+        material.extension.params.time_s = time.elapsed_secs();
+    }
 }
 
 fn ensure_neutral_local_surface_maps(
@@ -553,6 +614,21 @@ fn spawn_patch_mesh_system(
             record.material_ms += started.elapsed().as_secs_f64() * 1_000.0;
         }
 
+        // Ocean patches contribute a sea-level water cap in the same baked frame
+        // as the terrain mesh. The water material is shared.
+        let water_mesh_handle = if planet.domain_planet.has_ocean {
+            water_mesh_for_patch(
+                geometry,
+                render_assets.patch_resolution,
+                planet.domain_planet.radius_km as f64 * 1_000.0,
+                &render_origin.origin,
+                body_to_inertial,
+                &mut meshes,
+            )
+        } else {
+            None
+        };
+
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
         let transform = Transform::IDENTITY;
@@ -616,6 +692,7 @@ fn spawn_patch_mesh_system(
                     material_handle: material_handle.clone(),
                     local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
+                    water_mesh_handle: water_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
                     render_origin_at_spawn: render_origin.origin,
@@ -649,6 +726,26 @@ fn spawn_patch_mesh_system(
                     .with_rotation(body_to_inertial.as_quat()),
                     Name::new(format!(
                         "Vegetation_{:?}_{}_{}_{}",
+                        patch.face, patch.level, patch.tile_x, patch.tile_y
+                    )),
+                ));
+            });
+        }
+
+        // The water mesh shares the terrain patch's baked frame, so an identity
+        // child transform inherits the patch's later pose corrections.
+        if let (Some(water_mesh_handle), Some(water_material)) =
+            (water_mesh_handle, render_assets.water_material.clone())
+        {
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Mesh3d(water_mesh_handle),
+                    MeshMaterial3d(water_material),
+                    Transform::IDENTITY,
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                    Name::new(format!(
+                        "Water_{:?}_{}_{}_{}",
                         patch.face, patch.level, patch.tile_x, patch.tile_y
                     )),
                 ));
@@ -784,7 +881,12 @@ fn reveal_cached_patch_mesh_system(
                 else {
                     continue;
                 };
-                update_patch_transform(&mut transform, state, orientation, render_origin.origin);
+                update_patch_transform(
+                    &mut transform,
+                    state,
+                    body_fixed_to_planet_inertial_rotation(orientation),
+                    render_origin.origin,
+                );
             }
             *visibility = if has_departing_ancestor_render_entity(
                 event.patch,
@@ -931,6 +1033,9 @@ fn release_patch_render_assets(
     if let Some(vegetation_mesh_handle) = &state.vegetation_mesh_handle {
         meshes.remove(vegetation_mesh_handle.id());
     }
+    if let Some(water_mesh_handle) = &state.water_mesh_handle {
+        meshes.remove(water_mesh_handle.id());
+    }
     if let Some((albedo, normal)) = &state.local_surface_handles {
         images.remove(albedo.id());
         images.remove(normal.id());
@@ -987,6 +1092,93 @@ fn patch_geometry_to_mesh(
     mesh
 }
 
+/// Build a sea-level water cap for the ocean part of a patch, or `None` when
+/// the patch contains no ocean. Positions share the terrain mesh's baked
+/// inertial/render-origin frame so the water can parent to the patch entity
+/// with an identity transform. The red vertex-colour channel carries normalized
+/// depth for the shader's shallow/deep ramp.
+fn water_mesh_for_patch(
+    geometry: &PatchGeometry,
+    resolution: u32,
+    planet_radius_m: f64,
+    render_origin: &DVec3,
+    body_to_inertial: DQuat,
+    meshes: &mut Assets<Mesh>,
+) -> Option<Handle<Mesh>> {
+    let res = resolution as usize;
+    let core = res.checked_mul(res)?;
+    if res < 2 || geometry.positions.len() < core {
+        return None;
+    }
+    let sea_level_radius_m = planet_radius_m + WATER_SEA_LEVEL_M + WATER_SURFACE_OFFSET_M;
+    let inverse_max_depth = 1.0 / WATER_MAX_VISIBLE_DEPTH_M;
+
+    let mut positions = Vec::with_capacity(core);
+    let mut normals = Vec::with_capacity(core);
+    let mut depths = Vec::with_capacity(core);
+    for point in &geometry.positions[..core] {
+        let position = DVec3::from_array(*point);
+        let radius = position.length();
+        let radial = if radius > f64::EPSILON {
+            position / radius
+        } else {
+            DVec3::Y
+        };
+        let water_position = body_to_inertial * (radial * sea_level_radius_m) - *render_origin;
+        positions.push(water_position.as_vec3().to_array());
+        normals.push((body_to_inertial * radial).as_vec3().to_array());
+        let depth = ((sea_level_radius_m - radius).max(0.0) * inverse_max_depth).min(1.0) as f32;
+        depths.push(depth);
+    }
+
+    // Emit a quad when any corner samples below sea level. Vertices above sea
+    // level are still placed at sea level and are hidden by the land terrain
+    // above them, so the coastline has no hole.
+    let mut indices: Vec<u32> = Vec::new();
+    for row in 0..res - 1 {
+        for column in 0..res - 1 {
+            let top_left = (row * res + column) as u32;
+            let top_right = (row * res + column + 1) as u32;
+            let bottom_left = ((row + 1) * res + column) as u32;
+            let bottom_right = ((row + 1) * res + column + 1) as u32;
+            let touches_ocean = [top_left, top_right, bottom_left, bottom_right]
+                .into_iter()
+                .any(|index| depths[index as usize] > 0.0);
+            if !touches_ocean {
+                continue;
+            }
+            indices.extend_from_slice(&[
+                top_left,
+                top_right,
+                bottom_right,
+                top_left,
+                bottom_right,
+                bottom_left,
+            ]);
+        }
+    }
+    if indices.is_empty() {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs[..core].to_vec());
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        depths
+            .iter()
+            .map(|depth| [*depth, 0.0, 0.0, 1.0])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_indices(Indices::U32(indices));
+    Some(meshes.add(mesh))
+}
+
 /// Shift only presentation coordinates when the rocket has moved far enough
 /// from the current local origin. Existing terrain mesh vertices stay valid;
 /// their root transforms preserve world placement until regenerated.
@@ -1015,33 +1207,50 @@ fn update_patch_transforms(
     planet_query: Query<&PlanetComponent>,
     mut patch_query: Query<(&TerrainPatchRenderState, &mut Transform, &Visibility)>,
 ) {
+    // Every visible patch belongs to the active planet, so resolve the body
+    // rotation once and reuse it instead of rebuilding the same quaternion for
+    // each of the ~300 patch entities every frame.
+    let mut cached: Option<(Entity, DQuat)> = None;
     for (state, mut transform, visibility) in patch_query.iter_mut() {
         if *visibility == Visibility::Hidden {
             continue;
         }
-        let Ok(planet) = planet_query.get(state.planet_entity) else {
-            continue;
+        let body_to_inertial = match cached {
+            Some((entity, rotation)) if entity == state.planet_entity => rotation,
+            _ => {
+                let Ok(planet) = planet_query.get(state.planet_entity) else {
+                    continue;
+                };
+                let Some(orientation) =
+                    ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+                else {
+                    continue;
+                };
+                let rotation = body_fixed_to_planet_inertial_rotation(orientation);
+                cached = Some((state.planet_entity, rotation));
+                rotation
+            }
         };
-        let Some(orientation) =
-            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
-        else {
-            continue;
-        };
-        update_patch_transform(&mut transform, state, orientation, render_origin.origin);
+        update_patch_transform(
+            &mut transform,
+            state,
+            body_to_inertial,
+            render_origin.origin,
+        );
     }
 }
 
 fn update_patch_transform(
     transform: &mut Transform,
     state: &TerrainPatchRenderState,
-    orientation: &BodyOrientation,
+    body_to_inertial: DQuat,
     render_origin: DVec3,
 ) {
     update_baked_transform(
         transform,
         state.body_to_inertial_at_spawn,
         state.render_origin_at_spawn,
-        orientation,
+        body_to_inertial,
         render_origin,
     );
 }
@@ -1052,10 +1261,9 @@ fn update_baked_transform(
     transform: &mut Transform,
     body_to_inertial_at_spawn: DQuat,
     render_origin_at_spawn: DVec3,
-    orientation: &BodyOrientation,
+    body_to_inertial: DQuat,
     render_origin: DVec3,
 ) {
-    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
     let (rotation, translation) = patch_transform_components(
         body_to_inertial_at_spawn,
         render_origin_at_spawn,
@@ -1356,6 +1564,7 @@ mod tests {
                     material_handle: Handle::default(),
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
+                    water_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
@@ -1383,6 +1592,7 @@ mod tests {
                     material_handle: Handle::default(),
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
+                    water_mesh_handle: None,
                     planet_entity: other_planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
@@ -1712,6 +1922,7 @@ mod tests {
             material_handle: material_handle.clone(),
             local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
+            water_mesh_handle: None,
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,
             render_origin_at_spawn: DVec3::ZERO,
