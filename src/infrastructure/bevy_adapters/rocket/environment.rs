@@ -3,7 +3,9 @@ use super::planet::{RocketBoundPlanet, RocketBoundPlanetCloud};
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::units::AU_IN_METERS;
+use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
@@ -101,12 +103,19 @@ pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
 }
 
 /// Approximate local atmospheric presentation from the same flight conditions
-/// and ephemeris Sun as terrain lighting. It fades to space by 100 km and does
-/// not alter any atmospheric physics or the solar direction.
+/// and ephemeris Sun as terrain lighting. Aerial perspective is derived from the
+/// bound body's authoritative atmospheric optics, so distant terrain recedes
+/// through the same Rayleigh/Mie/ozone model as the sky. It does not alter any
+/// atmospheric physics or the solar direction.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This presentation system synchronizes independent camera, atmosphere, and cloud state."
+)]
 pub fn update_rocket_sky_color(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
     rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions)>,
+    planet_query: Query<&PlanetComponent>,
     mut clear_color: ResMut<ClearColor>,
     mut fog_query: Query<&mut DistanceFog, With<Camera3d>>,
     cloud_query: Query<&MeshMaterial3d<StandardMaterial>, With<RocketBoundPlanetCloud>>,
@@ -134,9 +143,19 @@ pub fn update_rocket_sky_color(
         0.006 + 0.79 * sky,
     ));
 
+    let optics = bound_planet
+        .0
+        .as_ref()
+        .and_then(|id| {
+            planet_query
+                .iter()
+                .find(|planet| planet.matches_body(id))
+                .map(|planet| (id.as_str(), planet.domain_planet.radius_km * 1_000.0))
+        })
+        .and_then(|(name, radius_m)| AtmosphericOptics::for_body(name, radius_m));
+
     for mut fog in fog_query.iter_mut() {
-        fog.color = Color::srgba(0.52, 0.68, 0.9, sky);
-        fog.falloff = FogFalloff::from_visibility(presentation.fog_visibility_m);
+        apply_aerial_perspective(&mut fog, optics.as_ref(), conditions.altitude_m, daylight);
     }
     for material_handle in &cloud_query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
@@ -147,12 +166,43 @@ pub fn update_rocket_sky_color(
     }
 }
 
+/// Configure per-fragment aerial perspective from the body's atmospheric
+/// optics. Bevy's atmospheric fog applies per-channel optical depth, so the
+/// transmittance and sky-coloured in-scattering match the modelled atmosphere.
+fn apply_aerial_perspective(
+    fog: &mut DistanceFog,
+    optics: Option<&AtmosphericOptics>,
+    altitude_m: f64,
+    daylight: f32,
+) {
+    let daylight = daylight.clamp(0.0, 1.0);
+    // Rayleigh-dominated airlight: blue-biased base with a warm sun lobe for Mie
+    // forward scattering.
+    fog.color = Color::srgba(
+        0.45 * daylight + 0.002,
+        0.55 * daylight + 0.002,
+        0.72 * daylight + 0.006,
+        daylight,
+    );
+    fog.directional_light_color = Color::srgba(1.0, 0.94, 0.82, 0.35 * daylight);
+    fog.directional_light_exponent = 16.0;
+    fog.falloff = match optics {
+        Some(optics) => {
+            let altitude_m = altitude_m.max(0.0) as f32;
+            FogFalloff::Atmospheric {
+                extinction: Vec3::from(optics.extinction_per_m(altitude_m)),
+                inscattering: Vec3::from(optics.scattering_per_m(altitude_m)),
+            }
+        }
+        None => FogFalloff::from_visibility(25_000.0),
+    };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AtmosphericPresentation {
     sky_unit: f32,
     ambient_unit: f32,
     cloud_opacity_unit: f32,
-    fog_visibility_m: f32,
 }
 
 /// Smooth render controls from the authoritative fixed-tick atmospheric sample.
@@ -169,7 +219,6 @@ fn atmospheric_presentation(
         sky_unit: daylight * atmosphere_unit,
         ambient_unit: daylight * atmosphere_unit,
         cloud_opacity_unit: atmosphere_unit * (0.18 + daylight * 0.62),
-        fog_visibility_m: 25_000.0 / atmosphere_unit.max(0.02),
     }
 }
 
@@ -340,6 +389,34 @@ mod tests {
         assert!((0.0..=1.0).contains(&dense.sky_unit));
         assert!(thin.sky_unit < dense.sky_unit);
         assert!(thin.cloud_opacity_unit < dense.cloud_opacity_unit);
-        assert!(thin.fog_visibility_m > dense.fog_visibility_m);
+    }
+
+    #[test]
+    fn aerial_perspective_uses_per_channel_optics_and_sun_glow() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let mut fog = DistanceFog::default();
+        apply_aerial_perspective(&mut fog, Some(&optics), 0.0, 1.0);
+
+        match fog.falloff {
+            FogFalloff::Atmospheric {
+                extinction,
+                inscattering,
+            } => {
+                assert!(extinction.z > extinction.x);
+                assert!(inscattering.z > inscattering.x);
+                assert!(inscattering.length() > 0.0);
+            }
+            other => panic!("expected atmospheric falloff, got {other:?}"),
+        }
+        assert!(fog.directional_light_color.to_srgba().alpha > 0.0);
+    }
+
+    #[test]
+    fn vacuum_aerial_perspective_falls_back_without_sun_glow() {
+        let mut fog = DistanceFog::default();
+        apply_aerial_perspective(&mut fog, None, 0.0, 0.0);
+
+        assert!(matches!(fog.falloff, FogFalloff::Exponential { .. }));
+        assert_eq!(fog.directional_light_color.to_srgba().alpha, 0.0);
     }
 }

@@ -40,19 +40,24 @@
   ephemeris, and flight conditions, and register it in rocket-mode composition.
 - [x] 3.4 Replace the flat clear-colour/fog sky with the scattering dome and
   derive ambient sky terms from the same model.
-- [ ] 3.5 Add aerial perspective to the terrain surface extension from the same
+- [x] 3.5 Add aerial perspective to the terrain surface extension from the same
   optics and remove the independent distance-fog colour.
 
-  Deferred: the sky scattering dome is complete, but per-fragment terrain
-  aerial perspective needs either a global optics uniform or a post-process
-  pass. The existing `DistanceFog` (density-derived, fixed colour) is retained
-  and is explicitly documented as the remaining approximation.
+  Implemented through Bevy's per-channel `FogFalloff::Atmospheric`, whose
+  extinction and in-scattering are derived per frame from the bound body's
+  `AtmosphericOptics` at the observer altitude, with a warm Sun lobe for Mie
+  forward scattering. This is a single homogeneous-layer approximation of the
+  vertical atmosphere, not a per-fragment vertical integral; it removes the
+  independent fixed fog colour and uses the authoritative optics.
 - [x] 3.6 Add tests for optics determinism and sky-material uniform derivation;
   validate day, twilight, night, and vacuum transitions.
 
-  Determinism and uniform-derivation tests pass. Day, night, and the solar-disc
-  horizon occlusion were validated under Xvfb software rendering; twilight and
-  vacuum were validated only analytically by the pure functions.
+  Determinism, extinction/scattering falloff, ozone-band, aerial-perspective,
+  and uniform-derivation tests pass. Day, night, and the solar-disc horizon
+  occlusion were validated under Xvfb software rendering; twilight and vacuum
+  were validated only analytically by the pure functions. The sky radiance is
+  explicitly calibrated (`SKY_RADIANCE_SCALE`) so a clear daytime sky does not
+  clip to white; final aesthetic tuning needs a real display.
 
 ## 4. Exposure, Calibration, And Validation
 

@@ -84,6 +84,55 @@ impl AtmosphericOptics {
                 .iter()
                 .any(|coefficient| *coefficient > 0.0)
     }
+
+    /// Rayleigh particulate density relative to sea level at an altitude.
+    fn rayleigh_density(&self, altitude_m: f32) -> f32 {
+        (-altitude_m.max(0.0) / self.rayleigh_scale_height_m.max(1.0)).exp()
+    }
+
+    /// Mie particulate density relative to sea level at an altitude.
+    fn mie_density(&self, altitude_m: f32) -> f32 {
+        (-altitude_m.max(0.0) / self.mie_scale_height_m.max(1.0)).exp()
+    }
+
+    /// Triangular ozone band density at an altitude, in `[0, 1]`.
+    fn ozone_density(&self, altitude_m: f32) -> f32 {
+        let half_width = (self.ozone_layer_width_m * 0.5).max(1.0);
+        (1.0 - ((altitude_m - self.ozone_layer_altitude_m).abs() / half_width)).clamp(0.0, 1.0)
+    }
+
+    /// Per-channel extinction coefficient at an altitude, in `1/m`. This is the
+    /// coefficient used for aerial perspective transmittance.
+    pub fn extinction_per_m(&self, altitude_m: f32) -> [f32; 3] {
+        let rayleigh = self.rayleigh_density(altitude_m);
+        let mie = self.mie_density(altitude_m);
+        let ozone = self.ozone_density(altitude_m);
+        let mie_extinction = (self.mie_scattering_per_m + self.mie_absorption_per_m) * mie;
+        [
+            self.rayleigh_scattering_per_m[0] * rayleigh
+                + mie_extinction
+                + self.ozone_absorption_per_m[0] * ozone,
+            self.rayleigh_scattering_per_m[1] * rayleigh
+                + mie_extinction
+                + self.ozone_absorption_per_m[1] * ozone,
+            self.rayleigh_scattering_per_m[2] * rayleigh
+                + mie_extinction
+                + self.ozone_absorption_per_m[2] * ozone,
+        ]
+    }
+
+    /// Per-channel scattering coefficient at an altitude, in `1/m`. This drives
+    /// the airlight added to distant surfaces.
+    pub fn scattering_per_m(&self, altitude_m: f32) -> [f32; 3] {
+        let rayleigh = self.rayleigh_density(altitude_m);
+        let mie = self.mie_density(altitude_m);
+        let mie_scatter = self.mie_scattering_per_m * mie;
+        [
+            self.rayleigh_scattering_per_m[0] * rayleigh + mie_scatter,
+            self.rayleigh_scattering_per_m[1] * rayleigh + mie_scatter,
+            self.rayleigh_scattering_per_m[2] * rayleigh + mie_scatter,
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -130,5 +179,50 @@ mod tests {
             AtmosphericOptics::earth(6_371_000.0),
             AtmosphericOptics::earth(6_371_000.0)
         );
+    }
+
+    #[test]
+    fn sea_level_extinction_is_strongest_in_blue() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let extinction = optics.extinction_per_m(0.0);
+
+        assert!(extinction[2] > extinction[1]);
+        assert!(extinction[1] > extinction[0]);
+    }
+
+    #[test]
+    fn extinction_falls_off_with_altitude() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let sea_level = optics.extinction_per_m(0.0);
+        let high_altitude = optics.extinction_per_m(50_000.0);
+
+        for channel in 0..3 {
+            assert!(high_altitude[channel] < sea_level[channel]);
+        }
+    }
+
+    #[test]
+    fn scattering_never_exceeds_extinction() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        for altitude_m in [0.0, 5_000.0, 25_000.0, 80_000.0] {
+            let extinction = optics.extinction_per_m(altitude_m);
+            let scattering = optics.scattering_per_m(altitude_m);
+            for channel in 0..3 {
+                assert!(scattering[channel] <= extinction[channel] + f32::EPSILON);
+            }
+        }
+    }
+
+    #[test]
+    fn ozone_band_adds_absorption_at_its_layer_altitude() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let below = optics.extinction_per_m(5_000.0);
+        let in_band = optics.extinction_per_m(optics.ozone_layer_altitude_m);
+
+        // Green is the most absorbed ozone channel, so the ratio of green to
+        // blue extinction increases inside the band relative to below it.
+        let below_ratio = below[1] / below[2];
+        let band_ratio = in_band[1] / in_band[2];
+        assert!(band_ratio > below_ratio);
     }
 }

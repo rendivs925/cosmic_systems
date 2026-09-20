@@ -31,6 +31,11 @@ const SKY_DOME_FAR_FRACTION: f32 = 0.9;
 /// dome is centred on the camera, so it must be biased far behind every other
 /// transparent surface to be drawn first as the background.
 const SKY_SORT_DEPTH_BIAS: f32 = -1.0e6;
+/// Calibration between the radiometric single-scattering integral and the
+/// camera's exposure. The integral is linear in the solar irradiance; this
+/// factor places a clear daytime sky at a natural fraction of a sunlit surface
+/// so it does not clip to white and lose its Rayleigh colour.
+const SKY_RADIANCE_SCALE: f32 = 0.03;
 
 /// Uniform parameters for the sky shader. Field order and types must match the
 /// `SkyParams` WGSL struct exactly.
@@ -87,7 +92,7 @@ impl SkyParams {
             sun_direction,
             sun_irradiance,
             ground_albedo: Vec3::from(optics.ground_albedo),
-            sky_strength: 1.0,
+            sky_strength: SKY_RADIANCE_SCALE,
         }
     }
 }
@@ -240,6 +245,6 @@ mod tests {
         assert_eq!(params.bottom_radius, optics.bottom_radius_m);
         assert_eq!(params.top_radius, optics.top_radius_m);
         assert!(params.rayleigh_scattering.z > params.rayleigh_scattering.x);
-        assert_eq!(params.sky_strength, 1.0);
+        assert_eq!(params.sky_strength, SKY_RADIANCE_SCALE);
     }
 }
