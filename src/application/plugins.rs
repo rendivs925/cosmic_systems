@@ -110,7 +110,8 @@ use crate::infrastructure::bevy_adapters::rocket::guidance::{
     guidance_system, update_drone_ship_landing_targets,
 };
 use crate::infrastructure::bevy_adapters::rocket::hud::{
-    spawn_rocket_hud_system, update_rocket_hud_system,
+    apply_hud_visibility_system, spawn_rocket_hud_system, toggle_hud_options_system,
+    update_rocket_hud_system, HudOptions,
 };
 use crate::infrastructure::bevy_adapters::rocket::lifecycle::{
     apply_relaunch_requests, constrain_terminal_time_warp, handle_relaunch_input_system,
@@ -649,9 +650,19 @@ impl Plugin for RocketModePlugin {
             update_flight_starfield.after(update_rocket_camera_projection),
         );
 
-        // Rocket HUD UI (runs in Update).
+        // Rocket HUD UI (runs in Update). Options/visibility are presentation
+        // only and are applied before the cadence-limited value writer.
+        app.init_resource::<HudOptions>();
         app.add_systems(Startup, spawn_rocket_hud_system);
-        app.add_systems(Update, update_rocket_hud_system);
+        app.add_systems(
+            Update,
+            (
+                toggle_hud_options_system,
+                apply_hud_visibility_system,
+                update_rocket_hud_system,
+            )
+                .chain(),
+        );
 
         // Rocket mode shares the existing exploration selector and orbital
         // visibility controls. They operate on the shared solar-system data,

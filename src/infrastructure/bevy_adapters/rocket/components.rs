@@ -905,12 +905,43 @@ pub struct RocketTelemetry {
     pub apoapsis_altitude_m: f64,
     /// Periapsis altitude above body surface in meters.
     pub periapsis_altitude_m: f64,
+    /// Osculating semi-major axis about the bound body, meters.
+    pub orbital_semi_major_axis_m: f64,
+    /// Osculating eccentricity (dimensionless).
+    pub orbital_eccentricity: f64,
+    /// Osculating inclination, degrees.
+    pub orbital_inclination_deg: f64,
+    /// Osculating longitude of ascending node, degrees.
+    pub orbital_raan_deg: f64,
+    /// Osculating argument of periapsis, degrees.
+    pub orbital_arg_periapsis_deg: f64,
+    /// Osculating true anomaly, degrees.
+    pub orbital_true_anomaly_deg: f64,
+    /// Osculating orbital period, seconds (infinite for open orbits).
+    pub orbital_period_s: f64,
+    /// Configured target apoapsis altitude, meters.
+    pub target_apoapsis_altitude_m: f64,
+    /// Configured target periapsis altitude, meters.
+    pub target_periapsis_altitude_m: f64,
+    /// Configured target inclination, degrees.
+    pub target_inclination_deg: f64,
     /// Thrust-to-weight ratio (total thrust / weight).
     pub tw_ratio: f64,
     /// Remaining delta-v in m/s (ideal rocket equation).
     pub delta_v_remaining_mps: f64,
-    /// Propellant remaining as fraction of initial (0.0-1.0).
+    /// Propellant remaining as fraction of the whole vehicle's initial load
+    /// (0.0-1.0). Includes every attached stage, so it moves slowly while only
+    /// the active stage is burning.
     pub propellant_fraction: f64,
+    /// Propellant remaining in the active stage, kg.
+    pub active_stage_propellant_kg: f64,
+    /// Active-stage propellant remaining as a fraction of that stage's
+    /// configured load (0.0-1.0). This is the precise "current tank" reading.
+    pub active_stage_propellant_fraction: f64,
+    /// Total propellant remaining across all attached stages and boosters, kg.
+    pub total_propellant_kg: f64,
+    /// Configured initial propellant load of the active stage, kg.
+    pub active_stage_initial_propellant_kg: f64,
     /// Current active stage index.
     pub active_stage: usize,
     /// Current mission phase.
@@ -965,10 +996,6 @@ pub struct RocketTelemetry {
     pub over_water: bool,
     /// Time since liftoff in seconds.
     pub time_since_liftoff_s: f64,
-    /// Downrange distance in meters.
-    pub downrange_m: f64,
-    /// Crossrange distance in meters.
-    pub crossrange_m: f64,
     /// True when a touchdown has been recorded (Phase 14 scorecard).
     pub touchdown_recorded: bool,
     /// Into-ground speed at the recorded touchdown, m/s.

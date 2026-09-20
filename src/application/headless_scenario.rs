@@ -325,10 +325,9 @@ pub fn run_headless_scenario(scenario: HeadlessScenario) -> Result<HeadlessScena
     })
 }
 
-/// Execute a fresh isolated simulation context and retain its fixed-tick output.
-pub fn run_headless_scenario_artifact(
-    scenario: HeadlessScenario,
-) -> Result<SimulationArtifact, String> {
+/// Compose and start a fresh isolated rocket-run world, returning the app and
+/// the run identity derived from its validated kernel and vehicle selection.
+fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRunIdentity), String> {
     let catalog = RocketCatalog::from_dir().map_err(|error| error.to_string())?;
     let selection = VehicleSelection::from(scenario.vehicle_key.clone());
     let (_, vehicle) = catalog
@@ -354,7 +353,7 @@ pub fn run_headless_scenario_artifact(
     let simulation_time = app.world().resource::<SimulationTime>();
     let ephemeris = app.world().resource::<EphemerisAuthority>();
     let identity = SimulationRunIdentity {
-        scenario_id: scenario.scenario_id,
+        scenario_id: scenario.scenario_id.clone(),
         vehicle_model_id,
         vehicle_configuration_sha256: Some(vehicle_configuration_sha256),
         launch_site_id: "papua-indonesia-coastal-lowland".to_string(),
@@ -372,6 +371,14 @@ pub fn run_headless_scenario_artifact(
         software_revision: option_env!("GIT_HASH").unwrap_or("workspace").to_string(),
     };
     identity.validate()?;
+    Ok((app, identity))
+}
+
+/// Execute a fresh isolated simulation context and retain its fixed-tick output.
+pub fn run_headless_scenario_artifact(
+    scenario: HeadlessScenario,
+) -> Result<SimulationArtifact, String> {
+    let (mut app, identity) = build_headless_app(&scenario)?;
     let mut artifact = SimulationArtifact::new(identity);
     artifact.telemetry.push(capture_telemetry_frame(&mut app)?);
 
@@ -391,6 +398,7 @@ pub fn run_headless_scenario_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::bevy_adapters::rocket::components::RocketTelemetry;
 
     #[test]
     fn repeated_headless_runs_are_bitwise_deterministic_and_identified() {
@@ -459,6 +467,37 @@ mod tests {
         assert_ne!(
             runs[0].result.as_ref().unwrap().run_identity.scenario_id,
             runs[1].result.as_ref().unwrap().run_identity.scenario_id
+        );
+    }
+
+    #[test]
+    fn live_telemetry_propellant_fraction_falls_during_burn() {
+        let scenario = HeadlessScenario {
+            fixed_steps: 300,
+            ..default()
+        };
+        let (mut app, _) = build_headless_app(&scenario).expect("headless app builds");
+
+        for _ in 0..300 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+
+        let telemetry = app.world().resource::<RocketTelemetry>();
+        assert!(
+            telemetry.active_stage_propellant_fraction < 0.99,
+            "active-stage fuel must fall below 99% after 4.7 s of burn, got {}",
+            telemetry.active_stage_propellant_fraction
+        );
+        assert!(
+            telemetry.active_stage_propellant_kg < telemetry.active_stage_initial_propellant_kg,
+            "active-stage propellant must drop below its {} kg load, got {}",
+            telemetry.active_stage_initial_propellant_kg,
+            telemetry.active_stage_propellant_kg
+        );
+        assert!(
+            telemetry.total_thrust_n > 0.0,
+            "engines must be producing thrust, got {}",
+            telemetry.total_thrust_n
         );
     }
 

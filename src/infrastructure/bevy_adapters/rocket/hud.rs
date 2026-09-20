@@ -3,59 +3,68 @@
 use super::components::*;
 use super::telemetry::RocketEventFeed;
 use crate::domain::services::simulation_time::SimulationTime;
+use crate::infrastructure::bevy_adapters::ui_components::ZenMode;
 use bevy::camera::CameraOutputMode;
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
+use bevy::ui::Display as UiDisplay;
 
 /// HUD panel types for different display regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HudPanel {
-    Left,  // Full telemetry panel
-    Right, // Compact speed tape
+    /// Secondary flight data card (left).
+    Left,
+    /// Primary glanceable gauge strip (right).
+    Right,
 }
 
-/// HUD field identifier for type-safe updates.
+/// HUD field identifier for type-safe updates. The value entities carry this
+/// key; static labels are plain text and never depend on telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HudField {
-    // Altitude group
+    // Primary gauge strip
     AltitudeAgl,
-    AltitudeMsl,
-    RadarAltitude,
-    // Velocity group
-    VelocityTotal,
     VelocityVertical,
-    VelocityHorizontal,
+    VelocityTotal,
     MachNumber,
-    // Aero group
     DynamicPressure,
     GLoad,
-    AngleOfAttack,
-    BankAngle,
-    // Orbital group
-    Apoapsis,
-    Periapsis,
-    TwRatio,
-    DeltaV,
-    // Vehicle group
+    Throttle,
+    // Vehicle
     Stage,
     MissionPhase,
     Mass,
     Thrust,
     PropellantFraction,
-    // Attitude group
+    DeltaV,
+    TwRatio,
+    // Navigation / orbit
+    AltitudeMsl,
+    RadarAltitude,
+    VelocityHorizontal,
+    Apoapsis,
+    Periapsis,
+    SemiMajorAxis,
+    Eccentricity,
+    Inclination,
+    RaanDeg,
+    ArgPeriapsis,
+    TrueAnomaly,
+    OrbitalPeriod,
+    // Attitude / control
+    AngleOfAttack,
+    BankAngle,
     AngularRates,
-    // Control group
-    Throttle,
     Gimbal,
-    // Thermal group
+    // Thermal
     HeatFlux,
     Ablation,
     PlasmaBlackout,
-    // Recovery group
+    // Recovery
     Parachute,
     SurfaceType,
     TouchdownScorecard,
-    // Meta
+    // Meta / status
     TimeAndCamera,
     EventLog,
     Warnings,
@@ -75,12 +84,12 @@ pub struct HudColors {
 impl Default for HudColors {
     fn default() -> Self {
         Self {
-            bright: Color::srgb(0.8, 0.9, 1.0),
-            dim: Color::srgb(0.5, 0.6, 0.7),
-            warning: Color::srgb(1.0, 0.8, 0.2),
-            caution: Color::srgb(1.0, 0.5, 0.2),
-            success: Color::srgb(0.3, 1.0, 0.3),
-            danger: Color::srgb(1.0, 0.2, 0.2),
+            bright: Color::srgb(0.82, 0.90, 1.0),
+            dim: Color::srgb(0.52, 0.61, 0.72),
+            warning: Color::srgb(1.0, 0.80, 0.20),
+            caution: Color::srgb(1.0, 0.55, 0.20),
+            success: Color::srgb(0.35, 0.95, 0.45),
+            danger: Color::srgb(1.0, 0.30, 0.28),
         }
     }
 }
@@ -97,6 +106,15 @@ impl TextStyle {
         Self { font_size, color }
     }
 }
+
+const PANEL_BG: Color = Color::srgba(0.02, 0.03, 0.06, 0.72);
+const PANEL_BORDER: Color = Color::srgba(0.20, 0.30, 0.50, 0.35);
+const FLIGHT_PANEL_WIDTH_PX: f32 = 248.0;
+const PRIMARY_PANEL_WIDTH_PX: f32 = 168.0;
+const PANEL_MARGIN_PX: f32 = 12.0;
+const LABEL_FONT_PX: f32 = 10.0;
+const VALUE_FONT_PX: f32 = 12.0;
+const PRIMARY_VALUE_FONT_PX: f32 = 19.0;
 
 /// Builder for HUD UI elements.
 #[derive(Default)]
@@ -125,20 +143,47 @@ impl HudBuilder {
         )
     }
 
+    fn label(&self, text: &str) -> (Text, TextFont, TextColor) {
+        self.txt(text, TextStyle::new(LABEL_FONT_PX, self.colors.dim))
+    }
+
     fn section_header(&self, text: &str) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(10.0, self.colors.dim))
+        self.txt(text, TextStyle::new(9.0, self.colors.dim))
     }
 
     fn title(&self, text: &str) -> (Text, TextFont, TextColor) {
-        self.txt(text, TextStyle::new(12.0, self.colors.bright))
+        self.txt(text, TextStyle::new(13.0, self.colors.bright))
     }
 }
 
-/// Marker component for HUD entities.
+/// Marker component for dynamic HUD value entities.
 #[derive(Component, Debug)]
 pub struct RocketHudMarker {
     pub panel: HudPanel,
     pub field: HudField,
+}
+
+/// Root node of a HUD panel. Toggling its display hides the whole panel.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HudRoot {
+    pub panel: HudPanel,
+}
+
+/// A diagnostic row hidden unless the operator enables the detail view.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HudDetailRow;
+
+/// Presentation-only HUD options (never part of simulation state).
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct HudOptions {
+    /// Show diagnostic rows (orbital elements, attitude, thermal, recovery).
+    pub detail: bool,
+}
+
+impl Default for HudOptions {
+    fn default() -> Self {
+        Self { detail: false }
+    }
 }
 
 /// Spawn the complete rocket HUD.
@@ -166,228 +211,505 @@ pub fn spawn_rocket_hud(mut commands: Commands) {
         },
     ));
 
-    spawn_left_panel(&mut commands, &builder);
-    spawn_right_panel(&mut commands, &builder);
-}
-
-fn spawn_left_panel(commands: &mut Commands, builder: &HudBuilder) {
+    // Full-screen flex row pins the flight card to the left edge and the
+    // primary gauge strip to the right edge. Anchoring through a real layout
+    // container is robust across window sizes; a bare absolute `right` node
+    // depends on the implicit UI root's resolved width.
     commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(10.0),
-                top: Val::Px(10.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(2.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.05, 0.7)),
-            BorderColor::all(Color::srgba(0.2, 0.3, 0.5, 0.4)),
-            BorderRadius::all(Val::Px(6.0)),
-            RocketHudMarker {
-                panel: HudPanel::Left,
-                field: HudField::Warnings,
-            },
-        ))
-        .with_children(|p| {
-            p.spawn(builder.title("=== ROCKET FLIGHT ==="));
-
-            // Altitude group
-            p.spawn(builder.section_header("--- ALTITUDE ---"));
-            spawn_field(p, builder, HudField::AltitudeAgl, "AGL: --- m");
-            spawn_field(p, builder, HudField::AltitudeMsl, "MSL: --- m");
-            spawn_field(p, builder, HudField::RadarAltitude, "Radar: --- m");
-
-            // Velocity group
-            p.spawn(builder.section_header("--- VELOCITY ---"));
-            spawn_field(p, builder, HudField::VelocityTotal, "Total: --- m/s");
-            spawn_field(p, builder, HudField::VelocityVertical, "Vertical: --- m/s");
-            spawn_field(
-                p,
-                builder,
-                HudField::VelocityHorizontal,
-                "Horizontal: --- m/s",
-            );
-            spawn_field(p, builder, HudField::MachNumber, "Mach: ---");
-
-            // Aero group
-            p.spawn(builder.section_header("--- AERO ---"));
-            spawn_field(p, builder, HudField::DynamicPressure, "Q: --- Pa");
-            spawn_field(p, builder, HudField::GLoad, "G-Load: ---");
-            spawn_field(p, builder, HudField::AngleOfAttack, "AoA: --- deg");
-            spawn_field(p, builder, HudField::BankAngle, "Bank: --- deg");
-
-            // Orbital group
-            p.spawn(builder.section_header("--- ORBIT ---"));
-            spawn_field(p, builder, HudField::Apoapsis, "Apoapsis: --- km");
-            spawn_field(p, builder, HudField::Periapsis, "Periapsis: --- km");
-            spawn_field(p, builder, HudField::TwRatio, "T/W: ---");
-            spawn_field(p, builder, HudField::DeltaV, "dV: --- m/s");
-
-            // Vehicle group
-            p.spawn(builder.section_header("--- VEHICLE ---"));
-            spawn_field(p, builder, HudField::Stage, "Stage: ---");
-            spawn_field(p, builder, HudField::MissionPhase, "Phase: ---");
-            spawn_field(p, builder, HudField::Mass, "Mass: --- kg");
-            spawn_field(p, builder, HudField::Thrust, "Thrust: --- kN");
-            spawn_field(p, builder, HudField::PropellantFraction, "Fuel: ---%");
-
-            // Attitude group
-            p.spawn(builder.section_header("--- ATTITUDE ---"));
-            spawn_field(
-                p,
-                builder,
-                HudField::AngularRates,
-                "Rates: R:--- P:--- Y:--- deg/s",
-            );
-
-            // Control group
-            p.spawn(builder.section_header("--- CONTROL ---"));
-            spawn_field(p, builder, HudField::Throttle, "Throttle: ---%");
-            spawn_field(p, builder, HudField::Gimbal, "Gimbal: P:--- Y:--- deg");
-
-            // Thermal group
-            p.spawn(builder.section_header("--- THERMAL ---"));
-            spawn_field(p, builder, HudField::HeatFlux, "Heat: --- MW/m2");
-            spawn_field(p, builder, HudField::Ablation, "Nose R: --- m  TPS: --- m");
-            spawn_field(p, builder, HudField::PlasmaBlackout, "Blackout: NO");
-
-            // Recovery group
-            p.spawn(builder.section_header("--- RECOVERY ---"));
-            spawn_field(p, builder, HudField::Parachute, "Drogue: NO  Main: NO");
-            spawn_field(p, builder, HudField::SurfaceType, "Surface: ---");
-            spawn_field(p, builder, HudField::TouchdownScorecard, "TD: ---");
-
-            // Time & camera
-            p.spawn(builder.section_header("--- ---"));
-            spawn_field(p, builder, HudField::TimeAndCamera, "T+: --- s  CAM: ---");
-
-            // Event feed (latest staging/fairing/splashdown/blackout event)
-            spawn_field(p, builder, HudField::EventLog, "");
-
-            // Warnings
-            spawn_field(p, builder, HudField::Warnings, "");
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::FlexStart,
+            padding: UiRect::all(Val::Px(PANEL_MARGIN_PX)),
+            column_gap: Val::Px(12.0),
+            ..default()
+        })
+        .with_children(|root| {
+            spawn_flight_panel(root, &builder);
+            spawn_primary_panel(root, &builder);
         });
 }
 
-fn spawn_right_panel(commands: &mut Commands, builder: &HudBuilder) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(10.0),
-                top: Val::Px(10.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.05, 0.7)),
-            BorderColor::all(Color::srgba(0.2, 0.3, 0.5, 0.4)),
-            BorderRadius::all(Val::Px(6.0)),
-            RocketHudMarker {
-                panel: HudPanel::Right,
-                field: HudField::Warnings,
-            },
-        ))
-        .with_children(|p| {
-            p.spawn(builder.txt("ALTITUDE", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::AltitudeAgl,
-                "--- m",
-                TextStyle::new(20.0, builder.colors.bright),
-            );
-
-            p.spawn(builder.txt("VERT SPEED", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::VelocityVertical,
-                "--- m/s",
-                TextStyle::new(16.0, builder.colors.bright),
-            );
-
-            p.spawn(builder.txt("SPEED", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::VelocityTotal,
-                "--- m/s",
-                TextStyle::new(16.0, builder.colors.bright),
-            );
-
-            p.spawn(builder.txt("MACH", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::MachNumber,
-                "---",
-                TextStyle::new(16.0, builder.colors.bright),
-            );
-
-            p.spawn(builder.txt("Q (kPa)", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::DynamicPressure,
-                "---",
-                TextStyle::new(16.0, builder.colors.bright),
-            );
-
-            p.spawn(builder.txt("G-LOAD", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::GLoad,
-                "---",
-                TextStyle::new(16.0, builder.colors.bright),
-            );
-
-            p.spawn(builder.txt("THROTTLE", TextStyle::new(9.0, builder.colors.dim)));
-            spawn_field_with_style(
-                p,
-                builder,
-                HudField::Throttle,
-                "---%",
-                TextStyle::new(16.0, builder.colors.bright),
-            );
-        });
+fn panel_node(width_px: f32) -> Node {
+    Node {
+        width: Val::Px(width_px),
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(3.0),
+        padding: UiRect::all(Val::Px(10.0)),
+        ..default()
+    }
 }
 
-fn spawn_field(
-    parent: &mut ChildSpawnerCommands,
-    builder: &HudBuilder,
-    field: HudField,
-    initial: impl Into<String>,
-) {
-    spawn_field_with_style(
-        parent,
-        builder,
-        field,
-        initial,
-        TextStyle::new(10.0, builder.colors.bright),
+fn panel_chrome() -> (BackgroundColor, BorderColor, BorderRadius) {
+    (
+        BackgroundColor(PANEL_BG),
+        BorderColor::all(PANEL_BORDER),
+        BorderRadius::all(Val::Px(10.0)),
     )
 }
 
-fn spawn_field_with_style(
+fn row_node() -> Node {
+    Node {
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Row,
+        justify_content: JustifyContent::SpaceBetween,
+        align_items: AlignItems::Center,
+        column_gap: Val::Px(8.0),
+        ..default()
+    }
+}
+
+/// Label + right-aligned value row. Values key off `HudField`; labels are
+/// static so alignment never depends on the font's metrics.
+fn stat_row(
     parent: &mut ChildSpawnerCommands,
     builder: &HudBuilder,
+    panel: HudPanel,
+    label: &str,
     field: HudField,
-    initial: impl Into<String>,
-    style: TextStyle,
+    value_style: TextStyle,
+    detail: bool,
 ) {
+    let mut row = parent.spawn(row_node());
+    if detail {
+        row.insert(HudDetailRow);
+    }
+    row.with_children(|r| {
+        r.spawn(builder.label(label));
+        r.spawn((
+            builder.txt("---", value_style),
+            RocketHudMarker { panel, field },
+        ));
+    });
+}
+
+/// Full-width status value row (event feed / warnings) with no static label.
+fn status_row(
+    parent: &mut ChildSpawnerCommands,
+    builder: &HudBuilder,
+    panel: HudPanel,
+    field: HudField,
+    detail: bool,
+) {
+    let mut row = parent.spawn(Node {
+        width: Val::Percent(100.0),
+        ..default()
+    });
+    if detail {
+        row.insert(HudDetailRow);
+    }
+    row.with_children(|r| {
+        r.spawn((
+            builder.txt("", TextStyle::new(11.0, builder.colors.bright)),
+            RocketHudMarker { panel, field },
+        ));
+    });
+}
+
+/// Section header for a section whose rows are all diagnostic.
+fn detail_header(parent: &mut ChildSpawnerCommands, builder: &HudBuilder, text: &str) {
+    parent.spawn((builder.section_header(text), HudDetailRow));
+}
+
+fn normal_style(builder: &HudBuilder) -> TextStyle {
+    TextStyle::new(VALUE_FONT_PX, builder.colors.bright)
+}
+
+fn primary_style(builder: &HudBuilder) -> TextStyle {
+    TextStyle::new(PRIMARY_VALUE_FONT_PX, builder.colors.bright)
+}
+
+fn spawn_flight_panel(parent: &mut ChildSpawnerCommands, builder: &HudBuilder) {
+    let node = panel_node(FLIGHT_PANEL_WIDTH_PX);
+    let (bg, border, radius) = panel_chrome();
     parent
-        .spawn(builder.txt(initial, style))
-        .insert(RocketHudMarker {
-            panel: HudPanel::Left,
-            field,
+        .spawn((
+            node,
+            bg,
+            border,
+            radius,
+            HudRoot {
+                panel: HudPanel::Left,
+            },
+        ))
+        .with_children(|p| {
+            p.spawn(builder.title("FLIGHT"));
+
+            p.spawn(builder.section_header("VEHICLE"));
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "STAGE",
+                HudField::Stage,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "PHASE",
+                HudField::MissionPhase,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "MASS",
+                HudField::Mass,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "FUEL",
+                HudField::PropellantFraction,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "DELTA-V",
+                HudField::DeltaV,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "T/W",
+                HudField::TwRatio,
+                normal_style(builder),
+                false,
+            );
+
+            detail_header(p, builder, "FLIGHT PATH");
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "MSL",
+                HudField::AltitudeMsl,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "RADAR",
+                HudField::RadarAltitude,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "H-SPD",
+                HudField::VelocityHorizontal,
+                normal_style(builder),
+                true,
+            );
+
+            p.spawn(builder.section_header("ORBIT"));
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "APOAPSIS",
+                HudField::Apoapsis,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "PERIAPSIS",
+                HudField::Periapsis,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "SEMI-MAJOR",
+                HudField::SemiMajorAxis,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "ECCENTRICITY",
+                HudField::Eccentricity,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "INCLINATION",
+                HudField::Inclination,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "RAAN",
+                HudField::RaanDeg,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "ARG PERIAPSIS",
+                HudField::ArgPeriapsis,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "TRUE ANOMALY",
+                HudField::TrueAnomaly,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "PERIOD",
+                HudField::OrbitalPeriod,
+                normal_style(builder),
+                true,
+            );
+
+            p.spawn(builder.section_header("ATTITUDE"));
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "AoA",
+                HudField::AngleOfAttack,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "BANK",
+                HudField::BankAngle,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "RATES",
+                HudField::AngularRates,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "GIMBAL",
+                HudField::Gimbal,
+                normal_style(builder),
+                true,
+            );
+
+            p.spawn(builder.section_header("THERMAL"));
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "HEAT",
+                HudField::HeatFlux,
+                normal_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "ABLATION",
+                HudField::Ablation,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "BLACKOUT",
+                HudField::PlasmaBlackout,
+                normal_style(builder),
+                false,
+            );
+
+            detail_header(p, builder, "RECOVERY");
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "CHUTES",
+                HudField::Parachute,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "SURFACE",
+                HudField::SurfaceType,
+                normal_style(builder),
+                true,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "TOUCHDOWN",
+                HudField::TouchdownScorecard,
+                normal_style(builder),
+                true,
+            );
+
+            p.spawn(builder.section_header("MISSION"));
+            stat_row(
+                p,
+                builder,
+                HudPanel::Left,
+                "TIME",
+                HudField::TimeAndCamera,
+                normal_style(builder),
+                false,
+            );
+
+            status_row(p, builder, HudPanel::Left, HudField::EventLog, false);
+            status_row(p, builder, HudPanel::Left, HudField::Warnings, false);
         });
 }
 
-/// Formatter implementations for each field.
+fn spawn_primary_panel(parent: &mut ChildSpawnerCommands, builder: &HudBuilder) {
+    let node = panel_node(PRIMARY_PANEL_WIDTH_PX);
+    let (bg, border, radius) = panel_chrome();
+    parent
+        .spawn((
+            node,
+            bg,
+            border,
+            radius,
+            HudRoot {
+                panel: HudPanel::Right,
+            },
+        ))
+        .with_children(|p| {
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "ALT",
+                HudField::AltitudeAgl,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "V/S",
+                HudField::VelocityVertical,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "SPD",
+                HudField::VelocityTotal,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "MACH",
+                HudField::MachNumber,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "Q",
+                HudField::DynamicPressure,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "G",
+                HudField::GLoad,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "THR",
+                HudField::Throttle,
+                primary_style(builder),
+                false,
+            );
+            stat_row(
+                p,
+                builder,
+                HudPanel::Right,
+                "THRUST",
+                HudField::Thrust,
+                normal_style(builder),
+                true,
+            );
+        });
+}
+
+/// Formatter implementations for each field. Returns the value only; the
+/// static label is owned by the layout so alignment is independent of text
+/// metrics.
 struct FieldFormatters;
 
 impl FieldFormatters {
@@ -400,219 +722,249 @@ impl FieldFormatters {
         time_acceleration: f64,
         pending_simulation_s: f64,
     ) -> (String, Color) {
+        let colors = HudColors::default();
+        let white = Color::WHITE;
         match field {
-            HudField::AltitudeAgl => (
-                format!("AGL: {:.0} m", telemetry.altitude_agl_m),
-                Color::WHITE,
-            ),
-            HudField::AltitudeMsl => (
-                format!("MSL: {:.0} m", telemetry.altitude_msl_m),
-                Color::WHITE,
-            ),
-            HudField::RadarAltitude => (
-                format!("Radar: {:.1} m", telemetry.radar_altitude_m),
-                Color::WHITE,
-            ),
-            HudField::VelocityTotal => (
-                format!("Total: {:.0} m/s", telemetry.velocity_total_mps),
-                Color::WHITE,
-            ),
+            HudField::AltitudeAgl => (format!("{:.0} m", telemetry.altitude_agl_m), white),
+            HudField::AltitudeMsl => (format!("{:.0} m", telemetry.altitude_msl_m), white),
+            HudField::RadarAltitude => (format!("{:.1} m", telemetry.radar_altitude_m), white),
+            HudField::VelocityTotal => (format!("{:.0} m/s", telemetry.velocity_total_mps), white),
             HudField::VelocityVertical => {
-                let color = if telemetry.velocity_vertical_mps > 0.0 {
-                    HudColors::default().success
+                let color = if telemetry.velocity_vertical_mps >= 0.0 {
+                    colors.success
                 } else {
-                    HudColors::default().danger
+                    colors.danger
                 };
                 (
-                    format!("Vertical: {:.1} m/s", telemetry.velocity_vertical_mps),
+                    format!("{:+.1} m/s", telemetry.velocity_vertical_mps),
                     color,
                 )
             }
             HudField::VelocityHorizontal => (
-                format!("Horizontal: {:.0} m/s", telemetry.velocity_horizontal_mps),
-                Color::WHITE,
+                format!("{:.0} m/s", telemetry.velocity_horizontal_mps),
+                white,
             ),
-            HudField::MachNumber => (format!("Mach: {:.2}", telemetry.mach_number), Color::WHITE),
-            HudField::DynamicPressure => (
-                format!(
-                    "Q: {:.0} Pa ({:.1} kPa)",
-                    telemetry.dynamic_pressure_pa,
-                    telemetry.dynamic_pressure_pa / 1000.0
-                ),
-                Color::WHITE,
-            ),
+            HudField::MachNumber => (format!("{:.2}", telemetry.mach_number), white),
+            HudField::DynamicPressure => {
+                let color = if telemetry.dynamic_pressure_pa > 50_000.0 {
+                    colors.danger
+                } else {
+                    white
+                };
+                (
+                    format!("{:.1} kPa", telemetry.dynamic_pressure_pa / 1000.0),
+                    color,
+                )
+            }
             HudField::GLoad => {
                 let color = if telemetry.g_load > 6.0 {
-                    HudColors::default().danger
+                    colors.danger
                 } else if telemetry.g_load > 3.0 {
-                    HudColors::default().warning
+                    colors.warning
                 } else {
-                    Color::WHITE
+                    white
                 };
-                (format!("G-Load: {:.2}", telemetry.g_load), color)
+                (format!("{:.2} g", telemetry.g_load), color)
             }
+            HudField::AngleOfAttack => {
+                (format!("{:+.1} deg", telemetry.angle_of_attack_deg), white)
+            }
+            HudField::BankAngle => (format!("{:+.1} deg", telemetry.bank_angle_deg), white),
             HudField::Apoapsis => (
                 if telemetry.apoapsis_altitude_m.is_finite() {
-                    format!("Apoapsis: {:.0} km", telemetry.apoapsis_altitude_m / 1000.0)
+                    format!("{:.0} km", telemetry.apoapsis_altitude_m / 1000.0)
                 } else {
-                    "Apoapsis: N/A".to_string()
+                    "N/A".to_string()
                 },
-                Color::WHITE,
+                white,
             ),
             HudField::Periapsis => {
                 let color = if telemetry.periapsis_altitude_m.is_finite()
                     && telemetry.periapsis_altitude_m < 100_000.0
                     && telemetry.mission_phase != RocketMissionState::Orbit
                 {
-                    HudColors::default().danger
+                    colors.danger
                 } else {
-                    Color::WHITE
+                    white
                 };
                 (
                     if telemetry.periapsis_altitude_m.is_finite() {
-                        format!(
-                            "Periapsis: {:.0} km",
-                            telemetry.periapsis_altitude_m / 1000.0
-                        )
+                        format!("{:.0} km", telemetry.periapsis_altitude_m / 1000.0)
                     } else {
-                        "Periapsis: N/A".to_string()
+                        "N/A".to_string()
                     },
                     color,
                 )
             }
-            HudField::TwRatio => (format!("T/W: {:.2}", telemetry.tw_ratio), Color::WHITE),
-            HudField::DeltaV => (
-                format!("dV: {:.0} m/s", telemetry.delta_v_remaining_mps),
-                Color::WHITE,
-            ),
-            HudField::PropellantFraction => {
-                let color = if telemetry.propellant_fraction < 0.1 {
-                    HudColors::default().danger
-                } else if telemetry.propellant_fraction < 0.3 {
-                    HudColors::default().warning
+            HudField::SemiMajorAxis => (
+                if telemetry.orbital_semi_major_axis_m.is_finite() {
+                    format!("{:.0} km", telemetry.orbital_semi_major_axis_m / 1000.0)
                 } else {
-                    Color::WHITE
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::Eccentricity => (
+                if telemetry.orbital_eccentricity.is_finite() {
+                    format!("{:.4}", telemetry.orbital_eccentricity)
+                } else {
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::Inclination => (
+                if telemetry.orbital_inclination_deg.is_finite() {
+                    format!("{:.2} deg", telemetry.orbital_inclination_deg)
+                } else {
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::RaanDeg => (
+                if telemetry.orbital_raan_deg.is_finite() {
+                    format!("{:.1} deg", telemetry.orbital_raan_deg)
+                } else {
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::ArgPeriapsis => (
+                if telemetry.orbital_arg_periapsis_deg.is_finite() {
+                    format!("{:.1} deg", telemetry.orbital_arg_periapsis_deg)
+                } else {
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::TrueAnomaly => (
+                if telemetry.orbital_true_anomaly_deg.is_finite() {
+                    format!("{:.1} deg", telemetry.orbital_true_anomaly_deg)
+                } else {
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::OrbitalPeriod => (
+                if telemetry.orbital_period_s.is_finite() {
+                    format!("{:.1} min", telemetry.orbital_period_s / 60.0)
+                } else {
+                    "N/A".to_string()
+                },
+                white,
+            ),
+            HudField::TwRatio => (format!("{:.2}", telemetry.tw_ratio), white),
+            HudField::DeltaV => (format!("{:.0} m/s", telemetry.delta_v_remaining_mps), white),
+            HudField::PropellantFraction => {
+                // The active stage is the tank draining right now, so its
+                // fraction is the precise gauge reading; the whole-vehicle
+                // fraction barely moves while only one stage burns.
+                let fraction = telemetry.active_stage_propellant_fraction;
+                let color = if fraction < 0.1 {
+                    colors.danger
+                } else if fraction < 0.3 {
+                    colors.warning
+                } else {
+                    white
                 };
                 (
-                    format!("Fuel: {:.0}%", telemetry.propellant_fraction * 100.0),
+                    format!(
+                        "{:.1}%  S{}  {:.1} t",
+                        fraction * 100.0,
+                        telemetry.active_stage + 1,
+                        telemetry.total_propellant_kg / 1000.0,
+                    ),
                     color,
                 )
             }
-            HudField::Stage => (
-                format!("Stage: {}", telemetry.active_stage + 1),
-                Color::WHITE,
-            ),
-            HudField::MissionPhase => {
-                let (text, color) = match telemetry.mission_phase {
-                    RocketMissionState::Crashed => {
-                        (String::from("Crashed"), HudColors::default().danger)
-                    }
-                    RocketMissionState::Landed => {
-                        (String::from("Landed"), HudColors::default().success)
-                    }
-                    RocketMissionState::ReentryCorridor => {
-                        (String::from("Reentry"), HudColors::default().caution)
-                    }
-                    RocketMissionState::PoweredDescent | RocketMissionState::Landing => {
-                        (String::from("Descent"), HudColors::default().success)
-                    }
-                    _ => (format!("{:?}", telemetry.mission_phase), Color::WHITE),
-                };
-                (format!("Phase: {}", text), color)
-            }
-            HudField::Mass => (format!("Mass: {:.0} kg", telemetry.mass_kg), Color::WHITE),
+            HudField::Stage => (format!("{}", telemetry.active_stage + 1), white),
+            HudField::MissionPhase => match telemetry.mission_phase {
+                RocketMissionState::Crashed => ("CRASHED".to_string(), colors.danger),
+                RocketMissionState::Landed => ("LANDED".to_string(), colors.success),
+                RocketMissionState::ReentryCorridor => ("REENTRY".to_string(), colors.caution),
+                RocketMissionState::PoweredDescent | RocketMissionState::Landing => {
+                    ("DESCENT".to_string(), colors.success)
+                }
+                RocketMissionState::PreLaunch => ("PRELAUNCH".to_string(), colors.dim),
+                // `RocketMissionState` wraps the domain enum; print the inner
+                // value rather than the wrapper's derived Debug.
+                other => (format!("{:?}", other.0).to_uppercase(), white),
+            },
+            HudField::Mass => (format!("{:.0} kg", telemetry.mass_kg), white),
             HudField::Thrust => (
-                format!("Thrust: {:.1} kN", telemetry.total_thrust_n / 1000.0),
-                Color::WHITE,
+                format!("{:.1} kN", telemetry.total_thrust_n / 1000.0),
+                white,
             ),
             HudField::AngularRates => (
                 format!(
-                    "Rates: R:{:.1} P:{:.1} Y:{:.1} deg/s",
+                    "{:.1} / {:.1} / {:.1} deg/s",
                     telemetry.roll_rate_dps, telemetry.pitch_rate_dps, telemetry.yaw_rate_dps
                 ),
-                Color::WHITE,
+                white,
             ),
-            HudField::Throttle => (
-                format!("Throttle: {:.0}%", telemetry.throttle * 100.0),
-                Color::WHITE,
-            ),
+            HudField::Throttle => (format!("{:.0}%", telemetry.throttle * 100.0), white),
             HudField::Gimbal => (
                 format!(
-                    "Gimbal: P:{:.1} Y:{:.1} deg",
+                    "{:+.2} / {:+.2} deg",
                     telemetry.gimbal_pitch_deg, telemetry.gimbal_yaw_deg
                 ),
-                Color::WHITE,
+                white,
             ),
             HudField::HeatFlux => {
                 let total_mw = telemetry.total_heat_flux_w_m2 / 1_000_000.0;
                 let color = if total_mw > 10.0 {
-                    HudColors::default().danger
+                    colors.danger
                 } else if total_mw > 1.0 {
-                    HudColors::default().warning
+                    colors.warning
                 } else {
-                    Color::WHITE
+                    white
                 };
-                (format!("Heat: {:.2} MW/m2", total_mw), color)
+                (format!("{:.2} MW/m2", total_mw), color)
             }
             HudField::Ablation => (
                 format!(
-                    "Nose R: {:.3} m  TPS: {:.3} m",
+                    "{:.3} / {:.3} m",
                     telemetry.nose_radius_m, telemetry.tps_thickness_remaining_m
                 ),
-                Color::WHITE,
+                white,
             ),
             HudField::PlasmaBlackout => {
                 if telemetry.plasma_blackout {
-                    // Flash between alarm red and dim while the link is down
-                    // (driven by the event-backed CommsState, presentation
-                    // only).
-                    let color = if flash_on {
-                        HudColors::default().danger
-                    } else {
-                        HudColors::default().dim
-                    };
-                    ("Blackout: YES".to_string(), color)
+                    // Flash between alarm red and dim while the link is down.
+                    let color = if flash_on { colors.danger } else { colors.dim };
+                    ("YES".to_string(), color)
                 } else {
-                    ("Blackout: NO".to_string(), Color::WHITE)
+                    ("NO".to_string(), white)
                 }
             }
             HudField::Parachute => {
-                let drogue = if telemetry.drogue_deployed {
-                    "YES"
-                } else {
-                    "NO"
-                };
-                let main = if telemetry.main_deployed { "YES" } else { "NO" };
-                (format!("Drogue: {}  Main: {}", drogue, main), Color::WHITE)
+                let drogue = if telemetry.drogue_deployed { "Y" } else { "-" };
+                let main = if telemetry.main_deployed { "Y" } else { "-" };
+                (format!("D {drogue}  M {main}"), white)
             }
             HudField::SurfaceType => {
-                // Water is inferred from terrain at mean sea level on Earth.
                 if telemetry.over_water {
-                    ("Surface: WATER".to_string(), HudColors::default().caution)
+                    ("WATER".to_string(), colors.caution)
                 } else {
-                    ("Surface: LAND".to_string(), Color::WHITE)
+                    ("LAND".to_string(), white)
                 }
             }
             HudField::TouchdownScorecard => {
                 if !telemetry.touchdown_recorded {
-                    ("TD: ---".to_string(), Color::WHITE)
+                    ("---".to_string(), white)
                 } else {
                     let color = if telemetry.toppling {
-                        HudColors::default().danger
+                        colors.danger
                     } else if telemetry.touchdown_tilt_deg > 10.0 {
-                        HudColors::default().warning
+                        colors.warning
                     } else {
-                        HudColors::default().success
+                        colors.success
                     };
                     (
                         format!(
-                            "TD: v{:.1} lat{:.1} tilt{:.0}° slope{:.0}° tgt{:.0}m strut{:.1}m",
+                            "v{:.1}  t{:.0} deg  d{:.0}m",
                             telemetry.touchdown_vertical_speed_mps,
-                            telemetry.touchdown_lateral_speed_mps,
                             telemetry.touchdown_tilt_deg,
-                            telemetry.touchdown_slope_deg,
                             telemetry.touchdown_distance_to_target_m,
-                            telemetry.leg_compression_peak_m,
                         ),
                         color,
                     )
@@ -626,48 +978,34 @@ impl FieldFormatters {
                     RocketCameraMode::Surface => "SURFACE",
                     RocketCameraMode::Free => "FREE",
                 };
+                let queue = if pending_simulation_s > 0.5 {
+                    format!("  Q{pending_simulation_s:.0}s")
+                } else {
+                    String::new()
+                };
                 (
                     format!(
-                        "T+: {:.1} s  CAM: {}  WARP ×{}  QUEUE {:.1}s",
-                        telemetry.time_since_liftoff_s,
-                        cam_name,
-                        time_acceleration,
-                        pending_simulation_s,
+                        "{:.1} s  {}  x{}{}",
+                        telemetry.time_since_liftoff_s, cam_name, time_acceleration, queue
                     ),
-                    Color::WHITE,
+                    white,
                 )
             }
             HudField::Warnings => {
                 let warnings = Self::compute_warnings(telemetry);
                 if warnings.is_empty() {
-                    (String::new(), Color::WHITE)
+                    (String::new(), white)
                 } else {
-                    (
-                        format!("⚠ {}", warnings.join("  ⚠ ")),
-                        HudColors::default().danger,
-                    )
+                    (format!("! {}", warnings.join("  |  ")), colors.danger)
                 }
             }
             HudField::EventLog => {
-                // Event-driven display fed by domain messages; empty while no
-                // event is recent.
                 if event_feed.latest.is_empty() {
-                    (String::new(), Color::WHITE)
+                    (String::new(), white)
                 } else {
-                    (
-                        format!("» {}", event_feed.latest),
-                        HudColors::default().warning,
-                    )
+                    (format!(">> {}", event_feed.latest), colors.warning)
                 }
             }
-            HudField::AngleOfAttack => (
-                format!("AoA: {:.1} deg", telemetry.angle_of_attack_deg),
-                Color::WHITE,
-            ),
-            HudField::BankAngle => (
-                format!("Bank: {:.1} deg", telemetry.bank_angle_deg),
-                Color::WHITE,
-            ),
         }
     }
 
@@ -693,7 +1031,7 @@ impl FieldFormatters {
         {
             warnings.push("LOW PERIAPSIS");
         }
-        if telemetry.propellant_fraction < 0.05
+        if telemetry.active_stage_propellant_fraction < 0.05
             && telemetry.mission_phase != RocketMissionState::Orbit
             && telemetry.mission_phase != RocketMissionState::Landed
         {
@@ -753,6 +1091,40 @@ pub(crate) fn update_rocket_hud_system(
     }
 }
 
+/// H toggles the diagnostic detail view; Z hides the whole HUD (Zen mode).
+pub fn toggle_hud_options_system(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut options: ResMut<HudOptions>,
+    mut zen_mode: ResMut<ZenMode>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyH) {
+        options.detail = !options.detail;
+    }
+    if keyboard.just_pressed(KeyCode::KeyZ) {
+        zen_mode.enabled = !zen_mode.enabled;
+    }
+}
+
+/// Apply presentation visibility: Zen mode hides everything; detail option
+/// shows or hides diagnostic rows.
+pub fn apply_hud_visibility_system(
+    options: Res<HudOptions>,
+    zen_mode: Res<ZenMode>,
+    mut roots: Query<(&HudRoot, &mut Node), Without<HudDetailRow>>,
+    mut detail_rows: Query<&mut Node, With<HudDetailRow>>,
+) {
+    let visible = UiDisplay::Flex;
+    let hidden = UiDisplay::None;
+
+    for (_root, mut node) in &mut roots {
+        node.display = if zen_mode.enabled { hidden } else { visible };
+    }
+    let show_detail = options.detail && !zen_mode.enabled;
+    for mut node in &mut detail_rows {
+        node.display = if show_detail { visible } else { hidden };
+    }
+}
+
 fn hud_update_due(state: &HudUpdateState, now_s: f32) -> bool {
     !state.initialized || now_s >= state.last_update_real_time_s + HUD_UPDATE_INTERVAL_S
 }
@@ -774,5 +1146,70 @@ mod tests {
         };
         assert!(!hud_update_due(&state, 2.01));
         assert!(hud_update_due(&state, 2.0 + HUD_UPDATE_INTERVAL_S));
+    }
+
+    #[test]
+    fn fuel_field_reports_active_stage_and_total() {
+        let telemetry = RocketTelemetry {
+            active_stage: 0,
+            active_stage_propellant_fraction: 0.875,
+            total_propellant_kg: 105_000.0,
+            ..default()
+        };
+        let (text, _) = FieldFormatters::format_field(
+            HudField::PropellantFraction,
+            &telemetry,
+            &RocketCameraMode::default(),
+            false,
+            &RocketEventFeed::default(),
+            1.0,
+            0.0,
+        );
+        assert_eq!(text, "87.5%  S1  105.0 t");
+    }
+
+    #[test]
+    fn orbital_fields_render_unavailable_before_flight() {
+        let telemetry = RocketTelemetry {
+            orbital_eccentricity: f64::NAN,
+            orbital_inclination_deg: f64::NAN,
+            orbital_period_s: f64::NAN,
+            ..default()
+        };
+        for field in [
+            HudField::Eccentricity,
+            HudField::Inclination,
+            HudField::OrbitalPeriod,
+        ] {
+            let (text, _) = FieldFormatters::format_field(
+                field,
+                &telemetry,
+                &RocketCameraMode::default(),
+                false,
+                &RocketEventFeed::default(),
+                1.0,
+                0.0,
+            );
+            assert_eq!(text, "N/A", "field {field:?} must read N/A prelaunch");
+        }
+    }
+
+    #[test]
+    fn warning_status_line_joins_compact_labels() {
+        let telemetry = RocketTelemetry {
+            g_load: 7.5,
+            ..default()
+        };
+        let (warnings, color) = FieldFormatters::format_field(
+            HudField::Warnings,
+            &telemetry,
+            &RocketCameraMode::default(),
+            false,
+            &RocketEventFeed::default(),
+            1.0,
+            0.0,
+        );
+        assert!(warnings.contains("HIGH G-LOAD"));
+        assert_eq!(color, HudColors::default().danger);
     }
 }

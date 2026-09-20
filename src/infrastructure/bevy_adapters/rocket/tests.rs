@@ -150,6 +150,26 @@ mod engine_lifecycle_pipeline_tests {
         (app, entity)
     }
 
+    /// The core-stage write-back must run in every build profile. In release,
+    /// a mutation hidden inside `debug_assert!` compiles out and pins fuel at
+    /// 100%; this test fails under `cargo test --release` for that regression.
+    #[test]
+    fn propellant_is_consumed_in_every_build_profile() {
+        let (mut app, entity) = lifecycle_app(false);
+        let load_before = app
+            .world()
+            .get::<RocketPropulsion>(entity)
+            .unwrap()
+            .propellant_remaining_kg[0];
+        app.world_mut().run_schedule(FixedUpdate);
+        let after = app.world().get::<RocketPropulsion>(entity).unwrap();
+        assert!(
+            after.propellant_remaining_kg[0] < load_before,
+            "active-stage propellant must decrease after a burn: before {load_before}, after {}",
+            after.propellant_remaining_kg[0]
+        );
+    }
+
     #[test]
     fn cutoff_stops_thrust_and_flow_then_budget_exhaustion_is_terminal() {
         let (mut app, entity) = lifecycle_app(false);

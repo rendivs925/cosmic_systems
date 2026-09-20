@@ -216,6 +216,10 @@ struct TelemetryThrust {
 struct TelemetryMassProperties {
     dry_mass_kg: f64,
     propellant_fraction: f64,
+    active_stage_propellant_kg: f64,
+    active_stage_propellant_fraction: f64,
+    active_stage_initial_propellant_kg: f64,
+    total_propellant_kg: f64,
 }
 
 impl<'a> TelemetryContext<'a> {
@@ -324,6 +328,10 @@ impl<'a> TelemetryContext<'a> {
             tw_ratio,
             g_load,
             propellant_fraction: mass_properties.propellant_fraction,
+            active_stage_propellant_kg: mass_properties.active_stage_propellant_kg,
+            active_stage_propellant_fraction: mass_properties.active_stage_propellant_fraction,
+            active_stage_initial_propellant_kg: mass_properties.active_stage_initial_propellant_kg,
+            total_propellant_kg: mass_properties.total_propellant_kg,
             delta_v,
             aoa,
             aos,
@@ -416,9 +424,35 @@ impl<'a> TelemetryContext<'a> {
         } else {
             0.0
         };
+        // The active stage is the tank actually draining this burn. Its
+        // configured load may have been partly reserved, but the fraction of
+        // the catalogued load is the meaningful "fuel gauge" reading.
+        let active_stage = self.propulsion.active_stage;
+        let active_stage_propellant_kg = self
+            .propulsion
+            .propellant_remaining_kg
+            .get(active_stage)
+            .copied()
+            .unwrap_or(0.0) as f64;
+        let active_stage_initial_propellant_kg = self
+            .propulsion
+            .vehicle
+            .stages
+            .get(active_stage)
+            .map(|stage| stage.propellant_mass_kg as f64)
+            .unwrap_or(0.0);
+        let active_stage_propellant_fraction = if active_stage_initial_propellant_kg > 0.0 {
+            (active_stage_propellant_kg / active_stage_initial_propellant_kg).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         TelemetryMassProperties {
             dry_mass_kg: dry_mass,
             propellant_fraction,
+            active_stage_propellant_kg,
+            active_stage_propellant_fraction,
+            active_stage_initial_propellant_kg,
+            total_propellant_kg: total_propellant_remaining,
         }
     }
 
@@ -445,6 +479,10 @@ struct DerivedTelemetry {
     tw_ratio: f64,
     g_load: f64,
     propellant_fraction: f64,
+    active_stage_propellant_kg: f64,
+    active_stage_propellant_fraction: f64,
+    active_stage_initial_propellant_kg: f64,
+    total_propellant_kg: f64,
     delta_v: f64,
     aoa: f64,
     aos: f64,
@@ -459,6 +497,9 @@ struct DerivedTelemetry {
 /// Pure function - no side effects, easy to test.
 pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketTelemetry {
     let d = ctx.derived();
+    // Orbital elements are only meaningful once the vehicle has left the pad;
+    // before that the authoritative `OrbitalElements` still holds its default.
+    let prelaunch = *ctx.mission_state == RocketMissionState::PreLaunch;
 
     RocketTelemetry {
         force_model: ctx.force_model.validation_report(),
@@ -470,19 +511,65 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
         mach_number: d.mach,
         dynamic_pressure_pa: d.q,
         g_load: d.g_load,
-        apoapsis_altitude_m: if *ctx.mission_state == RocketMissionState::PreLaunch {
+        apoapsis_altitude_m: if prelaunch {
             f64::NAN
         } else {
             ctx.orbital.apoapsis_m - ctx.planet_radius_m
         },
-        periapsis_altitude_m: if *ctx.mission_state == RocketMissionState::PreLaunch {
+        periapsis_altitude_m: if prelaunch {
             f64::NAN
         } else {
             ctx.orbital.periapsis_m - ctx.planet_radius_m
         },
+        orbital_semi_major_axis_m: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.semi_major_axis_m
+        },
+        orbital_eccentricity: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.eccentricity
+        },
+        orbital_inclination_deg: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.inclination_rad.to_degrees()
+        },
+        orbital_raan_deg: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.longitude_ascending_node_rad.to_degrees()
+        },
+        orbital_arg_periapsis_deg: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.argument_of_periapsis_rad.to_degrees()
+        },
+        orbital_true_anomaly_deg: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.true_anomaly_rad.to_degrees()
+        },
+        orbital_period_s: if prelaunch {
+            f64::NAN
+        } else {
+            ctx.orbital.orbital_period_s
+        },
+        target_apoapsis_altitude_m: ctx.autopilot.target_orbit.target_apoapsis_altitude_m,
+        target_periapsis_altitude_m: ctx.autopilot.target_orbit.target_periapsis_altitude_m,
+        target_inclination_deg: ctx
+            .autopilot
+            .target_orbit
+            .target_inclination_rad
+            .to_degrees(),
         tw_ratio: d.tw_ratio,
         delta_v_remaining_mps: d.delta_v,
         propellant_fraction: d.propellant_fraction,
+        active_stage_propellant_kg: d.active_stage_propellant_kg,
+        active_stage_propellant_fraction: d.active_stage_propellant_fraction,
+        active_stage_initial_propellant_kg: d.active_stage_initial_propellant_kg,
+        total_propellant_kg: d.total_propellant_kg,
         active_stage: ctx.propulsion.active_stage,
         mission_phase: *ctx.mission_state,
         total_thrust_n: d.total_thrust_n,
@@ -510,8 +597,6 @@ pub fn compute_telemetry_from_context<'a>(ctx: &TelemetryContext<'a>) -> RocketT
         main_deployed: ctx.parachute.deployment.main_deployed,
         over_water: ctx.collision.over_water,
         time_since_liftoff_s: ctx.autopilot.time_since_liftoff_s,
-        downrange_m: 0.0,
-        crossrange_m: 0.0,
         touchdown_recorded: false,
         touchdown_vertical_speed_mps: 0.0,
         touchdown_lateral_speed_mps: 0.0,
@@ -1281,6 +1366,70 @@ mod g_load_tests {
             "hovering at weight must read 1 g, got {}",
             t.g_load
         );
+    }
+
+    #[test]
+    fn propellant_fraction_reflects_partial_consumption() {
+        let vehicle = single_engine_vehicle(9.807);
+        let propulsion = RocketPropulsion {
+            vehicle,
+            active_stage: 0,
+            // Half of the configured 600 kg stage load remains.
+            propellant_remaining_kg: vec![300.0],
+            booster_attachment: BoosterAttachmentState::Detached,
+            throttle: 0.0,
+            gimbal_pitch_rad: 0.0,
+            gimbal_yaw_rad: 0.0,
+            time_since_separation_s: 0.0,
+            ullage_settle_time_s: 0.0,
+            separations_count: 0,
+            attached_payload_kg: 0.0,
+        };
+        let mission_state = RocketMissionState::default();
+        let autopilot = RocketAutopilot::default();
+        let orbital = OrbitalElements::default();
+        let conditions = RocketFlightConditions::default();
+        let comms = CommsState::default();
+        let aero_forces = AerodynamicForces::default();
+        let thermal = ThermalState::default();
+        let ablation = AblationState::default();
+        let parachute = ParachuteState::default();
+        let collision = TerrainCollisionState::default();
+
+        let t = telemetry(&TelemetryContext {
+            sim_time: 0.0,
+            dt: 1.0 / 60.0,
+            planet_mu_m3_s2: gravitational_parameter(EARTH_MASS_KG),
+            planet_radius_m: EARTH_RADIUS_M,
+            position_m: DVec3::new(EARTH_RADIUS_M + 100_000.0, 0.0, 0.0),
+            velocity_mps: DVec3::ZERO,
+            orientation: DQuat::IDENTITY,
+            angular_velocity_radps: DVec3::ZERO,
+            mass_kg: MASS_KG,
+            propulsion: &propulsion,
+            mission_state: &mission_state,
+            autopilot: &autopilot,
+            orbital: &orbital,
+            conditions: &conditions,
+            comms: &comms,
+            aero_forces: &aero_forces,
+            specific_force: None,
+            thermal: &thermal,
+            ablation: &ablation,
+            parachute: &parachute,
+            collision: &collision,
+            force_model: crate::domain::services::gravity::ForceModelConfig::default(),
+        });
+
+        assert!(
+            (t.propellant_fraction - 0.5).abs() < 1e-9,
+            "half a stage load must read 50%, got {}",
+            t.propellant_fraction
+        );
+        assert!((t.active_stage_propellant_fraction - 0.5).abs() < 1e-9);
+        assert!((t.active_stage_propellant_kg - 300.0).abs() < 1e-9);
+        assert!((t.active_stage_initial_propellant_kg - 600.0).abs() < 1e-9);
+        assert!((t.total_propellant_kg - 300.0).abs() < 1e-9);
     }
 
     #[test]

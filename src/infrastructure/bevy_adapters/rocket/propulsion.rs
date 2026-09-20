@@ -4,7 +4,7 @@ use super::components::*;
 use super::events::StageSeparatedEvent;
 use super::separation::{spawn_spent_stage, SpentStageSpec};
 use crate::application::rocket_spawning::{build_rocket_mesh, build_serial_stage_mesh};
-use crate::domain::entities::rocket::Rocket;
+use crate::domain::entities::rocket::{EngineState, Rocket};
 use crate::domain::services::guidance::AutopilotMode;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::rocket_propulsion::{
@@ -319,9 +319,7 @@ pub fn propulsion_thrust(
                 .stage()
                 .engines
                 .iter()
-                .filter(|engine| {
-                    engine.state == crate::domain::entities::rocket::EngineState::Running
-                })
+                .filter(|engine| engine.state == EngineState::Running)
                 .count() as u32;
             force_accum.add_force_n(
                 rocket.dynamics.orientation * thrust_body * retro.thrust_multiplier * burn_fraction,
@@ -356,9 +354,7 @@ pub fn propulsion_thrust(
                     .stage
                     .engines
                     .iter()
-                    .filter(|engine| {
-                        engine.state == crate::domain::entities::rocket::EngineState::Running
-                    })
+                    .filter(|engine| engine.state == EngineState::Running)
                     .count() as u32;
             }
         }
@@ -396,8 +392,15 @@ pub fn propulsion_consumption(
                 mass_flow_kg_s,
                 dt,
             );
+            // The write-back MUST be unconditional. Previously it lived inside
+            // `debug_assert!`, so release builds never drained the core stage
+            // (fuel pinned at 100%, mass constant). Keep only the sanity check
+            // debug-gated.
+            let applied =
+                propulsion.set_active_core_burnable_propellant_kg(consumption.remaining_kg);
             debug_assert!(
-                propulsion.set_active_core_burnable_propellant_kg(consumption.remaining_kg)
+                applied,
+                "active core stage inventory must be synchronized before consumption"
             );
         }
 
