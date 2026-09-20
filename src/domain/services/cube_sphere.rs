@@ -396,15 +396,40 @@ pub struct CameraProjection {
     pub viewport_height_px: f64,
 }
 
-/// Project a patch's conservative error using the distance to its center.
+/// Angular radius of a spherical cap enclosing the patch's corner directions.
+pub fn patch_angular_radius_rad(patch: &TerrainPatch) -> f64 {
+    let center = patch.center_direction();
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    [(u0, v0), (u1, v0), (u0, v1), (u1, v1)]
+        .into_iter()
+        .map(|(u, v)| {
+            center
+                .dot(face_uv_to_direction(patch.face, u, v))
+                .clamp(-1.0, 1.0)
+                .acos()
+        })
+        .fold(0.0, f64::max)
+}
+
+/// Project error using the nearest distance to the enclosing spherical cap.
+/// Center distance underestimates error for a camera standing near a large
+/// patch's edge, starving the entire near-camera descendant chain of detail.
 pub fn projected_patch_error_px(
     patch: &TerrainPatch,
     geometric_error_m: PatchGeometricError,
     planet_radius_m: f64,
     camera: CameraProjection,
 ) -> f64 {
-    let patch_center_m = patch.center_direction() * planet_radius_m;
-    let distance_m = camera.position_m.distance(patch_center_m);
+    let camera_radius_m = camera.position_m.length();
+    let angle_rad = patch
+        .center_direction()
+        .dot(camera.position_m.normalize_or_zero())
+        .clamp(-1.0, 1.0)
+        .acos();
+    let nearest_angle_rad = (angle_rad - patch_angular_radius_rad(patch)).max(0.0);
+    let distance_m = ((camera_radius_m - planet_radius_m).powi(2)
+        + 4.0 * camera_radius_m * planet_radius_m * (nearest_angle_rad * 0.5).sin().powi(2))
+    .sqrt();
     screen_space_error_m(
         geometric_error_m.conservative_m(patch, planet_radius_m),
         distance_m,
@@ -450,6 +475,10 @@ pub struct QuadtreeSelectionConfig {
     pub max_level: u32,
     pub max_projected_error_px: f64,
     pub max_neighbor_level_difference: u32,
+    /// Complete six-face cover, including splits needed for neighbor balance.
+    pub max_target_leaves: usize,
+    /// Includes all ancestors retained for progressive readiness fallback.
+    pub max_requested_bytes: u64,
 }
 
 /// Desired and renderable leaf covers selected without runtime dependencies.
@@ -471,27 +500,59 @@ pub fn select_quadtree_leaves(
     state: &QuadtreePatchState,
     projected_errors_px: &BTreeMap<TerrainPatch, f64>,
     config: QuadtreeSelectionConfig,
+    patch_bytes: impl Fn(&TerrainPatch) -> u64,
 ) -> QuadtreeSelection {
     let mut target_leaves: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
+    let mut requested_bytes: u64 = target_leaves.iter().map(&patch_bytes).sum();
     let mut pending: Vec<_> = TerrainPatch::roots().into_iter().collect();
 
-    while let Some(patch) = pending.pop() {
+    while let Some(index) = pending
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            projected_errors_px
+                .get(a)
+                .copied()
+                .unwrap_or(0.0)
+                .total_cmp(&projected_errors_px.get(b).copied().unwrap_or(0.0))
+                .then_with(|| a.cmp(b))
+        })
+        .map(|(index, _)| index)
+    {
+        let patch = pending.swap_remove(index);
         let projected_error_px = projected_errors_px.get(&patch).copied().unwrap_or(0.0);
-        if patch.level >= config.max_level
+        if !target_leaves.contains(&patch)
+            || patch.level >= config.max_level
             || !state.is_visible(&patch)
             || projected_error_px <= config.max_projected_error_px
         {
             continue;
         }
 
-        target_leaves.remove(&patch);
-        for child in patch.children() {
-            target_leaves.insert(child);
-            pending.push(child);
+        // Charge the complete balance closure before mutating the cover. A
+        // fixed reserve for balancing cannot bound deeply localized refinement.
+        let splits =
+            balanced_split_closure(&target_leaves, patch, config.max_neighbor_level_difference);
+        if target_leaves.len() + 3 * splits.len() > config.max_target_leaves.max(6) {
+            continue;
+        }
+        let added_bytes: u64 = splits
+            .iter()
+            .flat_map(TerrainPatch::children)
+            .map(|child| patch_bytes(&child))
+            .sum();
+        if requested_bytes.saturating_add(added_bytes) > config.max_requested_bytes {
+            continue;
+        }
+        requested_bytes += added_bytes;
+        for split in splits {
+            target_leaves.remove(&split);
+            for child in split.children() {
+                target_leaves.insert(child);
+                pending.push(child);
+            }
         }
     }
-
-    target_leaves = balance_visible_leaves(&target_leaves, config.max_neighbor_level_difference);
 
     let mut requested = BTreeSet::new();
     for leaf in &target_leaves {
@@ -514,6 +575,35 @@ pub fn select_quadtree_leaves(
         requested,
         visible_leaves,
     }
+}
+
+/// Given a balanced cover, find the coarser neighbors that must split with a
+/// leaf. Neighbor lookup is shared with full-cover balancing, including seams.
+fn balanced_split_closure(
+    leaves: &BTreeSet<TerrainPatch>,
+    patch: TerrainPatch,
+    max_level_difference: u32,
+) -> BTreeSet<TerrainPatch> {
+    let mut splits = BTreeSet::new();
+    let mut pending = vec![patch];
+    while let Some(patch) = pending.pop() {
+        if !splits.insert(patch) {
+            continue;
+        }
+        for edge in PatchEdge::ALL {
+            let mut neighbor = Some(patch.neighbor(edge).patch);
+            while let Some(candidate) = neighbor {
+                if leaves.contains(&candidate) {
+                    if candidate.level + max_level_difference < patch.level + 1 {
+                        pending.push(candidate);
+                    }
+                    break;
+                }
+                neighbor = candidate.parent();
+            }
+        }
+    }
+    splits
 }
 
 fn resolve_ready_leaves(
@@ -1118,6 +1208,61 @@ mod tests {
     }
 
     #[test]
+    fn localized_refinement_charges_balance_and_fallback_costs() {
+        for direction in [DVec3::Z, DVec3::new(1.0, 0.2, 1.0).normalize()] {
+            let mut errors = BTreeMap::new();
+            for level in 0..14 {
+                let patch = TerrainPatch::for_direction(direction, level);
+                errors.insert(patch, 100.0);
+                for edge in PatchEdge::ALL {
+                    let mut neighbor = Some(patch.neighbor(edge).patch);
+                    while let Some(patch) = neighbor {
+                        errors.entry(patch).or_insert(10.0);
+                        neighbor = patch.parent();
+                    }
+                }
+            }
+            let state = QuadtreePatchState {
+                ready: TerrainPatch::roots().into_iter().collect(),
+                ..QuadtreePatchState::default()
+            };
+            let cost = |patch: &TerrainPatch| if patch.level >= 12 { 10 } else { 1 };
+            for (max_target_leaves, max_requested_bytes) in [(60, 900), (300, 48), (300, 900)] {
+                let config = QuadtreeSelectionConfig {
+                    max_level: 14,
+                    max_projected_error_px: 4.0,
+                    max_neighbor_level_difference: 1,
+                    max_target_leaves,
+                    max_requested_bytes,
+                };
+                let selection = select_quadtree_leaves(&state, &errors, config, cost);
+                assert!(selection.target_leaves.len() <= max_target_leaves);
+                assert!(
+                    6 + selection.requested.iter().map(cost).sum::<u64>() <= max_requested_bytes
+                );
+                assert_eq!(
+                    selection.target_leaves,
+                    balance_visible_leaves(&selection.target_leaves, 1)
+                );
+                let face_area: f64 = selection
+                    .target_leaves
+                    .iter()
+                    .map(|patch| 4.0f64.powi(-(patch.level as i32)))
+                    .sum();
+                assert!(
+                    (face_area - 6.0).abs() < 1e-12,
+                    "complete cover must survive budget rejection"
+                );
+                assert_eq!(selection.visible_leaves, state.ready);
+                assert_eq!(
+                    selection,
+                    select_quadtree_leaves(&state, &errors, config, cost)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn readiness_changes_only_the_published_leaf_cover() {
         let root = TerrainPatch::root(CubeFace::PosZ);
         let errors = BTreeMap::from([(root, 10.0)]);
@@ -1125,18 +1270,20 @@ mod tests {
             max_level: 1,
             max_projected_error_px: 1.0,
             max_neighbor_level_difference: 1,
+            max_target_leaves: usize::MAX,
+            max_requested_bytes: u64::MAX,
         };
 
         let mut unready = QuadtreePatchState::default();
         unready.ready.extend(TerrainPatch::roots());
-        let fallback = select_quadtree_leaves(&unready, &errors, config);
+        let fallback = select_quadtree_leaves(&unready, &errors, config, |_| 0);
         assert_eq!(fallback.target_leaves.len(), 9);
         assert!(fallback.target_leaves.contains(&root.children()[0]));
         assert!(fallback.visible_leaves.contains(&root));
 
         let mut ready = unready.clone();
         ready.ready.extend(root.children());
-        let published = select_quadtree_leaves(&ready, &errors, config);
+        let published = select_quadtree_leaves(&ready, &errors, config, |_| 0);
         assert_eq!(fallback.target_leaves, published.target_leaves);
         assert_eq!(fallback.requested, published.requested);
         assert!(!published.visible_leaves.contains(&root));
@@ -1155,7 +1302,10 @@ mod tests {
                 max_level: 4,
                 max_projected_error_px: 1.0,
                 max_neighbor_level_difference: 1,
+                max_target_leaves: usize::MAX,
+                max_requested_bytes: u64::MAX,
             },
+            |_| 0,
         );
         let roots: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
         assert_eq!(selection.target_leaves, roots);
@@ -1172,7 +1322,10 @@ mod tests {
                 max_level: 4,
                 max_projected_error_px: 1.0,
                 max_neighbor_level_difference: 1,
+                max_target_leaves: usize::MAX,
+                max_requested_bytes: u64::MAX,
             },
+            |_| 0,
         );
         assert_eq!(selection.visible_leaves, roots);
     }

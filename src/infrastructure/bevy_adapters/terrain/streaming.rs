@@ -10,7 +10,7 @@
 
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, direction_to_lat_lon, face_uv_to_direction,
+    build_patch_geometry_with_stitches, direction_to_lat_lon, patch_angular_radius_rad,
     projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge, PatchGeometry,
     QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
@@ -35,7 +35,7 @@ use crate::infrastructure::bevy_adapters::terrain::surface::{
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -72,8 +72,8 @@ const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
 /// coverage alone exceed that budget, leaving LRU eviction with no legal
 /// candidate during an orbital camera view.
 const MAX_VIEWPORT_TARGET_LEAVES: usize = 300;
-/// Reserve leaf budget for 2:1 neighbour balancing at the viewport boundary.
-/// The visible traversal itself stops below the published-cover limit.
+/// Bound projected-error sampling independently of the final balanced cover.
+/// The domain selector separately charges the exact neighbor-balance closure.
 const MAX_VIEWPORT_UNBALANCED_LEAVES: usize = MAX_VIEWPORT_TARGET_LEAVES - 64;
 /// Full quadtree reconciliation is bounded to this rate while async job polling
 /// remains per-frame. Camera movement beyond the thresholds below bypasses it.
@@ -724,7 +724,10 @@ pub(crate) fn stream_terrain_patches(
             max_level: max_focus_level,
             max_projected_error_px: SCREEN_ERROR_PX,
             max_neighbor_level_difference: 1,
+            max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
+            max_requested_bytes: streaming.budget_bytes,
         },
+        |patch| estimated_patch_bytes(*patch, config.patch_resolution_for(*patch)),
     );
 
     // Geometry caches include the stitch index pattern. Never destroy a
@@ -752,7 +755,10 @@ pub(crate) fn stream_terrain_patches(
                 max_level: max_focus_level,
                 max_projected_error_px: SCREEN_ERROR_PX,
                 max_neighbor_level_difference: 1,
+                max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
+                max_requested_bytes: streaming.budget_bytes,
             },
+            |patch| estimated_patch_bytes(*patch, config.patch_resolution_for(*patch)),
         );
     }
     let lod_splits = selection
@@ -1294,16 +1300,7 @@ fn patch_bounding_sphere(
     elevation_bounds: ElevationBounds,
 ) -> (DVec3, f64) {
     let center = patch.center_direction();
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let patch_radius_rad = [
-        face_uv_to_direction(patch.face, u0, v0),
-        face_uv_to_direction(patch.face, u1, v0),
-        face_uv_to_direction(patch.face, u0, v1),
-        face_uv_to_direction(patch.face, u1, v1),
-    ]
-    .into_iter()
-    .map(|corner| center.dot(corner).clamp(-1.0, 1.0).acos())
-    .fold(0.0, f64::max);
+    let patch_radius_rad = patch_angular_radius_rad(&patch);
 
     let min_surface_radius_m = radius_m + elevation_bounds.min_m;
     let max_surface_radius_m = radius_m + elevation_bounds.max_m;
@@ -1482,10 +1479,9 @@ fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     terrain_bytes
 }
 
-/// Populate the full visible viewport through a bounded breadth-first
-/// traversal. The previous focus-only 3x3 neighborhood gave a single patch
-/// stack near the rocket all of the available detail while visible terrain at
-/// the edge of the screen remained at root quality.
+/// Sample the highest projected-error patches first within a bounded traversal.
+/// Breadth-first sampling exhausts the allowance on coarse terrain before
+/// reaching close surface detail. All viewport-visible roots remain candidates.
 fn projected_errors_for_viewport(
     viewport: &TerrainViewport,
     max_level: u32,
@@ -1496,27 +1492,30 @@ fn projected_errors_for_viewport(
 ) -> (BTreeMap<TerrainPatch, f64>, TerrainCullingStats) {
     let mut errors = BTreeMap::new();
     let mut culling = TerrainCullingStats::default();
-    let mut pending = VecDeque::new();
+    let mut pending = Vec::new();
+    let error_for = |patch: &TerrainPatch| {
+        projected_patch_error_px(patch, source.patch_geometric_error(patch), radius_m, camera)
+    };
     for patch in TerrainPatch::roots() {
         let visibility =
             patch_viewport_visibility(patch, Some(viewport), radius_m, elevation_bounds);
         culling.record(visibility);
         if visibility == PatchViewportVisibility::Visible {
-            pending.push_back(patch);
+            pending.push((patch, error_for(&patch)));
         }
     }
     let mut target_leaf_count = TerrainPatch::roots().len();
 
-    while let Some(patch) = pending.pop_front() {
+    while let Some(index) = pending
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
+        .map(|(index, _)| index)
+    {
         if target_leaf_count + 3 > MAX_VIEWPORT_UNBALANCED_LEAVES {
             break;
         }
-        let error_px = projected_patch_error_px(
-            &patch,
-            source.patch_geometric_error(&patch),
-            radius_m,
-            camera,
-        );
+        let (patch, error_px) = pending.swap_remove(index);
         errors.insert(patch, error_px);
         if patch.level >= max_level || error_px <= SCREEN_ERROR_PX {
             continue;
@@ -1528,7 +1527,7 @@ fn projected_errors_for_viewport(
                 patch_viewport_visibility(child, Some(viewport), radius_m, elevation_bounds);
             culling.record(visibility);
             if visibility == PatchViewportVisibility::Visible {
-                pending.push_back(child);
+                pending.push((child, error_for(&child)));
             }
         }
     }
@@ -1629,7 +1628,9 @@ fn stale_cached_stitch_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::services::cube_sphere::CubeFace;
+    use crate::domain::services::cube_sphere::{face_uv_to_direction, CubeFace};
+    #[cfg(feature = "dem")]
+    use crate::domain::services::terrain_source::EarthTerrainSource;
     use crate::infrastructure::bevy_adapters::terrain::surface::VEGETATION_MIN_PATCH_LEVEL;
 
     #[derive(Debug)]
@@ -2015,12 +2016,6 @@ mod tests {
             "viewport traversal must cover more than the previous 3x3 focus neighborhood"
         );
         assert!(
-            errors
-                .keys()
-                .any(|patch| patch.level >= 3 && patch.center_direction().dot(DVec3::Z) < 0.98),
-            "detail must extend away from the center camera ray"
-        );
-        assert!(
             errors.len() <= MAX_VIEWPORT_TARGET_LEAVES,
             "viewport traversal must remain within the leaf budget"
         );
@@ -2031,12 +2026,27 @@ mod tests {
                 max_level: 8,
                 max_projected_error_px: SCREEN_ERROR_PX,
                 max_neighbor_level_difference: 1,
+                max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
+                max_requested_bytes: DEFAULT_BUDGET_BYTES,
+            },
+            |patch| {
+                estimated_patch_bytes(
+                    *patch,
+                    TerrainRenderConfig::default().patch_resolution_for(*patch),
+                )
             },
         );
         assert!(
             selection.target_leaves.len() <= MAX_VIEWPORT_TARGET_LEAVES,
             "balanced viewport refinement must remain within the leaf budget; got {}",
             selection.target_leaves.len()
+        );
+        assert!(
+            selection
+                .target_leaves
+                .iter()
+                .any(|patch| patch.level >= 3 && patch.center_direction().dot(DVec3::Z) < 0.98),
+            "balanced coverage must extend away from the center camera ray"
         );
     }
 
@@ -2115,6 +2125,84 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dem")]
+    fn papua_prelaunch_selects_and_requests_scatter_lods() {
+        let radius_m = 6_371_000.0;
+        let source = EarthTerrainSource::new();
+        // Captured body-fixed prelaunch chase camera; presentation only.
+        let mut viewport = test_viewport(
+            DVec3::new(-4797946.588391222, -880870.7070947668, 4098122.6665984397),
+            DVec3::new(
+                -0.3447196691810858,
+                0.08207760644260215,
+                -0.9351104834191177,
+            ),
+            0.6347269740193145,
+            0.7853981852531433,
+        );
+        viewport.right = DVec3::new(
+            -0.08176481707358385,
+            0.9897584388338927,
+            0.11701601363069399,
+        );
+        viewport.up = DVec3::new(-0.9351379196254834, -0.11679680476929236, 0.334478067553325);
+        let camera = CameraProjection {
+            position_m: viewport.position_m,
+            vertical_fov_rad: viewport.vertical_fov_rad,
+            viewport_height_px: viewport.viewport_height_px,
+        };
+        let bounds = source.elevation_bounds_m();
+        let (errors, _) = projected_errors_for_viewport(
+            &viewport,
+            MAX_PATCH_LEVEL,
+            radius_m,
+            camera,
+            &source,
+            bounds,
+        );
+        let selection = select_quadtree_leaves(
+            &QuadtreePatchState::default(),
+            &errors,
+            QuadtreeSelectionConfig {
+                max_level: MAX_PATCH_LEVEL,
+                max_projected_error_px: SCREEN_ERROR_PX,
+                max_neighbor_level_difference: 1,
+                max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
+                max_requested_bytes: DEFAULT_BUDGET_BYTES,
+            },
+            |patch| {
+                estimated_patch_bytes(
+                    *patch,
+                    TerrainRenderConfig::default().patch_resolution_for(*patch),
+                )
+            },
+        );
+        let mut requested = BTreeSet::new();
+        for patch in
+            selection.requested.iter().copied().filter(|patch| {
+                patch_intersects_viewport(*patch, Some(&viewport), radius_m, bounds)
+            })
+        {
+            add_viewport_lod_group(patch, &selection.requested, &mut requested);
+        }
+        assert!(selection.target_leaves.len() <= MAX_VIEWPORT_TARGET_LEAVES);
+        assert!(
+            requested.iter().any(|patch| patch.level == MAX_PATCH_LEVEL),
+            "near-camera scatter must be requested, not only selected outside the frustum"
+        );
+        let requested_bytes: u64 = requested
+            .iter()
+            .map(|patch| {
+                estimated_patch_bytes(
+                    *patch,
+                    TerrainRenderConfig::default().patch_resolution_for(*patch),
+                )
+            })
+            .sum();
+        assert!(requested_bytes <= DEFAULT_BUDGET_BYTES);
+    }
+
+    #[test]
     fn generated_detail_stays_selected_while_it_remains_in_the_viewport() {
         let radius_m = 6_371_000.0;
         let detail = TerrainPatch::for_direction(DVec3::Z, 2);
@@ -2155,6 +2243,14 @@ mod tests {
                 max_level: MAX_PATCH_LEVEL,
                 max_projected_error_px: SCREEN_ERROR_PX,
                 max_neighbor_level_difference: 1,
+                max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
+                max_requested_bytes: DEFAULT_BUDGET_BYTES,
+            },
+            |patch| {
+                estimated_patch_bytes(
+                    *patch,
+                    TerrainRenderConfig::default().patch_resolution_for(*patch),
+                )
             },
         );
         assert!(selection.target_leaves.contains(&detail));
@@ -2336,6 +2432,14 @@ mod tests {
                 max_level: 1,
                 max_projected_error_px: SCREEN_ERROR_PX,
                 max_neighbor_level_difference: 1,
+                max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
+                max_requested_bytes: DEFAULT_BUDGET_BYTES,
+            },
+            |patch| {
+                estimated_patch_bytes(
+                    *patch,
+                    TerrainRenderConfig::default().patch_resolution_for(*patch),
+                )
             },
         );
         let mut required: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();

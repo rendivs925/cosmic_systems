@@ -66,9 +66,9 @@ and tree atlas geometry from rocks in the merged mesh.
 
 | Patch containing the launch site | Trees | Grass clumps |
 |---|---:|---:|
-| L12 | 68 | 560 |
-| L13 | 16 | 147 |
-| L14 | 3 | 36 |
+| L12 | 408 cards | 1,680 |
+| L13 | 420 cards | 1,809 |
+| L14 | 444 cards | 1,860 |
 
 These are generated patch-wide counts, not camera-visible instances. The sampled
 launch cover is 0.650. This test validates generation, not runtime publication or
@@ -80,15 +80,27 @@ does not imply software rendering. No panic or renderer validation error was
 found in those logs. Concurrent mode startup makes these runs unsuitable as
 frame-time baselines.
 
-The rocket capture still did not establish visible vegetation. Its streaming
-metrics requested/targeted levels only through L6 despite a focus maximum of
-L14; scatter begins at L12. The viewport breadth-first traversal exhausts its
-unbalanced leaf allowance before reaching local detail. A highest-projected-error
-traversal experiment reached close levels in a focused test, but violated the
-existing orbital-view balanced budget (366 target leaves versus the 300 limit).
-That experiment was removed; the original streaming policy remains in place.
+The first rocket capture reached only L6 despite a focus maximum of L14, so
+scatter never generated. Three causes were found and fixed:
 
-**Acceptance remains open.** The next LOD change must budget the neighbor-balance
-closure of refinements, preserve viewport coverage and parent fallbacks, and
-demonstrate published L12–L14 terrain and visible scatter in the prelaunch view.
-Do not treat source-generation tests or startup success as visual acceptance.
+1. `projected_patch_error_px` measured distance to the patch center. A camera
+   standing on a large patch is far from that center, so the near-camera
+   descendant chain was underestimated and never split. It now projects the
+   nearest distance to the patch's enclosing spherical cap.
+2. Viewport sampling was breadth-first and spent its bounded allowance on
+   distant coarse patches. It now expands the highest projected error first.
+3. `select_quadtree_leaves` refined freely and relied on a fixed balancing
+   reserve, so localized refinement could overrun the cover budget. It now
+   charges the exact neighbor-balance closure and the retained ancestor geometry
+   before admitting a split, bounded by both leaf count and estimated bytes.
+
+A later rocket capture published a complete cover through L14 with 258 target
+leaves under the 300-leaf limit and a 108 MiB resident estimate under the 128 MiB
+budget. Trees and rocks are visible on the Papua lowland ground. Per-patch scatter
+counts now reach full density at the finest level and decimate by area for coarser
+leaves, so close patches carry enough instances to read as vegetation.
+
+**Acceptance is met for runtime generation and visibility.** Remaining known
+limits: grounding still samples the LOD height field rather than the triangulated
+mesh, and the visual result has not been judged on a real display. Frame pacing
+was not measured because these captures ran concurrently with other modes.
