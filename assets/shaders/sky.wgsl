@@ -118,8 +118,10 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     let ray_dir = normalize(in.world_position.xyz - camera_world);
     let position = camera_world - sky.planet_center;
     let radius = length(position);
-    let local_up = normalize(position);
-    let cos_theta = dot(ray_dir, local_up);
+    // The scattering angle is between the incident sunlight and the light
+    // scattered toward the camera, so the phase functions use the cosine
+    // between the view ray and the Sun direction (not the zenith angle).
+    let cos_theta = dot(ray_dir, sky.sun_direction);
 
     let atmosphere_hit = ray_sphere(position, ray_dir, sky.top_radius);
     let ground_hit = ray_sphere(position, ray_dir, sky.bottom_radius);
