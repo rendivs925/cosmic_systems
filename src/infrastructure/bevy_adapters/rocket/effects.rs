@@ -10,8 +10,10 @@ use super::components::{
 };
 use super::presentation_parameters::{map_presentation_parameters, RocketPresentationInputs};
 use crate::domain::entities::rocket::EngineState;
+use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec3;
 use bevy::prelude::*;
+use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -98,9 +100,9 @@ impl RocketEngineEffectAssets {
         if self.core_mesh.is_some() {
             return;
         }
-        self.core_mesh = Some(meshes.add(Cylinder::new(1.0, 1.0)));
-        self.inner_mesh = Some(meshes.add(Cone::new(1.0, 1.0)));
-        self.outer_mesh = Some(meshes.add(Cone::new(1.0, 1.0)));
+        self.core_mesh = Some(meshes.add(plume_cone_mesh(12, 1)));
+        self.inner_mesh = Some(meshes.add(plume_cone_mesh(16, 4)));
+        self.outer_mesh = Some(meshes.add(plume_cone_mesh(16, 5)));
         self.core_material = Some(materials.add(emissive_plume_material(
             Color::srgb(0.55, 0.82, 1.0),
             10.0,
@@ -128,6 +130,54 @@ fn emissive_plume_material(color: Color, emission: f32, alpha: f32) -> StandardM
         cull_mode: None,
         ..default()
     }
+}
+
+/// Unit plume cone: apex at `+Y` (the nozzle), base at `-Y` (the far end),
+/// radius growing from zero at the apex to one at the base. Per-vertex colour
+/// fades from opaque white at the nozzle to fully transparent at the far end,
+/// so the additive plume reads as a soft exhaust rather than a hard cone.
+/// Normals are irrelevant because the plume material is unlit.
+fn plume_cone_mesh(radial_segments: usize, axial_segments: usize) -> Mesh {
+    let radial_segments = radial_segments.max(3);
+    let axial_segments = axial_segments.max(1);
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+
+    for ring in 0..=axial_segments {
+        let t = ring as f32 / axial_segments as f32;
+        let y = 0.5 - t;
+        let radius = t;
+        let fade = 1.0 - t;
+        for segment in 0..=radial_segments {
+            let angle = segment as f32 / radial_segments as f32 * std::f32::consts::TAU;
+            positions.push([radius * angle.cos(), y, radius * angle.sin()]);
+            normals.push([0.0, 1.0, 0.0]);
+            colors.push([fade, fade, fade, fade]);
+        }
+    }
+
+    let ring_stride = (radial_segments + 1) as u32;
+    for ring in 0..axial_segments as u32 {
+        for segment in 0..radial_segments as u32 {
+            let a = ring * ring_stride + segment;
+            let b = a + 1;
+            let c = a + ring_stride;
+            let d = c + 1;
+            indices.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
 /// Reconciles bounded catalog station children and updates their render-only state.
@@ -479,6 +529,24 @@ fn nearest_camera_distance_m(
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::{ParallelBoosters, Rocket};
+
+    #[test]
+    fn plume_cone_fades_from_nozzle_to_tail() {
+        use bevy_mesh::VertexAttributeValues;
+
+        let mesh = plume_cone_mesh(8, 3);
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("plume mesh must carry vertex colours");
+        };
+        let apex_alpha = colors.first().expect("apex vertex")[3];
+        let tail_alpha = colors.last().expect("tail vertex")[3];
+        assert!(
+            (apex_alpha - 1.0).abs() < 1e-6,
+            "nozzle must be opaque: {apex_alpha}"
+        );
+        assert!(tail_alpha < 1e-6, "tail must fade out: {tail_alpha}");
+    }
 
     #[test]
     fn active_stage_stations_use_the_current_presentation_root() {

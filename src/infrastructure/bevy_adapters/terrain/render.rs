@@ -19,7 +19,10 @@ use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerforman
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
-use crate::infrastructure::bevy_adapters::terrain::water::{WaterExtension, WaterMaterial};
+use crate::infrastructure::bevy_adapters::terrain::surface::vegetation_atlas;
+use crate::infrastructure::bevy_adapters::terrain::water::{
+    WaterExtension, WaterMaterial, WaterParams,
+};
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -88,6 +91,9 @@ pub struct TerrainPatchRenderState {
     /// Sea-level water cap for patches that contain ocean, released with the
     /// patch. The water material itself is shared.
     pub water_mesh_handle: Option<Handle<Mesh>>,
+    /// Drainage ribbon for patches crossed by a river channel, released with the
+    /// patch. Shares the river material.
+    pub river_mesh_handle: Option<Handle<Mesh>>,
     pub planet_entity: Entity,
     /// Body-fixed-to-inertial rotation used to bake this mesh's vertices.
     pub body_to_inertial_at_spawn: DQuat,
@@ -103,6 +109,8 @@ struct TerrainRenderAssets {
     vegetation_material: Option<Handle<StandardMaterial>>,
     /// One shared water material; every ocean patch reuses it.
     water_material: Option<Handle<WaterMaterial>>,
+    /// One shared river material; every drainage ribbon reuses it.
+    river_material: Option<Handle<WaterMaterial>>,
     /// Core grid resolution of a patch, mirrored from `TerrainRenderConfig` so
     /// water generation does not need another system parameter.
     patch_resolution: u32,
@@ -386,14 +394,35 @@ fn prepare_terrain_render_assets(
     asset_server: Res<AssetServer>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut images: ResMut<Assets<Image>>,
+    mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     render_assets.patch_resolution = config.patch_resolution;
     let _ = global_albedo_for(&mut render_assets, &asset_server, "Earth");
     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
+    // One alpha-masked foliage material is shared by every patch. It is created
+    // once here so no patch spawn path needs the image assets.
+    let vegetation_atlas = images.add(vegetation_atlas());
+    render_assets.vegetation_material = Some(standard_materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(vegetation_atlas.clone()),
+        alpha_mode: AlphaMode::Mask(0.5),
+        perceptual_roughness: 0.9,
+        metallic: 0.0,
+        // Billboards must be visible from both sides; Bevy flips normals for the
+        // back face in PBR.
+        cull_mode: None,
+        ..default()
+    }));
     render_assets.water_material = Some(water_materials.add(WaterMaterial {
         base: water_base_material(),
         extension: WaterExtension::default(),
+    }));
+    render_assets.river_material = Some(water_materials.add(WaterMaterial {
+        base: water_base_material(),
+        extension: WaterExtension {
+            params: WaterParams::river(),
+        },
     }));
 }
 
@@ -417,11 +446,17 @@ fn update_water_material(
     render_assets: Res<TerrainRenderAssets>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let Some(handle) = &render_assets.water_material else {
-        return;
-    };
-    if let Some(material) = water_materials.get_mut(handle) {
-        material.extension.params.time_s = time.elapsed_secs();
+    let elapsed_s = time.elapsed_secs();
+    for handle in [
+        render_assets.water_material.as_ref(),
+        render_assets.river_material.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(material) = water_materials.get_mut(handle) {
+            material.extension.params.time_s = elapsed_s;
+        }
     }
 }
 
@@ -467,7 +502,6 @@ fn spawn_patch_mesh_system(
     mut render_index: ResMut<TerrainPatchRenderIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
-    mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut streaming: ResMut<TerrainStreamingResource>,
@@ -635,33 +669,27 @@ fn spawn_patch_mesh_system(
 
         let vegetation = surface.vegetation;
         let vegetation_mesh_asset_count = usize::from(vegetation.is_some());
-        let vegetation_material_asset_count =
-            usize::from(vegetation.is_some() && render_assets.vegetation_material.is_none());
+        // The shared foliage material and its atlas are created once at startup,
+        // so no per-patch material asset is added here.
+        let vegetation_material_asset_count = 0usize;
         let vegetation_mesh_handle = vegetation
             .as_ref()
             .map(|(mesh, _)| meshes.add(mesh.clone()));
-        let vegetation_material = vegetation_mesh_handle.as_ref().map(|_| {
-            render_assets
-                .vegetation_material
-                .get_or_insert_with(|| {
-                    standard_materials.add(StandardMaterial {
-                        base_color: Color::WHITE,
-                        perceptual_roughness: 0.9,
-                        metallic: 0.0,
-                        // Low-poly foliage and blades must be visible from both
-                        // sides; Bevy flips normals for the back face in PBR.
-                        cull_mode: None,
-                        ..default()
-                    })
-                })
-                .clone()
-        });
+        let vegetation_material = vegetation_mesh_handle
+            .as_ref()
+            .and_then(|_| render_assets.vegetation_material.clone());
+        let river = surface.river;
+        let river_mesh_handle = river.as_ref().map(|(mesh, _)| meshes.add(mesh.clone()));
+        let river_material = river_mesh_handle
+            .as_ref()
+            .and_then(|_| render_assets.river_material.clone());
         if let (Some(started), Some(record)) = (
             asset_submission_started,
             terrain_performance.current_mut(instrumentation_enabled),
         ) {
             record.cpu_to_gpu_submission_ms += started.elapsed().as_secs_f64() * 1_000.0;
-            record.mesh_assets_created += 1 + vegetation_mesh_asset_count;
+            record.mesh_assets_created +=
+                1 + vegetation_mesh_asset_count + usize::from(river_mesh_handle.is_some());
             record.material_assets_created += 1 + vegetation_material_asset_count;
             record.image_assets_created += local_image_asset_count;
         }
@@ -693,6 +721,7 @@ fn spawn_patch_mesh_system(
                     local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     water_mesh_handle: water_mesh_handle.clone(),
+                    river_mesh_handle: river_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
                     render_origin_at_spawn: render_origin.origin,
@@ -726,6 +755,29 @@ fn spawn_patch_mesh_system(
                     .with_rotation(body_to_inertial.as_quat()),
                     Name::new(format!(
                         "Vegetation_{:?}_{}_{}_{}",
+                        patch.face, patch.level, patch.tile_x, patch.tile_y
+                    )),
+                ));
+            });
+        }
+
+        // The drainage ribbon shares the vegetation anchor's local frame, so it
+        // rotates into the inertial frame exactly like the vegetation child.
+        if let (Some(river_mesh_handle), Some(river_material), Some((_, anchor))) =
+            (river_mesh_handle.clone(), river_material, river)
+        {
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Mesh3d(river_mesh_handle),
+                    MeshMaterial3d(river_material),
+                    Transform::from_translation(
+                        (body_to_inertial * anchor - render_origin.origin).as_vec3(),
+                    )
+                    .with_rotation(body_to_inertial.as_quat()),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                    Name::new(format!(
+                        "River_{:?}_{}_{}_{}",
                         patch.face, patch.level, patch.tile_x, patch.tile_y
                     )),
                 ));
@@ -1035,6 +1087,9 @@ fn release_patch_render_assets(
     }
     if let Some(water_mesh_handle) = &state.water_mesh_handle {
         meshes.remove(water_mesh_handle.id());
+    }
+    if let Some(river_mesh_handle) = &state.river_mesh_handle {
+        meshes.remove(river_mesh_handle.id());
     }
     if let Some((albedo, normal)) = &state.local_surface_handles {
         images.remove(albedo.id());
@@ -1565,6 +1620,7 @@ mod tests {
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
+                    river_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
@@ -1593,6 +1649,7 @@ mod tests {
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
+                    river_mesh_handle: None,
                     planet_entity: other_planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
@@ -1923,6 +1980,7 @@ mod tests {
             local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             water_mesh_handle: None,
+            river_mesh_handle: None,
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,
             render_origin_at_spawn: DVec3::ZERO,

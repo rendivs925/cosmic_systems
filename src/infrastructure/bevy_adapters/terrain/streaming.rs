@@ -31,8 +31,8 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
-    prepare_patch_surface, supports_local_surfaces, supports_vegetation, PreparedPatchSurface,
-    LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
+    max_river_mesh_bytes, prepare_patch_surface, supports_local_surfaces, supports_vegetation,
+    PreparedPatchSurface, LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -1510,7 +1510,7 @@ fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     let mut terrain_bytes = vertices * (DOMAIN_BYTES_PER_VERTEX + RENDER_BYTES_PER_VERTEX)
         + indices * 2 * BYTES_PER_INDEX;
     if supports_local_surfaces(patch.level) {
-        terrain_bytes += LOCAL_SURFACE_MAP_BYTES;
+        terrain_bytes += LOCAL_SURFACE_MAP_BYTES + max_river_mesh_bytes(resolution as u32);
     }
     if supports_vegetation(patch.level) {
         terrain_bytes += MAX_VEGETATION_MESH_BYTES;
@@ -2475,7 +2475,10 @@ mod tests {
         );
         assert_eq!(
             estimated_patch_bytes(vegetated, 33),
-            estimated_patch_bytes(coarse, 33) + LOCAL_SURFACE_MAP_BYTES + MAX_VEGETATION_MESH_BYTES
+            estimated_patch_bytes(coarse, 33)
+                + LOCAL_SURFACE_MAP_BYTES
+                + max_river_mesh_bytes(33)
+                + MAX_VEGETATION_MESH_BYTES
         );
     }
 

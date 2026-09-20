@@ -1143,10 +1143,19 @@ pub fn surface_appearance(
     let rock_t = ss(35.0, 55.0, slope_deg);
     albedo = lerp3(albedo, ROCK, rock_t);
 
-    // Snow line: high altitude above the snow band turns white (low roughness).
-    let snow_t = ss(4500.0, 5200.0, elevation_m);
+    // Damp foreshore: the first couple of metres above the waterline read as
+    // darker, glossier wet ground rather than dry sand.
+    let wet_shore = 1.0 - ss(0.0, 2.5, elevation_m.min(2.5));
+    let wet_target = [albedo[0] * 0.5, albedo[1] * 0.5, albedo[2] * 0.5];
+    albedo = lerp3(albedo, wet_target, wet_shore * 0.5);
+
+    // Snow line: high altitude above the snow band turns white. The band
+    // descends from the equator toward the poles, so polar terrain is snow
+    // covered at much lower altitude than tropical terrain.
+    let snow_start = 4500.0 * (1.0 - polar_dist).powf(1.6);
+    let snow_t = ss(snow_start, snow_start + 700.0, elevation_m);
     albedo = lerp3(albedo, SNOW, snow_t);
-    let roughness = 0.85 - 0.35 * snow_t;
+    let roughness = (0.85 + 0.08 * rock_t - 0.35 * snow_t - 0.15 * wet_shore).clamp(0.0, 1.0);
 
     SurfaceAppearance {
         albedo,
@@ -2062,6 +2071,26 @@ mod tests {
             "grass reflectance should remain physically subdued: {:?}",
             grassland.albedo
         );
+    }
+
+    #[test]
+    fn snow_line_descends_toward_the_poles() {
+        // The same altitude is bare ground at the equator and snow-covered near
+        // the pole because the snow line drops with latitude.
+        let equatorial = surface_appearance(1_200.0, 0.5, 0.5, 5.0);
+        let polar = surface_appearance(1_200.0, 0.5, 0.98, 5.0);
+
+        assert!(
+            equatorial.albedo[0] < 0.5,
+            "equatorial lowland must not be snow: {:?}",
+            equatorial.albedo
+        );
+        assert!(
+            polar.albedo[0] > 0.7 && polar.albedo[1] > 0.75,
+            "polar terrain must read as snow: {:?}",
+            polar.albedo
+        );
+        assert!(polar.roughness < equatorial.roughness, "snow is less rough");
     }
 
     #[test]

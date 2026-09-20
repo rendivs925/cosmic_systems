@@ -31,16 +31,56 @@ use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 /// Maximum scatter counts for a level-12 patch. Finer leaves scale their count
 /// by patch area so refinement preserves density rather than multiplying it.
 const TREE_COUNT: usize = 64;
-/// A bounded carpet of crossed blades makes close vegetation read as grass
+/// A bounded carpet of crossed billboards makes close vegetation read as grass
 /// without adding entities or unique materials.
 const GRASS_CLUMP_COUNT: usize = 512;
 const ROCK_COUNT: usize = 14;
+/// Maximum lumps in one boulder/scree cluster.
+const ROCK_MAX_LUMPS: usize = 3;
+/// Solid trunk prisms share the single boulder tessellation budget.
 const TRUNK_SEGMENTS: usize = 6;
-const FOLIAGE_SEGMENTS: usize = 7;
 const BOULDER_SEGMENTS: usize = 6;
 const BOULDER_RINGS: usize = 3;
-const VEGETATION_BYTES_PER_VERTEX: u64 = 40;
+/// Crossed double-sided planes per canopy billboard.
+const CANOPY_CARD_PLANES: usize = 3;
+/// Stacked canopy billboards give trees volume without solid geometry.
+const CANOPY_CARD_LAYERS: usize = 2;
+/// Crossed planes per grass tuft.
+const GRASS_CARD_PLANES: usize = 3;
+/// Position (12) + normal (12) + vertex colour (16) + UV (8).
+const VEGETATION_BYTES_PER_VERTEX: u64 = 48;
 const VEGETATION_BYTES_PER_INDEX: u64 = 4;
+
+/// Resolution (texels per side) of the procedural foliage atlas. The atlas is
+/// generated deterministically at startup, so no binary texture asset is
+/// committed and the shapes stay reproducible for a fixed build.
+pub(crate) const VEGETATION_ATLAS_RES: u32 = 128;
+/// Atlas quadrants, in `[u0, v0, u1, v1]`. `v0` is the top of the region.
+const GRASS_UV: [f32; 4] = [0.0, 0.0, 0.5, 0.5];
+const CONIFER_UV: [f32; 4] = [0.5, 0.0, 1.0, 0.5];
+const BROADLEAF_UV: [f32; 4] = [0.0, 0.5, 0.5, 1.0];
+/// A fully opaque atlas texel for solid geometry (trunks and boulders) that must
+/// not be discarded by the foliage material's alpha mask.
+const OPAQUE_UV: [f32; 2] = [0.75, 0.75];
+
+/// Minimum drainage strength at which a river ribbon texel is emitted.
+const RIVER_MIN_STRENGTH: f64 = 0.28;
+/// Lift of the river surface above the sampled terrain, in meters. Small enough
+/// to hug the channel, large enough to avoid z-fighting with the ground.
+const RIVER_SURFACE_OFFSET_M: f64 = 0.35;
+/// Position (12) + normal (12) + UV (8) + vertex colour (16).
+const RIVER_BYTES_PER_VERTEX: u64 = 48;
+const RIVER_BYTES_PER_INDEX: u64 = 4;
+
+/// Conservative upper bound for a patch's river ribbon at the given core grid
+/// resolution. Used by the streaming memory budget so a fine patch that crosses
+/// a drainage network reserves its water geometry up front.
+pub(crate) fn max_river_mesh_bytes(resolution: u32) -> u64 {
+    let res = u64::from(resolution.max(2));
+    let vertices = res * res;
+    let indices = 6 * (res - 1) * (res - 1);
+    vertices * RIVER_BYTES_PER_VERTEX + indices * RIVER_BYTES_PER_INDEX
+}
 /// Local surface maps and vegetation are deferred until close-range geometry is
 /// available. Coarser patches retain the global geographic albedo, avoiding
 /// expensive source sampling for detail that is below their screen-space size.
@@ -52,18 +92,16 @@ pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 = SURFACE_TEX_RES as u64 * SURFACE
 /// Conservative maximum allocation for one merged vegetation mesh. Streaming
 /// reserves it for close patches before worker generation knows their biome.
 pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
-    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + 2 * (FOLIAGE_SEGMENTS + 1);
-    let tree_indices = TRUNK_SEGMENTS * 6 + FOLIAGE_SEGMENTS * 6;
+    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 4;
+    let tree_indices = TRUNK_SEGMENTS * 6 + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 6;
     let boulder_vertices = (BOULDER_RINGS + 1) * BOULDER_SEGMENTS;
     let boulder_indices = BOULDER_RINGS * BOULDER_SEGMENTS * 6;
-    let grass_vertices = 6;
-    let grass_indices = 6;
-    let vertices = TREE_COUNT * tree_vertices
-        + ROCK_COUNT * boulder_vertices
-        + GRASS_CLUMP_COUNT * grass_vertices;
-    let indices = TREE_COUNT * tree_indices
-        + ROCK_COUNT * boulder_indices
-        + GRASS_CLUMP_COUNT * grass_indices;
+    let rock_vertices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_vertices;
+    let rock_indices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_indices;
+    let grass_vertices = GRASS_CARD_PLANES * 4;
+    let grass_indices = GRASS_CARD_PLANES * 6;
+    let vertices = TREE_COUNT * tree_vertices + rock_vertices + GRASS_CLUMP_COUNT * grass_vertices;
+    let indices = TREE_COUNT * tree_indices + rock_indices + GRASS_CLUMP_COUNT * grass_indices;
     vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
 };
 
@@ -75,6 +113,163 @@ pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
     patch_level >= VEGETATION_MIN_PATCH_LEVEL
 }
 
+/// Build the deterministic foliage atlas used by the vegetation material. Every
+/// texel is white so the per-vertex colour fully controls hue; only the alpha
+/// channel carries shape. A fully opaque quadrant exists for solid trunks and
+/// boulders so the material's alpha mask never discards them.
+pub(crate) fn vegetation_atlas() -> Image {
+    let res = VEGETATION_ATLAS_RES as usize;
+    let half = res / 2;
+    let mut data = vec![0u8; res * res * 4];
+
+    draw_grass_tuft(&mut data, res, 0, 0, half);
+    draw_conifer(&mut data, res, half, 0, half);
+    draw_broadleaf_canopy(&mut data, res, 0, half, half);
+    fill_region(&mut data, res, half, half, half, 255);
+
+    let mut image = Image::new(
+        Extent3d {
+            width: res as u32,
+            height: res as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 4,
+        ..Default::default()
+    });
+    image
+}
+
+fn fill_region(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize, alpha: u8) {
+    for y in oy..(oy + size).min(res) {
+        for x in ox..(ox + size).min(res) {
+            set_alpha(data, res, x, y, alpha);
+        }
+    }
+}
+
+/// Overwrite alpha only where it is currently lower, so overlapping shapes
+/// union instead of erasing each other.
+fn raise_alpha(data: &mut [u8], res: usize, x: usize, y: usize, alpha: u8) {
+    if x >= res || y >= res {
+        return;
+    }
+    let index = (y * res + x) * 4;
+    if alpha > data[index + 3] {
+        set_alpha(data, res, x, y, alpha);
+    }
+}
+
+fn set_alpha(data: &mut [u8], res: usize, x: usize, y: usize, alpha: u8) {
+    if x >= res || y >= res {
+        return;
+    }
+    let index = (y * res + x) * 4;
+    data[index] = 255;
+    data[index + 1] = 255;
+    data[index + 2] = 255;
+    data[index + 3] = alpha;
+}
+
+/// A tuft of tapered blades rising from the bottom edge of the region.
+fn draw_grass_tuft(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize) {
+    const BLADES: usize = 9;
+    let s = size as f64;
+    for blade in 0..BLADES {
+        let base_x = s * (0.09 + 0.82 * blade as f64 / (BLADES - 1) as f64);
+        let lean = ((blade % 3) as f64 - 1.0) * s * 0.10;
+        let height = s * (0.55 + 0.35 * (blade % 4) as f64 / 3.0);
+        let steps = (height.ceil() as usize).max(1);
+        for step in 0..=steps {
+            let t = step as f64 / steps as f64;
+            let y_local = s - 1.0 - height * t;
+            let center = base_x + lean * t * t;
+            let half_width = s * 0.035 * (1.0 - t) + 0.35;
+            let x0 = (center - half_width).floor().max(0.0) as usize;
+            let x1 = (center + half_width).ceil().min(s - 1.0) as usize;
+            let y = oy + y_local.round().clamp(0.0, s - 1.0) as usize;
+            for x in x0..=x1 {
+                raise_alpha(data, res, ox + x, y, 255);
+            }
+        }
+    }
+}
+
+/// A triangular conifer silhouette over a short trunk.
+fn draw_conifer(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize) {
+    let s = size as f64;
+    let apex_y = s * 0.02;
+    let base_y = s * 0.84;
+    let center_x = s * 0.5;
+    for y in apex_y as usize..=base_y as usize {
+        let t = (y as f64 - apex_y) / (base_y - apex_y);
+        let half = s * 0.44 * t + 0.5;
+        let x0 = (center_x - half).max(0.0) as usize;
+        let x1 = (center_x + half).min(s - 1.0) as usize;
+        for x in x0..=x1 {
+            raise_alpha(data, res, ox + x, oy + y, 255);
+        }
+    }
+    for y in (s * 0.82) as usize..size {
+        for x in (s * 0.45) as usize..=(s * 0.55) as usize {
+            raise_alpha(data, res, ox + x, oy + y, 255);
+        }
+    }
+}
+
+/// A rounded broadleaf crown, unioned from overlapping lobes with a few gaps so
+/// the silhouette reads as leaves rather than a solid disc.
+fn draw_broadleaf_canopy(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize) {
+    let s = size as f64;
+    let lobes = [
+        (0.38, 0.34, 0.22),
+        (0.62, 0.36, 0.23),
+        (0.50, 0.52, 0.25),
+        (0.30, 0.54, 0.18),
+        (0.70, 0.54, 0.18),
+        (0.50, 0.30, 0.20),
+    ];
+    let holes = [(0.44, 0.40, 0.06), (0.58, 0.48, 0.06), (0.38, 0.53, 0.05)];
+
+    for y in 0..size {
+        for x in 0..size {
+            let lx = x as f64 / s;
+            let ly = y as f64 / s;
+            let inside = lobes
+                .iter()
+                .any(|&(cx, cy, r)| ((lx - cx).powi(2) + (ly - cy).powi(2)).sqrt() <= r);
+            if inside {
+                raise_alpha(data, res, ox + x, oy + y, 255);
+            }
+        }
+    }
+    for y in 0..size {
+        for x in 0..size {
+            let lx = x as f64 / s;
+            let ly = y as f64 / s;
+            let in_hole = holes
+                .iter()
+                .any(|&(cx, cy, r)| ((lx - cx).powi(2) + (ly - cy).powi(2)).sqrt() <= r);
+            if in_hole {
+                set_alpha(data, res, ox + x, oy + y, 0);
+            }
+        }
+    }
+    for y in (s * 0.70) as usize..size {
+        for x in (s * 0.46) as usize..=(s * 0.54) as usize {
+            raise_alpha(data, res, ox + x, oy + y, 255);
+        }
+    }
+}
+
 /// Source-derived patch data built by the streaming worker and consumed once by
 /// the render upload path. Keeping it here prevents asset upload from sampling
 /// a DEM, triggering erosion, or generating scatter on the presentation thread.
@@ -84,6 +279,9 @@ pub(crate) struct PreparedPatchSurface {
     pub metallic: f32,
     pub local_surfaces: Option<(Image, Image)>,
     pub vegetation: Option<(Mesh, DVec3)>,
+    /// River ribbon mesh plus its body-fixed anchor, or `None` when no channel
+    /// crosses the patch.
+    pub river: Option<(Mesh, DVec3)>,
 }
 
 pub(crate) fn prepare_patch_surface(
@@ -126,12 +324,19 @@ pub(crate) fn prepare_patch_surface(
         .then(|| build_vegetation_mesh(source, patch, radius_m, &vegetation_anchor))
         .flatten()
         .map(|mesh| (mesh, vegetation_anchor));
+    // Rivers only resolve once the drainage network is represented by close
+    // geometry, and share the vegetation anchor's local frame.
+    let river = supports_local_surfaces(patch.level)
+        .then(|| build_river_mesh(source, geometry, &vegetation_anchor))
+        .flatten()
+        .map(|mesh| (mesh, vegetation_anchor));
     PreparedPatchSurface {
         vertex_colors,
         roughness: appearance.roughness,
         metallic: appearance.metallic,
         local_surfaces,
         vegetation,
+        river,
     }
 }
 
@@ -394,6 +599,7 @@ struct MeshAccum {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
 }
 
@@ -403,6 +609,7 @@ impl MeshAccum {
             positions: Vec::new(),
             normals: Vec::new(),
             colors: Vec::new(),
+            uvs: Vec::new(),
             indices: Vec::new(),
         }
     }
@@ -456,6 +663,8 @@ impl MeshAccum {
             ]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
+            self.uvs.push(OPAQUE_UV);
+            self.uvs.push(OPAQUE_UV);
         }
 
         for s in 0..segments {
@@ -468,14 +677,13 @@ impl MeshAccum {
     }
 
     /// Push a low-poly boulder: a lumpy lump (random radial jitter per vertex).
-    fn push_boulder(&mut self, center: DVec3, up: DVec3, radius: f64, seed: u64) {
+    fn push_boulder(&mut self, center: DVec3, up: DVec3, radius: f64, seed: u64, color: [f32; 3]) {
         let ref_axis = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
         let tangent = up.cross(ref_axis).normalize();
         let bitangent = up.cross(tangent).normalize();
         let segments = BOULDER_SEGMENTS;
         let rings = BOULDER_RINGS;
         let start = self.positions.len() as u32;
-        let color = [0.42f32, 0.40f32, 0.38f32];
 
         for r in 0..=rings {
             let phi = (r as f64 / rings as f64) * std::f64::consts::PI;
@@ -492,6 +700,7 @@ impl MeshAccum {
                 self.positions.push([p.x as f32, p.y as f32, p.z as f32]);
                 self.normals.push([n.x as f32, n.y as f32, n.z as f32]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
+                self.uvs.push(OPAQUE_UV);
             }
         }
         for r in 0..rings {
@@ -505,34 +714,63 @@ impl MeshAccum {
         }
     }
 
-    fn push_grass_clump(
+    /// Push `planes` crossed, double-sided vertical billboards sharing a base.
+    /// `uv` selects the atlas region; the region's top maps to the billboard's
+    /// top. Used for grass tufts and tree canopies.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The billboard helper accepts the complete plant geometry and atlas inputs."
+    )]
+    fn push_cross_cards(
         &mut self,
         base: DVec3,
         up: DVec3,
         width_m: f64,
         height_m: f64,
+        planes: usize,
         rotation_rad: f64,
+        uv: [f32; 4],
         color: [f32; 3],
     ) {
+        if planes == 0 || width_m <= 0.0 || height_m <= 0.0 {
+            return;
+        }
         let reference = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
         let tangent = up.cross(reference).normalize();
         let bitangent = up.cross(tangent).normalize();
-        for angle in [rotation_rad, rotation_rad + std::f64::consts::FRAC_PI_2] {
+        let [u0, v0, u1, v1] = uv;
+        for plane in 0..planes {
+            // Billboards are double-sided, so spreading planes over half a turn
+            // already covers every viewing direction.
+            let angle = rotation_rad + plane as f64 * std::f64::consts::PI / planes as f64;
             let across = tangent * angle.cos() + bitangent * angle.sin();
-            let start = self.positions.len() as u32;
             let left = base - across * width_m * 0.5;
             let right = base + across * width_m * 0.5;
-            let tip = base + up * height_m;
+            let top = up * height_m;
             let normal = across.cross(up).normalize();
-            for point in [left, right, tip] {
+            let corners = [
+                (left, [u0, v1]),
+                (right, [u1, v1]),
+                (right + top, [u1, v0]),
+                (left + top, [u0, v0]),
+            ];
+            let start = self.positions.len() as u32;
+            for (point, uv) in corners {
                 self.positions
                     .push([point.x as f32, point.y as f32, point.z as f32]);
                 self.normals
                     .push([normal.x as f32, normal.y as f32, normal.z as f32]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
+                self.uvs.push(uv);
             }
-            self.indices
-                .extend_from_slice(&[start, start + 1, start + 2]);
+            self.indices.extend_from_slice(&[
+                start,
+                start + 1,
+                start + 2,
+                start,
+                start + 2,
+                start + 3,
+            ]);
         }
     }
 
@@ -544,6 +782,7 @@ impl MeshAccum {
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs);
         mesh.insert_indices(Indices::U32(self.indices));
         mesh
     }
@@ -631,8 +870,8 @@ pub fn build_vegetation_mesh(
         let scale = 0.7 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.9;
         let trunk_h = 2.2 * scale;
         let trunk_r = 0.18 * scale;
-        let foliage_h = 4.5 * scale;
-        let foliage_r = 1.6 * scale;
+        let canopy_h = 4.0 * scale;
+        let canopy_w = 3.1 * scale;
         let base = flight;
         let foliage_tint = 0.8 + hash01(k as u64, patch.tile_y as u64, patch.tile_x as u64) * 0.3;
         let trunk_color = [0.16f32, 0.07f32, 0.025f32];
@@ -651,14 +890,31 @@ pub fn build_vegetation_mesh(
             TRUNK_SEGMENTS,
             trunk_color,
         );
-        let foliage_base = base + up * trunk_h;
-        accum.push_prism(
-            foliage_base,
+        // Wet, low, warm sites read as broadleaf; higher/cooler or drier sites
+        // read as conifer. The choice is deterministic from the source samples.
+        let broadleaf = source.moisture(lat, lon) > 0.45 && h < 2_200.0;
+        let canopy_uv = if broadleaf { BROADLEAF_UV } else { CONIFER_UV };
+        let rotation = hash01(k as u64, patch.tile_x as u64, 7) * std::f64::consts::TAU;
+        let lower_base = base + up * trunk_h;
+        accum.push_cross_cards(
+            lower_base,
             up,
-            foliage_r,
-            0.0,
-            foliage_h,
-            FOLIAGE_SEGMENTS,
+            canopy_w,
+            canopy_h * 0.75,
+            CANOPY_CARD_PLANES,
+            rotation,
+            canopy_uv,
+            foliage_color,
+        );
+        let upper_base = lower_base + up * canopy_h * 0.42;
+        accum.push_cross_cards(
+            upper_base,
+            up,
+            canopy_w * 0.72,
+            canopy_h * 0.68,
+            CANOPY_CARD_PLANES,
+            rotation + std::f64::consts::FRAC_PI_3,
+            canopy_uv,
             foliage_color,
         );
     }
@@ -703,12 +959,14 @@ pub fn build_vegetation_mesh(
             0.24 + profile.wet_vegetation_unit as f32 * 0.08,
             0.025 + profile.wet_vegetation_unit as f32 * 0.02,
         ];
-        accum.push_grass_clump(
+        accum.push_cross_cards(
             base,
             up,
-            0.22 * scale,
-            0.45 * scale,
+            0.55 * scale,
+            0.6 * scale,
+            GRASS_CARD_PLANES,
             hash01(patch.tile_x as u64, patch.tile_y as u64, k as u64) * std::f64::consts::TAU,
+            GRASS_UV,
             grass_color,
         );
     }
@@ -732,14 +990,62 @@ pub fn build_vegetation_mesh(
         if h < 0.5 {
             continue;
         }
+        let slope_deg = slope_deg_at(source, lat, lon);
+        let moisture = source.moisture(lat, lon);
+        // Exposed rock concentrates on steeper, drier ground; on gentle vegetated
+        // terrain most scatter slots stay empty so rocks read as outcrops rather
+        // than evenly sprinkled spheres.
+        let exposed = ((slope_deg - 10.0) / 25.0).clamp(0.0, 1.0);
+        if exposed < 0.2
+            && hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64 ^ 0x5EED) > 0.3
+        {
+            continue;
+        }
+
         let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
-        let radius = 0.4 + hash01(k as u64, patch.tile_x as u64, 3) * 0.9;
-        accum.push_boulder(
-            flight,
-            dir,
-            radius,
-            0x1234_5678 ^ (k as u64 * 2_654_355_561),
-        );
+        // Damp, sheltered rock is darker and moss-tinged; dry rock is pale grey.
+        let moss = ((moisture - 0.35).max(0.0) * (1.0 - (slope_deg / 45.0).clamp(0.0, 1.0)))
+            .clamp(0.0, 1.0);
+        let tone = 0.30 + hash01(k as u64, patch.tile_y as u64, 11) * 0.22;
+        let rock_color = [
+            (tone * (1.0 - moss) + 0.05 * moss) as f32,
+            (tone * (1.0 - moss) + 0.15 * moss) as f32,
+            (tone * (1.0 - moss) + 0.04 * moss) as f32,
+        ];
+
+        let base_radius = 0.35 + hash01(k as u64, patch.tile_x as u64, 3) * 1.5;
+        let reference = if dir.y.abs() < 0.9 {
+            DVec3::Y
+        } else {
+            DVec3::X
+        };
+        let tangent = dir.cross(reference).normalize();
+        let bitangent = dir.cross(tangent).normalize();
+        let lumps = 1
+            + (hash01(k as u64, patch.tile_x as u64 ^ 0xABCD, patch.tile_y as u64)
+                * ROCK_MAX_LUMPS as f64)
+                .floor() as usize;
+        for lump in 0..lumps.min(ROCK_MAX_LUMPS) {
+            let angle = hash01(
+                (lump as u64) ^ (k as u64 * 2_654_355_561),
+                patch.tile_y as u64,
+                patch.tile_x as u64,
+            ) * std::f64::consts::TAU;
+            let offset = (tangent * angle.cos() + bitangent * angle.sin())
+                * base_radius
+                * 0.8
+                * hash01(lump as u64, patch.tile_x as u64, patch.tile_y as u64);
+            let lump_radius = base_radius
+                * (0.45 + hash01(lump as u64, patch.tile_y as u64, patch.tile_x as u64) * 0.65)
+                / (lump as f64 + 1.0).sqrt();
+            accum.push_boulder(
+                flight + offset,
+                dir,
+                lump_radius,
+                0x1234_5678 ^ (k as u64 * 2_654_355_561) ^ (lump as u64 * 0x9E37),
+                rock_color,
+            );
+        }
     }
 
     if accum.positions.is_empty() {
@@ -747,6 +1053,97 @@ pub fn build_vegetation_mesh(
     } else {
         Some(accum.into_mesh())
     }
+}
+
+/// Build a water ribbon that follows a patch's drainage network, or `None` when
+/// no channel crosses it. Vertices are body-fixed offsets from `anchor`, in the
+/// same local frame as the vegetation mesh, and sit just above the sampled
+/// terrain so the water hugs the channel. Presentation only: it never feeds
+/// collision, radar altitude, or any authoritative terrain sample.
+pub fn build_river_mesh(
+    source: &dyn TerrainSource,
+    geometry: &PatchGeometry,
+    anchor_body_fixed: &DVec3,
+) -> Option<Mesh> {
+    // Core grid vertices precede the skirt ring: `n^2 + 4*(n-1)`.
+    let resolution = ((geometry.positions.len() + 8) as f64).sqrt() as usize - 2;
+    if resolution < 2 {
+        return None;
+    }
+    let core = resolution * resolution;
+    if geometry.positions.len() < core {
+        return None;
+    }
+
+    let mut strengths = vec![0.0f32; core];
+    let mut positions = Vec::with_capacity(core);
+    let mut normals = Vec::with_capacity(core);
+    let mut crosses_channel = false;
+    for (index, point) in geometry.positions[..core].iter().enumerate() {
+        let position = DVec3::from_array(*point);
+        let radius = position.length();
+        let radial = if radius > f64::EPSILON {
+            position / radius
+        } else {
+            DVec3::Y
+        };
+        let (lat, lon) = direction_to_lat_lon(radial);
+        let strength = source.river_strength(lat, lon).clamp(0.0, 1.0) as f32;
+        strengths[index] = strength;
+        crosses_channel |= f64::from(strength) >= RIVER_MIN_STRENGTH;
+        let surface = radial * (radius + RIVER_SURFACE_OFFSET_M) - *anchor_body_fixed;
+        positions.push(surface.as_vec3().to_array());
+        normals.push(radial.as_vec3().to_array());
+    }
+    if !crosses_channel {
+        return None;
+    }
+
+    let mut indices: Vec<u32> = Vec::new();
+    for row in 0..resolution - 1 {
+        for column in 0..resolution - 1 {
+            let top_left = (row * resolution + column) as u32;
+            let top_right = top_left + 1;
+            let bottom_left = ((row + 1) * resolution + column) as u32;
+            let bottom_right = bottom_left + 1;
+            let touches_channel = [top_left, top_right, bottom_left, bottom_right]
+                .into_iter()
+                .any(|index| f64::from(strengths[index as usize]) >= RIVER_MIN_STRENGTH);
+            if !touches_channel {
+                continue;
+            }
+            indices.extend_from_slice(&[
+                top_left,
+                top_right,
+                bottom_right,
+                top_left,
+                bottom_right,
+                bottom_left,
+            ]);
+        }
+    }
+    if indices.is_empty() {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs[..core].to_vec());
+    // The water shader reads the red channel as its shallow/deep ramp, so the
+    // drainage strength drives river colour and opacity.
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        strengths
+            .iter()
+            .map(|strength| [*strength, 0.0, 0.0, 1.0])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_indices(Indices::U32(indices));
+    Some(mesh)
 }
 
 #[cfg(test)]
@@ -774,6 +1171,44 @@ mod tests {
         fn river_strength(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             1.0
         }
+    }
+
+    #[test]
+    fn boulder_vertices_use_the_supplied_color() {
+        use bevy_mesh::VertexAttributeValues;
+
+        let mut accum = MeshAccum::new();
+        accum.push_boulder(DVec3::ZERO, DVec3::Y, 1.0, 1, [0.1, 0.2, 0.3]);
+        let mesh = accum.into_mesh();
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("boulder must carry vertex colours");
+        };
+        assert!(!colors.is_empty());
+        assert!(colors.iter().all(|color| {
+            (color[0] - 0.1).abs() < 1e-6
+                && (color[1] - 0.2).abs() < 1e-6
+                && (color[2] - 0.3).abs() < 1e-6
+        }));
+    }
+
+    #[test]
+    fn river_mesh_follows_drainage_and_is_absent_without_channels() {
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+
+        let wet = RiverTerrain;
+        let geometry = build_patch_geometry(&patch, &wet, 6_371_000.0, 17, 5.0);
+        let mesh = build_river_mesh(&wet, &geometry, &DVec3::ZERO)
+            .expect("a fully wet patch must produce a river ribbon");
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
+
+        let dry = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let geometry = build_patch_geometry(&patch, &dry, 6_371_000.0, 17, 5.0);
+        assert!(
+            build_river_mesh(&dry, &geometry, &DVec3::ZERO).is_none(),
+            "a patch with no drainage must not allocate a river ribbon"
+        );
     }
 
     #[test]
@@ -945,6 +1380,29 @@ mod tests {
     }
 
     #[test]
+    fn vegetation_atlas_has_transparent_and_opaque_regions() {
+        let atlas = vegetation_atlas();
+        assert_eq!(atlas.width(), VEGETATION_ATLAS_RES);
+        assert_eq!(atlas.height(), VEGETATION_ATLAS_RES);
+        let data = atlas.data.as_ref().expect("atlas must own its texels");
+        let res = VEGETATION_ATLAS_RES as usize;
+
+        // The foliage quadrants must contain both cut-out transparency and
+        // opaque texels, or the alpha mask would render nothing.
+        let grass_region = &data[0..(res / 2) * 4 * res / 2];
+        let any_gap = grass_region.chunks_exact(4).any(|texel| texel[3] == 0);
+        let any_blade = grass_region.chunks_exact(4).any(|texel| texel[3] == 255);
+        assert!(
+            any_gap && any_blade,
+            "grass region needs shape, not a solid fill"
+        );
+
+        // The solid quadrant used by trunks and boulders must be fully opaque.
+        let opaque_index = ((res / 2 + 10) * res + (res / 2 + 10)) * 4;
+        assert_eq!(data[opaque_index + 3], 255);
+    }
+
+    #[test]
     fn vegetation_respects_source_and_is_deterministic() {
         let src = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
@@ -953,8 +1411,8 @@ mod tests {
         assert_eq!(a.is_some(), b.is_some());
 
         // Some patch on this planet must be vegetated (green land exists), and
-        // the merged mesh must carry vertex colors so it renders without a
-        // white base bleeding through.
+        // the merged mesh must carry vertex colors and foliage UVs so it renders
+        // opaque where intended and discards correctly elsewhere.
         use crate::domain::services::cube_sphere::CubeFace;
         let faces = [
             CubeFace::PosX,
@@ -971,6 +1429,7 @@ mod tests {
                 let p = TerrainPatch::for_direction(dir, 2);
                 if let Some(mesh) = build_vegetation_mesh(&src, &p, 6_371_000.0, &DVec3::ZERO) {
                     assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
+                    assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
                     found_veg = true;
                     break;
                 }

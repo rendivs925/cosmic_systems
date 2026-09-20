@@ -20,14 +20,24 @@ pub const WATER_SHADER: &str = "shaders/water.wgsl";
 pub struct WaterParams {
     /// Presentation clock in seconds; advances the wave phase only.
     pub time_s: f32,
-    /// Spatial frequency of the crossed wave trains, in 1/m.
+    /// Spatial frequency of the two crossed swell trains, in 1/m.
     pub wave_scale: f32,
-    /// Normal-perturbation strength.
+    /// Swell normal-perturbation strength.
     pub wave_strength: f32,
     pub shallow_color: Vec4,
     pub deep_color: Vec4,
     pub opacity_shallow: f32,
     pub opacity_deep: f32,
+    /// Breaking-wave foam colour blended onto the shoreline band.
+    pub foam_color: Vec4,
+    /// Depth of the foam band, as the normalized vertex-depth channel value.
+    pub foam_depth_normalized: f32,
+    /// Peak foam coverage at the waterline.
+    pub foam_strength: f32,
+    /// Spatial frequency of the fine ripple train, in 1/m.
+    pub ripple_scale: f32,
+    /// Fine-ripple normal-perturbation strength.
+    pub ripple_strength: f32,
 }
 
 impl Default for WaterParams {
@@ -42,6 +52,32 @@ impl Default for WaterParams {
             deep_color: Vec4::new(0.012, 0.07, 0.16, 1.0),
             opacity_shallow: 0.45,
             opacity_deep: 0.92,
+            foam_color: Vec4::new(0.82, 0.88, 0.9, 1.0),
+            foam_depth_normalized: 0.004,
+            foam_strength: 0.7,
+            ripple_scale: 0.6,
+            ripple_strength: 0.12,
+        }
+    }
+}
+
+impl WaterParams {
+    /// Parameter set for narrow inland channels. Rivers carry the drainage
+    /// strength in the vertex-depth channel, so the ramp stays shallow and
+    /// opaque, the ripple trains are fine and local, and no breaking-wave foam
+    /// is drawn away from the ocean.
+    pub fn river() -> Self {
+        Self {
+            shallow_color: Vec4::new(0.07, 0.20, 0.19, 1.0),
+            deep_color: Vec4::new(0.02, 0.07, 0.10, 1.0),
+            opacity_shallow: 0.5,
+            opacity_deep: 0.88,
+            foam_strength: 0.0,
+            wave_scale: 0.5,
+            wave_strength: 0.18,
+            ripple_scale: 2.5,
+            ripple_strength: 0.1,
+            ..Default::default()
         }
     }
 }
