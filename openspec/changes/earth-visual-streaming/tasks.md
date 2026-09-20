@@ -49,8 +49,14 @@
 
 ## 3. Progressive Terrain Imagery
 
-- [ ] 3.1 Add the smallest body-scoped imagery presentation contract needed to
-  locate the best available Earth tile for an existing `TerrainPatch`.
+- [x] 3.1 Add the smallest body-scoped imagery presentation contract needed to
+  locate the best available Earth tile for an existing `TerrainPatch`. Added
+  `domain/services/imagery_package.rs`: `EarthImageryPackage::load` validates the
+  manifest, requires the global overview, and indexes produced tiles once;
+  `resolve(&TerrainPatch)` returns the most detailed produced tile at or coarser
+  than the patch level inside a covering region, else the global overview.
+  Tests cover missing/unverified packages, finest-available resolution, coarser
+  fallback, and outside-region global fallback.
 - [ ] 3.2 Extend the existing terrain streaming resource to request, cancel,
   retain, and evict imagery with the same visible-first priorities as geometry.
 - [ ] 3.3 Extend terrain render state and materials to replace global albedo

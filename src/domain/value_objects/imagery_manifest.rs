@@ -52,6 +52,7 @@ pub struct ImageryLocalRegion {
     pub south_deg: f64,
     pub east_deg: f64,
     pub north_deg: f64,
+    pub min_level: u32,
     pub max_level: u32,
     pub runtime_tiles: String,
     pub source_sha256: String,
@@ -181,9 +182,9 @@ fn validate_local_region(region: &ImageryLocalRegion) -> Result<(), String> {
             region.id
         ));
     }
-    if region.max_level == 0 {
+    if region.min_level == 0 || region.max_level < region.min_level {
         return Err(format!(
-            "imagery region {} level must be positive",
+            "imagery region {} level range is invalid",
             region.id
         ));
     }

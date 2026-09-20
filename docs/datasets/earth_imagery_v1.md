@@ -37,8 +37,14 @@ Manifest: `assets/configs/terrain/earth_imagery_v1.ron`
   `139.0..140.0` east and `8.6..7.4` south; the exact granule footprint,
   acquisition date, and processing baseline are recorded here at production.
 - Horizontal reference: WGS 84 geographic (EPSG:4326), Earth body-fixed.
-- Role: detailed imagery for visible patches inside the region, up to the
-  configured local-detail level.
+- Level range: `min_level = 8`, `max_level = 12`. Level 12 is the recommended
+  production cap for this region size: 10 m pixels at roughly 9.5 m per texel
+  while keeping the package near tens of megabytes. Producing every level to
+  level 14 over a one-degree region would be roughly 800 MB of tiles, so either
+  the cap stays at 12 or the region shrinks.
+- Role: detailed imagery for visible patches inside the region. A patch at or
+  below the level range uses the most detailed produced tile at or coarser than
+  its own level; a coarser patch falls back to the global overview.
 
 ## Package layout
 

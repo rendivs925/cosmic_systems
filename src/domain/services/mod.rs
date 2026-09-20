@@ -12,6 +12,7 @@ pub mod ephemeris;
 pub mod erosion;
 pub mod gravity;
 pub mod guidance;
+pub mod imagery_package;
 pub mod imagery_tiles;
 pub mod landing_gear;
 pub mod local_elevation;

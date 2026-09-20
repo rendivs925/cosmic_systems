@@ -143,6 +143,24 @@ pub fn cube_face_name(face: CubeFace) -> &'static str {
     }
 }
 
+/// Inverse of [`cube_face_name`] for parsing a package directory.
+pub fn cube_face_from_name(name: &str) -> Option<CubeFace> {
+    CubeFace::ALL
+        .into_iter()
+        .find(|face| cube_face_name(*face) == name)
+}
+
+/// The patch at `level` that contains a finer patch, by shifting tile indices.
+pub fn ancestor_at_level(patch: &TerrainPatch, level: u32) -> TerrainPatch {
+    let shift = patch.level.saturating_sub(level);
+    TerrainPatch {
+        face: patch.face,
+        level,
+        tile_x: patch.tile_x >> shift,
+        tile_y: patch.tile_y >> shift,
+    }
+}
+
 /// Number of samples per axis used to bound a region's face coverage.
 const REGION_SAMPLES: usize = 64;
 
