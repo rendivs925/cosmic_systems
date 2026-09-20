@@ -15,6 +15,10 @@ use crate::infrastructure::bevy_adapters::rendering::textures::{
 };
 use crate::infrastructure::bevy_adapters::rocket::camera::update_rocket_camera_projection;
 use crate::infrastructure::bevy_adapters::rocket::components::RocketPhysicsState;
+use crate::infrastructure::bevy_adapters::terrain::imagery::{
+    apply_terrain_imagery, load_earth_imagery_package, stream_terrain_imagery,
+    TerrainImageryConfig, TerrainImageryResource,
+};
 use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
@@ -56,7 +60,7 @@ const WATER_MAX_VISIBLE_DEPTH_M: f64 = 4_000.0;
 struct PendingTerrainPatchHides(HashSet<TerrainPatchRenderKey>);
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
-struct TerrainSurfaceExtension {
+pub(crate) struct TerrainSurfaceExtension {
     #[texture(100)]
     #[sampler(101)]
     local_albedo: Handle<Image>,
@@ -70,6 +74,14 @@ struct TerrainSurfaceExtension {
     #[texture(105)]
     #[sampler(106)]
     global_albedo: Handle<Image>,
+    /// A produced cube-sphere imagery tile sampled with the patch-local UV1.
+    /// While no tile is ready this holds a neutral placeholder and
+    /// `imagery_weight` is zero, so the global overview stays visible.
+    #[texture(107)]
+    #[sampler(108)]
+    imagery_albedo: Handle<Image>,
+    #[uniform(104)]
+    imagery_weight: f32,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -78,13 +90,48 @@ impl MaterialExtension for TerrainSurfaceExtension {
     }
 }
 
-type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
+pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
+
+/// Build a patch material from its surface inputs. Kept in one place so the
+/// imagery upgrade path can rebuild the same material with a ready imagery tile
+/// without duplicating the extension layout.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_terrain_material(
+    base: StandardMaterial,
+    local_albedo: Handle<Image>,
+    local_normal: Handle<Image>,
+    local_detail_weight: f32,
+    global_albedo: Handle<Image>,
+    imagery_albedo: Handle<Image>,
+    imagery_weight: f32,
+) -> TerrainMaterial {
+    TerrainMaterial {
+        base,
+        extension: TerrainSurfaceExtension {
+            local_albedo,
+            local_normal,
+            local_detail_weight,
+            global_albedo,
+            imagery_albedo,
+            imagery_weight,
+        },
+    }
+}
 /// Component tracking the render state of a terrain patch.
 #[derive(Component, Debug, Clone)]
 pub struct TerrainPatchRenderState {
     pub patch: TerrainPatch,
     pub mesh_handle: Handle<Mesh>,
-    material_handle: Handle<TerrainMaterial>,
+    pub(crate) material_handle: Handle<TerrainMaterial>,
+    /// Inputs needed to rebuild the material when imagery becomes ready.
+    pub(crate) base_material: StandardMaterial,
+    pub(crate) local_albedo: Handle<Image>,
+    pub(crate) local_normal: Handle<Image>,
+    pub(crate) local_detail_weight: f32,
+    pub(crate) global_albedo: Handle<Image>,
+    /// The imagery tile currently bound, or a neutral placeholder.
+    pub(crate) imagery_albedo: Handle<Image>,
+    pub(crate) imagery_weight: f32,
     /// Per-patch source-derived surface textures released with the patch.
     local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
@@ -323,12 +370,17 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainPerformanceTelemetry>()
             .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
+            .init_resource::<TerrainImageryConfig>()
+            .init_resource::<TerrainImageryResource>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
-            .add_systems(Startup, prepare_terrain_render_assets)
+            .add_systems(
+                Startup,
+                (prepare_terrain_render_assets, load_earth_imagery_package),
+            )
             .add_systems(
                 Update,
                 (
@@ -345,6 +397,7 @@ impl Plugin for TerrainRenderPlugin {
                     .after(recenter_render_origin)
                     .after(update_rocket_camera_projection),
             )
+            .add_systems(Update, stream_terrain_imagery.after(stream_terrain_patches))
             .add_systems(
                 Update,
                 (
@@ -358,6 +411,12 @@ impl Plugin for TerrainRenderPlugin {
                     .chain()
                     .after(stream_terrain_patches)
                     .before(PerformanceMetricsSet::Report),
+            )
+            .add_systems(
+                Update,
+                apply_terrain_imagery
+                    .after(spawn_patch_mesh_system)
+                    .after(stream_terrain_imagery),
             );
     }
 }
@@ -632,15 +691,15 @@ fn spawn_patch_mesh_system(
                 );
                 local_albedo.clone()
             });
-        let material_handle = materials.add(TerrainMaterial {
-            base: base_material,
-            extension: TerrainSurfaceExtension {
-                local_albedo,
-                local_normal,
-                local_detail_weight,
-                global_albedo,
-            },
-        });
+        let material_handle = materials.add(build_terrain_material(
+            base_material.clone(),
+            local_albedo.clone(),
+            local_normal.clone(),
+            local_detail_weight,
+            global_albedo.clone(),
+            local_albedo.clone(),
+            0.0,
+        ));
         if let (Some(started), Some(record)) = (
             material_started,
             terrain_performance.current_mut(instrumentation_enabled),
@@ -718,6 +777,13 @@ fn spawn_patch_mesh_system(
                     patch,
                     mesh_handle: mesh_handle.clone(),
                     material_handle: material_handle.clone(),
+                    base_material: base_material.clone(),
+                    local_albedo: local_albedo.clone(),
+                    local_normal: local_normal.clone(),
+                    local_detail_weight,
+                    global_albedo: global_albedo.clone(),
+                    imagery_albedo: local_albedo.clone(),
+                    imagery_weight: 0.0,
                     local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     water_mesh_handle: water_mesh_handle.clone(),
@@ -1617,6 +1683,13 @@ mod tests {
                     patch,
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
+                    base_material: StandardMaterial::default(),
+                    local_albedo: Handle::default(),
+                    local_normal: Handle::default(),
+                    local_detail_weight: 0.0,
+                    global_albedo: Handle::default(),
+                    imagery_albedo: Handle::default(),
+                    imagery_weight: 0.0,
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
@@ -1646,6 +1719,13 @@ mod tests {
                     patch,
                     mesh_handle: Handle::default(),
                     material_handle: Handle::default(),
+                    base_material: StandardMaterial::default(),
+                    local_albedo: Handle::default(),
+                    local_normal: Handle::default(),
+                    local_detail_weight: 0.0,
+                    global_albedo: Handle::default(),
+                    imagery_albedo: Handle::default(),
+                    imagery_weight: 0.0,
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
@@ -1977,6 +2057,13 @@ mod tests {
             patch: TerrainPatch::for_direction(DVec3::X, 0),
             mesh_handle: mesh_handle.clone(),
             material_handle: material_handle.clone(),
+            base_material: StandardMaterial::default(),
+            local_albedo: Handle::default(),
+            local_normal: Handle::default(),
+            local_detail_weight: 0.0,
+            global_albedo: Handle::default(),
+            imagery_albedo: Handle::default(),
+            imagery_weight: 0.0,
             local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             water_mesh_handle: None,

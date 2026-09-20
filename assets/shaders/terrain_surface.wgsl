@@ -7,6 +7,9 @@
 
 struct TerrainSurfaceExtension {
     local_detail_weight: f32,
+    // 0 while only the global overview is available, 1 when a produced local
+    // imagery tile has replaced it for this patch.
+    imagery_weight: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -16,6 +19,8 @@ struct TerrainSurfaceExtension {
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> terrain_surface: TerrainSurfaceExtension;
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var terrain_global_albedo: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var terrain_global_albedo_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var terrain_imagery_albedo: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var terrain_imagery_albedo_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -33,8 +38,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_global_albedo_sampler,
         in.uv,
     );
+    // Detailed local imagery is a produced cube-sphere tile sampled with the
+    // patch-local UV1. It replaces the global overview only once it is ready;
+    // until then `imagery_weight` is zero and the overview remains visible.
+    let imagery_albedo = textureSample(
+        terrain_imagery_albedo,
+        terrain_imagery_albedo_sampler,
+        in.uv_b,
+    );
+    let base_albedo = mix(
+        global_albedo.rgb,
+        imagery_albedo.rgb,
+        terrain_surface.imagery_weight,
+    );
     pbr_input.material.base_color = vec4(
-        mix(global_albedo.rgb, local_albedo.rgb, 0.28 * detail_weight),
+        mix(base_albedo, local_albedo.rgb, 0.28 * detail_weight),
         pbr_input.material.base_color.a,
     );
     let local_surface = textureSample(

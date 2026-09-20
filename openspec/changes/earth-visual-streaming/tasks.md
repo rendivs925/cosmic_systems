@@ -57,20 +57,32 @@
   than the patch level inside a covering region, else the global overview.
   Tests cover missing/unverified packages, finest-available resolution, coarser
   fallback, and outside-region global fallback.
-- [ ] 3.2 Extend the existing terrain streaming resource to request, cancel,
+- [x] 3.2 Extend the existing terrain streaming resource to request, cancel,
   retain, and evict imagery with the same visible-first priorities as geometry.
-- [ ] 3.3 Extend terrain render state and materials to replace global albedo
+  Added `terrain/imagery.rs`: `TerrainImageryResource` derives its desired tile
+  set from `TerrainStreamingResource::published`, cancels pending loads for
+  patches that leave view, and evicts handles for patches no longer desired.
+- [x] 3.3 Extend terrain render state and materials to replace global albedo
   only after detailed imagery is ready, while preserving global fallback and
-  geometry-first publication.
-- [ ] 3.4 Keep imagery payloads presentation-only and release their Bevy asset
-  handles with the existing terrain patch eviction path.
+  geometry-first publication. `apply_terrain_imagery` rebuilds a patch material
+  with the ready tile and `imagery_weight = 1.0`; the shader mixes the tile over
+  the global overview by that weight. Geometry publication is unchanged.
+- [x] 3.4 Keep imagery payloads presentation-only and release their Bevy asset
+  handles with the existing terrain patch eviction path. Imagery handles live in
+  `TerrainImageryResource` and the render state; both drop when a patch is
+  evicted or despawned, and imagery never feeds height, collision, or physics.
 
 ## 4. Budgets And Regression Coverage
 
-- [ ] 4.1 Define explicit imagery CPU/GPU residency, in-flight, and per-frame
+- [x] 4.1 Define explicit imagery CPU/GPU residency, in-flight, and per-frame
   upload budgets with geometry work retaining priority.
+  `TerrainImageryConfig` sets `budget_bytes` (64 MiB) and
+  `max_uploads_per_frame` (4); admission is skipped when the next tile would
+  exceed the budget, and imagery streams after geometry in the frame.
 - [ ] 4.2 Add cadence-limited imagery residency, pending, eviction, and upload
-  backlog fields to the existing terrain streaming metrics.
+  backlog fields to the existing terrain streaming metrics. A cadence-limited
+  `terrain_imagery` line reports residency, pending, budget, and evictions, but
+  it is not yet folded into the unified `terrain_streaming` metrics snapshot.
 - [ ] 4.3 Add focused tests for manifest validation, cube-face mapping,
   antimeridian/polar behavior, seam continuity, fallback retention, budgeted
   eviction, and source/collision independence.
