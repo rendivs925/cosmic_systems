@@ -25,6 +25,7 @@ pub mod recovery;
 pub mod replay;
 pub mod separation;
 pub mod sets;
+pub mod sky;
 pub mod telemetry;
 pub mod terrain_map;
 #[cfg(test)]

@@ -2,10 +2,19 @@ use super::components::{RocketFlightConditions, RocketPhysicsState};
 use super::planet::{RocketBoundPlanet, RocketBoundPlanetCloud};
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
 use crate::domain::services::ephemeris::NaifBodyId;
+use crate::domain::units::AU_IN_METERS;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
+
+/// Rocket shadow cascades are sized to the near-flight scale: sharp vehicle and
+/// pad shadows out to a few hundred meters, useful terrain shadows out to the
+/// visible horizon range, well inside the flight camera's far plane.
+const ROCKET_SHADOW_CASCADES: usize = 4;
+const ROCKET_SHADOW_MIN_DISTANCE_M: f32 = 1.0;
+const ROCKET_SHADOW_FIRST_CASCADE_FAR_M: f32 = 250.0;
+const ROCKET_SHADOW_MAX_DISTANCE_M: f32 = 20_000.0;
 
 /// Spawns a directional sunlight source. The Sun's inertial direction comes
 /// from the shared ephemeris; the rotating planet moves terrain through that
@@ -15,32 +24,38 @@ pub fn setup_rocket_sun_light(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
 ) {
-    let Some(sun_direction) = bound_planet
+    let Some(sun) = bound_planet
         .0
         .as_ref()
-        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
+        .and_then(|id| bound_planet_sun(&ephemeris_snapshot, id))
     else {
         bevy::log::error!(
             "cannot initialize rocket sunlight without a bound-planet ephemeris state"
         );
         return;
     };
-    let sun_direction = sun_direction.as_vec3();
+    let sun_direction = sun.direction.as_vec3();
 
     commands.spawn((
         bevy::light::DirectionalLight {
-            illuminance: SUN_ILLUMINANCE_AT_EARTH_LUX,
+            illuminance: solar_illuminance_lux(sun.distance_m),
             color: Color::srgb(1.0, 1.0, 0.98),
-            // Terrain is assembled from rebased streamed patches. Do not let
-            // directional shadow cascades introduce a planet-scale dark arc at
-            // patch boundaries; ephemeris-driven direct lighting still models
-            // the physical day/night cycle.
-            shadows_enabled: false,
+            // Directional shadow cascades are configured with the light and the
+            // enclosing far-field globe is excluded as a caster, so terrain
+            // self-shadowing does not produce a planet-scale dark arc.
+            shadows_enabled: true,
             ..default()
         },
         // Light travels along local -Z toward the scene; orient it so the Sun
         // appears in its ephemeris direction.
         Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_direction, Vec3::Y),
+        bevy::light::CascadeShadowConfig::from(bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: ROCKET_SHADOW_CASCADES,
+            minimum_distance: ROCKET_SHADOW_MIN_DISTANCE_M,
+            first_cascade_far_bound: ROCKET_SHADOW_FIRST_CASCADE_FAR_M,
+            maximum_distance: ROCKET_SHADOW_MAX_DISTANCE_M,
+            ..default()
+        }),
         SunLight,
     ));
 }
@@ -54,17 +69,20 @@ pub fn update_rocket_sky_ambient_light(
     rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions)>,
     mut ambient: ResMut<AmbientLight>,
 ) {
-    let Some(sun_direction) = bound_planet
+    let Some(sun) = bound_planet
         .0
         .as_ref()
-        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
+        .and_then(|id| bound_planet_sun(&ephemeris_snapshot, id))
     else {
         return;
     };
     let Some((rocket, conditions)) = rocket_query.iter().next() else {
         return;
     };
-    let daylight = local_daylight(rocket.dynamics.position_m, sun_direction);
+    let daylight = twilight_daylight_unit(solar_altitude_rad(
+        rocket.dynamics.position_m,
+        sun.direction,
+    ));
     let presentation = atmospheric_presentation(conditions, daylight);
     ambient.color = Color::srgb(0.56, 0.68, 0.82);
     // The atmosphere controls diffuse sky fill while a tiny floor preserves a
@@ -94,17 +112,20 @@ pub fn update_rocket_sky_color(
     cloud_query: Query<&MeshMaterial3d<StandardMaterial>, With<RocketBoundPlanetCloud>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some(sun_direction) = bound_planet
+    let Some(sun) = bound_planet
         .0
         .as_ref()
-        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
+        .and_then(|id| bound_planet_sun(&ephemeris_snapshot, id))
     else {
         return;
     };
     let Some((rocket, conditions)) = rocket_query.iter().next() else {
         return;
     };
-    let daylight = local_daylight(rocket.dynamics.position_m, sun_direction);
+    let daylight = twilight_daylight_unit(solar_altitude_rad(
+        rocket.dynamics.position_m,
+        sun.direction,
+    ));
     let presentation = atmospheric_presentation(conditions, daylight);
     let sky = presentation.sky_unit;
     *clear_color = ClearColor(Color::srgb(
@@ -152,47 +173,87 @@ fn atmospheric_presentation(
     }
 }
 
-fn local_daylight(rocket_position_m: bevy::math::DVec3, sun_direction: bevy::math::DVec3) -> f32 {
-    let surface_normal = rocket_position_m.normalize_or_zero();
-    let daylight = ((surface_normal.dot(sun_direction) + 0.12) / 0.32).clamp(0.0, 1.0);
-    (daylight * daylight * (3.0 - 2.0 * daylight)) as f32
+/// Solar altitude of the observer above its own local horizon, in radians.
+/// Positive is day, negative is night. The observer's planet-centered position
+/// normal is the local vertical in the planet-centered inertial frame.
+fn solar_altitude_rad(
+    observer_position_m: bevy::math::DVec3,
+    sun_direction: bevy::math::DVec3,
+) -> f64 {
+    let local_up = observer_position_m.normalize_or_zero();
+    local_up.dot(sun_direction).clamp(-1.0, 1.0).asin()
+}
+
+/// Fraction of full daylight used only for non-direct sky, ambient, and cloud
+/// presentation. It follows the civil/nautical/astronomical twilight bands and
+/// reaches zero at -18 degrees solar altitude. Direct PBR lighting terminates
+/// geometrically and is unaffected by this curve.
+fn twilight_daylight_unit(solar_altitude_rad: f64) -> f32 {
+    let astronomical_twilight_rad = -18.0_f64.to_radians();
+    let t = ((solar_altitude_rad - astronomical_twilight_rad) / -astronomical_twilight_rad)
+        .clamp(0.0, 1.0);
+    (t * t * (3.0 - 2.0 * t)) as f32
 }
 
 /// Updates rocket-mode sunlight from the same ephemeris state used by the Sun
 /// proxy. Planet and terrain rotation, rather than an artificial light orbit,
-/// produces the local day/night cycle.
+/// produces the local day/night cycle. Direct illuminance tracks the true
+/// planet-Sun distance so bodies other than the reference distance receive the
+/// inverse-square-correct radiance.
 pub fn update_sun_day_night_cycle(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    mut sun_query: Query<&mut Transform, With<SunLight>>,
+    mut sun_query: Query<(&mut Transform, &mut bevy::light::DirectionalLight), With<SunLight>>,
 ) {
-    let Some(sun_direction) = bound_planet
+    let Some(sun) = bound_planet
         .0
         .as_ref()
-        .and_then(|id| sun_direction_for_bound_planet(&ephemeris_snapshot, id))
+        .and_then(|id| bound_planet_sun(&ephemeris_snapshot, id))
     else {
         return;
     };
-    let sun_direction = sun_direction.as_vec3();
+    let sun_direction = sun.direction.as_vec3();
+    let illuminance = solar_illuminance_lux(sun.distance_m);
 
-    for mut light_transform in sun_query.iter_mut() {
+    for (mut light_transform, mut light) in sun_query.iter_mut() {
         *light_transform = Transform::from_xyz(0.0, 0.0, 0.0).looking_at(-sun_direction, Vec3::Y);
+        light.illuminance = illuminance;
     }
 }
 
-/// Direction from the bound planet toward the Sun in the existing
-/// planet-centered inertial axes. The input snapshot is SSB/ICRF; the reference
-/// frame service performs the one explicit ICRF-to-solar-inertial conversion.
-fn sun_direction_for_bound_planet(
+/// Direct normal solar illuminance at a planet-Sun distance, scaled from the
+/// single calibrated reference value by the inverse square of the distance.
+pub(super) fn solar_illuminance_lux(planet_sun_distance_m: f64) -> f32 {
+    if !planet_sun_distance_m.is_finite() || planet_sun_distance_m <= 0.0 {
+        return 0.0;
+    }
+    let distance_ratio = AU_IN_METERS / planet_sun_distance_m;
+    (SUN_ILLUMINANCE_AT_EARTH_LUX as f64 * distance_ratio * distance_ratio) as f32
+}
+
+/// Bound planet Sun geometry in the existing planet-centered inertial axes: the
+/// unit direction from the planet toward the Sun and the planet-Sun range in
+/// meters. The input snapshot is SSB/ICRF; the reference frame service performs
+/// the one explicit ICRF-to-solar-inertial conversion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct BoundPlanetSun {
+    pub(super) direction: bevy::math::DVec3,
+    pub(super) distance_m: f64,
+}
+
+pub(super) fn bound_planet_sun(
     ephemeris_snapshot: &EphemerisSnapshot,
     bound_planet_id: &CelestialBodyId,
-) -> Option<bevy::math::DVec3> {
+) -> Option<BoundPlanetSun> {
     let bound_body = NaifBodyId::for_catalog_name(bound_planet_id.as_str())?;
-    let direction = ephemeris_snapshot
+    let position_m = ephemeris_snapshot
         .solar_inertial_relative_state(NaifBodyId::SUN, bound_body)?
         .position_m;
-    let length = direction.length();
-    (length.is_finite() && length > 0.0).then_some(direction / length)
+    let distance_m = position_m.length();
+    (distance_m.is_finite() && distance_m > 0.0).then_some(BoundPlanetSun {
+        direction: position_m / distance_m,
+        distance_m,
+    })
 }
 
 #[cfg(test)]
@@ -223,15 +284,38 @@ mod tests {
         ]);
 
         assert_eq!(
-            sun_direction_for_bound_planet(&snapshot, &CelestialBodyId::earth(),),
+            bound_planet_sun(&snapshot, &CelestialBodyId::earth()).map(|sun| sun.direction),
             Some(-DVec3::X)
         );
     }
 
     #[test]
-    fn local_sky_presentation_follows_the_ephemeris_day_night_boundary() {
-        assert_eq!(local_daylight(DVec3::X, DVec3::X), 1.0);
-        assert_eq!(local_daylight(DVec3::X, -DVec3::X), 0.0);
+    fn direct_illuminance_follows_the_inverse_square_law() {
+        let reference = solar_illuminance_lux(AU_IN_METERS);
+        assert!((reference as f64 - SUN_ILLUMINANCE_AT_EARTH_LUX as f64).abs() < 0.1);
+
+        let twice_as_far = solar_illuminance_lux(2.0 * AU_IN_METERS);
+        assert!((twice_as_far as f64 - reference as f64 / 4.0).abs() < 0.1);
+        assert!(solar_illuminance_lux(1.52 * AU_IN_METERS) < reference);
+    }
+
+    #[test]
+    fn solar_altitude_is_positive_by_day_and_negative_by_night() {
+        let day = solar_altitude_rad(DVec3::X, DVec3::X);
+        let night = solar_altitude_rad(DVec3::X, -DVec3::X);
+        let horizon = solar_altitude_rad(DVec3::X, DVec3::Y);
+
+        assert!((day - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!((night + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!(horizon.abs() < 1e-12);
+    }
+
+    #[test]
+    fn twilight_daylight_reaches_night_beyond_astronomical_twilight() {
+        assert_eq!(twilight_daylight_unit(0.0), 1.0);
+        assert_eq!(twilight_daylight_unit(-18.0_f64.to_radians()), 0.0);
+        assert!(twilight_daylight_unit(-6.0_f64.to_radians()) < 1.0);
+        assert!(twilight_daylight_unit(0.5) == 1.0);
     }
 
     #[test]

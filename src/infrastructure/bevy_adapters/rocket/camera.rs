@@ -76,7 +76,14 @@ pub fn setup_rocket_camera_and_origin(
             proj.near = 0.5;
             proj.far = 100_000.0;
         }
-        commands.entity(entity).insert(
+        commands.entity(entity).insert((
+            // Flight presentation is calibrated to physical sunlight: HDR keeps
+            // highlight range for the solar disc, and the sunlight exposure
+            // keeps lit surfaces and the physically based sky in the stable
+            // display range. Both are inserted only in rocket mode so the
+            // solar-map and craft cameras keep their existing exposure.
+            bevy::render::view::Hdr,
+            bevy::camera::Exposure::SUNLIGHT,
             // Presentation-only low-altitude haze makes the distant terrain
             // recede naturally without changing surface lighting.
             DistanceFog {
@@ -85,7 +92,7 @@ pub fn setup_rocket_camera_and_origin(
                 directional_light_exponent: 8.0,
                 falloff: FogFalloff::from_visibility(25_000.0),
             },
-        );
+        ));
     }
 }
 

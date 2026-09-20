@@ -345,17 +345,20 @@ fn spawn_celestial_body(
         _ => (0.0, 0.5, 0.7),
     };
 
+    // Only the Sun and bodies with a real night-emission source emit light.
+    // Non-emissive bodies must be genuinely dark on their night side; a flat
+    // albedo-derived fill erased the terminator and is not physical.
     let emissive = if is_sun {
         let luminance_nits = solar_surface_luminance_nits(solar_params);
         LinearRgba::new(luminance_nits, luminance_nits, luminance_nits, 1.0)
-    } else if has_albedo {
-        LinearRgba::new(0.35, 0.35, 0.35, 1.0)
+    } else if textures.emissive.is_some() {
+        LinearRgba::WHITE
     } else {
         LinearRgba::BLACK
     };
 
     #[cfg(not(target_arch = "wasm32"))]
-    let emissive_texture = if is_sun || has_albedo {
+    let emissive_texture = if is_sun {
         albedo_handle.clone()
     } else {
         emissive_handle.clone()
@@ -363,8 +366,6 @@ fn spawn_celestial_body(
 
     #[cfg(target_arch = "wasm32")]
     let emissive_path = if is_sun {
-        textures.albedo
-    } else if has_albedo {
         textures.albedo
     } else {
         textures.emissive

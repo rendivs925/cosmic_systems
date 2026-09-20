@@ -33,6 +33,10 @@ use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_cloud_layer_config, get_planet_textures, load_texture,
 };
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
+// The far-field planet and cloud shells enclose the flight camera. If they cast
+// or receive directional shadows they produce a planet-scale dark arc, so they
+// are excluded from the shadow system while remaining fully lit.
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -44,7 +48,10 @@ pub struct RocketSunDisc;
 
 const ROCKET_SUN_DISC_DISTANCE_M: f64 = 20_000.0;
 const SUN_RADIUS_M: f64 = 696_340_000.0;
-const SUN_MEAN_DISTANCE_M: f64 = 149_597_870_700.0;
+/// The solar disc is hidden below this altitude. The small negative allowance
+/// represents atmospheric refraction lifting the Sun slightly above the
+/// geometric horizon; it is zero in vacuum, where the disc sets geometrically.
+const SUN_DISC_HORIZON_ALTITUDE_RAD: f64 = -0.0087;
 
 /// A low-detail geographic Earth shell beneath streamed terrain. It is a
 /// presentation fallback only: terrain meshes remain the sole source for
@@ -166,13 +173,20 @@ fn spawn_rocket_bound_planet_surface(
     asset_server: &AssetServer,
     planet: &crate::domain::entities::planet::Planet,
 ) {
-    let albedo = load_texture(asset_server, get_planet_textures(&planet.name).albedo);
+    let textures = get_planet_textures(&planet.name);
+    let albedo = load_texture(asset_server, textures.albedo);
+    let emissive_texture = load_texture(asset_server, textures.emissive);
     let material = create_planet_material(PlanetMaterialConfig {
         base_color_texture: albedo,
         normal_map_texture: None,
-        emissive_texture: None,
+        emissive_texture,
         base_color: Color::WHITE,
-        emissive: LinearRgba::BLACK,
+        // Real night-emission sources only; no flat albedo-wide fill.
+        emissive: if textures.emissive.is_some() {
+            LinearRgba::WHITE
+        } else {
+            LinearRgba::BLACK
+        },
         unlit: false,
         metallic: 0.0,
         reflectance: 0.4,
@@ -187,6 +201,8 @@ fn spawn_rocket_bound_planet_surface(
                 body: CelestialBodyId::new(planet.name.clone())
                     .expect("configured bound planet must have a valid identifier"),
             },
+            NotShadowCaster,
+            NotShadowReceiver,
             Name::new(format!("RocketFarField{}", planet.name)),
         ))
         .id();
@@ -208,6 +224,8 @@ fn spawn_rocket_bound_planet_surface(
                     MeshMaterial3d(cloud_material),
                     Transform::default(),
                     RocketBoundPlanetCloud,
+                    NotShadowCaster,
+                    NotShadowReceiver,
                     Name::new(format!("RocketFarField{}Clouds", planet.name)),
                 ));
             });
@@ -255,8 +273,10 @@ fn spawn_rocket_moon(
         normal_map_texture: None,
         emissive_texture: emissive_handle.clone(),
         base_color,
-        emissive: if textures.albedo.is_some() {
-            LinearRgba::new(0.35, 0.35, 0.35, 1.0)
+        // Real night-emission sources only; the previous flat albedo fill made
+        // every moon glow on its unlit side.
+        emissive: if textures.emissive.is_some() {
+            LinearRgba::WHITE
         } else {
             LinearRgba::BLACK
         },
@@ -417,11 +437,13 @@ fn bound_planet_surface_transform(
 }
 
 /// Keep the visual Sun inside the local rocket camera depth range while its
-/// direction comes from the evaluated ephemeris snapshot. This is presentation
-/// only; the directional light remains the illumination authority.
+/// direction, angular size, and horizon visibility come from the evaluated
+/// ephemeris snapshot. This is presentation only; the directional light remains
+/// the illumination authority.
 pub fn update_rocket_sun_disc(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
+    rocket_query: Query<&RocketPhysicsState>,
     camera_query: Query<&Transform, (With<Camera3d>, Without<RocketSunDisc>)>,
     mut sun_query: Query<(&mut Transform, &mut Visibility), With<RocketSunDisc>>,
 ) {
@@ -432,10 +454,14 @@ pub fn update_rocket_sun_disc(
     else {
         return;
     };
-    let Some(sun_direction) = ephemeris_snapshot
-        .solar_inertial_relative_state(NaifBodyId::SUN, bound_body)
-        .map(|state| state.position_m.normalize_or_zero())
-        .filter(|direction| direction.length_squared() > 0.0)
+    let Some(sun_state) =
+        ephemeris_snapshot.solar_inertial_relative_state(NaifBodyId::SUN, bound_body)
+    else {
+        return;
+    };
+    let planet_sun_distance_m = sun_state.position_m.length();
+    let Some(sun_direction) = (planet_sun_distance_m.is_finite() && planet_sun_distance_m > 0.0)
+        .then(|| sun_state.position_m / planet_sun_distance_m)
     else {
         return;
     };
@@ -443,18 +469,38 @@ pub fn update_rocket_sun_disc(
         return;
     };
 
-    let radius_m = rocket_sun_disc_radius_m(ROCKET_SUN_DISC_DISTANCE_M);
+    let visible = rocket_query
+        .iter()
+        .next()
+        .map(|rocket| {
+            let local_up = rocket.dynamics.position_m.normalize_or_zero();
+            local_up.dot(sun_direction).clamp(-1.0, 1.0).asin() > SUN_DISC_HORIZON_ALTITUDE_RAD
+        })
+        .unwrap_or(false);
+
+    let radius_m = rocket_sun_disc_radius_m(planet_sun_distance_m);
     let translation =
         camera.translation + sun_direction.as_vec3() * ROCKET_SUN_DISC_DISTANCE_M as f32;
     for (mut transform, mut visibility) in sun_query.iter_mut() {
         transform.translation = translation;
         transform.scale = Vec3::splat(radius_m as f32);
-        *visibility = Visibility::Visible;
+        *visibility = if visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
-fn rocket_sun_disc_radius_m(distance_m: f64) -> f64 {
-    distance_m * (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M)
+/// Apparent solar radius for a unit-distance Sun scaled to the disc's render
+/// distance. Because the disc and the physical angular size both scale with the
+/// planet-Sun distance, the rendered angular radius matches the real one at any
+/// heliocentric distance.
+fn rocket_sun_disc_radius_m(planet_sun_distance_m: f64) -> f64 {
+    if !planet_sun_distance_m.is_finite() || planet_sun_distance_m <= 0.0 {
+        return 0.0;
+    }
+    ROCKET_SUN_DISC_DISTANCE_M * (SUN_RADIUS_M / planet_sun_distance_m)
 }
 
 #[cfg(test)]
@@ -580,12 +626,14 @@ mod tests {
     }
 
     #[test]
-    fn rocket_sun_disc_preserves_the_mean_solar_angular_radius() {
-        let radius_m = rocket_sun_disc_radius_m(ROCKET_SUN_DISC_DISTANCE_M);
+    fn rocket_sun_disc_preserves_the_true_solar_angular_radius() {
+        let one_au = crate::domain::units::AU_IN_METERS;
+        let radius_m = rocket_sun_disc_radius_m(one_au);
         let angular_radius_rad = (radius_m / ROCKET_SUN_DISC_DISTANCE_M).asin();
-        let expected_angular_radius_rad = (SUN_RADIUS_M / SUN_MEAN_DISTANCE_M).asin();
+        let expected_angular_radius_rad = (SUN_RADIUS_M / one_au).asin();
 
         assert!((angular_radius_rad - expected_angular_radius_rad).abs() < 1e-12);
+        assert!(rocket_sun_disc_radius_m(1.52 * one_au) < radius_m);
     }
 
     #[test]

@@ -142,6 +142,9 @@ use crate::infrastructure::bevy_adapters::rocket::separation::{
     check_fairing_separation, spent_stage_aerodynamics, update_spent_stage_lifecycle,
 };
 use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
+use crate::infrastructure::bevy_adapters::rocket::sky::{
+    sky_material_plugin, spawn_rocket_sky_dome, update_rocket_sky,
+};
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
     compute_rocket_telemetry_system, handle_flight_recorder_export_system,
     handle_flight_recorder_input_system, record_flight_data_system,
@@ -621,6 +624,9 @@ impl Plugin for RocketModePlugin {
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
 
+        // Physically based sky material (single scattering).
+        app.add_plugins(sky_material_plugin());
+
         // The shared star mesh is authored in solar display units. Re-scale it
         // into the camera-relative flight frame instead of expanding the
         // flight depth range to solar-map distances.
@@ -751,6 +757,7 @@ impl Plugin for RocketModePlugin {
                 setup_rocket_planets,
                 setup_rocket_sun_light,
                 setup_rocket_sky_color,
+                spawn_rocket_sky_dome,
             )
                 .chain()
                 .after(setup_space)
@@ -766,6 +773,7 @@ impl Plugin for RocketModePlugin {
                 setup_rocket_planets,
                 setup_rocket_sun_light,
                 setup_rocket_sky_color,
+                spawn_rocket_sky_dome,
             )
                 .chain()
                 .after(setup_space),
@@ -783,6 +791,12 @@ impl Plugin for RocketModePlugin {
         app.add_systems(
             Update,
             update_rocket_sun_disc.after(update_rocket_camera_projection),
+        );
+        // Physically based sky follows the active camera's far plane and the
+        // shared render origin.
+        app.add_systems(
+            Update,
+            update_rocket_sky.after(update_rocket_camera_projection),
         );
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(

@@ -114,7 +114,9 @@ pub fn create_cloud_material(
         alpha_mode: AlphaMode::Blend,
         double_sided: true,
         perceptual_roughness: 0.9,
-        unlit: true,
+        // Clouds are lit by the shared Sun so they darken at night and across
+        // the terminator instead of staying full-bright everywhere.
+        unlit: false,
         ..default()
     }
 }
