@@ -24,7 +24,7 @@ use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
-    local_detail_weight, vegetation_atlas,
+    local_detail_weight, terrain_detail_texture, vegetation_atlas,
 };
 use crate::infrastructure::bevy_adapters::terrain::water::{
     WaterExtension, WaterMaterial, WaterParams,
@@ -56,6 +56,8 @@ const MAX_PENDING_PATCH_UPLOADS: usize = 512;
 /// the shared edge matching the neighbouring parent patch.
 const MORPH_START_SIZE_FACTOR: f64 = 0.6;
 const MORPH_END_SIZE_FACTOR: f64 = 2.0;
+/// Micro-detail texture repetitions per metre squared. About 1.7 m features.
+const TERRAIN_DETAIL_SCALE: f32 = 0.6;
 const WATER_SEA_LEVEL_M: f64 = 0.0;
 /// Small lift so the translucent water cap wins the depth test against the
 /// coincident far-field fallback globe instead of z-fighting it.
@@ -97,6 +99,13 @@ pub(crate) struct TerrainSurfaceExtension {
     morph_start_m: f32,
     #[uniform(104)]
     morph_end_m: f32,
+    /// Shared triplanar micro-detail texture (normal/albedo/roughness).
+    #[texture(109)]
+    #[sampler(110)]
+    detail_texture: Handle<Image>,
+    /// Repetitions per metre of the micro-detail texture.
+    #[uniform(104)]
+    detail_scale: f32,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -127,6 +136,8 @@ pub(crate) fn build_terrain_material(
     imagery_weight: f32,
     morph_start_m: f32,
     morph_end_m: f32,
+    detail_texture: Handle<Image>,
+    detail_scale: f32,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -139,6 +150,8 @@ pub(crate) fn build_terrain_material(
             imagery_weight,
             morph_start_m,
             morph_end_m,
+            detail_texture,
+            detail_scale,
         },
     }
 }
@@ -160,6 +173,9 @@ pub struct TerrainPatchRenderState {
     /// View-distance morph band for this patch, passed through on material rebuild.
     pub(crate) morph_start_m: f32,
     pub(crate) morph_end_m: f32,
+    /// Shared micro-detail inputs, passed through on material rebuild.
+    pub(crate) detail_texture: Handle<Image>,
+    pub(crate) detail_scale: f32,
     /// Per-patch source-derived surface textures released with the patch.
     pub(crate) local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
@@ -196,6 +212,9 @@ struct TerrainRenderAssets {
     /// allocating local images whose detail is not visible at their LOD.
     neutral_local_albedo: Option<Handle<Image>>,
     neutral_local_normal: Option<Handle<Image>>,
+    /// Shared tiling micro-detail texture (normal/albedo/roughness) sampled
+    /// triplanar by the terrain shader.
+    detail_texture: Option<Handle<Image>>,
 }
 
 /// Identifies a terrain render entity independently for every planet. Patch
@@ -498,6 +517,8 @@ fn prepare_terrain_render_assets(
     render_assets.patch_resolution = config.patch_resolution;
     let _ = global_albedo_for(&mut render_assets, &asset_server, &imagery, "Earth");
     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
+    // One shared micro-detail texture across every patch.
+    render_assets.detail_texture = Some(images.add(terrain_detail_texture()));
     // One alpha-masked foliage material is shared by every patch. It is created
     // once here so no patch spawn path needs the image assets.
     let vegetation_atlas = images.add(vegetation_atlas());
@@ -744,6 +765,7 @@ fn spawn_patch_mesh_system(
         );
         let morph_start_m = (patch_size_m * MORPH_START_SIZE_FACTOR) as f32;
         let morph_end_m = (patch_size_m * MORPH_END_SIZE_FACTOR) as f32;
+        let detail_texture = render_assets.detail_texture.clone().unwrap_or_default();
         let material_handle = materials.add(build_terrain_material(
             base_material.clone(),
             local_albedo.clone(),
@@ -754,6 +776,8 @@ fn spawn_patch_mesh_system(
             0.0,
             morph_start_m,
             morph_end_m,
+            detail_texture.clone(),
+            TERRAIN_DETAIL_SCALE,
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -841,6 +865,8 @@ fn spawn_patch_mesh_system(
                     imagery_weight: 0.0,
                     morph_start_m,
                     morph_end_m,
+                    detail_texture,
+                    detail_scale: TERRAIN_DETAIL_SCALE,
                     local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     water_mesh_handle: water_mesh_handle.clone(),
@@ -1761,6 +1787,8 @@ mod tests {
                     imagery_weight: 0.0,
                     morph_start_m: 0.0,
                     morph_end_m: 0.0,
+                    detail_texture: Handle::default(),
+                    detail_scale: 0.0,
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
@@ -1799,6 +1827,8 @@ mod tests {
                     imagery_weight: 0.0,
                     morph_start_m: 0.0,
                     morph_end_m: 0.0,
+                    detail_texture: Handle::default(),
+                    detail_scale: 0.0,
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
@@ -2139,6 +2169,8 @@ mod tests {
             imagery_weight: 0.0,
             morph_start_m: 0.0,
             morph_end_m: 0.0,
+            detail_texture: Handle::default(),
+            detail_scale: 0.0,
             local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             water_mesh_handle: None,

@@ -23,7 +23,7 @@ use crate::domain::services::terrain_source::{
     slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
 };
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::DVec3;
 use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -134,6 +134,115 @@ pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
 
 pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
     patch_level >= LOCAL_SURFACE_MIN_PATCH_LEVEL
+}
+
+/// Resolution of the shared tiling micro-detail texture.
+const TERRAIN_DETAIL_RES: u32 = 256;
+/// Cells across the tile at the base octave. Integral octave frequencies keep
+/// every octave seamless when wrapped, so the texture tiles without a seam.
+const TERRAIN_DETAIL_PERIOD: i64 = 8;
+/// Tangent-space XY gain applied to the detail height gradient.
+const TERRAIN_DETAIL_NORMAL_GAIN: f64 = 2.4;
+
+fn detail_hash(ix: i64, iy: i64) -> f64 {
+    let h = (ix as u64)
+        .wrapping_mul(374_761_393)
+        .wrapping_add((iy as u64).wrapping_mul(668_265_263));
+    let h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    ((h ^ (h >> 16)) & 0x00FF_FFFF) as f64 / 0x00FF_FFFF as f64
+}
+
+fn detail_noise(x: f64, y: f64, period: i64) -> f64 {
+    let ix = x.floor() as i64;
+    let iy = y.floor() as i64;
+    let fx = x - ix as f64;
+    let fy = y - iy as f64;
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    let wrap = |value: i64| value.rem_euclid(period);
+    let a = detail_hash(wrap(ix), wrap(iy));
+    let b = detail_hash(wrap(ix + 1), wrap(iy));
+    let c = detail_hash(wrap(ix), wrap(iy + 1));
+    let d = detail_hash(wrap(ix + 1), wrap(iy + 1));
+    let ab = a + (b - a) * ux;
+    let cd = c + (d - c) * ux;
+    (ab + (cd - ab) * uy) * 2.0 - 1.0
+}
+
+fn detail_fbm(u: f64, v: f64) -> f64 {
+    let mut sum = 0.0;
+    let mut weight_sum = 0.0;
+    let mut amplitude = 0.6;
+    let mut period = TERRAIN_DETAIL_PERIOD;
+    for _ in 0..3 {
+        sum += amplitude * detail_noise(u * period as f64, v * period as f64, period);
+        weight_sum += amplitude;
+        amplitude *= 0.5;
+        period *= 2;
+    }
+    sum / weight_sum
+}
+
+/// Build the shared micro-detail texture sampled triplanar by the terrain
+/// shader: RG is a tangent-space normal, B is subtle albedo variation, A is
+/// roughness variation. It carries the surface grain that satellite imagery at
+/// ten metres per texel cannot resolve. Deterministic and seam-tiled.
+pub(crate) fn terrain_detail_texture() -> Image {
+    let res = TERRAIN_DETAIL_RES as usize;
+    let mut height = vec![0.0f64; res * res];
+    for j in 0..res {
+        for i in 0..res {
+            height[j * res + i] = detail_fbm(i as f64 / res as f64, j as f64 / res as f64);
+        }
+    }
+    let sample = |i: i64, j: i64| {
+        let i = i.rem_euclid(res as i64) as usize;
+        let j = j.rem_euclid(res as i64) as usize;
+        height[j * res + i]
+    };
+    let mut data = vec![0u8; res * res * 4];
+    for j in 0..res {
+        for i in 0..res {
+            let dx = (sample(i as i64 + 1, j as i64) - sample(i as i64 - 1, j as i64)) * 0.5;
+            let dy = (sample(i as i64, j as i64 + 1) - sample(i as i64, j as i64 - 1)) * 0.5;
+            let nx = -dx * TERRAIN_DETAIL_NORMAL_GAIN;
+            let ny = -dy * TERRAIN_DETAIL_NORMAL_GAIN;
+            let length = (nx * nx + ny * ny + 1.0).sqrt();
+            let h = height[j * res + i];
+            let index = (j * res + i) * 4;
+            data[index] = (((nx / length) * 0.5 + 0.5) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            data[index + 1] = (((ny / length) * 0.5 + 0.5) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            data[index + 2] = ((0.5 + h * 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+            data[index + 3] = ((0.5 + h * 0.35) * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    let (data, levels) = mip_chain_rgba8(res as u32, res as u32, &data, MipFilter::Color);
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: res as u32,
+            height: res as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = levels;
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 8,
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::default()
+    });
+    image
 }
 
 /// Build the deterministic foliage atlas used by the vegetation material. Every
@@ -1494,6 +1603,36 @@ mod tests {
         // Vegetation still starts one level finer than local maps.
         assert!(!supports_vegetation(LOCAL_SURFACE_MIN_PATCH_LEVEL));
         assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
+    }
+
+    #[test]
+    fn detail_texture_tiles_seamlessly_with_a_mip_chain() {
+        let first = terrain_detail_texture();
+        let second = terrain_detail_texture();
+        assert_eq!(
+            first.data, second.data,
+            "detail texture must be deterministic"
+        );
+        assert_eq!(first.width(), TERRAIN_DETAIL_RES);
+        assert_eq!(first.height(), TERRAIN_DETAIL_RES);
+        assert!(first.texture_descriptor.mip_level_count > 1);
+        let ImageSampler::Descriptor(sampler) = &first.sampler else {
+            panic!("detail texture must use explicit sampling");
+        };
+        assert_eq!(sampler.address_mode_u, ImageAddressMode::Repeat);
+        assert_eq!(sampler.address_mode_v, ImageAddressMode::Repeat);
+        // The left and right edge columns must match for a seamless wrap. The
+        // wrap is exact because every octave wraps at its own period.
+        let data = first.data.as_ref().unwrap();
+        let res = TERRAIN_DETAIL_RES as usize;
+        for row in 0..res {
+            let left = (row * res) * 4;
+            let right = (row * res + res - 1) * 4;
+            assert!(
+                (data[left] as i32 - data[right] as i32).abs() <= 24,
+                "row {row} does not wrap"
+            );
+        }
     }
 
     #[test]

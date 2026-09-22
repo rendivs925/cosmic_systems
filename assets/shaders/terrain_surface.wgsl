@@ -51,6 +51,8 @@ struct TerrainSurfaceExtension {
     // View-distance band over which a patch morphs toward its coarser parent.
     morph_start_m: f32,
     morph_end_m: f32,
+    // Repetitions per metre of the shared micro-detail texture.
+    detail_scale: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -62,6 +64,19 @@ struct TerrainSurfaceExtension {
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var terrain_global_albedo_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var terrain_imagery_albedo: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var terrain_imagery_albedo_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var terrain_detail: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var terrain_detail_sampler: sampler;
+
+// Triplanar sample of the shared micro-detail texture. Projecting on the three
+// world axes avoids both UV stretching on steep faces and cube-sphere seams.
+fn sample_detail_triplanar(world_position: vec3<f32>, normal: vec3<f32>, scale: f32) -> vec4<f32> {
+    var weights = abs(normal);
+    weights = weights / max(weights.x + weights.y + weights.z, 1e-4);
+    let x = textureSample(terrain_detail, terrain_detail_sampler, world_position.zy * scale);
+    let y = textureSample(terrain_detail, terrain_detail_sampler, world_position.xz * scale);
+    let z = textureSample(terrain_detail, terrain_detail_sampler, world_position.xy * scale);
+    return x * weights.x + y * weights.y + z * weights.z;
+}
 
 // Terrain vertex stage. Mirrors Bevy's default mesh vertex path for the
 // attributes terrain actually carries, and adds continuous level-of-detail
@@ -167,6 +182,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let local_roughness = local_surface.w;
     // Macro albedo variation at a scale the streamed imagery does not resolve.
     let macro_variation = value_noise(in.world_position.xyz * MACRO_FREQUENCY) * 2.0 - 1.0;
+    // Shared micro-detail carries the surface grain below the imagery/texture
+    // resolution. It fades out sooner than the patch maps so it never aliases.
+    let micro_fade = 1.0 - smoothstep(300.0, 1500.0, view_distance);
+    let micro_weight = detail_fade * micro_fade;
+    let detail = sample_detail_triplanar(
+        in.world_position.xyz,
+        pbr_input.N,
+        terrain_surface.detail_scale,
+    );
+    let micro_albedo = 1.0 + (detail.b - 0.5) * 0.4 * micro_weight;
     // Crevices (low tangent-space normal.z) darken slightly, adding depth a flat
     // albedo cannot carry. Fades with the same distance-based detail weight.
     let crevice = mix(
@@ -176,13 +201,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     );
     let detail_albedo = mix(base_albedo, local_albedo.rgb, 0.4 * detail_weight);
     pbr_input.material.base_color = vec4(
-        detail_albedo * (1.0 + macro_variation * MACRO_STRENGTH) * crevice,
+        detail_albedo * (1.0 + macro_variation * MACRO_STRENGTH) * crevice * micro_albedo,
         pbr_input.material.base_color.a,
     );
-    pbr_input.material.perceptual_roughness = mix(
-        pbr_input.material.perceptual_roughness,
-        local_roughness,
-        detail_weight,
+    pbr_input.material.perceptual_roughness = clamp(
+        mix(pbr_input.material.perceptual_roughness, local_roughness, detail_weight)
+            + (detail.a - 0.5) * 0.3 * micro_weight,
+        0.04,
+        1.0,
     );
     // Reconstruct the local tangent frame from the patch UVs. The normal map
     // contains source detail absent from the streamed mesh, so it must affect
@@ -201,7 +227,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let mapped_normal = normalize(
             tangent * local_normal.x + bitangent * local_normal.y + pbr_input.N * local_normal.z,
         );
-        pbr_input.N = normalize(mix(pbr_input.N, mapped_normal, detail_weight));
+        // Layer the triplanar micro-detail normal on top of the patch normal.
+        let micro_normal = detail.xy * 2.0 - vec2<f32>(1.0, 1.0);
+        let with_micro = normalize(
+            mapped_normal
+                + tangent * (micro_normal.x * 0.6 * micro_weight)
+                + bitangent * (micro_normal.y * 0.6 * micro_weight),
+        );
+        pbr_input.N = normalize(mix(pbr_input.N, with_micro, detail_weight));
     }
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material,

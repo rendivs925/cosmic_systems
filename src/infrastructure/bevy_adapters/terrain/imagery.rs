@@ -276,6 +276,8 @@ pub(crate) fn apply_terrain_imagery(
             state.imagery_weight,
             state.morph_start_m,
             state.morph_end_m,
+            state.detail_texture.clone(),
+            state.detail_scale,
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing
@@ -412,6 +414,8 @@ mod tests {
                 imagery_weight: 0.0,
                 morph_start_m: 0.0,
                 morph_end_m: 0.0,
+                detail_texture: Handle::default(),
+                detail_scale: 0.0,
                 local_surface_handles: None,
                 vegetation_mesh_handle: None,
                 water_mesh_handle: None,
