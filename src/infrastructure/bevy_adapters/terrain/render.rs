@@ -23,7 +23,9 @@ use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerforman
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
-use crate::infrastructure::bevy_adapters::terrain::surface::vegetation_atlas;
+use crate::infrastructure::bevy_adapters::terrain::surface::{
+    local_detail_weight, vegetation_atlas,
+};
 use crate::infrastructure::bevy_adapters::terrain::water::{
     WaterExtension, WaterMaterial, WaterParams,
 };
@@ -41,8 +43,10 @@ use std::time::Instant;
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
-/// completed terrain batch from stalling camera and HUD presentation.
-const MAX_PATCH_UPLOADS_PER_FRAME: usize = 2;
+/// completed terrain batch from stalling camera and HUD presentation. The cap is
+/// high enough to keep pace with the eight-bake generation budget; a larger
+/// backlog would otherwise leave generated patches invisible for seconds.
+const MAX_PATCH_UPLOADS_PER_FRAME: usize = 6;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
@@ -681,7 +685,13 @@ fn spawn_patch_mesh_system(
             if let Some((albedo, normal)) = surface.local_surfaces {
                 let albedo = images.add(albedo);
                 let normal = images.add(normal);
-                (albedo.clone(), normal.clone(), Some((albedo, normal)), 1.0)
+                let weight = local_detail_weight(patch.level);
+                (
+                    albedo.clone(),
+                    normal.clone(),
+                    Some((albedo, normal)),
+                    weight,
+                )
             } else {
                 let (albedo, normal) =
                     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);

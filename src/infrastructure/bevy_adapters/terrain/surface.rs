@@ -87,10 +87,25 @@ pub(crate) fn max_river_mesh_bytes(resolution: u32) -> u64 {
     let indices = 6 * (res - 1) * (res - 1);
     vertices * RIVER_BYTES_PER_VERTEX + indices * RIVER_BYTES_PER_INDEX
 }
-/// Local surface maps and vegetation are deferred until close-range geometry is
-/// available. Coarser patches retain the global geographic albedo, avoiding
-/// expensive source sampling for detail that is below their screen-space size.
+/// Vegetation is deferred until close-range geometry is available; coarser
+/// patches retain the global geographic albedo and scalar surface properties.
 pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
+
+/// Local albedo/normal maps begin one level coarser than vegetation. A patch's
+/// detail then fades in over three LOD rings instead of appearing on a single
+/// hard boundary, which otherwise reads as one detailed block beside flat ones.
+pub(crate) const LOCAL_SURFACE_MIN_PATCH_LEVEL: u32 = 11;
+
+/// Continuous detail contribution for a patch level. Zero below the map range,
+/// ramping to full detail by level 13 so adjacent LODs blend rather than pop.
+pub(crate) fn local_detail_weight(patch_level: u32) -> f32 {
+    match patch_level {
+        0..=10 => 0.0,
+        11 => 0.4,
+        12 => 0.7,
+        _ => 1.0,
+    }
+}
 
 /// Albedo and normal maps are both RGBA8 textures. The stored size includes the
 /// full mip chain, which adds one third over the base level.
@@ -118,7 +133,7 @@ pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
 }
 
 pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
-    patch_level >= VEGETATION_MIN_PATCH_LEVEL
+    patch_level >= LOCAL_SURFACE_MIN_PATCH_LEVEL
 }
 
 /// Build the deterministic foliage atlas used by the vegetation material. Every
@@ -1473,8 +1488,22 @@ mod tests {
 
     #[test]
     fn local_surface_maps_are_restricted_to_close_range_patches() {
-        assert!(!supports_local_surfaces(VEGETATION_MIN_PATCH_LEVEL - 1));
-        assert!(supports_local_surfaces(VEGETATION_MIN_PATCH_LEVEL));
+        assert!(!supports_local_surfaces(LOCAL_SURFACE_MIN_PATCH_LEVEL - 1));
+        assert!(supports_local_surfaces(LOCAL_SURFACE_MIN_PATCH_LEVEL));
+        // Vegetation still starts one level finer than local maps.
+        assert!(!supports_vegetation(LOCAL_SURFACE_MIN_PATCH_LEVEL));
+        assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
+    }
+
+    #[test]
+    fn local_detail_weight_fades_across_three_lod_rings() {
+        assert_eq!(local_detail_weight(LOCAL_SURFACE_MIN_PATCH_LEVEL - 1), 0.0);
+        let near = local_detail_weight(LOCAL_SURFACE_MIN_PATCH_LEVEL);
+        let mid = local_detail_weight(LOCAL_SURFACE_MIN_PATCH_LEVEL + 1);
+        let full = local_detail_weight(LOCAL_SURFACE_MIN_PATCH_LEVEL + 2);
+        assert!(near > 0.0 && near < mid, "detail must ramp continuously");
+        assert!(mid < full, "detail must ramp continuously");
+        assert_eq!(full, 1.0);
     }
 
     #[test]

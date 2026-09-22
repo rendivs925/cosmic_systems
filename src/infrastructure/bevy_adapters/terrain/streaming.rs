@@ -66,14 +66,16 @@ const SURFACE_LOD_ALTITUDE_THRESHOLD_M: f64 = 10_000.0;
 /// Extra frustum angle retained around the viewport so terrain does not pop at
 /// its edge while the camera is moving between streaming updates.
 const VIEWPORT_PREFETCH_MARGIN_RAD: f64 = 0.2;
-/// Admit a bounded pair of CPU terrain bakes per presentation frame. This fills
-/// the reserved worker pool quickly after a camera move without queueing an
-/// unbounded cold-start burst or blocking the render thread.
-const MAX_TERRAIN_TASKS_PER_FRAME: usize = 2;
+/// Cap on CPU terrain bakes admitted per presentation frame. The effective
+/// limit is still the number of idle worker threads (`generation_capacity`), so
+/// a larger cap lets a cold viewport fill the reserved pool quickly instead of
+/// admitting two tiles at a time and leaving most of the screen coarse for
+/// seconds. Submission itself is cheap and cancellable.
+const MAX_TERRAIN_TASKS_PER_FRAME: usize = 8;
 /// Bound active coverage, including its protected progressive fallback chain,
-/// to the 128 MiB cache budget. The previous 512-leaf limit could make active
-/// coverage alone exceed that budget, leaving LRU eviction with no legal
-/// candidate during an orbital camera view.
+/// to the 128 MiB cache budget. Raising it without more per-frame capacity only
+/// moves the bottleneck to generation/upload and raises reconcile cost, so keep
+/// it matched to the budget.
 const MAX_VIEWPORT_TARGET_LEAVES: usize = 300;
 /// Bound projected-error sampling independently of the final balanced cover.
 /// The domain selector separately charges the exact neighbor-balance closure.
@@ -1642,7 +1644,9 @@ mod tests {
     use crate::domain::services::cube_sphere::{face_uv_to_direction, CubeFace};
     #[cfg(feature = "dem")]
     use crate::domain::services::terrain_source::EarthTerrainSource;
-    use crate::infrastructure::bevy_adapters::terrain::surface::VEGETATION_MIN_PATCH_LEVEL;
+    use crate::infrastructure::bevy_adapters::terrain::surface::{
+        LOCAL_SURFACE_MIN_PATCH_LEVEL, VEGETATION_MIN_PATCH_LEVEL,
+    };
 
     #[derive(Debug)]
     struct DivergentOverviewSource;
@@ -2544,13 +2548,19 @@ mod tests {
     #[test]
     fn vegetation_budget_applies_only_to_close_range_patches() {
         let coarse = TerrainPatch::root(CubeFace::PosZ);
-        let non_vegetated = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL - 1);
+        let plain = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL - 1);
+        let surfaced = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL);
         let vegetated = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL);
 
         assert_eq!(
-            estimated_patch_bytes(non_vegetated, 33),
+            estimated_patch_bytes(plain, 33),
             estimated_patch_bytes(coarse, 33),
             "only close patches reserve local material maps and scatter"
+        );
+        assert_eq!(
+            estimated_patch_bytes(surfaced, 33),
+            estimated_patch_bytes(coarse, 33) + LOCAL_SURFACE_MAP_BYTES + max_river_mesh_bytes(33),
+            "local maps begin one level before vegetation"
         );
         assert_eq!(
             estimated_patch_bytes(vegetated, 33),
@@ -2572,7 +2582,7 @@ mod tests {
         let generated = HashMap::new();
         let bootstrap_batch =
             generation_batch(&roots, &manager, &generated, generation_capacity(4, 0));
-        assert_eq!(bootstrap_batch, roots[..2].to_vec());
+        assert_eq!(bootstrap_batch, roots[..4].to_vec());
 
         let mut generated = HashMap::new();
         let focus = TerrainPatch::root(CubeFace::PosZ);
@@ -2594,12 +2604,15 @@ mod tests {
         manager.mark_ready(&focus);
         manager.mark_visible(&focus);
         let later_batch = generation_batch(&roots, &manager, &generated, generation_capacity(4, 0));
-        assert_eq!(later_batch.len(), 2);
+        assert_eq!(later_batch.len(), 4);
         assert!(!later_batch.contains(&focus));
 
+        // The per-frame cap never exceeds the idle worker count.
+        assert_eq!(generation_capacity(2, 0), 2);
         assert_eq!(generation_capacity(4, 4), 0);
         assert_eq!(generation_capacity(8, 6), 2);
-        assert_eq!(generation_capacity(8, 3), 2);
+        assert_eq!(generation_capacity(8, 3), 5);
+        assert_eq!(generation_capacity(64, 0), MAX_TERRAIN_TASKS_PER_FRAME);
     }
 
     #[test]
