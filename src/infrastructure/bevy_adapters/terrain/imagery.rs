@@ -7,7 +7,9 @@
 //! Imagery is never a terrain-height, altitude, or physics authority.
 
 use crate::domain::services::cube_sphere::TerrainPatch;
-use crate::domain::services::imagery_package::{EarthImageryPackage, ImageryResolution};
+use crate::domain::services::imagery_package::{
+    EarthImageryPackage, ImageryResolution, GLOBAL_OVERVIEW_FILE,
+};
 use crate::domain::services::imagery_tiles::cube_face_name;
 use crate::domain::value_objects::imagery_manifest::EarthImageryManifest;
 use crate::infrastructure::bevy_adapters::terrain::render::{
@@ -63,6 +65,10 @@ pub(crate) struct ImageryMetrics {
 #[derive(Resource, Default)]
 pub(crate) struct TerrainImageryResource {
     package: Option<EarthImageryPackage>,
+    /// The package's high-resolution global overview, used as Earth's global
+    /// albedo fallback so uncovered patches are not limited by the tiny catalog
+    /// texture. Loaded only when the package verifies.
+    overview: Option<Handle<Image>>,
     handles: HashMap<TerrainPatch, Handle<Image>>,
     pending: BTreeSet<TerrainPatch>,
     ready: BTreeSet<TerrainPatch>,
@@ -86,6 +92,13 @@ impl TerrainImageryResource {
         self.handles.get(&tile)
     }
 
+    /// The package's verified global overview, if loaded. Earth's terrain
+    /// material prefers this over the catalog albedo so every patch starts from
+    /// the best available global image.
+    pub(crate) fn global_overview(&self) -> Option<&Handle<Image>> {
+        self.overview.as_ref()
+    }
+
     pub(crate) fn metrics(&self) -> ImageryMetrics {
         ImageryMetrics {
             resident_tiles: self.ready.len(),
@@ -101,6 +114,7 @@ impl TerrainImageryResource {
 /// reported and Earth keeps its existing global albedo.
 pub(crate) fn load_earth_imagery_package(
     config: Res<TerrainImageryConfig>,
+    asset_server: Res<AssetServer>,
     mut imagery: ResMut<TerrainImageryResource>,
 ) {
     imagery.budget_bytes = config.budget_bytes;
@@ -124,7 +138,16 @@ pub(crate) fn load_earth_imagery_package(
                 package.tile_count(),
                 package.regions().len()
             );
+            let overview_path = format!(
+                "{}/{GLOBAL_OVERVIEW_FILE}",
+                config.asset_root.trim_end_matches('/')
+            );
+            imagery.overview = Some(asset_server.load(overview_path.clone()));
             imagery.package = Some(package);
+            info!(
+                target: "terrain_imagery",
+                "Earth global overview bound as fallback albedo: {overview_path}"
+            );
         }
         Err(error) => {
             info!(target: "terrain_imagery", "Earth imagery unavailable; using global albedo fallback: {error}");
@@ -271,6 +294,138 @@ fn imagery_asset_path(asset_root: &str, patch: &TerrainPatch) -> String {
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::CubeFace;
+    use crate::domain::services::imagery_package::{GLOBAL_OVERVIEW_FILE, TILES_DIRECTORY};
+    use crate::domain::services::imagery_tiles::ancestor_at_level;
+    use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
+    use bevy::math::{DQuat, DVec3};
+
+    /// A verified temp package with one produced level-12 tile covering the
+    /// Papua launch site, plus the level-14 geometry patch it resolves for.
+    fn papua_imagery_resource() -> (TerrainImageryResource, TerrainPatch) {
+        let root =
+            std::env::temp_dir().join(format!("cosmic_imagery_upgrade_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(TILES_DIRECTORY)).unwrap();
+        std::fs::write(root.join(GLOBAL_OVERVIEW_FILE), b"").unwrap();
+
+        let mut manifest = EarthImageryManifest::from_ron(EARTH_IMAGERY_MANIFEST).unwrap();
+        let digest = "a".repeat(64);
+        manifest.global_overview.source_sha256 = digest.clone();
+        manifest.global_overview.runtime_sha256 = digest.clone();
+        for region in &mut manifest.local_regions {
+            region.source_sha256 = digest.clone();
+            region.runtime_sha256 = digest.clone();
+        }
+
+        let geometry_patch =
+            TerrainPatch::for_direction(terrain_lat_lon_to_body_fixed(-8.0, 139.5), 14);
+        let tile = ancestor_at_level(&geometry_patch, 12);
+        let directory = root
+            .join(TILES_DIRECTORY)
+            .join(cube_face_name(tile.face))
+            .join("12");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("{}_{}.png", tile.tile_x, tile.tile_y)),
+            b"",
+        )
+        .unwrap();
+
+        let package = EarthImageryPackage::load(&root, manifest).unwrap();
+        let mut resource = TerrainImageryResource {
+            package: Some(package),
+            overview: None,
+            handles: HashMap::new(),
+            pending: BTreeSet::new(),
+            ready: BTreeSet::new(),
+            resident_bytes: IMAGERY_TILE_BYTES,
+            budget_bytes: 64 * 1024 * 1024,
+            evictions: 0,
+        };
+        let mut images = Assets::<Image>::default();
+        let handle = images.add(Image::default());
+        resource.handles.insert(tile, handle);
+        resource.ready.insert(tile);
+        (resource, geometry_patch)
+    }
+
+    #[test]
+    fn ready_imagery_upgrades_the_material_without_recreating_geometry() {
+        let (resource, geometry_patch) = papua_imagery_resource();
+        let mut app = App::new();
+        app.insert_resource(resource)
+            .insert_resource(Assets::<TerrainMaterial>::default())
+            .add_systems(Update, apply_terrain_imagery);
+
+        let entity = app
+            .world_mut()
+            .spawn(TerrainPatchRenderState {
+                patch: geometry_patch,
+                mesh_handle: Handle::default(),
+                material_handle: Handle::default(),
+                base_material: StandardMaterial::default(),
+                local_albedo: Handle::default(),
+                local_normal: Handle::default(),
+                local_detail_weight: 0.0,
+                global_albedo: Handle::default(),
+                imagery_albedo: Handle::default(),
+                imagery_weight: 0.0,
+                local_surface_handles: None,
+                vegetation_mesh_handle: None,
+                water_mesh_handle: None,
+                river_mesh_handle: None,
+                planet_entity: Entity::PLACEHOLDER,
+                body_to_inertial_at_spawn: DQuat::IDENTITY,
+                render_origin_at_spawn: DVec3::ZERO,
+            })
+            .id();
+
+        app.update();
+
+        let state = app.world().get::<TerrainPatchRenderState>(entity).unwrap();
+        assert_eq!(
+            state.imagery_weight, 1.0,
+            "detailed imagery must be applied"
+        );
+        assert_ne!(
+            state.imagery_albedo,
+            Handle::default(),
+            "the resolved imagery tile must be bound"
+        );
+        assert_eq!(
+            state.mesh_handle,
+            Handle::default(),
+            "geometry must not be recreated by imagery"
+        );
+        assert!(
+            state.local_surface_handles.is_none(),
+            "surface data must not be rebuilt by imagery"
+        );
+        assert!(
+            state.vegetation_mesh_handle.is_none() && state.water_mesh_handle.is_none(),
+            "surface and vegetation meshes must not be rebuilt by imagery"
+        );
+        let upgraded = state.material_handle.clone();
+        assert!(
+            app.world()
+                .resource::<Assets<TerrainMaterial>>()
+                .get(&upgraded)
+                .is_some(),
+            "the upgraded material must exist and be non-blank"
+        );
+
+        // A second frame with the same ready imagery must be a no-op.
+        app.update();
+        let state = app.world().get::<TerrainPatchRenderState>(entity).unwrap();
+        assert_eq!(
+            state.material_handle, upgraded,
+            "already-applied imagery must not rebuild the material"
+        );
+
+        let _ = std::fs::remove_dir_all(
+            std::env::temp_dir().join(format!("cosmic_imagery_upgrade_{}", std::process::id())),
+        );
+    }
 
     #[test]
     fn imagery_admission_stays_within_budget() {
@@ -285,6 +440,21 @@ mod tests {
             2 * IMAGERY_TILE_BYTES
         ));
         assert!(within_budget(IMAGERY_TILE_BYTES, 0, 2 * IMAGERY_TILE_BYTES));
+    }
+
+    #[test]
+    fn verified_package_overview_is_the_global_fallback() {
+        // No package means no override: the catalog albedo stays in use.
+        assert!(TerrainImageryResource::default()
+            .global_overview()
+            .is_none());
+
+        let handle = Handle::<Image>::default();
+        let resource = TerrainImageryResource {
+            overview: Some(handle.clone()),
+            ..TerrainImageryResource::default()
+        };
+        assert_eq!(resource.global_overview(), Some(&handle));
     }
 
     #[test]

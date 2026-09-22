@@ -133,7 +133,7 @@ pub struct TerrainPatchRenderState {
     pub(crate) imagery_albedo: Handle<Image>,
     pub(crate) imagery_weight: f32,
     /// Per-patch source-derived surface textures released with the patch.
-    local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
+    pub(crate) local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     /// Sea-level water cap for patches that contain ocean, released with the
     /// patch. The water material itself is shared.
@@ -377,9 +377,11 @@ impl Plugin for TerrainRenderPlugin {
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
+            // Load the imagery package first so the preload can bind the
+            // package's global overview as Earth's fallback albedo.
             .add_systems(
                 Startup,
-                (prepare_terrain_render_assets, load_earth_imagery_package),
+                (load_earth_imagery_package, prepare_terrain_render_assets).chain(),
             )
             .add_systems(
                 Update,
@@ -430,11 +432,19 @@ fn finish_terrain_performance_frame(
 
 /// The catalog's geographic albedo for one body, loaded once and cached. Terrain
 /// meshes retain UV0 specifically for this continuous, equirectangular image.
+/// When the Earth imagery package has verified, its high-resolution global
+/// overview replaces the catalog texture as the globe-wide fallback.
 fn global_albedo_for(
     render_assets: &mut TerrainRenderAssets,
     asset_server: &AssetServer,
+    imagery: &TerrainImageryResource,
     body_name: &str,
 ) -> Option<Handle<Image>> {
+    if body_name == "Earth" {
+        if let Some(handle) = imagery.global_overview() {
+            return Some(handle.clone());
+        }
+    }
     if let Some(handle) = render_assets.global_albedo.get(body_name) {
         return Some(handle.clone());
     }
@@ -451,13 +461,14 @@ fn global_albedo_for(
 fn prepare_terrain_render_assets(
     config: Res<TerrainRenderConfig>,
     asset_server: Res<AssetServer>,
+    imagery: Res<TerrainImageryResource>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut images: ResMut<Assets<Image>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     render_assets.patch_resolution = config.patch_resolution;
-    let _ = global_albedo_for(&mut render_assets, &asset_server, "Earth");
+    let _ = global_albedo_for(&mut render_assets, &asset_server, &imagery, "Earth");
     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
     // One alpha-masked foliage material is shared by every patch. It is created
     // once here so no patch spawn path needs the image assets.
@@ -565,6 +576,7 @@ fn spawn_patch_mesh_system(
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut streaming: ResMut<TerrainStreamingResource>,
     asset_server: Res<AssetServer>,
+    imagery: Res<TerrainImageryResource>,
     render_origin: Res<RenderOrigin>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
@@ -684,7 +696,8 @@ fn spawn_patch_mesh_system(
         let material_started = instrumentation_enabled.then(Instant::now);
         let base_material = patch_material(surface.roughness, surface.metallic);
         let body_name = planet.domain_planet.name.clone();
-        let global_albedo = global_albedo_for(&mut render_assets, &asset_server, &body_name)
+        let global_albedo =
+            global_albedo_for(&mut render_assets, &asset_server, &imagery, &body_name)
             .unwrap_or_else(|| {
                 bevy::log::warn!(
                     "{body_name} global albedo is unavailable; terrain will use source-derived color only"
