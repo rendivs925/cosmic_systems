@@ -817,6 +817,11 @@ pub struct PatchGeometry {
     pub uvs: Vec<[f32; 2]>,
     /// Tile-local UVs retained for future custom material normal/detail maps.
     pub local_uvs: Vec<[f32; 2]>,
+    /// Per-vertex radial height offset from this patch's surface to the coarser
+    /// (parent-level) surface, in meters. The renderer morphs vertices along the
+    /// normal by this offset so LOD refinement is continuous instead of popping.
+    /// Empty when the resolution cannot resolve a 2:1 parent grid.
+    pub morph_deltas: Vec<f32>,
     pub indices: Vec<u32>,
 }
 
@@ -852,6 +857,7 @@ pub fn build_patch_geometry_with_stitches(
     skirt_depth_m: f64,
     stitched_edges: &[PatchEdge],
 ) -> PatchGeometry {
+    let parent_level = patch.level.saturating_sub(1);
     build_patch_geometry_with_height_sampler(
         patch,
         planet_radius_m,
@@ -861,9 +867,13 @@ pub fn build_patch_geometry_with_stitches(
         |latitude_deg, longitude_deg| {
             source.mesh_height_m(latitude_deg, longitude_deg, patch.level)
         },
+        |latitude_deg, longitude_deg| {
+            source.mesh_height_m(latitude_deg, longitude_deg, parent_level)
+        },
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_patch_geometry_with_height_sampler(
     patch: &TerrainPatch,
     planet_radius_m: f64,
@@ -871,6 +881,7 @@ fn build_patch_geometry_with_height_sampler(
     skirt_depth_m: f64,
     stitched_edges: &[PatchEdge],
     height_at: impl Fn(f64, f64) -> f64,
+    coarse_height_at: impl Fn(f64, f64) -> f64,
 ) -> PatchGeometry {
     // Sample in planet-tangent coordinates, rather than patch UV space, so
     // shared vertices retain an identical normal across LOD and cube faces.
@@ -886,6 +897,27 @@ fn build_patch_geometry_with_height_sampler(
     let mut normals = vec![[0.0f64; 3]; res * res];
     let mut uvs = vec![[0.0f32; 2]; res * res];
     let mut local_uvs = vec![[0.0f32; 2]; res * res];
+    let mut morph_deltas = vec![0.0f32; res * res];
+
+    // Parent-level surface on the 2:1 parent grid. With an even number of cells
+    // the parent's vertices coincide with this patch's even vertices, so the
+    // morph target is a plain bilinear interpolation of those samples (CDLOD).
+    // A root has no coarser surface to morph toward.
+    let morph_supported = patch.level > 0 && res >= 3 && (res - 1) % 2 == 0;
+    let half = (res - 1) / 2;
+    let coarse_stride = half + 1;
+    let mut coarse_heights = vec![0.0f64; coarse_stride * coarse_stride];
+    if morph_supported {
+        for m in 0..=half {
+            for k in 0..=half {
+                let u = u0 + (u1 - u0) * (2 * k) as f64 / (res - 1) as f64;
+                let v = v0 + (v1 - v0) * (2 * m) as f64 / (res - 1) as f64;
+                let dir = face_uv_to_direction(patch.face, u, v);
+                let (lat, lon) = direction_to_lat_lon(dir);
+                coarse_heights[m * coarse_stride + k] = coarse_height_at(lat, lon);
+            }
+        }
+    }
     let surface_point = |direction: DVec3| {
         let direction = direction.normalize();
         let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
@@ -909,6 +941,22 @@ fn build_patch_geometry_with_height_sampler(
                 ((90.0 - lat) / 180.0) as f32,
             ];
             local_uvs[idx] = [i as f32 / (res - 1) as f32, j as f32 / (res - 1) as f32];
+            if morph_supported {
+                let k = i / 2;
+                let m = j / 2;
+                let fi = (i % 2) as f64 * 0.5;
+                let fj = (j % 2) as f64 * 0.5;
+                let k1 = (k + 1).min(half);
+                let m1 = (m + 1).min(half);
+                let c00 = coarse_heights[m * coarse_stride + k];
+                let c10 = coarse_heights[m * coarse_stride + k1];
+                let c01 = coarse_heights[m1 * coarse_stride + k];
+                let c11 = coarse_heights[m1 * coarse_stride + k1];
+                let near_row = c00 + (c10 - c00) * fi;
+                let far_row = c01 + (c11 - c01) * fi;
+                let coarse_h = near_row + (far_row - near_row) * fj;
+                morph_deltas[idx] = (coarse_h - h) as f32;
+            }
 
             // Sample normals immediately after the vertex position. Eroded
             // terrain tiles are then reused while still resident instead of
@@ -948,6 +996,7 @@ fn build_patch_geometry_with_height_sampler(
                 all_normals.push(normals[idx]);
                 uvs.push(uvs[idx]);
                 local_uvs.push(local_uvs[idx]);
+                morph_deltas.push(morph_deltas[idx]);
                 skirt_index[idx] = Some(positions.len() as u32 - 1);
             }
         }
@@ -1028,6 +1077,7 @@ fn build_patch_geometry_with_height_sampler(
         normals: all_normals,
         uvs,
         local_uvs,
+        morph_deltas,
         indices,
     }
 }
@@ -1089,19 +1139,80 @@ mod tests {
     #[test]
     fn geometry_samples_each_vertex_and_normal_probe_together() {
         let source = SampleTraceSource::default();
-        let patch = TerrainPatch::root(CubeFace::PosZ);
+        // A non-root patch so the builder also samples its coarse parent grid.
+        let patch = TerrainPatch::for_direction(DVec3::Z, 1);
         build_patch_geometry(&patch, &source, 6_371_000.0, 3, 40.0);
 
         let samples = source.samples.lock().expect("sample trace lock");
-        assert_eq!(samples.len(), 3 * 3 * 5);
-        let (latitude_deg, longitude_deg) = samples[0];
-        assert!(samples[1..5].iter().all(|(lat, lon)| {
-            central_angle_deg(latitude_deg, longitude_deg, *lat, *lon) < 0.01
-        }));
+        // The builder first samples the coarse (parent) grid for LOD morphing,
+        // then each vertex followed by its four normal probes.
+        let coarse_samples = 2 * 2;
+        assert_eq!(samples.len(), coarse_samples + 3 * 3 * 5);
+        let vertex_start = coarse_samples;
+        let (latitude_deg, longitude_deg) = samples[vertex_start];
+        assert!(samples[vertex_start + 1..vertex_start + 5]
+            .iter()
+            .all(|(lat, lon)| {
+                central_angle_deg(latitude_deg, longitude_deg, *lat, *lon) < 0.01
+            }));
         assert!(
-            central_angle_deg(latitude_deg, longitude_deg, samples[5].0, samples[5].1) > 1.0,
+            central_angle_deg(
+                latitude_deg,
+                longitude_deg,
+                samples[vertex_start + 5].0,
+                samples[vertex_start + 5].1
+            ) > 1.0,
             "the next vertex must follow the first vertex's four normal probes"
         );
+    }
+
+    #[test]
+    fn patch_geometry_carries_a_parent_level_morph_offset() {
+        let radius_m = 6_371_000.0;
+        let source = source();
+        let patch = TerrainPatch::for_direction(DVec3::Z, 5);
+        let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 40.0);
+        assert_eq!(geometry.morph_deltas.len(), geometry.positions.len());
+        assert!(
+            geometry.morph_deltas.iter().any(|delta| delta.abs() > 0.0),
+            "a refined patch must have a coarser morph target"
+        );
+
+        // A root has no coarser surface, so every morph offset is zero.
+        let root = build_patch_geometry(
+            &TerrainPatch::root(CubeFace::PosZ),
+            &source,
+            radius_m,
+            33,
+            40.0,
+        );
+        assert!(root.morph_deltas.iter().all(|delta| *delta == 0.0));
+    }
+
+    #[test]
+    fn odd_morph_vertices_interpolate_the_parent_grid() {
+        let radius_m = 6_371_000.0;
+        let source = source();
+        let patch = TerrainPatch::for_direction(DVec3::Z, 5);
+        let resolution = 33usize;
+        let geometry = build_patch_geometry(&patch, &source, radius_m, resolution as u32, 0.0);
+
+        // Height = position length - radius because every vertex sits on the
+        // radial through its direction. The morph target of an odd vertex must
+        // be the midpoint of the surrounding even (parent) samples.
+        let height = |i: usize, j: usize| {
+            let position = DVec3::from_array(geometry.positions[j * resolution + i]);
+            position.length() - radius_m + geometry.morph_deltas[j * resolution + i] as f64
+        };
+        for j in (0..resolution).step_by(2) {
+            for i in (1..resolution - 1).step_by(2) {
+                let midpoint = (height(i - 1, j) + height(i + 1, j)) * 0.5;
+                assert!(
+                    (height(i, j) - midpoint).abs() < 0.05,
+                    "vertex ({i},{j}) morph target is not the parent midpoint"
+                );
+            }
+        }
     }
 
     #[test]

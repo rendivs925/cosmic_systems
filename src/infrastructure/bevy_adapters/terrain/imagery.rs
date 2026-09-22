@@ -274,6 +274,8 @@ pub(crate) fn apply_terrain_imagery(
             state.global_albedo.clone(),
             state.imagery_albedo.clone(),
             state.imagery_weight,
+            state.morph_start_m,
+            state.morph_end_m,
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing
@@ -408,6 +410,8 @@ mod tests {
                 global_albedo: Handle::default(),
                 imagery_albedo: Handle::default(),
                 imagery_weight: 0.0,
+                morph_start_m: 0.0,
+                morph_end_m: 0.0,
                 local_surface_handles: None,
                 vegetation_mesh_handle: None,
                 water_mesh_handle: None,

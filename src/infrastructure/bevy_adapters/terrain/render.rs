@@ -51,6 +51,11 @@ const MAX_PATCH_UPLOADS_PER_FRAME: usize = 6;
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
 /// Sea level is the terrain datum: height 0 above the catalog mean radius.
+/// A patch morphs toward its coarser parent surface between these multiples of
+/// its world size. Reaching full morph before the coarser LOD takes over keeps
+/// the shared edge matching the neighbouring parent patch.
+const MORPH_START_SIZE_FACTOR: f64 = 0.6;
+const MORPH_END_SIZE_FACTOR: f64 = 2.0;
 const WATER_SEA_LEVEL_M: f64 = 0.0;
 /// Small lift so the translucent water cap wins the depth test against the
 /// coincident far-field fallback globe instead of z-fighting it.
@@ -86,10 +91,22 @@ pub(crate) struct TerrainSurfaceExtension {
     imagery_albedo: Handle<Image>,
     #[uniform(104)]
     imagery_weight: f32,
+    /// View-distance band over which a patch morphs toward its coarser parent
+    /// surface. Scaled to the patch's world size so neighbouring LODs agree.
+    #[uniform(104)]
+    morph_start_m: f32,
+    #[uniform(104)]
+    morph_end_m: f32,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
     fn fragment_shader() -> ShaderRef {
+        TERRAIN_SURFACE_SHADER.into()
+    }
+
+    /// The default mesh vertex shader cannot apply the per-vertex LOD morph, so
+    /// the terrain supplies its own vertex stage alongside the fragment one.
+    fn vertex_shader() -> ShaderRef {
         TERRAIN_SURFACE_SHADER.into()
     }
 }
@@ -108,6 +125,8 @@ pub(crate) fn build_terrain_material(
     global_albedo: Handle<Image>,
     imagery_albedo: Handle<Image>,
     imagery_weight: f32,
+    morph_start_m: f32,
+    morph_end_m: f32,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -118,6 +137,8 @@ pub(crate) fn build_terrain_material(
             global_albedo,
             imagery_albedo,
             imagery_weight,
+            morph_start_m,
+            morph_end_m,
         },
     }
 }
@@ -136,6 +157,9 @@ pub struct TerrainPatchRenderState {
     /// The imagery tile currently bound, or a neutral placeholder.
     pub(crate) imagery_albedo: Handle<Image>,
     pub(crate) imagery_weight: f32,
+    /// View-distance morph band for this patch, passed through on material rebuild.
+    pub(crate) morph_start_m: f32,
+    pub(crate) morph_end_m: f32,
     /// Per-patch source-derived surface textures released with the patch.
     pub(crate) local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
@@ -714,6 +738,12 @@ fn spawn_patch_mesh_system(
                 );
                 local_albedo.clone()
             });
+        let patch_size_m = crate::domain::services::cube_sphere::patch_world_size_m(
+            patch.level,
+            planet.domain_planet.radius_km as f64 * 1_000.0,
+        );
+        let morph_start_m = (patch_size_m * MORPH_START_SIZE_FACTOR) as f32;
+        let morph_end_m = (patch_size_m * MORPH_END_SIZE_FACTOR) as f32;
         let material_handle = materials.add(build_terrain_material(
             base_material.clone(),
             local_albedo.clone(),
@@ -722,6 +752,8 @@ fn spawn_patch_mesh_system(
             global_albedo.clone(),
             local_albedo.clone(),
             0.0,
+            morph_start_m,
+            morph_end_m,
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -807,6 +839,8 @@ fn spawn_patch_mesh_system(
                     global_albedo: global_albedo.clone(),
                     imagery_albedo: local_albedo.clone(),
                     imagery_weight: 0.0,
+                    morph_start_m,
+                    morph_end_m,
                     local_surface_handles,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     water_mesh_handle: water_mesh_handle.clone(),
@@ -1228,7 +1262,19 @@ fn patch_geometry_to_mesh(
     let uvs = geometry.uvs.to_vec();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, geometry.local_uvs.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors.to_vec());
+    // Terrain vertex colour is otherwise neutral, so it carries the per-vertex
+    // LOD morph offset (metres, radial) in the red channel for the terrain
+    // vertex shader. Falls back to neutral colour when no morph data exists.
+    let colors: Vec<[f32; 4]> = if geometry.morph_deltas.len() == geometry.positions.len() {
+        geometry
+            .morph_deltas
+            .iter()
+            .map(|delta| [*delta, 0.0, 0.0, 1.0])
+            .collect()
+    } else {
+        vertex_colors.to_vec()
+    };
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
 
     // Indices.
     mesh.insert_indices(Indices::U32(geometry.indices.clone()));
@@ -1713,6 +1759,8 @@ mod tests {
                     global_albedo: Handle::default(),
                     imagery_albedo: Handle::default(),
                     imagery_weight: 0.0,
+                    morph_start_m: 0.0,
+                    morph_end_m: 0.0,
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
@@ -1749,6 +1797,8 @@ mod tests {
                     global_albedo: Handle::default(),
                     imagery_albedo: Handle::default(),
                     imagery_weight: 0.0,
+                    morph_start_m: 0.0,
+                    morph_end_m: 0.0,
                     local_surface_handles: None,
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
@@ -2087,6 +2137,8 @@ mod tests {
             global_albedo: Handle::default(),
             imagery_albedo: Handle::default(),
             imagery_weight: 0.0,
+            morph_start_m: 0.0,
+            morph_end_m: 0.0,
             local_surface_handles: None,
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             water_mesh_handle: None,

@@ -1,9 +1,11 @@
 #import bevy_pbr::{
-    forward_io::{VertexOutput, FragmentOutput},
+    forward_io::{Vertex, VertexOutput, FragmentOutput},
+    mesh_functions,
     mesh_view_bindings::view,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
+    view_transformations,
 }
 
 // Source-derived detail fades out with camera distance. Evaluating the fade per
@@ -46,6 +48,9 @@ struct TerrainSurfaceExtension {
     // 0 while only the global overview is available, 1 when a produced local
     // imagery tile has replaced it for this patch.
     imagery_weight: f32,
+    // View-distance band over which a patch morphs toward its coarser parent.
+    morph_start_m: f32,
+    morph_end_m: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -57,6 +62,65 @@ struct TerrainSurfaceExtension {
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var terrain_global_albedo_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var terrain_imagery_albedo: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var terrain_imagery_albedo_sampler: sampler;
+
+// Terrain vertex stage. Mirrors Bevy's default mesh vertex path for the
+// attributes terrain actually carries, and adds continuous level-of-detail
+// morphing: each vertex stores its offset to the coarser parent surface in the
+// vertex-colour red channel (meters along the normal). The morph factor is
+// derived from the vertex's own view distance, so shared edges between
+// neighbouring patches agree and refinement never pops or cracks.
+@vertex
+fn vertex(vertex: Vertex) -> VertexOutput {
+    var out: VertexOutput;
+
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    var local_position = vertex.position;
+
+#ifdef VERTEX_COLORS
+#ifdef VERTEX_NORMALS
+    let world_before = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(local_position, 1.0),
+    );
+    let view_distance = distance(world_before.xyz, view.world_position);
+    let morph_factor = clamp(
+        (view_distance - terrain_surface.morph_start_m)
+            / max(terrain_surface.morph_end_m - terrain_surface.morph_start_m, 1.0),
+        0.0,
+        1.0,
+    );
+    local_position += vertex.normal * (vertex.color.r * morph_factor);
+#endif
+#endif
+
+#ifdef VERTEX_NORMALS
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+        vertex.normal,
+        vertex.instance_index,
+    );
+#endif
+#ifdef VERTEX_POSITIONS
+    out.world_position = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(local_position, 1.0),
+    );
+    out.position = view_transformations::position_world_to_clip(out.world_position.xyz);
+#endif
+#ifdef VERTEX_UVS_A
+    out.uv = vertex.uv;
+#endif
+#ifdef VERTEX_UVS_B
+    out.uv_b = vertex.uv_b;
+#endif
+#ifdef VERTEX_COLORS
+    out.color = vertex.color;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+
+    return out;
+}
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {

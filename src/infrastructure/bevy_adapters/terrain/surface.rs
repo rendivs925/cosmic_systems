@@ -1377,6 +1377,7 @@ mod tests {
             normals: vec![[1.0, 0.0, 1.0]; 4],
             uvs: vec![],
             local_uvs: vec![],
+            morph_deltas: vec![],
             indices: vec![],
         };
 
