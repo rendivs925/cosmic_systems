@@ -12,6 +12,7 @@ use crate::domain::services::imagery_package::{
 };
 use crate::domain::services::imagery_tiles::cube_face_name;
 use crate::domain::value_objects::imagery_manifest::EarthImageryManifest;
+use crate::infrastructure::bevy_adapters::terrain::mips::{mip_chain_rgba8, MipFilter};
 use crate::infrastructure::bevy_adapters::terrain::render::{
     build_terrain_material, TerrainMaterial, TerrainPatchRenderState,
 };
@@ -160,11 +161,19 @@ pub(crate) fn stream_terrain_imagery(
     config: Res<TerrainImageryConfig>,
     streaming: Res<TerrainStreamingResource>,
     asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     mut imagery: ResMut<TerrainImageryResource>,
 ) {
     let Some(package) = imagery.package.as_ref() else {
         return;
     };
+    // The global overview is a runtime-loaded image with no mip chain; give it
+    // one once it finishes loading so distant patches do not alias.
+    if let Some(overview) = imagery.overview.clone() {
+        if asset_server.load_state(overview.id()).is_loaded() {
+            add_mip_chain_once(&mut images, &overview);
+        }
+    }
     // Desired imagery is exactly the resolution of the currently published
     // cover, so imagery follows the same visible-first priorities as geometry.
     let mut desired = BTreeSet::new();
@@ -210,6 +219,9 @@ pub(crate) fn stream_terrain_imagery(
             imagery.pending.remove(&tile);
             if imagery.ready.insert(tile) {
                 imagery.resident_bytes += IMAGERY_TILE_BYTES;
+                if let Some(handle) = imagery.handles.get(&tile) {
+                    add_mip_chain_once(&mut images, handle);
+                }
             }
         } else if matches!(state, LoadState::Failed(_)) {
             imagery.pending.remove(&tile);
@@ -278,6 +290,32 @@ pub(crate) fn apply_terrain_imagery(
 fn within_budget(resident_bytes: u64, pending: usize, budget_bytes: u64) -> bool {
     let reserved = resident_bytes + pending as u64 * IMAGERY_TILE_BYTES + IMAGERY_TILE_BYTES;
     reserved <= budget_bytes
+}
+
+/// Add a full mip chain to a runtime-loaded image, once. The immutable lookup
+/// avoids emitting a modified event for images that already have a chain.
+fn add_mip_chain_once(images: &mut Assets<Image>, handle: &Handle<Image>) -> bool {
+    let needs_chain = images
+        .get(handle.id())
+        .is_some_and(|image| image.texture_descriptor.mip_level_count == 1 && image.data.is_some());
+    if !needs_chain {
+        return false;
+    }
+    let Some(image) = images.get_mut(handle.id()) else {
+        return false;
+    };
+    let width = image.texture_descriptor.size.width;
+    let height = image.texture_descriptor.size.height;
+    let Some(data) = image.data.as_ref() else {
+        return false;
+    };
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let (chain, levels) = mip_chain_rgba8(width, height, data, MipFilter::Color);
+    image.data = Some(chain);
+    image.texture_descriptor.mip_level_count = levels;
+    true
 }
 
 fn imagery_asset_path(asset_root: &str, patch: &TerrainPatch) -> String {

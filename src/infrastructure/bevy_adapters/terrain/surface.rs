@@ -14,6 +14,7 @@
 //! Everything is seeded from the patch coordinates, so it is reproducible and
 //! independent of frame rate or spawn order (AGENTS.md 26, 44).
 
+use super::mips::{mip_chain_rgba8, MipFilter};
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
@@ -91,8 +92,10 @@ pub(crate) fn max_river_mesh_bytes(resolution: u32) -> u64 {
 /// expensive source sampling for detail that is below their screen-space size.
 pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
 
-/// Albedo and normal maps are both RGBA8 textures.
-pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 = SURFACE_TEX_RES as u64 * SURFACE_TEX_RES as u64 * 8;
+/// Albedo and normal maps are both RGBA8 textures. The stored size includes the
+/// full mip chain, which adds one third over the base level.
+pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 =
+    SURFACE_TEX_RES as u64 * SURFACE_TEX_RES as u64 * 8 * 4 / 3;
 
 /// Conservative maximum allocation for one merged vegetation mesh. Streaming
 /// reserves it for close patches before worker generation knows their biome.
@@ -497,20 +500,29 @@ pub fn build_patch_surfaces(
         height: res as u32,
         depth_or_array_layers: 1,
     };
-    let mut albedo_img = Image::new(
+    // Bevy does not generate mipmaps, so supply the chain here. Without it the
+    // mip-filtering sampler aliases the source detail into shimmer as soon as a
+    // patch is minified.
+    let (albedo, albedo_levels) =
+        mip_chain_rgba8(res as u32, res as u32, &albedo, MipFilter::Color);
+    let (normal_data, normal_levels) =
+        mip_chain_rgba8(res as u32, res as u32, &normal_data, MipFilter::Normal);
+    let mut albedo_img = Image::new_uninit(
         extent,
         TextureDimension::D2,
-        albedo,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
-    let mut normal_img = Image::new(
+    albedo_img.data = Some(albedo);
+    albedo_img.texture_descriptor.mip_level_count = albedo_levels;
+    let mut normal_img = Image::new_uninit(
         extent,
         TextureDimension::D2,
-        normal_data,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
+    normal_img.data = Some(normal_data);
+    normal_img.texture_descriptor.mip_level_count = normal_levels;
     let sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
@@ -1221,10 +1233,22 @@ mod tests {
         assert_eq!(albedo.height(), SURFACE_TEX_RES);
         assert_eq!(normal.width(), SURFACE_TEX_RES);
         assert_eq!(albedo.texture_descriptor.format, TextureFormat::Rgba8Unorm);
-        // 4 channels per texel.
+        // The stored data is the complete mip chain (base level plus every
+        // halving), so Bevy can sample it without aliasing.
+        assert!(
+            albedo.texture_descriptor.mip_level_count > 1,
+            "local terrain maps must ship a mip chain"
+        );
+        let expected_bytes: usize = (0..albedo.texture_descriptor.mip_level_count)
+            .map(|level| {
+                let size = (SURFACE_TEX_RES >> level).max(1) as usize;
+                size * size * 4
+            })
+            .sum();
+        assert_eq!(albedo.data.as_ref().unwrap().len(), expected_bytes);
         assert_eq!(
-            albedo.data.as_ref().unwrap().len(),
-            (SURFACE_TEX_RES as usize).pow(2) * 4
+            normal.texture_descriptor.mip_level_count,
+            albedo.texture_descriptor.mip_level_count
         );
         assert_eq!(normal.texture_descriptor.format, TextureFormat::Rgba8Unorm);
         for image in [&albedo, &normal] {
