@@ -11,8 +11,8 @@
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::cube_sphere::{
     build_patch_geometry_with_stitches, direction_to_lat_lon, patch_angular_radius_rad,
-    projected_patch_error_px, select_quadtree_leaves, CameraProjection, PatchEdge, PatchGeometry,
-    QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
+    projected_patch_error_px, select_quadtree_leaves, visible_leaves_for_cover, CameraProjection,
+    PatchEdge, PatchGeometry, QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
@@ -761,19 +761,12 @@ pub(crate) fn stream_terrain_patches(
     }
     streaming.manager.sweep_evicted();
     if invalidated_stitch_variants {
+        // Eviction only changes which cached patches are ready. The balanced
+        // cover and its request set are unchanged, so refresh the ready-cover
+        // leaves directly instead of repeating the projected-error traversal.
         state.ready = streaming.generated.keys().copied().collect();
-        selection = select_quadtree_leaves(
-            &state,
-            &errors,
-            QuadtreeSelectionConfig {
-                max_level: max_focus_level,
-                max_projected_error_px: SCREEN_ERROR_PX,
-                max_neighbor_level_difference: 1,
-                max_target_leaves: MAX_VIEWPORT_TARGET_LEAVES,
-                max_requested_bytes: streaming.budget_bytes,
-            },
-            |patch| estimated_patch_bytes(*patch, config.patch_resolution_for(*patch)),
-        );
+        let refreshed = visible_leaves_for_cover(&selection.target_leaves, &state);
+        selection.visible_leaves = refreshed;
     }
     let lod_splits = selection
         .target_leaves
@@ -1599,10 +1592,13 @@ fn stitch_edges_for(patch: TerrainPatch, leaves: &BTreeSet<TerrainPatch>) -> Vec
         .into_iter()
         .filter(|edge| {
             let neighbor_at_patch_level = patch.neighbor(*edge).patch;
-            leaves.iter().any(|candidate| {
-                candidate.level + 1 == patch.level
-                    && candidate.is_ancestor_of(&neighbor_at_patch_level)
-            })
+            // The stitch is needed when the neighbor at this patch's level is
+            // covered by a coarser leaf. On a balanced cover (level difference
+            // at most one) that leaf is exactly the neighbor's parent, so the
+            // membership test replaces scanning the whole leaf set.
+            neighbor_at_patch_level
+                .parent()
+                .is_some_and(|parent| leaves.contains(&parent))
         })
         .collect()
 }
@@ -2633,6 +2629,43 @@ mod tests {
         let error = source.patch_geometric_error(&TerrainPatch::root(CubeFace::PosX));
         assert_eq!(error.elevation_range_m, 2_000.0);
         assert_eq!(error.child_to_parent_deviation_m, 2_000.0);
+    }
+
+    #[test]
+    fn stitch_edges_follow_the_balanced_neighbor_cover() {
+        // One level-1 quadrant plus the four level-2 children of its neighbor.
+        let face = CubeFace::PosZ;
+        let mut leaves: BTreeSet<TerrainPatch> = BTreeSet::new();
+        for (tile_x, tile_y) in [(0, 0), (1, 0), (0, 1)] {
+            leaves.insert(TerrainPatch {
+                face,
+                level: 1,
+                tile_x,
+                tile_y,
+            });
+        }
+        for (tile_x, tile_y) in [(2, 2), (3, 2), (2, 3), (3, 3)] {
+            leaves.insert(TerrainPatch {
+                face,
+                level: 2,
+                tile_x,
+                tile_y,
+            });
+        }
+
+        let patch = TerrainPatch {
+            face,
+            level: 2,
+            tile_x: 2,
+            tile_y: 2,
+        };
+        let edges = stitch_edges_for(patch, &leaves);
+        // West and South border the coarser level-1 quadrants, so they stitch.
+        assert!(edges.contains(&PatchEdge::West));
+        assert!(edges.contains(&PatchEdge::South));
+        // East and North border same-level siblings, which must not stitch.
+        assert!(!edges.contains(&PatchEdge::East));
+        assert!(!edges.contains(&PatchEdge::North));
     }
 
     #[test]

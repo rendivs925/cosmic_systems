@@ -11,7 +11,8 @@
 use crate::domain::math::DVec3;
 use crate::domain::services::terrain_source::TerrainSource;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
 
 /// The six faces of the cube-sphere.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -492,6 +493,31 @@ pub struct QuadtreeSelection {
     pub visible_leaves: BTreeSet<TerrainPatch>,
 }
 
+/// One node queued for refinement, ordered by descending projected error with a
+/// deterministic patch-key tie-break. `BinaryHeap` is a max-heap, so the
+/// greatest entry pops first.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PendingNode {
+    patch: TerrainPatch,
+    error_px: f64,
+}
+
+impl Eq for PendingNode {}
+
+impl Ord for PendingNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.error_px
+            .total_cmp(&other.error_px)
+            .then_with(|| self.patch.cmp(&other.patch))
+    }
+}
+
+impl PartialOrd for PendingNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Select a complete, balanced six-face leaf cover from supplied projected errors.
 ///
 /// Readiness only affects `visible_leaves`; `target_leaves` and `requested` are
@@ -504,23 +530,25 @@ pub fn select_quadtree_leaves(
 ) -> QuadtreeSelection {
     let mut target_leaves: BTreeSet<_> = TerrainPatch::roots().into_iter().collect();
     let mut requested_bytes: u64 = target_leaves.iter().map(&patch_bytes).sum();
-    let mut pending: Vec<_> = TerrainPatch::roots().into_iter().collect();
-
-    while let Some(index) = pending
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            projected_errors_px
-                .get(a)
-                .copied()
-                .unwrap_or(0.0)
-                .total_cmp(&projected_errors_px.get(b).copied().unwrap_or(0.0))
-                .then_with(|| a.cmp(b))
+    // Highest projected error refines first; equal errors break toward the
+    // greater patch key (the previous `max_by` order). A heap keeps each step
+    // O(log n) instead of scanning the whole pending set.
+    let mut pending: BinaryHeap<PendingNode> = TerrainPatch::roots()
+        .into_iter()
+        .map(|patch| PendingNode {
+            patch,
+            error_px: projected_errors_px.get(&patch).copied().unwrap_or(0.0),
         })
-        .map(|(index, _)| index)
+        .collect();
+    // Balance closure re-queries the same neighbours across successive splits.
+    // Cross-face neighbour lookup is trigonometric, so memoize within the pass.
+    let mut neighbors = NeighborCache::default();
+
+    while let Some(PendingNode {
+        patch,
+        error_px: projected_error_px,
+    }) = pending.pop()
     {
-        let patch = pending.swap_remove(index);
-        let projected_error_px = projected_errors_px.get(&patch).copied().unwrap_or(0.0);
         if !target_leaves.contains(&patch)
             || patch.level >= config.max_level
             || !state.is_visible(&patch)
@@ -531,8 +559,12 @@ pub fn select_quadtree_leaves(
 
         // Charge the complete balance closure before mutating the cover. A
         // fixed reserve for balancing cannot bound deeply localized refinement.
-        let splits =
-            balanced_split_closure(&target_leaves, patch, config.max_neighbor_level_difference);
+        let splits = balanced_split_closure(
+            &target_leaves,
+            patch,
+            config.max_neighbor_level_difference,
+            &mut neighbors,
+        );
         if target_leaves.len() + 3 * splits.len() > config.max_target_leaves.max(6) {
             continue;
         }
@@ -549,7 +581,10 @@ pub fn select_quadtree_leaves(
             target_leaves.remove(&split);
             for child in split.children() {
                 target_leaves.insert(child);
-                pending.push(child);
+                pending.push(PendingNode {
+                    patch: child,
+                    error_px: projected_errors_px.get(&child).copied().unwrap_or(0.0),
+                });
             }
         }
     }
@@ -565,10 +600,7 @@ pub fn select_quadtree_leaves(
         }
     }
 
-    let mut visible_leaves = BTreeSet::new();
-    for root in TerrainPatch::roots() {
-        resolve_ready_leaves(root, &target_leaves, state, &mut visible_leaves);
-    }
+    let visible_leaves = visible_leaves_for_cover(&target_leaves, state);
 
     QuadtreeSelection {
         target_leaves,
@@ -577,12 +609,31 @@ pub fn select_quadtree_leaves(
     }
 }
 
+/// Resolve the ready-cover leaves for an already-balanced target cover.
+///
+/// Readiness affects only this result: `target_leaves` and `requested` depend
+/// solely on projected error, configuration, and visibility, none of which
+/// change when a cached variant is evicted. A caller that has already selected a
+/// cover can therefore refresh visibility without repeating the projected-error
+/// traversal.
+pub fn visible_leaves_for_cover(
+    target_leaves: &BTreeSet<TerrainPatch>,
+    state: &QuadtreePatchState,
+) -> BTreeSet<TerrainPatch> {
+    let mut visible_leaves = BTreeSet::new();
+    for root in TerrainPatch::roots() {
+        resolve_ready_leaves(root, target_leaves, state, &mut visible_leaves);
+    }
+    visible_leaves
+}
+
 /// Given a balanced cover, find the coarser neighbors that must split with a
 /// leaf. Neighbor lookup is shared with full-cover balancing, including seams.
 fn balanced_split_closure(
     leaves: &BTreeSet<TerrainPatch>,
     patch: TerrainPatch,
     max_level_difference: u32,
+    neighbors: &mut NeighborCache,
 ) -> BTreeSet<TerrainPatch> {
     let mut splits = BTreeSet::new();
     let mut pending = vec![patch];
@@ -591,7 +642,7 @@ fn balanced_split_closure(
             continue;
         }
         for edge in PatchEdge::ALL {
-            let mut neighbor = Some(patch.neighbor(edge).patch);
+            let mut neighbor = Some(neighbors.neighbor(patch, edge));
             while let Some(candidate) = neighbor {
                 if leaves.contains(&candidate) {
                     if candidate.level + max_level_difference < patch.level + 1 {
@@ -604,6 +655,25 @@ fn balanced_split_closure(
         }
     }
     splits
+}
+
+/// Memoizes same-level neighbour lookups for one selection pass. Cube-face
+/// neighbours are derived trigonometrically, so repeated queries during balance
+/// closure are worth caching.
+#[derive(Default)]
+struct NeighborCache {
+    neighbors: HashMap<(TerrainPatch, PatchEdge), TerrainPatch>,
+}
+
+impl NeighborCache {
+    fn neighbor(&mut self, patch: TerrainPatch, edge: PatchEdge) -> TerrainPatch {
+        if let Some(found) = self.neighbors.get(&(patch, edge)) {
+            return *found;
+        }
+        let found = patch.neighbor(edge).patch;
+        self.neighbors.insert((patch, edge), found);
+        found
+    }
 }
 
 fn resolve_ready_leaves(
