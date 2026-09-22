@@ -10,38 +10,57 @@ Manifest: `assets/configs/terrain/earth_imagery_v1.ron`
 
 ## Global overview
 
-- Dataset: NASA Blue Marble: Next Generation, August 2004 base map.
-- Source: <https://science.nasa.gov/earth/earth-observatory/blue-marble/>
+- Dataset: NASA Blue Marble: Next Generation, August 2004 composite with
+  topography and bathymetry.
+- Source:
+  <https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/74117/world.200408.3x21600x10800.jpg>
 - License: public domain (NASA). NASA material is not protected by copyright
   unless noted.
 - Attribution: NASA Earth Observatory / Reto Stockli (NASA GSFC).
 - Coverage: global, seamless true-colour mosaic.
-- Resolution: 500 m per pixel at the equator.
+- Resolution: 21600 by 10800 source samples, 2 km per pixel; the runtime asset is
+  downsampled to 8192 by 4096 with Lanczos resampling.
 - Horizontal reference: WGS 84 geographic (EPSG:4326), Earth body-fixed.
-- Role: immediate fallback albedo for every visible Earth patch until a more
-  detailed local tile is ready.
+- Downloaded source SHA-256:
+  `926be7253be90a1fd57071a33afbfe7a712a2dfe0d5b5b4602bc5dfbcfdc2c89`.
+- Runtime asset SHA-256:
+  `9b108ac20def521dfa6035d906e4fa33097cfd205689b0f3211d4b05e416373f`.
+- Role: Earth's global fallback albedo. When the package verifies at startup,
+  this overview replaces the catalog texture as the texture every terrain patch
+  starts from, so uncovered patches are not limited to the small source-derived
+  global albedo. A missing or invalid package leaves the catalog albedo in
+  place.
 
 ## Local high-detail region
 
 - Region id: `papua_coastal_lowland`.
-- Dataset: Copernicus Sentinel-2 Level-2A surface reflectance.
-- Source: <https://dataspace.copernicus.eu/>
+- Dataset: Copernicus Sentinel-2 Level-2A true colour (TCI) surface reflectance.
+- Source: the Sentinel-2 L2A COGs on AWS Open Data served through the Earth
+  Search STAC API.
 - License: Copernicus Sentinel Data is provided on a free, full and open basis
   under the Legal Notice on the use of Copernicus Sentinel Data and Service
   Information (<https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice>).
   Redistribution and adaptation are permitted with the required attribution.
 - Required attribution notice: `Contains modified Copernicus Sentinel data 2026`.
-- Bands: red (B04), green (B03), blue (B02) at 10 m per pixel.
-- Coverage: the Sentinel-2 L2A granule containing the presentation launch site
-  at 8.0 degrees south, 139.5 degrees east. The nominal bounding box is
-  `139.0..140.0` east and `8.6..7.4` south; the exact granule footprint,
-  acquisition date, and processing baseline are recorded here at production.
-- Horizontal reference: WGS 84 geographic (EPSG:4326), Earth body-fixed.
-- Level range: `min_level = 8`, `max_level = 12`. Level 12 is the recommended
-  production cap for this region size: 10 m pixels at roughly 9.5 m per texel
-  while keeping the package near tens of megabytes. Producing every level to
-  level 14 over a one-degree region would be roughly 800 MB of tiles, so either
-  the cap stays at 12 or the region shrinks.
+- Acquisition: 2026-08-22, Sentinel-2B, one MGRS scene per tile, true colour TCI
+  at 10 m per pixel. Four scenes cover the region:
+  `54LTR`, `54LUR`, `54MTS`, `54MUS` (UTM zone 54S, EPSG:32654).
+- Coverage: a complete mosaic of the nominal bounding box
+  `139.0..140.0` east and `8.6..7.4` south (100.000 % filled by the four scenes).
+- Horizontal reference: WGS 84 geographic (EPSG:4326), Earth body-fixed. The UTM
+  sources are reprojected with `scripts/imagery_reproject_utm.py`.
+- Level range: `min_level = 8`, `max_level = 12`, `resolution = 256`. This yields
+  5009 produced tiles (24 at L8, 75 at L9, 263 at L10, 955 at L11, 3692 at L12),
+  34 MB on disk after PNG compression. Cube-edge distortion makes this longitude
+  fall near a face edge where level-12 tiles are small angularly, so level 12 is
+  the largest cap that keeps the package in the tens-of-megabytes range. Level 12
+  is about 7 m per texel and level 11 about 14 m per texel, so level 12 slightly
+  oversamples the 10 m source, and level 14 over this region would be hundreds of
+  megabytes.
+- Aggregate source SHA-256 (four scenes):
+  `2d3f5173c44895f714d427429eaa929852169318d48c29d3d8cc1b49f674df23`.
+- Aggregate runtime tile SHA-256:
+  `977f14594b871e0fdb0ead79a51bd0495d0564f58e52a127fcf7adedaf737d31`.
 - Role: detailed imagery for visible patches inside the region. A patch at or
   below the level range uses the most detailed produced tile at or coarser than
   its own level; a coarser patch falls back to the global overview.
@@ -65,23 +84,47 @@ global overview.
 ## Verification
 
 `source_sha256` and `runtime_sha256` in the manifest are recorded when the
-source data is downloaded and the runtime package is generated. Until then they
-hold the literal value `pending`, which is not a valid SHA-256 and must cause
-package verification to fail so no unverified imagery is accepted.
+source data is downloaded and the runtime package is generated. The literal
+value `pending` is not a valid SHA-256 and causes package verification to fail so
+no unverified imagery is accepted.
 
-Expected visual error is also recorded at production: the local region is
-10 m imagery displayed on terrain whose geometry is finer than the imagery
-resolution at the local-detail level, so imagery, not geometry, limits the
-close-range ground detail.
+For a single-file source (the global overview) the checksum is the SHA-256 of
+that file. For a multi-file source or a tile set the checksum is the SHA-256 of
+the sorted listing of `<file-sha256>  <relative-name>\n` lines, so it is
+deterministic and order-independent.
+
+Expected visual error: the local region is 10 m imagery displayed on terrain
+whose geometry is finer than the imagery resolution at the local-detail level, so
+imagery, not geometry, limits close-range ground detail. Scene 54LUR contains
+thin cirrus streaks and small cloud fragments despite the low reported cloud
+cover; these are visible in the imagery and are not corrected.
 
 ## Production workflow
 
-1. Acquire the Blue Marble overview and the Sentinel-2 L2A granule, and record
-   their downloaded SHA-256 values in the manifest.
-2. Convert both sources to the cube-sphere tile layout with the offline imagery
-   converter (added by task 2.3 of `earth-visual-streaming`).
-3. Verify the runtime package and fill the `runtime_sha256` fields.
-4. Enable the package; a missing or invalid package falls back to the existing
+1. Query the Earth Search STAC API for Sentinel-2 L2A scenes covering the
+   region, choose one low-cloud date, and download the four `TCI.tif` COGs. Also
+   download the Blue Marble August 2004 global composite. Record both downloaded
+   SHA-256 values (aggregated as above) in the manifest.
+2. Reproject and mosaic the UTM scenes into one WGS 84 equirectangular image with
+   `scripts/imagery_reproject_utm.py`, for example:
+
+   ```sh
+   python3 scripts/imagery_reproject_utm.py --zone 54 --south \
+       --bounds 139.0 -8.6 140.0 -7.4 --out /tmp/papua_equirect.png \
+       54LTR.tif 54LUR.tif 54MTS.tif 54MUS.tif
+   ```
+
+   The script refuses to finish unless the mosaic fully covers the region.
+3. Downsample the Blue Marble composite to `global_overview.png` and convert the
+   equirectangular image to cube-sphere tiles with the offline converter:
+
+   ```sh
+   cargo run --release --features dem --bin imagery_convert -- \
+       /tmp/papua_equirect.png assets/large_files/terrain/earth_imagery_v1/tiles \
+       139.0 -8.6 140.0 -7.4 8 12 256
+   ```
+4. Verify the runtime package and fill the `runtime_sha256` fields.
+5. Enable the package; a missing or invalid package falls back to the existing
    global albedo and emits a startup availability status.
 
 No simulator path downloads imagery, and a missing package is never a terrain

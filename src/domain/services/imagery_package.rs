@@ -289,9 +289,9 @@ mod tests {
         let root = temp_root("unverified");
         std::fs::write(root.join(GLOBAL_OVERVIEW_FILE), b"").unwrap();
         std::fs::create_dir_all(root.join(TILES_DIRECTORY)).unwrap();
-        let error =
-            EarthImageryPackage::load(&root, EarthImageryManifest::from_ron(MANIFEST).unwrap())
-                .unwrap_err();
+        let mut manifest = EarthImageryManifest::from_ron(MANIFEST).unwrap();
+        manifest.global_overview.source_sha256 = "pending".into();
+        let error = EarthImageryPackage::load(&root, manifest).unwrap_err();
         assert!(matches!(error, ImageryPackageError::Manifest(_)));
         let _ = std::fs::remove_dir_all(&root);
     }

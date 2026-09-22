@@ -20,14 +20,15 @@
 
 ## 2. Earth Imagery Package
 
-- [ ] 2.1 Select and review a redistributable global Earth imagery source and
+- [x] 2.1 Select and review a redistributable global Earth imagery source and
   a bounded high-detail launch/flight region; record license, body-fixed datum,
   coverage, resolution, source checksums, and expected visual error.
-  Source and region are selected and documented: NASA Blue Marble: Next
-  Generation (public domain) for the global overview and Copernicus Sentinel-2
-  L2A 10 m for the bounded Papua region. License, datum, coverage, and
-  resolution are recorded. Source checksums and expected visual error remain
-  pending actual acquisition.
+  NASA Blue Marble: Next Generation (public domain) provides the global overview
+  and Copernicus Sentinel-2 L2A true colour provides the bounded Papua region.
+  `docs/datasets/earth_imagery_v1.md` records the license, attribution, WGS 84
+  body-fixed datum, coverage, resolution, acquisition, downloaded and runtime
+  SHA-256 values, and the expected visual error (10 m imagery limits close-range
+  detail; thin cirrus in scene 54LUR is left uncorrected).
 - [x] 2.2 Add a versioned imagery manifest and provenance document under the
   existing terrain asset/document paths, with ignored local-package locations.
   Added `assets/configs/terrain/earth_imagery_v1.ron` and
@@ -41,11 +42,18 @@
   Eight tests cover pixel-center mapping, antimeridian wrap, polar clamp,
   adjacent-edge continuity, region coverage/bounds, and determinism; the binary
   was exercised end to end on a synthetic equirectangular image.
-- [ ] 2.4 Produce and verify the local imagery package without adding runtime
-  downloads or committing large generated assets. Blocked on data acquisition
-  and a region/max-level decision: a full 10 m package over the nominal region
-  to level 14 is roughly 800 MB of tiles, so production must either cap the
-  imagery level or shrink the region.
+- [x] 2.4 Produce and verify the local imagery package without adding runtime
+  downloads or committing large generated assets. Four Sentinel-2B scenes from
+  2026-08-22 (54LTR/54LUR/54MTS/54MUS) were reprojected with
+  `scripts/imagery_reproject_utm.py` and converted to 5009 cube-sphere tiles
+  (levels 8..=12, 256 px, 34 MB) under the ignored
+  `assets/large_files/terrain/earth_imagery_v1/`. The level cap is 12 because
+  cube-edge distortion makes this longitude need 3692 level-12 tiles; levels
+  8..=10 would be too coarse and level 14 would be hundreds of megabytes. The
+  runtime log confirms the package loads and streams (`Earth imagery available:
+  5009 tiles, 1 regions`, 82-85 resident tiles, ~21 MiB of the 64 MiB budget,
+  evictions advancing) with no errors, and an absent package still falls back to
+  the global albedo.
 
 ## 3. Progressive Terrain Imagery
 
@@ -91,21 +99,45 @@
   Source/collision independence is structural: imagery lives only in
   presentation modules and no imagery type is referenced by `TerrainSource`,
   terrain collision, or rocket physics.
-- [ ] 4.4 Add render lifecycle tests proving that detailed imagery upgrades a
+- [x] 4.4 Add render lifecycle tests proving that detailed imagery upgrades a
   patch without recreating terrain geometry or leaving a blank material.
-  Not yet covered; the upgrade path was verified end to end at runtime with a
-  synthetic package but has no automated Bevy-world test.
+  `ready_imagery_upgrades_the_material_without_recreating_geometry` builds a
+  verified temporary package, spawns a resolved patch render state, and runs
+  `apply_terrain_imagery`: it asserts the material is upgraded (non-default
+  albedo, `imagery_weight == 1.0`), the mesh and surface handles are unchanged,
+  and a second frame is a no-op.
 
 ## 5. Validation And Acceptance
 
 - [ ] 5.1 Run `cargo fmt --check`, `cargo check --features dem`, `cargo clippy
   --features dem -- -D warnings`, `cargo test --features dem`, and `cargo build
-  --release --features dem`.
-- [ ] 5.2 Run bounded normal, craft, and rocket starts with the `dem` feature
+  --release --features dem`. All ran clean (713 dem and 686 no-default lib tests,
+  30/30 strict OpenSpec) except `cargo clippy -- -D warnings`, which the user
+  intentionally skipped; run it before final acceptance if warnings are wanted.
+- [x] 5.2 Run bounded normal, craft, and rocket starts with the `dem` feature
   and confirm absent imagery preserves the existing global-albedo fallback.
+  Normal, craft, and rocket each stayed alive for 18 s under Xvfb with zero
+  errors or panics. Imagery is rocket-terrain-only: normal and craft never load
+  it. A rocket run with the package moved away logged the global-albedo fallback
+  and stayed bounded, so a missing package is not a terrain or collision error.
 - [ ] 5.3 Capture a native-display 1x Earth flight-camera run with existing
   performance and terrain telemetry enabled; compare frame percentiles,
   geometry work, and imagery backlog against the pre-change baseline.
+  Blocked by the environment. A GPU-backed Xvfb ascent (Space launch, chase
+  camera, `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`) reached fairing separation at
+  110 km with p50 ~52-54 ms, p95 ~120 ms, and p99 ~133 ms, and the imagery
+  backlog drained from 85 resident tiles to 0 as the region was left behind
+  (191 evictions, resident ceiling 21.25 MiB of 64 MiB). On the real `:0`
+  display the rocket window is destroyed externally after tens of seconds with a
+  clean exit (code 0) and no error, panic, OOM, or imagery correlation (normal
+  mode survives), so a native-display capture comparable to the documented
+  pre-change baseline (p50 82.9 ms, p95 103.1 ms, p99 179.3 ms) is still
+  pending.
 - [ ] 5.4 Visually inspect globe-to-ground imagery refinement on a usable
   display for continuous fallback, cube-face seams, blank patches, and stable
   camera-relative presentation.
+  Blocked by the same display instability. Xvfb frames confirm continuous
+  fallback and no blank patches at Earth's limb, but the near-ground chase and
+  peripheral camera views are dominated by atmospheric haze and pre-existing
+  patch-level shading banding, so detailed imagery refinement cannot be judged
+  from them; inspection needs a usable display.

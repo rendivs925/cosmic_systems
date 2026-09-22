@@ -224,7 +224,8 @@ mod tests {
 
     #[test]
     fn unverified_checksums_are_rejected() {
-        let manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        let mut manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        manifest.local_regions[0].runtime_sha256 = "pending".into();
         let error = manifest
             .validate()
             .expect_err("pending checksums must not be accepted");
