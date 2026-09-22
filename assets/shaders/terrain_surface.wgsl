@@ -1,8 +1,44 @@
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
+    mesh_view_bindings::view,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
+}
+
+// Source-derived detail fades out with camera distance. Evaluating the fade per
+// pixel (not per patch) keeps shared patch edges continuous, so neighbouring
+// LODs never step in brightness or normal strength.
+const DETAIL_FADE_START_M: f32 = 1500.0;
+const DETAIL_FADE_END_M: f32 = 6000.0;
+// Low-frequency albedo variation breaks up uniform source colour at scales the
+// streamed imagery does not resolve.
+const MACRO_FREQUENCY: f32 = 0.0009;
+const MACRO_STRENGTH: f32 = 0.09;
+
+fn hash31(p: vec3<f32>) -> f32 {
+    var q = fract(p * 0.3183099 + vec3<f32>(0.71, 0.113, 0.419));
+    q += dot(q, q.zyx + 19.19);
+    return fract((q.x + q.y) * q.z);
+}
+
+fn value_noise(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let c000 = hash31(i + vec3<f32>(0.0, 0.0, 0.0));
+    let c100 = hash31(i + vec3<f32>(1.0, 0.0, 0.0));
+    let c010 = hash31(i + vec3<f32>(0.0, 1.0, 0.0));
+    let c110 = hash31(i + vec3<f32>(1.0, 1.0, 0.0));
+    let c001 = hash31(i + vec3<f32>(0.0, 0.0, 1.0));
+    let c101 = hash31(i + vec3<f32>(1.0, 0.0, 1.0));
+    let c011 = hash31(i + vec3<f32>(0.0, 1.0, 1.0));
+    let c111 = hash31(i + vec3<f32>(1.0, 1.0, 1.0));
+    let x00 = mix(c000, c100, u.x);
+    let x10 = mix(c010, c110, u.x);
+    let x01 = mix(c001, c101, u.x);
+    let x11 = mix(c011, c111, u.x);
+    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
 }
 
 struct TerrainSurfaceExtension {
@@ -25,7 +61,14 @@ struct TerrainSurfaceExtension {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    let detail_weight = terrain_surface.local_detail_weight;
+    // Per-pixel fade keeps detail continuous across patch and LOD boundaries.
+    let view_distance = distance(in.world_position.xyz, view.world_position);
+    let detail_fade = 1.0 - smoothstep(
+        DETAIL_FADE_START_M,
+        DETAIL_FADE_END_M,
+        view_distance,
+    );
+    let detail_weight = terrain_surface.local_detail_weight * detail_fade;
     let local_albedo = textureSample(
         terrain_local_albedo,
         terrain_local_albedo_sampler,
@@ -51,10 +94,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         imagery_albedo.rgb,
         terrain_surface.imagery_weight,
     );
-    pbr_input.material.base_color = vec4(
-        mix(base_albedo, local_albedo.rgb, 0.28 * detail_weight),
-        pbr_input.material.base_color.a,
-    );
     let local_surface = textureSample(
         terrain_local_normal,
         terrain_local_normal_sampler,
@@ -62,6 +101,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     );
     let local_normal = local_surface.xyz * 2.0 - vec3<f32>(1.0);
     let local_roughness = local_surface.w;
+    // Macro albedo variation at a scale the streamed imagery does not resolve.
+    let macro_variation = value_noise(in.world_position.xyz * MACRO_FREQUENCY) * 2.0 - 1.0;
+    // Crevices (low tangent-space normal.z) darken slightly, adding depth a flat
+    // albedo cannot carry. Fades with the same distance-based detail weight.
+    let crevice = mix(
+        1.0,
+        0.55 + 0.45 * smoothstep(0.55, 0.95, local_surface.z),
+        detail_weight,
+    );
+    let detail_albedo = mix(base_albedo, local_albedo.rgb, 0.4 * detail_weight);
+    pbr_input.material.base_color = vec4(
+        detail_albedo * (1.0 + macro_variation * MACRO_STRENGTH) * crevice,
+        pbr_input.material.base_color.a,
+    );
     pbr_input.material.perceptual_roughness = mix(
         pbr_input.material.perceptual_roughness,
         local_roughness,
