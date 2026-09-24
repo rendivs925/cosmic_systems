@@ -21,10 +21,10 @@ use bevy::ecs::query::QueryData;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
-/// Presentation-free fixed-tick recorder shared by interactive and headless
-/// composition. Frames are owned by the consuming artifact through
-/// [`build_simulation_telemetry_frame`]; the recorder keeps the bounded
-/// interactive capture and the authoritative event timeline.
+/// Presentation-free fixed-tick recorder. The artifact-consuming composition
+/// (headless) registers [`record_simulation_telemetry_system`] and drains
+/// `frames`; [`record_simulation_events_system`] fills the authoritative event
+/// timeline for any composition that records events.
 #[derive(Resource, Debug, Default)]
 pub struct SimulationTelemetryRecorder {
     pub frames: Vec<SimulationTelemetryFrame>,

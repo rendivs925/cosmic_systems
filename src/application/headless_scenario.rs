@@ -18,8 +18,10 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{RocketMissionState, SpentStage};
+use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
-    build_simulation_telemetry_frame, SimulationTelemetryAccess, SimulationTelemetryRecorder,
+    build_simulation_telemetry_frame, record_simulation_telemetry_system,
+    SimulationTelemetryAccess, SimulationTelemetryRecorder,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -214,6 +216,12 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
     app.insert_resource(catalog);
     app.insert_resource(selection);
     app.add_plugins((EphemerisPlugin, RocketFixedSimulationPlugin));
+    // Frame capture is consumed only by the artifact, so the headless
+    // composition registers it instead of the interactive mode.
+    app.add_systems(
+        FixedUpdate,
+        record_simulation_telemetry_system.in_set(RocketSet::Telemetry),
+    );
     app.add_systems(
         Startup,
         spawn_headless_scenario.after(update_ephemeris_snapshot),
