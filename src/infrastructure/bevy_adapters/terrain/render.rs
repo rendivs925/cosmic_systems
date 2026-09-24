@@ -38,7 +38,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 use bevy_mesh::{Indices, PrimitiveTopology};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
@@ -634,40 +634,16 @@ fn spawn_patch_mesh_system(
 ) {
     let instrumentation_enabled = performance_config.instrumentation_enabled();
     let active_planet = streaming.active_planet();
-    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-        record.queue_start = pending_uploads.queue.len();
-        record.queue_peak = record.queue_start;
-    }
-    pending_uploads.retain_published_for_planet(active_planet, &streaming.published);
-    for event in events.read().cloned() {
-        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-            record.ready_received += 1;
-        }
-        if active_planet == Some(event.planet_entity)
-            && streaming.published.contains(&event.patch)
-            && pending_uploads.enqueue(event) == TerrainUploadEnqueueResult::Rejected
-        {
-            if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-                record.ready_rejected += 1;
-            }
-        }
-    }
-    // A ready-event burst can exceed the bounded queue. Keep the recovery flag
-    // until every published patch is queued or rendered; MessageReader cannot
-    // replay the events that overflowed in an earlier frame.
-    if pending_uploads.needs_backfill {
-        let Some(planet_entity) = active_planet else {
-            return;
-        };
-        let backfill =
-            pending_uploads.backfill_published(planet_entity, &streaming.published, &render_index);
-        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-            record.ready_backfilled += backfill.queued;
-            record.ready_rejected += backfill.rejected;
-        }
-    }
-    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-        record.queue_peak = record.queue_peak.max(pending_uploads.queue.len());
+    if !enqueue_ready_uploads(
+        &mut events,
+        &mut pending_uploads,
+        &streaming.published,
+        active_planet,
+        &render_index,
+        &mut terrain_performance,
+        instrumentation_enabled,
+    ) {
+        return;
     }
     for _ in 0..MAX_PATCH_UPLOADS_PER_FRAME {
         let Some(event) = pending_uploads.pop_front() else {
@@ -964,6 +940,58 @@ fn spawn_patch_mesh_system(
         record.queue_end = pending_uploads.queue.len();
         record.queue_peak = record.queue_peak.max(record.queue_end);
     }
+}
+
+/// Drain ready events into the bounded upload queue and recover published
+/// patches whose ready events overflowed in an earlier frame.
+///
+/// Returns `false` when backfill is required but the active planet is
+/// unavailable, so no queued upload could be attributed; the caller aborts the
+/// frame in that case.
+fn enqueue_ready_uploads(
+    events: &mut MessageReader<TerrainPatchReady>,
+    pending_uploads: &mut PendingTerrainPatchUploads,
+    published: &BTreeSet<TerrainPatch>,
+    active_planet: Option<Entity>,
+    render_index: &TerrainPatchRenderIndex,
+    terrain_performance: &mut TerrainPerformanceTelemetry,
+    instrumentation_enabled: bool,
+) -> bool {
+    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+        record.queue_start = pending_uploads.queue.len();
+        record.queue_peak = record.queue_start;
+    }
+    pending_uploads.retain_published_for_planet(active_planet, published);
+    for event in events.read().cloned() {
+        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+            record.ready_received += 1;
+        }
+        if active_planet == Some(event.planet_entity)
+            && published.contains(&event.patch)
+            && pending_uploads.enqueue(event) == TerrainUploadEnqueueResult::Rejected
+        {
+            if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+                record.ready_rejected += 1;
+            }
+        }
+    }
+    // A ready-event burst can exceed the bounded queue. Keep the recovery flag
+    // until every published patch is queued or rendered; MessageReader cannot
+    // replay the events that overflowed in an earlier frame.
+    if pending_uploads.needs_backfill {
+        let Some(planet_entity) = active_planet else {
+            return false;
+        };
+        let backfill = pending_uploads.backfill_published(planet_entity, published, render_index);
+        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+            record.ready_backfilled += backfill.queued;
+            record.ready_rejected += backfill.rejected;
+        }
+    }
+    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
+        record.queue_peak = record.queue_peak.max(pending_uploads.queue.len());
+    }
+    true
 }
 
 /// Hide cached tile entities without destroying their mesh/material assets.
