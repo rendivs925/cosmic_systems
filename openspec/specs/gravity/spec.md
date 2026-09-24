@@ -8,10 +8,12 @@ Defines authoritative planetary gravity for vehicles: Newtonian inverse-square g
 
 ### Requirement: Perturbing gravity respects the accelerating origin
 
-The system SHALL calculate each enabled third body's contribution to a
-planet-centered inertial vehicle state as the difference between that body's
-acceleration at the vehicle and at the bound-planet origin. The active force
-model SHALL declare its enabled perturbing bodies and harmonics.
+The system SHALL calculate a third body's contribution to a planet-centered
+inertial vehicle state as the difference between the body's acceleration at the
+vehicle and at the bound-planet origin. The third-body position SHALL come from
+the shared kernel-backed ephemeris at the same TDB epoch as the bound-body
+state. The active force model SHALL declare its enabled perturbing bodies and
+harmonics.
 
 #### Scenario: Sun perturbation at the origin
 
@@ -22,7 +24,7 @@ model SHALL declare its enabled perturbing bodies and harmonics.
 
 - **WHEN** a primary-bound rocket evaluates gravity
 - **THEN** it combines bound-planet gravity with the Sun's differential term
-  from the shared physical ephemeris, not the Sun's full heliocentric force
+  from the shared kernel-backed ephemeris, not the Sun's full heliocentric force
 
 #### Scenario: Lunar perturbation
 

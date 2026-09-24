@@ -22,7 +22,12 @@ The rocket dynamics core SHALL operate in real SI units (meters, seconds, kilogr
 
 ### Requirement: Reference-frame conversions are authoritative and single-sourced
 
-The system SHALL provide one authoritative implementation for each frame conversion, and other subsystems SHALL reuse it rather than re-implementing coordinate math.
+The system SHALL provide one authoritative implementation for each frame
+conversion, and other subsystems SHALL reuse it rather than re-implementing
+coordinate math. The physical solar-system authority SHALL be barycentric
+ICRF/J2000 f64 SI state at a TDB epoch; heliocentric, planet-centered,
+body-fixed, local tangent, and render frames SHALL be explicitly derived from
+that state.
 
 #### Scenario: Shared conversion utilities
 
@@ -32,14 +37,21 @@ The system SHALL provide one authoritative implementation for each frame convers
 #### Scenario: Supported frames
 
 - **WHEN** the reference-frame module is used
-- **THEN** it supports solar-inertial, planet-centered, planet body-fixed, local tangent (lat/lon/alt), and rocket-body frames
+- **THEN** it supports barycentric ICRF/J2000, derived heliocentric,
+  planet-centered inertial, planet body-fixed, local tangent (lat/lon/alt), and
+  rocket-body frames
 
-#### Scenario: Physical solar-inertial ephemeris boundary
+#### Scenario: Physical solar-system ephemeris boundary
 
-- **WHEN** a primary-body ephemeris crosses from AU and AU/day into flight
-  physics
-- **THEN** its position and velocity are converted once to f64 solar-inertial
-  meters and meters-per-second through the shared reference-frame module
+- **WHEN** an ephemeris state enters flight physics
+- **THEN** its position and velocity remain f64 barycentric ICRF/J2000 meters
+  and meters-per-second until an explicit shared relative-frame conversion
+
+#### Scenario: Render projection
+
+- **WHEN** a physical solar-system position is projected for rendering
+- **THEN** it is rebased in f64 against the selected render origin before the
+  centralized meter-to-display and f32 conversion
 
 ### Requirement: High-precision dynamics with render boundary
 
