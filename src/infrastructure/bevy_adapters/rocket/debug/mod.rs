@@ -17,14 +17,17 @@ use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingRe
 use bevy::math::{DQuat, DVec3, Isometry3d};
 use bevy::prelude::*;
 
+mod primitives;
+mod trajectory;
+
+use primitives::{draw_vector, find_bound_planet, offset_to_units, rocket_render_origin};
+use trajectory::{draw_orbital_trajectory, update_trajectory_cache, TrajectoryCache};
+
 /// Gizmo configuration group so rocket debugging has independent visibility,
 /// line style, and depth settings (isolated from DefaultGizmoConfigGroup).
 #[derive(Default, Reflect, GizmoConfigGroup)]
 #[reflect(Default)]
 struct RocketDebugGizmos {}
-
-/// Samples along one full orbit for the trajectory polyline.
-const TRAJECTORY_SAMPLE_COUNT: usize = 128;
 
 /// Per-category visual scales separate physical magnitude from visual length.
 #[derive(Resource, Debug, Clone)]
@@ -73,36 +76,6 @@ impl Default for RocketDebugConfig {
 }
 
 /// Identity of the orbital state that produced the cached trajectory.
-/// Recompute only when this changes (stage switch, thrust toggle, or km-level
-/// apoapsis/periapsis drift), not every frame.
-#[derive(Debug, Clone, PartialEq)]
-struct TrajectoryStateKey {
-    active_stage: usize,
-    thrusting: bool,
-    apoapsis_km: i64,
-    periapsis_km: i64,
-}
-
-impl TrajectoryStateKey {
-    fn new(propulsion: &RocketPropulsion, orbital: &OrbitalElements) -> Self {
-        Self {
-            active_stage: propulsion.active_stage,
-            thrusting: propulsion.throttle.clamp(0.0, 1.0) > 0.0,
-            apoapsis_km: (orbital.apoapsis_m / 1000.0) as i64,
-            periapsis_km: (orbital.periapsis_m / 1000.0) as i64,
-        }
-    }
-}
-
-/// Cached trajectory points in planet-centered meters, plus the state key that
-/// produced them. Drawn offset by the live planet transform each frame.
-#[derive(Resource, Default)]
-struct TrajectoryCache {
-    key: Option<TrajectoryStateKey>,
-    /// Planet-centered sample positions (meters) forming the orbit polyline.
-    points_planet_frame: Vec<DVec3>,
-}
-
 /// Rocket debug visualization plugin. Composed only by RocketModePlugin;
 /// GizmoPlugin itself is registered once at the app level.
 pub struct RocketDebugPlugin;
@@ -189,75 +162,6 @@ fn handle_debug_input(keyboard: Res<ButtonInput<KeyCode>>, mut config: ResMut<Ro
             toggle(&mut config);
         }
     }
-}
-
-/// Shared vector-with-arrowhead primitive. All force/velocity vectors route
-/// through here so there is exactly one arrow implementation.
-fn draw_vector(
-    gizmos: &mut Gizmos<RocketDebugGizmos>,
-    origin: Vec3,
-    vector: Vec3,
-    color: Color,
-    visual_scale: f32,
-    max_visual_length: f32,
-) {
-    let magnitude = vector.length();
-    if magnitude < 1e-9 || !magnitude.is_finite() {
-        return;
-    }
-    let dir = vector / magnitude;
-    let visual_len = (visual_scale * magnitude).min(max_visual_length).max(0.5);
-
-    // Shaft
-    gizmos.ray(origin, dir * visual_len, color);
-
-    // Arrowhead: four barbs around the tip.
-    let tip = origin + dir * visual_len;
-    let reference = if dir.y.abs() > 0.95 { Vec3::X } else { Vec3::Y };
-    let side_a = dir.cross(reference).normalize_or_zero();
-    let side_b = dir.cross(side_a).normalize_or_zero();
-    let base = tip - dir * (visual_len * 0.12);
-    let barb = visual_len * 0.06;
-
-    gizmos.line(tip, base + side_a * barb, color);
-    gizmos.line(tip, base - side_a * barb, color);
-    gizmos.line(tip, base + side_b * barb, color);
-    gizmos.line(tip, base - side_b * barb, color);
-}
-
-/// World-space render origin of the rocket, matching `sync_render_transform`:
-/// planet translation + PhysicalScale-converted planet-centered meters.
-fn rocket_render_origin(
-    planet_translation: DVec3,
-    scale: &PhysicalScale,
-    position_m: DVec3,
-) -> Vec3 {
-    (planet_translation
-        + DVec3::new(
-            scale.solar_meters_to_units(position_m.x),
-            scale.solar_meters_to_units(position_m.y),
-            scale.solar_meters_to_units(position_m.z),
-        ))
-    .as_vec3()
-}
-
-/// Convert a planet-centered meter offset to render-unit offset.
-fn offset_to_units(scale: &PhysicalScale, offset_m: DVec3) -> Vec3 {
-    DVec3::new(
-        scale.solar_meters_to_units(offset_m.x),
-        scale.solar_meters_to_units(offset_m.y),
-        scale.solar_meters_to_units(offset_m.z),
-    )
-    .as_vec3()
-}
-
-fn find_bound_planet<'a>(
-    planet_query: &'a Query<(&PlanetComponent, &Transform)>,
-    binding: &RocketPlanetBinding,
-) -> Option<(&'a PlanetComponent, &'a Transform)> {
-    planet_query
-        .iter()
-        .find(|(planet, _)| planet.matches_body(&binding.planet_name))
 }
 
 /// Gravity vector from the single authoritative `GravityAcceleration`
@@ -567,126 +471,6 @@ fn draw_com_cop(
             cross(&mut gizmos, cop_world, 1.0, Color::srgb(0.0, 1.0, 1.0));
             gizmos.line(com_world, cop_world, Color::srgb(1.0, 0.5, 0.0));
         }
-    }
-}
-
-/// Rebuild the trajectory polyline only when orbital state meaningfully
-/// changes; otherwise reuse cached samples (drawn against the live planet
-/// transform). Avoids per-frame Kepler propagation during coast flight.
-fn update_trajectory_cache(
-    config: Res<RocketDebugConfig>,
-    rocket_query: Query<(&RocketPropulsion, &OrbitalElements)>,
-    mut cache: ResMut<TrajectoryCache>,
-) {
-    if !config.show_trajectory {
-        return;
-    }
-
-    let Some((propulsion, orbital)) = rocket_query.iter().next() else {
-        return;
-    };
-
-    let period = orbital.orbital_period_s;
-    // Skip hyperbolic/escape or degenerate orbits.
-    if !period.is_finite() || period <= 0.0 || period > 86400.0 * 365.0 {
-        cache.points_planet_frame.clear();
-        return;
-    }
-
-    let key = TrajectoryStateKey::new(propulsion, orbital);
-    if cache.key.as_ref() == Some(&key) && !cache.points_planet_frame.is_empty() {
-        return;
-    }
-
-    let steps = TRAJECTORY_SAMPLE_COUNT;
-    let e = orbital.eccentricity.clamp(0.0, 0.999);
-    let a = orbital.semi_major_axis_m;
-
-    // Precompute the perifocal-to-inertial rotation terms once.
-    let cos_raan = orbital.longitude_ascending_node_rad.cos();
-    let sin_raan = orbital.longitude_ascending_node_rad.sin();
-    let cos_inc = orbital.inclination_rad.cos();
-    let sin_inc = orbital.inclination_rad.sin();
-    let cos_arg = orbital.argument_of_periapsis_rad.cos();
-    let sin_arg = orbital.argument_of_periapsis_rad.sin();
-
-    cache.points_planet_frame.clear();
-    cache.points_planet_frame.reserve(steps + 1);
-
-    for i in 0..=steps {
-        let mean_anomaly =
-            orbital.mean_anomaly_rad + 2.0 * std::f64::consts::PI * i as f64 / steps as f64;
-
-        // Newton iteration for Kepler's equation: M = E - e·sin(E).
-        let mut eccentric = mean_anomaly;
-        for _ in 0..8 {
-            eccentric -=
-                (eccentric - e * eccentric.sin() - mean_anomaly) / (1.0 - e * eccentric.cos());
-        }
-
-        // True anomaly and radius from the conic equation.
-        let cos_e = eccentric.cos();
-        let sin_e = eccentric.sin();
-        let cos_nu = (cos_e - e) / (1.0 - e * cos_e);
-        let sin_nu = (1.0 - e * e).sqrt() * sin_e / (1.0 - e * cos_e);
-        let r = a * (1.0 - e * cos_e);
-
-        // Perifocal coordinates.
-        let u = r * cos_nu;
-        let v = r * sin_nu;
-        let angle = orbital.argument_of_periapsis_rad;
-        let p_x = u * angle.cos() - v * angle.sin();
-        let p_y = u * angle.sin() + v * angle.cos();
-
-        let x = (cos_raan * cos_arg - sin_raan * sin_arg * cos_inc) * p_x
-            + (-cos_raan * sin_arg - sin_raan * cos_arg * cos_inc) * p_y;
-        let y = (sin_raan * cos_arg + cos_raan * sin_arg * cos_inc) * p_x
-            + (-sin_raan * sin_arg + cos_raan * cos_arg * cos_inc) * p_y;
-        let z = sin_arg * sin_inc * p_x + cos_arg * sin_inc * p_y;
-
-        cache.points_planet_frame.push(DVec3::new(x, y, z));
-    }
-
-    cache.key = Some(key);
-}
-
-/// Cached orbital polyline + apoapsis/periapsis markers. Pure drawing; the
-/// expensive propagation lives in `update_trajectory_cache`.
-fn draw_orbital_trajectory(
-    planet_query: Query<(&PlanetComponent, &Transform)>,
-    cache: Res<TrajectoryCache>,
-    mut gizmos: Gizmos<RocketDebugGizmos>,
-) {
-    if cache.points_planet_frame.len() < 2 {
-        return;
-    }
-
-    let Some((_, planet_transform)) = planet_query.iter().next() else {
-        return;
-    };
-    let planet_pos = planet_transform.translation.as_dvec3();
-
-    let to_world = |p: DVec3| (planet_pos + p).as_vec3();
-
-    // Polyline via linestrip (one primitive for the whole orbit).
-    gizmos.linestrip(
-        cache.points_planet_frame.iter().map(|p| to_world(*p)),
-        Color::srgb(0.5, 0.5, 1.0),
-    );
-
-    // Apoapsis (green) / periapsis (red) from cached extremes.
-    if let (Some(ap), Some(pe)) = (
-        cache
-            .points_planet_frame
-            .iter()
-            .max_by(|a, b| a.length().total_cmp(&b.length())),
-        cache
-            .points_planet_frame
-            .iter()
-            .min_by(|a, b| a.length().total_cmp(&b.length())),
-    ) {
-        gizmos.sphere(to_world(*ap), 3.0, Color::srgb(0.0, 1.0, 0.0));
-        gizmos.sphere(to_world(*pe), 3.0, Color::srgb(1.0, 0.0, 0.0));
     }
 }
 
