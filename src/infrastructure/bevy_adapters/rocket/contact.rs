@@ -632,7 +632,6 @@ pub fn resolve_ground_contact(
 )]
 mod tests {
     use super::super::components::RocketRenderState;
-    use super::super::presentation::render_dynamics_state;
     use super::*;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::terrain_collision::decompose_velocity;
@@ -688,7 +687,6 @@ mod tests {
             prev: previous,
             current,
         };
-        let _visual = render_dynamics_state(render, 0.5);
         let velocity = decompose_velocity(render.current.velocity_mps, DVec3::Y);
         let criteria = TouchdownCriteria::default();
 

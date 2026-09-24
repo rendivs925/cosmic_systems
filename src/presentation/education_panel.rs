@@ -180,7 +180,6 @@ fn build_context_markdown(craft: Option<&CraftComponent>, control: &CraftControl
         return "Spawn the craft (craft mode) to begin exploring vacuum physics.\n\nPress **B** to toggle this panel.".to_string();
     };
 
-    let _dc = control.dc_current;
     let pulse = control.pulse_current;
     let speed = craft.linear_velocity.length();
     let alt = craft.physics.vertical_position;

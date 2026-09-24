@@ -12,7 +12,6 @@ pub mod performance_systems;
 pub mod physical_scale;
 pub mod planet_appearance;
 pub mod planet_systems;
-pub mod reference_frames;
 pub mod rendering;
 pub mod rocket;
 pub mod simulation_time;

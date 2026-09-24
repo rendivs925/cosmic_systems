@@ -26,7 +26,6 @@ pub fn take_pending_screenshot(
     mut commands: Commands,
     mut screenshot_state: ResMut<ScreenshotState>,
     video_state: Res<VideoRecordingState>,
-    main_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mut notifications: ResMut<NotificationQueue>,
     time: Res<Time>,
 ) {
@@ -35,8 +34,6 @@ pub fn take_pending_screenshot(
     }
 
     screenshot_state.pending = false;
-
-    let _window_entity = main_window.single();
 
     // Determine output directory based on recording state
     let (output_dir, filename_prefix) =
@@ -136,7 +133,6 @@ pub fn toggle_video_recording(
             });
 
             // Spawn a task to convert frames to MP4
-            let _notifications_clone = notifications.notifications.clone();
             std::thread::spawn(move || {
                 convert_frames_to_mp4(&output_dir, frame_count, duration);
             });

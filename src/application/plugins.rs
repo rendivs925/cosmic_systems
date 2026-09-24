@@ -457,7 +457,6 @@ impl Plugin for RocketFixedSimulationPlugin {
                 RocketSet::Control,
                 RocketSet::Actuation,
                 RocketSet::Gravity,
-                RocketSet::TerrainInteraction,
                 RocketSet::SpentStage,
                 RocketSet::EntryPhysics,
                 RocketSet::AeroForces,

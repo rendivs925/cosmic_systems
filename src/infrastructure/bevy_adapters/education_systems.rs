@@ -38,7 +38,6 @@ pub fn check_journal_unlocks(
     state.flight_time += time.delta_secs();
 
     let craft_exists = craft_query.single().is_ok();
-    let _dc = control.dc_current;
     let pulse = control.pulse_current;
 
     for (i, entry) in journal.entries.clone().iter().enumerate() {
