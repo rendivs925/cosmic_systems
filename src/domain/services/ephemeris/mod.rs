@@ -107,6 +107,17 @@ impl NaifBodyId {
             .find_map(|(catalog_name, target)| (*catalog_name == name).then_some(*target))
     }
 
+    /// The explicit predicate that separates kernel-backed catalog bodies from
+    /// the presentation-only parent-relative moon approximation. Consumers use
+    /// it to make the fallback visible and testable rather than an incidental
+    /// `None` from [`Self::for_catalog_name`]. A body is kernel-backed when the
+    /// curated manifest covers its translation state; adding a satellite kernel
+    /// and a [`Self::KERNEL_BACKED_CATALOG_BODIES`] entry is the only way to
+    /// move a moon out of the approximation path.
+    pub fn is_kernel_backed(name: &str) -> bool {
+        Self::for_catalog_name(name).is_some()
+    }
+
     pub const fn new(value: i32) -> Self {
         Self(value)
     }
@@ -471,6 +482,28 @@ mod tests {
 
         assert!(coverage.contains(TdbEpoch::j2000()));
         assert!(!coverage.contains(TdbEpoch::from_seconds_since_j2000(172_800.0).unwrap()));
+    }
+
+    #[test]
+    fn kernel_coverage_predicate_matches_the_catalog_manifest_boundary() {
+        // Kernel-backed catalog bodies must resolve through the shared
+        // authority; every other catalog body is an explicit presentation-only
+        // approximation. This test is the guard rail that keeps the two
+        // authorities from silently overlapping.
+        for (name, _target) in NaifBodyId::KERNEL_BACKED_CATALOG_BODIES {
+            assert!(
+                NaifBodyId::is_kernel_backed(name),
+                "manifest body {name} must be kernel-backed"
+            );
+        }
+        for approximation in ["Phobos", "Deimos", "Io", "Europa", "Titan", "Triton"] {
+            assert!(
+                !NaifBodyId::is_kernel_backed(approximation),
+                "{approximation} has no satellite translation kernel and must stay on the \
+                 explicit approximation path"
+            );
+            assert_eq!(NaifBodyId::for_catalog_name(approximation), None);
+        }
     }
 
     #[test]

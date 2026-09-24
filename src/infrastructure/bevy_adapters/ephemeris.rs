@@ -565,4 +565,77 @@ mod tests {
         assert!(path.iter().all(|position| position.is_finite()));
         assert!(path[0].distance(expected) < 1e-6);
     }
+
+    /// Evaluate the shared snapshot for one fully initialized app instance.
+    fn startup_snapshot_states() -> (TdbEpoch, Vec<BodyState>) {
+        let mut app = App::new();
+        app.init_resource::<SimulationTime>();
+        app.add_plugins(EphemerisPlugin);
+        app.update();
+
+        let snapshot = app.world().resource::<EphemerisSnapshot>();
+        let epoch = snapshot
+            .epoch
+            .expect("startup evaluates the shared snapshot");
+        (epoch, snapshot.states.clone())
+    }
+
+    #[test]
+    fn repeated_evaluation_of_the_same_epoch_is_bit_identical() {
+        // The spec requires the same epoch to evaluate to the same state so
+        // replays and regression baselines remain reproducible.
+        let (_, first) = startup_snapshot_states();
+        let (_, second) = startup_snapshot_states();
+
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(second.iter()) {
+            assert_eq!(a.target, b.target);
+            assert_eq!(a.epoch, b.epoch);
+            assert_eq!(
+                a.position_m.to_array().map(f64::to_bits),
+                b.position_m.to_array().map(f64::to_bits),
+                "position for NAIF {} must be bit-identical across evaluations",
+                a.target.value()
+            );
+            assert_eq!(
+                a.velocity_mps.to_array().map(f64::to_bits),
+                b.velocity_mps.to_array().map(f64::to_bits),
+                "velocity for NAIF {} must be bit-identical across evaluations",
+                a.target.value()
+            );
+        }
+    }
+
+    #[test]
+    fn every_mode_consumes_the_same_evaluated_state_at_a_shared_epoch() {
+        // normal, craft, and rocket all load the same EphemerisPlugin, so an
+        // independent composition must yield the identical shared state. Any
+        // per-mode ephemeris divergence would break this assertion.
+        let (epoch, states) = startup_snapshot_states();
+
+        let mut independent_app = App::new();
+        independent_app.init_resource::<SimulationTime>();
+        independent_app.add_plugins(EphemerisPlugin);
+        independent_app.update();
+        let snapshot = independent_app.world().resource::<EphemerisSnapshot>();
+
+        assert!(snapshot.is_current_at(epoch));
+        for expected in &states {
+            let actual = snapshot
+                .state(expected.target)
+                .unwrap_or_else(|| panic!("snapshot missing NAIF {}", expected.target.value()));
+            assert_eq!(
+                actual.position_m.to_array().map(f64::to_bits),
+                expected.position_m.to_array().map(f64::to_bits),
+                "mode-independent composition diverged for NAIF {}",
+                expected.target.value()
+            );
+            assert_eq!(
+                actual.velocity_mps.to_array().map(f64::to_bits),
+                expected.velocity_mps.to_array().map(f64::to_bits),
+                "mode-independent composition diverged for NAIF {}",
+                expected.target.value()
+            );
+        }
+    }
 }

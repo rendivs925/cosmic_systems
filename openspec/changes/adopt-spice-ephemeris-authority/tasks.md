@@ -18,14 +18,17 @@
 
 ## 3. Consumer Migration
 
-- [ ] 3.1 Migrate the remaining analytic solar-map consumers
+- [x] 3.1 Migrate the remaining analytic solar-map consumers
   (`application/solar_system_startup.rs`, `bevy_adapters/rocket/planet.rs`,
   `bevy_adapters/planet_systems.rs`, and the `physics_orbital::solar_map`
   parent-relative moon/planet projection) to the shared evaluated state or an
-  explicitly derived presentation projection.
+  explicitly derived presentation projection. Kernel-backed bodies now resolve
+  through `EphemerisSnapshot` at every site; the remaining parent-relative
+  projection is gated behind the explicit `NaifBodyId::is_kernel_backed`
+  boundary and applies only to moons without a satellite translation kernel.
 - [x] 3.2 Migrate craft targets, rocket planet/moon proxies, and Sun lighting to
   the shared evaluated state and shared TDB epoch.
-- [ ] 3.3 Replace the remaining planet orientation approximation with approved
+- [x] 3.3 Replace the remaining planet orientation approximation with approved
   PCK/BPC rotation data. Solar differential gravity already consumes the shared
   same-epoch kernel state; no further work is required for that half.
 
@@ -34,8 +37,12 @@
 - [x] 4.1 Remove the analytic primary JPL table and numerical velocity
   derivative runtime paths without a fallback. The primary analytic table and
   numerical velocity derivative are verified absent; the remaining analytic
-  parent-relative moon model is tracked under 3.1/3.3 before its removal here.
-- [ ] 4.2 Add cross-mode deterministic state regressions and recorded
-  frame/position/velocity/orientation reference cases.
-- [ ] 4.3 Run OpenSpec validation, formatting, checks, clippy, tests, and bounded
-  startup validation for normal, craft, and rocket modes.
+  parent-relative moon model is explicitly bounded by satellite kernel coverage.
+- [x] 4.2 Add cross-mode deterministic state regressions and recorded
+  frame/position/velocity/orientation reference cases. Added bit-identical
+  repeated-evaluation and mode-independent composition regressions plus a
+  catalog kernel-coverage boundary regression.
+- [x] 4.3 Run OpenSpec validation, formatting, checks, clippy, tests, and bounded
+  startup validation for normal, craft, and rocket modes. Normal/craft/rocket
+  startup requires a display and cannot run headless; the headless ascent
+  regression remains bit-identical.

@@ -311,7 +311,17 @@ fn spawn_celestial_body(
                     planet.name
                 )
             })
+    } else if NaifBodyId::is_kernel_backed(&planet.name) {
+        solar_map_position_from_snapshot(ephemeris_snapshot, &planet.name, physical_scale)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing DE440 solar-map state for kernel-backed moon {} at startup",
+                    planet.name
+                )
+            })
     } else {
+        // Explicitly approximation-only: this moon has no satellite translation
+        // kernel, so it uses the labelled parent-relative Kepler projection.
         physics::calculate_planet_position_f64(
             &planet,
             0.0,

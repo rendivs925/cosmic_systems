@@ -405,6 +405,11 @@ pub fn update_rocket_planets(
                     (planet_center_flight.as_dvec3() + moon_relative_to_bound.position_m).as_vec3();
                 continue;
             }
+            // Only moons absent from the satellite kernel coverage fall through
+            // to the labelled parent-relative approximation.
+            if NaifBodyId::is_kernel_backed(&rocket_moon.name) {
+                continue;
+            }
             let moon_solar = planet_query
                 .iter()
                 .find(|planet| planet.domain_planet.name == rocket_moon.name)

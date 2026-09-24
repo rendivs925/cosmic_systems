@@ -92,6 +92,12 @@ fn update_planet_positions_sequential(
             position.0 = ephemeris_position;
             continue;
         }
+        // Only moons without a satellite translation kernel reach this branch.
+        // The predicate makes the approximation boundary explicit and testable
+        // instead of an incidental snapshot miss.
+        if NaifBodyId::is_kernel_backed(&planet_comp.domain_planet.name) {
+            continue;
+        }
         let Some(parent_position) = parent_positions.get(parent_name).copied() else {
             continue;
         };
