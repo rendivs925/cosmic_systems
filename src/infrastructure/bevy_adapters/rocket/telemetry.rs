@@ -17,11 +17,14 @@ use crate::domain::services::simulation_artifact::{
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, Selectable};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use bevy::ecs::query::QueryData;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
-/// Bounded presentation-free fixed-tick capture shared by interactive and
-/// headless composition. Durable artifacts own their run identity separately.
+/// Presentation-free fixed-tick recorder shared by interactive and headless
+/// composition. Frames are owned by the consuming artifact through
+/// [`build_simulation_telemetry_frame`]; the recorder keeps the bounded
+/// interactive capture and the authoritative event timeline.
 #[derive(Resource, Debug, Default)]
 pub struct SimulationTelemetryRecorder {
     pub frames: Vec<SimulationTelemetryFrame>,
@@ -146,49 +149,39 @@ pub fn record_simulation_events_system(
     }
 }
 
-const MAX_SHARED_TELEMETRY_FRAMES: usize = 20_000;
-
 fn telemetry_mission_code(mission: RocketMissionState) -> u8 {
     mission.0.code()
 }
 
-/// Capture one authoritative primary-vehicle frame after fixed integration.
-#[expect(
-    clippy::type_complexity,
-    reason = "The frame recorder reads the cohesive authoritative rocket state for one primary vehicle."
-)]
-pub fn record_simulation_telemetry_system(
-    sim_time: Res<SimulationTime>,
-    ephemeris_snapshot: Res<EphemerisSnapshot>,
-    mut recorder: ResMut<SimulationTelemetryRecorder>,
-    query: Query<
-        (
-            &RocketPhysicsState,
-            &RocketMissionState,
-            &RocketPlanetBinding,
-            &RocketPropulsion,
-            &RocketFlightConditions,
-            &TerrainCollisionState,
-            &ThermalState,
-            Option<&AppliedPropulsionState>,
-        ),
-        Without<SpentStage>,
-    >,
-) {
-    let Ok((physics, mission, binding, propulsion, conditions, collision, thermal, applied)) =
-        query.single()
-    else {
-        return;
-    };
-    if recorder.frames.len() == MAX_SHARED_TELEMETRY_FRAMES {
-        recorder.frames.remove(0);
-    }
-    let dynamics = &physics.dynamics;
-    recorder.frames.push(SimulationTelemetryFrame {
-        simulation_time_s: sim_time.sim_time_s,
-        epoch_tdb_seconds_since_j2000: sim_time
-            .tdb_epoch()
-            .map_or(f64::NAN, |epoch| epoch.seconds_since_j2000()),
+/// Authoritative primary-vehicle state needed for one telemetry frame. One
+/// access definition keeps the interactive recorder and the headless artifact
+/// from drifting apart.
+#[derive(QueryData)]
+pub struct SimulationTelemetryAccess {
+    pub physics: &'static RocketPhysicsState,
+    pub mission: &'static RocketMissionState,
+    pub binding: &'static RocketPlanetBinding,
+    pub propulsion: &'static RocketPropulsion,
+    pub conditions: &'static RocketFlightConditions,
+    pub collision: &'static TerrainCollisionState,
+    pub thermal: &'static ThermalState,
+    pub applied: Option<&'static AppliedPropulsionState>,
+}
+
+/// Build one presentation-free frame from a completed fixed-tick sample. This
+/// is the single frame model shared by interactive and headless composition
+/// (AGENTS.md section 16): the caller owns the frame, so there is no second
+/// derivation of the same channels.
+pub fn build_simulation_telemetry_frame(
+    simulation_time_s: f64,
+    epoch_tdb_seconds_since_j2000: f64,
+    gravitational_parameter_m3_s2: Option<f64>,
+    access: &SimulationTelemetryAccessItem,
+) -> SimulationTelemetryFrame {
+    let dynamics = &access.physics.dynamics;
+    SimulationTelemetryFrame {
+        simulation_time_s,
+        epoch_tdb_seconds_since_j2000,
         state: RocketStateSample::new(
             [
                 dynamics.position_m.x,
@@ -212,32 +205,59 @@ pub fn record_simulation_telemetry_system(
                 dynamics.angular_velocity_radps.z,
             ],
             dynamics.mass_kg,
-            telemetry_mission_code(*mission),
+            telemetry_mission_code(*access.mission),
         ),
-        active_stage: propulsion.active_stage as u32,
-        propellant_remaining_kg: propulsion
+        active_stage: access.propulsion.active_stage as u32,
+        propellant_remaining_kg: access
+            .propulsion
             .propellant_remaining_kg
             .iter()
             .map(|value| f64::from(*value))
             .sum(),
-        throttle_unit: f64::from(propulsion.throttle),
-        mach_number: conditions.mach_number,
-        dynamic_pressure_pa: conditions.dynamic_pressure_pa,
-        atmospheric_density_kg_m3: conditions.density_kg_m3,
-        terrain_altitude_m: collision.radar_altitude_m,
+        throttle_unit: f64::from(access.propulsion.throttle),
+        mach_number: access.conditions.mach_number,
+        dynamic_pressure_pa: access.conditions.dynamic_pressure_pa,
+        atmospheric_density_kg_m3: access.conditions.density_kg_m3,
+        terrain_altitude_m: access.collision.radar_altitude_m,
         ground_contact: !matches!(
-            collision.ground_contact,
+            access.collision.ground_contact,
             crate::domain::services::terrain_collision::GroundContact::None
         ),
         angle_of_attack_rad: Some(angle_of_attack(
-            dynamics.orientation.inverse() * conditions.atmosphere_relative_velocity_mps,
+            dynamics.orientation.inverse() * access.conditions.atmosphere_relative_velocity_mps,
         )),
-        total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
-        gravitational_parameter_m3_s2: ephemeris_snapshot
-            .gravitational_parameter_for_catalog_body(binding.planet_name.as_str()),
-        applied_thrust_n: applied.map(|value| value.thrust_n),
-        active_engine_count: applied.map(|value| value.active_engine_count),
-    });
+        total_heat_flux_w_m2: Some(access.thermal.total_heat_flux_w_m2),
+        gravitational_parameter_m3_s2,
+        applied_thrust_n: access.applied.map(|value| value.thrust_n),
+        active_engine_count: access.applied.map(|value| value.active_engine_count),
+    }
+}
+
+const MAX_SHARED_TELEMETRY_FRAMES: usize = 20_000;
+
+/// Capture one authoritative primary-vehicle frame after fixed integration.
+pub fn record_simulation_telemetry_system(
+    sim_time: Res<SimulationTime>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    mut recorder: ResMut<SimulationTelemetryRecorder>,
+    query: Query<SimulationTelemetryAccess, Without<SpentStage>>,
+) {
+    let Ok(access) = query.single() else {
+        return;
+    };
+    if recorder.frames.len() == MAX_SHARED_TELEMETRY_FRAMES {
+        recorder.frames.remove(0);
+    }
+    let frame = build_simulation_telemetry_frame(
+        sim_time.sim_time_s,
+        sim_time
+            .tdb_epoch()
+            .map_or(f64::NAN, |epoch| epoch.seconds_since_j2000()),
+        ephemeris_snapshot
+            .gravitational_parameter_for_catalog_body(access.binding.planet_name.as_str()),
+        &access,
+    );
+    recorder.frames.push(frame);
 }
 
 /// Context containing all data needed for telemetry computation.

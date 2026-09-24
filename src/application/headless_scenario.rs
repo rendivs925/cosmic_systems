@@ -3,8 +3,6 @@
 use crate::application::plugins::RocketFixedSimulationPlugin;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::application::rocket_spawning::spawn_rocket_physics;
-use crate::domain::services::aerodynamics::angle_of_attack;
-use crate::domain::services::regression::RocketStateSample;
 use crate::domain::services::simulation_analysis::{
     analyze_simulation_artifact, EngineeringConstraint, SimulationAnalysisResult,
 };
@@ -19,11 +17,10 @@ use crate::infrastructure::bevy_adapters::entity_components::{
 use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
-use crate::infrastructure::bevy_adapters::rocket::components::{
-    AppliedPropulsionState, RocketFlightConditions, RocketMissionState, RocketPhysicsState,
-    RocketPlanetBinding, RocketPropulsion, TerrainCollisionState, ThermalState,
+use crate::infrastructure::bevy_adapters::rocket::components::{RocketMissionState, SpentStage};
+use crate::infrastructure::bevy_adapters::rocket::telemetry::{
+    build_simulation_telemetry_frame, SimulationTelemetryAccess, SimulationTelemetryRecorder,
 };
-use crate::infrastructure::bevy_adapters::rocket::telemetry::SimulationTelemetryRecorder;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 #[cfg(feature = "dem")]
@@ -123,10 +120,9 @@ pub fn analyze_headless_batch(
         .collect()
 }
 
-fn mission_code(mission: RocketMissionState) -> u8 {
-    mission.0.code()
-}
-
+/// Capture the initial primary-vehicle frame before the first fixed tick. The
+/// shared fixed pipeline records every completed tick into the
+/// [`SimulationTelemetryRecorder`] through the same frame model.
 fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, String> {
     let time = app.world().resource::<SimulationTime>();
     let epoch = time
@@ -135,73 +131,17 @@ fn capture_telemetry_frame(app: &mut App) -> Result<SimulationTelemetryFrame, St
         .seconds_since_j2000();
     let simulation_time_s = time.sim_time_s;
     let world = app.world_mut();
-    let mut query = world.query::<(
-        &RocketPhysicsState,
-        &RocketMissionState,
-        &RocketPlanetBinding,
-        &RocketPropulsion,
-        &RocketFlightConditions,
-        &TerrainCollisionState,
-        &ThermalState,
-        &AppliedPropulsionState,
-    )>();
-    let (physics, mission, binding, propulsion, conditions, collision, thermal, applied) =
-        query.single(world).map_err(|error| error.to_string())?;
+    let mut query = world.query_filtered::<SimulationTelemetryAccess, Without<SpentStage>>();
+    let access = query.single(world).map_err(|error| error.to_string())?;
     let gravitational_parameter_m3_s2 = world
         .resource::<EphemerisSnapshot>()
-        .gravitational_parameter_for_catalog_body(binding.planet_name.as_str());
-    let dynamics = &physics.dynamics;
-    Ok(SimulationTelemetryFrame {
+        .gravitational_parameter_for_catalog_body(access.binding.planet_name.as_str());
+    Ok(build_simulation_telemetry_frame(
         simulation_time_s,
-        epoch_tdb_seconds_since_j2000: epoch,
-        state: RocketStateSample::new(
-            [
-                dynamics.position_m.x,
-                dynamics.position_m.y,
-                dynamics.position_m.z,
-            ],
-            [
-                dynamics.velocity_mps.x,
-                dynamics.velocity_mps.y,
-                dynamics.velocity_mps.z,
-            ],
-            [
-                dynamics.orientation.x,
-                dynamics.orientation.y,
-                dynamics.orientation.z,
-                dynamics.orientation.w,
-            ],
-            [
-                dynamics.angular_velocity_radps.x,
-                dynamics.angular_velocity_radps.y,
-                dynamics.angular_velocity_radps.z,
-            ],
-            dynamics.mass_kg,
-            mission_code(*mission),
-        ),
-        active_stage: propulsion.active_stage as u32,
-        propellant_remaining_kg: propulsion
-            .propellant_remaining_kg
-            .iter()
-            .map(|value| f64::from(*value))
-            .sum(),
-        throttle_unit: f64::from(propulsion.throttle),
-        mach_number: conditions.mach_number,
-        dynamic_pressure_pa: conditions.dynamic_pressure_pa,
-        atmospheric_density_kg_m3: conditions.density_kg_m3,
-        terrain_altitude_m: collision.radar_altitude_m,
-        ground_contact: !matches!(
-            collision.ground_contact,
-            crate::domain::services::terrain_collision::GroundContact::None
-        ),
-        angle_of_attack_rad: Some(angle_of_attack(
-            physics.dynamics.orientation.inverse() * conditions.atmosphere_relative_velocity_mps,
-        )),
-        total_heat_flux_w_m2: Some(thermal.total_heat_flux_w_m2),
+        epoch,
         gravitational_parameter_m3_s2,
-        applied_thrust_n: Some(applied.thrust_n),
-        active_engine_count: Some(applied.active_engine_count),
-    })
+        &access,
+    ))
 }
 
 fn spawn_headless_scenario(
@@ -311,16 +251,30 @@ pub fn run_headless_scenario_artifact(
     let (mut app, identity) = build_headless_app(&scenario)?;
     let mut artifact = SimulationArtifact::new(identity);
     artifact.telemetry.push(capture_telemetry_frame(&mut app)?);
+    // The shared fixed pipeline records each completed tick through the same
+    // frame model. Discard any frame a stray startup fixed step may have
+    // produced, then drain per tick so the artifact owns every frame without
+    // ever hitting the interactive bound.
+    app.world_mut()
+        .resource_mut::<SimulationTelemetryRecorder>()
+        .frames
+        .clear();
 
     for _ in 0..scenario.fixed_steps {
         app.world_mut().run_schedule(FixedUpdate);
-        artifact.telemetry.push(capture_telemetry_frame(&mut app)?);
+        artifact.telemetry.append(
+            &mut app
+                .world_mut()
+                .resource_mut::<SimulationTelemetryRecorder>()
+                .frames,
+        );
     }
-    artifact.events = app
-        .world()
-        .resource::<SimulationTelemetryRecorder>()
-        .events
-        .clone();
+    artifact.events = std::mem::take(
+        &mut app
+            .world_mut()
+            .resource_mut::<SimulationTelemetryRecorder>()
+            .events,
+    );
     artifact.validate()?;
     Ok(artifact)
 }
