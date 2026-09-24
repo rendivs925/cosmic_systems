@@ -153,6 +153,10 @@ fn telemetry_mission_code(mission: RocketMissionState) -> u8 {
 }
 
 /// Capture one authoritative primary-vehicle frame after fixed integration.
+#[expect(
+    clippy::type_complexity,
+    reason = "The frame recorder reads the cohesive authoritative rocket state for one primary vehicle."
+)]
 pub fn record_simulation_telemetry_system(
     sim_time: Res<SimulationTime>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,

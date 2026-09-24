@@ -903,7 +903,7 @@ fn build_patch_geometry_with_height_sampler(
     // the parent's vertices coincide with this patch's even vertices, so the
     // morph target is a plain bilinear interpolation of those samples (CDLOD).
     // A root has no coarser surface to morph toward.
-    let morph_supported = patch.level > 0 && res >= 3 && (res - 1) % 2 == 0;
+    let morph_supported = patch.level > 0 && res >= 3 && (res - 1).is_multiple_of(2);
     let half = (res - 1) / 2;
     let coarse_stride = half + 1;
     let mut coarse_heights = vec![0.0f64; coarse_stride * coarse_stride];

@@ -212,6 +212,10 @@ pub fn deploy_landing_legs(
 /// penetration clamp + normal-velocity removal + tangential damping),
 /// releases rest when thrust exceeds weight, and emits splashdown on water
 /// touchdowns exactly as before.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Post-integration contact resolution reads shared time, ephemeris, surface cache, the four domain message channels, and the cohesive ground-contact query."
+)]
 pub fn resolve_ground_contact(
     sim_time: Res<SimulationTime>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,

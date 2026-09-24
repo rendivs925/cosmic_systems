@@ -1200,6 +1200,10 @@ pub(crate) struct HudUpdateState {
 }
 
 /// System to update all HUD fields from telemetry.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The cadence-limited HUD writer reads telemetry, camera mode, display settings, clock, and event feed before writing bounded text nodes."
+)]
 pub(crate) fn update_rocket_hud_system(
     telemetry: Res<RocketTelemetry>,
     camera_mode: Res<RocketCameraMode>,
@@ -1320,6 +1324,10 @@ pub fn apply_hud_palette_system(
 
 /// Apply presentation visibility: Zen mode hides everything; detail option
 /// shows or hides diagnostic rows.
+#[expect(
+    clippy::type_complexity,
+    reason = "The disjoint root/detail/timeline node queries make Bevy access explicit and prevent Node aliasing."
+)]
 pub fn apply_hud_visibility_system(
     options: Res<HudOptions>,
     zen_mode: Res<ZenMode>,

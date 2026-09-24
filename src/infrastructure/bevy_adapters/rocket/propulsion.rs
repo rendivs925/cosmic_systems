@@ -291,6 +291,10 @@ pub fn propulsion_staging(
 }
 
 /// Add pressure-corrected engine thrust in the inertial frame.
+#[expect(
+    clippy::type_complexity,
+    reason = "The query groups the cohesive authoritative propulsion state and its optional diagnostic channel."
+)]
 pub fn propulsion_thrust(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(

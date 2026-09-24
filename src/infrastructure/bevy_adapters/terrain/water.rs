@@ -84,18 +84,10 @@ impl WaterParams {
 
 /// Material extension blending the depth-driven water ramp over the shared PBR
 /// base. The base `StandardMaterial` supplies blend state and lighting.
-#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 pub struct WaterExtension {
     #[uniform(100)]
     pub params: WaterParams,
-}
-
-impl Default for WaterExtension {
-    fn default() -> Self {
-        Self {
-            params: WaterParams::default(),
-        }
-    }
 }
 
 impl MaterialExtension for WaterExtension {
