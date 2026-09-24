@@ -3,6 +3,8 @@
 //! Spawns GPU meshes and materials for cube-sphere LOD terrain patches from the
 //! streaming manager, with PBR shaders for planetary surfaces and a floating
 //! origin for precision at planetary scale.
+//!
+//! The ready-patch upload queue lives in the [`uploads`] submodule.
 
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
@@ -38,8 +40,15 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 use bevy_mesh::{Indices, PrimitiveTopology};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
+
+mod uploads;
+
+use self::uploads::{
+    enqueue_ready_uploads, PendingTerrainPatchUploads, TerrainPatchRenderIndex,
+    TerrainPatchRenderKey,
+};
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
@@ -215,122 +224,6 @@ struct TerrainRenderAssets {
     /// Shared tiling micro-detail texture (normal/albedo/roughness) sampled
     /// triplanar by the terrain shader.
     detail_texture: Option<Handle<Image>>,
-}
-
-/// Identifies a terrain render entity independently for every planet. Patch
-/// coordinates alone overlap between planets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TerrainPatchRenderKey {
-    planet_entity: Entity,
-    patch: TerrainPatch,
-}
-
-impl From<&TerrainPatchReady> for TerrainPatchRenderKey {
-    fn from(event: &TerrainPatchReady) -> Self {
-        Self {
-            planet_entity: event.planet_entity,
-            patch: event.patch,
-        }
-    }
-}
-
-/// Direct lifecycle lookup avoids scanning every render entity per event.
-#[derive(Resource, Default)]
-struct TerrainPatchRenderIndex(HashMap<TerrainPatchRenderKey, Entity>);
-
-/// Ready patches wait here until their CPU-to-GPU asset creation budget is
-/// available. Messages expire after two frames, so the queue owns pending
-/// uploads and coalesces repeated ready notifications.
-#[derive(Resource, Default)]
-struct PendingTerrainPatchUploads {
-    queue: VecDeque<TerrainPatchReady>,
-    queued: HashSet<TerrainPatchRenderKey>,
-    needs_backfill: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TerrainUploadEnqueueResult {
-    Queued,
-    Duplicate,
-    Rejected,
-}
-
-#[derive(Default)]
-struct TerrainUploadBackfill {
-    queued: usize,
-    rejected: usize,
-}
-
-impl PendingTerrainPatchUploads {
-    fn retain_published_for_planet(
-        &mut self,
-        active_planet: Option<Entity>,
-        published: &std::collections::BTreeSet<TerrainPatch>,
-    ) {
-        let before = self.queue.len();
-        self.queue.retain(|event| {
-            active_planet == Some(event.planet_entity) && published.contains(&event.patch)
-        });
-        // Rebuilding the dedup set is only necessary when the retain actually
-        // removed queued work; the common case (nothing stale) skips the
-        // per-frame allocation entirely.
-        if self.queue.len() != before {
-            self.queued = self.queue.iter().map(TerrainPatchRenderKey::from).collect();
-        }
-    }
-
-    fn enqueue(&mut self, event: TerrainPatchReady) -> TerrainUploadEnqueueResult {
-        let key = TerrainPatchRenderKey::from(&event);
-        if self.queued.contains(&key) {
-            return TerrainUploadEnqueueResult::Duplicate;
-        }
-        if self.queue.len() >= MAX_PENDING_PATCH_UPLOADS {
-            self.needs_backfill = true;
-            return TerrainUploadEnqueueResult::Rejected;
-        }
-        self.queued.insert(key);
-        self.queue.push_back(event);
-        TerrainUploadEnqueueResult::Queued
-    }
-
-    fn pop_front(&mut self) -> Option<TerrainPatchReady> {
-        let event = self.queue.pop_front()?;
-        self.queued.remove(&TerrainPatchRenderKey::from(&event));
-        Some(event)
-    }
-
-    fn backfill_published(
-        &mut self,
-        planet_entity: Entity,
-        published: &std::collections::BTreeSet<TerrainPatch>,
-        render_index: &TerrainPatchRenderIndex,
-    ) -> TerrainUploadBackfill {
-        let mut backfill = TerrainUploadBackfill::default();
-        if !self.needs_backfill {
-            return backfill;
-        }
-
-        self.needs_backfill = false;
-        for patch in published.iter().copied() {
-            let event = TerrainPatchReady {
-                patch,
-                planet_entity,
-            };
-            let key = TerrainPatchRenderKey::from(&event);
-            if render_index.0.contains_key(&key) || self.queued.contains(&key) {
-                continue;
-            }
-            match self.enqueue(event) {
-                TerrainUploadEnqueueResult::Queued => backfill.queued += 1,
-                TerrainUploadEnqueueResult::Duplicate => {}
-                TerrainUploadEnqueueResult::Rejected => {
-                    backfill.rejected += 1;
-                    break;
-                }
-            }
-        }
-        backfill
-    }
 }
 
 /// Resource for the floating render origin (AGENTS.md section 13).
@@ -948,52 +841,6 @@ fn spawn_patch_mesh_system(
 /// Returns `false` when backfill is required but the active planet is
 /// unavailable, so no queued upload could be attributed; the caller aborts the
 /// frame in that case.
-fn enqueue_ready_uploads(
-    events: &mut MessageReader<TerrainPatchReady>,
-    pending_uploads: &mut PendingTerrainPatchUploads,
-    published: &BTreeSet<TerrainPatch>,
-    active_planet: Option<Entity>,
-    render_index: &TerrainPatchRenderIndex,
-    terrain_performance: &mut TerrainPerformanceTelemetry,
-    instrumentation_enabled: bool,
-) -> bool {
-    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-        record.queue_start = pending_uploads.queue.len();
-        record.queue_peak = record.queue_start;
-    }
-    pending_uploads.retain_published_for_planet(active_planet, published);
-    for event in events.read().cloned() {
-        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-            record.ready_received += 1;
-        }
-        if active_planet == Some(event.planet_entity)
-            && published.contains(&event.patch)
-            && pending_uploads.enqueue(event) == TerrainUploadEnqueueResult::Rejected
-        {
-            if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-                record.ready_rejected += 1;
-            }
-        }
-    }
-    // A ready-event burst can exceed the bounded queue. Keep the recovery flag
-    // until every published patch is queued or rendered; MessageReader cannot
-    // replay the events that overflowed in an earlier frame.
-    if pending_uploads.needs_backfill {
-        let Some(planet_entity) = active_planet else {
-            return false;
-        };
-        let backfill = pending_uploads.backfill_published(planet_entity, published, render_index);
-        if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-            record.ready_backfilled += backfill.queued;
-            record.ready_rejected += backfill.rejected;
-        }
-    }
-    if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
-        record.queue_peak = record.queue_peak.max(pending_uploads.queue.len());
-    }
-    true
-}
-
 /// Hide cached tile entities without destroying their mesh/material assets.
 /// The ready handler restores these entities instead of rebuilding them.
 fn hide_cached_patch_mesh_system(
@@ -1545,6 +1392,7 @@ fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
 
 #[cfg(test)]
 mod tests {
+    use self::uploads::TerrainUploadEnqueueResult;
     use super::*;
     use crate::domain::services::cube_sphere::{build_patch_geometry, CubeFace};
     use crate::domain::services::planet_factory::PlanetFactory;
