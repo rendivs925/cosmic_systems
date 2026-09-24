@@ -1,4 +1,5 @@
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
+use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
@@ -9,7 +10,9 @@ use crate::domain::services::reference_frames::{
 use crate::domain::services::rocket_dynamics::{
     orientation_from_up_and_heading, RocketDynamicsState,
 };
-use crate::domain::services::rocket_propulsion::DEFAULT_ULLAGE_SETTLE_TIME_S;
+use crate::domain::services::rocket_propulsion::{
+    ActiveVehicleMassProperties, DEFAULT_ULLAGE_SETTLE_TIME_S,
+};
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -31,144 +34,32 @@ const RECORDER_MAX_ENTRIES: usize = 2_048;
 /// Flight-recorder sampling interval (s): ~10 physics ticks at 60 Hz.
 const RECORDER_INTERVAL_S: f64 = 1.0 / 6.0;
 
-/// Spawn the authoritative rocket state without presentation components.
-///
-/// The graphical launcher still owns mesh, material, and pad creation. This
-/// path deliberately uses the same launch-frame and mass-property calculations
-/// so headless execution does not have a second physical spawn model.
-pub fn spawn_rocket_physics(
-    commands: &mut Commands,
-    catalog: &RocketCatalog,
-    selection: &VehicleSelection,
-    terrain_source: &dyn TerrainSource,
-    earth_orientation: &BodyOrientation,
-) -> Entity {
-    let requested_key = selection.selected_key();
-    let Some((_, vehicle)) = catalog.resolve(selection) else {
-        let available = catalog.keys().collect::<Vec<_>>().join(", ");
-        panic!("Unknown vehicle '{requested_key}'. Available vehicles: {available}");
-    };
-    let rocket = vehicle.rocket.clone();
-    let final_stage_fairing_mass_kg = rocket
-        .stages
-        .last()
-        .and_then(|stage| stage.fairing_dry_mass_kg);
-    let attached_payload_kg = final_stage_fairing_mass_kg.unwrap_or(0.0);
-    let propulsion = RocketPropulsion::for_fresh_flight(
-        rocket.clone(),
-        attached_payload_kg,
-        DEFAULT_ULLAGE_SETTLE_TIME_S,
-    );
-    let papua = predefined_sites::papua_indonesia_coastal_lowland();
-    let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
-    let earth_radius_m = earth.radius_km as f64 * 1000.0;
-    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&papua, &earth);
-    let terrain_sample = sample_surface(
-        terrain_source,
-        terrain_latitude_deg,
-        terrain_longitude_deg,
-        earth_radius_m,
-    );
-    let launch_site = LaunchSiteCoordinates::new(
-        papua.planet_id.clone(),
-        papua.latitude_deg,
-        papua.longitude_deg,
-        terrain_sample.height_m as f32,
-    );
-    let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
-        * (earth_radius_m + terrain_sample.height_m);
-    let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
-    let launch_up = body_to_inertial * terrain_sample.normal;
-    let (_, pad_north_bf, _) = enu_basis(papua.latitude_deg, papua.longitude_deg);
-    let launch_attitude =
-        orientation_from_up_and_heading(launch_up, body_to_inertial * pad_north_bf)
-            .expect("Papua coastal-lowland launch heading is finite");
-    let geometry = RocketGeometry {
-        radius_m: rocket.diameter_m / 2.0,
-        height_m: rocket.height_m,
-        lower_extent_y_m: rocket.lower_extent_in_stack_m(),
-    };
-    let mass_properties = propulsion.mass_properties(geometry, 0.0);
-    let position_m = body_to_inertial * position_bf + launch_up * (rocket.height_m as f64 * 0.5);
-    let dynamics = RocketDynamicsState::new(
-        position_m,
-        surface_velocity_in_planet_inertial(position_m, earth_orientation),
-        launch_attitude,
-        mass_properties.mass_kg,
-        mass_properties.inertia_body,
-        mass_properties.center_of_mass_m,
-    );
-    let entity = commands
-        .spawn((
-            RocketPhysicsState { dynamics },
-            geometry,
-            RocketMissionState::PreLaunch,
-            MissionPhaseTracker::default(),
-            propulsion,
-            ForceAccumulator::default(),
-            TorqueAccumulator::default(),
-            GravityAcceleration::default(),
-            SpecificForceAcceleration::default(),
-            RocketPlanetBinding {
-                planet_name: CelestialBodyId::earth(),
-            },
-            launch_site,
-        ))
-        .id();
-    commands.entity(entity).insert((
-        RocketFlightConditions::default(),
-        AerodynamicForces::default(),
-        MaxQTracker::default(),
-        RocketCommands::default(),
-        RocketAutopilot::default(),
-        TerrainCollisionState::default(),
-        GroundRest { active: true },
-        OrbitalElements::default(),
-        ThermalState::default(),
-        AblationState::default(),
-        ParachuteState::default(),
-        TipOverState::default(),
-        LandingScorecard::default(),
-        CommsState::default(),
-        RetroPropulsionEffect::default(),
-    ));
-    commands
-        .entity(entity)
-        .insert(AppliedPropulsionState::default());
-    commands.entity(entity).insert((FlightRecorder::new(
-        RECORDER_MAX_ENTRIES,
-        RECORDER_INTERVAL_S,
-    ),));
-    if let Some(fairing_dry_mass_kg) = final_stage_fairing_mass_kg {
-        commands.entity(entity).insert((
-            PayloadFairing {
-                dry_mass_kg: fairing_dry_mass_kg,
-            },
-            InitialPayloadFairing {
-                dry_mass_kg: fairing_dry_mass_kg,
-            },
-        ));
-    }
-    if let Some(spec) = rocket.stages.first().and_then(|stage| stage.landing_gear) {
-        commands
-            .entity(entity)
-            .insert(LandingLegs::new(LandingGear::new(
-                spec,
-                mass_properties.mass_kg,
-            )));
-    }
-    entity
+/// Authoritative launch-frame and mass properties computed once for a vehicle
+/// selection. Interactive presentation and headless execution both consume this
+/// single launch model so the two spawns cannot drift (AGENTS.md sections 17,
+/// 50, 51).
+struct LaunchSetup {
+    rocket: Rocket,
+    final_stage_fairing_mass_kg: Option<f32>,
+    propulsion: RocketPropulsion,
+    geometry: RocketGeometry,
+    dynamics: RocketDynamicsState,
+    launch_site: LaunchSiteCoordinates,
+    mass_properties: ActiveVehicleMassProperties,
+    position_body_fixed_m: DVec3,
+    terrain_normal_body_fixed: DVec3,
+    pad_north_body_fixed: DVec3,
 }
 
-pub(crate) fn spawn_rockets(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
+/// Resolve the selected vehicle and derive its authoritative prelaunch state in
+/// the one planet-centered inertial frame. Presentation-only values (mesh,
+/// material, pad geometry) are derived by the caller from this result.
+fn build_launch_setup(
     catalog: &RocketCatalog,
     selection: &VehicleSelection,
     terrain_source: &dyn TerrainSource,
     earth_orientation: &BodyOrientation,
-) {
+) -> LaunchSetup {
     let requested_key = selection.selected_key();
     let Some((_, vehicle)) = catalog.resolve(selection) else {
         let available = catalog.keys().collect::<Vec<_>>().join(", ");
@@ -188,8 +79,181 @@ pub(crate) fn spawn_rockets(
         DEFAULT_ULLAGE_SETTLE_TIME_S,
     );
 
+    // The launch site is defined in Earth body-fixed geodetic coordinates, then
+    // converted once into the authoritative planet-centered inertial frame.
+    // Collision and terrain convert back through the same reference-frame API.
+    let papua = predefined_sites::papua_indonesia_coastal_lowland();
+    let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
+    let earth_radius_m = earth.radius_km as f64 * 1000.0;
+    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&papua, &earth);
+    let terrain_sample = sample_surface(
+        terrain_source,
+        terrain_latitude_deg,
+        terrain_longitude_deg,
+        earth_radius_m,
+    );
+    let launch_site = LaunchSiteCoordinates::new(
+        papua.planet_id.clone(),
+        papua.latitude_deg,
+        papua.longitude_deg,
+        terrain_sample.height_m as f32,
+    );
+    // Terrain elevations are radial offsets from the catalog mean radius. Use
+    // the WGS-84-derived radial direction, but let the shared terrain surface
+    // define the authoritative launch radius.
+    let position_body_fixed_m = geodetic_to_body_fixed(&launch_site, &earth).normalize()
+        * (earth_radius_m + terrain_sample.height_m);
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
+    // Stand on the procedural pad normal while preserving a deterministic
+    // northward heading. This is the held physical prelaunch attitude, not a
+    // presentation rotation.
+    let launch_up = body_to_inertial * terrain_sample.normal;
+    let (_, pad_north_body_fixed, _) = enu_basis(papua.latitude_deg, papua.longitude_deg);
+    let launch_attitude =
+        orientation_from_up_and_heading(launch_up, body_to_inertial * pad_north_body_fixed)
+            .expect("Papua coastal-lowland launch heading is finite");
+    let geometry = RocketGeometry {
+        radius_m: rocket.diameter_m / 2.0,
+        height_m: rocket.height_m,
+        lower_extent_y_m: rocket.lower_extent_in_stack_m(),
+    };
+    let mass_properties = propulsion.mass_properties(geometry, 0.0);
+    // State position is the full cylindrical stack's geometric center; its
+    // lower -Y extent, rather than that center, rests on the launch surface.
+    let position_m =
+        body_to_inertial * position_body_fixed_m + launch_up * (rocket.height_m as f64 * 0.5);
+    let dynamics = RocketDynamicsState::new(
+        position_m,
+        surface_velocity_in_planet_inertial(position_m, earth_orientation),
+        launch_attitude,
+        mass_properties.mass_kg,
+        mass_properties.inertia_body,
+        mass_properties.center_of_mass_m,
+    );
+    LaunchSetup {
+        rocket,
+        final_stage_fairing_mass_kg,
+        propulsion,
+        geometry,
+        dynamics,
+        launch_site,
+        mass_properties,
+        position_body_fixed_m,
+        terrain_normal_body_fixed: terrain_sample.normal,
+        pad_north_body_fixed,
+    }
+}
+
+/// Spawn the authoritative rocket entity: physical state, flight-support state,
+/// recorder, fairing, and landing gear. Presentation components are added by
+/// the interactive caller; headless stops here.
+fn spawn_rocket_core(commands: &mut Commands, setup: &LaunchSetup) -> Entity {
+    let entity = commands
+        .spawn((
+            RocketPhysicsState {
+                dynamics: setup.dynamics,
+            },
+            setup.geometry,
+            RocketMissionState::PreLaunch,
+            MissionPhaseTracker::default(),
+            setup.propulsion.clone(),
+            ForceAccumulator::default(),
+            TorqueAccumulator::default(),
+            GravityAcceleration::default(),
+            SpecificForceAcceleration::default(),
+            RocketPlanetBinding {
+                planet_name: CelestialBodyId::earth(),
+            },
+            setup.launch_site.clone(),
+        ))
+        .id();
+    commands.entity(entity).insert((
+        RocketFlightConditions::default(),
+        AerodynamicForces::default(),
+        MaxQTracker::default(),
+        RocketCommands::default(),
+        RocketAutopilot::default(),
+        TerrainCollisionState::default(),
+        // The vehicle spawns standing on the pad: the resting-contact
+        // constraint holds it there until thrust exceeds weight (real physics
+        // instead of the old crash-exemption hack).
+        GroundRest { active: true },
+        // Required by update_orbital_elements and guidance_system; without it
+        // neither system ever matches the entity.
+        OrbitalElements::default(),
+        ThermalState::default(),
+        AblationState::default(),
+        ParachuteState::default(),
+        // Required by GroundContactAccess (resolve_ground_contact). Without
+        // these, the contact query never matches the vehicle, GroundRest never
+        // holds it, and the rocket falls freely through the terrain.
+        TipOverState::default(),
+        LandingScorecard::default(),
+        CommsState::default(),
+        RetroPropulsionEffect::default(),
+    ));
+    commands
+        .entity(entity)
+        .insert(AppliedPropulsionState::default());
+    commands.entity(entity).insert(FlightRecorder::new(
+        RECORDER_MAX_ENTRIES,
+        RECORDER_INTERVAL_S,
+    ));
+    if let Some(dry_mass_kg) = setup.final_stage_fairing_mass_kg {
+        commands.entity(entity).insert((
+            PayloadFairing { dry_mass_kg },
+            InitialPayloadFairing { dry_mass_kg },
+        ));
+    }
+    // Contact follows only the active serial stage's attached hardware. Leg
+    // meshes wait until a stage is independently recoverable, avoiding lower
+    // stage visuals parented to an upper stage after separation.
+    if let Some(spec) = setup
+        .rocket
+        .stages
+        .first()
+        .and_then(|stage| stage.landing_gear)
+    {
+        commands
+            .entity(entity)
+            .insert(LandingLegs::new(LandingGear::new(
+                spec,
+                setup.mass_properties.mass_kg,
+            )));
+    }
+    entity
+}
+
+/// Spawn the authoritative rocket state without presentation components.
+///
+/// The graphical launcher still owns mesh, material, and pad creation. This
+/// path deliberately uses the same launch-frame and mass-property calculations
+/// so headless execution does not have a second physical spawn model.
+pub fn spawn_rocket_physics(
+    commands: &mut Commands,
+    catalog: &RocketCatalog,
+    selection: &VehicleSelection,
+    terrain_source: &dyn TerrainSource,
+    earth_orientation: &BodyOrientation,
+) -> Entity {
+    let setup = build_launch_setup(catalog, selection, terrain_source, earth_orientation);
+    spawn_rocket_core(commands, &setup)
+}
+
+pub(crate) fn spawn_rockets(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    catalog: &RocketCatalog,
+    selection: &VehicleSelection,
+    terrain_source: &dyn TerrainSource,
+    earth_orientation: &BodyOrientation,
+) {
+    let setup = build_launch_setup(catalog, selection, terrain_source, earth_orientation);
+    let entity = spawn_rocket_core(commands, &setup);
+
     // Create a proper multi-part rocket mesh from the vehicle configuration.
-    let mesh_handle = build_rocket_mesh(meshes, &rocket);
+    let mesh_handle = build_rocket_mesh(meshes, &setup.rocket);
 
     // Create rocket material: white painted hull, lit by the sun so the body
     // shades correctly (cylinder silhouette reads as a rocket, not a ghost).
@@ -204,147 +268,19 @@ pub(crate) fn spawn_rockets(
     };
     let material_handle = materials.add(material);
 
-    // The launch site is defined in Earth body-fixed geodetic coordinates, then
-    // converted once into the authoritative planet-centered inertial frame.
-    // Collision and terrain convert back through the same reference-frame API.
-    let papua = predefined_sites::papua_indonesia_coastal_lowland();
-    let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
-    let earth_radius_m = earth.radius_km as f64 * 1000.0;
-    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&papua, &earth);
-    let terrain_sample = sample_surface(
-        terrain_source,
-        terrain_latitude_deg,
-        terrain_longitude_deg,
-        earth_radius_m,
-    );
-    let terrain_elevation_m = terrain_sample.height_m;
-    let launch_site = LaunchSiteCoordinates::new(
-        papua.planet_id.clone(),
-        papua.latitude_deg,
-        papua.longitude_deg,
-        terrain_elevation_m as f32,
-    );
-    // Terrain elevations are radial offsets from the catalog mean radius. Use
-    // the WGS-84-derived radial direction, but let the shared terrain surface
-    // define the authoritative launch radius.
-    let position_bf = geodetic_to_body_fixed(&launch_site, &earth).normalize()
-        * (earth_radius_m + terrain_elevation_m);
-    let body_to_inertial = body_fixed_to_planet_inertial_rotation(earth_orientation);
-    // Stand on the procedural pad normal while preserving a deterministic
-    // northward heading. This is the held physical prelaunch attitude, not a
-    // presentation rotation.
-    let launch_up = body_to_inertial * terrain_sample.normal;
-    let (_, pad_north_bf, _) = enu_basis(papua.latitude_deg, papua.longitude_deg);
-    let launch_attitude =
-        orientation_from_up_and_heading(launch_up, body_to_inertial * pad_north_bf)
-            .expect("Papua coastal-lowland presentation site has a finite nonpolar pad heading");
-
-    // The fairing rides as structure until jettison, so it joins the dry
-    // input of the geometric inertia model (documented approximation).
-    let radius_m = (rocket.diameter_m / 2.0) as f64;
-    let geometry = RocketGeometry {
-        radius_m: radius_m as f32,
-        height_m: rocket.height_m,
-        lower_extent_y_m: rocket.lower_extent_in_stack_m(),
-    };
-    let mass_properties = propulsion.mass_properties(geometry, 0.0);
-    let total_mass_kg = mass_properties.mass_kg;
-    // State position is the full cylindrical stack's geometric center; its
-    // lower -Y extent, rather than that center, rests on the launch surface.
-    let position_m = body_to_inertial * position_bf + launch_up * (rocket.height_m as f64 * 0.5);
-    let surface_velocity_mps = surface_velocity_in_planet_inertial(position_m, earth_orientation);
-    let dynamics = RocketDynamicsState::new(
-        position_m,
-        surface_velocity_mps,
-        launch_attitude,
-        total_mass_kg,
-        mass_properties.inertia_body,
-        mass_properties.center_of_mass_m,
-    );
-
-    // Phase 1: Core physics components (fits in bundle limit)
-    let entity = commands
-        .spawn((
-            RocketPhysicsState { dynamics },
-            geometry,
-            RocketMissionState::PreLaunch,
-            MissionPhaseTracker::default(),
-            propulsion,
-            ForceAccumulator::default(),
-            TorqueAccumulator::default(),
-            GravityAcceleration::default(),
-            SpecificForceAcceleration::default(),
-            RocketPlanetBinding {
-                planet_name: CelestialBodyId::earth(),
-            },
-            launch_site,
-        ))
-        .id();
-
-    // Phase 2: Render and flight-support components.
-    // Two inserts because Bevy bundle tuples cap at 15 items.
+    // Presentation primitives. The mesh and transform are non-authoritative;
+    // `capture_render_state`/`interpolate_render_transform` derive them from the
+    // authoritative dynamics.
     commands.entity(entity).insert((
-        RocketRenderState::new(dynamics),
-        RocketFlightConditions::default(),
-        AerodynamicForces::default(),
-        MaxQTracker::default(),
-        RocketCommands::default(),
-        RocketAutopilot::default(),
-        TerrainCollisionState::default(),
-        // The vehicle spawns standing on the pad: the resting-contact
-        // constraint holds it there until thrust exceeds weight (real
-        // physics instead of the old crash-exemption hack).
-        GroundRest { active: true },
-        // Required by update_orbital_elements and guidance_system; without
-        // it neither system ever matches the entity.
-        OrbitalElements::default(),
-        ThermalState::default(),
-        AblationState::default(),
-        ParachuteState::default(),
-        // Required by GroundContactAccess (resolve_ground_contact). Without
-        // these, the contact query never matches the vehicle, GroundRest never
-        // holds it, and the rocket falls freely through the terrain.
-        TipOverState::default(),
-        LandingScorecard::default(),
-    ));
-    commands
-        .entity(entity)
-        .insert(AppliedPropulsionState::default());
-
-    // Phase 3: Entry/comms state + render primitives. Vehicles that define a
-    // final-stage fairing carry one at spawn; `check_fairing_separation`
-    // jettisons it. The presentation mesh remains non-authoritative.
-    commands.entity(entity).insert((
-        CommsState::default(),
-        RetroPropulsionEffect::default(),
-        FlightRecorder::new(RECORDER_MAX_ENTRIES, RECORDER_INTERVAL_S),
+        RocketRenderState::new(setup.dynamics),
         Mesh3d(mesh_handle),
-        MeshMaterial3d(material_handle.clone()),
+        MeshMaterial3d(material_handle),
         Transform::default(),
         Selectable {
-            name: rocket.name.clone(),
+            name: setup.rocket.name.clone(),
             selected: false,
         },
     ));
-    if let Some(fairing_dry_mass_kg) = final_stage_fairing_mass_kg {
-        commands.entity(entity).insert((
-            PayloadFairing {
-                dry_mass_kg: fairing_dry_mass_kg,
-            },
-            InitialPayloadFairing {
-                dry_mass_kg: fairing_dry_mass_kg,
-            },
-        ));
-    }
-
-    // Contact follows only the active serial stage's attached hardware. Leg
-    // meshes wait until a stage is independently recoverable, avoiding lower
-    // stage visuals parented to an upper stage after separation.
-    if let Some(spec) = rocket.stages.first().and_then(|stage| stage.landing_gear) {
-        commands
-            .entity(entity)
-            .insert(LandingLegs::new(LandingGear::new(spec, total_mass_kg)));
-    }
 
     spawn_procedural_launch_pad(
         commands,
@@ -352,12 +288,12 @@ pub(crate) fn spawn_rockets(
         materials,
         LaunchPadPresentation {
             planet_name: CelestialBodyId::earth(),
-            position_body_fixed_m: position_bf,
-            normal_body_fixed: terrain_sample.normal,
-            heading_body_fixed: pad_north_bf,
+            position_body_fixed_m: setup.position_body_fixed_m,
+            normal_body_fixed: setup.terrain_normal_body_fixed,
+            heading_body_fixed: setup.pad_north_body_fixed,
         },
-        rocket.height_m,
-        rocket.diameter_m,
+        setup.rocket.height_m,
+        setup.rocket.diameter_m,
     );
 }
 
