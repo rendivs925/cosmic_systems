@@ -10,6 +10,7 @@ use crate::domain::entities::rocket::{
     EngineState, ParallelBoosters, Rocket, RocketEngine, RocketStage, ThrustReference,
 };
 use crate::domain::services::landing_gear::LandingGearSpec;
+use crate::domain::services::simulation_run::is_lowercase_sha256;
 use bevy::math::Vec3;
 use bevy::prelude::*;
 use ron::error::SpannedError;
@@ -251,13 +252,6 @@ fn is_https_url(value: &str) -> bool {
                 .is_some_and(|authority| !authority.is_empty())
                 && !value.contains(char::is_whitespace)
         })
-}
-
-fn is_lowercase_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 // ---------------------------------------------------------------------------

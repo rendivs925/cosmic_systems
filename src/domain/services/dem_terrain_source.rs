@@ -16,6 +16,7 @@ use crate::domain::math::DVec3;
 use crate::domain::services::cube_sphere::{
     face_uv, face_uv_to_direction, CubeFace, PatchGeometricError, TerrainPatch,
 };
+use crate::domain::services::reference_frames::body_fixed_to_terrain_lat_lon;
 use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, TerrainSource};
 
 /// Magic bytes for the versioned cube-sphere DEM format.
@@ -698,10 +699,7 @@ fn cube_face_index(face: CubeFace) -> usize {
 }
 
 fn direction_to_lat_lon(direction: DVec3) -> (f64, f64) {
-    (
-        direction.y.clamp(-1.0, 1.0).asin().to_degrees(),
-        direction.z.atan2(direction.x).to_degrees(),
-    )
+    body_fixed_to_terrain_lat_lon(direction)
 }
 
 fn sample_etopo1_m(raw: &[u8], latitude_deg: f64, longitude_deg: f64) -> f64 {

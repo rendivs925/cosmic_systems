@@ -11,7 +11,9 @@ use crate::domain::services::physics_orbital::orbital_elements_from_state_in_ref
 use crate::domain::services::reference_frames::{
     planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
 };
-use crate::domain::services::rocket_propulsion::stage_available_thrust_body;
+use crate::domain::services::rocket_propulsion::{
+    stage_available_thrust_body, STANDARD_GRAVITY_MPS2,
+};
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -375,10 +377,12 @@ pub fn guidance_system(
                 let g_load = specific_force.map_or_else(
                     || {
                         aerodynamic_forces.map_or(0.0, |aero| {
-                            aero.force_body.length() / rocket.dynamics.mass_kg.max(1.0) / 9.80665
+                            aero.force_body.length()
+                                / rocket.dynamics.mass_kg.max(1.0)
+                                / STANDARD_GRAVITY_MPS2
                         })
                     },
-                    |specific_force| specific_force.value.length() / 9.80665,
+                    |specific_force| specific_force.value.length() / STANDARD_GRAVITY_MPS2,
                 );
                 let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
                 let range_errors = target_surface_range_errors_m(
@@ -535,10 +539,12 @@ pub fn guidance_system(
             let g_load = specific_force.map_or_else(
                 || {
                     aerodynamic_forces.map_or(0.0, |aero| {
-                        aero.force_body.length() / rocket.dynamics.mass_kg.max(1.0) / 9.80665
+                        aero.force_body.length()
+                            / rocket.dynamics.mass_kg.max(1.0)
+                            / STANDARD_GRAVITY_MPS2
                     })
                 },
-                |specific_force| specific_force.value.length() / 9.80665,
+                |specific_force| specific_force.value.length() / STANDARD_GRAVITY_MPS2,
             );
             let heat_flux = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2);
             let range_errors = target_surface_range_errors_m(

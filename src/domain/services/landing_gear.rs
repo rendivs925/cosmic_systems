@@ -21,6 +21,7 @@
 
 use crate::domain::math::DVec3;
 
+use crate::domain::services::rocket_propulsion::STANDARD_GRAVITY_MPS2;
 use crate::domain::services::terrain_collision::TouchdownCriteria;
 
 /// Touchdown vertical speed the gear is sized for (m/s). Matches
@@ -36,9 +37,6 @@ pub const LEG_DAMPING_RATIO: f64 = 0.5;
 /// may use up to this share of the stroke before the spring is considered
 /// undersized.
 pub const STATIC_RIDE_HEIGHT_FRACTION: f64 = 0.5;
-
-/// Standard gravity used by the static sag requirement, m/s².
-const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
 
 /// Static configuration of a vehicle's landing gear (from the RON catalog).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -348,7 +346,7 @@ mod tests {
     fn spring_sizing_meets_static_and_dynamic_requirements() {
         let g = gear();
         // Static: full weight compresses to ≤ half stroke.
-        let static_compression = DESIGN_MASS * 9.80665 / g.spring.stiffness_n_per_m;
+        let static_compression = DESIGN_MASS * STANDARD_GRAVITY_MPS2 / g.spring.stiffness_n_per_m;
         assert!(
             static_compression <= STATIC_RIDE_HEIGHT_FRACTION * STROKE + 1e-9,
             "static sag {static_compression} exceeds half stroke"
@@ -389,7 +387,7 @@ mod tests {
 
         fn step(&mut self, g: &LandingGear, mass_kg: f64) {
             // Weight, then position integration for this tick.
-            self.velocity -= 9.80665 * DT;
+            self.velocity -= STANDARD_GRAVITY_MPS2 * DT;
             self.altitude_m += self.velocity * DT;
             let penetration = (-self.altitude_m).max(0.0);
             let out = g.resolve_contact_step(
@@ -423,7 +421,7 @@ mod tests {
             "vertical speed not arrested: {}",
             d.velocity
         );
-        let static_sag = DESIGN_MASS * 9.80665 / g.spring.stiffness_n_per_m;
+        let static_sag = DESIGN_MASS * STANDARD_GRAVITY_MPS2 / g.spring.stiffness_n_per_m;
         assert!(
             (d.compression_m - static_sag).abs() < 0.25,
             "settled at {}, expected ~{static_sag}",
@@ -591,7 +589,7 @@ mod tests {
     fn topple_fall_accelerates_under_gravity_and_completes() {
         let mut fall = ToppleFall::from_tilt(5.0_f64.to_radians());
         let dt = DT;
-        let (g, h) = (9.80665_f64, 35.0_f64);
+        let (g, h) = (STANDARD_GRAVITY_MPS2, 35.0_f64);
         let mut previous_rate = fall.angular_velocity_radps;
         let mut ticks = 0;
         loop {
@@ -619,7 +617,7 @@ mod tests {
     #[test]
     fn topple_degenerate_geometry_completes_immediately() {
         let mut fall = ToppleFall::from_tilt(1.0_f64.to_radians());
-        assert!(fall.advance(9.80665, 0.0, DT));
+        assert!(fall.advance(STANDARD_GRAVITY_MPS2, 0.0, DT));
         assert_eq!(fall.tilt_rad, std::f64::consts::FRAC_PI_2);
     }
 }

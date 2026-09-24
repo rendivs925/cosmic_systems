@@ -3,8 +3,8 @@
 //! These values are render and audio controls only. They do not model thrust,
 //! atmosphere, terrain contact, or heating and never feed back into simulation.
 
-const SEA_LEVEL_PRESSURE_PA: f64 = 101_325.0;
-const SEA_LEVEL_DENSITY_KG_M3: f64 = 1.225;
+use crate::domain::services::atmosphere::{SEA_LEVEL_DENSITY_KG_M3, SEA_LEVEL_PRESSURE_PA};
+
 const GROUND_EFFECT_FADE_ALTITUDE_M: f64 = 50.0;
 const SHOCK_MIN_DYNAMIC_PRESSURE_PA: f64 = 5_000.0;
 const SHOCK_FULL_DYNAMIC_PRESSURE_PA: f64 = 50_000.0;

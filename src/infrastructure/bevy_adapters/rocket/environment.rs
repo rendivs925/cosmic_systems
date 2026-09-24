@@ -1,6 +1,7 @@
 use super::components::{RocketFlightConditions, RocketPhysicsState};
 use super::planet::{RocketBoundPlanet, RocketBoundPlanetCloud};
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
+use crate::domain::services::atmosphere::SEA_LEVEL_DENSITY_KG_M3;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::units::AU_IN_METERS;
 use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
@@ -226,7 +227,8 @@ fn atmospheric_presentation(
     conditions: &RocketFlightConditions,
     daylight: f32,
 ) -> AtmosphericPresentation {
-    let density_unit = (conditions.density_kg_m3.max(0.0) / 1.225).clamp(0.0, 1.0) as f32;
+    let density_unit =
+        (conditions.density_kg_m3.max(0.0) / SEA_LEVEL_DENSITY_KG_M3).clamp(0.0, 1.0) as f32;
     let altitude_unit = (conditions.altitude_m.max(0.0) / 100_000.0).clamp(0.0, 1.0) as f32;
     let atmosphere_unit = (density_unit * (1.0 - altitude_unit * 0.35)).clamp(0.0, 1.0);
     let daylight = daylight.clamp(0.0, 1.0);
@@ -387,7 +389,7 @@ mod tests {
         let dense = RocketFlightConditions::from_sample(
             crate::domain::services::atmosphere::FlightConditions {
                 altitude_m: 0.0,
-                density_kg_m3: 1.225,
+                density_kg_m3: SEA_LEVEL_DENSITY_KG_M3,
                 ..default()
             },
         );
