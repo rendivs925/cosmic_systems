@@ -692,13 +692,24 @@ fn positive_angle(from: DVec3, to: DVec3, normal: DVec3) -> f64 {
         .rem_euclid(std::f64::consts::TAU)
 }
 
+/// Vis-viva orbital speed on an ellipse with semi-major axis `a_m` at radius
+/// `r_m`, m/s. The single authority for transfer speed math.
+pub fn vis_viva_speed_mps(mu_m3_s2: f64, r_m: f64, a_m: f64) -> f64 {
+    (mu_m3_s2 * (2.0 / r_m - 1.0 / a_m)).sqrt()
+}
+
+/// Circular-orbit speed at radius `r_m` around a body with gravitational
+/// parameter `mu_m3_s2`, m/s.
+pub fn circular_speed_mps(mu_m3_s2: f64, r_m: f64) -> f64 {
+    (mu_m3_s2 / r_m).sqrt()
+}
+
 /// Circularize burn delta-v at current altitude to achieve circular orbit.
 /// Returns the prograde delta-v required and the target circular orbit radius.
 pub fn circularize_burn_dv(position_m: DVec3, velocity_mps: DVec3, mu: f64) -> (f64, f64) {
     let r = position_m.length();
     let v = velocity_mps.length();
-    let v_circular = (mu / r).sqrt();
-    let dv = (v_circular - v).max(0.0);
+    let dv = (circular_speed_mps(mu, r) - v).max(0.0);
     (dv, r)
 }
 
@@ -706,12 +717,8 @@ pub fn circularize_burn_dv(position_m: DVec3, velocity_mps: DVec3, mu: f64) -> (
 /// Returns (delta_v1, delta_v2) for the two burns.
 pub fn hohmann_transfer_dv(r1: f64, r2: f64, mu: f64) -> (f64, f64) {
     let a_transfer = (r1 + r2) / 2.0;
-    let v1_circular = (mu / r1).sqrt();
-    let v2_circular = (mu / r2).sqrt();
-    let v1_transfer = (mu * (2.0 / r1 - 1.0 / a_transfer)).sqrt();
-    let v2_transfer = (mu * (2.0 / r2 - 1.0 / a_transfer)).sqrt();
-    let dv1 = (v1_transfer - v1_circular).abs();
-    let dv2 = (v2_circular - v2_transfer).abs();
+    let dv1 = (vis_viva_speed_mps(mu, r1, a_transfer) - circular_speed_mps(mu, r1)).abs();
+    let dv2 = (circular_speed_mps(mu, r2) - vis_viva_speed_mps(mu, r2, a_transfer)).abs();
     (dv1, dv2)
 }
 

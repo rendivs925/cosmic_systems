@@ -1,6 +1,12 @@
-/// Lift force from asymmetric vacuum polarization (kN)
-/// F_lift = 47.0 * dc^1.35, capped at 65 kN
 use crate::domain::services::gravity::GRAVITATIONAL_CONSTANT;
+
+/// Pulse fraction above which the vacuum cavity enters parametric resonance and
+/// ZPE extraction is amplified. The single authority for this threshold across
+/// craft physics, presentation, and education data.
+pub const PARAMETRIC_RESONANCE_THRESHOLD: f32 = 0.42;
+
+/// Gain slope above the resonance threshold.
+pub const PARAMETRIC_GAIN_SLOPE: f32 = 2.6;
 
 pub fn lift_force(dc: f32) -> f32 {
     (47.0 * dc.clamp(0.0, 1.0).powf(1.35)).min(65.0)
@@ -10,8 +16,8 @@ pub fn lift_force(dc: f32) -> f32 {
 /// Below 42% pulse: gain = 1.0
 /// Above 42%: gain = 1.0 + (pulse - 0.42) * 2.6
 pub fn parametric_gain(pulse: f32) -> f32 {
-    if pulse > 0.42 {
-        1.0 + (pulse - 0.42) * 2.6
+    if pulse > PARAMETRIC_RESONANCE_THRESHOLD {
+        1.0 + (pulse - PARAMETRIC_RESONANCE_THRESHOLD) * PARAMETRIC_GAIN_SLOPE
     } else {
         1.0
     }
@@ -31,9 +37,9 @@ pub fn zpe_power(pulse: f32, dc: f32) -> f32 {
     (base * boost * synergy).min(1250.0)
 }
 
-/// Whether parametric gain is active (pulse > 42%)
+/// Whether parametric gain is active (pulse above the resonance threshold)
 pub fn parametric_gain_active(pulse: f32) -> bool {
-    pulse > 0.42
+    pulse > PARAMETRIC_RESONANCE_THRESHOLD
 }
 
 /// Vacuum polarization gradient at a distance from the hull (T/m).

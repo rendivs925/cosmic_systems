@@ -188,7 +188,7 @@ fn build_context_markdown(craft: Option<&CraftComponent>, control: &CraftControl
         "Craft is on the ground. Increase **DC field** (comma/period) to generate lift. The DC field polarizes the vacuum, creating a low-pressure zone above the craft.\n\n> Watch the Lift Force increase in telemetry.".to_string()
     } else if speed < 1.0 && alt > 1.0 {
         "Craft is hovering. The asymmetric vacuum polarization is pushing the craft upward against the local pressure gradient. Increase **Pulse** (brackets) to activate ZPE extraction.\n\n> The cavity is forming. Energy is beginning to flow from the vacuum.".to_string()
-    } else if pulse > 0.42 {
+    } else if vacuum_physics::parametric_gain_active(pulse) {
         "**Parametric resonance threshold exceeded!**\n\nZPE power output is amplified. The vacuum cavity is oscillating at twice its natural frequency, and each energy pulse extracts more from the vacuum than it consumes.\n\nFormula: `P_zpe = 210 × pulse^1.8 × (1 + 2.6 × max(0, pulse - 0.42))`".to_string()
     } else if speed > 50.0 {
         "**High-speed flight.**\n\nThe segmented hull is steering the craft by reshaping the low-pressure zone. No G-forces are felt due to inertial decoupling — the craft moves within its own spacetime bubble.\n\n> *\"And it is He who created the night and the day and the sun and the moon; all [heavenly bodies] swim in an orbit.\"* — Quran 21:33".to_string()

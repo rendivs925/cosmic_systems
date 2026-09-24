@@ -1,3 +1,4 @@
+use crate::domain::services::vacuum_physics::PARAMETRIC_RESONANCE_THRESHOLD;
 use crate::presentation::education_state::{
     JournalCategory, JournalDatabase, JournalEntry, QuranicReference, UnlockCondition,
 };
@@ -172,7 +173,7 @@ pub fn create_journal_database() -> JournalDatabase {
             ],
             vec![],
             Some("P_zpe = 210 x pulse^1.8 x (1 + 2.6 x max(0, pulse - 0.42)) x (1 + 0.4 x DC)"),
-            UnlockCondition::PulseAbove(0.42),
+            UnlockCondition::PulseAbove(PARAMETRIC_RESONANCE_THRESHOLD),
         ),
         entry(
             "overunity_explained",

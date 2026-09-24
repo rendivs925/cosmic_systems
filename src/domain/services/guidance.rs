@@ -24,6 +24,9 @@
 
 use crate::domain::entities::rocket::RocketMissionState;
 use crate::domain::math::{DQuat, DVec3};
+use crate::domain::services::physics_orbital::{
+    circular_speed_mps, hohmann_transfer_dv, vis_viva_speed_mps,
+};
 use crate::domain::services::reference_frames::{
     planet_inertial_enu_basis, PlanetInertialEnuError,
 };
@@ -433,26 +436,14 @@ impl BiellipticSolution {
     }
 }
 
-/// Vis-viva orbital speed on an ellipse with semi-major axis `a_m` at radius
-/// `r_m`, m/s. The single authority for all transfer speed math here.
-fn vis_viva_speed_mps(mu_m3_s2: f64, r_m: f64, a_m: f64) -> f64 {
-    (mu_m3_s2 * (2.0 / r_m - 1.0 / a_m)).sqrt()
-}
-
-/// Circular-orbit speed at radius r, m/s.
-fn circular_speed_mps(mu_m3_s2: f64, r_m: f64) -> f64 {
-    (mu_m3_s2 / r_m).sqrt()
-}
-
 /// Two-impulse Hohmann transfer between coplanar circular orbits at `r1_m`
 /// and `r2_m` around a body with gravitational parameter `mu_m3_s2`.
-/// Works in both directions (raising or lowering); Δvs are magnitudes.
+/// Works in both directions (raising or lowering); Δvs are magnitudes. The
+/// impulse magnitudes come from the shared transfer authority; this wrapper
+/// adds the transfer time and the guidance solution type.
 pub fn hohmann_transfer(r1_m: f64, r2_m: f64, mu_m3_s2: f64) -> TransferSolution {
+    let (departure_dv, arrival_dv) = hohmann_transfer_dv(r1_m, r2_m, mu_m3_s2);
     let a_transfer = (r1_m + r2_m) / 2.0;
-    let departure_dv =
-        (vis_viva_speed_mps(mu_m3_s2, r1_m, a_transfer) - circular_speed_mps(mu_m3_s2, r1_m)).abs();
-    let arrival_dv =
-        (circular_speed_mps(mu_m3_s2, r2_m) - vis_viva_speed_mps(mu_m3_s2, r2_m, a_transfer)).abs();
     let transfer_time =
         std::f64::consts::PI * (a_transfer * a_transfer * a_transfer / mu_m3_s2).sqrt();
     TransferSolution {
@@ -486,13 +477,6 @@ pub fn bielliptic_transfer(r1_m: f64, r2_m: f64, rb_m: f64, mu_m3_s2: f64) -> Bi
 pub fn bielliptic_potentially_favorable(r1_m: f64, r2_m: f64) -> bool {
     let ratio = r1_m.max(r2_m) / r1_m.min(r2_m);
     ratio > BIELLIPTIC_FAVORABLE_RATIO
-}
-
-/// Plane-change Δv for rotating the orbital plane by `inclination_change_rad`
-/// at constant speed `speed_mps`: `Δv = 2·v·sin(i/2)` (vector difference of
-/// two equal-speed velocities separated by i).
-pub fn plane_change_dv(speed_mps: f64, inclination_change_rad: f64) -> f64 {
-    2.0 * speed_mps * (inclination_change_rad / 2.0).sin()
 }
 
 /// Combined-maneuver identity: performing a tangential burn `dv1_mps` and a
@@ -1250,6 +1234,7 @@ mod tests {
     use crate::domain::services::gravity::{
         circular_orbit_speed_mps, gravitational_acceleration, gravitational_parameter,
     };
+    use crate::domain::services::physics_orbital::plane_change_dv;
 
     fn profile() -> AscentGuidanceProfile {
         AscentGuidanceProfile::new(0.0, 0.0, 80_000.0, 80.0_f64.to_radians())

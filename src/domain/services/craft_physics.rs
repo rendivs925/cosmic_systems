@@ -1,4 +1,7 @@
 use crate::domain::entities::craft::Craft;
+use crate::domain::services::vacuum_physics::{
+    parametric_gain_active, PARAMETRIC_GAIN_SLOPE, PARAMETRIC_RESONANCE_THRESHOLD,
+};
 
 #[derive(Debug, Clone)]
 pub struct CraftPhysicsState {
@@ -33,17 +36,13 @@ pub fn calculate_lift(dc: f32) -> f32 {
 
 pub fn calculate_zpe(pulse: f32, dc: f32) -> f32 {
     let base = 210.0 * pulse.powf(1.8);
-    let parametric_boost = if pulse > 0.42 {
-        1.0 + (pulse - 0.42) * 2.6
+    let parametric_boost = if pulse > PARAMETRIC_RESONANCE_THRESHOLD {
+        1.0 + (pulse - PARAMETRIC_RESONANCE_THRESHOLD) * PARAMETRIC_GAIN_SLOPE
     } else {
         1.0
     };
     let synergy = 1.0 + 0.4 * dc;
     (base * parametric_boost * synergy).min(1250.0)
-}
-
-pub fn parametric_gain_active(pulse: f32) -> bool {
-    pulse > 0.42
 }
 
 pub fn compute_physics(craft: &Craft, state: &mut CraftPhysicsState, dc: f32, pulse: f32, dt: f32) {
