@@ -8,9 +8,10 @@ Defines authoritative planetary gravity for vehicles: Newtonian inverse-square g
 
 ### Requirement: Perturbing gravity respects the accelerating origin
 
-The system SHALL calculate a third body's contribution to a planet-centered
-inertial vehicle state as the difference between the body's acceleration at the
-vehicle and at the bound-planet origin.
+The system SHALL calculate each enabled third body's contribution to a
+planet-centered inertial vehicle state as the difference between that body's
+acceleration at the vehicle and at the bound-planet origin. The active force
+model SHALL declare its enabled perturbing bodies and harmonics.
 
 #### Scenario: Sun perturbation at the origin
 
@@ -23,19 +24,42 @@ vehicle and at the bound-planet origin.
 - **THEN** it combines bound-planet gravity with the Sun's differential term
   from the shared physical ephemeris, not the Sun's full heliocentric force
 
+#### Scenario: Lunar perturbation
+
+- **WHEN** the Earth-Moon-Sun force tier is active near Earth
+- **THEN** the Moon and Sun both contribute same-epoch differential
+  accelerations from the shared physical body-state authority
+
+### Requirement: Force-model fidelity is selectable and observable
+
+The system SHALL expose named, deterministic force-model tiers with documented
+included forces, valid use cases, and limits. Selecting a tier SHALL not change
+the coordinate frame or units of the vehicle state.
+
+#### Scenario: Earth J2 tier
+
+- **WHEN** an Earth J2 force tier is selected
+- **THEN** the model adds the documented zonal-harmonic acceleration to the
+  Earth point-mass term and reports the tier in telemetry and validation output
+
 ### Requirement: Gravity uses real planet masses
 
-The system SHALL compute gravitational acceleration from a celestial body's mass using Newton's law of universal gravitation, consuming the existing `Planet.mass_kg` (f64) value.
+The system SHALL compute high-fidelity gravitational acceleration from validated
+gravitational parameters (GM) tied to the selected scientific dataset. Catalog
+mass times a gravitational constant MAY remain only for bodies without approved
+GM data and SHALL be labelled as an approximation.
 
 #### Scenario: Surface acceleration on Earth
 
-- **WHEN** gravitational acceleration is computed at Earth's surface radius
-- **THEN** the magnitude is approximately `GM_earth / r_earth²` and within a documented tolerance of 9.8 m/s²
+- **WHEN** gravitational acceleration is computed at Earth's reference radius
+- **THEN** the magnitude is derived from the validated Earth GM and the selected
+  gravity model's documented reference surface
 
 #### Scenario: Inverse-square behavior
 
-- **WHEN** distance from the body center doubles
-- **THEN** the gravitational acceleration magnitude decreases to approximately one quarter
+- **WHEN** distance from a point-mass body center doubles
+- **THEN** the point-mass component of gravitational acceleration decreases to
+  approximately one quarter
 
 ### Requirement: One authoritative gravity implementation
 

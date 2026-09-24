@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the separation of guidance, control, actuation, and physics for the rocket: guidance computes targets, control commands actuators, actuation applies physical limits, and physics integrates the actual state, with no layer directly manipulating the rocket's motion.
-
 ## Requirements
-
 ### Requirement: Guidance, control, actuation, and physics are separate
 
 The system SHALL implement guidance, control, actuation, and physics as distinct concepts with explicit ordering and no cross-layer direct state manipulation.
@@ -80,3 +78,11 @@ Physics SHALL integrate forces and torques from the actuated commands and extern
 
 - **WHEN** the flight loop iterates
 - **THEN** guidance reads the latest integrated state to compute the next targets
+
+### Requirement: Guidance uses authoritative flight conditions
+Guidance SHALL use the authoritative atmosphere-relative dynamic pressure when evaluating ascent, reentry, and descent constraints.
+
+#### Scenario: Reentry dynamic-pressure gate
+- **WHEN** reentry guidance evaluates a vehicle traversing the atmosphere
+- **THEN** its phase and bank constraints use dynamic pressure derived from the current atmosphere-relative velocity
+
