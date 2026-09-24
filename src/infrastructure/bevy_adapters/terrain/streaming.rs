@@ -548,32 +548,14 @@ pub(crate) fn stream_terrain_patches(
     let streaming_started = Instant::now();
     // No rocket yet: keep the manager tidy and return.
     let Some((binding, rocket, mission)) = rocket_query.iter().next() else {
-        let active_planet = streaming.active_planet.take();
-        let evicted = clear_terrain_cache(&mut streaming);
-        if let Some(planet_entity) = active_planet {
-            for patch in evicted {
-                evicted_events.write(TerrainPatchEvicted {
-                    patch,
-                    planet_entity,
-                });
-            }
-        }
+        clear_active_planet_cache(&mut streaming, &mut evicted_events);
         return;
     };
     let Some((planet_entity, planet, planet_terrain)) = planet_query
         .iter()
         .find(|(_, planet, _)| planet.matches_body(&binding.planet_name))
     else {
-        let active_planet = streaming.active_planet.take();
-        let evicted = clear_terrain_cache(&mut streaming);
-        if let Some(planet_entity) = active_planet {
-            for patch in evicted {
-                evicted_events.write(TerrainPatchEvicted {
-                    patch,
-                    planet_entity,
-                });
-            }
-        }
+        clear_active_planet_cache(&mut streaming, &mut evicted_events);
         return;
     };
 
@@ -902,8 +884,89 @@ pub(crate) fn stream_terrain_patches(
     // spawned until every sibling can replace the parent, preventing z-fighting
     // and blank-space transitions.
     let publication_started = instrumentation_enabled.then(Instant::now);
-    let current_visible: BTreeSet<_> = selection
-        .visible_leaves
+    let patches_published = publish_ready_cover(
+        &mut streaming,
+        selection.visible_leaves,
+        &requested,
+        planet_entity,
+        &mut ready_events,
+        &mut cached_events,
+    );
+    if let (Some(started), Some(record)) = (
+        publication_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.publication_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.visible_patches = streaming.published.len();
+        record.patches_published += patches_published;
+    }
+
+    let eviction_started = instrumentation_enabled.then(Instant::now);
+    // The complete requested chain is progressive render fallback. It may
+    // temporarily exceed the cache budget but must never be evicted mid-handoff.
+    let evicted = enforce_streaming_budget(
+        &mut streaming,
+        &requested,
+        planet_entity,
+        &mut evicted_events,
+    );
+    if let (Some(started), Some(record)) = (
+        eviction_started,
+        terrain_performance.current_mut(instrumentation_enabled),
+    ) {
+        record.eviction_ms += started.elapsed().as_secs_f64() * 1_000.0;
+        record.patches_evicted += stale_stitch_variant_count + evicted;
+    }
+
+    if let Some(metrics) = streaming.metrics(
+        &requested,
+        &selection.target_leaves,
+        completed_batch,
+        cancellation,
+        evicted,
+        prelaunch,
+        max_focus_level,
+        culling,
+        streaming_started.elapsed().as_secs_f64() * 1_000.0,
+        imagery.metrics(),
+    ) {
+        metrics.log();
+    }
+}
+
+/// Drop the active planet's resident patches and emit one eviction per patch.
+///
+/// Used when no rocket or matching planet exists so the cache never holds
+/// geometry for a body that is no longer bound.
+fn clear_active_planet_cache(
+    streaming: &mut TerrainStreamingResource,
+    evicted_events: &mut MessageWriter<TerrainPatchEvicted>,
+) {
+    let active_planet = streaming.active_planet.take();
+    let evicted = clear_terrain_cache(streaming);
+    if let Some(planet_entity) = active_planet {
+        for patch in evicted {
+            evicted_events.write(TerrainPatchEvicted {
+                patch,
+                planet_entity,
+            });
+        }
+    }
+}
+
+/// Publish only the complete ready leaf cover: mark departed leaves cached,
+/// mark arrived leaves visible, and return how many were published. Keeping a
+/// parent published until every sibling is ready prevents z-fighting and
+/// blank-space transitions.
+fn publish_ready_cover(
+    streaming: &mut TerrainStreamingResource,
+    visible_leaves: BTreeSet<TerrainPatch>,
+    requested: &BTreeSet<TerrainPatch>,
+    planet_entity: Entity,
+    ready_events: &mut MessageWriter<TerrainPatchReady>,
+    cached_events: &mut MessageWriter<TerrainPatchCached>,
+) -> usize {
+    let current_visible: BTreeSet<_> = visible_leaves
         .into_iter()
         .filter(|patch| requested.contains(patch))
         .collect();
@@ -932,20 +995,19 @@ pub(crate) fn stream_terrain_patches(
         });
     }
     streaming.published = current_visible;
-    if let (Some(started), Some(record)) = (
-        publication_started,
-        terrain_performance.current_mut(instrumentation_enabled),
-    ) {
-        record.publication_ms += started.elapsed().as_secs_f64() * 1_000.0;
-        record.visible_patches = streaming.published.len();
-        record.patches_published += patches_published;
-    }
+    patches_published
+}
 
-    let eviction_started = instrumentation_enabled.then(Instant::now);
+/// Enforce the cache budget while protecting the progressive fallback chain,
+/// dropping evicted geometry and emitting an eviction per patch. Returns the
+/// number of patches evicted.
+fn enforce_streaming_budget(
+    streaming: &mut TerrainStreamingResource,
+    protected: &BTreeSet<TerrainPatch>,
+    planet_entity: Entity,
+    evicted_events: &mut MessageWriter<TerrainPatchEvicted>,
+) -> usize {
     let budget = streaming.budget_bytes;
-    // The complete requested chain is progressive render fallback. It may
-    // temporarily exceed the cache budget but must never be evicted mid-handoff.
-    let protected = &requested;
     let evicted = streaming
         .manager
         .enforce_memory_budget_protecting(budget, protected);
@@ -956,28 +1018,7 @@ pub(crate) fn stream_terrain_patches(
             planet_entity,
         });
     }
-    if let (Some(started), Some(record)) = (
-        eviction_started,
-        terrain_performance.current_mut(instrumentation_enabled),
-    ) {
-        record.eviction_ms += started.elapsed().as_secs_f64() * 1_000.0;
-        record.patches_evicted += stale_stitch_variant_count + evicted.len();
-    }
-
-    if let Some(metrics) = streaming.metrics(
-        &requested,
-        &selection.target_leaves,
-        completed_batch,
-        cancellation,
-        evicted.len(),
-        prelaunch,
-        max_focus_level,
-        culling,
-        streaming_started.elapsed().as_secs_f64() * 1_000.0,
-        imagery.metrics(),
-    ) {
-        metrics.log();
-    }
+    evicted.len()
 }
 
 fn build_streamed_patch_geometry(
