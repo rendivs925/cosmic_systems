@@ -12,6 +12,14 @@ use crate::domain::services::simulation_epoch::{
 /// Unprocessed time remains queued, rather than being discarded.
 pub const MAX_FIXED_STEPS_PER_RENDER_FRAME: u32 = 32;
 
+/// The single authoritative fixed physics timestep for every application mode.
+///
+/// 64 Hz is the validated determinism-regression cadence: the committed ascent
+/// and LEO baselines, the headless scenario runner, and the flight-recorder
+/// fixtures are all defined at this exact step. Interactive modes share it so
+/// there is one simulation cadence and one reproducibility contract.
+pub const DEFAULT_FIXED_TIMESTEP_S: f64 = 1.0 / 64.0;
+
 /// Shared physical start instant for every application mode. 03:00 UTC is
 /// roughly local solar noon at the Papua coastal launch site (139.5 degrees
 /// east), placing the launch scene in high daylight while remaining inside the
@@ -39,7 +47,7 @@ pub struct SimulationTime {
     pub time_acceleration: f64,
     /// Whether simulation time is paused.
     pub paused: bool,
-    /// Fixed physics timestep in seconds (e.g., 1/120 = 120 Hz physics).
+    /// Fixed physics timestep in seconds (e.g., 1/64 = 64 Hz physics).
     pub fixed_timestep_s: f64,
     /// Simulated seconds accrued from wall time but not yet integrated. This
     /// permits a bounded fixed-step runner to catch up without losing time.
@@ -51,7 +59,10 @@ pub struct SimulationTime {
 }
 
 impl SimulationTime {
-    /// Create a new SimulationTime with default 60 Hz fixed timestep and 1x acceleration.
+    /// Create a new SimulationTime with the given fixed timestep and 1x
+    /// acceleration. Prefer [`SimulationTime::default`] /
+    /// [`DEFAULT_FIXED_TIMESTEP_S`] unless a scenario deliberately pins a
+    /// different validated cadence.
     pub fn new(fixed_timestep_s: f64) -> Self {
         Self {
             real_time_s: 0.0,
@@ -224,7 +235,7 @@ pub fn stepped_time_acceleration(current: f64, direction: i32) -> f64 {
 
 impl Default for SimulationTime {
     fn default() -> Self {
-        Self::new(1.0 / 120.0) // 120 Hz physics
+        Self::new(DEFAULT_FIXED_TIMESTEP_S)
     }
 }
 
@@ -233,9 +244,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_120hz() {
+    fn default_uses_the_authoritative_fixed_timestep() {
         let sim = SimulationTime::default();
-        assert!((sim.fixed_timestep() - 1.0 / 120.0).abs() < 1e-9);
+        assert_eq!(sim.fixed_timestep(), DEFAULT_FIXED_TIMESTEP_S);
+        assert!((sim.fixed_update_hz() - 64.0).abs() < 1e-9);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::domain::services::simulation_analysis::{
 };
 use crate::domain::services::simulation_artifact::{SimulationArtifact, SimulationTelemetryFrame};
 use crate::domain::services::simulation_run::SimulationRunIdentity;
-use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::services::simulation_time::{SimulationTime, DEFAULT_FIXED_TIMESTEP_S};
 #[cfg(feature = "dem")]
 use crate::domain::services::terrain_source::DEFAULT_EARTH_DEM_PATH;
 use crate::infrastructure::bevy_adapters::entity_components::{
@@ -27,8 +27,6 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 #[cfg(feature = "dem")]
 use sha2::{Digest, Sha256};
-
-const FIXED_TIMESTEP_S: f64 = 1.0 / 64.0;
 
 #[cfg(feature = "dem")]
 fn terrain_source_identity() -> Result<String, String> {
@@ -212,7 +210,7 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.insert_resource(SimulationTime::new(FIXED_TIMESTEP_S));
+    app.insert_resource(SimulationTime::new(DEFAULT_FIXED_TIMESTEP_S));
     app.insert_resource(catalog);
     app.insert_resource(selection);
     app.add_plugins((EphemerisPlugin, RocketFixedSimulationPlugin));
@@ -244,7 +242,7 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
             .seconds_since_j2000(),
         state_reference_frame: "planet-inertial-meters".to_string(),
         numerical_integrator: "semi-implicit-euler".to_string(),
-        fixed_timestep_s: FIXED_TIMESTEP_S,
+        fixed_timestep_s: DEFAULT_FIXED_TIMESTEP_S,
         random_seed: None,
         software_revision: option_env!("GIT_HASH").unwrap_or("workspace").to_string(),
     };

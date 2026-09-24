@@ -3028,6 +3028,7 @@ mod determinism_regression_tests {
         load_baseline_ron, save_baseline_ron, RegressionConfig, RocketStateSample,
     };
     use crate::domain::services::simulation_run::SimulationRunIdentity;
+    use crate::domain::services::simulation_time::DEFAULT_FIXED_TIMESTEP_S;
     use crate::infrastructure::bevy_adapters::rocket::components::{
         RocketAutopilot, RocketMissionState, RocketPhysicsState,
     };
@@ -3052,7 +3053,7 @@ mod determinism_regression_tests {
             start_epoch_tdb_seconds_since_j2000: 0.0,
             state_reference_frame: "Earth-centered inertial".into(),
             numerical_integrator: "semi-implicit Euler".into(),
-            fixed_timestep_s: 1.0 / 64.0,
+            fixed_timestep_s: DEFAULT_FIXED_TIMESTEP_S,
             random_seed: None,
             software_revision: software_revision.into(),
         }
