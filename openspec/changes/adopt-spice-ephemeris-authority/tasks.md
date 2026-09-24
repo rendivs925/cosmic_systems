@@ -18,17 +18,23 @@
 
 ## 3. Consumer Migration
 
-- [ ] 3.1 Migrate solar-map transforms, render rebasing, and sampled orbit
-  presentation to the shared evaluated state.
+- [ ] 3.1 Migrate the remaining analytic solar-map consumers
+  (`application/solar_system_startup.rs`, `bevy_adapters/rocket/planet.rs`,
+  `bevy_adapters/planet_systems.rs`, and the `physics_orbital::solar_map`
+  parent-relative moon/planet projection) to the shared evaluated state or an
+  explicitly derived presentation projection.
 - [x] 3.2 Migrate craft targets, rocket planet/moon proxies, and Sun lighting to
   the shared evaluated state and shared TDB epoch.
-- [ ] 3.3 Migrate solar differential gravity to same-epoch kernel-derived states
-  and replace migrated planet orientation with approved PCK/BPC rotation data.
+- [ ] 3.3 Replace the remaining planet orientation approximation with approved
+  PCK/BPC rotation data. Solar differential gravity already consumes the shared
+  same-epoch kernel state; no further work is required for that half.
 
 ## 4. Authority Cleanup And Validation
 
-- [ ] 4.1 Remove the analytic primary JPL table, numerical velocity derivative,
-  and superseded primary/moon/orientation runtime paths without a fallback.
+- [x] 4.1 Remove the analytic primary JPL table and numerical velocity
+  derivative runtime paths without a fallback. The primary analytic table and
+  numerical velocity derivative are verified absent; the remaining analytic
+  parent-relative moon model is tracked under 3.1/3.3 before its removal here.
 - [ ] 4.2 Add cross-mode deterministic state regressions and recorded
   frame/position/velocity/orientation reference cases.
 - [ ] 4.3 Run OpenSpec validation, formatting, checks, clippy, tests, and bounded
