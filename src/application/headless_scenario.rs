@@ -7,7 +7,10 @@ use crate::domain::services::simulation_analysis::{
     analyze_simulation_artifact, EngineeringConstraint, SimulationAnalysisResult,
 };
 use crate::domain::services::simulation_artifact::{SimulationArtifact, SimulationTelemetryFrame};
-use crate::domain::services::simulation_run::SimulationRunIdentity;
+use crate::domain::services::simulation_run::{
+    SimulationRunIdentity, NUMERICAL_INTEGRATOR_SEMI_IMPLICIT_EULER,
+    STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL,
+};
 use crate::domain::services::simulation_time::{SimulationTime, DEFAULT_FIXED_TIMESTEP_S};
 #[cfg(feature = "dem")]
 use crate::domain::services::terrain_source::DEFAULT_EARTH_DEM_PATH;
@@ -240,11 +243,11 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
             .tdb_epoch()
             .map_err(|error| error.to_string())?
             .seconds_since_j2000(),
-        state_reference_frame: "planet-inertial-meters".to_string(),
-        numerical_integrator: "semi-implicit-euler".to_string(),
+        state_reference_frame: STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL.to_string(),
+        numerical_integrator: NUMERICAL_INTEGRATOR_SEMI_IMPLICIT_EULER.to_string(),
         fixed_timestep_s: DEFAULT_FIXED_TIMESTEP_S,
         random_seed: None,
-        software_revision: option_env!("GIT_HASH").unwrap_or("workspace").to_string(),
+        software_revision: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
     };
     identity.validate()?;
     Ok((app, identity))

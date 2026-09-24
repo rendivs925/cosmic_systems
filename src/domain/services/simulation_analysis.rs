@@ -7,7 +7,9 @@ use crate::domain::services::physics_orbital::{
 use crate::domain::services::simulation_artifact::{
     SimulationArtifact, SimulationEventType, SimulationTelemetryEvent,
 };
-use crate::domain::services::simulation_run::SimulationRunIdentity;
+use crate::domain::services::simulation_run::{
+    SimulationRunIdentity, STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL,
+};
 use ron::de::from_str;
 use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
@@ -179,7 +181,8 @@ pub fn analyze_simulation_artifact(
     constraints: &[EngineeringConstraint],
 ) -> Result<SimulationAnalysisResult, String> {
     artifact.validate()?;
-    if artifact.run_identity.state_reference_frame != "planet-inertial-meters" {
+    if artifact.run_identity.state_reference_frame != STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL
+    {
         return Err(format!(
             "analysis does not support state reference frame '{}'",
             artifact.run_identity.state_reference_frame
@@ -378,7 +381,10 @@ mod tests {
     use crate::domain::services::simulation_artifact::{
         SimulationArtifact, SimulationEventType, SimulationTelemetryEvent, SimulationTelemetryFrame,
     };
-    use crate::domain::services::simulation_run::SimulationRunIdentity;
+    use crate::domain::services::simulation_run::{
+        SimulationRunIdentity, NUMERICAL_INTEGRATOR_SEMI_IMPLICIT_EULER,
+        STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL,
+    };
     fn artifact() -> SimulationArtifact {
         let identity = SimulationRunIdentity {
             scenario_id: "test".into(),
@@ -389,8 +395,8 @@ mod tests {
             terrain_source_id: "terrain".into(),
             ephemeris_authority_id: "ephemeris".into(),
             start_epoch_tdb_seconds_since_j2000: 0.0,
-            state_reference_frame: "planet-inertial-meters".into(),
-            numerical_integrator: "euler".into(),
+            state_reference_frame: STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL.into(),
+            numerical_integrator: NUMERICAL_INTEGRATOR_SEMI_IMPLICIT_EULER.into(),
             fixed_timestep_s: 1.0,
             random_seed: None,
             software_revision: "test".into(),

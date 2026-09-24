@@ -6,6 +6,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Canonical name of the authoritative frame for recorded state vectors. State
+/// is SI meters in a planet-centered inertial frame. Artifact producers,
+/// analysis, and the regression baselines all share this one string, so a
+/// baseline artifact is analyzable by the same authority.
+pub const STATE_REFERENCE_FRAME_EARTH_CENTERED_INERTIAL: &str = "Earth-centered inertial";
+
+/// Canonical name of the fixed-step integrator applied to the authoritative
+/// 6-DOF state.
+pub const NUMERICAL_INTEGRATOR_SEMI_IMPLICIT_EULER: &str = "semi-implicit Euler";
+
 /// Immutable identity of a simulation run or recorded baseline.
 ///
 /// Units and frames are explicit: `start_epoch_tdb_seconds_since_j2000` is TDB
