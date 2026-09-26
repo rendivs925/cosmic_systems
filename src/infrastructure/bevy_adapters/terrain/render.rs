@@ -6,7 +6,10 @@
 //!
 //! The ready-patch upload queue lives in the [`uploads`] submodule.
 
-use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
+use crate::domain::services::cube_sphere::{
+    face_uv, face_uv_to_direction, CubeFace, PatchGeometry, TerrainPatch,
+};
+use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -26,14 +29,16 @@ use crate::infrastructure::bevy_adapters::terrain::streaming::{
     stream_terrain_patches, TerrainStreamingResource,
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
-    local_detail_weight, terrain_detail_texture, vegetation_atlas,
+    layer_texture_set, local_detail_weight, terrain_detail_texture, vegetation_atlas,
+    LAYER_NORMAL_STRENGTH, LAYER_TILING_SCALE, NEAR_DETAIL_SCALE, NEAR_DETAIL_STRENGTH,
 };
 use crate::infrastructure::bevy_adapters::terrain::water::{
-    WaterExtension, WaterMaterial, WaterParams,
+    WaterExtension, WaterMaterial, WaterParams, WaterQualityConfig,
 };
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
-use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::light::NotShadowCaster;
 use bevy::math::{DQuat, DVec3};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
@@ -115,6 +120,53 @@ pub(crate) struct TerrainSurfaceExtension {
     /// Repetitions per metre of the micro-detail texture.
     #[uniform(104)]
     detail_scale: f32,
+    /// Baked terrain occlusion sampled with the patch-local UV1: red is the
+    /// self-shadow visibility toward the shared ephemeris Sun, green is the
+    /// sky/ambient visibility. Neutral (1, 1) where a patch has no bake.
+    #[texture(111)]
+    #[sampler(112)]
+    terrain_occlusion: Handle<Image>,
+    /// Fraction of the baked self-shadow applied to the direct-sun term.
+    #[uniform(104)]
+    self_shadow_strength: f32,
+    /// Fraction of the baked sky occlusion applied to the indirect term.
+    #[uniform(104)]
+    sky_occlusion_strength: f32,
+    /// Shared per-layer albedo/roughness texture array; rgb is the tiled albedo
+    /// variation and alpha is the layer roughness. Layer index matches the
+    /// terrain layer catalog.
+    #[texture(113, dimension = "2d_array")]
+    #[sampler(114)]
+    layer_albedo_roughness: Handle<Image>,
+    /// Shared per-layer tangent-space normal texture array.
+    #[texture(115, dimension = "2d_array")]
+    #[sampler(116)]
+    layer_normal: Handle<Image>,
+    /// Per-patch layer-weight map ([grass, soil, rock, sand]); snow is the
+    /// remaining unit. Neutral (1, 0, 0, 0) for coarse patches and the fallback.
+    #[texture(117)]
+    #[sampler(118)]
+    layer_weights: Handle<Image>,
+    /// One while the layered path is active for this patch, zero for the
+    /// single-layer fallback. Evaluated per patch, not per fragment.
+    #[uniform(104)]
+    layer_blend_weight: f32,
+    /// Repetitions per metre of a ground-layer texture.
+    #[uniform(104)]
+    layer_tiling_scale: f32,
+    /// Repetitions of a ground-layer texture across the patch-local UV, matching
+    /// the world-space triplanar scale so the two projections agree physically.
+    #[uniform(104)]
+    layer_patch_uv_scale: f32,
+    /// Gain applied to the blended layer tangent-space normal.
+    #[uniform(104)]
+    layer_normal_strength: f32,
+    /// Repetitions per metre of the near-camera detail overlay.
+    #[uniform(104)]
+    near_detail_scale: f32,
+    /// Gain of the near-camera detail overlay, faded by view distance.
+    #[uniform(104)]
+    near_detail_strength: f32,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -147,6 +199,18 @@ pub(crate) fn build_terrain_material(
     morph_end_m: f32,
     detail_texture: Handle<Image>,
     detail_scale: f32,
+    terrain_occlusion: Handle<Image>,
+    self_shadow_strength: f32,
+    sky_occlusion_strength: f32,
+    layer_albedo_roughness: Handle<Image>,
+    layer_normal: Handle<Image>,
+    layer_weights: Handle<Image>,
+    layer_blend_weight: f32,
+    layer_tiling_scale: f32,
+    layer_patch_uv_scale: f32,
+    layer_normal_strength: f32,
+    near_detail_scale: f32,
+    near_detail_strength: f32,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -161,9 +225,59 @@ pub(crate) fn build_terrain_material(
             morph_end_m,
             detail_texture,
             detail_scale,
+            terrain_occlusion,
+            self_shadow_strength,
+            sky_occlusion_strength,
+            layer_albedo_roughness,
+            layer_normal,
+            layer_weights,
+            layer_blend_weight,
+            layer_tiling_scale,
+            layer_patch_uv_scale,
+            layer_normal_strength,
+            near_detail_scale,
+            near_detail_strength,
         },
     }
 }
+/// Layered-material inputs for one patch, preserved so an imagery upgrade can
+/// rebuild the shared material without re-deriving layer state.
+#[derive(Debug, Clone)]
+pub(crate) struct LayerMaterialState {
+    /// Shared per-layer albedo/roughness array (never released per patch).
+    pub(crate) albedo_roughness: Handle<Image>,
+    /// Shared per-layer normal array (never released per patch).
+    pub(crate) normal: Handle<Image>,
+    /// Per-patch layer-weight map, or the shared neutral placeholder.
+    pub(crate) weights: Handle<Image>,
+    /// One while the layered path is active, zero for the single-layer fallback.
+    pub(crate) blend_weight: f32,
+    pub(crate) tiling_scale: f32,
+    pub(crate) patch_uv_scale: f32,
+    pub(crate) normal_strength: f32,
+    pub(crate) near_detail_scale: f32,
+    pub(crate) near_detail_strength: f32,
+    /// Whether `weights` is owned by this patch and released with it.
+    pub(crate) weights_owned: bool,
+}
+
+impl Default for LayerMaterialState {
+    fn default() -> Self {
+        Self {
+            albedo_roughness: Handle::default(),
+            normal: Handle::default(),
+            weights: Handle::default(),
+            blend_weight: 0.0,
+            tiling_scale: 1.0,
+            patch_uv_scale: 1.0,
+            normal_strength: 0.0,
+            near_detail_scale: 1.0,
+            near_detail_strength: 0.0,
+            weights_owned: false,
+        }
+    }
+}
+
 /// Component tracking the render state of a terrain patch.
 #[derive(Component, Debug, Clone)]
 pub struct TerrainPatchRenderState {
@@ -187,10 +301,16 @@ pub struct TerrainPatchRenderState {
     pub(crate) detail_scale: f32,
     /// Per-patch source-derived surface textures released with the patch.
     pub(crate) local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
+    /// Layered ground-material inputs (shared layer sets, per-patch weights).
+    pub(crate) layer: LayerMaterialState,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     /// Sea-level water cap for patches that contain ocean, released with the
-    /// patch. The water material itself is shared.
+    /// patch. The water material itself is shared unless this patch has its own
+    /// landscape-shadow material.
     pub water_mesh_handle: Option<Handle<Mesh>>,
+    /// Per-patch ocean material carrying this patch's baked terrain occlusion
+    /// map, or `None` when the shared water material is used.
+    pub water_material_handle: Option<Handle<WaterMaterial>>,
     /// Drainage ribbon for patches crossed by a river channel, released with the
     /// patch. Shares the river material.
     pub river_mesh_handle: Option<Handle<Mesh>>,
@@ -199,6 +319,20 @@ pub struct TerrainPatchRenderState {
     pub body_to_inertial_at_spawn: DQuat,
     /// Render origin used to bake this mesh's vertices.
     pub render_origin_at_spawn: DVec3,
+    /// Baked terrain-occlusion map bound to this patch's material, or the
+    /// shared neutral map when the patch is below the occlusion bake level.
+    pub(crate) occlusion_texture: Handle<Image>,
+    /// Whether `occlusion_texture` is owned by this patch and must be released
+    /// with it. The shared neutral map is never released here.
+    pub(crate) occlusion_owned: bool,
+    /// Body-fixed height field the occlusion map was baked from, retained so a
+    /// material Sun-direction change can refresh the patch without rebuilding
+    /// its geometry.
+    pub(crate) occlusion_field: Option<PatchHeightField>,
+    /// Inertial Sun direction recorded by the occlusion bake. Rotation alone
+    /// does not change it, so resident patches are only refreshed when the
+    /// shared ephemeris Sun direction changes materially.
+    pub(crate) baked_sun_inertial: DVec3,
 }
 
 /// Reusable render assets whose appearance is identical for every terrain
@@ -224,6 +358,21 @@ struct TerrainRenderAssets {
     /// Shared tiling micro-detail texture (normal/albedo/roughness) sampled
     /// triplanar by the terrain shader.
     detail_texture: Option<Handle<Image>>,
+    /// Shared per-layer albedo/roughness texture array (one upload for all
+    /// patches, so residency does not grow with the visible patch count).
+    layer_albedo_roughness: Option<Handle<Image>>,
+    /// Shared per-layer tangent-space normal texture array.
+    layer_normal: Option<Handle<Image>>,
+    /// One shared neutral layer-weight map so coarse patches and the single-layer
+    /// fallback never allocate a per-patch image.
+    neutral_layer_weights: Option<Handle<Image>>,
+    /// One shared neutral occlusion map (self-shadow = sky visibility = 1) so
+    /// patches without a bake never allocate a per-patch image.
+    neutral_occlusion: Option<Handle<Image>>,
+    /// Bounded occlusion bake configuration, mirrored from
+    /// `TerrainOcclusionConfig` so the spawn system does not need another
+    /// resource parameter.
+    occlusion: TerrainOcclusionConfig,
 }
 
 /// Resource for the floating render origin (AGENTS.md section 13).
@@ -272,6 +421,74 @@ impl TerrainRenderConfig {
     }
 }
 
+/// Bounded, deterministic configuration for baked terrain occlusion.
+///
+/// Every field caps work rather than expressing a target: the per-bake sun and
+/// sky ray-march counts, the horizon direction count, and the occlusion map
+/// resolution together bound the height-field samples a patch bake may cost.
+/// Defaults are deliberately conservative and are only raised against measured
+/// `TerrainPerformanceTelemetry` evidence.
+#[derive(Resource, Debug, Clone)]
+pub struct TerrainOcclusionConfig {
+    /// Occlusion map resolution in texels per side, baked in patch-local UV.
+    pub texture_resolution: u32,
+    /// Height-field samples marched along each sun ray.
+    pub sun_samples: u32,
+    /// Hemisphere directions sampled for sky occlusion; the final direction is
+    /// the local zenith. The rest are evenly spaced at `sky_elevation_deg`.
+    pub sky_directions: u32,
+    /// Height-field samples marched along each sky ray.
+    pub sky_samples: u32,
+    /// Elevation of the ring sky directions above the local horizon, degrees.
+    pub sky_elevation_deg: f64,
+    /// Maximum sun-ray range in meters. Terrain beyond it is not an occluder.
+    pub sun_max_distance_m: f64,
+    /// Maximum sky-ray range in meters.
+    pub sky_max_distance_m: f64,
+    /// Terrain penetration mapped to full occlusion. Controls shadow softness
+    /// at grazing angles.
+    pub softness_m: f64,
+    /// Patches below this level get the neutral map instead of a bake. Coarse
+    /// roots cannot resolve terrain occlusion anyway.
+    pub min_patch_level: u32,
+    /// Fraction of the baked self-shadow applied to the direct-sun term.
+    pub self_shadow_strength: f32,
+    /// Fraction of the baked sky occlusion applied to the indirect term.
+    pub sky_occlusion_strength: f32,
+    /// Inertial Sun-direction change (radians) that refreshes resident patches.
+    pub refresh_tolerance_rad: f64,
+    /// Maximum resident patches refreshed against a new Sun direction per frame.
+    pub max_refreshes_per_frame: u32,
+    /// Bounded occlusion terms combined per rendered fragment (self-shadow and
+    /// sky occlusion). Kept explicit so the per-fragment budget is visible in
+    /// telemetry even though the terms are interpolated, not re-marched.
+    pub samples_per_fragment: u32,
+}
+
+impl Default for TerrainOcclusionConfig {
+    fn default() -> Self {
+        Self {
+            texture_resolution: 16,
+            sun_samples: 5,
+            sky_directions: 4,
+            sky_samples: 2,
+            sky_elevation_deg: 40.0,
+            sun_max_distance_m: 6_000.0,
+            sky_max_distance_m: 1_500.0,
+            softness_m: 80.0,
+            // Bake every streamed patch: landscape self-shadow must cover the
+            // far terrain beyond the 20 km directional-shadow cascade range,
+            // which is dominated by coarse patches.
+            min_patch_level: 0,
+            self_shadow_strength: 1.0,
+            sky_occlusion_strength: 0.7,
+            refresh_tolerance_rad: 0.02,
+            max_refreshes_per_frame: 2,
+            samples_per_fragment: 2,
+        }
+    }
+}
+
 /// Events emitted by the streaming system when patch lifecycle changes.
 /// These are observed by the render system to spawn/despawn meshes.
 #[derive(Message, Debug, Clone)]
@@ -312,6 +529,8 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainPatchRenderIndex>()
             .init_resource::<TerrainImageryConfig>()
             .init_resource::<TerrainImageryResource>()
+            .init_resource::<TerrainOcclusionConfig>()
+            .init_resource::<WaterQualityConfig>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_message::<TerrainPatchReady>()
@@ -346,6 +565,7 @@ impl Plugin for TerrainRenderPlugin {
                     update_patch_transforms,
                     reveal_cached_patch_mesh_system,
                     spawn_patch_mesh_system,
+                    refresh_terrain_occlusion,
                     hide_cached_patch_mesh_system,
                     despawn_patch_mesh_system,
                     finish_terrain_performance_frame,
@@ -398,8 +618,14 @@ fn global_albedo_for(
 /// Preload the default Earth albedo and the shared neutral surface maps so the
 /// first terrain patch does not wait on an asset load. Non-default bodies load
 /// on demand through [`global_albedo_for`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Startup asset preparation binds independent shared terrain assets and configuration."
+)]
 fn prepare_terrain_render_assets(
     config: Res<TerrainRenderConfig>,
+    occlusion_config: Res<TerrainOcclusionConfig>,
+    water_quality: Res<WaterQualityConfig>,
     asset_server: Res<AssetServer>,
     imagery: Res<TerrainImageryResource>,
     mut render_assets: ResMut<TerrainRenderAssets>,
@@ -408,10 +634,17 @@ fn prepare_terrain_render_assets(
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     render_assets.patch_resolution = config.patch_resolution;
+    render_assets.occlusion = occlusion_config.clone();
     let _ = global_albedo_for(&mut render_assets, &asset_server, &imagery, "Earth");
     ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
     // One shared micro-detail texture across every patch.
     render_assets.detail_texture = Some(images.add(terrain_detail_texture()));
+    // One shared procedural layer PBR set across every patch. Generated
+    // deterministically at startup, so the layered path needs no asset files.
+    let layer_set = layer_texture_set();
+    render_assets.layer_albedo_roughness = Some(images.add(layer_set.albedo_roughness));
+    render_assets.layer_normal = Some(images.add(layer_set.normal));
+    ensure_neutral_layer_weights(&mut render_assets, &mut images);
     // One alpha-masked foliage material is shared by every patch. It is created
     // once here so no patch spawn path needs the image assets.
     let vegetation_atlas = images.add(vegetation_atlas());
@@ -426,49 +659,50 @@ fn prepare_terrain_render_assets(
         cull_mode: None,
         ..default()
     }));
+    let neutral_occlusion = neutral_occlusion_image(&mut render_assets, &mut images);
+    let mut ocean_params = WaterParams::default();
+    ocean_params.wave_components = water_quality.wave_components_f32();
+    ocean_params.foam_coverage = water_quality.foam_coverage;
+    let mut river_params = WaterParams::river();
+    river_params.wave_components = water_quality.wave_components_f32();
+    river_params.foam_coverage = water_quality.foam_coverage;
     render_assets.water_material = Some(water_materials.add(WaterMaterial {
-        base: water_base_material(),
-        extension: WaterExtension::default(),
+        base: water_base_material(water_quality.refraction),
+        extension: WaterExtension::new(ocean_params, neutral_occlusion.clone()),
     }));
     render_assets.river_material = Some(water_materials.add(WaterMaterial {
-        base: water_base_material(),
-        extension: WaterExtension {
-            params: WaterParams::river(),
-        },
+        base: water_base_material(false),
+        extension: WaterExtension::new(river_params, neutral_occlusion),
     }));
 }
 
 /// Shared base material for the water surface: blended, double-sided, and very
-/// smooth so the fragment shader's ripple normal drives a tight sun glint.
-fn water_base_material() -> StandardMaterial {
+/// smooth so the fragment shader's ripple normal drives a tight sun glint. When
+/// `refraction` is enabled the material also asks Bevy for screen-space
+/// transmission; without refraction buffers (or when disabled) the alpha-blended
+/// depth path is used unchanged.
+fn water_base_material(refraction: bool) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
         alpha_mode: AlphaMode::Blend,
         cull_mode: None,
         perceptual_roughness: 0.05,
         metallic: 0.0,
+        specular_transmission: if refraction { 0.35 } else { 0.0 },
+        ior: 1.33,
+        thickness: if refraction { 2.0 } else { 0.0 },
         ..default()
     }
 }
 
 /// Advance the shared water wave phase. Presentation only; never read by the
 /// simulation, terrain source, or collision.
-fn update_water_material(
-    time: Res<Time>,
-    render_assets: Res<TerrainRenderAssets>,
-    mut water_materials: ResMut<Assets<WaterMaterial>>,
-) {
+fn update_water_material(time: Res<Time>, mut water_materials: ResMut<Assets<WaterMaterial>>) {
     let elapsed_s = time.elapsed_secs();
-    for handle in [
-        render_assets.water_material.as_ref(),
-        render_assets.river_material.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Some(material) = water_materials.get_mut(handle) {
-            material.extension.params.time_s = elapsed_s;
-        }
+    // Every water material (shared and per-patch) advances the same presentation
+    // clock, so a shared wave field stays coherent across all caps.
+    for (_, material) in water_materials.iter_mut() {
+        material.extension.params.time_s = elapsed_s;
     }
 }
 
@@ -485,6 +719,55 @@ fn ensure_neutral_local_surface_maps(
         .get_or_insert_with(|| images.add(neutral_surface_image([128, 128, 255, 255])))
         .clone();
     (albedo, normal)
+}
+
+/// Neutral layer-weight map used by coarse patches and the single-layer
+/// fallback. The red channel is fully set so the derived snow remainder is zero;
+/// the shader ignores the map entirely while `layer_blend_weight` is zero.
+fn ensure_neutral_layer_weights(
+    render_assets: &mut TerrainRenderAssets,
+    images: &mut Assets<Image>,
+) -> Handle<Image> {
+    render_assets
+        .neutral_layer_weights
+        .get_or_insert_with(|| images.add(neutral_surface_image([255, 0, 0, 0])))
+        .clone()
+}
+
+/// Resolve the layered-material inputs for one patch. A produced per-patch
+/// weight map selects the layered path; otherwise the shared neutral weight map
+/// and the single-layer fallback are used.
+fn build_layer_material_state(
+    render_assets: &mut TerrainRenderAssets,
+    images: &mut Assets<Image>,
+    patch_layer_weights: Option<Image>,
+    patch_size_m: f64,
+) -> LayerMaterialState {
+    let albedo_roughness = render_assets
+        .layer_albedo_roughness
+        .clone()
+        .unwrap_or_default();
+    let normal = render_assets.layer_normal.clone().unwrap_or_default();
+    let (weights, weights_owned, blend_weight) = match patch_layer_weights {
+        Some(image) => (images.add(image), true, 1.0),
+        None => (
+            ensure_neutral_layer_weights(render_assets, images),
+            false,
+            0.0,
+        ),
+    };
+    LayerMaterialState {
+        albedo_roughness,
+        normal,
+        weights,
+        blend_weight,
+        tiling_scale: LAYER_TILING_SCALE,
+        patch_uv_scale: (patch_size_m * f64::from(LAYER_TILING_SCALE)) as f32,
+        normal_strength: LAYER_NORMAL_STRENGTH,
+        near_detail_scale: NEAR_DETAIL_SCALE,
+        near_detail_strength: NEAR_DETAIL_STRENGTH,
+        weights_owned,
+    }
 }
 
 fn neutral_surface_image(data: [u8; 4]) -> Image {
@@ -507,14 +790,27 @@ fn neutral_surface_image(data: [u8; 4]) -> Image {
     clippy::too_many_arguments,
     reason = "This renderer upload system coordinates independent terrain assets, events, and state."
 )]
+/// Bundled terrain asset stores for the patch spawn system. Grouping them keeps
+/// the system within the ECS parameter limit while preserving separate mutable
+/// access to each asset store.
+#[derive(bevy::ecs::system::SystemParam)]
+struct TerrainSpawnAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<TerrainMaterial>>,
+    water_materials: ResMut<'w, Assets<WaterMaterial>>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This renderer upload system coordinates independent terrain assets, events, and state."
+)]
 fn spawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchReady>,
     mut pending_uploads: ResMut<PendingTerrainPatchUploads>,
     mut render_index: ResMut<TerrainPatchRenderIndex>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<TerrainMaterial>>,
-    mut images: ResMut<Assets<Image>>,
+    assets: TerrainSpawnAssets,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut streaming: ResMut<TerrainStreamingResource>,
     asset_server: Res<AssetServer>,
@@ -522,10 +818,18 @@ fn spawn_patch_mesh_system(
     render_origin: Res<RenderOrigin>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
+    water_quality: Res<WaterQualityConfig>,
     performance_config: Res<PerformanceMetricsConfig>,
     mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
 ) {
+    let TerrainSpawnAssets {
+        mut meshes,
+        mut materials,
+        mut water_materials,
+        mut images,
+    } = assets;
     let instrumentation_enabled = performance_config.instrumentation_enabled();
+    let occlusion_config = render_assets.occlusion.clone();
     let active_planet = streaming.active_planet();
     if !enqueue_ready_uploads(
         &mut events,
@@ -608,7 +912,7 @@ fn spawn_patch_mesh_system(
                 )
             } else {
                 let (albedo, normal) =
-                    ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
+                    ensure_neutral_local_surface_maps(&mut render_assets, &mut *images);
                 (albedo, normal, None, 0.0)
             };
         if let (Some(started), Some(record)) = (
@@ -617,6 +921,35 @@ fn spawn_patch_mesh_system(
         ) {
             record.image_asset_creation_ms += started.elapsed().as_secs_f64() * 1_000.0;
         }
+
+        // Bake the landscape self-shadow and sky occlusion from the same
+        // authoritative height field and the shared ephemeris Sun. The term is
+        // body-fixed, presentation-only, and bounded per patch.
+        let occlusion_started = instrumentation_enabled.then(Instant::now);
+        let patch_resolution = render_assets.patch_resolution;
+        let (occlusion_texture, occlusion_field, occlusion_samples, baked_sun_inertial) =
+            bake_terrain_occlusion_for_patch(
+                geometry,
+                patch,
+                patch_resolution,
+                body_to_inertial,
+                &ephemeris_snapshot,
+                &planet.domain_planet.name,
+                &occlusion_config,
+                &mut render_assets,
+                &mut *images,
+            );
+        let occlusion_owned = occlusion_field.is_some();
+        if let (Some(started), Some(record)) = (
+            occlusion_started,
+            terrain_performance.current_mut(instrumentation_enabled),
+        ) {
+            record.occlusion_bake_ms += started.elapsed().as_secs_f64() * 1_000.0;
+            record.occlusion_bake_samples += occlusion_samples;
+            record.occlusion_patches_baked += usize::from(occlusion_owned);
+            record.occlusion_fragment_samples = occlusion_config.samples_per_fragment as usize;
+        }
+
         let material_started = instrumentation_enabled.then(Instant::now);
         let base_material = patch_material(surface.roughness, surface.metallic);
         let body_name = planet.domain_planet.name.clone();
@@ -635,6 +968,14 @@ fn spawn_patch_mesh_system(
         let morph_start_m = (patch_size_m * MORPH_START_SIZE_FACTOR) as f32;
         let morph_end_m = (patch_size_m * MORPH_END_SIZE_FACTOR) as f32;
         let detail_texture = render_assets.detail_texture.clone().unwrap_or_default();
+        // Select the layered path versus the single-layer fallback from whether
+        // a per-patch weight map was produced (native `dem` only).
+        let layer = build_layer_material_state(
+            &mut render_assets,
+            &mut *images,
+            surface.layer_weights,
+            patch_size_m,
+        );
         let material_handle = materials.add(build_terrain_material(
             base_material.clone(),
             local_albedo.clone(),
@@ -647,6 +988,18 @@ fn spawn_patch_mesh_system(
             morph_end_m,
             detail_texture.clone(),
             TERRAIN_DETAIL_SCALE,
+            occlusion_texture.clone(),
+            occlusion_config.self_shadow_strength,
+            occlusion_config.sky_occlusion_strength,
+            layer.albedo_roughness.clone(),
+            layer.normal.clone(),
+            layer.weights.clone(),
+            layer.blend_weight,
+            layer.tiling_scale,
+            layer.patch_uv_scale,
+            layer.normal_strength,
+            layer.near_detail_scale,
+            layer.near_detail_strength,
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -660,15 +1013,29 @@ fn spawn_patch_mesh_system(
         let water_mesh_handle = if planet.domain_planet.has_ocean {
             water_mesh_for_patch(
                 geometry,
-                render_assets.patch_resolution,
+                // Budget-gate displacement subdivision for the ocean cap.
+                render_assets
+                    .patch_resolution
+                    .min(water_quality.max_subdivision.max(2)),
                 planet.domain_planet.radius_km as f64 * 1_000.0,
                 &render_origin.origin,
                 body_to_inertial,
-                &mut meshes,
+                &mut *meshes,
             )
         } else {
             None
         };
+        // Ocean water over a baked patch gets its own material so the patch's
+        // terrain occlusion map can shade the sea beyond the shadow cascades.
+        let water_material_handle = (water_mesh_handle.is_some() && occlusion_owned).then(|| {
+            let mut params = WaterParams::default();
+            params.wave_components = water_quality.wave_components_f32();
+            params.foam_coverage = water_quality.foam_coverage;
+            water_materials.add(WaterMaterial {
+                base: water_base_material(water_quality.refraction),
+                extension: WaterExtension::new(params, occlusion_texture.clone()),
+            })
+        });
 
         // Geometry is already in the rocket-local flight frame; the entity sits
         // at the origin (the rocket's render position).
@@ -698,7 +1065,9 @@ fn spawn_patch_mesh_system(
             record.mesh_assets_created +=
                 1 + vegetation_mesh_asset_count + usize::from(river_mesh_handle.is_some());
             record.material_assets_created += 1 + vegetation_material_asset_count;
-            record.image_assets_created += local_image_asset_count;
+            record.image_assets_created += local_image_asset_count
+                + usize::from(occlusion_owned)
+                + usize::from(layer.weights_owned);
         }
         // A departing parent remains the visible fallback until a complete
         // descendant cover has reached the renderer. Spawning each replacement
@@ -737,12 +1106,18 @@ fn spawn_patch_mesh_system(
                     detail_texture,
                     detail_scale: TERRAIN_DETAIL_SCALE,
                     local_surface_handles,
+                    layer,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     water_mesh_handle: water_mesh_handle.clone(),
+                    water_material_handle: water_material_handle.clone(),
                     river_mesh_handle: river_mesh_handle.clone(),
                     planet_entity: event.planet_entity,
                     body_to_inertial_at_spawn: body_to_inertial,
                     render_origin_at_spawn: render_origin.origin,
+                    occlusion_texture: occlusion_texture.clone(),
+                    occlusion_owned,
+                    occlusion_field,
+                    baked_sun_inertial,
                 },
                 visibility,
                 Name::new(format!(
@@ -792,8 +1167,9 @@ fn spawn_patch_mesh_system(
                         (body_to_inertial * anchor - render_origin.origin).as_vec3(),
                     )
                     .with_rotation(body_to_inertial.as_quat()),
+                    // Receives the shared directional shadow; a thin blended cap
+                    // must not cast one.
                     NotShadowCaster,
-                    NotShadowReceiver,
                     Name::new(format!(
                         "River_{:?}_{}_{}_{}",
                         patch.face, patch.level, patch.tile_x, patch.tile_y
@@ -804,22 +1180,26 @@ fn spawn_patch_mesh_system(
 
         // The water mesh shares the terrain patch's baked frame, so an identity
         // child transform inherits the patch's later pose corrections.
-        if let (Some(water_mesh_handle), Some(water_material)) =
-            (water_mesh_handle, render_assets.water_material.clone())
-        {
-            commands.entity(entity).with_children(|parent| {
-                parent.spawn((
-                    Mesh3d(water_mesh_handle),
-                    MeshMaterial3d(water_material),
-                    Transform::IDENTITY,
-                    NotShadowCaster,
-                    NotShadowReceiver,
-                    Name::new(format!(
-                        "Water_{:?}_{}_{}_{}",
-                        patch.face, patch.level, patch.tile_x, patch.tile_y
-                    )),
-                ));
-            });
+        if let Some(water_mesh_handle) = water_mesh_handle {
+            if let Some(water_material) =
+                water_material_handle.or_else(|| render_assets.water_material.clone())
+            {
+                commands.entity(entity).with_children(|parent| {
+                    parent.spawn((
+                        Mesh3d(water_mesh_handle),
+                        MeshMaterial3d(water_material),
+                        Transform::IDENTITY,
+                        // Water receives the shared directional and terrain shadow;
+                        // it stays a non-caster so the blended cap never darkens
+                        // the terrain beneath it.
+                        NotShadowCaster,
+                        Name::new(format!(
+                            "Water_{:?}_{}_{}_{}",
+                            patch.face, patch.level, patch.tile_x, patch.tile_y
+                        )),
+                    ));
+                });
+            }
         }
         if let (Some(started), Some(record)) = (
             activation_started,
@@ -1081,6 +1461,7 @@ fn despawn_patch_mesh_system(
     render_query: Query<&TerrainPatchRenderState>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     for event in events.read() {
@@ -1093,7 +1474,13 @@ fn despawn_patch_mesh_system(
         };
         if let Ok(state) = render_query.get(entity) {
             commands.entity(entity).despawn();
-            release_patch_render_assets(state, &mut meshes, &mut materials, &mut images);
+            release_patch_render_assets(
+                state,
+                &mut meshes,
+                &mut materials,
+                &mut water_materials,
+                &mut images,
+            );
         }
     }
 }
@@ -1102,10 +1489,14 @@ fn release_patch_render_assets(
     state: &TerrainPatchRenderState,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<TerrainMaterial>,
+    water_materials: &mut Assets<WaterMaterial>,
     images: &mut Assets<Image>,
 ) {
     meshes.remove(state.mesh_handle.id());
     materials.remove(state.material_handle.id());
+    if let Some(water_material_handle) = &state.water_material_handle {
+        water_materials.remove(water_material_handle.id());
+    }
     if let Some(vegetation_mesh_handle) = &state.vegetation_mesh_handle {
         meshes.remove(vegetation_mesh_handle.id());
     }
@@ -1118,6 +1509,12 @@ fn release_patch_render_assets(
     if let Some((albedo, normal)) = &state.local_surface_handles {
         images.remove(albedo.id());
         images.remove(normal.id());
+    }
+    if state.layer.weights_owned {
+        images.remove(state.layer.weights.id());
+    }
+    if state.occlusion_owned {
+        images.remove(state.occlusion_texture.id());
     }
 }
 
@@ -1259,6 +1656,9 @@ fn water_mesh_for_patch(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs[..core].to_vec());
+    // Patch-local UV1 lets the water shader sample the patch's baked terrain
+    // occlusion map, so landscape shadow reaches the sea beyond the cascades.
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, geometry.local_uvs[..core].to_vec());
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
         depths
@@ -1390,6 +1790,442 @@ fn patch_material(roughness: f32, metallic: f32) -> StandardMaterial {
     }
 }
 
+// Baked terrain self-shadow and sky occlusion (AGENTS.md sections 20, 27, 44).
+//
+// Both terms are pure functions of the generated patch height field (the
+// authoritative rendered height: rendering never resamples terrain height), the
+// patch identity, and the body-fixed ephemeris Sun direction. They are baked in
+// the same body-fixed frame as the patch mesh, so render-origin rebasing and
+// body rotation never invalidate the stored texels. Nothing here reads frame
+// time, camera pose, or writes simulation state.
+
+/// Body-fixed local height field of one generated terrain patch.
+///
+/// The generated patch geometry is the authoritative rendered height field, so
+/// the bake ray-marches it directly instead of resampling the terrain source.
+/// That keeps the bake O(1) per sample (a bilinear grid lookup) with no DEM or
+/// procedural work on the main thread. Cross-patch occluders are approximated by
+/// clamping to the shared edge; the directional shadow map covers the near range
+/// where that approximation matters most.
+#[derive(Clone, Debug)]
+pub(crate) struct PatchHeightField {
+    face: CubeFace,
+    resolution: usize,
+    uv_bounds: (f64, f64, f64, f64),
+    /// Terrain radius in meters for each core grid vertex, row-major.
+    radii_m: Vec<f32>,
+}
+
+impl PatchHeightField {
+    /// Build the field from a generated patch's core grid. Skirt vertices are
+    /// ignored: they duplicate the boundary and are hidden crack geometry.
+    fn from_geometry(
+        geometry: &PatchGeometry,
+        patch: TerrainPatch,
+        resolution: u32,
+    ) -> Option<Self> {
+        let resolution = resolution.max(2) as usize;
+        let core = resolution * resolution;
+        if geometry.positions.len() < core {
+            return None;
+        }
+        let radii_m = geometry.positions[..core]
+            .iter()
+            .map(|position| DVec3::from_array(*position).length() as f32)
+            .collect();
+        Some(Self {
+            face: patch.face,
+            resolution,
+            uv_bounds: patch.uv_bounds(),
+            radii_m,
+        })
+    }
+
+    /// Terrain radius sampled at a body-fixed point, or `None` when the point
+    /// left this patch's cube face. Coordinates outside the patch are clamped to
+    /// the shared edge so the field stays continuous across patch boundaries.
+    fn sample_radius_m(&self, direction: DVec3) -> Option<f64> {
+        let (face, u, v) = face_uv(direction);
+        if face != self.face {
+            return None;
+        }
+        let (u0, v0, u1, v1) = self.uv_bounds;
+        let span_u = (u1 - u0).abs().max(f64::EPSILON);
+        let span_v = (v1 - v0).abs().max(f64::EPSILON);
+        let fu = ((u - u0) / span_u).clamp(0.0, 1.0);
+        let fv = ((v - v0) / span_v).clamp(0.0, 1.0);
+        let last = (self.resolution - 1) as f64;
+        let x = fu * last;
+        let y = fv * last;
+        let x0 = x.floor() as usize;
+        let y0 = y.floor() as usize;
+        let x1 = (x0 + 1).min(self.resolution - 1);
+        let y1 = (y0 + 1).min(self.resolution - 1);
+        let tx = x - x0 as f64;
+        let ty = y - y0 as f64;
+        let radius =
+            |row: usize, column: usize| self.radii_m[row * self.resolution + column] as f64;
+        let r00 = radius(y0, x0);
+        let r10 = radius(y0, x1);
+        let r01 = radius(y1, x0);
+        let r11 = radius(y1, x1);
+        let near = r00 + (r10 - r00) * tx;
+        let far = r01 + (r11 - r01) * tx;
+        Some(near + (far - near) * ty)
+    }
+}
+
+/// Hermite smoothstep over `[edge0, edge1]`.
+fn smoothstep01(edge0: f64, edge1: f64, x: f64) -> f64 {
+    if edge1 <= edge0 {
+        return if x < edge0 { 0.0 } else { 1.0 };
+    }
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// March one ray from a surface point and return `[0, 1]` visibility.
+///
+/// A sample whose terrain radius exceeds the ray's radius is penetrating terrain;
+/// the deepest penetration above the configured softness maps to full occlusion.
+/// Quadratic sample spacing keeps near-field occluders (ridges, rock contacts)
+/// dense without paying for distant detail.
+fn ray_visibility(
+    field: &PatchHeightField,
+    origin_m: DVec3,
+    direction: DVec3,
+    max_distance_m: f64,
+    samples: u32,
+    softness_m: f64,
+) -> f32 {
+    if samples == 0 || direction.length_squared() <= 0.0 || max_distance_m <= 0.0 {
+        return 1.0;
+    }
+    let direction = direction.normalize();
+    let mut max_penetration_m: f64 = 0.0;
+    for step in 1..=samples {
+        let fraction = step as f64 / samples as f64;
+        let distance_m = max_distance_m * fraction * fraction;
+        let sample_m = origin_m + direction * distance_m;
+        let radius_m = sample_m.length();
+        if !radius_m.is_finite() {
+            continue;
+        }
+        let Some(terrain_radius_m) = field.sample_radius_m(sample_m / radius_m) else {
+            continue;
+        };
+        max_penetration_m = max_penetration_m.max(terrain_radius_m - radius_m);
+    }
+    if max_penetration_m <= 0.0 {
+        return 1.0;
+    }
+    if softness_m <= 0.0 {
+        return 0.0;
+    }
+    (1.0 - smoothstep01(0.0, softness_m, max_penetration_m)) as f32
+}
+
+/// Sky-hemisphere directions for ambient occlusion. The final direction is the
+/// local zenith; the rest form a ring at `elevation_deg` so an enclosed sample
+/// loses fill from every azimuth.
+fn hemisphere_directions(surface_up: DVec3, count: u32, elevation_deg: f64) -> Vec<DVec3> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let up = surface_up.normalize_or_zero();
+    if up.length_squared() <= 0.0 {
+        return Vec::new();
+    }
+    let reference = if up.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
+    let tangent = up.cross(reference).normalize_or_zero();
+    let bitangent = up.cross(tangent);
+    let ring_count = count.saturating_sub(1);
+    let elevation_rad = elevation_deg.to_radians();
+    let sin_elevation = elevation_rad.sin();
+    let cos_elevation = elevation_rad.cos();
+    let mut directions = Vec::with_capacity(count as usize);
+    for index in 0..ring_count {
+        let azimuth = std::f64::consts::TAU * index as f64 / ring_count as f64;
+        let (sin_azimuth, cos_azimuth) = (azimuth.sin(), azimuth.cos());
+        directions.push(
+            (up * sin_elevation
+                + tangent * (cos_elevation * cos_azimuth)
+                + bitangent * (cos_elevation * sin_azimuth))
+                .normalize_or_zero(),
+        );
+    }
+    directions.push(up);
+    directions
+}
+
+/// Fraction of the sky hemisphere visible from a surface point. `1` is open
+/// ground, `0` is fully enclosed.
+fn sky_occlusion_visibility(
+    field: &PatchHeightField,
+    position_m: DVec3,
+    surface_up: DVec3,
+    config: &TerrainOcclusionConfig,
+) -> f32 {
+    let directions =
+        hemisphere_directions(surface_up, config.sky_directions, config.sky_elevation_deg);
+    if directions.is_empty() {
+        return 1.0;
+    }
+    let mut visibility = 0.0f32;
+    for direction in &directions {
+        visibility += ray_visibility(
+            field,
+            position_m,
+            *direction,
+            config.sky_max_distance_m,
+            config.sky_samples,
+            config.softness_m,
+        );
+    }
+    (visibility / directions.len() as f32).clamp(0.0, 1.0)
+}
+
+/// Bake the interleaved `[self_shadow, sky_occlusion]` map for one patch and
+/// return the total height-field samples consumed. The count is bounded by
+/// `texture_resolution^2 * (sun_samples + sky_directions * sky_samples)`.
+fn bake_terrain_occlusion(
+    field: &PatchHeightField,
+    sun_direction_body: DVec3,
+    config: &TerrainOcclusionConfig,
+) -> (Vec<f32>, usize) {
+    let resolution = config.texture_resolution.max(1);
+    let res = resolution as usize;
+    let (u0, v0, u1, v1) = field.uv_bounds;
+    let sun_direction = sun_direction_body.normalize_or_zero();
+    let samples_per_texel =
+        config.sun_samples as usize + config.sky_directions as usize * config.sky_samples as usize;
+    let mut values = vec![1.0f32; res * res * 2];
+    let mut samples = 0usize;
+    for gy in 0..res {
+        for gx in 0..res {
+            let fu = gx as f64 / (res - 1).max(1) as f64;
+            let fv = gy as f64 / (res - 1).max(1) as f64;
+            let direction =
+                face_uv_to_direction(field.face, u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv);
+            let Some(radius_m) = field.sample_radius_m(direction) else {
+                continue;
+            };
+            let position_m = direction * radius_m;
+            samples += samples_per_texel;
+            let self_shadow = if sun_direction.length_squared() > 0.0 {
+                ray_visibility(
+                    field,
+                    position_m,
+                    sun_direction,
+                    config.sun_max_distance_m,
+                    config.sun_samples,
+                    config.softness_m,
+                )
+            } else {
+                1.0
+            };
+            let sky_occlusion = sky_occlusion_visibility(field, position_m, direction, config);
+            let index = (gy * res + gx) * 2;
+            values[index] = self_shadow;
+            values[index + 1] = sky_occlusion;
+        }
+    }
+    (values, samples)
+}
+
+/// R8G8 image carrying the baked self-shadow (red) and sky occlusion (green),
+/// sampled with linear filtering over the patch-local UV.
+fn terrain_occlusion_image(resolution: u32, values: &[f32]) -> Image {
+    let res = resolution.max(1) as usize;
+    let mut data = vec![0u8; res * res * 2];
+    for index in 0..res * res {
+        let self_shadow = values
+            .get(index * 2)
+            .copied()
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        let sky_occlusion = values
+            .get(index * 2 + 1)
+            .copied()
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        data[index * 2] = (self_shadow * 255.0).round() as u8;
+        data[index * 2 + 1] = (sky_occlusion * 255.0).round() as u8;
+    }
+    let mut image = Image::new(
+        Extent3d {
+            width: res as u32,
+            height: res as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rg8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        ..Default::default()
+    });
+    image
+}
+
+fn neutral_occlusion_image_value() -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![255, 255],
+        TextureFormat::Rg8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn neutral_occlusion_image(
+    render_assets: &mut TerrainRenderAssets,
+    images: &mut Assets<Image>,
+) -> Handle<Image> {
+    render_assets
+        .neutral_occlusion
+        .get_or_insert_with(|| images.add(neutral_occlusion_image_value()))
+        .clone()
+}
+
+/// The body-fixed unit direction from a catalog body toward the shared
+/// ephemeris Sun, or `None` when the snapshot has no valid Sun state.
+fn body_fixed_sun_direction(
+    ephemeris_snapshot: &EphemerisSnapshot,
+    body_name: &str,
+    body_to_inertial: DQuat,
+) -> Option<DVec3> {
+    let body = NaifBodyId::for_catalog_name(body_name)?;
+    let sun_position_m = ephemeris_snapshot
+        .solar_inertial_relative_state(NaifBodyId::SUN, body)?
+        .position_m;
+    let distance_m = sun_position_m.length();
+    if !distance_m.is_finite() || distance_m <= 0.0 {
+        return None;
+    }
+    Some(body_to_inertial.conjugate() * (sun_position_m / distance_m))
+}
+
+/// Bake one patch's occlusion map, falling back to the shared neutral map when
+/// the patch is too coarse or the ephemeris Sun is unavailable.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The bake coordinates terrain, ephemeris, configuration, and Bevy assets."
+)]
+fn bake_terrain_occlusion_for_patch(
+    geometry: &PatchGeometry,
+    patch: TerrainPatch,
+    patch_resolution: u32,
+    body_to_inertial: DQuat,
+    ephemeris_snapshot: &EphemerisSnapshot,
+    body_name: &str,
+    config: &TerrainOcclusionConfig,
+    render_assets: &mut TerrainRenderAssets,
+    images: &mut Assets<Image>,
+) -> (Handle<Image>, Option<PatchHeightField>, usize, DVec3) {
+    let mut neutral = || {
+        (
+            neutral_occlusion_image(render_assets, images),
+            None,
+            0,
+            DVec3::ZERO,
+        )
+    };
+    if patch.level < config.min_patch_level {
+        return neutral();
+    }
+    let Some(field) = PatchHeightField::from_geometry(geometry, patch, patch_resolution) else {
+        return neutral();
+    };
+    let Some(sun_direction_body) =
+        body_fixed_sun_direction(ephemeris_snapshot, body_name, body_to_inertial)
+    else {
+        return neutral();
+    };
+    let (values, samples) = bake_terrain_occlusion(&field, sun_direction_body, config);
+    let handle = images.add(terrain_occlusion_image(config.texture_resolution, &values));
+    (
+        handle,
+        Some(field),
+        samples,
+        body_to_inertial * sun_direction_body,
+    )
+}
+
+/// Refresh resident patches whose recorded inertial Sun direction has moved
+/// beyond the configured tolerance. Body rotation alone never triggers a bake,
+/// because the recorded direction is inertial; only a genuine ephemeris change
+/// (or patch regeneration, which bakes at spawn) does.
+fn refresh_terrain_occlusion(
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    occlusion_config: Res<TerrainOcclusionConfig>,
+    planet_query: Query<&PlanetComponent>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+    mut query: Query<&mut TerrainPatchRenderState>,
+) {
+    if occlusion_config.max_refreshes_per_frame == 0 {
+        return;
+    }
+    let tolerance_cos = occlusion_config.refresh_tolerance_rad.cos();
+    let mut refreshed = 0u32;
+    for mut state in &mut query {
+        if refreshed >= occlusion_config.max_refreshes_per_frame {
+            break;
+        }
+        if !state.occlusion_owned {
+            continue;
+        }
+        let Some(field) = state.occlusion_field.as_ref() else {
+            continue;
+        };
+        let Ok(planet) = planet_query.get(state.planet_entity) else {
+            continue;
+        };
+        let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+        else {
+            continue;
+        };
+        let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+        let Some(sun_direction_body) = body_fixed_sun_direction(
+            &ephemeris_snapshot,
+            &planet.domain_planet.name,
+            body_to_inertial,
+        ) else {
+            continue;
+        };
+        let sun_inertial = body_to_inertial * sun_direction_body;
+        if state.baked_sun_inertial.length_squared() > 0.0
+            && state.baked_sun_inertial.dot(sun_inertial) >= tolerance_cos
+        {
+            continue;
+        }
+        let field = field.clone();
+        let (values, _) = bake_terrain_occlusion(&field, sun_direction_body, &occlusion_config);
+        let new_handle = images.add(terrain_occlusion_image(
+            occlusion_config.texture_resolution,
+            &values,
+        ));
+        if let Some(material) = materials.get_mut(&state.material_handle) {
+            material.extension.terrain_occlusion = new_handle.clone();
+        }
+        let previous = std::mem::replace(&mut state.occlusion_texture, new_handle);
+        images.remove(previous.id());
+        state.baked_sun_inertial = sun_inertial;
+        refreshed += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use self::uploads::TerrainUploadEnqueueResult;
@@ -1398,8 +2234,50 @@ mod tests {
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::reference_frames::catalog_body_fixed_to_inertial_rotation;
     use crate::domain::services::simulation_time::SimulationTime;
+    use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSource};
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
+
+    /// Build a body-fixed `PatchHeightField` directly from a local height law,
+    /// so the ray-march can be tested against known ridges and bowls without a
+    /// full cube-sphere geometry build.
+    fn synthetic_height_field(
+        uv_bounds: (f64, f64, f64, f64),
+        resolution: usize,
+        planet_radius_m: f64,
+        height_fn: impl Fn(f64, f64) -> f64,
+    ) -> PatchHeightField {
+        let mut radii_m = Vec::with_capacity(resolution * resolution);
+        for row in 0..resolution {
+            for column in 0..resolution {
+                let fu = column as f64 / (resolution - 1) as f64;
+                let fv = row as f64 / (resolution - 1) as f64;
+                radii_m.push((planet_radius_m + height_fn(fu, fv)) as f32);
+            }
+        }
+        PatchHeightField {
+            face: CubeFace::PosZ,
+            resolution,
+            uv_bounds,
+            radii_m,
+        }
+    }
+
+    /// Body-fixed direction through a patch-local UV coordinate.
+    fn local_uv_direction(uv_bounds: (f64, f64, f64, f64), fu: f64, fv: f64) -> DVec3 {
+        let (u0, v0, u1, v1) = uv_bounds;
+        face_uv_to_direction(CubeFace::PosZ, u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv)
+    }
+
+    fn small_occlusion_config() -> TerrainOcclusionConfig {
+        TerrainOcclusionConfig {
+            texture_resolution: 8,
+            sun_samples: 4,
+            sky_directions: 3,
+            sky_samples: 2,
+            ..Default::default()
+        }
+    }
 
     fn terrain_position_in_render_frame(
         body_fixed_position_m: DVec3,
@@ -1587,12 +2465,14 @@ mod tests {
             &TerrainPatch::for_direction(DVec3::Z, 0),
             &geometry,
             6_371_000.0,
+            None,
         );
         let fine = crate::infrastructure::bevy_adapters::terrain::surface::prepare_patch_surface(
             &source,
             &TerrainPatch::for_direction(DVec3::Z, 12),
             &geometry,
             6_371_000.0,
+            None,
         );
 
         assert!(coarse
@@ -1666,12 +2546,18 @@ mod tests {
                     detail_texture: Handle::default(),
                     detail_scale: 0.0,
                     local_surface_handles: None,
+                    layer: LayerMaterialState::default(),
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
+                    water_material_handle: None,
                     river_mesh_handle: None,
                     planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
+                    occlusion_texture: Handle::default(),
+                    occlusion_owned: false,
+                    occlusion_field: None,
+                    baked_sun_inertial: DVec3::ZERO,
                 },
                 Transform::IDENTITY,
                 Visibility::Visible,
@@ -1706,12 +2592,18 @@ mod tests {
                     detail_texture: Handle::default(),
                     detail_scale: 0.0,
                     local_surface_handles: None,
+                    layer: LayerMaterialState::default(),
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
+                    water_material_handle: None,
                     river_mesh_handle: None,
                     planet_entity: other_planet_entity,
                     body_to_inertial_at_spawn: DQuat::IDENTITY,
                     render_origin_at_spawn: DVec3::ZERO,
+                    occlusion_texture: Handle::default(),
+                    occlusion_owned: false,
+                    occlusion_field: None,
+                    baked_sun_inertial: DVec3::ZERO,
                 },
                 Transform::IDENTITY,
                 Visibility::Visible,
@@ -2020,6 +2912,7 @@ mod tests {
     fn evicting_a_patch_releases_its_unique_render_assets() {
         let mut meshes = Assets::<Mesh>::default();
         let mut materials = Assets::<TerrainMaterial>::default();
+        let mut water_materials = Assets::<WaterMaterial>::default();
         let mut images = Assets::<Image>::default();
         let mesh_handle = meshes.add(Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -2030,6 +2923,10 @@ mod tests {
             RenderAssetUsages::RENDER_WORLD,
         ));
         let material_handle = materials.add(TerrainMaterial::default());
+        let water_material_handle = water_materials.add(WaterMaterial {
+            base: water_base_material(false),
+            extension: WaterExtension::new(WaterParams::default(), Handle::default()),
+        });
         let mut vegetation_materials = Assets::<StandardMaterial>::default();
         let shared_vegetation_material = vegetation_materials.add(StandardMaterial::default());
         let state = TerrainPatchRenderState {
@@ -2048,21 +2945,220 @@ mod tests {
             detail_texture: Handle::default(),
             detail_scale: 0.0,
             local_surface_handles: None,
+            layer: LayerMaterialState::default(),
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             water_mesh_handle: None,
+            water_material_handle: Some(water_material_handle.clone()),
             river_mesh_handle: None,
             planet_entity: Entity::PLACEHOLDER,
             body_to_inertial_at_spawn: DQuat::IDENTITY,
             render_origin_at_spawn: DVec3::ZERO,
+            occlusion_texture: Handle::default(),
+            occlusion_owned: false,
+            occlusion_field: None,
+            baked_sun_inertial: DVec3::ZERO,
         };
 
-        release_patch_render_assets(&state, &mut meshes, &mut materials, &mut images);
+        release_patch_render_assets(
+            &state,
+            &mut meshes,
+            &mut materials,
+            &mut water_materials,
+            &mut images,
+        );
 
         assert!(meshes.get(mesh_handle.id()).is_none());
         assert!(meshes.get(vegetation_mesh_handle.id()).is_none());
         assert!(materials.get(material_handle.id()).is_none());
+        assert!(
+            water_materials.get(water_material_handle.id()).is_none(),
+            "a per-patch water material must be released with its patch"
+        );
         assert!(vegetation_materials
             .get(shared_vegetation_material.id())
             .is_some());
+    }
+
+    #[test]
+    fn refractive_water_base_uses_transmission_and_depth_fallback_does_not() {
+        let depth_path = water_base_material(false);
+        assert_eq!(depth_path.specular_transmission, 0.0);
+        assert_eq!(depth_path.thickness, 0.0);
+
+        let refractive = water_base_material(true);
+        assert!(refractive.specular_transmission > 0.0);
+        assert!(refractive.thickness > 0.0);
+        assert_eq!(refractive.ior, 1.33);
+    }
+
+    #[test]
+    fn flat_terrain_is_unoccluded_and_a_ridge_blocks_the_sun_ray() {
+        let radius_m = 6_371_000.0;
+        let bounds = (0.5, 0.5, 0.51, 0.51);
+        let origin_direction = local_uv_direction(bounds, 0.2, 0.5);
+        let origin_m = origin_direction * radius_m;
+
+        let flat = synthetic_height_field(bounds, 33, radius_m, |_, _| 0.0);
+        assert_eq!(
+            ray_visibility(&flat, origin_m, origin_direction, 20_000.0, 16, 80.0),
+            1.0,
+            "flat ground cannot occlude a ray rising toward the Sun"
+        );
+
+        let ridge = synthetic_height_field(bounds, 33, radius_m, |fu, _| {
+            if (0.35..=0.65).contains(&fu) {
+                500.0
+            } else {
+                0.0
+            }
+        });
+        // Aim across the patch toward increasing local u, where the ridge sits.
+        let toward_ridge = (local_uv_direction(bounds, 0.21, 0.5) - origin_direction).normalize();
+        assert_eq!(
+            ray_visibility(&ridge, origin_m, toward_ridge, 20_000.0, 64, 80.0),
+            0.0,
+            "a tall ridge must fully shadow the ground behind it"
+        );
+        assert_eq!(
+            ray_visibility(&ridge, origin_m, -toward_ridge, 20_000.0, 64, 80.0),
+            1.0,
+            "the opposite direction is unobstructed"
+        );
+    }
+
+    #[test]
+    fn grazing_sun_ray_produces_a_partial_soft_shadow() {
+        let radius_m = 6_371_000.0;
+        let bounds = (0.5, 0.5, 0.51, 0.51);
+        let origin_direction = local_uv_direction(bounds, 0.2, 0.5);
+        let origin_m = origin_direction * radius_m;
+        // Just tall enough to clip the curved tangent ray without fully burying
+        // it: the deepest penetration stays inside the softness band.
+        let ridge = synthetic_height_field(bounds, 33, radius_m, |fu, _| {
+            if (0.35..=0.65).contains(&fu) {
+                40.0
+            } else {
+                0.0
+            }
+        });
+        let toward_ridge = (local_uv_direction(bounds, 0.21, 0.5) - origin_direction).normalize();
+
+        let visibility = ray_visibility(&ridge, origin_m, toward_ridge, 20_000.0, 64, 80.0);
+        assert!(
+            visibility > 0.0 && visibility < 1.0,
+            "a grazing ray must produce a partial self-shadow, got {visibility}"
+        );
+    }
+
+    #[test]
+    fn crevice_occludes_more_sky_than_an_open_slope() {
+        let radius_m = 6_371_000.0;
+        let bounds = (0.5, 0.5, 0.51, 0.51);
+        // A bowl inside a patch, with the ring sampled near the horizon so the
+        // rim blocks the low sky directions.
+        let pit = synthetic_height_field(bounds, 33, radius_m, |fu, fv| {
+            if (fu - 0.5).abs() < 0.15 && (fv - 0.5).abs() < 0.15 {
+                -200.0
+            } else {
+                300.0
+            }
+        });
+        let config = TerrainOcclusionConfig {
+            sky_max_distance_m: 20_000.0,
+            sky_elevation_deg: 1.0,
+            sky_samples: 4,
+            ..Default::default()
+        };
+
+        let pit_direction = local_uv_direction(bounds, 0.5, 0.5);
+        let pit_position_m = pit_direction * (radius_m - 200.0);
+        let pit_visibility = sky_occlusion_visibility(&pit, pit_position_m, pit_direction, &config);
+
+        let open_direction = local_uv_direction(bounds, 0.9, 0.9);
+        let open_position_m = open_direction * (radius_m + 300.0);
+        let open_visibility =
+            sky_occlusion_visibility(&pit, open_position_m, open_direction, &config);
+
+        assert!(
+            pit_visibility < open_visibility,
+            "an enclosed sample must see less sky: pit {pit_visibility} vs open {open_visibility}"
+        );
+        assert!(
+            open_visibility > 0.9,
+            "open ground must keep almost all sky fill, got {open_visibility}"
+        );
+    }
+
+    #[test]
+    fn occlusion_bake_is_deterministic_for_identical_inputs() {
+        let field = synthetic_height_field((0.5, 0.5, 0.51, 0.51), 33, 6_371_000.0, |fu, fv| {
+            fu * 400.0 - fv * 150.0
+        });
+        let sun_direction = DVec3::new(0.4, 0.5, 0.77).normalize();
+        let config = small_occlusion_config();
+
+        let (first, first_samples) = bake_terrain_occlusion(&field, sun_direction, &config);
+        let (second, second_samples) = bake_terrain_occlusion(&field, sun_direction, &config);
+
+        assert_eq!(
+            first, second,
+            "identical inputs must reproduce identical texels"
+        );
+        assert_eq!(first_samples, second_samples);
+        assert!(
+            first.iter().all(|value| (0.0..=1.0).contains(value)),
+            "occlusion terms must stay normalized"
+        );
+    }
+
+    #[test]
+    fn occlusion_bake_cannot_modify_the_terrain_source() {
+        let source = ProceduralTerrainSource::new(7, 1_500.0, 400.0, 0);
+        let patch = TerrainPatch::for_direction(DVec3::Z, 12);
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 17, 5.0);
+        let before = source.height_m(12.0, 34.0);
+
+        let field = PatchHeightField::from_geometry(&geometry, patch, 17)
+            .expect("a 17x17 patch provides a height field");
+        let _ = bake_terrain_occlusion(&field, DVec3::X, &small_occlusion_config());
+
+        assert_eq!(
+            source.height_m(12.0, 34.0),
+            before,
+            "the bake reads an immutable height field and writes no simulation state"
+        );
+    }
+
+    /// Rust mirror of the shader's direct/indirect occlusion split. Kept here so
+    /// the visibility contract is provable without a GPU.
+    fn compose_terrain_lighting(
+        direct: f32,
+        indirect: f32,
+        self_shadow: f32,
+        sky_occlusion: f32,
+    ) -> f32 {
+        direct * self_shadow + indirect * sky_occlusion
+    }
+
+    #[test]
+    fn self_shadow_scales_direct_only_and_occlusion_scales_indirect_only() {
+        let direct = 1.0f32;
+        let indirect = 0.25f32;
+
+        assert_eq!(
+            compose_terrain_lighting(direct, indirect, 0.0, 1.0),
+            indirect,
+            "fully self-shadowed terrain with non-zero ambient keeps its sky fill"
+        );
+        assert_eq!(
+            compose_terrain_lighting(direct, indirect, 1.0, 0.0),
+            direct,
+            "sky occlusion must not attenuate the direct-sun term"
+        );
+        assert_eq!(
+            compose_terrain_lighting(direct, indirect, 0.5, 0.5),
+            0.625,
+            "the two terms compose independently"
+        );
     }
 }

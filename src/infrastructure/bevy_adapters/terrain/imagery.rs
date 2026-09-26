@@ -14,7 +14,7 @@ use crate::domain::services::imagery_tiles::cube_face_name;
 use crate::domain::value_objects::imagery_manifest::EarthImageryManifest;
 use crate::infrastructure::bevy_adapters::terrain::mips::{mip_chain_rgba8, MipFilter};
 use crate::infrastructure::bevy_adapters::terrain::render::{
-    build_terrain_material, TerrainMaterial, TerrainPatchRenderState,
+    build_terrain_material, TerrainMaterial, TerrainOcclusionConfig, TerrainPatchRenderState,
 };
 use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
 use bevy::asset::{AssetServer, Handle, LoadState};
@@ -250,6 +250,7 @@ pub(crate) fn stream_terrain_imagery(
 /// and collision are untouched; only the albedo source changes.
 pub(crate) fn apply_terrain_imagery(
     imagery: Res<TerrainImageryResource>,
+    occlusion_config: Res<TerrainOcclusionConfig>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut query: Query<(Entity, &mut TerrainPatchRenderState)>,
     mut commands: Commands,
@@ -278,6 +279,18 @@ pub(crate) fn apply_terrain_imagery(
             state.morph_end_m,
             state.detail_texture.clone(),
             state.detail_scale,
+            state.occlusion_texture.clone(),
+            occlusion_config.self_shadow_strength,
+            occlusion_config.sky_occlusion_strength,
+            state.layer.albedo_roughness.clone(),
+            state.layer.normal.clone(),
+            state.layer.weights.clone(),
+            state.layer.blend_weight,
+            state.layer.tiling_scale,
+            state.layer.patch_uv_scale,
+            state.layer.normal_strength,
+            state.layer.near_detail_scale,
+            state.layer.near_detail_strength,
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing
@@ -396,6 +409,7 @@ mod tests {
         let (resource, geometry_patch) = papua_imagery_resource();
         let mut app = App::new();
         app.insert_resource(resource)
+            .insert_resource(TerrainOcclusionConfig::default())
             .insert_resource(Assets::<TerrainMaterial>::default())
             .add_systems(Update, apply_terrain_imagery);
 
@@ -417,12 +431,18 @@ mod tests {
                 detail_texture: Handle::default(),
                 detail_scale: 0.0,
                 local_surface_handles: None,
+                layer: Default::default(),
                 vegetation_mesh_handle: None,
                 water_mesh_handle: None,
+                water_material_handle: None,
                 river_mesh_handle: None,
                 planet_entity: Entity::PLACEHOLDER,
                 body_to_inertial_at_spawn: DQuat::IDENTITY,
                 render_origin_at_spawn: DVec3::ZERO,
+                occlusion_texture: Handle::default(),
+                occlusion_owned: false,
+                occlusion_field: None,
+                baked_sun_inertial: DVec3::ZERO,
             })
             .id();
 

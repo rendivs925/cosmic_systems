@@ -16,7 +16,13 @@ use crate::domain::services::cube_sphere::{
     visible_leaves_for_cover, CameraProjection, PatchEdge, PatchGeometry, QuadtreePatchState,
     QuadtreeSelectionConfig, TerrainPatch,
 };
-use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
+use crate::domain::services::elevation_pyramid::{
+    ElevationPyramidError, ElevationTile, TileElevationSource,
+};
+use crate::domain::services::land_cover::LandCoverPackage;
+use crate::domain::services::reference_frames::{
+    body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
+};
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use crate::infrastructure::bevy_adapters::entity_components::*;
@@ -64,6 +70,14 @@ const RENDER_BYTES_PER_VERTEX: u64 = 56;
 const BYTES_PER_INDEX: u64 = 4;
 const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 const METRICS_GENERATED_TILE_INTERVAL: usize = 32;
+/// Elevation payload decoding is strictly lower priority than geometry
+/// publication. Admit at most this many tile decodes per reconciliation so a
+/// cold geometry viewport never loses worker capacity to payload work.
+const MAX_ELEVATION_TILES_PER_FRAME: usize = 4;
+/// Body-fixed look-ahead used to prefetch payload tiles toward the vehicle's
+/// flight path. Geometry publication keeps priority, so this only spends
+/// otherwise idle decode capacity.
+const ELEVATION_PREFETCH_LEAD_S: f64 = 30.0;
 /// Minimum distance for LOD calculation when on the ground.
 /// Uses estimated camera-to-terrain distance (~150m) instead of orbital heuristic.
 const SURFACE_LOD_DISTANCE_M: f64 = 150.0;
@@ -118,6 +132,21 @@ pub struct TerrainStreamingResource {
     /// Planet that owns every entry in this cache. Patch coordinates alone are
     /// not sufficient when a rocket changes its bound celestial body.
     active_planet: Option<Entity>,
+    /// Shared handle to the active planet's elevation payload source. It is the
+    /// same authority collision and rendering sample; streaming only installs
+    /// decoded tiles into it and never owns a second copy.
+    elevation_source: Option<Arc<TileElevationSource>>,
+    /// Optional presentation-only measured land-cover package. It refines
+    /// vegetation placement and never feeds collision or physics.
+    land_cover: Option<Arc<LandCoverPackage>>,
+    /// Payload tiles currently being decoded off the main thread.
+    elevation_inflight: BTreeMap<TerrainPatch, InflightElevationTile>,
+    /// Payload tiles requested but not yet admitted to a worker task.
+    elevation_pending: BTreeSet<TerrainPatch>,
+    /// Requested geometry patches that the active package covers.
+    elevation_covered_patches: usize,
+    /// Covered requested patches whose finest payload tile is already resident.
+    elevation_resident_patches: usize,
     /// Next generated-tile count at which streaming metrics are reported.
     next_metrics_report_at: usize,
     cadence: TerrainStreamingCadence,
@@ -133,6 +162,12 @@ impl Default for TerrainStreamingResource {
             published: BTreeSet::new(),
             target_leaves: TerrainPatch::roots().into_iter().collect(),
             active_planet: None,
+            elevation_source: None,
+            land_cover: None,
+            elevation_inflight: BTreeMap::new(),
+            elevation_pending: BTreeSet::new(),
+            elevation_covered_patches: 0,
+            elevation_resident_patches: 0,
             next_metrics_report_at: 0,
             cadence: TerrainStreamingCadence::default(),
         }
@@ -206,6 +241,92 @@ impl TerrainStreamingResource {
         cancellation
     }
 
+    /// Adopt the active planet's elevation payload handle. This is the same
+    /// source attached to `PlanetTerrain`, so decoded tiles become authoritative
+    /// for collision and rendering without a second terrain pipeline.
+    fn adopt_elevation_source(&mut self, source: Option<Arc<TileElevationSource>>) {
+        let changed = match (&self.elevation_source, &source) {
+            (Some(current), Some(next)) => !Arc::ptr_eq(current, next),
+            (None, None) => false,
+            _ => true,
+        };
+        if changed {
+            self.clear_elevation_work();
+            self.elevation_source = source;
+        }
+    }
+
+    /// Set the optional presentation-only measured land-cover package used to
+    /// refine vegetation placement. It never feeds collision or physics.
+    pub fn set_land_cover(&mut self, land_cover: Option<Arc<LandCoverPackage>>) {
+        self.land_cover = land_cover;
+    }
+
+    fn begin_elevation_load(
+        &mut self,
+        request: ElevationTileRequest,
+        task_pool: &AsyncComputeTaskPool,
+    ) {
+        self.elevation_pending.remove(&request.patch);
+        self.elevation_inflight
+            .insert(request.patch, request.spawn(task_pool));
+    }
+
+    /// Poll finished decodes on the presentation thread and install them into
+    /// the shared source. Installation is a bounded cache insert and never
+    /// blocks a terrain query.
+    fn collect_completed_elevation(&mut self) -> ElevationDecodeBatch {
+        let completed: Vec<_> = self
+            .elevation_inflight
+            .iter_mut()
+            .filter_map(|(patch, inflight)| {
+                block_on(future::poll_once(&mut inflight.task)).map(|result| (*patch, result))
+            })
+            .collect();
+        let mut batch = ElevationDecodeBatch::default();
+        let source = self.elevation_source.clone();
+        for (patch, result) in completed {
+            self.elevation_inflight.remove(&patch);
+            let Some(source) = source.as_ref() else {
+                continue;
+            };
+            match result {
+                Ok(tile) => {
+                    source.install_tile(tile);
+                    batch.installed += 1;
+                }
+                Err(_) => batch.failed += 1,
+            }
+        }
+        batch
+    }
+
+    /// Drop decode work for tiles that are no longer requested. Dropping a
+    /// Bevy task cancels it; pending entries are likewise released.
+    fn cancel_unrequested_elevation(&mut self, requested: &BTreeSet<TerrainPatch>) -> usize {
+        let stale: Vec<_> = self
+            .elevation_inflight
+            .keys()
+            .copied()
+            .filter(|patch| !requested.contains(patch))
+            .collect();
+        let cancelled = stale.len();
+        for patch in stale {
+            self.elevation_inflight.remove(&patch);
+        }
+        let before = self.elevation_pending.len();
+        self.elevation_pending
+            .retain(|patch| requested.contains(patch));
+        cancelled + (before - self.elevation_pending.len())
+    }
+
+    fn clear_elevation_work(&mut self) {
+        self.elevation_inflight.clear();
+        self.elevation_pending.clear();
+        self.elevation_covered_patches = 0;
+        self.elevation_resident_patches = 0;
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "Metrics intentionally capture the complete cadence-limited streaming snapshot."
@@ -265,6 +386,7 @@ struct TerrainPatchBakeRequest {
     resolution: u32,
     skirt_depth_m: f64,
     stitched_edges: Vec<PatchEdge>,
+    land_cover: Option<Arc<LandCoverPackage>>,
 }
 
 impl TerrainPatchBakeRequest {
@@ -282,8 +404,13 @@ impl TerrainPatchBakeRequest {
                 self.skirt_depth_m,
                 &self.stitched_edges,
             );
-            let surface =
-                prepare_patch_surface(self.source.as_ref(), &patch, &geometry, self.radius_m);
+            let surface = prepare_patch_surface(
+                self.source.as_ref(),
+                &patch,
+                &geometry,
+                self.radius_m,
+                self.land_cover.as_deref(),
+            );
             GeneratedTerrainPatch {
                 geometry,
                 surface,
@@ -296,6 +423,35 @@ impl TerrainPatchBakeRequest {
             started_at: Instant::now(),
         }
     }
+}
+
+struct InflightElevationTile {
+    task: Task<Result<ElevationTile, ElevationPyramidError>>,
+}
+
+/// One worker-task request to read and decode a payload tile. The path is
+/// resolved on the main thread; the worker only performs bounded file I/O and
+/// deterministic decoding, and installation happens back on the main thread.
+struct ElevationTileRequest {
+    patch: TerrainPatch,
+    path: std::path::PathBuf,
+}
+
+impl ElevationTileRequest {
+    fn spawn(self, task_pool: &AsyncComputeTaskPool) -> InflightElevationTile {
+        let path = self.path;
+        let task = task_pool.spawn(async move {
+            let bytes = std::fs::read(path)?;
+            ElevationTile::from_bytes(&bytes)
+        });
+        InflightElevationTile { task }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ElevationDecodeBatch {
+    installed: usize,
+    failed: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -395,9 +551,13 @@ pub(crate) fn stream_terrain_patches(
         }
     }
     streaming.active_planet = Some(planet_entity);
+    // Share the active planet's single elevation authority. The handle only
+    // changes on a planet swap, which already cleared its decode work above.
+    streaming.adopt_elevation_source(planet_terrain.source.elevation_tile_source());
 
     let completion_poll_started = instrumentation_enabled.then(Instant::now);
     let completed_batch = streaming.collect_completed_generation();
+    streaming.collect_completed_elevation();
     if let (Some(started), Some(record)) = (
         completion_poll_started,
         terrain_performance.current_mut(instrumentation_enabled),
@@ -423,6 +583,14 @@ pub(crate) fn stream_terrain_patches(
     };
     let position_bf = planet_inertial_to_body_fixed(position_m, orientation);
     let dir = position_bf.normalize_or_zero();
+    // Body-fixed look-ahead along the flight path so payload tiles can be
+    // prefetched before the vehicle arrives. Terrain body-fixed and inertial
+    // axes differ only by the planet's rotation; the inverse of the shared
+    // body-fixed rotation maps the inertial velocity consistently.
+    let inertial_to_body = body_fixed_to_planet_inertial_rotation(orientation).inverse();
+    let predicted_bf =
+        position_bf + inertial_to_body * rocket.dynamics.velocity_mps * ELEVATION_PREFETCH_LEAD_S;
+    let ahead_direction = predicted_bf.normalize_or_zero();
     let viewport_started = instrumentation_enabled.then(Instant::now);
     let viewport = terrain_viewport(&camera_query, &render_origin, orientation);
     if let (Some(started), Some(record)) = (
@@ -681,6 +849,7 @@ pub(crate) fn stream_terrain_patches(
         generation_limit,
     );
     let tasks_started = batch.len();
+    let land_cover = streaming.land_cover.clone();
     for patch in batch {
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
         streaming.begin_bake(
@@ -691,6 +860,7 @@ pub(crate) fn stream_terrain_patches(
                 resolution: config.patch_resolution_for(patch),
                 skirt_depth_m: config.skirt_depth_m,
                 stitched_edges: stitch_edges,
+                land_cover: land_cover.clone(),
             },
             task_pool,
         );
@@ -739,6 +909,55 @@ pub(crate) fn stream_terrain_patches(
     ) {
         record.eviction_ms += started.elapsed().as_secs_f64() * 1_000.0;
         record.patches_evicted += stale_stitch_variant_count + evicted;
+    }
+
+    // Elevation payload decoding is strictly lower priority than geometry
+    // publication: it only spends worker capacity that geometry left idle this
+    // frame, and installing a tile never changes the geometry request set or
+    // delays a mesh upload.
+    if let Some(source) = streaming.elevation_source.clone() {
+        let mut tile_requests = elevation_tile_requests(&source, requested.iter().copied());
+        if ahead_direction.length_squared() > 0.5 {
+            if let Some(tile) = source.covering_tile_for_direction(ahead_direction) {
+                if !source.is_resident(tile.patch) {
+                    tile_requests.insert(tile.patch);
+                }
+            }
+        }
+        streaming.cancel_unrequested_elevation(&tile_requests);
+        let mut covered = 0usize;
+        let mut resident = 0usize;
+        for patch in &requested {
+            if let Some(tile) = source.covering_tile_for(patch) {
+                covered += 1;
+                if source.is_resident(tile.patch) {
+                    resident += 1;
+                }
+            }
+        }
+        streaming.elevation_covered_patches = covered;
+        streaming.elevation_resident_patches = resident;
+        streaming.elevation_pending = tile_requests
+            .iter()
+            .copied()
+            .filter(|tile| !streaming.elevation_inflight.contains_key(tile))
+            .collect();
+        let ordered = prioritize_elevation_requests(&streaming.elevation_pending, focus_direction);
+        let capacity = generation_capacity(
+            task_pool.thread_num(),
+            streaming.inflight.len() + streaming.elevation_inflight.len(),
+        )
+        .min(MAX_ELEVATION_TILES_PER_FRAME);
+        for patch in ordered.into_iter().take(capacity) {
+            let Some(path) = source.resolved_payload_path(&patch) else {
+                continue;
+            };
+            streaming.begin_elevation_load(ElevationTileRequest { patch, path }, task_pool);
+        }
+    } else {
+        streaming.elevation_covered_patches = 0;
+        streaming.elevation_resident_patches = 0;
+        streaming.elevation_pending.clear();
     }
 
     if let Some(metrics) = streaming.metrics(
@@ -903,6 +1122,8 @@ fn clear_terrain_cache(streaming: &mut TerrainStreamingResource) -> Vec<TerrainP
     streaming.published.clear();
     streaming.target_leaves = TerrainPatch::roots().into_iter().collect();
     streaming.cadence = TerrainStreamingCadence::default();
+    streaming.clear_elevation_work();
+    streaming.elevation_source = None;
     evicted
 }
 
@@ -993,6 +1214,73 @@ fn generation_priority_group(
     }
 
     (2, patch)
+}
+
+/// The set of finest payload tile addresses covering `patches` that are not
+/// already resident. Multiple patches commonly resolve to the same tile.
+fn elevation_tile_requests(
+    source: &TileElevationSource,
+    patches: impl IntoIterator<Item = TerrainPatch>,
+) -> BTreeSet<TerrainPatch> {
+    patches
+        .into_iter()
+        .filter_map(|patch| source.covering_tile_for(&patch).map(|tile| tile.patch))
+        .filter(|tile| !source.is_resident(*tile))
+        .collect()
+}
+
+/// Order payload tiles by angular proximity to the focus and then by a stable
+/// address so decode admission is deterministic.
+fn prioritize_elevation_requests(
+    tiles: &BTreeSet<TerrainPatch>,
+    focus_direction: DVec3,
+) -> Vec<TerrainPatch> {
+    let mut ordered: Vec<_> = tiles.iter().copied().collect();
+    ordered.sort_by_key(|tile| {
+        (
+            angular_distance_key(tile.center_direction(), focus_direction),
+            tile.level,
+            tile.face,
+            tile.tile_y,
+            tile.tile_x,
+        )
+    });
+    ordered
+}
+
+/// Adopt the active planet's optional elevation payload source at startup.
+/// This shares the exact handle collision and rendering already sample.
+pub(crate) fn share_elevation_tile_source(
+    planet_query: Query<&PlanetTerrain>,
+    mut streaming: ResMut<TerrainStreamingResource>,
+) {
+    let source = planet_query
+        .iter()
+        .find_map(|terrain| terrain.source.elevation_tile_source());
+    streaming.adopt_elevation_source(source);
+}
+
+/// Default native measured land-cover package. It is optional: when the file is
+/// absent or invalid, vegetation placement deterministically falls back to the
+/// source's climate density.
+pub const DEFAULT_LAND_COVER_PATH: &str = "assets/large_files/terrain/earth_landcover_v1.clcvr";
+
+/// Load the optional measured land-cover package at startup (native only).
+/// Browser builds keep the climate-density fallback path.
+#[cfg(feature = "dem")]
+pub(crate) fn load_default_land_cover(mut streaming: ResMut<TerrainStreamingResource>) {
+    let path = std::path::Path::new(DEFAULT_LAND_COVER_PATH);
+    if !path.exists() {
+        streaming.set_land_cover(None);
+        return;
+    }
+    match LandCoverPackage::from_path(path) {
+        Ok(package) => streaming.set_land_cover(Some(Arc::new(package))),
+        Err(error) => {
+            warn!("land-cover package unavailable ({error:?}); using climate density");
+            streaming.set_land_cover(None);
+        }
+    }
 }
 
 fn angular_distance_key(center_direction: DVec3, focus_direction: DVec3) -> u64 {

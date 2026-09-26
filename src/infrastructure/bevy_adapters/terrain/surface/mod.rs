@@ -17,17 +17,24 @@
 //! Per-patch surface maps live in [`surface_maps`]; scatter and river meshes
 //! live in [`scatter`].
 
+mod layers;
 mod scatter;
 mod surface_maps;
 
-pub use scatter::{build_river_mesh, build_vegetation_mesh};
+pub use scatter::{build_river_mesh, build_vegetation_mesh, build_vegetation_mesh_with_land_cover};
 pub use surface_maps::build_patch_surfaces;
 use surface_maps::SURFACE_TEX_RES;
+
+pub(crate) use layers::{
+    build_layer_weight_map, layer_texture_set, LAYER_NORMAL_STRENGTH, LAYER_TILING_SCALE,
+    NEAR_DETAIL_SCALE, NEAR_DETAIL_STRENGTH,
+};
 
 use super::mips::{mip_chain_rgba8, MipFilter};
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
+use crate::domain::services::land_cover::LandCoverPackage;
 use crate::domain::services::terrain_source::{
     slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -50,16 +57,21 @@ const SCATTER_FULL_DENSITY_LEVEL: u32 = 14;
 /// it they are thinned probabilistically so density falls off smoothly.
 const TREE_MIN_DENSITY: f64 = 0.08;
 const GRASS_MIN_DENSITY: f64 = 0.05;
-/// Maximum lumps in one boulder/scree cluster.
+/// Maximum procedurally generated rock bodies in one scree cluster.
 const ROCK_MAX_LUMPS: usize = 3;
-/// Solid trunk prisms share the single boulder tessellation budget.
+/// Solid trunk prisms share the single rock tessellation budget.
 const TRUNK_SEGMENTS: usize = 6;
-const BOULDER_SEGMENTS: usize = 6;
-const BOULDER_RINGS: usize = 3;
+/// Procedural rock base-shape tessellation. Rings and segments are bounded so
+/// the displaced rock reads as faceted geology without inflating the per-patch
+/// merged-mesh reservation beyond the previous boulder footprint by more than a
+/// small margin.
+const ROCK_SEGMENTS: usize = 8;
+const ROCK_RINGS: usize = 5;
 /// Crossed double-sided planes per canopy billboard.
 const CANOPY_CARD_PLANES: usize = 3;
-/// Stacked canopy billboards give trees volume without solid geometry.
-const CANOPY_CARD_LAYERS: usize = 2;
+/// Maximum stacked canopy layers across all species (conifer uses three).
+/// Used only to reserve the merged-mesh byte budget.
+const CANOPY_CARD_LAYERS: usize = 3;
 /// Crossed planes per grass tuft.
 const GRASS_CARD_PLANES: usize = 3;
 /// Position (12) + normal (12) + vertex colour (16) + UV (8).
@@ -105,6 +117,12 @@ pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
 /// hard boundary, which otherwise reads as one detailed block beside flat ones.
 pub(crate) const LOCAL_SURFACE_MIN_PATCH_LEVEL: u32 = 11;
 
+/// Whether the layered ground material is selected for this build. Native
+/// `dem` builds use the layered splat path; browser / no-`dem` builds keep the
+/// single-layer surface appearance fallback. Evaluated at runtime so both paths
+/// stay compiled and the fallback is explicit.
+pub(crate) const LAYERED_MATERIAL_SUPPORTED: bool = cfg!(feature = "dem");
+
 /// Continuous detail contribution for a patch level. Zero below the map range,
 /// ramping to full detail by level 13 so adjacent LODs blend rather than pop.
 pub(crate) fn local_detail_weight(patch_level: u32) -> f32 {
@@ -126,8 +144,8 @@ pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 =
 pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
     let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 4;
     let tree_indices = TRUNK_SEGMENTS * 6 + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 6;
-    let boulder_vertices = (BOULDER_RINGS + 1) * BOULDER_SEGMENTS;
-    let boulder_indices = BOULDER_RINGS * BOULDER_SEGMENTS * 6;
+    let boulder_vertices = (ROCK_RINGS + 1) * ROCK_SEGMENTS;
+    let boulder_indices = ROCK_RINGS * ROCK_SEGMENTS * 6;
     let rock_vertices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_vertices;
     let rock_indices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_indices;
     let grass_vertices = GRASS_CARD_PLANES * 4;
@@ -419,6 +437,9 @@ pub(crate) struct PreparedPatchSurface {
     pub roughness: f32,
     pub metallic: f32,
     pub local_surfaces: Option<(Image, Image)>,
+    /// Per-patch layer-weight map ([grass, soil, rock, sand]); snow is derived
+    /// in the shader. Presentation-only; never read by collision or physics.
+    pub layer_weights: Option<Image>,
     pub vegetation: Option<(Mesh, DVec3)>,
     /// River ribbon mesh plus its body-fixed anchor, or `None` when no channel
     /// crosses the patch.
@@ -430,6 +451,7 @@ pub(crate) fn prepare_patch_surface(
     patch: &TerrainPatch,
     geometry: &PatchGeometry,
     radius_m: f64,
+    land_cover: Option<&LandCoverPackage>,
 ) -> PreparedPatchSurface {
     // Global Earth albedo supplies broad geography. Source-derived local maps
     // are generated only once their detail is visible at close range.
@@ -460,9 +482,21 @@ pub(crate) fn prepare_patch_surface(
     );
     let local_surfaces = supports_local_surfaces(patch.level)
         .then(|| build_patch_surfaces(source, patch, geometry, radius_m));
+    // The layered material is selected at runtime from build capability. Browser
+    // / no-`dem` builds keep the single-layer surface appearance path unchanged.
+    let layer_weights = (LAYERED_MATERIAL_SUPPORTED && supports_local_surfaces(patch.level))
+        .then(|| build_layer_weight_map(source, patch));
     let vegetation_anchor = center * (radius_m + height_m);
     let vegetation = supports_vegetation(patch.level)
-        .then(|| build_vegetation_mesh(source, patch, radius_m, &vegetation_anchor))
+        .then(|| {
+            build_vegetation_mesh_with_land_cover(
+                source,
+                patch,
+                radius_m,
+                &vegetation_anchor,
+                land_cover,
+            )
+        })
         .flatten()
         .map(|mesh| (mesh, vegetation_anchor));
     // Rivers only resolve once the drainage network is represented by close
@@ -476,6 +510,7 @@ pub(crate) fn prepare_patch_surface(
         roughness: appearance.roughness,
         metallic: appearance.metallic,
         local_surfaces,
+        layer_weights,
         vegetation,
         river,
     }
@@ -485,12 +520,18 @@ pub(crate) fn prepare_patch_surface(
 
 #[cfg(test)]
 mod tests {
-    use super::scatter::{scatter_count_for_level, MeshAccum};
+    use super::scatter::{
+        plan_rock_bodies, rock_acceptance_probability, rock_candidates, scatter_count_for_level,
+        MeshAccum, RockBody,
+    };
     use super::surface_maps::{
         mesh_surface_frame, papua_tropical_profile, terrain_albedo, SURFACE_TEX_RES,
     };
     use super::*;
     use crate::domain::services::cube_sphere::build_patch_geometry;
+    use crate::domain::services::land_cover::{
+        LandCoverClass, LandCoverMetadata, LandCoverPackage,
+    };
     #[cfg(feature = "dem")]
     use crate::domain::services::planet_factory::PlanetFactory;
     #[cfg(feature = "dem")]
@@ -523,21 +564,243 @@ mod tests {
         }
     }
 
+    /// A channel confined to the low-latitude half of the patch, so only part of
+    /// the grid carries discharge.
+    #[derive(Debug)]
+    struct BandedRiverTerrain;
+
+    impl TerrainSource for BandedRiverTerrain {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            300.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(300.0, 300.0)
+        }
+
+        fn river_strength(&self, latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            if latitude_deg < 21.0 {
+                0.9
+            } else {
+                0.0
+            }
+        }
+    }
+
     #[test]
-    fn boulder_vertices_use_the_supplied_color() {
+    fn rock_vertices_are_darkened_toward_the_base() {
         let mut accum = MeshAccum::new();
-        accum.push_boulder(DVec3::ZERO, DVec3::Y, 1.0, 1, [0.1, 0.2, 0.3]);
+        accum.push_rock(RockBody {
+            center: DVec3::ZERO,
+            up: DVec3::Y,
+            radius: 1.0,
+            aspect: DVec3::new(1.0, 0.8, 1.0),
+            seed: 1,
+            color: [0.4, 0.5, 0.6],
+        });
         let mesh = accum.into_mesh();
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("rock must carry positions");
+        };
         let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
         else {
-            panic!("boulder must carry vertex colours");
+            panic!("rock must carry vertex colours");
         };
-        assert!(!colors.is_empty());
-        assert!(colors.iter().all(|color| {
-            (color[0] - 0.1).abs() < 1e-6
-                && (color[1] - 0.2).abs() < 1e-6
-                && (color[2] - 0.3).abs() < 1e-6
-        }));
+        let brightness = |color: &[f32; 4]| color[0] + color[1] + color[2];
+        let supplied = 0.4 + 0.5 + 0.6;
+        let max = colors.iter().map(brightness).fold(0.0f32, f32::max);
+        let min = colors.iter().map(brightness).fold(f32::MAX, f32::min);
+        assert!(
+            max <= supplied + 1e-5,
+            "the crown must not exceed the supplied colour"
+        );
+        assert!(min < max, "the embedded base must be darker than the crown");
+
+        let lowest = positions
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1[1].total_cmp(&b.1[1]))
+            .map(|(index, _)| index)
+            .expect("rock has vertices");
+        assert!(
+            (brightness(&colors[lowest]) - min).abs() < 1e-6,
+            "the lowest vertex must carry the darkest contact colour"
+        );
+    }
+
+    #[test]
+    fn rock_base_is_embedded_below_the_ground_plane() {
+        let embed = 0.35;
+        let vertical_radius = 0.8;
+        let mut accum = MeshAccum::new();
+        accum.push_rock(RockBody {
+            center: DVec3::new(0.0, vertical_radius - embed, 0.0),
+            up: DVec3::Y,
+            radius: 1.0,
+            aspect: DVec3::new(1.0, 0.8, 1.0),
+            seed: 5,
+            color: [0.5, 0.5, 0.5],
+        });
+        let mesh = accum.into_mesh();
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("rock must carry positions");
+        };
+        let lowest = positions
+            .iter()
+            .map(|position| position[1])
+            .fold(f32::MAX, f32::min);
+        assert!(
+            lowest < 0.0,
+            "the displaced base must sink below the ground plane, got {lowest}"
+        );
+    }
+
+    #[test]
+    fn rocks_are_non_spherical_and_vary_in_size_and_aspect() {
+        let mut accum = MeshAccum::new();
+        accum.push_rock(RockBody {
+            center: DVec3::ZERO,
+            up: DVec3::Y,
+            radius: 1.0,
+            aspect: DVec3::splat(1.0),
+            seed: 7,
+            color: [0.5, 0.5, 0.5],
+        });
+        let mesh = accum.into_mesh();
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("rock must carry positions");
+        };
+        let radii: Vec<f64> = positions
+            .iter()
+            .map(|position| {
+                ((position[0] * position[0] + position[1] * position[1] + position[2] * position[2])
+                    as f64)
+                    .sqrt()
+            })
+            .collect();
+        let max = radii.iter().copied().fold(f64::MIN, f64::max);
+        let min = radii.iter().copied().fold(f64::MAX, f64::min);
+        assert!(
+            max - min > 0.05,
+            "the displaced base shape must not be a sphere"
+        );
+
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let bodies = find_rock_bodies(&source);
+        assert!(bodies.len() > 1, "expected several rocks on a rocky patch");
+        let first_radius = bodies[0].radius;
+        let first_aspect = bodies[0].aspect.x / bodies[0].aspect.y;
+        assert!(
+            bodies
+                .iter()
+                .any(|body| (body.radius - first_radius).abs() > 1e-6),
+            "rock sizes must vary within a patch"
+        );
+        assert!(
+            bodies
+                .iter()
+                .any(|body| (body.aspect.x / body.aspect.y - first_aspect).abs() > 1e-6),
+            "rock aspect ratios must vary within a patch"
+        );
+    }
+
+    #[test]
+    fn steeper_ground_accepts_more_rock_candidates() {
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+        let budget = scatter_count_for_level(ROCK_COUNT, patch.level);
+        let gentle = rock_candidates(&patch, budget, |_, _| 2.0);
+        let steep = rock_candidates(&patch, budget, |_, _| 40.0);
+        assert!(
+            steep.len() > gentle.len(),
+            "steep ground must accept more rock candidates"
+        );
+        assert!(steep.len() <= budget, "candidates must respect the budget");
+        assert!(
+            rock_acceptance_probability(40.0) > rock_acceptance_probability(2.0),
+            "acceptance must rise monotonically with slope"
+        );
+    }
+
+    #[test]
+    fn procedural_rock_geometry_is_deterministic() {
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+
+        let first = plan_rock_bodies(&source, &patch, 6_371_000.0, &DVec3::ZERO);
+        let second = plan_rock_bodies(&source, &patch, 6_371_000.0, &DVec3::ZERO);
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(&second) {
+            assert_eq!(a.seed, b.seed);
+            assert_eq!(a.color, b.color);
+            assert!((a.center - b.center).length() < 1e-9);
+            assert!((a.radius - b.radius).abs() < 1e-12);
+            assert!((a.aspect - b.aspect).length() < 1e-12);
+        }
+
+        let positions = |mesh: &Mesh| match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(values)) => values.clone(),
+            _ => panic!("scatter mesh must carry positions"),
+        };
+        match (
+            build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO),
+            build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO),
+        ) {
+            (Some(a), Some(b)) => assert_eq!(positions(&a), positions(&b)),
+            (None, None) => {}
+            _ => panic!("repeat generation must agree"),
+        }
+    }
+
+    #[test]
+    fn rock_scatter_respects_lod_budget_and_patch_cap() {
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
+        for level in VEGETATION_MIN_PATCH_LEVEL..=16 {
+            let patch = TerrainPatch::for_direction(direction, level);
+            let budget = scatter_count_for_level(ROCK_COUNT, level);
+            assert!(budget <= ROCK_COUNT);
+            let candidates = rock_candidates(&patch, budget, |_, _| 60.0);
+            assert!(
+                candidates.len() <= budget,
+                "L{level} rock candidates exceeded the budget"
+            );
+            let bodies = plan_rock_bodies(&source, &patch, 6_371_000.0, &DVec3::ZERO);
+            assert!(
+                bodies.len() <= budget * ROCK_MAX_LUMPS,
+                "L{level} rock bodies exceeded the per-patch cap"
+            );
+        }
+
+        // Rocks are accumulated into the single merged per-patch mesh; there is
+        // no per-rock entity or separate draw path.
+        let patch = TerrainPatch::for_direction(direction, VEGETATION_MIN_PATCH_LEVEL);
+        if let Some(mesh) = build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO) {
+            assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
+        }
+    }
+
+    fn find_rock_bodies(source: &dyn TerrainSource) -> Vec<RockBody> {
+        use crate::domain::services::cube_sphere::CubeFace;
+
+        for face in CubeFace::ALL {
+            for tile in 0..16u32 {
+                for level in [12u32, 13, 14] {
+                    let direction = face_uv_to_direction(face, tile as f64 / 16.0, 0.5);
+                    let patch = TerrainPatch::for_direction(direction, level);
+                    let bodies = plan_rock_bodies(source, &patch, 6_371_000.0, &DVec3::ZERO);
+                    if bodies.len() > 3 {
+                        return bodies;
+                    }
+                }
+            }
+        }
+        Vec::new()
     }
 
     #[test]
@@ -556,6 +819,39 @@ mod tests {
         assert!(
             build_river_mesh(&dry, &geometry, &DVec3::ZERO).is_none(),
             "a patch with no drainage must not allocate a river ribbon"
+        );
+    }
+
+    #[test]
+    fn river_width_scales_with_discharge_and_stays_deterministic() {
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 8);
+
+        let wide_source = RiverTerrain;
+        let wide_geometry = build_patch_geometry(&patch, &wide_source, 6_371_000.0, 17, 5.0);
+        let wide = build_river_mesh(&wide_source, &wide_geometry, &DVec3::ZERO)
+            .expect("a fully wet patch must produce a river ribbon");
+
+        let banded_source = BandedRiverTerrain;
+        let banded_geometry = build_patch_geometry(&patch, &banded_source, 6_371_000.0, 17, 5.0);
+        let banded = build_river_mesh(&banded_source, &banded_geometry, &DVec3::ZERO)
+            .expect("a partly wet patch must still produce a channel");
+        let banded_repeat = build_river_mesh(&banded_source, &banded_geometry, &DVec3::ZERO)
+            .expect("deterministic regeneration");
+
+        // Discharge confines the ribbon: the banded channel covers fewer grid
+        // cells than the fully wet patch. Each emitted cell is four vertices.
+        assert_eq!(wide.count_vertices() % 4, 0);
+        assert_eq!(banded.count_vertices() % 4, 0);
+        assert!(
+            banded.count_vertices() < wide.count_vertices(),
+            "a confined channel must be narrower: {} vs {}",
+            banded.count_vertices(),
+            wide.count_vertices()
+        );
+        assert_eq!(
+            banded.attribute(Mesh::ATTRIBUTE_POSITION),
+            banded_repeat.attribute(Mesh::ATTRIBUTE_POSITION),
+            "river geometry must be identical on repeated generation"
         );
     }
 
@@ -727,8 +1023,9 @@ mod tests {
         };
         let coarse_geometry = build_patch_geometry(&coarse, &source, 6_371_000.0, 5, 5.0);
         let fine_geometry = build_patch_geometry(&fine, &source, 6_371_000.0, 5, 5.0);
-        let coarse_surface = prepare_patch_surface(&source, &coarse, &coarse_geometry, 6_371_000.0);
-        let fine_surface = prepare_patch_surface(&source, &fine, &fine_geometry, 6_371_000.0);
+        let coarse_surface =
+            prepare_patch_surface(&source, &coarse, &coarse_geometry, 6_371_000.0, None);
+        let fine_surface = prepare_patch_surface(&source, &fine, &fine_geometry, 6_371_000.0, None);
 
         for fine_j in [0, 2, 4] {
             let coarse_j = fine_j / 2;
@@ -761,6 +1058,106 @@ mod tests {
         // The solid quadrant used by trunks and boulders must be fully opaque.
         let opaque_index = ((res / 2 + 10) * res + (res / 2 + 10)) * 4;
         assert_eq!(data[opaque_index + 3], 255);
+    }
+
+    #[derive(Debug)]
+    struct DenseFlatTerrain;
+
+    impl TerrainSource for DenseFlatTerrain {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            100.0
+        }
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(100.0, 100.0)
+        }
+        fn moisture(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            0.8
+        }
+        fn vegetation_density(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            1.0
+        }
+    }
+
+    fn land_cover_metadata() -> LandCoverMetadata {
+        LandCoverMetadata {
+            body: "Earth".into(),
+            coordinate_frame: "terrain-radial-degrees".into(),
+            horizontal_datum: "WGS84".into(),
+            source: "test".into(),
+            source_resolution_m: 10.0,
+            nodata_policy: "fallback".into(),
+            source_sha256: "0".repeat(64),
+            license: "test".into(),
+            conversion_version: 1,
+        }
+    }
+
+    #[test]
+    fn measured_land_cover_suppresses_cover_and_stays_deterministic() {
+        let source = DenseFlatTerrain;
+        let patch = TerrainPatch::for_direction(DVec3::new(0.2, 0.3, 1.0).normalize(), 12);
+
+        let without =
+            build_vegetation_mesh_with_land_cover(&source, &patch, 6_371_000.0, &DVec3::ZERO, None)
+                .expect("dense flat ground must grow vegetation");
+
+        let water = LandCoverPackage::from_samples(
+            2,
+            2,
+            -180.0,
+            -90.0,
+            180.0,
+            90.0,
+            land_cover_metadata(),
+            vec![LandCoverClass::PermanentWater.code(); 4],
+        )
+        .expect("valid land-cover package");
+        let with_a = build_vegetation_mesh_with_land_cover(
+            &source,
+            &patch,
+            6_371_000.0,
+            &DVec3::ZERO,
+            Some(&water),
+        );
+        let with_b = build_vegetation_mesh_with_land_cover(
+            &source,
+            &patch,
+            6_371_000.0,
+            &DVec3::ZERO,
+            Some(&water),
+        );
+
+        // Measured water cover removes canopy and ground-cover scatter, leaving
+        // only exposed-rock geometry, so the merged mesh shrinks. Repeated
+        // generation with the same package is identical.
+        let without_vertices = without.count_vertices();
+        let with_vertices = with_a.as_ref().map(Mesh::count_vertices).unwrap_or(0);
+        assert!(
+            with_vertices < without_vertices,
+            "land cover must thin cover: {with_vertices} vs {without_vertices}"
+        );
+        assert_eq!(
+            with_vertices,
+            with_b.as_ref().map(Mesh::count_vertices).unwrap_or(0)
+        );
+    }
+
+    #[test]
+    fn fully_vegetated_patch_stays_within_the_mesh_budget() {
+        let source = DenseFlatTerrain;
+        let patch = TerrainPatch::for_direction(DVec3::new(0.2, 0.3, 1.0).normalize(), 14);
+        let mesh = build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO)
+            .expect("dense flat ground must grow vegetation");
+        let vertices = mesh.count_vertices() as u64;
+        let indices = mesh
+            .indices()
+            .map(|indices| indices.len() as u64)
+            .unwrap_or(0);
+        let bytes = vertices * VEGETATION_BYTES_PER_VERTEX + indices * VEGETATION_BYTES_PER_INDEX;
+        assert!(
+            bytes <= MAX_VEGETATION_MESH_BYTES,
+            "vegetated patch used {bytes} bytes over the reserved {MAX_VEGETATION_MESH_BYTES}"
+        );
     }
 
     #[test]

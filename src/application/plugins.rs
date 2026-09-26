@@ -159,7 +159,11 @@ use crate::infrastructure::bevy_adapters::simulation_time::{
 use crate::infrastructure::bevy_adapters::terrain::render::{
     recenter_render_origin, TerrainRenderConfig, TerrainRenderPlugin,
 };
-use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
+#[cfg(feature = "dem")]
+use crate::infrastructure::bevy_adapters::terrain::streaming::load_default_land_cover;
+use crate::infrastructure::bevy_adapters::terrain::streaming::{
+    share_elevation_tile_source, TerrainStreamingResource,
+};
 use crate::infrastructure::bevy_adapters::ui_components::{
     CameraInputState, NotificationQueue, ScreenshotState, SelectedPlanet, UiPointerState,
     VideoRecordingState, ZenMode,
@@ -618,6 +622,15 @@ impl Plugin for RocketModePlugin {
         // Earth surface and shares its source with collision/altitude queries.
         app.insert_resource(TerrainStreamingResource::default());
         app.init_resource::<TerrainSurfaceSampleCache>();
+        // Share the planet's single elevation payload handle with streaming so
+        // decoded tiles install into the authority collision already samples.
+        app.add_systems(Startup, share_elevation_tile_source.after(setup_space));
+        // Load the optional presentation-only land-cover package for vegetation.
+        #[cfg(feature = "dem")]
+        app.add_systems(
+            Startup,
+            load_default_land_cover.after(share_elevation_tile_source),
+        );
 
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);

@@ -16,6 +16,13 @@ use crate::domain::services::cube_sphere::face_uv;
 use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 #[cfg(feature = "dem")]
 use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
+use crate::domain::services::elevation_pyramid::TileElevationSource;
+#[cfg(feature = "dem")]
+use crate::domain::services::elevation_pyramid::{
+    ElevationPyramidError, DEFAULT_ELEVATION_TILE_CAPACITY,
+};
+#[cfg(feature = "dem")]
+use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
 #[cfg(feature = "dem")]
 use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
 #[cfg(feature = "dem")]
@@ -34,6 +41,11 @@ use std::sync::Arc;
 #[cfg(feature = "dem")]
 pub const DEFAULT_EARTH_DEM_PATH: &str =
     "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem";
+/// Default optional high-resolution elevation payload package root. A missing
+/// package is not an error: Earth falls back to the resident measured CSDEM.
+#[cfg(feature = "dem")]
+pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT: &str =
+    "assets/large_files/terrain/earth_elevation_pyramid";
 #[cfg(feature = "dem")]
 const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";
 #[cfg(feature = "dem")]
@@ -74,6 +86,9 @@ impl LocalElevationOverlayTerrainSource {
 /// Deterministic seed for Earth's procedural detail contribution.
 #[cfg(feature = "dem")]
 const EARTH_PROCEDURAL_DETAIL_SEED: u64 = 0x00E4_27A6_1E5E_ED01;
+/// Deterministic master seed for Earth's thermal/hydraulic erosion field.
+#[cfg(feature = "dem")]
+const EARTH_EROSION_SEED: u64 = 0x00E4_2705_E0D1_5EED;
 /// Radius around a launch site where the procedural detail is graded flat.
 #[cfg(feature = "dem")]
 const EARTH_PAD_FLAT_RADIUS_M: f64 = 750.0;
@@ -81,20 +96,40 @@ const EARTH_PAD_FLAT_RADIUS_M: f64 = 750.0;
 #[cfg(feature = "dem")]
 const EARTH_PAD_BLEND_RADIUS_M: f64 = 3_000.0;
 
+/// Earth's declared, validated erosion configuration. It shares the planet's
+/// deterministic seed so a baked and a runtime-eroded tile are identical.
+#[cfg(feature = "dem")]
+pub(crate) fn earth_erosion_config() -> ErosionConfig {
+    ErosionConfig {
+        seed: EARTH_EROSION_SEED,
+        ..ErosionConfig::default()
+    }
+}
+
+/// Wrap an Earth elevation layer in the one authoritative erosion/hydrology
+/// field. The cached `ErodedTerrainSource` samples the eroded height plus D8
+/// flow, moisture, and river strength; it is the only erosion implementation.
+#[cfg(feature = "dem")]
+pub(crate) fn earth_eroded_base(base: Arc<dyn TerrainSource>) -> Arc<dyn TerrainSource> {
+    Arc::new(ErodedTerrainSource::new(base, earth_erosion_config()))
+}
+
 /// Compose Earth's measured base terrain with the bounded procedural detail
 /// contribution. Rendering, collision, radar altitude, and biome metadata all
 /// sample this one surface; the detail is deterministic and never changes with
 /// camera movement or frame rate. The measured ETOPO1 package stays the base
-/// elevation authority, and the detail is documented presentation-scale relief.
+/// elevation authority, erosion is applied to that base, and the detail is
+/// documented presentation-scale relief.
 #[cfg(feature = "dem")]
 fn earth_layered_terrain(base: Arc<dyn TerrainSource>) -> LayeredTerrainSource {
     let base_bounds = base.elevation_bounds_m();
+    let eroded = earth_eroded_base(base);
     let detail: Arc<dyn TerrainSource> = Arc::new(ProceduralDetailSource::with_flat_zones(
         EARTH_PROCEDURAL_DETAIL_SEED,
         earth_pad_flat_zones(),
     ));
     LayeredTerrainSource::new(
-        TerrainElevationLayer::new(base, base_bounds),
+        TerrainElevationLayer::new(eroded, base_bounds),
         None,
         Some(TerrainDetailLayer::new(
             detail,
@@ -135,22 +170,48 @@ fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
 /// resident measured ETOPO1 height package as the base surface and add a
 /// deterministic bounded procedural detail layer; rendering and collision use
 /// the same source with no runtime download.
+///
+/// When a valid elevation payload package is present, it is composed *behind*
+/// the same authority: the resident CSDEM is the streamed base and installed
+/// payload tiles override it only where they are resident. The optional
+/// `tiles` handle is shared with the streaming layer; it is never a second
+/// terrain authority.
 #[derive(Debug)]
 pub struct EarthTerrainSource {
     source: Arc<dyn TerrainSource>,
+    tiles: Option<Arc<TileElevationSource>>,
 }
 
 impl EarthTerrainSource {
     pub fn new() -> Self {
         #[cfg(feature = "dem")]
-        return Self::with_dem_path(DEFAULT_EARTH_DEM_PATH).unwrap_or_else(|error| {
-            panic!("Earth measured terrain authority is unavailable or invalid: {error}")
-        });
+        {
+            // The resident CSDEM is mandatory. The payload pyramid is optional:
+            // a missing or invalid package silently falls back to the current
+            // base+detail composition so no mode depends on the new data.
+            let measured: Arc<dyn TerrainSource> = Arc::new(
+                DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH).unwrap_or_else(|error| {
+                    panic!("Earth measured terrain authority is unavailable or invalid: {error}")
+                }),
+            );
+            let root = Path::new(DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT);
+            Self::assemble(measured, None, Some(root)).unwrap_or_else(|_| {
+                let measured: Arc<dyn TerrainSource> = Arc::new(
+                    DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
+                        .expect("resident Earth DEM was validated above"),
+                );
+                Self {
+                    source: Arc::new(earth_layered_terrain(measured)),
+                    tiles: None,
+                }
+            })
+        }
         #[cfg(not(feature = "dem"))]
         Self {
             source: Arc::new(ProceduralTerrainSource::from_config(
                 ProceduralTerrainConfig::earth(),
             )),
+            tiles: None,
         }
     }
 
@@ -162,7 +223,20 @@ impl EarthTerrainSource {
         let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path(path)?);
         Ok(Self {
             source: Arc::new(earth_layered_terrain(base)),
+            tiles: None,
         })
+    }
+
+    /// Construct Earth terrain from a validated CSDEM plus an explicit
+    /// elevation payload package root. Unlike [`Self::new`], an invalid or
+    /// missing package is an error: callers that name a package must get it.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_and_elevation_manifest(
+        global_dem_path: impl AsRef<Path>,
+        manifest_root: impl AsRef<Path>,
+    ) -> Result<Self, EarthTerrainDataError> {
+        let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path(global_dem_path)?);
+        Self::assemble(base, None, Some(manifest_root.as_ref()))
     }
 
     /// Use a reviewed local elevation package as an absolute replacement within
@@ -174,24 +248,77 @@ impl EarthTerrainSource {
         global_dem_path: impl AsRef<Path>,
         local_elevation_path: impl AsRef<Path>,
     ) -> Result<Self, EarthTerrainDataError> {
-        let global = Arc::new(DemTerrainSource::from_path(global_dem_path)?);
-        let local = Arc::new(LocalElevationPackage::from_path(local_elevation_path)?);
-        if local.metadata().body != "Earth" {
-            return Err(EarthTerrainDataError::InvalidLocalElevation(
-                "local elevation package body must be Earth".into(),
-            ));
-        }
-        if local.elevation_bounds_m().is_none() {
-            return Err(EarthTerrainDataError::InvalidLocalElevation(
-                "local elevation package contains no valid samples".into(),
-            ));
-        }
-        let base: Arc<dyn TerrainSource> =
-            Arc::new(LocalElevationOverlayTerrainSource { global, local });
+        let global: Arc<dyn TerrainSource> =
+            Arc::new(DemTerrainSource::from_path(global_dem_path)?);
+        let local = load_local_elevation(local_elevation_path)?;
+        Self::assemble(global, Some(local), None)
+    }
+
+    /// Compose the reviewed measured local package over the global streamed
+    /// coverage. Local samples override both the resident base and any resident
+    /// payload tile within their footprint, with the package's declared
+    /// continuous blend border. Payload tiles remain authoritative elsewhere.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_local_and_elevation_manifest_paths(
+        global_dem_path: impl AsRef<Path>,
+        local_elevation_path: impl AsRef<Path>,
+        manifest_root: impl AsRef<Path>,
+    ) -> Result<Self, EarthTerrainDataError> {
+        let global: Arc<dyn TerrainSource> =
+            Arc::new(DemTerrainSource::from_path(global_dem_path)?);
+        let local = load_local_elevation(local_elevation_path)?;
+        Self::assemble(global, Some(local), Some(manifest_root.as_ref()))
+    }
+
+    /// Build the single authority from a measured global source, an optional
+    /// reviewed local overlay, and an optional payload package root. The
+    /// payload, when present, sits between the measured base and the local
+    /// overlay so local measured data always wins where it is covered.
+    #[cfg(feature = "dem")]
+    fn assemble(
+        measured_global: Arc<dyn TerrainSource>,
+        local: Option<Arc<LocalElevationPackage>>,
+        manifest_root: Option<&Path>,
+    ) -> Result<Self, EarthTerrainDataError> {
+        let (global, tiles) = match manifest_root {
+            Some(root) => {
+                let tiles = Arc::new(TileElevationSource::from_manifest_root(
+                    measured_global,
+                    root,
+                    DEFAULT_ELEVATION_TILE_CAPACITY,
+                )?);
+                (Arc::clone(&tiles) as Arc<dyn TerrainSource>, Some(tiles))
+            }
+            None => (measured_global, None),
+        };
+        let authority: Arc<dyn TerrainSource> = match local {
+            Some(local) => Arc::new(LocalElevationOverlayTerrainSource { global, local }),
+            None => global,
+        };
         Ok(Self {
-            source: Arc::new(earth_layered_terrain(base)),
+            source: Arc::new(earth_layered_terrain(authority)),
+            tiles,
         })
     }
+}
+
+/// Validate and load a reviewed local elevation package as Earth coverage.
+#[cfg(feature = "dem")]
+fn load_local_elevation(
+    local_elevation_path: impl AsRef<Path>,
+) -> Result<Arc<LocalElevationPackage>, EarthTerrainDataError> {
+    let local = LocalElevationPackage::from_path(local_elevation_path)?;
+    if local.metadata().body != "Earth" {
+        return Err(EarthTerrainDataError::InvalidLocalElevation(
+            "local elevation package body must be Earth".into(),
+        ));
+    }
+    if local.elevation_bounds_m().is_none() {
+        return Err(EarthTerrainDataError::InvalidLocalElevation(
+            "local elevation package contains no valid samples".into(),
+        ));
+    }
+    Ok(Arc::new(local))
 }
 
 /// Failures when assembling Earth's reviewed global and local elevation data.
@@ -200,6 +327,7 @@ impl EarthTerrainSource {
 pub enum EarthTerrainDataError {
     GlobalDem(DemError),
     LocalElevation(LocalElevationError),
+    ElevationPyramid(ElevationPyramidError),
     InvalidLocalElevation(String),
 }
 
@@ -217,11 +345,21 @@ impl From<LocalElevationError> for EarthTerrainDataError {
     }
 }
 
+#[cfg(feature = "dem")]
+impl From<ElevationPyramidError> for EarthTerrainDataError {
+    fn from(error: ElevationPyramidError) -> Self {
+        Self::ElevationPyramid(error)
+    }
+}
+
 /// Selects measured, datum-normalized local elevation over the global source.
+/// The global side is any authoritative source, including the tile-backed
+/// composition, so streamed payload tiles remain authoritative outside the
+/// local footprint.
 #[cfg(feature = "dem")]
 #[derive(Debug)]
 pub(crate) struct LocalElevationOverlayTerrainSource {
-    pub(crate) global: Arc<DemTerrainSource>,
+    pub(crate) global: Arc<dyn TerrainSource>,
     pub(crate) local: Arc<LocalElevationPackage>,
 }
 
@@ -371,6 +509,10 @@ impl TerrainSource for EarthTerrainSource {
 
     fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
         self.source.patch_geometric_error(patch)
+    }
+
+    fn elevation_tile_source(&self) -> Option<Arc<TileElevationSource>> {
+        self.tiles.clone()
     }
 
     fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {

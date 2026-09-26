@@ -1,6 +1,6 @@
 (
     name: "leo-insertion-safe",
-    git_commit: "be9497d",
+    git_commit: "35487e4",
     run_identity: (
         scenario_id: "leo-insertion-safe",
         vehicle_model_id: "electron-like-test-fixture",
@@ -14,7 +14,7 @@
         numerical_integrator: "semi-implicit Euler",
         fixed_timestep_s: 0.015625,
         random_seed: None,
-        software_revision: "be9497d",
+        software_revision: "35487e4",
     ),
     audit: (
         change_description: "add a deterministic safe low-Earth-orbit insertion regression recording for the existing ascent completion predicate",
@@ -56,7 +56,7 @@
         ),
         (
             position_m: (6570999.999657685, 95.81513580144677, -75.02143071889856),
-            velocity_mps: (2718.654307225279, 4067.8805313057956, -2831.873609339392),
+            velocity_mps: (2718.6539131360355, 4067.880679098895, -2831.8746134454677),
             orientation: (-0.5042288436250708, -0.0000000000000000005421010862427522, -0.08498968884056539, 0.8593776969687471),
             angular_velocity_radps: (0.0, 0.0, 0.0),
             mass_kg: 12500.0,
@@ -66,6 +66,6 @@
     hash_chain: [
         6068713942594238783,
         6068713942594238783,
-        7820442409829641600,
+        1589104058443049118,
     ],
 )

@@ -61,6 +61,11 @@ path = "src/bin/csdem_upgrade.rs"
 required-features = ["dem"]
 
 [[bin]]
+name = "elevation_pyramid_convert"
+path = "src/bin/elevation_pyramid_convert.rs"
+required-features = ["dem"]
+
+[[bin]]
 name = "terrain_overview_bake"
 path = "src/bin/terrain_overview_bake.rs"
 required-features = ["dem"]

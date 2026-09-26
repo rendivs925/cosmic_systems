@@ -3,10 +3,10 @@
 
 use super::topology::{face_uv, face_uv_to_direction, CubeFace, PatchEdge};
 use crate::domain::math::DVec3;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A quadtree patch on a cube face: face + level + tile coordinates.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TerrainPatch {
     pub face: CubeFace,
     pub level: u32,

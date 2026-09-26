@@ -43,6 +43,9 @@ pub(super) struct TerrainStreamingMetrics {
     target_lods: PatchLevelDistribution,
     visible_lods: PatchLevelDistribution,
     completed: TerrainGenerationBatch,
+    elevation_resident_tiles: usize,
+    elevation_load_backlog: usize,
+    elevation_fallback_rate: f64,
     imagery: ImageryMetrics,
 }
 
@@ -69,6 +72,19 @@ impl TerrainStreamingMetrics {
             .values()
             .filter(|cached| cached.surface.is_some())
             .count();
+        let elevation_resident_tiles = streaming
+            .elevation_source
+            .as_ref()
+            .map_or(0, |source| source.resident_tile_count());
+        let elevation_load_backlog =
+            streaming.elevation_inflight.len() + streaming.elevation_pending.len();
+        let elevation_fallback_rate = if streaming.elevation_covered_patches == 0 {
+            0.0
+        } else {
+            let fallback =
+                streaming.elevation_covered_patches - streaming.elevation_resident_patches;
+            fallback as f64 / streaming.elevation_covered_patches as f64
+        };
         Self {
             requested_tiles: requested.len(),
             target_tiles: target.len(),
@@ -95,6 +111,9 @@ impl TerrainStreamingMetrics {
             target_lods: PatchLevelDistribution::from_patches(target.iter().copied()),
             visible_lods: PatchLevelDistribution::from_patches(streaming.published.iter().copied()),
             completed,
+            elevation_resident_tiles,
+            elevation_load_backlog,
+            elevation_fallback_rate,
             imagery,
         }
     }
@@ -126,6 +145,9 @@ impl TerrainStreamingMetrics {
             visible_lods = ?self.visible_lods.0,
             completed_batch_tiles = self.completed.completed_tiles,
             completed_batch_ms = self.completed.generation_ms,
+            elevation_resident_tiles = self.elevation_resident_tiles,
+            elevation_load_backlog = self.elevation_load_backlog,
+            elevation_fallback_rate = self.elevation_fallback_rate,
             imagery_resident_tiles = self.imagery.resident_tiles,
             imagery_pending_tiles = self.imagery.pending_tiles,
             imagery_resident_mib = self.imagery.resident_mib,

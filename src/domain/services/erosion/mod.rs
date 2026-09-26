@@ -22,7 +22,7 @@ mod simulate;
 mod source;
 
 pub use simulate::{carve_rivers, erode_tile, flow_accumulation, hydraulic_erode, thermal_erode};
-pub use source::ErodedTerrainSource;
+pub use source::{ErodedTerrainSource, ErosionTileError};
 
 /// accumulation and moisture channels.
 #[derive(Debug, Clone)]
@@ -191,32 +191,20 @@ mod tests {
     }
 
     #[test]
-    fn mesh_samples_use_the_lod_independent_macro_field() {
+    fn mesh_height_samples_the_eroded_field_at_every_level() {
         let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
         let latitude_deg = 28.5;
         let longitude_deg = -80.6;
 
-        assert_eq!(
-            source.mesh_height_m(latitude_deg, longitude_deg, 3),
-            source.base.height_m(latitude_deg, longitude_deg)
-        );
-        assert!(source
-            .cache
-            .lock()
-            .expect("erosion cache lock")
-            .tiles
-            .is_empty());
-
-        assert_eq!(
-            source.mesh_height_m(latitude_deg, longitude_deg, 12),
-            source.base.height_m(latitude_deg, longitude_deg)
-        );
-        assert!(source
-            .cache
-            .lock()
-            .expect("erosion cache lock")
-            .tiles
-            .is_empty());
+        let eroded = source.height_m(latitude_deg, longitude_deg);
+        for level in [3, 7, 12] {
+            assert_eq!(
+                source.mesh_height_m(latitude_deg, longitude_deg, level),
+                eroded,
+                "mesh geometry must sample the same eroded field at L{level}"
+            );
+        }
+        assert!(source.resident_tile_count() > 0);
     }
 
     #[test]
@@ -656,6 +644,147 @@ mod tests {
             steepest_downhill_with_spacing(1, 1, &heights, 3, 3, &polar).map(|(index, _, _)| index),
             Some(idx(2, 1, 3)),
             "D8 must account for the latitude-dependent east-west cell width"
+        );
+    }
+
+    #[test]
+    fn adjacent_independent_tiles_meet_at_the_shared_boundary() {
+        let source_base = base();
+        let config = cfg();
+        let west = erode_tile(&source_base, 10.0, 12.0, 20.0, 22.0, &config, 1);
+        let east = erode_tile(&source_base, 10.0, 12.0, 22.0, 24.0, &config, 2);
+        let boundary = (11.0, 22.0);
+        let base_height = source_base.height_m(boundary.0, boundary.1);
+
+        let (west_height, west_edge) = sample(&west, boundary.0, boundary.1);
+        let (east_height, east_edge) = sample(&east, boundary.0, boundary.1);
+        let west_blend = base_height
+            + (west_height - base_height) * erosion_weight(west_edge, config.edge_feather);
+        let east_blend = base_height
+            + (east_height - base_height) * erosion_weight(east_edge, config.edge_feather);
+
+        assert_eq!(west_blend, base_height, "the edge must fade to base");
+        assert_eq!(east_blend, base_height, "the edge must fade to base");
+        assert_eq!(west_blend, east_blend, "independent tiles must not seam");
+
+        // The feather must not touch the tile interior.
+        let (_, center_edge) = sample(&west, 11.0, 21.0);
+        assert_eq!(erosion_weight(center_edge, config.edge_feather), 1.0);
+    }
+
+    #[test]
+    fn resident_tile_count_never_exceeds_the_cache_limit() {
+        let source = ErodedTerrainSource::new(
+            Arc::new(base()),
+            ErosionConfig {
+                resolution: 4,
+                droplets: 0,
+                thermal_iterations: 0,
+                cache_max_tiles: 2,
+                ..cfg()
+            },
+        );
+        for step in 0..6 {
+            source.prepare_sample(10.5, 20.5 + step as f64 * 2.0);
+            assert!(
+                source.resident_tile_count() <= 2,
+                "resident tiles must stay bounded by cache_max_tiles"
+            );
+        }
+    }
+
+    #[test]
+    fn mesh_and_collision_heights_agree_on_the_eroded_surface() {
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
+        for (latitude_deg, longitude_deg) in [(11.0, 21.0), (-12.5, 140.25), (48.85, 2.35)] {
+            assert_eq!(
+                source.mesh_height_m(latitude_deg, longitude_deg, 12),
+                source.height_m(latitude_deg, longitude_deg),
+                "rendered patch geometry must match the collision surface"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_patch_edges_compute_identical_mesh_heights() {
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
+        // A matching geographic sample must resolve identically at any patch
+        // level, so adjacent patches at equal or different LOD cannot crack.
+        for (latitude_deg, longitude_deg) in [(10.0, 22.0), (11.0, 20.0), (-33.5, 151.25)] {
+            assert_eq!(
+                source.mesh_height_m(latitude_deg, longitude_deg, 4),
+                source.mesh_height_m(latitude_deg, longitude_deg, 9)
+            );
+        }
+    }
+
+    #[test]
+    fn baked_tile_matches_runtime_bake_for_every_channel() {
+        let baked = ErodedTerrainSource::new(Arc::new(base()), cfg());
+        let runtime = ErodedTerrainSource::new(Arc::new(base()), cfg());
+        let raster = baked.bake_tile_containing(11.0, 21.0);
+        baked
+            .install_baked_tile(raster)
+            .expect("a freshly baked tile is valid");
+
+        for (latitude_deg, longitude_deg) in [(11.0, 21.0), (10.5, 20.5), (11.9, 21.9)] {
+            assert_eq!(
+                baked.height_m(latitude_deg, longitude_deg),
+                runtime.height_m(latitude_deg, longitude_deg)
+            );
+            assert_eq!(
+                baked.moisture(latitude_deg, longitude_deg),
+                runtime.moisture(latitude_deg, longitude_deg)
+            );
+            assert_eq!(
+                baked.river_strength(latitude_deg, longitude_deg),
+                runtime.river_strength(latitude_deg, longitude_deg)
+            );
+        }
+    }
+
+    #[test]
+    fn install_baked_tile_rejects_malformed_payloads() {
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
+
+        let mut wet = source.bake_tile_containing(11.0, 21.0);
+        wet.moisture[0] = 1.5;
+        assert!(source.install_baked_tile(wet).is_err());
+
+        let mut misaligned = source.bake_tile_containing(11.0, 21.0);
+        misaligned.lat_max += 1.0;
+        assert!(source.install_baked_tile(misaligned).is_err());
+    }
+
+    #[test]
+    fn hydrology_signals_are_normalized_and_channels_are_wetter() {
+        let source = ErodedTerrainSource::new(
+            Arc::new(ProceduralTerrainSource::new(0, 0.0, 0.0, 0)),
+            ErosionConfig {
+                resolution: 16,
+                droplets: 0,
+                thermal_iterations: 0,
+                river_flow_threshold: 0.5,
+                ..cfg()
+            },
+        );
+        let base_moisture = source.base.moisture(11.0, 21.0);
+        let mut channel_seen = false;
+        for lat_step in 0..16 {
+            for lon_step in 0..16 {
+                let latitude_deg = 11.0 + lat_step as f64 * 0.05;
+                let longitude_deg = 21.0 + lon_step as f64 * 0.05;
+                let moisture = source.moisture(latitude_deg, longitude_deg);
+                let river = source.river_strength(latitude_deg, longitude_deg);
+                assert!((0.0..=1.0).contains(&moisture), "moisture out of range");
+                assert!((0.0..=1.0).contains(&river), "river strength out of range");
+                channel_seen |= river > 0.0;
+            }
+        }
+        assert!(channel_seen, "a carved channel must read as a river");
+        assert!(
+            source.moisture(11.0, 21.0) > base_moisture,
+            "a carved channel must be wetter than the base surface"
         );
     }
 }

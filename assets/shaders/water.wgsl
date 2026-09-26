@@ -1,19 +1,23 @@
-// Physically lit planetary water surface.
+// Physically lit planetary water surface with a bounded Gerstner wave sum.
 //
 // Each terrain patch that contains ocean contributes a sea-level sphere cap.
 // The red vertex-colour channel carries normalized depth (0 at the shoreline,
 // 1 at the deepest sampled seafloor) and drives the shallow/deep colour blend,
-// the opacity ramp, and the shoreline foam band. Waves are a presentation-only
-// normal perturbation; nothing here feeds collision or any authoritative
-// simulation state.
+// the opacity ramp, and the shoreline foam band. The vertex stage displaces the
+// cap radially by a sum of Gerstner waves; the fragment stage reconstructs the
+// analytic wave normal and applies Beer-Lambert depth absorption plus a crest
+// subsurface term. Waves are presentation-only and never feed collision or any
+// authoritative simulation state.
 
 #define_import_path cosmic_systems::water
 
 #import bevy_pbr::{
-    forward_io::{VertexOutput, FragmentOutput},
+    forward_io::{Vertex, VertexOutput, FragmentOutput},
+    mesh_functions,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
+    view_transformations,
 }
 
 struct WaterParams {
@@ -37,38 +41,127 @@ struct WaterParams {
     ripple_scale: f32,
     /// Fine-ripple normal-perturbation strength.
     ripple_strength: f32,
+    /// Peak vertical displacement of the primary swell, in meters.
+    wave_height_m: f32,
+    /// Beer-Lambert absorption exponent over the normalized visible depth.
+    absorption: f32,
+    /// Strength of the crest subsurface-scattering tint.
+    sss_strength: f32,
+    /// Colour scattered through wave crests.
+    sss_color: vec4<f32>,
+    /// Fraction of the baked terrain self-shadow applied to water shading.
+    landscape_shadow_strength: f32,
+    /// Number of active Gerstner wave components (1..=4).
+    wave_components: f32,
+    /// Global foam coverage multiplier.
+    foam_coverage: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: WaterParams;
+// Baked terrain occlusion sampled with the patch-local UV1: red is the
+// self-shadow visibility toward the sun. Neutral (1, 1) when unbound.
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var terrain_occlusion: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var terrain_occlusion_sampler: sampler;
 
-// Crossed wave trains give a cheap, stable, non-tiling ripple gradient. The
-// height gradient is converted into a surface normal. `shoal` attenuates the
-// perturbation in very shallow water so the waterline does not erupt into
-// spiky normals where the seafloor slope is steep.
-fn wave_normal(world_position: vec3<f32>, time_s: f32, shoal: f32) -> vec3<f32> {
-    let k = water.wave_scale;
-    let dir_a = vec2<f32>(k, k * 0.73);
-    let dir_b = vec2<f32>(-k * 0.61, k * 0.92);
-    let phase_a = dot(world_position.xz, dir_a) + time_s * 1.15;
-    let phase_b = dot(world_position.xz, dir_b) + time_s * 1.71;
-    let height_a = cos(phase_a);
-    let height_b = cos(phase_b);
+const GRAVITY: f32 = 9.81;
+const TAU: f32 = 6.283185307;
 
-    // A finer, faster ripple train breaks up the swell so the surface never
-    // reads as two clean geometric waves.
-    let kr = water.ripple_scale;
-    let dir_c = vec2<f32>(kr * 0.42, -kr * 0.9);
-    let phase_c = dot(world_position.xz, dir_c) + time_s * 2.6;
-    let height_c = cos(phase_c);
+/// One wave component's contribution in the local tangent plane:
+/// `(height_m, d(height)/d(tangent_x), d(height)/d(tangent_y))`.
+fn wave_term(p: vec2<f32>, dir: vec2<f32>, wavelength_m: f32, amplitude_m: f32, time_s: f32) -> vec3<f32> {
+    let k = TAU / max(wavelength_m, 1e-3);
+    // Deep-water dispersion keeps long swells slow and short chop fast.
+    let omega = sqrt(GRAVITY * k);
+    let phase = k * dot(dir, p) - omega * time_s;
+    let height = amplitude_m * sin(phase);
+    let slope = dir * (amplitude_m * k * cos(phase));
+    return vec3<f32>(height, slope.x, slope.y);
+}
 
-    let swell = vec2<f32>(
-        dir_a.x * height_a + dir_b.x * height_b,
-        dir_a.y * height_a + dir_b.y * height_b,
-    ) * water.wave_strength;
-    let ripple = vec2<f32>(dir_c.x * height_c, dir_c.y * height_c) * water.ripple_strength;
+struct WaveSample {
+    height: f32,
+    grad: vec2<f32>,
+    tangent: vec3<f32>,
+    bitangent: vec3<f32>,
+}
 
-    let gradient = (swell + ripple) * shoal;
-    return normalize(vec3<f32>(-gradient.x, 1.0, -gradient.y));
+/// Sum of a bounded set of Gerstner-style directional waves evaluated in the
+/// surface tangent plane. Amplitude derives from the configured swell height so
+/// the same field drives both the vertex displacement and the fragment normal.
+fn gerstner_sample(world_position: vec3<f32>, normal: vec3<f32>, time_s: f32) -> WaveSample {
+    let reference = select(
+        vec3<f32>(1.0, 0.0, 0.0),
+        vec3<f32>(0.0, 0.0, 1.0),
+        abs(normal.y) > 0.9,
+    );
+    let tangent = normalize(cross(normal, reference));
+    let bitangent = cross(normal, tangent);
+    let p = vec2<f32>(dot(world_position, tangent), dot(world_position, bitangent));
+
+    let swell_wavelength = 1.0 / max(water.wave_scale, 1e-4);
+    let chop_wavelength = 1.0 / max(water.ripple_scale, 1e-4);
+    let amplitude = water.wave_height_m;
+
+    // Quality budget: each component is gated by the configured wave count so a
+    // lower tier reduces work without changing the shader path.
+    let active0 = select(0.0, 1.0, water.wave_components > 0.5);
+    let active1 = select(0.0, 1.0, water.wave_components > 1.5);
+    let active2 = select(0.0, 1.0, water.wave_components > 2.5);
+    let active3 = select(0.0, 1.0, water.wave_components > 3.5);
+    let term = wave_term(p, vec2<f32>(0.86, 0.51), swell_wavelength, amplitude, time_s) * active0
+        + wave_term(p, vec2<f32>(-0.51, 0.86), swell_wavelength * 0.62, amplitude * 0.5, time_s) * active1
+        + wave_term(p, vec2<f32>(0.21, -0.98), chop_wavelength, amplitude * 0.12, time_s) * active2
+        + wave_term(p, vec2<f32>(-0.91, -0.42), chop_wavelength * 1.6, amplitude * 0.08, time_s) * active3;
+
+    return WaveSample(term.x, vec2<f32>(term.y, term.z), tangent, bitangent);
+}
+
+/// Terrain vertex stage. Mirrors Bevy's default mesh vertex path for the
+/// attributes water carries, and adds the Gerstner radial displacement so the
+/// sea surface moves instead of reading as a static glossy cap. Shared patch
+/// and tile boundaries stay continuous because the wave field is a function of
+/// the body-fixed surface position and the presentation clock only.
+@vertex
+fn vertex(vertex: Vertex) -> VertexOutput {
+    var out: VertexOutput;
+    var local_position = vertex.position;
+
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let world_normal = normalize(
+        mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index).xyz,
+    );
+    let world_before = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(local_position, 1.0),
+    )
+    .xyz;
+    let wave = gerstner_sample(world_before, world_normal, water.time_s);
+    local_position += vertex.normal * wave.height;
+
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+        vertex.normal,
+        vertex.instance_index,
+    );
+    out.world_position = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(local_position, 1.0),
+    );
+    out.position = view_transformations::position_world_to_clip(out.world_position.xyz);
+
+#ifdef VERTEX_UVS_A
+    out.uv = vertex.uv;
+#endif
+#ifdef VERTEX_UVS_B
+    out.uv_b = vertex.uv_b;
+#endif
+#ifdef VERTEX_COLORS
+    out.color = vertex.color;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+
+    return out;
 }
 
 @fragment
@@ -79,10 +172,40 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var water_color = mix(water.shallow_color, water.deep_color, depth);
     var opacity = mix(water.opacity_shallow, water.opacity_deep, depth);
 
-    // Shoaling: full ripple amplitude in open water, damped at the shoreline.
+    // Shoaling: full wave amplitude in open water, damped at the shoreline.
     let shoal = smoothstep(0.0, 0.06, depth);
-    let ripple = wave_normal(in.world_position.xyz, water.time_s, mix(0.35, 1.0, shoal));
-    pbr.N = normalize(mix(pbr.N, ripple, 0.65));
+    let wave = gerstner_sample(in.world_position.xyz, pbr.N, water.time_s);
+    // Analytic gradient of the wave field, projected into the tangent plane.
+    let gradient = wave.grad * shoal * water.wave_strength;
+    let wave_normal = normalize(pbr.N - wave.tangent * gradient.x - wave.bitangent * gradient.y);
+    pbr.N = normalize(mix(pbr.N, wave_normal, 0.85));
+
+    // Beer-Lambert absorption: deep water extinguishes transmitted light and
+    // becomes opaque smoothly instead of relying on a linear opacity ramp.
+    let transmittance = exp(-max(water.absorption, 0.0) * depth);
+    opacity = max(opacity, (1.0 - transmittance) * water.opacity_deep);
+
+    // Crest subsurface scattering: the highest wave samples glow with the
+    // scattering colour, reading as light transmitted through the swell.
+    let crest = clamp(wave.height / max(water.wave_height_m, 1e-3), 0.0, 1.0);
+    water_color = mix(water_color, water.sss_color, water.sss_strength * crest);
+
+    // Landscape self-shadow: terrain beyond the directional-shadow cascades
+    // still darkens the sea through the patch's baked terrain occlusion map.
+    var landscape_visibility = 1.0;
+#ifdef VERTEX_UVS_B
+    let landscape = textureSample(
+        terrain_occlusion,
+        terrain_occlusion_sampler,
+        in.uv_b,
+    )
+    .r;
+    landscape_visibility = mix(1.0, landscape, water.landscape_shadow_strength);
+#endif
+    water_color = vec4<f32>(
+        water_color.rgb * mix(0.45, 1.0, landscape_visibility),
+        water_color.a,
+    );
 
     // Shoreline foam: strongest exactly at the waterline and modulated by a
     // slow travelling pattern so the edge reads as moving surf, not a hard line.
@@ -90,7 +213,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let foam_pattern =
         0.5 + 0.5 * sin(in.world_position.x * 0.35 + water.time_s * 1.3)
             * sin(in.world_position.z * 0.31 - water.time_s * 1.05);
-    let foam = clamp(foam_band * water.foam_strength * (0.4 + 0.6 * foam_pattern), 0.0, 1.0);
+    // Expose wave crests as whitecaps in open water as the swell steepens.
+    let whitecap = smoothstep(0.75, 1.0, wave.height / max(water.wave_height_m, 1e-3))
+        * water.foam_strength;
+    let foam = clamp(
+        foam_band * water.foam_strength * (0.4 + 0.6 * foam_pattern) + whitecap,
+        0.0,
+        1.0,
+    ) * clamp(water.foam_coverage, 0.0, 1.0);
     water_color = mix(water_color, water.foam_color, foam);
 
     // Grazing angles reflect more and transmit less, so the surface becomes

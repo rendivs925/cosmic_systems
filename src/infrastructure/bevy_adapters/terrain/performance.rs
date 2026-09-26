@@ -18,8 +18,12 @@ pub(crate) struct TerrainFrameAttribution {
     pub cpu_mesh_construction_ms: f64,
     pub material_ms: f64,
     pub image_asset_creation_ms: f64,
+    pub occlusion_bake_ms: f64,
     pub cpu_to_gpu_submission_ms: f64,
     pub activation_ms: f64,
+    pub occlusion_bake_samples: usize,
+    pub occlusion_fragment_samples: usize,
+    pub occlusion_patches_baked: usize,
     pub queue_start: usize,
     pub queue_end: usize,
     pub queue_peak: usize,
@@ -57,6 +61,7 @@ impl TerrainFrameAttribution {
             + self.cpu_mesh_construction_ms
             + self.material_ms
             + self.image_asset_creation_ms
+            + self.occlusion_bake_ms
             + self.cpu_to_gpu_submission_ms
             + self.activation_ms
     }
@@ -72,8 +77,14 @@ impl TerrainFrameAttribution {
         self.cpu_mesh_construction_ms += record.cpu_mesh_construction_ms;
         self.material_ms += record.material_ms;
         self.image_asset_creation_ms += record.image_asset_creation_ms;
+        self.occlusion_bake_ms += record.occlusion_bake_ms;
         self.cpu_to_gpu_submission_ms += record.cpu_to_gpu_submission_ms;
         self.activation_ms += record.activation_ms;
+        self.occlusion_bake_samples += record.occlusion_bake_samples;
+        self.occlusion_fragment_samples = self
+            .occlusion_fragment_samples
+            .max(record.occlusion_fragment_samples);
+        self.occlusion_patches_baked += record.occlusion_patches_baked;
         self.queue_start += record.queue_start;
         self.queue_end += record.queue_end;
         self.queue_peak = self.queue_peak.max(record.queue_peak);

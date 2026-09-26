@@ -17,7 +17,9 @@
 //! (Earth/Moon/Mars data-backed sources).
 
 use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
+use crate::domain::services::elevation_pyramid::TileElevationSource;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 mod appearance;
 mod catalog;
@@ -30,6 +32,7 @@ pub use catalog::EarthTerrainSource;
 #[cfg(feature = "dem")]
 pub use catalog::{
     EarthTerrainDataError, MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
+    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT,
 };
 pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
 pub use noise::ValueNoise;
@@ -96,6 +99,14 @@ pub trait TerrainSource: Send + Sync + Debug {
     fn patch_geometric_error(&self, _patch: &TerrainPatch) -> PatchGeometricError {
         let bounds = self.elevation_bounds_m();
         PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
+    }
+
+    /// Optional streamed elevation tile authority backing this source. The
+    /// streaming layer installs decoded payload tiles through this handle; a
+    /// source without an offline payload pyramid returns `None` and keeps its
+    /// resident authority unchanged.
+    fn elevation_tile_source(&self) -> Option<Arc<TileElevationSource>> {
+        None
     }
 
     /// Coherent authoritative sample. Existing height and material metadata
@@ -244,6 +255,8 @@ impl TerrainSource for FlatTerrainSource {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "dem")]
+    use super::catalog::earth_eroded_base;
     #[cfg(feature = "dem")]
     use super::catalog::LocalElevationOverlayTerrainSource;
     use super::*;
@@ -403,6 +416,59 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "dem")]
+    #[test]
+    fn local_elevation_overlay_blends_continuously_into_global_coverage() {
+        let global: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_dem(
+            CubeSphereDem::new(2, vec![100; 24]).expect("valid cube-sphere DEM"),
+        ));
+        let local = Arc::new(
+            LocalElevationPackage::from_samples(
+                2,
+                2,
+                -1.0,
+                -1.0,
+                1.0,
+                1.0,
+                crate::domain::services::local_elevation::LocalElevationMetadata {
+                    body: "Earth".into(),
+                    coordinate_frame: "terrain-radial-degrees".into(),
+                    horizontal_datum: "WGS84".into(),
+                    vertical_datum: "test".into(),
+                    source_resolution_m: 1.0,
+                    nodata_policy: "fallback".into(),
+                    source_sha256: "0".repeat(64),
+                    license: "test".into(),
+                    conversion_version: 1,
+                    blend_border_m: 5_000.0,
+                },
+                vec![400.0; 4],
+            )
+            .expect("valid local elevation package"),
+        );
+        let source = LocalElevationOverlayTerrainSource { global, local };
+
+        // Exactly on the coverage edge the blend weight is zero, so the global
+        // value is returned with no cliff.
+        assert!((source.height_m(0.0, -1.0) - 100.0).abs() < 1e-9);
+
+        // Immediately inside, the surface moves smoothly toward the measured
+        // local value instead of stepping to it.
+        let steps: Vec<f64> = (0..=10)
+            .map(|index| source.height_m(0.0, -1.0 + index as f64 * 0.001))
+            .collect();
+        for pair in steps.windows(2) {
+            assert!(
+                (pair[1] - pair[0]).abs() < 20.0,
+                "local blend must be continuous: {pair:?}"
+            );
+        }
+        assert!(
+            steps[10] > 100.0,
+            "measured local coverage must raise the surface above the global base"
+        );
+    }
+
     #[test]
     fn procedural_is_independent_of_evaluation_order() {
         let source = ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0);
@@ -430,14 +496,37 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
-    fn default_earth_source_adds_bounded_detail_over_the_measured_dem_package() {
+    fn earth_source_without_a_package_has_no_tile_handle_and_missing_root_errors() {
+        let source = EarthTerrainSource::with_dem_path(DEFAULT_EARTH_DEM_PATH)
+            .expect("resident Earth DEM must load");
+        assert!(
+            source.elevation_tile_source().is_none(),
+            "a plain measured source must not advertise a payload handle"
+        );
+
+        let missing = EarthTerrainSource::with_dem_and_elevation_manifest(
+            DEFAULT_EARTH_DEM_PATH,
+            "assets/large_files/terrain/missing_earth_elevation_pyramid",
+        );
+        assert!(matches!(
+            missing,
+            Err(EarthTerrainDataError::ElevationPyramid(_))
+        ));
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn default_earth_source_adds_bounded_detail_over_the_eroded_dem_package() {
         let default_source = EarthTerrainSource::new();
         let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
             .expect("resident Earth ETOPO1 terrain package must load");
+        // Erosion is part of Earth's base authority, so the bounded detail is
+        // the difference from the eroded base, not the un-eroded package.
+        let eroded_package = earth_eroded_base(Arc::new(package_source));
 
         for (latitude_deg, longitude_deg) in [(-40.0, 100.0), (62.0, -35.0), (-12.0, 145.0)] {
             let detail_m = default_source.height_m(latitude_deg, longitude_deg)
-                - package_source.height_m(latitude_deg, longitude_deg);
+                - eroded_package.height_m(latitude_deg, longitude_deg);
             assert!(
                 (ProceduralDetailSource::elevation_bounds_m().min_m
                     ..=ProceduralDetailSource::elevation_bounds_m().max_m)
@@ -453,6 +542,7 @@ mod tests {
         let source = EarthTerrainSource::new();
         let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
             .expect("resident Earth ETOPO1 terrain package must load");
+        let eroded_source = earth_eroded_base(Arc::new(package_source));
         let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).expect("Earth exists");
 
         for site in [
@@ -462,8 +552,8 @@ mod tests {
             let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
             assert_eq!(
                 source.height_m(latitude_deg, longitude_deg),
-                package_source.height_m(latitude_deg, longitude_deg),
-                "a graded pad must suppress procedural detail at {latitude_deg}, {longitude_deg}"
+                eroded_source.height_m(latitude_deg, longitude_deg),
+                "a graded pad must suppress procedural detail over the eroded base at {latitude_deg}, {longitude_deg}"
             );
         }
     }
@@ -609,6 +699,88 @@ mod tests {
             6_371_000.0,
         );
         assert_eq!(collision.height_m, render_height);
+    }
+
+    #[test]
+    fn composed_layered_authority_consumes_the_eroded_field() {
+        use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
+
+        let base = Arc::new(ProceduralTerrainSource::new(7, 2_000.0, 1_200.0, 0));
+        let cfg = ErosionConfig {
+            resolution: 16,
+            droplets: 500,
+            thermal_iterations: 1,
+            cache_max_tiles: 4,
+            ..ErosionConfig::default()
+        };
+        let eroded = Arc::new(ErodedTerrainSource::new(base.clone(), cfg));
+        let layered = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(eroded.clone(), base.elevation_bounds_m()),
+            None,
+            None,
+        );
+
+        // Find the interior cell the erosion bake changed most, then prove the
+        // composed authority reports that eroded height, not the analytic base.
+        let raster = eroded.bake_tile_containing(11.0, 21.0);
+        let res = raster.width as usize;
+        let mut changed: Option<(f64, f64, f64)> = None;
+        for y in 2..res - 2 {
+            for x in 2..res - 2 {
+                let latitude_deg = raster.lat_min
+                    + (raster.lat_max - raster.lat_min) * y as f64 / (res - 1) as f64;
+                let longitude_deg = raster.lon_min
+                    + (raster.lon_max - raster.lon_min) * x as f64 / (res - 1) as f64;
+                let delta = (f64::from(raster.data[y * res + x])
+                    - base.height_m(latitude_deg, longitude_deg))
+                .abs();
+                let replaces = match changed {
+                    Some((_, _, current)) => delta > current,
+                    None => true,
+                };
+                if replaces {
+                    changed = Some((latitude_deg, longitude_deg, delta));
+                }
+            }
+        }
+        let (latitude_deg, longitude_deg, delta) =
+            changed.expect("the erosion tile must have an interior");
+        assert!(delta > 0.0, "erosion must modify the tile interior");
+        assert_ne!(
+            layered.height_m(latitude_deg, longitude_deg),
+            base.height_m(latitude_deg, longitude_deg),
+            "the composed authority must consume the eroded field"
+        );
+
+        let sample = layered.surface_sample(latitude_deg, longitude_deg);
+        assert!((0.0..=1.0).contains(&sample.moisture));
+        assert!((0.0..=1.0).contains(&sample.river_strength));
+    }
+
+    #[test]
+    fn layered_collision_and_render_heights_agree_at_fine_level() {
+        let base = Arc::new(ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0));
+        let detail = Arc::new(ProceduralDetailSource::new(99));
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(base.clone(), base.elevation_bounds_m()),
+            None,
+            Some(TerrainDetailLayer::new(
+                detail,
+                ProceduralDetailSource::elevation_bounds_m(),
+                DetailLodFade::new(3, 6),
+            )),
+        );
+        let (lat, lon) = (33.0, -110.0);
+
+        // At a fine level the detail fade is fully applied, so rendered patch
+        // geometry resolves the same height as the collision surface.
+        assert_eq!(source.mesh_height_m(lat, lon, 6), source.height_m(lat, lon));
+        // Matching geographic samples also agree across patch levels (the eroded
+        // base is LOD-independent), which keeps shared edges crack-free.
+        assert_eq!(
+            source.mesh_height_m(lat, lon, 6),
+            source.mesh_height_m(lat, lon, 7)
+        );
     }
 
     #[test]

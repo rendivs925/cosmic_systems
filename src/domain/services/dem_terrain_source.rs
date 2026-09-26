@@ -401,7 +401,10 @@ impl CubeSphereDem {
         )
     }
 
-    fn sample_face_m(&self, face: CubeFace, u: f64, v: f64) -> f64 {
+    /// Bilinearly sample signed metres at a face-UV coordinate, clamping `u` and
+    /// `v` to `[0, 1]`. This is the authoritative face-grid accessor shared by
+    /// runtime sampling, collision, and the offline elevation tile converter.
+    pub fn sample_face_m(&self, face: CubeFace, u: f64, v: f64) -> f64 {
         let resolution = self.resolution as usize;
         let coordinate = |value: f64| value.clamp(0.0, 1.0) * (resolution - 1) as f64;
         let x = coordinate(u);

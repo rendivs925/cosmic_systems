@@ -3,9 +3,29 @@
 
 use super::simulate::{canonical_lat_lon, sample_channel};
 use super::{erode_tile, ErosionConfig, HeightRaster};
-use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
+use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
+use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, TerrainSource};
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
+
+/// Failure installing an offline-baked erosion tile into the runtime cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErosionTileError {
+    /// The payload is malformed or inconsistent with the configured tile grid.
+    InvalidTile(String),
+}
+
+impl std::fmt::Display for ErosionTileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidTile(message) => {
+                write!(formatter, "invalid baked erosion tile: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ErosionTileError {}
 
 pub(super) fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
     sample_channel(raster, &raster.data, lat, lon)
@@ -93,6 +113,99 @@ impl ErodedTerrainSource {
             cache: Mutex::new(TileCache::with_capacity(cache_capacity)),
             in_flight: Mutex::new(HashMap::with_capacity(cache_capacity.min(8))),
         }
+    }
+
+    /// Install an offline-baked erosion tile. The tile is keyed by its
+    /// geographic bounds on the configured tile grid, so every subsequent
+    /// sample of that tile reads the baked height/flow/moisture channels and
+    /// never runs the runtime bake. Tiles without a baked payload keep baking
+    /// on demand; both paths are bit-identical because `erode_tile` is a pure
+    /// deterministic function of the base source, configuration, and tile seed.
+    pub fn install_baked_tile(&self, tile: HeightRaster) -> Result<(), ErosionTileError> {
+        let expected = (tile.width as usize)
+            .checked_mul(tile.height as usize)
+            .ok_or_else(|| ErosionTileError::InvalidTile("tile dimensions overflow".into()))?;
+        if tile.width < 2
+            || tile.height < 2
+            || tile.data.len() != expected
+            || tile.flow.len() != expected
+            || tile.moisture.len() != expected
+        {
+            return Err(ErosionTileError::InvalidTile(
+                "tile channels are inconsistent with its dimensions".into(),
+            ));
+        }
+        let span_lat = (tile.lat_max - tile.lat_min).abs();
+        let span_lon = (tile.lon_max - tile.lon_min).abs();
+        if !span_lat.is_finite()
+            || !span_lon.is_finite()
+            || (span_lat - self.cfg.tile_deg).abs() > 1e-9
+            || (span_lon - self.cfg.tile_deg).abs() > 1e-9
+        {
+            return Err(ErosionTileError::InvalidTile(
+                "tile bounds do not match the configured tile size".into(),
+            ));
+        }
+        if tile
+            .data
+            .iter()
+            .chain(tile.flow.iter())
+            .chain(tile.moisture.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err(ErosionTileError::InvalidTile(
+                "tile channels must be finite".into(),
+            ));
+        }
+        if tile
+            .moisture
+            .iter()
+            .any(|value| !(0.0..=1.0).contains(value))
+        {
+            return Err(ErosionTileError::InvalidTile(
+                "tile moisture must be normalized to [0, 1]".into(),
+            ));
+        }
+        let key = Self::tile_key(
+            tile.lat_min + (tile.lat_max - tile.lat_min) * 0.5,
+            tile.lon_min + (tile.lon_max - tile.lon_min) * 0.5,
+            self.cfg.tile_deg,
+        );
+        self.cache.lock().expect("erosion cache lock").insert(
+            key,
+            Arc::new(tile),
+            self.cfg.cache_max_tiles,
+        );
+        Ok(())
+    }
+
+    /// Number of erosion tiles currently resident in the bounded LRU cache.
+    pub fn resident_tile_count(&self) -> usize {
+        self.cache.lock().expect("erosion cache lock").tiles.len()
+    }
+
+    /// Produce the exact runtime erosion raster for the tile containing a
+    /// coordinate. This is the payload an offline bake writes and later
+    /// installs with [`Self::install_baked_tile`]; because it reuses
+    /// `erode_tile` with the same tile seed, the baked and runtime paths are
+    /// identical.
+    pub fn bake_tile_containing(&self, latitude_deg: f64, longitude_deg: f64) -> HeightRaster {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        let tile_deg = self.cfg.tile_deg;
+        let (tx, ty) = Self::tile_key(latitude_deg, longitude_deg, tile_deg);
+        let lat_min = ty as f64 * tile_deg;
+        let lat_max = lat_min + tile_deg;
+        let lon_min = tx as f64 * tile_deg;
+        let lon_max = lon_min + tile_deg;
+        erode_tile(
+            self.base.as_ref(),
+            lat_min,
+            lat_max,
+            lon_min,
+            lon_max,
+            &self.cfg,
+            self.tile_seed(tx, ty),
+        )
     }
 
     pub(super) fn tile_key(lat: f64, lon: f64, tile_deg: f64) -> (i64, i64) {
@@ -191,18 +304,34 @@ impl TerrainSource for ErodedTerrainSource {
     }
 
     fn elevation_bounds_m(&self) -> ElevationBounds {
-        // Mesh generation intentionally uses the analytic base at every LOD to
-        // keep patch edges identical, so streaming bounds follow that geometry.
+        // The eroded field stays within the source's declared envelope: thermal
+        // and hydraulic transport conserve material and river carving only
+        // lowers channels, so the base bounds remain a conservative interval.
         self.base.elevation_bounds_m()
     }
 
-    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
-        // Mesh edges must be independent of LOD: a different radial height at
-        // the same geographic sample produces cracks that stitch indices cannot
-        // close. Erosion remains exact for collision and close-range material
-        // maps, while the macro mesh uses the deterministic analytic field.
-        self.base
-            .mesh_height_m(latitude_deg, longitude_deg, patch_level)
+    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
+        // Delegate so the base source's tighter per-patch metadata survives the
+        // erosion wrapper; deriving error from global bounds here would force
+        // needless LOD subdivision.
+        self.base.patch_geometric_error(patch)
+    }
+
+    fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, _patch_level: u32) -> f64 {
+        // The eroded field is baked per geographic tile, not per patch level, so
+        // it is LOD-independent by construction. Sampling the same field for mesh
+        // geometry and collision keeps rendered and physical surfaces consistent,
+        // while the tile edge feather keeps adjacent independently-eroded tiles
+        // continuous.
+        self.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
+        self.base.surface_class(latitude_deg, longitude_deg)
+    }
+
+    fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.vegetation_density(latitude_deg, longitude_deg)
     }
 
     fn prepare_sample(&self, latitude_deg: f64, longitude_deg: f64) {

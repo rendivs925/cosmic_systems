@@ -2,10 +2,10 @@
 //! the direction ↔ face-UV projection. Pure domain logic; no ECS.
 
 use crate::domain::math::DVec3;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The six faces of the cube-sphere.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CubeFace {
     PosX,
     NegX,
