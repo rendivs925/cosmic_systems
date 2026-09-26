@@ -13,18 +13,84 @@ use crate::domain::services::terrain_source::ValueNoise;
 pub const TREE_CANDIDATE_SALT: u64 = 0x7A11_5EED;
 /// Salt for ground-cover (grass) candidates.
 pub const GRASS_CANDIDATE_SALT: u64 = 0x6A55_5EED;
+
+/// Named, validated vegetation configuration: the single source of truth for
+/// placement budgets, ecological thresholds, clumping, and the committed
+/// land-cover package path. Presets derive from [`Self::DEFAULT`] so tuning
+/// happens in one place and cannot drift between the mesh budget and the
+/// placement pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VegetationConfig {
+    /// Maximum accepted tree candidates per full-density patch.
+    pub tree_budget: usize,
+    /// Maximum accepted grass clumps per full-density patch.
+    pub grass_budget: usize,
+    /// Patch level at which the full candidate budget is reached; coarser
+    /// presentation scales the budget down.
+    pub full_density_level: u32,
+    /// Combined cover density below which tree candidates are dropped.
+    pub tree_min_density: f64,
+    /// Combined cover density below which grass candidates are dropped.
+    pub grass_min_density: f64,
+    /// Candidate-grid oversampling applied before the ecological gate.
+    pub candidate_oversample: f64,
+    /// Fraction of a cell a candidate may jitter from its center.
+    pub cell_jitter: f64,
+    /// Seed for the low-frequency clumping field.
+    pub clump_seed: u64,
+    /// Minimum value of the clumping mask, so clearings never fully vanish.
+    pub clump_min: f64,
+    /// Committed land-cover package consumed by the scatter pass.
+    pub land_cover_path: &'static str,
+}
+
+impl VegetationConfig {
+    pub const DEFAULT: Self = Self {
+        tree_budget: 128,
+        grass_budget: 1024,
+        full_density_level: 14,
+        tree_min_density: 0.08,
+        grass_min_density: 0.05,
+        candidate_oversample: 2.4,
+        cell_jitter: 0.7,
+        clump_seed: 0x00A1_C0FF_EE01_2345,
+        clump_min: 0.35,
+        land_cover_path: "assets/large_files/terrain/earth_landcover_v1.clcvr",
+    };
+
+    /// Whether the configuration is internally consistent. Invalid values fail
+    /// loudly at startup instead of silently degrading cover.
+    pub fn is_valid(&self) -> bool {
+        self.tree_budget > 0
+            && self.grass_budget > 0
+            && self.full_density_level > 0
+            && (0.0..=1.0).contains(&self.tree_min_density)
+            && (0.0..=1.0).contains(&self.grass_min_density)
+            && self.candidate_oversample >= 1.0
+            && (0.0..=1.0).contains(&self.cell_jitter)
+            && (0.0..=1.0).contains(&self.clump_min)
+            && !self.land_cover_path.is_empty()
+    }
+}
+
+impl Default for VegetationConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// Fraction of a grid cell a candidate may jitter from its cell center. Below
 /// 1.0 this preserves a guaranteed minimum spacing while removing lattice
 /// alignment.
-const CELL_JITTER: f64 = 0.7;
+const CELL_JITTER: f64 = VegetationConfig::DEFAULT.cell_jitter;
 /// Oversampling factor applied to the candidate grid before ecological
 /// acceptance, so thinning still leaves a spatially even cover.
-pub const CANDIDATE_OVERSAMPLE: f64 = 2.4;
+pub const CANDIDATE_OVERSAMPLE: f64 = VegetationConfig::DEFAULT.candidate_oversample;
 
-const CLUMP_SEED: u64 = 0x00A1_C0FF_EE01_2345;
+const CLUMP_SEED: u64 = VegetationConfig::DEFAULT.clump_seed;
 /// Low-frequency clumping field, mapped so clearings open but cover never
 /// vanishes entirely.
-const CLUMP_MIN: f64 = 0.35;
+const CLUMP_MIN: f64 = VegetationConfig::DEFAULT.clump_min;
 
 /// Deterministic hash of three integers to `[0, 1)`, used for every placement
 /// decision so results never depend on evaluation order.
@@ -312,6 +378,38 @@ pub fn vegetation_candidates(
 mod tests {
     use super::*;
     use crate::domain::services::cube_sphere::face_uv_to_direction;
+
+    #[test]
+    fn default_configuration_is_valid_and_single_sourced() {
+        let config = VegetationConfig::default();
+        assert!(config.is_valid());
+        assert_eq!(config, VegetationConfig::DEFAULT);
+        // The scatter budget, thresholds, and mask all read back from the config.
+        assert_eq!(CELL_JITTER, config.cell_jitter);
+        assert_eq!(CANDIDATE_OVERSAMPLE, config.candidate_oversample);
+        assert_eq!(CLUMP_MIN, config.clump_min);
+
+        assert!(!VegetationConfig {
+            tree_budget: 0,
+            ..config
+        }
+        .is_valid());
+        assert!(!VegetationConfig {
+            tree_min_density: 1.5,
+            ..config
+        }
+        .is_valid());
+        assert!(!VegetationConfig {
+            candidate_oversample: 0.5,
+            ..config
+        }
+        .is_valid());
+        assert!(!VegetationConfig {
+            land_cover_path: "",
+            ..config
+        }
+        .is_valid());
+    }
 
     #[test]
     fn species_selection_is_deterministic_and_ecological() {

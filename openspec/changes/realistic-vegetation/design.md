@@ -67,3 +67,18 @@ New placement and species modules hold the pure, Bevy-free algorithms (blue-nois
 ## Open Questions
 
 - The exact land-cover package and class-to-species mapping will be finalized during implementation; any such choice stays behind the presentation boundary and does not change the specs, approach, or task breakdown.
+
+## Recorded Measurements And Deferred Follow-ups
+
+Measured on the full-density vegetated patch (L14, `DenseFlatTerrain`) in a debug build via
+`fully_vegetated_patch_stays_within_the_mesh_budget` (now prints telemetry):
+
+- vertices: 12,746; indices: 20,646
+- merged mesh bytes: 694,392 of a 1,291,008-byte reservation (~53.8% used)
+- single-patch generation time: ~12.4 ms (debug, single worker)
+
+Deferred (non-goals of this change, kept out to avoid new quality budgets and draw scheduling):
+
+- Wind/animation shading for canopy and grass cards.
+- GPU instancing / impostor LODs to replace the merged per-patch mesh as plant counts grow.
+- A direct on-slope mesh assertion for grounding (the current tests cover the embed-depth and normal contracts).

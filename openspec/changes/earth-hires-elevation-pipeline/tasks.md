@@ -64,6 +64,6 @@
   `fmt`, `check`, no-default `check`, the full library suite, and the release
   build all pass; `run`, `craft`, and `rocket` each started and survived a 20 s
   bound with no panic. Clippy retains pre-existing unrelated failures.
-- [ ] 6.4 Record a before/after terrain telemetry capture before changing any
+- [x] 6.4 Record a before/after terrain telemetry capture before changing any
   hard-coded terrain budget.
-  No terrain budget was changed; the capture remains a follow-up.
+  No hard-coded terrain budget was changed, so before == after. Captured current native telemetry (`rocket`, ~35 s): `resident_tiles=4`, `estimated_resident_mib=0.768` of `budget_mib=128`, `elevation_resident_tiles=0`, `elevation_load_backlog=0`, `elevation_fallback_rate=0.0`, `imagery_resident_tiles=0` of `imagery_budget_mib=64`. Elevation fields are present, so any future budget change has a recorded reference.

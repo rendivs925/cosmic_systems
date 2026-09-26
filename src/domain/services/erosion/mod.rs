@@ -173,6 +173,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::Duration;
+    use std::time::Instant;
 
     fn base() -> ProceduralTerrainSource {
         ProceduralTerrainSource::new(7, 2_000.0, 1_200.0, 0)
@@ -188,6 +189,38 @@ mod tests {
             cache_max_tiles: 8,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn default_config_bake_and_cache_memory_baseline() {
+        // Performance baseline for task 1.3: cold-bake time and the resident
+        // erosion-cache ceiling for the default config. Each tile raster holds
+        // height, flow, and moisture as f32 at `resolution` vertices per side.
+        let cfg = ErosionConfig::default();
+        cfg.validate();
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg.clone());
+
+        let bytes_per_tile = 3 * cfg.resolution as u64 * cfg.resolution as u64 * 4;
+        let capacity_bytes = bytes_per_tile * cfg.cache_max_tiles as u64;
+
+        let cold_start = Instant::now();
+        let _ = source.height_m(10.0, 20.0);
+        let cold_bake_ms = cold_start.elapsed().as_secs_f64() * 1e3;
+
+        // Walk distinct 2-degree tiles to exercise additional concurrent bakes.
+        for step in 1..=4 {
+            let _ = source.height_m(10.0, 20.0 + cfg.tile_deg * step as f64);
+        }
+        let resident = source.resident_tile_count();
+        assert!(resident > 0);
+        assert!(resident <= cfg.cache_max_tiles);
+
+        println!(
+            "erosion baseline: resolution={} bytes_per_tile={bytes_per_tile} \
+             cache_max_tiles={} capacity_bytes={capacity_bytes} cold_bake_ms={cold_bake_ms:.2} \
+             resident_tiles={resident}",
+            cfg.resolution, cfg.cache_max_tiles
+        );
     }
 
     #[test]

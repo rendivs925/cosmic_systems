@@ -519,6 +519,37 @@ mod tests {
     }
 
     #[test]
+    fn layer_material_cost_and_residency_baseline() {
+        // Performance baseline for task 5.4: CPU cost of the per-patch layer
+        // weight map and the resident bytes of the per-patch map plus the shared
+        // layer texture arrays. Display-free, so it runs anywhere.
+        use crate::domain::services::terrain_source::ProceduralTerrainSource;
+        let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
+        let patch =
+            TerrainPatch::for_direction(bevy::math::DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
+
+        let started = std::time::Instant::now();
+        let weight_map = build_layer_weight_map(&source, &patch);
+        let gen_ms = started.elapsed().as_secs_f64() * 1e3;
+        let per_patch_bytes = weight_map.data.as_ref().map_or(0, |data| data.len() as u64);
+        assert!(per_patch_bytes <= LAYER_WEIGHT_MAP_BYTES);
+
+        let shared = layer_texture_set();
+        let shared_bytes = shared
+            .albedo_roughness
+            .data
+            .as_ref()
+            .map_or(0, |d| d.len() as u64)
+            + shared.normal.data.as_ref().map_or(0, |d| d.len() as u64);
+
+        println!(
+            "layer material baseline: weight_map_res={LAYER_WEIGHT_TEX_RES} \
+             per_patch_bytes={per_patch_bytes} budget_bytes={LAYER_WEIGHT_MAP_BYTES} \
+             shared_textures_bytes={shared_bytes} weight_map_gen_ms={gen_ms:.2}"
+        );
+    }
+
+    #[test]
     fn layer_weight_map_is_packed_and_deterministic() {
         use crate::domain::services::terrain_source::ProceduralTerrainSource;
         let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);

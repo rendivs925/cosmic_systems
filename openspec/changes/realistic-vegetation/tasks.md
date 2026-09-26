@@ -43,8 +43,8 @@
 
 ## 6. Configuration And Budgets
 
-- [ ] 6.1 Add named configuration for placement, species spacing, ecological thresholds, and the land-cover package path.
-  Species thresholds live in bounded `SpeciesProfile` constants and the package path is a named constant; a unified config value remains.
+- [x] 6.1 Add named configuration for placement, species spacing, ecological thresholds, and the land-cover package path.
+  `VegetationConfig` (domain, Bevy-free) with `DEFAULT` and `is_valid()` is now the single source of truth: budgets, full-density level, min densities, oversample, jitter, clump seed/min, and `land_cover_path`. The `vegetation.rs` consts, the `surface/mod.rs` mesh-cap consts, and `DEFAULT_LAND_COVER_PATH` all read from it. Species spacing stays on the bounded `SpeciesProfile`. Covered by `default_configuration_is_valid_and_single_sourced`.
 - [x] 6.2 Keep the existing per-patch scatter budgets and update `MAX_VEGETATION_MESH_BYTES` only if the bounded skeletons require it, with recorded evidence.
   Reserved canopy layers raised from two to three to bound the conifer species.
 - [x] 6.3 Add tests asserting per-patch vertex/index budgets are respected on a fully vegetated site.
@@ -58,4 +58,5 @@
   `cargo test --features dem --lib` passes including the determinism regression suite with the regenerated baselines.
 - [x] 7.3 Smoke-test `cargo run`, `cargo run -- craft`, and `cargo run -- rocket`; inspect close-range vegetation placement, species variety, and grounding.
   All three modes started and survived a 20 s bound with no panic. Visual close-range inspection is not possible in this environment.
-- [ ] 7.4 Record generation time and mesh sizes for a vegetated patch, and document the deferred wind/instancing follow-ups.
+- [x] 7.4 Record generation time and mesh sizes for a vegetated patch, and document the deferred wind/instancing follow-ups.
+  `fully_vegetated_patch_stays_within_the_mesh_budget` now prints telemetry; measured vertices=12,746, indices=20,646, bytes=694,392 of a 1,291,008-byte reservation (53.8%), gen_time≈12.4 ms in a debug build. Wind shading, GPU instancing/impostors, and the on-slope mesh assertion are recorded as deferred follow-ups in `design.md`.

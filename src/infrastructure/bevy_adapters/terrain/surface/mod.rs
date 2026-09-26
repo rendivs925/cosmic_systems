@@ -38,6 +38,7 @@ use crate::domain::services::land_cover::LandCoverPackage;
 use crate::domain::services::terrain_source::{
     slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
 };
+use crate::domain::services::vegetation::VegetationConfig;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::DVec3;
@@ -47,16 +48,16 @@ use bevy_mesh::Mesh;
 
 /// Per-patch geometry caps. Full density is reached at local L14; coarser
 /// presentation uses fewer plants per square meter within the same mesh cap.
-const TREE_COUNT: usize = 128;
+const TREE_COUNT: usize = VegetationConfig::DEFAULT.tree_budget;
 /// A bounded carpet of crossed billboards makes close vegetation read as grass
 /// without adding entities or unique materials.
-const GRASS_CLUMP_COUNT: usize = 1024;
+const GRASS_CLUMP_COUNT: usize = VegetationConfig::DEFAULT.grass_budget;
 const ROCK_COUNT: usize = 28;
-const SCATTER_FULL_DENSITY_LEVEL: u32 = 14;
+const SCATTER_FULL_DENSITY_LEVEL: u32 = VegetationConfig::DEFAULT.full_density_level;
 /// Scatter candidates below this land-cover density are dropped entirely; above
 /// it they are thinned probabilistically so density falls off smoothly.
-const TREE_MIN_DENSITY: f64 = 0.08;
-const GRASS_MIN_DENSITY: f64 = 0.05;
+const TREE_MIN_DENSITY: f64 = VegetationConfig::DEFAULT.tree_min_density;
+const GRASS_MIN_DENSITY: f64 = VegetationConfig::DEFAULT.grass_min_density;
 /// Maximum procedurally generated rock bodies in one scree cluster.
 const ROCK_MAX_LUMPS: usize = 3;
 /// Solid trunk prisms share the single rock tessellation budget.
@@ -516,8 +517,6 @@ pub(crate) fn prepare_patch_surface(
     }
 }
 
-/// Accumulator for building one merged vegetation/scatter mesh per patch.
-
 #[cfg(test)]
 mod tests {
     use super::scatter::{
@@ -823,6 +822,33 @@ mod tests {
     }
 
     #[test]
+    fn river_mesh_encodes_a_flow_direction_in_vertex_colour() {
+        let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 8);
+        let source = BandedRiverTerrain;
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 17, 5.0);
+        let mesh = build_river_mesh(&source, &geometry, &DVec3::ZERO)
+            .expect("a partly wet patch must still produce a channel");
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("river mesh must carry vertex colours");
+        };
+        let mut saw_flow = false;
+        for color in colors {
+            assert!(
+                (0.0..=1.0).contains(&color[1]) && (0.0..=1.0).contains(&color[2]),
+                "encoded flow direction must stay in the unit range"
+            );
+            if (color[1] - 0.5).abs() > 1e-3 || (color[2] - 0.5).abs() > 1e-3 {
+                saw_flow = true;
+            }
+        }
+        assert!(
+            saw_flow,
+            "a channel with a strength gradient must carry a non-neutral flow direction"
+        );
+    }
+
+    #[test]
     fn river_width_scales_with_discharge_and_stays_deterministic() {
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 8);
 
@@ -1048,8 +1074,16 @@ mod tests {
         // The foliage quadrants must contain both cut-out transparency and
         // opaque texels, or the alpha mask would render nothing.
         let grass_region = &data[0..(res / 2) * 4 * res / 2];
-        let any_gap = grass_region.chunks_exact(4).any(|texel| texel[3] == 0);
-        let any_blade = grass_region.chunks_exact(4).any(|texel| texel[3] == 255);
+        let any_gap = grass_region
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|texel| texel[3] == 0);
+        let any_blade = grass_region
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|texel| texel[3] == 255);
         assert!(
             any_gap && any_blade,
             "grass region needs shape, not a solid fill"
@@ -1146,14 +1180,23 @@ mod tests {
     fn fully_vegetated_patch_stays_within_the_mesh_budget() {
         let source = DenseFlatTerrain;
         let patch = TerrainPatch::for_direction(DVec3::new(0.2, 0.3, 1.0).normalize(), 14);
+        let start = std::time::Instant::now();
         let mesh = build_vegetation_mesh(&source, &patch, 6_371_000.0, &DVec3::ZERO)
             .expect("dense flat ground must grow vegetation");
+        let elapsed = start.elapsed();
         let vertices = mesh.count_vertices() as u64;
         let indices = mesh
             .indices()
             .map(|indices| indices.len() as u64)
             .unwrap_or(0);
         let bytes = vertices * VEGETATION_BYTES_PER_VERTEX + indices * VEGETATION_BYTES_PER_INDEX;
+        let budget_pct = bytes as f64 / MAX_VEGETATION_MESH_BYTES as f64 * 100.0;
+        println!(
+            "vegetation mesh telemetry: vertices={vertices} indices={indices} bytes={bytes} \
+             budget_bytes={MAX_VEGETATION_MESH_BYTES} budget_used={budget_pct:.1}% \
+             gen_time_us={}",
+            elapsed.as_micros()
+        );
         assert!(
             bytes <= MAX_VEGETATION_MESH_BYTES,
             "vegetated patch used {bytes} bytes over the reserved {MAX_VEGETATION_MESH_BYTES}"

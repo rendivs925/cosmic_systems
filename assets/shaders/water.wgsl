@@ -55,6 +55,9 @@ struct WaterParams {
     wave_components: f32,
     /// Global foam coverage multiplier.
     foam_coverage: f32,
+    /// Phase speed of the flow-directed river ripple, in radians per second.
+    /// Zero for the ocean; rivers animate along their per-vertex flow direction.
+    flow_speed: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: WaterParams;
@@ -177,7 +180,32 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let wave = gerstner_sample(in.world_position.xyz, pbr.N, water.time_s);
     // Analytic gradient of the wave field, projected into the tangent plane.
     let gradient = wave.grad * shoal * water.wave_strength;
-    let wave_normal = normalize(pbr.N - wave.tangent * gradient.x - wave.bitangent * gradient.y);
+    // Flow-directed ripple: rivers carry a normalized flow direction in the
+    // vertex-colour green/blue channels (the ocean leaves them neutral). Rebuild
+    // the surface east/north frame and advect a travelling ripple along the flow
+    // so the channel reads as moving water rather than a still sheet.
+    let flow_coded = vec2<f32>(in.color.g, in.color.b) * 2.0 - 1.0;
+    let radial_east = normalize(
+        cross(vec3<f32>(0.0, 1.0, 0.0), pbr.N) + vec3<f32>(1e-5, 0.0, 1e-5),
+    );
+    let radial_north = normalize(cross(pbr.N, radial_east));
+    let flow_world = radial_east * flow_coded.x + radial_north * flow_coded.y;
+    let flow_t = vec2<f32>(
+        dot(flow_world, wave.tangent),
+        dot(flow_world, wave.bitangent),
+    );
+    let flow_position = vec2<f32>(
+        dot(in.world_position.xyz, wave.tangent),
+        dot(in.world_position.xyz, wave.bitangent),
+    );
+    let flow_phase =
+        dot(flow_t, flow_position) * water.ripple_scale * 4.0 - water.time_s * water.flow_speed;
+    let flow_slope = cos(flow_phase) * water.flow_speed * 0.08;
+    let wave_normal = normalize(
+        pbr.N
+            - wave.tangent * (gradient.x + flow_t.x * flow_slope)
+            - wave.bitangent * (gradient.y + flow_t.y * flow_slope),
+    );
     pbr.N = normalize(mix(pbr.N, wave_normal, 0.85));
 
     // Beer-Lambert absorption: deep water extinguishes transmitted light and

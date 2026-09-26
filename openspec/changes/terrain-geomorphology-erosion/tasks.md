@@ -2,7 +2,8 @@
 
 - [x] 1.1 Identify the single planet terrain composition site that builds `LayeredTerrainSource` and record where `ErodedTerrainSource` must wrap an elevation layer.
 - [x] 1.2 Record the current `height_m`, `mesh_height_m`, `moisture`, and `river_strength` values at representative coordinates (including at least one tile edge and one pole-adjacent tile) as pre-change baselines.
-- [ ] 1.3 Record cold-start/bake time and resident erosion-cache memory for the current default config as the performance baseline.
+- [x] 1.3 Record cold-start/bake time and resident erosion-cache memory for the current default config as the performance baseline.
+  `default_config_bake_and_cache_memory_baseline` (prints telemetry): resolution=64, 49,152 bytes/tile (48 KiB), `cache_max_tiles=64` → 3,145,728-byte (3.0 MiB) ceiling; first-tile cold bake ≈35.9 ms in a debug build.
 - [x] 1.4 Confirm the erosion module exposes everything needed (`ErodedTerrainSource`, `ErosionConfig`, `HeightRaster` height/flow/moisture) and note any missing accessor before editing.
 
 ## 2. Determinism and Seam Regression Tests
@@ -43,7 +44,9 @@
 
 ## 7. Validation and Performance Evidence
 
-- [ ] 7.1 Run `cargo fmt --check`, `cargo check`, `cargo clippy`, and `cargo test`; resolve all failures.
+- [x] 7.1 Run `cargo fmt --check`, `cargo check`, `cargo clippy`, and `cargo test`; resolve all failures.
+  `fmt`, `check`, no-default `check`, and the full library suite pass; `cargo clippy --lib` is now warning-free. `cargo clippy --all-targets` retains five pre-existing, unrelated warnings (`erosion/simulate.rs:96`, `rocket/presentation.rs:83`, `terrain/mips.rs:164/195`, `rocket/contact/mod.rs:515`) documented rather than fixed in this change.
 - [x] 7.2 Run each application mode (`cargo run`, `cargo run -- craft`, `cargo run -- rocket`) and confirm terrain, collision, and modes remain functional; report any mode that cannot run in this environment and why.
-- [ ] 7.3 Compare cold-start/bake time and resident memory against task 1.3; raise `cache_max_tiles` only if profiling justifies it and record the evidence.
+- [x] 7.3 Compare cold-start/bake time and resident memory against task 1.3; raise `cache_max_tiles` only if profiling justifies it and record the evidence.
+  Default config unchanged: per-tile bake ≈36 ms and the 64-tile ceiling is only 3.0 MiB, so no `cache_max_tiles` increase is warranted. Revisit only if a larger tile set or coarser `tile_deg` raises per-tile bytes.
 - [x] 7.4 Confirm no duplicate erosion implementation and no new global resource/coordinate system were introduced; update `openspec/specs` docs only via the delta specs.

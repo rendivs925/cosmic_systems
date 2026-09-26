@@ -25,6 +25,7 @@ use crate::domain::services::reference_frames::{
 };
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
+use crate::domain::services::vegetation::VegetationConfig;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
@@ -1263,7 +1264,7 @@ pub(crate) fn share_elevation_tile_source(
 /// Default native measured land-cover package. It is optional: when the file is
 /// absent or invalid, vegetation placement deterministically falls back to the
 /// source's climate density.
-pub const DEFAULT_LAND_COVER_PATH: &str = "assets/large_files/terrain/earth_landcover_v1.clcvr";
+pub const DEFAULT_LAND_COVER_PATH: &str = VegetationConfig::DEFAULT.land_cover_path;
 
 /// Load the optional measured land-cover package at startup (native only).
 /// Browser builds keep the climate-density fallback path.

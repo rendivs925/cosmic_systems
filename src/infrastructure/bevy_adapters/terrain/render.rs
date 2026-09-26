@@ -660,12 +660,16 @@ fn prepare_terrain_render_assets(
         ..default()
     }));
     let neutral_occlusion = neutral_occlusion_image(&mut render_assets, &mut images);
-    let mut ocean_params = WaterParams::default();
-    ocean_params.wave_components = water_quality.wave_components_f32();
-    ocean_params.foam_coverage = water_quality.foam_coverage;
-    let mut river_params = WaterParams::river();
-    river_params.wave_components = water_quality.wave_components_f32();
-    river_params.foam_coverage = water_quality.foam_coverage;
+    let ocean_params = WaterParams {
+        wave_components: water_quality.wave_components_f32(),
+        foam_coverage: water_quality.foam_coverage,
+        ..WaterParams::default()
+    };
+    let river_params = WaterParams {
+        wave_components: water_quality.wave_components_f32(),
+        foam_coverage: water_quality.foam_coverage,
+        ..WaterParams::river()
+    };
     render_assets.water_material = Some(water_materials.add(WaterMaterial {
         base: water_base_material(water_quality.refraction),
         extension: WaterExtension::new(ocean_params, neutral_occlusion.clone()),
@@ -786,10 +790,6 @@ fn neutral_surface_image(data: [u8; 4]) -> Image {
 
 /// System that spawns Bevy mesh/material entities when a terrain patch
 /// becomes ready in the streaming lifecycle.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This renderer upload system coordinates independent terrain assets, events, and state."
-)]
 /// Bundled terrain asset stores for the patch spawn system. Grouping them keeps
 /// the system within the ECS parameter limit while preserving separate mutable
 /// access to each asset store.
@@ -912,7 +912,7 @@ fn spawn_patch_mesh_system(
                 )
             } else {
                 let (albedo, normal) =
-                    ensure_neutral_local_surface_maps(&mut render_assets, &mut *images);
+                    ensure_neutral_local_surface_maps(&mut render_assets, &mut images);
                 (albedo, normal, None, 0.0)
             };
         if let (Some(started), Some(record)) = (
@@ -937,7 +937,7 @@ fn spawn_patch_mesh_system(
                 &planet.domain_planet.name,
                 &occlusion_config,
                 &mut render_assets,
-                &mut *images,
+                &mut images,
             );
         let occlusion_owned = occlusion_field.is_some();
         if let (Some(started), Some(record)) = (
@@ -972,7 +972,7 @@ fn spawn_patch_mesh_system(
         // a per-patch weight map was produced (native `dem` only).
         let layer = build_layer_material_state(
             &mut render_assets,
-            &mut *images,
+            &mut images,
             surface.layer_weights,
             patch_size_m,
         );
@@ -1020,7 +1020,7 @@ fn spawn_patch_mesh_system(
                 planet.domain_planet.radius_km as f64 * 1_000.0,
                 &render_origin.origin,
                 body_to_inertial,
-                &mut *meshes,
+                &mut meshes,
             )
         } else {
             None
@@ -1028,9 +1028,11 @@ fn spawn_patch_mesh_system(
         // Ocean water over a baked patch gets its own material so the patch's
         // terrain occlusion map can shade the sea beyond the shadow cascades.
         let water_material_handle = (water_mesh_handle.is_some() && occlusion_owned).then(|| {
-            let mut params = WaterParams::default();
-            params.wave_components = water_quality.wave_components_f32();
-            params.foam_coverage = water_quality.foam_coverage;
+            let params = WaterParams {
+                wave_components: water_quality.wave_components_f32(),
+                foam_coverage: water_quality.foam_coverage,
+                ..WaterParams::default()
+            };
             water_materials.add(WaterMaterial {
                 base: water_base_material(water_quality.refraction),
                 extension: WaterExtension::new(params, occlusion_texture.clone()),
@@ -1454,6 +1456,10 @@ fn reveal_published_descendants(
 }
 
 /// System that despawns mesh entities when a terrain patch is evicted.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This renderer release system coordinates independent terrain asset stores, events, and state."
+)]
 fn despawn_patch_mesh_system(
     mut commands: Commands,
     mut events: MessageReader<TerrainPatchEvicted>,

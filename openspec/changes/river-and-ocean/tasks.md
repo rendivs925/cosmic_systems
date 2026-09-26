@@ -51,8 +51,8 @@
   Channel coverage and ribbon shape derive from the normalized `river_strength` discharge signal; an explicit flow-direction vector is not exposed by the authority yet.
 - [x] 7.2 Generate channel banks that blend into surrounding terrain
   Weak corners are pulled toward the local channel core and sit closer to the bed, exposing terrain as banks.
-- [ ] 7.3 Add a flow-directed surface animation along the channel
-  Blocked on a per-vertex flow direction from the hydrology field; the water surface still animates via the shared time uniform.
+- [x] 7.3 Add a flow-directed surface animation along the channel
+  `build_river_mesh` derives a per-cell flow direction from the `river_strength` isoline and encodes it in the vertex-colour green/blue channels; `water.wgsl` rebuilds the surface east/north frame and advects a travelling ripple along it, gated by the new `WaterParams::flow_speed` (0 for the ocean, >0 for rivers). Covered by `river_mesh_encodes_a_flow_direction_in_vertex_colour` and the `WaterParams`/WGSL field-order sync test. Visual confirmation still needs a display.
 - [x] 7.4 Preserve the dry-patch `None` contract and per-patch mesh lifetime
 
 ## 8. Validation

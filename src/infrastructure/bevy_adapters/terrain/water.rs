@@ -28,6 +28,9 @@ const RIVER_ABSORPTION: f32 = 4.0;
 const RIVER_SSS_STRENGTH: f32 = 0.18;
 const RIVER_SSS_COLOR: Vec4 = Vec4::new(0.06, 0.22, 0.16, 1.0);
 const RIVER_LANDSCAPE_SHADOW_STRENGTH: f32 = 0.5;
+/// Phase speed, in radians per second, of the flow-directed river ripple. The
+/// direction comes per-vertex from the river mesh; this only scales time.
+const RIVER_FLOW_SPEED: f32 = 1.4;
 /// Maximum and minimum Gerstner wave components accepted by the quality config.
 const MAX_WAVE_COMPONENTS: u32 = 4;
 const MIN_WAVE_COMPONENTS: u32 = 1;
@@ -58,6 +61,7 @@ const WATER_PARAM_FIELDS: &[&str] = &[
     "landscape_shadow_strength",
     "wave_components",
     "foam_coverage",
+    "flow_speed",
 ];
 
 /// Shared uniform for every water patch. Must match `WaterParams` in
@@ -100,6 +104,9 @@ pub struct WaterParams {
     pub wave_components: f32,
     /// Global foam coverage multiplier applied to shoreline and crest foam.
     pub foam_coverage: f32,
+    /// Phase speed of the flow-directed river ripple, in radians per second.
+    /// Zero for the ocean; rivers animate along their per-vertex flow direction.
+    pub flow_speed: f32,
 }
 
 impl Default for WaterParams {
@@ -126,6 +133,7 @@ impl Default for WaterParams {
             landscape_shadow_strength: OCEAN_LANDSCAPE_SHADOW_STRENGTH,
             wave_components: DEFAULT_WAVE_COMPONENTS as f32,
             foam_coverage: DEFAULT_FOAM_COVERAGE,
+            flow_speed: 0.0,
         }
     }
 }
@@ -152,6 +160,7 @@ impl WaterParams {
             sss_color: RIVER_SSS_COLOR,
             // Inland channels are narrow and mostly shaded by their banks.
             landscape_shadow_strength: RIVER_LANDSCAPE_SHADOW_STRENGTH,
+            flow_speed: RIVER_FLOW_SPEED,
             ..Default::default()
         }
     }

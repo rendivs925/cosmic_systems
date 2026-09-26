@@ -35,6 +35,7 @@
 - [x] 5.2 Build and check both native `dem` and no-`dem` configurations; confirm the browser fallback compiles and selects the single-layer path.
 - [x] 5.3 Verify `cargo run`, `cargo run -- craft`, and `cargo run -- rocket` still start, and terrain streaming/collision are unchanged.
   All three modes started and survived a 20 s bound with no panic or shader error.
-- [ ] 5.4 Capture before/after native measurements for terrain material cost and residency; only then consider any budget change.
-  No terrain budget was changed; measurement remains a follow-up.
-- [ ] 5.5 Run `openspec validate terrain-layered-material --strict` and confirm it passes.
+- [x] 5.4 Capture before/after native measurements for terrain material cost and residency; only then consider any budget change.
+  No budget was changed. `layer_material_cost_and_residency_baseline` records CPU cost/residency (display-free): weight-map res 32, per-patch bytes 5,460 of a 5,461-byte budget, shared layer-array textures 873,800 bytes (~0.83 MiB), weight-map generation ≈10 ms in a debug build. The per-frame `material_ms` attribution (`terrain_performance` log) remains available for GPU-side runs.
+- [x] 5.5 Run `openspec validate terrain-layered-material --strict` and confirm it passes.
+  `Change 'terrain-layered-material' is valid`.

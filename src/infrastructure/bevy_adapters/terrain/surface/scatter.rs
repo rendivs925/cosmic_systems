@@ -840,6 +840,31 @@ pub fn build_river_mesh(
             let core_direction = radials[strongest];
             let core_radius = radii[strongest];
 
+            // Flow runs along the channel, i.e. along the strength isoline
+            // (perpendicular to the strength gradient). Encode the normalized
+            // direction in the vertex-colour green/blue channels so the water
+            // shader can advect its ripple along the flow.
+            let strong_row = strongest / resolution;
+            let strong_col = strongest % resolution;
+            let sample = |row: isize, col: isize| -> f32 {
+                let row = row.clamp(0, resolution as isize - 1) as usize;
+                let col = col.clamp(0, resolution as isize - 1) as usize;
+                strengths[row * resolution + col]
+            };
+            let grad_col = sample(strong_row as isize, strong_col as isize + 1)
+                - sample(strong_row as isize, strong_col as isize - 1);
+            let grad_row = sample(strong_row as isize + 1, strong_col as isize)
+                - sample(strong_row as isize - 1, strong_col as isize);
+            let grad_mag = (grad_col * grad_col + grad_row * grad_row).sqrt();
+            let (flow_east, flow_north) = if grad_mag > 1e-6 {
+                (
+                    0.5 - 0.5 * grad_row / grad_mag,
+                    0.5 + 0.5 * grad_col / grad_mag,
+                )
+            } else {
+                (0.5, 0.5)
+            };
+
             for index in corners {
                 let strength = strengths[index];
                 let smooth = {
@@ -865,7 +890,7 @@ pub fn build_river_mesh(
                 positions.push(surface.as_vec3().to_array());
                 normals.push(direction.as_vec3().to_array());
                 uvs.push(geometry.uvs[index]);
-                colors.push([strength, 0.0, 0.0, 1.0]);
+                colors.push([strength, flow_east, flow_north, 1.0]);
             }
         }
     }
