@@ -82,3 +82,32 @@ Deferred (non-goals of this change, kept out to avoid new quality budgets and dr
 - Wind/animation shading for canopy and grass cards.
 - GPU instancing / impostor LODs to replace the merged per-patch mesh as plant counts grow.
 - A direct on-slope mesh assertion for grounding (the current tests cover the embed-depth and normal contracts).
+
+## Runtime Visibility Corrections (2026-10-04)
+
+Native screenshots exposed defects that the earlier source-only tests missed:
+
+- Minimum spacing must compare patch-local UV distances. Candidates are stored
+  in cube-face UV, so their differences are divided by the patch span before
+  comparison with `min_spacing_m / patch_size_m`. The previous comparison
+  effectively allowed only one plant per species on fine tiles.
+- Clumping gates placement, while species selection consumes the unmasked
+  climate/land-cover density. A spatial clearing is not a different climate.
+- Worker-generated scatter bases intersect the actual streamed triangles,
+  including their stitch indices, before embedding. This is visual grounding
+  only: collision and physical heights still come from `TerrainSource`.
+- Moisture noise from procedural relief is not river discharge. Real channel
+  metadata remains supplied by the existing erosion/hydrology layer.
+- Render handoff waits for uploaded published viewport coverage, not culled
+  sibling quadrants. Coarsening retains children while a parent upload is pending.
+- Free and Surface cameras retain two metres of clearance above the finest
+  available cached terrain triangles, using the shared body rotation and render
+  origin. This prevents views entering terrain and mistaking back-face rejection
+  for missing tiles; absent geometry does not trigger synchronous generation.
+- The sky shader applies camera exposure to solar radiance, matching PBR and
+  preventing the angle-dependent whiteout that hid terrain and vegetation.
+
+The actual Papua launch L14 regression now checks exposed grass and canopy
+geometry, rather than merely checking that a merged mesh was allocated. The
+earlier byte/time measurements above predate the spacing correction and are
+historical; the existing maximum mesh reservation remains enforced by tests.

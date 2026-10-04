@@ -189,7 +189,10 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
             * cos_sun;
         radiance += transmittance * ground_radiance;
     }
-    radiance *= sky.sky_strength;
+    // PBR lighting has already applied camera exposure before writing HDR.
+    // Match that scale here too: unexposed solar radiance clips the sky to
+    // white and blooms over the terrain when the camera turns toward it.
+    radiance *= sky.sky_strength * view.exposure;
 
     let opacity = saturate(1.0 - dot(transmittance, vec3(1.0 / 3.0)));
     out.color = vec4(radiance, opacity);

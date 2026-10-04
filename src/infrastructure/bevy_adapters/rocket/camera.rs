@@ -2,9 +2,15 @@
 
 use super::components::*;
 use super::presentation::render_dynamics_state;
+use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
+use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
+use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
+use crate::infrastructure::bevy_adapters::terrain::surface::surface_radius;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::math::{DQuat, DVec3};
 use bevy::math::{Quat, Vec3};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
@@ -191,6 +197,7 @@ pub fn handle_free_camera_input(
 /// with a newer fixed-tick physics sample at liftoff.
 #[expect(
     clippy::type_complexity,
+    clippy::too_many_arguments,
     reason = "The camera reads the cohesive presentation state for the primary vehicle."
 )]
 pub fn update_rocket_camera(
@@ -198,6 +205,8 @@ pub fn update_rocket_camera(
     fixed_time: Res<Time<Fixed>>,
     config: Res<RocketCameraConfig>,
     render_origin: Res<RenderOrigin>,
+    streaming: Option<Res<TerrainStreamingResource>>,
+    ephemeris: Res<EphemerisSnapshot>,
     planet_query: Query<(&PlanetComponent, &Transform), Without<Camera3d>>,
     rocket_query: Query<
         (
@@ -217,7 +226,7 @@ pub fn update_rocket_camera(
         return;
     };
 
-    let Some((_planet, _planet_transform)) = planet_query
+    let Some((planet, _planet_transform)) = planet_query
         .iter()
         .find(|(p, _)| p.matches_body(&binding.planet_name))
     else {
@@ -325,7 +334,58 @@ pub fn update_rocket_camera(
             smoothed_pose,
             controller.target_mode,
         );
+        if matches!(
+            controller.target_mode,
+            RocketCameraMode::Free | RocketCameraMode::Surface
+        ) {
+            if let (Some(streaming), Some(orientation)) = (
+                streaming.as_deref(),
+                ephemeris.orientation_for_catalog_body(&planet.domain_planet.name),
+            ) {
+                camera_transform.translation = camera_above_streamed_surface(
+                    camera_transform.translation,
+                    render_origin.origin,
+                    body_fixed_to_planet_inertial_rotation(orientation),
+                    streaming
+                        .generated
+                        .iter()
+                        .map(|(patch, cached)| (patch, &cached.geometry)),
+                );
+            }
+        }
     }
+}
+
+/// Keep detached flight views outside the actual display mesh. Sampling the
+/// finest available cached triangle is cheap and presentation-only; it never
+/// invokes the terrain source or changes authoritative vehicle/contact state.
+fn camera_above_streamed_surface<'a>(
+    camera_render_position: Vec3,
+    render_origin_m: DVec3,
+    body_to_inertial: DQuat,
+    geometry: impl Iterator<Item = (&'a TerrainPatch, &'a PatchGeometry)>,
+) -> Vec3 {
+    const CAMERA_SURFACE_CLEARANCE_M: f64 = 2.0;
+    let body_position =
+        body_to_inertial.conjugate() * (render_origin_m + camera_render_position.as_dvec3());
+    let direction = body_position.normalize_or_zero();
+    if direction.length_squared() < 0.5 {
+        return camera_render_position;
+    }
+    let ground = geometry
+        .filter(|(patch, _)| TerrainPatch::for_direction(direction, patch.level) == **patch)
+        .filter_map(|(patch, geometry)| {
+            surface_radius(patch, geometry, direction).map(|radius| (patch.level, radius))
+        })
+        .max_by_key(|(level, _)| *level);
+    let Some((_, radius_m)) = ground else {
+        return camera_render_position;
+    };
+    let minimum_radius_m = radius_m + CAMERA_SURFACE_CLEARANCE_M;
+    if body_position.length() >= minimum_radius_m {
+        return camera_render_position;
+    }
+    (body_to_inertial * (direction * minimum_radius_m) - render_origin_m).as_vec3()
 }
 
 /// Vehicle-attached views follow the body frame. Planet-relative and free views
@@ -639,6 +699,43 @@ pub fn update_rocket_camera_projection(
 mod tests {
     use super::*;
     use bevy::math::DVec3;
+
+    #[test]
+    fn detached_camera_clearance_uses_rotated_rebased_streamed_triangles() {
+        use crate::domain::services::cube_sphere::build_patch_geometry;
+        use crate::domain::services::terrain_source::ProceduralTerrainSource;
+        let radius_m = 6_371_000.0;
+        let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
+        let patch = TerrainPatch::for_direction(direction, 14);
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        let ground_radius_m = surface_radius(&patch, &geometry, direction).unwrap();
+        let rotation = DQuat::from_rotation_z(0.4) * DQuat::from_rotation_y(0.7);
+        let origin = rotation * (direction * (ground_radius_m - 10.0));
+        let corrected = camera_above_streamed_surface(
+            Vec3::ZERO,
+            origin,
+            rotation,
+            std::iter::once((&patch, &geometry)),
+        );
+        let body_position = rotation.conjugate() * (origin + corrected.as_dvec3());
+        assert!((body_position.length() - ground_radius_m - 2.0).abs() < 1e-5);
+        let above = (rotation * direction * 100.0).as_vec3();
+        assert_eq!(
+            camera_above_streamed_surface(
+                above,
+                origin,
+                rotation,
+                std::iter::once((&patch, &geometry))
+            ),
+            above
+        );
+        assert_eq!(
+            camera_above_streamed_surface(Vec3::ZERO, origin, rotation, std::iter::empty()),
+            Vec3::ZERO,
+            "missing patches must never trigger terrain generation"
+        );
+    }
 
     #[test]
     fn render_relative_camera_pose_rebases_without_a_camera_cut() {

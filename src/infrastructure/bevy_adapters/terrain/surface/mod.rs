@@ -17,6 +17,8 @@
 //! Per-patch surface maps live in [`surface_maps`]; scatter and river meshes
 //! live in [`scatter`].
 
+mod grounding;
+pub(crate) use grounding::surface_radius;
 mod layers;
 mod scatter;
 mod surface_maps;
@@ -490,12 +492,13 @@ pub(crate) fn prepare_patch_surface(
     let vegetation_anchor = center * (radius_m + height_m);
     let vegetation = supports_vegetation(patch.level)
         .then(|| {
-            build_vegetation_mesh_with_land_cover(
+            scatter::build_grounded_vegetation_mesh(
                 source,
                 patch,
                 radius_m,
                 &vegetation_anchor,
                 land_cover,
+                Some(geometry),
             )
         })
         .flatten()
@@ -800,6 +803,49 @@ mod tests {
             }
         }
         Vec::new()
+    }
+
+    #[test]
+    fn scatter_is_grounded_on_rendered_triangles_not_buried_by_lod() {
+        let source = DenseFlatTerrain;
+        let radius_m = 6_371_000.0;
+        let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
+        let patch = TerrainPatch::for_direction(direction, 14);
+        let mut geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        // A displayed LOD surface can differ from the continuous source. Move
+        // it up far enough that the old scatter would be completely buried.
+        for point in &mut geometry.positions {
+            let position = DVec3::from_array(*point);
+            *point = (position + position.normalize() * 30.0).to_array();
+        }
+        let anchor = patch.center_direction() * radius_m;
+        let surface = prepare_patch_surface(&source, &patch, &geometry, radius_m, None);
+        let (mesh, mesh_anchor) = surface.vegetation.expect("vegetated patch has scatter");
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("scatter has positions");
+        };
+        let mut exposed = 0;
+        for point in positions {
+            let position = mesh_anchor + DVec3::from_array(point.map(f64::from));
+            let radial = position.normalize();
+            if let Some(ground) = grounding::surface_radius(&patch, &geometry, radial) {
+                if position.length() > ground {
+                    exposed += 1;
+                }
+            }
+        }
+        assert!(
+            exposed > positions.len() / 2,
+            "most scatter vertices must remain above the displayed surface"
+        );
+        assert_eq!(
+            source.height_m(0.0, 0.0),
+            100.0,
+            "visual grounding must not change the terrain source"
+        );
+        assert!(grounding::surface_radius(&patch, &geometry, anchor.normalize()).is_some());
     }
 
     #[test]
@@ -1324,6 +1370,60 @@ mod tests {
 
     /// Exercise the public Earth wrapper and resident data used at startup.
     /// Atlas corners distinguish plant geometry from rocks in the merged mesh.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn launch_site_scatter_remains_exposed_on_the_streamed_mesh() {
+        let source = EarthTerrainSource::new();
+        let site = predefined_sites::papua_indonesia_coastal_lowland();
+        let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
+        let radius_m = f64::from(earth.radius_km) * 1_000.0;
+        let (lat, lon) = geodetic_to_terrain_lat_lon(&site, &earth);
+        let direction =
+            crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(lat, lon);
+        let patch = TerrainPatch::for_direction(direction, 14);
+        let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        let surface = prepare_patch_surface(&source, &patch, &geometry, radius_m, None);
+        let (mesh, anchor) = surface
+            .vegetation
+            .expect("launch-site vegetation must be generated");
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("scatter has positions");
+        };
+        let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("scatter has atlas coordinates");
+        };
+        let mut exposed_grass = 0;
+        let mut exposed_canopies = 0;
+        for (point, uv) in positions.iter().zip(uvs) {
+            let position = anchor + DVec3::from_array(point.map(f64::from));
+            let Some(ground) = grounding::surface_radius(&patch, &geometry, position.normalize())
+            else {
+                continue;
+            };
+            if position.length() <= ground + 0.05 {
+                continue;
+            }
+            if *uv == [GRASS_UV[0], GRASS_UV[1]] {
+                exposed_grass += 1;
+            }
+            if *uv == [BROADLEAF_UV[0], BROADLEAF_UV[3]] || *uv == [CONIFER_UV[2], CONIFER_UV[1]] {
+                exposed_canopies += 1;
+            }
+        }
+        println!("Launch L14: {} vertices, {exposed_grass} exposed grass tops, {exposed_canopies} exposed canopy tops, river={}", positions.len(), surface.river.is_some());
+        assert!(
+            exposed_grass > 0,
+            "grass is buried by the streamed geometry"
+        );
+        assert!(
+            exposed_canopies > TREE_COUNT,
+            "canopies are buried or patch-local spacing is incorrectly compared with face UV"
+        );
+    }
+
     #[cfg(feature = "dem")]
     #[test]
     fn earth_launch_site_is_vegetated_at_close_lod() {

@@ -407,9 +407,9 @@ impl TerrainSource for ProceduralDetailSource {
         self.drainage_strength(latitude_deg, longitude_deg)
     }
 
-    fn river_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.drainage_strength(latitude_deg, longitude_deg)
-    }
+    // The detail noise is a moisture/trough signal, not accumulated flow.
+    // Inherit zero river strength: only the composed hydrology layer can
+    // designate standing channel water, otherwise every noise ridge floods.
 
     /// Broad climate cover for the procedural detail layer: humid tropics, dry
     /// subtropical belts, temperate and boreal forest, modulated by regional

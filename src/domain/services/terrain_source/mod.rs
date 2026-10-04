@@ -939,6 +939,26 @@ mod tests {
     }
 
     #[test]
+    fn procedural_moisture_noise_does_not_flood_the_landscape() {
+        let detail = ProceduralDetailSource::new(99);
+        let mut wet_samples = 0;
+        for latitude_deg in [-8.0, 28.5, 45.0] {
+            for longitude_deg in [139.5, -80.6, 0.0, 20.0] {
+                wet_samples += usize::from(detail.moisture(latitude_deg, longitude_deg) > 0.28);
+                assert_eq!(
+                    detail.river_strength(latitude_deg, longitude_deg),
+                    0.0,
+                    "moisture noise without flow accumulation must not emit river water"
+                );
+            }
+        }
+        assert!(
+            wet_samples > 0,
+            "moisture must still vary independently of river water"
+        );
+    }
+
+    #[test]
     fn vegetation_density_tracks_climate_not_rendered_color() {
         let detail = ProceduralDetailSource::new(0x00E4_27A6);
         // Humid tropics outrank the dry subtropical belt regardless of how the

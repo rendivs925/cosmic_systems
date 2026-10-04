@@ -484,11 +484,22 @@ pub(super) fn rock_candidates(
 /// slope, normal, and moisture only from the shared `TerrainSource` and writes
 /// nothing back. Each accepted blue-noise candidate emits a small cluster of
 /// anisotropic procedural rocks embedded into the slope.
+#[cfg(test)]
 pub(super) fn plan_rock_bodies(
     source: &dyn TerrainSource,
     patch: &TerrainPatch,
     radius_m: f64,
     mesh_origin_body_fixed: &DVec3,
+) -> Vec<RockBody> {
+    plan_grounded_rock_bodies(source, patch, radius_m, mesh_origin_body_fixed, None)
+}
+
+fn plan_grounded_rock_bodies(
+    source: &dyn TerrainSource,
+    patch: &TerrainPatch,
+    radius_m: f64,
+    mesh_origin_body_fixed: &DVec3,
+    geometry: Option<&PatchGeometry>,
 ) -> Vec<RockBody> {
     let budget = scatter_count_for_level(ROCK_COUNT, patch.level);
     let candidates = rock_candidates(patch, budget, |u, v| {
@@ -507,7 +518,10 @@ pub(super) fn plan_rock_bodies(
         }
         let slope_deg = slope_deg_at(source, lat, lon);
         let moisture = source.moisture(lat, lon);
-        let flight = dir * (radius_m + height_m) - *mesh_origin_body_fixed;
+        let ground_radius = geometry
+            .and_then(|geometry| super::grounding::surface_radius(patch, geometry, dir))
+            .unwrap_or(radius_m + height_m);
+        let flight = dir * ground_radius - *mesh_origin_body_fixed;
         let up = surface_normal(source, lat, lon, radius_m);
         let reference = if dir.y.abs() < 0.9 {
             DVec3::Y
@@ -615,6 +629,29 @@ pub fn build_vegetation_mesh_with_land_cover(
     mesh_origin_body_fixed: &DVec3,
     land_cover: Option<&LandCoverPackage>,
 ) -> Option<Mesh> {
+    build_grounded_vegetation_mesh(
+        source,
+        patch,
+        radius_m,
+        mesh_origin_body_fixed,
+        land_cover,
+        None,
+    )
+}
+
+pub(super) fn build_grounded_vegetation_mesh(
+    source: &dyn TerrainSource,
+    patch: &TerrainPatch,
+    radius_m: f64,
+    mesh_origin_body_fixed: &DVec3,
+    land_cover: Option<&LandCoverPackage>,
+    geometry: Option<&PatchGeometry>,
+) -> Option<Mesh> {
+    let ground_radius = |dir: DVec3, height_m: f64| {
+        geometry
+            .and_then(|geometry| super::grounding::surface_radius(patch, geometry, dir))
+            .unwrap_or(radius_m + height_m)
+    };
     let density_at = |lat: f64, lon: f64| {
         combined_cover_density(
             source.vegetation_density(lat, lon),
@@ -644,6 +681,7 @@ pub fn build_vegetation_mesh_with_land_cover(
     // spacing and the patch's world size. Canopy species use larger spacing than
     // understory shrubs.
     let patch_size_m = patch_world_size_m(patch.level, radius_m).max(1.0);
+    let (u0, v0, u1, v1) = patch.uv_bounds();
     let mut placed: Vec<(VegetationSpecies, f64, f64)> = Vec::new();
     for (k, (u, v)) in tree_sites.into_iter().enumerate() {
         let dir = face_uv_to_direction(patch.face, u, v);
@@ -651,7 +689,10 @@ pub fn build_vegetation_mesh_with_land_cover(
         let h = source.mesh_height_m(lat, lon, patch.level);
         let local_slope = slope_deg_at(source, lat, lon);
         let moisture = source.moisture(lat, lon);
-        let density = density_at(lat, lon) * clump_mask(lat, lon);
+        // Clumping already gates placement. It describes spatial clearings,
+        // not a different climate; applying it to species selection again
+        // downgrades humid forest to tiny shrubs or grass.
+        let density = density_at(lat, lon);
         let Some(species) = select_species(lat, h, moisture, local_slope, density) else {
             continue;
         };
@@ -661,12 +702,18 @@ pub fn build_vegetation_mesh_with_land_cover(
         let profile = species.profile();
         let spacing_uv = profile.min_spacing_m / patch_size_m;
         if placed.iter().any(|(other, other_u, other_v)| {
-            *other == species && ((u - other_u).powi(2) + (v - other_v).powi(2)).sqrt() < spacing_uv
+            // Candidate coordinates are face UV, not patch-local [0, 1].
+            // Comparing them directly to a patch-local spacing rejects almost
+            // every tree on fine tiles (previously only one tree per species).
+            *other == species
+                && (((u - other_u) / (u1 - u0)).powi(2) + ((v - other_v) / (v1 - v0)).powi(2))
+                    .sqrt()
+                    < spacing_uv
         }) {
             continue;
         }
         placed.push((species, u, v));
-        let flight = dir * (radius_m + h) - *mesh_origin_body_fixed;
+        let flight = dir * ground_radius(dir, h) - *mesh_origin_body_fixed;
         let up = surface_normal(source, lat, lon, radius_m);
         // Grounding: sink the base a fraction of the trunk into the slope so a
         // tree never floats on a hillside, and align its up axis to the surface
@@ -739,7 +786,7 @@ pub fn build_vegetation_mesh_with_land_cover(
         let scale = 0.55 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.65;
         let grass_color = species_foliage_color(VegetationSpecies::Grass, moisture, 1.0);
         // Embed the tuft base slightly so ground cover follows the slope.
-        let base = dir * (radius_m + h) - *mesh_origin_body_fixed - up * (0.05 * scale);
+        let base = dir * ground_radius(dir, h) - *mesh_origin_body_fixed - up * (0.05 * scale);
         accum.push_cross_cards(
             base,
             up,
@@ -752,7 +799,8 @@ pub fn build_vegetation_mesh_with_land_cover(
         );
     }
 
-    for body in plan_rock_bodies(source, patch, radius_m, mesh_origin_body_fixed) {
+    for body in plan_grounded_rock_bodies(source, patch, radius_m, mesh_origin_body_fixed, geometry)
+    {
         accum.push_rock(body);
     }
 

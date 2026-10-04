@@ -1245,9 +1245,9 @@ fn hide_cached_patch_mesh_system(
             pending_hides.0.remove(&key);
             continue;
         }
-        // A refinement parent remains visible until every quadrant is covered
-        // by an uploaded published descendant. Checking every direct region
-        // recursively prevents a partial child set from exposing a hole.
+        // Publication has already selected complete ready sibling groups and
+        // filtered them to the conservative viewport. Wait for uploads of that
+        // published cover, not off-screen quadrants that were deliberately culled.
         let has_replacements = streaming
             .published
             .iter()
@@ -1260,6 +1260,22 @@ fn hide_cached_patch_mesh_system(
                 &render_index,
             )
         {
+            continue;
+        }
+        // Coarsening also needs an uploaded replacement before hiding children.
+        let mut ancestor = key.patch.parent();
+        let mut pending_ancestor_upload = false;
+        while let Some(parent) = ancestor {
+            if streaming.published.contains(&parent) {
+                pending_ancestor_upload = !render_index.0.contains_key(&TerrainPatchRenderKey {
+                    planet_entity: key.planet_entity,
+                    patch: parent,
+                });
+                break;
+            }
+            ancestor = parent.parent();
+        }
+        if pending_ancestor_upload {
             continue;
         }
         let Some(entity) = render_index.0.get(&key).copied() else {
@@ -1423,12 +1439,19 @@ fn published_cover_is_renderable(
         });
     }
 
-    patch.children().into_iter().all(|child| {
-        published
-            .iter()
-            .any(|candidate| child.is_ancestor_of(candidate))
-            && published_cover_is_renderable(child, planet_entity, published, render_index)
-    })
+    let visible_regions: Vec<_> = patch
+        .children()
+        .into_iter()
+        .filter(|child| {
+            published
+                .iter()
+                .any(|candidate| child.is_ancestor_of(candidate))
+        })
+        .collect();
+    !visible_regions.is_empty()
+        && visible_regions.into_iter().all(|child| {
+            published_cover_is_renderable(child, planet_entity, published, render_index)
+        })
 }
 
 fn reveal_published_descendants(
@@ -2714,8 +2737,8 @@ mod tests {
             Visibility::Visible
         );
 
-        // A partial child cover is not a replacement: the parent remains
-        // visible even after the first descendant entity has uploaded.
+        // A published sibling cover with only one uploaded entity is not yet
+        // renderable: retain the parent until all in-view uploads finish.
         app.world_mut()
             .resource_mut::<TerrainStreamingResource>()
             .published
@@ -2723,7 +2746,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<TerrainStreamingResource>()
             .published
-            .insert(child);
+            .extend(patch.children());
         app.world_mut()
             .resource_mut::<Messages<TerrainPatchCached>>()
             .write(TerrainPatchCached {
@@ -2771,6 +2794,39 @@ mod tests {
                 Visibility::Visible
             );
         }
+    }
+
+    #[test]
+    fn viewport_culled_siblings_do_not_block_detailed_terrain_handoff() {
+        let planet_entity = Entity::PLACEHOLDER;
+        let parent = TerrainPatch::for_direction(DVec3::Z, 3);
+        let child = parent.children()[0];
+        let published = std::collections::BTreeSet::from([child]);
+        let mut index = TerrainPatchRenderIndex::default();
+        assert!(
+            !published_cover_is_renderable(parent, planet_entity, &published, &index),
+            "keep the coarse parent while the in-view child awaits upload"
+        );
+        index.0.insert(
+            TerrainPatchRenderKey {
+                planet_entity,
+                patch: child,
+            },
+            Entity::PLACEHOLDER,
+        );
+        assert!(
+            published_cover_is_renderable(parent, planet_entity, &published, &index),
+            "off-screen siblings must not keep a coarse parent covering the uploaded child"
+        );
+        assert!(
+            !published_cover_is_renderable(
+                parent,
+                planet_entity,
+                &std::collections::BTreeSet::new(),
+                &index
+            ),
+            "an empty replacement cover is not a handoff"
+        );
     }
 
     #[test]
