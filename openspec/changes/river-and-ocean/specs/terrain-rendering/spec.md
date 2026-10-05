@@ -1,26 +1,26 @@
 ## ADDED Requirements
 
-### Requirement: Terrain ocean patches present a displaced water surface
+### Requirement: Terrain ocean patches present a wave-shaded water surface
 
-Terrain patches that contain ocean SHALL spawn a water surface with geometry
-sufficient to carry vertex displacement, sharing the existing water material and
-preserving the normalized depth vertex channel, instead of a flat sea-level cap.
+Terrain patches that contain ocean SHALL spawn a sea-level water surface that
+reuses the patch grid topology, shares the existing water material, and preserves
+the normalized depth vertex channel, instead of a separate flat cap.
 
-#### Scenario: Ocean patch spawns a displaceable surface
+#### Scenario: Ocean patch spawns a wave-shaded surface
 
 - **WHEN** a ready terrain patch contains ocean
-- **THEN** it spawns a water surface whose geometry supports vertex displacement
-  and whose normalized depth channel is preserved for shading
+- **THEN** it spawns a sea-level water surface whose normalized depth channel is
+  preserved for shading and whose topology matches the patch grid
 
-#### Scenario: Displaced surface stays within the patch lifetime
+#### Scenario: Water surface stays within the patch lifetime
 
 - **WHEN** a terrain patch is evicted
-- **THEN** its displaced water surface is released with the patch
+- **THEN** its water surface is released with the patch
 
 #### Scenario: Coastline remains sealed
 
-- **WHEN** the ocean surface is displaced near the coastline
-- **THEN** the displaced surface continues to meet the land without holes
+- **WHEN** the ocean surface meets the coastline
+- **THEN** the surface continues to meet the land without holes
 
 ### Requirement: Terrain patch rivers follow the drainage network
 

@@ -4,6 +4,7 @@
 //! stable external engine loop per Rocket and only creates a short one-shot on
 //! ignition or staging, so audio never participates in flight authority.
 
+use super::camera::nearest_active_camera_distance_m;
 use super::components::{
     RocketAudioControls, RocketCameraMode, RocketFlightConditions, RocketPropulsion, ThermalState,
 };
@@ -67,7 +68,7 @@ pub(crate) fn update_rocket_audio_controls(
         &Transform,
         Option<&mut RocketAudioControls>,
     )>,
-    cameras: Query<&Transform, With<Camera3d>>,
+    cameras: Query<(&Camera, &Transform), With<Camera3d>>,
 ) {
     let now_s = time.elapsed_secs();
     if now_s - cadence.last_update_at_s < AUDIO_CONTROL_UPDATE_INTERVAL_S {
@@ -90,7 +91,10 @@ pub(crate) fn update_rocket_audio_controls(
             mach_number: conditions.mach_number,
             dynamic_pressure_pa: conditions.dynamic_pressure_pa,
             total_heat_flux_w_m2: thermal.total_heat_flux_w_m2,
-            observer_distance_m: f64::from(nearest_camera_distance_m(rocket_transform, &cameras)),
+            observer_distance_m: f64::from(nearest_active_camera_distance_m(
+                rocket_transform.translation,
+                &cameras,
+            )),
         });
         let next_controls = RocketAudioControls {
             engine_gain_unit: presentation.ignition_intensity_unit as f32,
@@ -185,17 +189,6 @@ pub(crate) fn apply_rocket_audio_playback(
 fn external_engine_gain_unit(controls: RocketAudioControls) -> f32 {
     let cockpit_mix = 1.0 - controls.interior_attenuation_unit * (1.0 - INTERIOR_EXTERIOR_MIX);
     (controls.engine_gain_unit * controls.external_attenuation_unit * cockpit_mix).clamp(0.0, 1.0)
-}
-
-fn nearest_camera_distance_m(
-    rocket_transform: &Transform,
-    cameras: &Query<&Transform, With<Camera3d>>,
-) -> f32 {
-    cameras
-        .iter()
-        .map(|camera| camera.translation.distance(rocket_transform.translation))
-        .reduce(f32::min)
-        .unwrap_or(0.0)
 }
 
 fn staging_gain_unit(propulsion: &RocketPropulsion) -> f32 {

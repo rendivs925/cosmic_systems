@@ -717,6 +717,14 @@ pub struct SpentStage {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RecoveringStage;
 
+/// Query filter selecting the authoritative primary vehicle. Spent debris and
+/// independently recovering boosters must never drive the primary camera,
+/// projection, HUD telemetry, environment, or orbit prediction; those
+/// consumers read one primary stage and would otherwise snap to a booster once
+/// it separates. Per-vehicle systems (physics, flight recording, effects)
+/// intentionally query without this filter.
+pub type PrimaryVehicle = (Without<SpentStage>, Without<RecoveringStage>);
+
 /// Payload fairing attached to the vehicle. Presence of the component means
 /// the fairing is still attached; jettison removes it and drops its mass.
 #[derive(Component, Debug, Clone, Copy)]

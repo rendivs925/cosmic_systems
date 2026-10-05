@@ -201,7 +201,7 @@ pub(crate) fn update_rocket_engine_effects(
     mut effect_assets: ResMut<RocketEngineEffectAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    cameras: Query<&Transform, With<Camera3d>>,
+    cameras: Query<(&Camera, &Transform), With<Camera3d>>,
     mut rockets: Query<
         (
             Entity,
@@ -317,7 +317,10 @@ pub(crate) fn update_rocket_engine_effects(
             mach_number: conditions.mach_number,
             dynamic_pressure_pa: conditions.dynamic_pressure_pa,
             total_heat_flux_w_m2: thermal.total_heat_flux_w_m2,
-            observer_distance_m: f64::from(nearest_camera_distance_m(rocket_transform, &cameras)),
+            observer_distance_m: f64::from(super::camera::nearest_active_camera_distance_m(
+                rocket_transform.translation,
+                &cameras,
+            )),
         });
         let intensity = smoothing.map_or(target.ignition_intensity_unit as f32, |mut smoothing| {
             let blend = 1.0 - (-IGNITION_SMOOTHING_PER_SECOND * time.delta_secs()).exp();
@@ -331,7 +334,8 @@ pub(crate) fn update_rocket_engine_effects(
                 (target.heating_intensity_unit as f32 - smoothing.heating_intensity_unit) * blend;
             smoothing.ignition_intensity_unit
         });
-        let distance_m = nearest_camera_distance_m(rocket_transform, &cameras);
+        let distance_m =
+            super::camera::nearest_active_camera_distance_m(rocket_transform.translation, &cameras);
 
         for (entity, effect) in &existing {
             if effect.owner != rocket_entity || !desired_keys.contains(&(effect.key, effect.layer))
@@ -514,26 +518,14 @@ fn layer_is_within_quality_budget(
     distance_m <= max_distance_m
 }
 
-fn nearest_camera_distance_m(
-    rocket_transform: &Transform,
-    cameras: &Query<&Transform, With<Camera3d>>,
-) -> f32 {
-    cameras
-        .iter()
-        .map(|camera| camera.translation.distance(rocket_transform.translation))
-        .reduce(f32::min)
-        .unwrap_or(0.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::{ParallelBoosters, Rocket};
+    use bevy_mesh::VertexAttributeValues;
 
     #[test]
     fn plume_cone_fades_from_nozzle_to_tail() {
-        use bevy_mesh::VertexAttributeValues;
-
         let mesh = plume_cone_mesh(8, 3);
         let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
         else {

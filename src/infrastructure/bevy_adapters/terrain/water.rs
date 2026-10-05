@@ -171,8 +171,9 @@ impl WaterParams {
 /// coverage, and displacement subdivision without changing any code path.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct WaterQualityConfig {
-    /// Maximum water mesh vertices per side. Caps displacement subdivision for
-    /// the ocean cap so a distant or constrained target pays less geometry.
+    /// Reserved subdivision budget for independently tessellated waves. The
+    /// current cap shares terrain topology; it cannot be decimated separately
+    /// without changing sphere sag and breaking stitched shoreline coverage.
     pub max_subdivision: u32,
     /// Number of active Gerstner wave components, clamped to `1..=4`.
     pub wave_components: u32,
@@ -234,8 +235,7 @@ impl MaterialExtension for WaterExtension {
         WATER_SHADER.into()
     }
 
-    /// The Gerstner radial displacement needs a custom vertex stage, so the
-    /// water material supplies its own vertex shader alongside the fragment one.
+    /// Preserve the water attributes in the custom sea-level vertex stage.
     fn vertex_shader() -> ShaderRef {
         WATER_SHADER.into()
     }

@@ -51,6 +51,8 @@ pub(crate) struct TerrainFrameAttribution {
 
 impl TerrainFrameAttribution {
     pub(crate) fn total_cpu_ms(self) -> f64 {
+        // Submission is an inclusive CPU timer around asset preparation. Its
+        // image, material, and occlusion sub-timers must not be counted twice.
         self.completion_poll_ms
             + self.viewport_culling_ms
             + self.lod_selection_ms
@@ -59,9 +61,6 @@ impl TerrainFrameAttribution {
             + self.publication_ms
             + self.eviction_ms
             + self.cpu_mesh_construction_ms
-            + self.material_ms
-            + self.image_asset_creation_ms
-            + self.occlusion_bake_ms
             + self.cpu_to_gpu_submission_ms
             + self.activation_ms
     }
@@ -260,6 +259,20 @@ impl TimingPercentiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inclusive_submission_does_not_double_count_nested_phases() {
+        let record = TerrainFrameAttribution {
+            cpu_mesh_construction_ms: 1.0,
+            cpu_to_gpu_submission_ms: 8.0,
+            material_ms: 1.0,
+            image_asset_creation_ms: 2.0,
+            occlusion_bake_ms: 4.0,
+            activation_ms: 0.5,
+            ..default()
+        };
+        assert_eq!(record.total_cpu_ms(), 9.5);
+    }
 
     #[test]
     fn aggregation_sums_counters_and_retains_the_most_expensive_frame() {

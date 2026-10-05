@@ -1,28 +1,34 @@
 ## Purpose
 
-Defines the displaced, physically shaded planetary water presentation (ocean and
-rivers) so surface water reads as a lit, depth-aware body of water rather than a
-flat decal, while remaining deterministic and strictly presentation-only.
+Defines the physically shaded planetary water presentation (ocean and rivers)
+with analytic wave normals, so surface water reads as a lit, depth-aware body of
+water rather than a flat decal, while remaining deterministic and strictly
+presentation-only.
 
 ## ADDED Requirements
 
-### Requirement: Ocean surface is vertex-displaced by directional waves
+### Requirement: Ocean surface presents bounded directional wave detail
 
-The system SHALL displace the ocean surface in the vertex stage using a bounded
-sum of directional waves, so wave height varies over space and time instead of
-rendering as a flat sea-level cap.
+The system SHALL evaluate a bounded sum of directional waves for the ocean
+surface in the fragment stage, so wave detail varies over space and time instead
+of rendering as a flat sea-level cap.
 
-#### Scenario: Bounded wave sum displaces vertices
+#### Scenario: Bounded wave sum shapes the surface
 
 - **WHEN** an ocean surface is rendered
-- **THEN** each vertex is displaced vertically by a bounded sum of directional
-  wave contributions and the displaced height varies smoothly across the surface
+- **THEN** the shading normal is derived from a bounded sum of directional wave
+  contributions that varies smoothly across the surface
 
-#### Scenario: Displacement amplitude is bounded
+#### Scenario: Wave detail stays bounded
 
-- **WHEN** the ocean surface is displaced
-- **THEN** the displacement magnitude stays within the configured maximum and the
-  surface never introduces gaps against the coastline
+- **WHEN** the ocean surface is shaded
+- **THEN** the wave contribution stays within the configured maximum and the
+  sea-level mesh never introduces gaps against the coastline
+
+#### Scenario: Sub-pixel waves become roughness
+
+- **WHEN** a wave component is smaller than the pixel footprint
+- **THEN** it contributes to surface roughness instead of point-sampled facets
 
 #### Scenario: Presentation clock drives motion
 
@@ -32,13 +38,13 @@ rendering as a flat sea-level cap.
 
 ### Requirement: Ocean surface normals are analytic
 
-The system SHALL derive the displaced ocean surface normal analytically from the
-same bounded wave sum used for displacement, so lighting matches the surface shape.
+The system SHALL derive the ocean surface normal analytically from the same
+bounded wave sum used for shading, so lighting matches the wave shape.
 
-#### Scenario: Analytic normal matches displacement
+#### Scenario: Analytic normal matches the wave sum
 
-- **WHEN** the ocean is displaced by the wave sum
-- **THEN** the shading normal is the analytic normal of that displaced surface and
+- **WHEN** the ocean is shaded by the wave sum
+- **THEN** the shading normal is the analytic normal of that wave field and
   produces a moving specular response
 
 #### Scenario: Normal remains stable at close range
@@ -157,4 +163,4 @@ produce identical output.
 #### Scenario: Deterministic regeneration
 
 - **WHEN** the same configuration and presentation clock value are applied twice
-- **THEN** the water displacement, normals, and geometry are identical
+- **THEN** the water wave normals and geometry are identical

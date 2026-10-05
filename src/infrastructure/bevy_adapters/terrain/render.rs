@@ -6,6 +6,10 @@
 //!
 //! The ready-patch upload queue lives in the [`uploads`] submodule.
 
+use self::uploads::{
+    enqueue_ready_uploads, PendingTerrainPatchUploads, TerrainPatchRenderIndex,
+    TerrainPatchRenderKey,
+};
 use crate::domain::services::cube_sphere::{
     face_uv, face_uv_to_direction, CubeFace, PatchGeometry, TerrainPatch,
 };
@@ -19,7 +23,9 @@ use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
 };
 use crate::infrastructure::bevy_adapters::rocket::camera::update_rocket_camera_projection;
-use crate::infrastructure::bevy_adapters::rocket::components::RocketPhysicsState;
+use crate::infrastructure::bevy_adapters::rocket::components::{
+    PrimaryVehicle, RocketPhysicsState,
+};
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     apply_terrain_imagery, load_earth_imagery_package, stream_terrain_imagery,
     TerrainImageryConfig, TerrainImageryResource,
@@ -49,11 +55,6 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 mod uploads;
-
-use self::uploads::{
-    enqueue_ready_uploads, PendingTerrainPatchUploads, TerrainPatchRenderIndex,
-    TerrainPatchRenderKey,
-};
 
 const TERRAIN_SURFACE_SHADER: &str = "shaders/terrain_surface.wgsl";
 /// Spreading texture creation and GPU asset uploads across frames prevents a
@@ -167,6 +168,9 @@ pub(crate) struct TerrainSurfaceExtension {
     /// Gain of the near-camera detail overlay, faded by view distance.
     #[uniform(104)]
     near_detail_strength: f32,
+    /// Planet centre in the same rebased inertial metre frame as mesh fragments.
+    #[uniform(104)]
+    planet_center: Vec3,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -211,6 +215,7 @@ pub(crate) fn build_terrain_material(
     layer_normal_strength: f32,
     near_detail_scale: f32,
     near_detail_strength: f32,
+    planet_center: Vec3,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -237,6 +242,7 @@ pub(crate) fn build_terrain_material(
             layer_normal_strength,
             near_detail_scale,
             near_detail_strength,
+            planet_center,
         },
     }
 }
@@ -329,10 +335,8 @@ pub struct TerrainPatchRenderState {
     /// material Sun-direction change can refresh the patch without rebuilding
     /// its geometry.
     pub(crate) occlusion_field: Option<PatchHeightField>,
-    /// Inertial Sun direction recorded by the occlusion bake. Rotation alone
-    /// does not change it, so resident patches are only refreshed when the
-    /// shared ephemeris Sun direction changes materially.
-    pub(crate) baked_sun_inertial: DVec3,
+    /// Sun direction in the terrain's body-fixed frame at the last shadow bake.
+    pub(crate) baked_sun_body: DVec3,
 }
 
 /// Reusable render assets whose appearance is identical for every terrain
@@ -455,7 +459,7 @@ pub struct TerrainOcclusionConfig {
     pub self_shadow_strength: f32,
     /// Fraction of the baked sky occlusion applied to the indirect term.
     pub sky_occlusion_strength: f32,
-    /// Inertial Sun-direction change (radians) that refreshes resident patches.
+    /// Body-fixed Sun-direction change (radians) that refreshes visible patches.
     pub refresh_tolerance_rad: f64,
     /// Maximum resident patches refreshed against a new Sun direction per frame.
     pub max_refreshes_per_frame: u32,
@@ -547,6 +551,7 @@ impl Plugin for TerrainRenderPlugin {
                 (
                     recenter_render_origin.before(stream_terrain_patches),
                     update_water_material,
+                    update_terrain_material_origin.after(recenter_render_origin),
                 ),
             )
             // Streaming owns the authoritative terrain mesh lifecycle. It must
@@ -710,6 +715,19 @@ fn update_water_material(time: Res<Time>, mut water_materials: ResMut<Assets<Wat
     }
 }
 
+/// Rebasing changes only the render-frame centre, not physical terrain data.
+fn update_terrain_material_origin(
+    render_origin: Res<RenderOrigin>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+) {
+    if !render_origin.is_changed() {
+        return;
+    }
+    for (_, material) in materials.iter_mut() {
+        material.extension.planet_center = (-render_origin.origin).as_vec3();
+    }
+}
+
 fn ensure_neutral_local_surface_maps(
     render_assets: &mut TerrainRenderAssets,
     images: &mut Assets<Image>,
@@ -821,6 +839,7 @@ fn spawn_patch_mesh_system(
     water_quality: Res<WaterQualityConfig>,
     performance_config: Res<PerformanceMetricsConfig>,
     mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
+    patch_visibility: Query<&Visibility, With<TerrainPatchRenderState>>,
 ) {
     let TerrainSpawnAssets {
         mut meshes,
@@ -927,7 +946,7 @@ fn spawn_patch_mesh_system(
         // body-fixed, presentation-only, and bounded per patch.
         let occlusion_started = instrumentation_enabled.then(Instant::now);
         let patch_resolution = render_assets.patch_resolution;
-        let (occlusion_texture, occlusion_field, occlusion_samples, baked_sun_inertial) =
+        let (occlusion_texture, occlusion_field, occlusion_samples, baked_sun_body) =
             bake_terrain_occlusion_for_patch(
                 geometry,
                 patch,
@@ -1000,6 +1019,7 @@ fn spawn_patch_mesh_system(
             layer.normal_strength,
             layer.near_detail_scale,
             layer.near_detail_strength,
+            (-render_origin.origin).as_vec3(),
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -1013,10 +1033,9 @@ fn spawn_patch_mesh_system(
         let water_mesh_handle = if planet.domain_planet.has_ocean {
             water_mesh_for_patch(
                 geometry,
-                // Budget-gate displacement subdivision for the ocean cap.
-                render_assets
-                    .patch_resolution
-                    .min(water_quality.max_subdivision.max(2)),
+                // Keep the terrain topology, including stitched edge vertices.
+                // Decimating only water changes sphere sag and exposes the bed.
+                render_assets.patch_resolution,
                 planet.domain_planet.radius_km as f64 * 1_000.0,
                 &render_origin.origin,
                 body_to_inertial,
@@ -1045,17 +1064,17 @@ fn spawn_patch_mesh_system(
 
         let vegetation = surface.vegetation;
         let vegetation_mesh_asset_count = usize::from(vegetation.is_some());
+        let vegetation_anchor = vegetation.as_ref().map(|(_, anchor)| *anchor);
         // The shared foliage material and its atlas are created once at startup,
         // so no per-patch material asset is added here.
         let vegetation_material_asset_count = 0usize;
-        let vegetation_mesh_handle = vegetation
-            .as_ref()
-            .map(|(mesh, _)| meshes.add(mesh.clone()));
+        let vegetation_mesh_handle = vegetation.map(|(mesh, _)| meshes.add(mesh));
         let vegetation_material = vegetation_mesh_handle
             .as_ref()
             .and_then(|_| render_assets.vegetation_material.clone());
         let river = surface.river;
-        let river_mesh_handle = river.as_ref().map(|(mesh, _)| meshes.add(mesh.clone()));
+        let river_anchor = river.as_ref().map(|(_, anchor)| *anchor);
+        let river_mesh_handle = river.map(|(mesh, _)| meshes.add(mesh));
         let river_material = river_mesh_handle
             .as_ref()
             .and_then(|_| render_assets.river_material.clone());
@@ -1080,6 +1099,11 @@ fn spawn_patch_mesh_system(
             event.planet_entity,
             &streaming.published,
             &render_index,
+            |entity| {
+                patch_visibility
+                    .get(entity)
+                    .is_ok_and(|v| *v != Visibility::Hidden)
+            },
         ) {
             Visibility::Hidden
         } else {
@@ -1119,7 +1143,7 @@ fn spawn_patch_mesh_system(
                     occlusion_texture: occlusion_texture.clone(),
                     occlusion_owned,
                     occlusion_field,
-                    baked_sun_inertial,
+                    baked_sun_body,
                 },
                 visibility,
                 Name::new(format!(
@@ -1128,14 +1152,15 @@ fn spawn_patch_mesh_system(
                 )),
             ))
             .id();
+
         render_index.0.insert(key, entity);
 
         // Merged vegetation + scatter (trees, rocks) is one child draw and
         // shares an immutable material across every terrain tile.
-        if let (Some(vegetation_mesh_handle), Some(vegetation_material), Some((_, anchor))) = (
+        if let (Some(vegetation_mesh_handle), Some(vegetation_material), Some(anchor)) = (
             vegetation_mesh_handle.clone(),
             vegetation_material,
-            vegetation,
+            vegetation_anchor,
         ) {
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
@@ -1158,8 +1183,8 @@ fn spawn_patch_mesh_system(
 
         // The drainage ribbon shares the vegetation anchor's local frame, so it
         // rotates into the inertial frame exactly like the vegetation child.
-        if let (Some(river_mesh_handle), Some(river_material), Some((_, anchor))) =
-            (river_mesh_handle.clone(), river_material, river)
+        if let (Some(river_mesh_handle), Some(river_material), Some(anchor)) =
+            (river_mesh_handle.clone(), river_material, river_anchor)
         {
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
@@ -1348,6 +1373,17 @@ fn reveal_cached_patch_mesh_system(
         let Some(entity) = render_index.0.get(&key).copied() else {
             continue;
         };
+        let departing_ancestor = has_departing_ancestor_render_entity(
+            event.patch,
+            event.planet_entity,
+            &streaming.published,
+            &render_index,
+            |ancestor| {
+                render_query
+                    .get(ancestor)
+                    .is_ok_and(|(_, _, v)| *v != Visibility::Hidden)
+            },
+        );
         if let Ok((state, mut transform, mut visibility)) = render_query.get_mut(entity) {
             if let Ok(planet) = planet_query.get(state.planet_entity) {
                 let Some(orientation) =
@@ -1362,12 +1398,7 @@ fn reveal_cached_patch_mesh_system(
                     render_origin.origin,
                 );
             }
-            *visibility = if has_departing_ancestor_render_entity(
-                event.patch,
-                event.planet_entity,
-                &streaming.published,
-                &render_index,
-            ) {
+            *visibility = if departing_ancestor {
                 Visibility::Hidden
             } else {
                 Visibility::Visible
@@ -1383,14 +1414,18 @@ fn has_departing_ancestor_render_entity(
     planet_entity: Entity,
     published: &std::collections::BTreeSet<TerrainPatch>,
     render_index: &TerrainPatchRenderIndex,
+    is_visible: impl Fn(Entity) -> bool,
 ) -> bool {
     let mut ancestor = patch.parent();
     while let Some(parent) = ancestor {
         if !published.contains(&parent)
-            && render_index.0.contains_key(&TerrainPatchRenderKey {
-                planet_entity,
-                patch: parent,
-            })
+            && render_index
+                .0
+                .get(&TerrainPatchRenderKey {
+                    planet_entity,
+                    patch: parent,
+                })
+                .is_some_and(|entity| is_visible(*entity))
         {
             return true;
         }
@@ -1648,30 +1683,15 @@ fn water_mesh_for_patch(
         depths.push(depth);
     }
 
-    // Emit a quad when any corner samples below sea level. Vertices above sea
-    // level are still placed at sea level and are hidden by the land terrain
-    // above them, so the coastline has no hole.
+    // Reuse the terrain's outward winding, diagonal, and collapsed stitch edges.
+    // A different diagonal intersects the bed even when all vertex heights agree.
+    // Exclude the downward skirt; it is not part of the sea surface.
     let mut indices: Vec<u32> = Vec::new();
-    for row in 0..res - 1 {
-        for column in 0..res - 1 {
-            let top_left = (row * res + column) as u32;
-            let top_right = (row * res + column + 1) as u32;
-            let bottom_left = ((row + 1) * res + column) as u32;
-            let bottom_right = ((row + 1) * res + column + 1) as u32;
-            let touches_ocean = [top_left, top_right, bottom_left, bottom_right]
-                .into_iter()
-                .any(|index| depths[index as usize] > 0.0);
-            if !touches_ocean {
-                continue;
-            }
-            indices.extend_from_slice(&[
-                top_left,
-                top_right,
-                bottom_right,
-                top_left,
-                bottom_right,
-                bottom_left,
-            ]);
+    for triangle in geometry.indices.as_chunks::<3>().0 {
+        if triangle.iter().all(|index| (*index as usize) < core)
+            && triangle.iter().any(|index| depths[*index as usize] > 0.0)
+        {
+            indices.extend_from_slice(triangle);
         }
     }
     if indices.is_empty() {
@@ -1704,7 +1724,7 @@ fn water_mesh_for_patch(
 /// their root transforms preserve world placement until regenerated.
 pub fn recenter_render_origin(
     config: Res<TerrainRenderConfig>,
-    rocket_query: Query<&RocketPhysicsState>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
     mut render_origin: ResMut<RenderOrigin>,
 ) {
     let Some(rocket) = rocket_query.iter().next() else {
@@ -2182,36 +2202,29 @@ fn bake_terrain_occlusion_for_patch(
     };
     let (values, samples) = bake_terrain_occlusion(&field, sun_direction_body, config);
     let handle = images.add(terrain_occlusion_image(config.texture_resolution, &values));
-    (
-        handle,
-        Some(field),
-        samples,
-        body_to_inertial * sun_direction_body,
-    )
+    (handle, Some(field), samples, sun_direction_body)
 }
 
-/// Refresh resident patches whose recorded inertial Sun direction has moved
-/// beyond the configured tolerance. Body rotation alone never triggers a bake,
-/// because the recorded direction is inertial; only a genuine ephemeris change
-/// (or patch regeneration, which bakes at spawn) does.
+/// Refresh visible terrain as the Sun moves in its body-fixed frame, including
+/// planetary rotation. Keep the texture handle stable so terrain and ocean
+/// materials both observe the new shadow map without dangling image handles.
 fn refresh_terrain_occlusion(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     occlusion_config: Res<TerrainOcclusionConfig>,
     planet_query: Query<&PlanetComponent>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<TerrainMaterial>>,
-    mut query: Query<&mut TerrainPatchRenderState>,
+    mut query: Query<(&mut TerrainPatchRenderState, &Visibility)>,
 ) {
     if occlusion_config.max_refreshes_per_frame == 0 {
         return;
     }
     let tolerance_cos = occlusion_config.refresh_tolerance_rad.cos();
     let mut refreshed = 0u32;
-    for mut state in &mut query {
+    for (mut state, visibility) in &mut query {
         if refreshed >= occlusion_config.max_refreshes_per_frame {
             break;
         }
-        if !state.occlusion_owned {
+        if !state.occlusion_owned || *visibility == Visibility::Hidden {
             continue;
         }
         let Some(field) = state.occlusion_field.as_ref() else {
@@ -2233,39 +2246,168 @@ fn refresh_terrain_occlusion(
         ) else {
             continue;
         };
-        let sun_inertial = body_to_inertial * sun_direction_body;
-        if state.baked_sun_inertial.length_squared() > 0.0
-            && state.baked_sun_inertial.dot(sun_inertial) >= tolerance_cos
-        {
+        if !occlusion_needs_refresh(state.baked_sun_body, sun_direction_body, tolerance_cos) {
             continue;
         }
-        let field = field.clone();
-        let (values, _) = bake_terrain_occlusion(&field, sun_direction_body, &occlusion_config);
-        let new_handle = images.add(terrain_occlusion_image(
-            occlusion_config.texture_resolution,
-            &values,
-        ));
-        if let Some(material) = materials.get_mut(&state.material_handle) {
-            material.extension.terrain_occlusion = new_handle.clone();
-        }
-        let previous = std::mem::replace(&mut state.occlusion_texture, new_handle);
-        images.remove(previous.id());
-        state.baked_sun_inertial = sun_inertial;
+        let (values, _) = bake_terrain_occlusion(field, sun_direction_body, &occlusion_config);
+        let Some(image) = images.get_mut(&state.occlusion_texture) else {
+            bevy::log::warn!("missing terrain shadow map for {:?}", state.patch);
+            continue;
+        };
+        *image = terrain_occlusion_image(occlusion_config.texture_resolution, &values);
+        state.baked_sun_body = sun_direction_body;
         refreshed += 1;
     }
+}
+
+fn occlusion_needs_refresh(baked_sun_body: DVec3, sun_body: DVec3, tolerance_cos: f64) -> bool {
+    baked_sun_body.length_squared() == 0.0 || baked_sun_body.dot(sun_body) < tolerance_cos
 }
 
 #[cfg(test)]
 mod tests {
     use self::uploads::TerrainUploadEnqueueResult;
     use super::*;
-    use crate::domain::services::cube_sphere::{build_patch_geometry, CubeFace};
+    use crate::domain::services::cube_sphere::{
+        build_patch_geometry, build_patch_geometry_with_stitches, CubeFace, PatchEdge,
+    };
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::reference_frames::catalog_body_fixed_to_inertial_rotation;
     use crate::domain::services::simulation_time::SimulationTime;
-    use crate::domain::services::terrain_source::{ProceduralTerrainSource, TerrainSource};
+    use crate::domain::services::terrain_source::{
+        ElevationBounds, ProceduralTerrainSource, TerrainSource,
+    };
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn rotating_terrain_refreshes_shadows_under_a_fixed_inertial_sun() {
+        let inertial_sun = DVec3::X;
+        let baked_sun_body = inertial_sun;
+        let new_body_to_inertial = DQuat::from_rotation_y(0.1);
+        let new_sun_body = new_body_to_inertial.conjugate() * inertial_sun;
+        let tolerance_cos = 0.02_f64.cos();
+        assert!(occlusion_needs_refresh(
+            baked_sun_body,
+            new_sun_body,
+            tolerance_cos
+        ));
+        assert!(!occlusion_needs_refresh(
+            new_sun_body,
+            new_sun_body,
+            tolerance_cos
+        ));
+    }
+
+    #[test]
+    fn ocean_caps_preserve_outward_terrain_triangles_and_stitches() {
+        #[derive(Debug)]
+        struct SeaLevel;
+        impl TerrainSource for SeaLevel {
+            fn height_m(&self, _: f64, _: f64) -> f64 {
+                0.0
+            }
+            fn elevation_bounds_m(&self) -> ElevationBounds {
+                ElevationBounds::new(0.0, 0.0)
+            }
+        }
+        let res = 5;
+        for face in [
+            CubeFace::PosX,
+            CubeFace::NegX,
+            CubeFace::PosY,
+            CubeFace::NegY,
+            CubeFace::PosZ,
+            CubeFace::NegZ,
+        ] {
+            let patch = TerrainPatch {
+                face,
+                level: 8,
+                tile_x: 128,
+                tile_y: 128,
+            };
+            let geometry = build_patch_geometry_with_stitches(
+                &patch,
+                &SeaLevel,
+                6_371_000.0,
+                res,
+                20.0,
+                &[PatchEdge::West],
+            );
+            let origin = DVec3::from_array(geometry.positions[0]);
+            let mut meshes = Assets::<Mesh>::default();
+            let handle = water_mesh_for_patch(
+                &geometry,
+                res,
+                6_371_000.0,
+                &origin,
+                DQuat::IDENTITY,
+                &mut meshes,
+            )
+            .expect("sea-level terrain needs an ocean cap");
+            let mesh = meshes.get(&handle).unwrap();
+            let expected: Vec<_> = geometry
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter(|triangle| triangle.iter().all(|index| *index < res * res))
+                .flatten()
+                .copied()
+                .collect();
+            assert_eq!(mesh.indices(), Some(&Indices::U32(expected)));
+            let bevy_mesh::VertexAttributeValues::Float32x3(positions) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+            else {
+                panic!("positions");
+            };
+            for (water, bed) in positions.iter().zip(&geometry.positions) {
+                let radial = DVec3::from_array(*bed).normalize();
+                let gap = (Vec3::from_array(*water).as_dvec3() + origin - DVec3::from_array(*bed))
+                    .dot(radial);
+                assert!(
+                    (gap - WATER_SURFACE_OFFSET_M).abs() < 0.01,
+                    "{face:?}: gap {gap}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hidden_cached_ancestors_do_not_hide_republished_children() {
+        let planet_entity = Entity::from_bits(100);
+        let ancestor_entity = Entity::from_bits(101);
+        let parent = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 2,
+            tile_x: 1,
+            tile_y: 1,
+        };
+        let child = parent.children()[0];
+        let published = BTreeSet::from([child]);
+        let mut index = TerrainPatchRenderIndex::default();
+        index.0.insert(
+            TerrainPatchRenderKey {
+                planet_entity,
+                patch: parent,
+            },
+            ancestor_entity,
+        );
+        assert!(!has_departing_ancestor_render_entity(
+            child,
+            planet_entity,
+            &published,
+            &index,
+            |_| false
+        ));
+        assert!(has_departing_ancestor_render_entity(
+            child,
+            planet_entity,
+            &published,
+            &index,
+            |_| true
+        ));
+    }
 
     /// Build a body-fixed `PatchHeightField` directly from a local height law,
     /// so the ray-march can be tested against known ridges and bowls without a
@@ -2586,7 +2728,7 @@ mod tests {
                     occlusion_texture: Handle::default(),
                     occlusion_owned: false,
                     occlusion_field: None,
-                    baked_sun_inertial: DVec3::ZERO,
+                    baked_sun_body: DVec3::ZERO,
                 },
                 Transform::IDENTITY,
                 Visibility::Visible,
@@ -2632,7 +2774,7 @@ mod tests {
                     occlusion_texture: Handle::default(),
                     occlusion_owned: false,
                     occlusion_field: None,
-                    baked_sun_inertial: DVec3::ZERO,
+                    baked_sun_body: DVec3::ZERO,
                 },
                 Transform::IDENTITY,
                 Visibility::Visible,
@@ -3018,7 +3160,7 @@ mod tests {
             occlusion_texture: Handle::default(),
             occlusion_owned: false,
             occlusion_field: None,
-            baked_sun_inertial: DVec3::ZERO,
+            baked_sun_body: DVec3::ZERO,
         };
 
         release_patch_render_assets(

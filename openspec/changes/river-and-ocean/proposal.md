@@ -8,8 +8,8 @@ presentation-only and deterministic.
 
 ## What Changes
 
-- Replace the flat sea-level sphere-cap ocean with a vertex-displaced ocean surface:
-  a bounded sum of directional waves with analytic normals evaluated per vertex.
+- Keep the ocean mesh at sea level and add a bounded sum of directional waves
+  evaluated per fragment, producing analytic, footprint-filtered wave normals.
 - Add Fresnel sky reflection, Beer-Lambert depth absorption driven by the existing
   normalized depth vertex channel, and subsurface scattering to the water shading.
 - Add crest foam (breaking wave tops) and shoreline shoaling foam, in addition to
@@ -26,10 +26,10 @@ presentation-only and deterministic.
 ## Capabilities
 
 ### New Capabilities
-- `planetary-water`: displaced, physically shaded ocean and flow-directed river water presentation for planetary surfaces.
+- `planetary-water`: physically shaded ocean with analytic wave normals and flow-directed river water presentation for planetary surfaces.
 
 ### Modified Capabilities
-- `terrain-rendering`: terrain water presentation gains a displaced ocean surface and hydrology-aligned river channels instead of flat caps and flat ribbons.
+- `terrain-rendering`: terrain water presentation gains a wave-shaded ocean surface and hydrology-aligned river channels instead of flat caps and flat ribbons.
 
 ## Impact
 
@@ -41,4 +41,4 @@ presentation-only and deterministic.
   `src/infrastructure/bevy_adapters/terrain/surface/scatter.rs` and `surface/mod.rs`.
 - Read-only consumption of the authoritative hydrology signal in
   `src/domain/services/terrain_source` (no new hydrology computation in water).
-- Tests for deterministic displacement/geometry and presentation-only boundaries.
+- Tests for deterministic geometry and presentation-only boundaries.

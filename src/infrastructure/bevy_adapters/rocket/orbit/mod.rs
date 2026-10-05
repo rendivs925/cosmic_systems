@@ -6,7 +6,8 @@
 //! [`predicted_orbit`] function remains independently testable.
 
 use super::components::{
-    GroundRest, RocketMissionState, RocketPhysicsState, RocketPlanetBinding, TerrainCollisionState,
+    GroundRest, PrimaryVehicle, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
+    TerrainCollisionState,
 };
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -106,13 +107,16 @@ impl Plugin for RocketOrbitPlugin {
 pub fn update_orbit_prediction_cache(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
-    rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &RocketMissionState,
-        &TerrainCollisionState,
-        &GroundRest,
-    )>,
+    rocket_query: Query<
+        (
+            &RocketPlanetBinding,
+            &RocketPhysicsState,
+            &RocketMissionState,
+            &TerrainCollisionState,
+            &GroundRest,
+        ),
+        PrimaryVehicle,
+    >,
     sim_time: Res<SimulationTime>,
     mut cache: ResMut<OrbitPredictionCache>,
 ) {

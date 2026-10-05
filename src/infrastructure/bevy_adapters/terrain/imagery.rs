@@ -26,8 +26,9 @@ use std::path::PathBuf;
 /// Manifest that describes the imagery package layout and provenance.
 const EARTH_IMAGERY_MANIFEST: &str =
     include_str!("../../../../assets/configs/terrain/earth_imagery_v1.ron");
-/// Conservative per-tile GPU/CPU estimate for a produced 256² RGBA tile.
-const IMAGERY_TILE_BYTES: u64 = 256 * 256 * 4;
+/// Texture residency for a produced 256² RGBA tile, including the full mip chain.
+/// CPU-side image data may additionally mirror these bytes until asset release.
+const IMAGERY_TILE_BYTES: u64 = (4 * 256 * 256 - 1) * 4 / 3;
 
 /// Imagery streaming configuration. Disabled or absent imagery falls back to
 /// the existing global albedo without touching terrain or collision data.
@@ -251,6 +252,7 @@ pub(crate) fn stream_terrain_imagery(
 pub(crate) fn apply_terrain_imagery(
     imagery: Res<TerrainImageryResource>,
     occlusion_config: Res<TerrainOcclusionConfig>,
+    render_origin: Res<super::render::RenderOrigin>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut query: Query<(Entity, &mut TerrainPatchRenderState)>,
     mut commands: Commands,
@@ -291,6 +293,7 @@ pub(crate) fn apply_terrain_imagery(
             state.layer.normal_strength,
             state.layer.near_detail_scale,
             state.layer.near_detail_strength,
+            (-render_origin.origin).as_vec3(),
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing
@@ -329,7 +332,12 @@ fn add_mip_chain_once(images: &mut Assets<Image>, handle: &Handle<Image>) -> boo
     if width == 0 || height == 0 {
         return false;
     }
-    let (chain, levels) = mip_chain_rgba8(width, height, data, MipFilter::Color);
+    let filter = if image.texture_descriptor.format.is_srgb() {
+        MipFilter::SrgbColor
+    } else {
+        MipFilter::Color
+    };
+    let (chain, levels) = mip_chain_rgba8(width, height, data, filter);
     image.data = Some(chain);
     image.texture_descriptor.mip_level_count = levels;
     true
@@ -353,6 +361,21 @@ mod tests {
     use crate::domain::services::imagery_tiles::ancestor_at_level;
     use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
     use bevy::math::{DQuat, DVec3};
+
+    #[test]
+    fn imagery_residency_budget_accounts_for_the_full_mip_chain() {
+        let base = vec![128; 256 * 256 * 4];
+        let (chain, _) = mip_chain_rgba8(256, 256, &base, MipFilter::SrgbColor);
+        assert_eq!(chain.len() as u64, IMAGERY_TILE_BYTES);
+        let budget = TerrainImageryConfig::default().budget_bytes;
+        let capacity = budget / IMAGERY_TILE_BYTES;
+        assert!(within_budget(
+            (capacity - 1) * IMAGERY_TILE_BYTES,
+            0,
+            budget
+        ));
+        assert!(!within_budget(capacity * IMAGERY_TILE_BYTES, 0, budget));
+    }
 
     /// A verified temp package with one produced level-12 tile covering the
     /// Papua launch site, plus the level-14 geometry patch it resolves for.
@@ -409,6 +432,7 @@ mod tests {
         let (resource, geometry_patch) = papua_imagery_resource();
         let mut app = App::new();
         app.insert_resource(resource)
+            .init_resource::<super::super::render::RenderOrigin>()
             .insert_resource(TerrainOcclusionConfig::default())
             .insert_resource(Assets::<TerrainMaterial>::default())
             .add_systems(Update, apply_terrain_imagery);
@@ -442,7 +466,7 @@ mod tests {
                 occlusion_texture: Handle::default(),
                 occlusion_owned: false,
                 occlusion_field: None,
-                baked_sun_inertial: DVec3::ZERO,
+                baked_sun_body: DVec3::ZERO,
             })
             .id();
 

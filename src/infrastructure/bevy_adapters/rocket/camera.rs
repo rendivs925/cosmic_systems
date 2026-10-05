@@ -41,7 +41,7 @@ pub fn setup_rocket_camera_and_origin(
     mut camera_query: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
     mut render_origin: ResMut<RenderOrigin>,
     config: Res<RocketCameraConfig>,
-    rocket_query: Query<(&RocketPhysicsState, &RocketGeometry)>,
+    rocket_query: Query<(&RocketPhysicsState, &RocketGeometry), PrimaryVehicle>,
 ) {
     let Some((rocket, geometry)) = rocket_query.iter().next() else {
         bevy::log::warn!("setup_rocket_camera_and_origin: no rocket entity found");
@@ -100,6 +100,20 @@ pub fn setup_rocket_camera_and_origin(
             },
         ));
     }
+}
+
+/// Presentation distance in the metre-scaled flight render frame. Inactive
+/// solar-map cameras must not keep flight effects or audio at full intensity.
+pub(crate) fn nearest_active_camera_distance_m<F: bevy::ecs::query::QueryFilter>(
+    render_position_m: Vec3,
+    cameras: &Query<(&Camera, &Transform), F>,
+) -> f32 {
+    cameras
+        .iter()
+        .filter(|(camera, _)| camera.is_active)
+        .map(|(_, transform)| transform.translation.distance(render_position_m))
+        .reduce(f32::min)
+        .unwrap_or(f32::INFINITY)
 }
 
 /// System to handle rocket camera mode input and transitions.
@@ -215,7 +229,11 @@ pub fn update_rocket_camera(
             &RocketGeometry,
             &Transform,
         ),
-        (Without<Camera3d>, Without<SpentStage>),
+        (
+            Without<Camera3d>,
+            Without<SpentStage>,
+            Without<RecoveringStage>,
+        ),
     >,
     mut camera_query: Query<(&mut Transform, &mut RocketCameraController), With<Camera3d>>,
 ) {
@@ -334,10 +352,7 @@ pub fn update_rocket_camera(
             smoothed_pose,
             controller.target_mode,
         );
-        if matches!(
-            controller.target_mode,
-            RocketCameraMode::Free | RocketCameraMode::Surface
-        ) {
+        if controller.target_mode != RocketCameraMode::Cockpit {
             if let (Some(streaming), Some(orientation)) = (
                 streaming.as_deref(),
                 ephemeris.orientation_for_catalog_body(&planet.domain_planet.name),
@@ -356,7 +371,7 @@ pub fn update_rocket_camera(
     }
 }
 
-/// Keep detached flight views outside the actual display mesh. Sampling the
+/// Keep exterior flight views outside the actual display mesh. Sampling the
 /// finest available cached triangle is cheap and presentation-only; it never
 /// invokes the terrain source or changes authoritative vehicle/contact state.
 fn camera_above_streamed_surface<'a>(
@@ -631,8 +646,8 @@ fn compute_free_camera(
 /// System to update the camera near/far planes for rocket mode.
 pub fn update_rocket_camera_projection(
     camera_mode: Res<RocketCameraMode>,
-    rocket_query: Query<&RocketPhysicsState>,
-    rocket_binding_query: Query<&RocketPlanetBinding>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
+    rocket_binding_query: Query<&RocketPlanetBinding, PrimaryVehicle>,
     planet_query: Query<&PlanetComponent>,
     mut camera_query: Query<&mut Projection, With<Camera3d>>,
 ) {
@@ -698,12 +713,45 @@ pub fn update_rocket_camera_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::cube_sphere::build_patch_geometry;
+    use crate::domain::services::terrain_source::ProceduralTerrainSource;
+    use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+    use bevy::ecs::system::SystemState;
     use bevy::math::DVec3;
 
     #[test]
+    fn inactive_cameras_do_not_control_effect_or_audio_distance() {
+        let mut world = World::new();
+        world.spawn((
+            Camera3d::default(),
+            Camera {
+                is_active: false,
+                ..default()
+            },
+            Transform::IDENTITY,
+        ));
+        let active = world
+            .spawn((
+                Camera3d::default(),
+                Camera::default(),
+                Transform::from_xyz(100.0, 0.0, 0.0),
+            ))
+            .id();
+        let mut state =
+            SystemState::<Query<(&Camera, &Transform), With<Camera3d>>>::new(&mut world);
+        assert_eq!(
+            nearest_active_camera_distance_m(Vec3::ZERO, &state.get(&world)),
+            100.0
+        );
+        world.get_mut::<Camera>(active).unwrap().is_active = false;
+        assert_eq!(
+            nearest_active_camera_distance_m(Vec3::ZERO, &state.get(&world)),
+            f32::INFINITY
+        );
+    }
+
+    #[test]
     fn detached_camera_clearance_uses_rotated_rebased_streamed_triangles() {
-        use crate::domain::services::cube_sphere::build_patch_geometry;
-        use crate::domain::services::terrain_source::ProceduralTerrainSource;
         let radius_m = 6_371_000.0;
         let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
         let patch = TerrainPatch::for_direction(direction, 14);
@@ -856,5 +904,63 @@ mod tests {
             b * b >= c && -b - (b * b - c).sqrt() >= 0.0,
             "the pitched chase view must intersect the visible Earth horizon"
         );
+    }
+
+    #[test]
+    fn primary_selection_skips_spent_and_recovering_stages() {
+        let mut world = World::new();
+        let binding = RocketPlanetBinding {
+            planet_name: CelestialBodyId::earth(),
+        };
+        let core_radius_m = 6_371_000.0 + 80_000.0;
+
+        let core_id = world
+            .spawn((binding.clone(), dynamics_state_at(core_radius_m)))
+            .id();
+        // A recovering booster sits far below the core. If either filtered-out
+        // stage were selected, the camera/projection/HUD would snap to it.
+        world.spawn((
+            binding.clone(),
+            SpentStage {
+                parent_rocket: core_id,
+                kind: SpentStageKind::Booster,
+            },
+            dynamics_state_at(core_radius_m),
+        ));
+        world.spawn((
+            binding.clone(),
+            RecoveringStage,
+            dynamics_state_at(6_371_000.0 + 2_000.0),
+        ));
+
+        let mut state = SystemState::<(
+            Query<(Entity, &RocketPhysicsState), (Without<SpentStage>, Without<RecoveringStage>)>,
+            Query<&RocketPlanetBinding, (Without<SpentStage>, Without<RecoveringStage>)>,
+        )>::new(&mut world);
+        let (rocket_query, binding_query) = state.get(&world);
+        let selected: Vec<Entity> = rocket_query.iter().map(|(entity, _)| entity).collect();
+        assert_eq!(
+            selected,
+            vec![core_id],
+            "only the non-recovering core stage may drive primary presentation"
+        );
+        assert_eq!(binding_query.iter().count(), 1);
+        assert_eq!(
+            rocket_query.iter().next().unwrap().1.dynamics.position_m.x,
+            core_radius_m
+        );
+    }
+
+    fn dynamics_state_at(radius_m: f64) -> RocketPhysicsState {
+        RocketPhysicsState {
+            dynamics: crate::domain::services::rocket_dynamics::RocketDynamicsState::new(
+                DVec3::new(radius_m, 0.0, 0.0),
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                1.0,
+                bevy::math::DMat3::IDENTITY,
+                DVec3::ZERO,
+            ),
+        }
     }
 }

@@ -4,8 +4,8 @@
 //! distance input. They neither sample visual terrain nor affect flight state.
 
 use super::components::{
-    LaunchPadPresentation, RocketFlightConditions, RocketPresentationQuality, RocketPropulsion,
-    TerrainCollisionState,
+    LaunchPadPresentation, PrimaryVehicle, RocketFlightConditions, RocketPresentationQuality,
+    RocketPropulsion, TerrainCollisionState,
 };
 use super::effects::RocketPresentationMetrics;
 use super::presentation_parameters::{map_presentation_parameters, RocketPresentationInputs};
@@ -78,12 +78,15 @@ pub(crate) fn update_rocket_ground_presentation(
     mut assets: ResMut<RocketGroundPresentationAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<RocketPadGroundEffect>)>,
-    rockets: Query<(
-        &RocketPropulsion,
-        &RocketFlightConditions,
-        &TerrainCollisionState,
-    )>,
+    cameras: Query<(&Camera, &Transform), (With<Camera3d>, Without<RocketPadGroundEffect>)>,
+    rockets: Query<
+        (
+            &RocketPropulsion,
+            &RocketFlightConditions,
+            &TerrainCollisionState,
+        ),
+        PrimaryVehicle,
+    >,
     pads: Query<(Entity, &Transform), With<LaunchPadPresentation>>,
     mut effects: Query<
         (&RocketPadGroundEffect, &mut Transform, &mut Visibility),
@@ -127,11 +130,8 @@ pub(crate) fn update_rocket_ground_presentation(
         total_heat_flux_w_m2: 0.0,
         observer_distance_m: 0.0,
     });
-    let camera_distance_m = cameras
-        .iter()
-        .map(|camera| camera.translation.distance(pad_transform.translation))
-        .reduce(f32::min)
-        .unwrap_or(0.0);
+    let camera_distance_m =
+        super::camera::nearest_active_camera_distance_m(pad_transform.translation, &cameras);
     let visible = ground_effect_visible(
         parameters.ground_effect_intensity_unit,
         terrain.radar_altitude_m,

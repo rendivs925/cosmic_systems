@@ -255,7 +255,7 @@ pub fn record_simulation_telemetry_system(
     sim_time: Res<SimulationTime>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     mut recorder: ResMut<SimulationTelemetryRecorder>,
-    query: Query<SimulationTelemetryAccess, Without<SpentStage>>,
+    query: Query<SimulationTelemetryAccess, PrimaryVehicle>,
 ) {
     let Ok(access) = query.single() else {
         return;
@@ -718,24 +718,27 @@ pub fn compute_rocket_telemetry_system(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     planet_query: Query<&PlanetComponent>,
     mut telemetry: ResMut<RocketTelemetry>,
-    rocket_query: Query<(
-        Entity,
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &RocketPropulsion,
-        &RocketMissionState,
-        &RocketAutopilot,
-        &OrbitalElements,
-        &RocketFlightConditions,
-        &CommsState,
-        &ThermalState,
-        &AblationState,
-        &ParachuteState,
-        &TerrainCollisionState,
-    )>,
+    rocket_query: Query<
+        (
+            Entity,
+            &RocketPlanetBinding,
+            &RocketPhysicsState,
+            &RocketPropulsion,
+            &RocketMissionState,
+            &RocketAutopilot,
+            &OrbitalElements,
+            &RocketFlightConditions,
+            &CommsState,
+            &ThermalState,
+            &AblationState,
+            &ParachuteState,
+            &TerrainCollisionState,
+        ),
+        PrimaryVehicle,
+    >,
     force_query: Query<(&AerodynamicForces, Option<&SpecificForceAcceleration>)>,
     // Phase 14 extras, read-only and disjoint from the tuple above.
-    lifecycle_query: Query<(&LandingScorecard, &TipOverState)>,
+    lifecycle_query: Query<(&LandingScorecard, &TipOverState), PrimaryVehicle>,
 ) {
     let dt = sim_time.fixed_timestep();
     let current_time = sim_time.sim_time_s;

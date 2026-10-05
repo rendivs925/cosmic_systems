@@ -104,3 +104,79 @@ leaves, so close patches carry enough instances to read as vegetation.
 limits: grounding still samples the LOD height field rather than the triangulated
 mesh, and the visual result has not been judged on a real display. Frame pacing
 was not measured because these captures ran concurrently with other modes.
+
+## Staging Tracking And GPU Pass Follow-up — 2026-10-05
+
+Recorded on the real X11 desktop with the release Rocket binary and the normal
+user `HOME`. Unlike the earlier Xvfb/overridden-`HOME` runs, these are
+comparable frame-pacing samples. The primary-vehicle filter added this session
+(`PrimaryVehicle`, `Without<SpentStage> + Without<RecoveringStage>`) was verified
+against a real staging transition.
+
+Environment: `./target/release/cosmic_systems rocket`, 1280x720 window,
+`AutoVsync`, `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 600-frame rolling windows,
+RTX 5070 Laptop (driver 610.43.03). The flight was driven with the shared
+`Period` time-acceleration input, then sampled at real time.
+
+### Verified staging transition
+
+The HUD flight log recorded `t+46.1 STAGE SEPARATED (-33000 kg)` followed by
+`t+47.8 STAGE 2 IGNITION`. Captures at T+42.5 s (38.9 km) and T+52.5 s (52.9 km)
+both showed the chase camera and the entire HUD (STAGE 2, ASCENT, mass, fuel,
+thrust) following the core upper stage. Before the filter, the first matching
+rocket became the recovering booster once it separated, which also made the
+shared telemetry recorder's `single()` query fail and stop recording. Both
+consumers now read the non-recovering core stage.
+
+### Frame pacing during ascent
+
+| Scenario | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| Launched ascent (10 consecutive 600-frame windows) | 16.73–16.81 | 17.76–18.73 | 18.05–21.37 |
+
+Frame time is vsync-bound at ~60 Hz, so these values show stable pacing rather
+than available headroom. No frame-time spike above ~21 ms was observed across
+the sampled ascent.
+
+### GPU pass timings (new opt-in diagnostics)
+
+The existing opt-in `RenderDiagnosticsPlugin` now reports the top five GPU passes.
+Nested/overlapping spans are not additive; representative ascent values:
+
+| Pass | GPU ms |
+|---|---:|
+| `main_opaque_pass_3d` | 1.92–1.97 |
+| `main_transparent_pass_3d` | 0.94–0.98 |
+| `bloom` | 0.38 |
+| `shadow_directional_light_0_cascade_3` | 0.13 |
+| `tonemapping` | 0.11 |
+
+Every measured pass is well inside the 16.7 ms frame budget, so GPU submission
+is not the ascent bottleneck.
+
+### Terrain scheduling during ascent
+
+| Metric | Value |
+|---|---:|
+| `scheduling` p95 | 0.26–0.27 ms |
+| `scheduling` p99 | 0.27–0.52 ms |
+| `top_frame_cpu_ms` | 1.01–1.54 ms |
+| `queue_peak` | 0 |
+
+The earlier resident-patch prioritization change held through ascent: no
+geometry backlog accumulated and per-frame terrain scheduling stayed sub-
+millisecond.
+
+### Remaining limits
+
+- Vsync masks absolute CPU/GPU headroom; a present-mode-off run would be needed
+  to measure true frame cost.
+- No exoatmospheric/orbital capture was taken; the highest verified sample was
+  52.9 km.
+- The terrain at altitude still renders as broad low-relief ground with
+  disconnected water polygons; that appearance was not accepted or rejected
+  here.
+- The large circular ground shadow traced to the visual Sun-disc proxy casting
+  shadows is no longer present in these captures (the disc now has
+  `NotShadowCaster`/`NotShadowReceiver`), but the fix has not been compared
+  against every Sun elevation.

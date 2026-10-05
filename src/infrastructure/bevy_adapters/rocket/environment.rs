@@ -1,5 +1,5 @@
-use super::components::{RocketFlightConditions, RocketPhysicsState};
-use super::planet::{RocketBoundPlanet, RocketBoundPlanetCloud};
+use super::components::{PrimaryVehicle, RocketFlightConditions, RocketPhysicsState};
+use super::planet::RocketBoundPlanet;
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
 use crate::domain::services::atmosphere::SEA_LEVEL_DENSITY_KG_M3;
 use crate::domain::services::ephemeris::NaifBodyId;
@@ -8,6 +8,7 @@ use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
@@ -76,7 +77,7 @@ pub fn setup_rocket_sun_light(
 pub fn update_rocket_sky_ambient_light(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions)>,
+    rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions), PrimaryVehicle>,
     mut ambient: ResMut<AmbientLight>,
 ) {
     let Some(sun) = bound_planet
@@ -120,19 +121,14 @@ pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
 /// bound body's authoritative atmospheric optics, so distant terrain recedes
 /// through the same Rayleigh/Mie/ozone model as the sky. It does not alter any
 /// atmospheric physics or the solar direction.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This presentation system synchronizes independent camera, atmosphere, and cloud state."
-)]
 pub fn update_rocket_sky_color(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions)>,
+    rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions), PrimaryVehicle>,
     planet_query: Query<&PlanetComponent>,
     mut clear_color: ResMut<ClearColor>,
-    mut fog_query: Query<&mut DistanceFog, With<Camera3d>>,
-    cloud_query: Query<&MeshMaterial3d<StandardMaterial>, With<RocketBoundPlanetCloud>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    render_origin: Res<RenderOrigin>,
+    mut fog_query: Query<(&mut DistanceFog, &Transform, &Camera), With<Camera3d>>,
 ) {
     let Some(sun) = bound_planet
         .0
@@ -167,15 +163,17 @@ pub fn update_rocket_sky_color(
         })
         .and_then(|(name, radius_m)| AtmosphericOptics::for_body(name, radius_m));
 
-    for mut fog in fog_query.iter_mut() {
-        apply_aerial_perspective(&mut fog, optics.as_ref(), conditions.altitude_m, daylight);
-    }
-    for material_handle in &cloud_query {
-        if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.base_color = material
-                .base_color
-                .with_alpha(presentation.cloud_opacity_unit);
+    for (mut fog, transform, camera) in fog_query.iter_mut() {
+        if !camera.is_active {
+            continue;
         }
+        // Detached cameras do not share the rocket's altitude or local horizon.
+        let observer_m = render_origin.origin + transform.translation.as_dvec3();
+        let altitude_m = optics.as_ref().map_or(conditions.altitude_m, |optics| {
+            observer_m.length() - optics.bottom_radius_m as f64
+        });
+        let camera_daylight = twilight_daylight_unit(solar_altitude_rad(observer_m, sun.direction));
+        apply_aerial_perspective(&mut fog, optics.as_ref(), altitude_m, camera_daylight);
     }
 }
 
@@ -218,7 +216,6 @@ fn apply_aerial_perspective(
 struct AtmosphericPresentation {
     sky_unit: f32,
     ambient_unit: f32,
-    cloud_opacity_unit: f32,
 }
 
 /// Smooth render controls from the authoritative fixed-tick atmospheric sample.
@@ -235,7 +232,6 @@ fn atmospheric_presentation(
     AtmosphericPresentation {
         sky_unit: daylight * atmosphere_unit,
         ambient_unit: daylight * atmosphere_unit,
-        cloud_opacity_unit: atmosphere_unit * (0.18 + daylight * 0.62),
     }
 }
 
@@ -405,7 +401,7 @@ mod tests {
 
         assert!((0.0..=1.0).contains(&dense.sky_unit));
         assert!(thin.sky_unit < dense.sky_unit);
-        assert!(thin.cloud_opacity_unit < dense.cloud_opacity_unit);
+        assert!(thin.ambient_unit < dense.ambient_unit);
     }
 
     #[test]

@@ -1,5 +1,8 @@
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
 
 #[derive(Debug, Clone)]
 pub struct PlanetMaterialConfig {
@@ -96,6 +99,32 @@ pub fn create_cloud_material(
         // the terminator instead of staying full-bright everywhere.
         unlit: false,
         ..default()
+    }
+}
+
+/// Flight clouds use the existing geographic texture as coverage, not a black
+/// opaque layer. The shared standard-material factory still owns lighting.
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub struct CloudExtension {
+    #[uniform(100)]
+    pub coverage: f32,
+}
+
+impl MaterialExtension for CloudExtension {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/clouds.wgsl".into()
+    }
+}
+
+pub type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudExtension>;
+
+/// Cloud altitude for the flight shell, in metres above the reference surface.
+/// Solar-map exaggeration (`CloudLayerConfig::scale`) is not a flight altitude.
+pub fn flight_cloud_altitude_m(body: &str) -> f32 {
+    match body {
+        "Venus" => 60_000.0,
+        "Titan" => 20_000.0,
+        _ => 6_000.0,
     }
 }
 

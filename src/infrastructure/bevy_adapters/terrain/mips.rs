@@ -13,6 +13,8 @@ pub(crate) enum MipFilter {
     /// Plain average of the encoded RGBA texels. Correct for albedo, roughness,
     /// and other linear channels.
     Color,
+    /// Decode sRGB RGB into linear light before filtering; alpha stays linear.
+    SrgbColor,
     /// Average the decoded normal and renormalize, then average the remaining
     /// channel. Keeps every mip a unit normal instead of shrinking toward the
     /// encoded zero vector.
@@ -62,8 +64,8 @@ pub(crate) fn mip_chain_rgba8(
     (data, levels)
 }
 
-/// One 2x2 box-filter step. Odd dimensions clamp the odd tap to the last texel,
-/// so non-power-of-two terrain maps still terminate at a single texel.
+/// Area-weighted box filter. Odd-sized edges contribute to the mip instead of
+/// dropping the final row/column when the next dimension rounds down.
 fn downsample(
     src: &[u8],
     width: u32,
@@ -76,18 +78,27 @@ fn downsample(
     for y in 0..next_height {
         for x in 0..next_width {
             let mut accumulator = [0.0f32; 4];
-            for dy in 0..2u32 {
-                for dx in 0..2u32 {
-                    let source_x = (x * 2 + dx).min(width - 1);
-                    let source_y = (y * 2 + dy).min(height - 1);
+            let x0 = x as f32 * width as f32 / next_width as f32;
+            let x1 = (x + 1) as f32 * width as f32 / next_width as f32;
+            let y0 = y as f32 * height as f32 / next_height as f32;
+            let y1 = (y + 1) as f32 * height as f32 / next_height as f32;
+            let area = (x1 - x0) * (y1 - y0);
+            for source_y in y0.floor() as u32..(y1.ceil() as u32).min(height) {
+                for source_x in x0.floor() as u32..(x1.ceil() as u32).min(width) {
+                    let weight = (x1.min((source_x + 1) as f32) - x0.max(source_x as f32))
+                        * (y1.min((source_y + 1) as f32) - y0.max(source_y as f32))
+                        / area;
                     let index = ((source_y * width + source_x) * 4) as usize;
                     for channel in 0..4 {
-                        accumulator[channel] += src[index + channel] as f32;
+                        let encoded = src[index + channel] as f32 / 255.0;
+                        let value = if filter == MipFilter::SrgbColor && channel < 3 {
+                            srgb_to_linear(encoded)
+                        } else {
+                            encoded
+                        };
+                        accumulator[channel] += value * weight * 255.0;
                     }
                 }
-            }
-            for channel in accumulator.iter_mut() {
-                *channel *= 0.25;
             }
             let index = ((y * next_width + x) * 4) as usize;
             match filter {
@@ -95,6 +106,13 @@ fn downsample(
                     for channel in 0..4 {
                         out[index + channel] = quantize(accumulator[channel]);
                     }
+                }
+                MipFilter::SrgbColor => {
+                    for channel in 0..3 {
+                        out[index + channel] =
+                            quantize(linear_to_srgb(accumulator[channel] / 255.0) * 255.0);
+                    }
+                    out[index + 3] = quantize(accumulator[3]);
                 }
                 MipFilter::Normal => {
                     let normal = [
@@ -122,9 +140,40 @@ fn quantize(value: f32) -> u8 {
     value.round().clamp(0.0, 255.0) as u8
 }
 
+fn srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(value: f32) -> f32 {
+    if value <= 0.0031308 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srgb_mips_preserve_light_energy_and_linear_alpha() {
+        let base = [0, 0, 0, 0, 255, 255, 255, 255];
+        let (data, _) = mip_chain_rgba8(2, 1, &base, MipFilter::SrgbColor);
+        assert_eq!(&data[8..], &[188, 188, 188, 128]);
+    }
+
+    #[test]
+    fn odd_sized_mips_include_the_final_row_and_column() {
+        let mut base = vec![0; 3 * 3 * 4];
+        base[8 * 4..].fill(255);
+        let (data, _) = mip_chain_rgba8(3, 3, &base, MipFilter::Color);
+        assert_eq!(&data[36..], &[28, 28, 28, 28]);
+    }
 
     #[test]
     fn chain_terminates_at_one_texel_with_expected_level_count() {
@@ -161,8 +210,8 @@ mod tests {
             .copied()
             .collect::<Vec<_>>();
         let (data, _) = mip_chain_rgba8(16, 16, &base, MipFilter::Color);
-        for texel in data.chunks_exact(4) {
-            assert_eq!(texel, [10, 20, 30, 255]);
+        for texel in data.as_chunks::<4>().0 {
+            assert_eq!(*texel, [10, 20, 30, 255]);
         }
     }
 
@@ -192,7 +241,10 @@ mod tests {
                 })
                 .sum::<usize>();
             let texels = (8u32 >> level).max(1) as usize;
-            for texel in data[offset..offset + texels * texels * 4].chunks_exact(4) {
+            for texel in data[offset..offset + texels * texels * 4]
+                .as_chunks::<4>()
+                .0
+            {
                 let n = [
                     texel[0] as f32 * (2.0 / 255.0) - 1.0,
                     texel[1] as f32 * (2.0 / 255.0) - 1.0,

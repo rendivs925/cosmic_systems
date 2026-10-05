@@ -3,6 +3,7 @@ use super::ui_components::*;
 use crate::infrastructure::bevy_adapters::rocket::effects::RocketPresentationMetrics;
 use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::ui_components::VideoRecordingState;
+use bevy::diagnostic::DiagnosticsStore;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use std::time::Instant;
@@ -283,6 +284,7 @@ pub(crate) fn log_performance_metrics(
     mut reporter: ResMut<PerformanceMetricsReporter>,
     rocket_presentation: Option<Res<RocketPresentationMetrics>>,
     terrain_performance: Option<Res<TerrainPerformanceTelemetry>>,
+    render_diagnostics: Option<Res<DiagnosticsStore>>,
 ) {
     if !reporter.report_due(*config, Instant::now()) {
         return;
@@ -290,6 +292,28 @@ pub(crate) fn log_performance_metrics(
     let Some(summary) = performance_stats.frame_time_summary() else {
         return;
     };
+
+    if let Some(diagnostics) = render_diagnostics {
+        let mut passes: Vec<_> = diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                diagnostic
+                    .path()
+                    .as_str()
+                    .ends_with("/elapsed_gpu")
+                    .then(|| {
+                        diagnostic
+                            .average()
+                            .map(|ms| (diagnostic.path().as_str(), ms))
+                    })
+                    .flatten()
+            })
+            .collect();
+        passes.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (path, gpu_ms) in passes.into_iter().take(5) {
+            bevy::log::info!(target: "render_performance", pass = path, gpu_ms, "Measured GPU pass time (overlapping/nested spans are not additive)");
+        }
+    }
 
     if let Some(rocket_presentation) = rocket_presentation {
         bevy::log::info!(

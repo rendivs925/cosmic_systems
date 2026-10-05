@@ -30,7 +30,7 @@ use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    RocketMissionState, RocketPhysicsState, RocketPlanetBinding, SpentStage,
+    PrimaryVehicle, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
 };
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     ImageryMetrics, TerrainImageryResource,
@@ -509,7 +509,7 @@ pub(crate) fn stream_terrain_patches(
             &RocketPhysicsState,
             &RocketMissionState,
         ),
-        Without<SpentStage>,
+        PrimaryVehicle,
     >,
     mut ready_events: MessageWriter<TerrainPatchReady>,
     mut cached_events: MessageWriter<TerrainPatchCached>,
@@ -821,8 +821,20 @@ pub(crate) fn stream_terrain_patches(
         streaming.manager.request(*patch, size_bytes);
     }
 
+    // Prioritize only missing work. Re-sorting the entire resident ancestor
+    // chain wastes viewport tests and trigonometry on every reconciliation.
+    let generation_candidates: BTreeSet<_> = requested
+        .iter()
+        .copied()
+        .filter(|patch| {
+            patch_needs_geometry(
+                streaming.manager.state_of(patch),
+                streaming.generated.contains_key(patch),
+            )
+        })
+        .collect();
     let generation_order = prioritize_generation_requests(
-        &requested,
+        &generation_candidates,
         &streaming.published,
         &selection.target_leaves,
         focus_direction,
@@ -1163,7 +1175,7 @@ fn prioritize_generation_requests(
     elevation_bounds: ElevationBounds,
 ) -> Vec<TerrainPatch> {
     let mut ordered: Vec<_> = requested.iter().copied().collect();
-    ordered.sort_by_key(|patch| {
+    ordered.sort_by_cached_key(|patch| {
         let (tier, anchor) =
             generation_priority_group(*patch, published, target_leaves, focus_direction);
         (
@@ -1237,7 +1249,7 @@ fn prioritize_elevation_requests(
     focus_direction: DVec3,
 ) -> Vec<TerrainPatch> {
     let mut ordered: Vec<_> = tiles.iter().copied().collect();
-    ordered.sort_by_key(|tile| {
+    ordered.sort_by_cached_key(|tile| {
         (
             angular_distance_key(tile.center_direction(), focus_direction),
             tile.level,

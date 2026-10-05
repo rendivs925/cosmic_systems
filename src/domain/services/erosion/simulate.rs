@@ -50,14 +50,16 @@ pub(super) fn idx(x: usize, y: usize, w: usize) -> usize {
 pub(super) struct GridSpacing {
     pub(super) north_south_m: f64,
     pub(super) east_west_m: Vec<f64>,
+    diagonal_m: Vec<[f64; 2]>,
 }
+
+#[cfg(test)]
+#[path = "simulate_tests.rs"]
+mod spacing_tests;
 
 impl GridSpacing {
     pub(super) fn uniform(spacing_m: f64, rows: usize) -> Self {
-        Self {
-            north_south_m: spacing_m,
-            east_west_m: vec![spacing_m; rows],
-        }
+        Self::from_distances(spacing_m, vec![spacing_m; rows])
     }
 
     pub(super) fn from_tile(
@@ -76,25 +78,44 @@ impl GridSpacing {
                 (longitude_step_deg * 111_320.0 * lat.to_radians().cos().abs()).max(1.0)
             })
             .collect();
+        Self::from_distances(north_south_m.max(1.0), east_west_m)
+    }
+
+    fn from_distances(north_south_m: f64, east_west_m: Vec<f64>) -> Self {
+        // D8 distances are immutable for a raster. Retain the original hypot
+        // inputs/order so precomputation cannot change drainage tie-breaking.
+        let diagonal_m = (0..east_west_m.len())
+            .map(|y| {
+                let above = y.saturating_sub(1);
+                let below = (y + 1).min(east_west_m.len() - 1);
+                [above, below].map(|ny| {
+                    north_south_m
+                        .hypot((east_west_m[y] + east_west_m[ny]) * 0.5)
+                        .max(f64::EPSILON)
+                })
+            })
+            .collect();
         Self {
-            north_south_m: north_south_m.max(1.0),
+            north_south_m,
             east_west_m,
+            diagonal_m,
         }
     }
 
-    fn neighbor_distance_m(&self, y: usize, ny: usize, dx: i64, dy: i64) -> f64 {
-        let north_south_m = if dy == 0 { 0.0 } else { self.north_south_m };
-        let east_west_m = if dx == 0 {
-            0.0
+    fn neighbor_distance_m(&self, y: usize, _ny: usize, dx: i64, dy: i64) -> f64 {
+        if dx == 0 {
+            self.north_south_m.abs().max(f64::EPSILON)
+        } else if dy == 0 {
+            ((self.east_west_m[y] + self.east_west_m[y]) * 0.5)
+                .abs()
+                .max(f64::EPSILON)
         } else {
-            (self.east_west_m[y] + self.east_west_m[ny]) * 0.5
-        };
-        north_south_m.hypot(east_west_m).max(f64::EPSILON)
+            self.diagonal_m[y][usize::from(dy > 0)]
+        }
     }
 }
 
 /// Steepest-downhill neighbour of a cell. Returns its flat index and the drop
-
 #[cfg(test)]
 pub(super) fn steepest_downhill(
     x: usize,
@@ -119,22 +140,23 @@ pub(super) fn steepest_downhill_with_spacing(
 ) -> Option<(usize, f32, f64)> {
     let mut best = None;
     let mut best_slope = 0.0f64;
-    for dy in -1i64..=1 {
-        for dx in -1i64..=1 {
-            if dx == 0 && dy == 0 {
+    let current_height = h[idx(x, y, w)];
+    // Bounds once per cell, preserving the original D8 row/column tie order.
+    for ny in y.saturating_sub(1)..=(y + 1).min(hgt - 1) {
+        for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+            if nx == x && ny == y {
                 continue;
             }
-            let nx = x as i64 + dx;
-            let ny = y as i64 + dy;
-            if nx < 0 || ny < 0 || nx >= w as i64 || ny >= hgt as i64 {
+            let drop = current_height - h[idx(nx, ny, w)];
+            if drop <= 0.0 {
                 continue;
             }
-            let drop = h[idx(x, y, w)] - h[idx(nx as usize, ny as usize, w)];
-            let distance_m = spacing.neighbor_distance_m(y, ny as usize, dx, dy);
+            let distance_m =
+                spacing.neighbor_distance_m(y, ny, nx as i64 - x as i64, ny as i64 - y as i64);
             let slope = f64::from(drop) / distance_m;
             if slope > best_slope {
                 best_slope = slope;
-                best = Some((idx(nx as usize, ny as usize, w), drop, distance_m));
+                best = Some((idx(nx, ny, w), drop, distance_m));
             }
         }
     }

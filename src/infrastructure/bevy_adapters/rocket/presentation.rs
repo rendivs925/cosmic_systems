@@ -79,31 +79,6 @@ pub fn render_transform(
     Transform::from_translation(display).with_rotation(dynamics.orientation.as_quat())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::math::{DMat3, DQuat};
-    use bevy::math::Vec3;
-
-    #[test]
-    fn render_transform_rebases_before_f32_conversion() {
-        let scale = PhysicalScale::default();
-        let local_origin = DVec3::new(1.0e12, -2.0e12, 3.0e12);
-        let dynamics = RocketDynamicsState::new(
-            local_origin + DVec3::new(1.0, -2.0, 3.0),
-            DVec3::ZERO,
-            DQuat::IDENTITY,
-            1.0,
-            DMat3::IDENTITY,
-            DVec3::ZERO,
-        );
-
-        let transform = render_transform(dynamics, local_origin, &scale);
-
-        assert_eq!(transform.translation, Vec3::new(1.0, -2.0, 3.0));
-    }
-}
-
 /// Interpolate every rocket state at the same presentation timestamp as terrain.
 ///
 /// A pre-launch rocket is fixed to a rotating planetary surface, so rendering
@@ -123,5 +98,28 @@ pub(crate) fn render_dynamics_state(render: RocketRenderState, alpha: f64) -> Ro
         mass_kg: current.mass_kg,
         inertia_body: current.inertia_body,
         center_of_mass_m: current.center_of_mass_m,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::math::{DMat3, DQuat};
+    use bevy::math::Vec3;
+
+    #[test]
+    fn render_transform_rebases_before_f32_conversion() {
+        let scale = PhysicalScale::default();
+        let local_origin = DVec3::new(1.0e12, -2.0e12, 3.0e12);
+        let dynamics = RocketDynamicsState::new(
+            local_origin + DVec3::new(1.0, -2.0, 3.0),
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            1.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let transform = render_transform(dynamics, local_origin, &scale);
+        assert_eq!(transform.translation, Vec3::new(1.0, -2.0, 3.0));
     }
 }

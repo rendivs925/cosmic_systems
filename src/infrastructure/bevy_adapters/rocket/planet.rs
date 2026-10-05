@@ -9,7 +9,7 @@
 //! The existing display-scale conversion remains only for the current
 //! parent-relative moon approximation.
 
-use super::components::{RocketPhysicsState, RocketPlanetBinding};
+use super::components::{PrimaryVehicle, RocketPhysicsState, RocketPlanetBinding};
 use crate::application::solar_system_startup::solar_surface_luminance_nits;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
@@ -17,6 +17,7 @@ use crate::domain::services::physics_orbital::MOON_ORBIT_SCALE;
 use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::services::terrain_source::ElevationBounds;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::entity_components::*;
@@ -24,15 +25,14 @@ use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
-    create_cloud_material, create_planet_material, PlanetMaterialConfig,
+    create_cloud_material, create_planet_material, flight_cloud_altitude_m, CloudExtension,
+    CloudMaterial, PlanetMaterialConfig,
 };
-use crate::infrastructure::bevy_adapters::rendering::meshes::{
-    create_flight_globe_mesh, create_uv_sphere_mesh,
-};
+use crate::infrastructure::bevy_adapters::rendering::meshes::create_flight_globe_mesh;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_cloud_layer_config, get_planet_textures, load_texture,
 };
-use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
+use crate::infrastructure::bevy_adapters::terrain::render::{RenderOrigin, TerrainRenderConfig};
 // The far-field planet and cloud shells enclose the flight camera. If they cast
 // or receive directional shadows they produce a planet-scale dark arc, so they
 // are excluded from the shadow system while remaining fully lit.
@@ -61,8 +61,8 @@ pub struct RocketBoundPlanetSurface {
     body: CelestialBodyId,
 }
 
-/// Marks the Rocket-mode cloud shell so atmospheric presentation can fade its
-/// visual contribution without changing ephemeris placement or cloud geometry.
+/// Marks the Rocket-mode geographic cloud deck. Observer air density must not
+/// fade this layer away when the vehicle rises above it.
 #[derive(Component, Debug)]
 pub struct RocketBoundPlanetCloud;
 
@@ -122,10 +122,12 @@ pub fn setup_rocket_planets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cloud_materials: ResMut<Assets<CloudMaterial>>,
+    terrain_config: Res<TerrainRenderConfig>,
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
-    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState)>,
-    planet_query: Query<&PlanetComponent>,
+    rocket_query: Query<(&RocketPlanetBinding, &RocketPhysicsState), PrimaryVehicle>,
+    planet_query: Query<(&PlanetComponent, Option<&PlanetTerrain>)>,
     mut bound_planet_res: ResMut<RocketBoundPlanet>,
 ) {
     let Some((binding, _rocket)) = rocket_query.iter().next() else {
@@ -133,16 +135,26 @@ pub fn setup_rocket_planets(
     };
     bound_planet_res.0 = Some(binding.planet_name.clone());
 
-    if let Some(planet) = planet_query
+    if let Some((planet, terrain)) = planet_query
         .iter()
-        .find(|planet| planet.domain_planet.name == binding.planet_name.as_str())
+        .find(|(planet, _)| planet.domain_planet.name == binding.planet_name.as_str())
     {
+        let bounds = terrain.map_or(ElevationBounds::new(0.0, 0.0), |terrain| {
+            terrain.source.elevation_bounds_m()
+        });
+        let fallback_radius_m = bound_planet_fallback_radius_m(
+            planet.domain_planet.radius_km as f64 * 1_000.0,
+            bounds,
+            terrain_config.patch_resolution,
+        );
         spawn_rocket_bound_planet_surface(
             &mut commands,
             &mut meshes,
             &mut materials,
+            &mut cloud_materials,
             &asset_server,
             &planet.domain_planet,
+            fallback_radius_m as f32,
         );
     }
 
@@ -170,8 +182,10 @@ fn spawn_rocket_bound_planet_surface(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
+    cloud_materials: &mut Assets<CloudMaterial>,
     asset_server: &AssetServer,
     planet: &crate::domain::entities::planet::Planet,
+    fallback_radius_m: f32,
 ) {
     let textures = get_planet_textures(&planet.name);
     let albedo = load_texture(asset_server, textures.albedo);
@@ -194,7 +208,7 @@ fn spawn_rocket_bound_planet_surface(
     });
     let surface_entity = commands
         .spawn((
-            Mesh3d(create_flight_globe_mesh(meshes, planet.radius_km * 1_000.0)),
+            Mesh3d(create_flight_globe_mesh(meshes, fallback_radius_m)),
             MeshMaterial3d(materials.add(material)),
             Transform::default(),
             RocketBoundPlanetSurface {
@@ -213,13 +227,18 @@ fn spawn_rocket_bound_planet_surface(
     if let Some(clouds) = get_cloud_layer_config(&planet.name) {
         let cloud_texture = load_texture(asset_server, Some(clouds.texture_path));
         if let Some(cloud_texture) = cloud_texture {
-            let cloud_material =
-                materials.add(create_cloud_material(Some(cloud_texture), clouds.alpha));
+            let mut base = create_cloud_material(Some(cloud_texture), clouds.alpha);
+            // The flight camera can see both above and below the cloud deck.
+            base.cull_mode = None;
+            let cloud_material = cloud_materials.add(CloudMaterial {
+                base,
+                extension: CloudExtension { coverage: 1.0 },
+            });
             commands.entity(surface_entity).with_children(|parent| {
                 parent.spawn((
-                    Mesh3d(create_uv_sphere_mesh(
+                    Mesh3d(create_flight_globe_mesh(
                         meshes,
-                        planet.radius_km * 1_000.0 * clouds.scale,
+                        planet.radius_km * 1_000.0 + flight_cloud_altitude_m(&planet.name),
                     )),
                     MeshMaterial3d(cloud_material),
                     Transform::default(),
@@ -231,6 +250,16 @@ fn spawn_rocket_bound_planet_surface(
             });
         }
     }
+}
+
+/// The geographic fallback must lie below even the coarsest streamed triangles,
+/// not merely below their spherical vertices. Otherwise it intersects ocean caps
+/// along jagged grid-shaped lines. This conservative angular cell diameter also
+/// covers stitched edges; no terrain sampling or high-resolution globe is needed.
+fn bound_planet_fallback_radius_m(radius_m: f64, bounds: ElevationBounds, resolution: u32) -> f64 {
+    let cell_angle_rad = 2.0 * std::f64::consts::SQRT_2 / f64::from(resolution.max(3) - 1);
+    let minimum_surface_radius_m = radius_m + bounds.min_m.min(0.0);
+    (minimum_surface_radius_m * cell_angle_rad.cos() - 2.0).max(radius_m * 0.1)
 }
 
 /// Spawn a moon in flight units.
@@ -333,6 +362,10 @@ fn spawn_rocket_sun(
         MeshMaterial3d(material_handle),
         Transform::default(),
         RocketSunDisc,
+        // This is a camera-relative image of the emitter, not an occluder.
+        // Casting from the 20 km proxy creates a ~93 m circular ground shadow.
+        NotShadowCaster,
+        NotShadowReceiver,
     ));
 }
 
@@ -448,7 +481,7 @@ fn bound_planet_surface_transform(
 pub fn update_rocket_sun_disc(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    rocket_query: Query<&RocketPhysicsState>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
     camera_query: Query<&Transform, (With<Camera3d>, Without<RocketSunDisc>)>,
     mut sun_query: Query<(&mut Transform, &mut Visibility), With<RocketSunDisc>>,
 ) {
@@ -512,14 +545,69 @@ fn rocket_sun_disc_radius_m(planet_sun_distance_m: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::domain::services::body_orientation::BodyOrientation;
+    use crate::domain::services::cube_sphere::{build_patch_geometry, TerrainPatch};
     use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::terrain_source::ProceduralTerrainSource;
     use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
     use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
     use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
     use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
+    use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::math::{DMat3, DQuat, DVec3};
+
+    #[test]
+    fn visual_sun_disc_never_casts_or_receives_local_shadows() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.insert_resource(SolarSystemParameters::for_visualization());
+        app.add_systems(
+            Startup,
+            |mut commands: Commands,
+             mut meshes: ResMut<Assets<Mesh>>,
+             mut materials: ResMut<Assets<StandardMaterial>>,
+             asset_server: Res<AssetServer>,
+             solar: Res<SolarSystemParameters>| {
+                spawn_rocket_sun(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &asset_server,
+                    &solar,
+                )
+            },
+        );
+        app.update();
+        let mut sun = app
+            .world_mut()
+            .query_filtered::<(Has<NotShadowCaster>, Has<NotShadowReceiver>), With<RocketSunDisc>>(
+            );
+        assert_eq!(sun.single(app.world()).unwrap(), (true, true));
+    }
+
+    #[test]
+    fn fallback_globe_is_below_coarse_terrain_triangle_planes() {
+        let radius_m = 6_371_000.0;
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let fallback_m =
+            bound_planet_fallback_radius_m(radius_m, ElevationBounds::new(0.0, 0.0), 33);
+        for root in TerrainPatch::roots() {
+            let geometry = build_patch_geometry(&root, &source, radius_m, 33, 0.0);
+            for triangle in geometry.indices.as_chunks::<3>().0 {
+                if triangle.iter().any(|index| *index >= 33 * 33) {
+                    continue;
+                }
+                let [a, b, c] =
+                    triangle.map(|index| DVec3::from_array(geometry.positions[index as usize]));
+                let plane_normal = (b - a).cross(c - a).normalize();
+                assert!(plane_normal.dot(a).abs() > fallback_m);
+            }
+        }
+    }
 
     fn earth_orientation(epoch: TdbEpoch) -> BodyOrientation {
         BodyOrientation::from_kernel(

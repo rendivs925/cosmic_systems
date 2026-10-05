@@ -6,8 +6,8 @@
 //! state.
 
 use super::components::{
-    GroundRest, RocketAutopilot, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
-    TerrainCollisionState,
+    GroundRest, PrimaryVehicle, RocketAutopilot, RocketMissionState, RocketPhysicsState,
+    RocketPlanetBinding, TerrainCollisionState,
 };
 use super::orbit::{update_orbit_prediction_cache, OrbitPrediction, OrbitPredictionCache};
 use super::telemetry::{FlightLogEntry, FlightRecorder};
@@ -337,16 +337,19 @@ fn update_terrain_map_panel(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     real_time: Res<Time>,
     planet_query: Query<(Entity, &PlanetComponent), With<PlanetTerrain>>,
-    rocket_query: Query<(
-        &RocketPlanetBinding,
-        &RocketPhysicsState,
-        &LaunchSiteCoordinates,
-        &RocketAutopilot,
-        &RocketMissionState,
-        &TerrainCollisionState,
-        &GroundRest,
-        &FlightRecorder,
-    )>,
+    rocket_query: Query<
+        (
+            &RocketPlanetBinding,
+            &RocketPhysicsState,
+            &LaunchSiteCoordinates,
+            &RocketAutopilot,
+            &RocketMissionState,
+            &TerrainCollisionState,
+            &GroundRest,
+            &FlightRecorder,
+        ),
+        PrimaryVehicle,
+    >,
     prediction_cache: Res<OrbitPredictionCache>,
     mut cache: ResMut<TerrainMapRasterCache>,
     mut update_state: ResMut<TerrainMapUpdateState>,

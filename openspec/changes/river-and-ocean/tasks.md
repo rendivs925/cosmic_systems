@@ -11,16 +11,16 @@
 
 ## 2. Displaced Ocean Geometry
 
-- [x] 2.1 Extend `water_mesh_for_patch` to emit displacement-capable subdivision while preserving the normalized depth vertex channel and render-origin frame
-  The ocean cap reuses the terrain patch grid so the Gerstner vertex stage displaces it, retains the normalized depth vertex channel, carries patch-local UV1, and stays in the render-origin frame.
-- [x] 2.2 Keep the coastline sealed when displacement is enabled and release the mesh with the patch on evict
-- [x] 2.3 Budget-gate subdivision and wave count by patch LOD/distance with a configuration value
-  `WaterQualityConfig` caps the ocean cap's vertices per side and the active Gerstner wave count (1..=4) plus foam coverage; defaults are the maximum tier.
+- [x] 2.1 Extend `water_mesh_for_patch` to reuse the terrain patch grid topology while preserving the normalized depth vertex channel and render-origin frame
+  The ocean cap reuses the terrain patch grid (including LOD stitches) at sea level, retains the normalized depth vertex channel, carries patch-local UV1, and stays in the render-origin frame. Vertex displacement was dropped after it aliased into large facets and tore stitched edges.
+- [x] 2.2 Keep the coastline sealed at sea level and release the mesh with the patch on evict
+- [x] 2.3 Budget-gate wave count by patch LOD/distance with a configuration value
+  `WaterQualityConfig` caps the active Gerstner wave count (1..=4) plus foam coverage; defaults are the maximum tier. The ocean mesh follows the terrain grid resolution.
 
 ## 3. Gerstner Vertex Shader
 
-- [x] 3.1 Implement the bounded Gerstner wave-sum displacement in the water vertex stage
-- [x] 3.2 Derive the analytic surface normal from the same wave sum and feed it into PBR lighting
+- [x] 3.1 Implement the bounded Gerstner wave sum in the water fragment stage (the vertex stage stays at sea level to avoid coarse-mesh aliasing)
+- [x] 3.2 Derive the analytic surface normal from the same wave sum and feed it into PBR lighting, filtering sub-pixel components into roughness
 - [x] 3.3 Drive wave phase from the deterministic presentation clock only
 
 ## 4. Physically Based Water Shading
@@ -57,8 +57,8 @@
 
 ## 8. Validation
 
-- [x] 8.1 Add domain-level tests for deterministic displacement, analytic normals, and river width scaling
-  River width scaling and channel determinism are covered by `river_width_scales_with_discharge_and_stays_deterministic`; ocean displacement/analytic normals are shader-side and validated by shader compilation only.
+- [x] 8.1 Add domain-level tests for deterministic geometry, analytic normals, and river width scaling
+  River width scaling and channel determinism are covered by `river_width_scales_with_discharge_and_stays_deterministic`; ocean analytic wave normals are shader-side and validated by shader compilation only.
 - [x] 8.2 Add presentation-boundary tests that water never mutates collision, radar altitude, or physics state
   Structural boundary: `WaterParams`, `WaterExtension`, `WaterMaterial`, and `WaterQualityConfig` are declared and referenced only under `src/infrastructure/bevy_adapters/terrain/`; no `src/domain` or `src/application` module references them. Collision, altitude, and physics sample only `TerrainSource`, so water cannot mutate authoritative state.
 - [x] 8.3 Verify terrain patch spawn/evict, render-origin rebasing, and material sharing still hold for water

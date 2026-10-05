@@ -1,21 +1,16 @@
 #import bevy_pbr::{
     forward_io::{Vertex, VertexOutput, FragmentOutput},
-    lighting,
-    lighting::LAYER_BASE,
     mesh_functions,
-    mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
-    mesh_view_bindings::{lights, view},
-    mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
+    mesh_view_bindings::view,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{
-        alpha_discard, apply_pbr_lighting, calculate_diffuse_color, calculate_F0,
+        alpha_discard, apply_pbr_lighting,
         main_pass_post_lighting_processing,
     },
-    pbr_types,
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
-    shadows,
     view_transformations,
 }
+#import "shaders/landscape_lighting.wgsl"::direct_sun_self_shadow_correction
 
 // Source-derived detail fades out with camera distance. Evaluating the fade per
 // pixel (not per patch) keeps shared patch edges continuous, so neighbouring
@@ -81,6 +76,7 @@ struct TerrainSurfaceExtension {
     near_detail_scale: f32,
     // Gain of the near-camera detail overlay, faded by view distance.
     near_detail_strength: f32,
+    planet_center: vec3<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -145,7 +141,7 @@ fn blended_layer_uv(
     let triplanar = world_position.zy * axis_weights.x
         + world_position.xz * axis_weights.y
         + world_position.xy * axis_weights.z;
-    let radial = normalize(world_position + vec3<f32>(1e-6, 1e-6, 1e-6));
+    let radial = normalize(world_position - terrain_surface.planet_center);
     let steep = 1.0 - clamp(abs(dot(normal, radial)), 0.0, 1.0);
     let blend = smoothstep(PROJECTION_BLEND_START, PROJECTION_BLEND_END, steep);
     return mix(patch_uv * patch_scale, triplanar * world_scale, blend);
@@ -244,70 +240,6 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 #endif
 
     return out;
-}
-
-// Return the change needed to scale only the directional-sun contribution by
-// `self_shadow`. Bevy's `apply_pbr_lighting` has no per-material hook for a
-// single light, so the terrain reconstructs the same directional contribution
-// from the same public lighting functions and subtracts the part the baked
-// self-shadow hides. Indirect sky/ambient light is left untouched, so shadowed
-// slopes keep readable fill instead of going black.
-fn direct_sun_self_shadow_correction(
-    pbr_input: pbr_types::PbrInput,
-    self_shadow: f32,
-) -> vec3<f32> {
-    if self_shadow >= 1.0 || lights.n_directional_lights == 0u {
-        return vec3<f32>(0.0);
-    }
-    let view_z = dot(
-        vec4<f32>(
-            view.view_from_world[0].z,
-            view.view_from_world[1].z,
-            view.view_from_world[2].z,
-            view.view_from_world[3].z,
-        ),
-        pbr_input.world_position,
-    );
-    let ndotv = max(dot(pbr_input.N, pbr_input.V), 0.0001);
-    var lighting_input: lighting::LightingInput;
-    lighting_input.layers[LAYER_BASE].NdotV = ndotv;
-    lighting_input.layers[LAYER_BASE].N = pbr_input.N;
-    lighting_input.layers[LAYER_BASE].R = reflect(-pbr_input.V, pbr_input.N);
-    lighting_input.layers[LAYER_BASE].perceptual_roughness =
-        pbr_input.material.perceptual_roughness;
-    lighting_input.layers[LAYER_BASE].roughness =
-        lighting::perceptualRoughnessToRoughness(pbr_input.material.perceptual_roughness);
-    lighting_input.P = pbr_input.world_position.xyz;
-    lighting_input.V = pbr_input.V;
-    lighting_input.diffuse_color = calculate_diffuse_color(
-        pbr_input.material.base_color.rgb,
-        pbr_input.material.metallic,
-        pbr_input.material.specular_transmission,
-        pbr_input.material.diffuse_transmission,
-    );
-    lighting_input.F0_ = calculate_F0(
-        pbr_input.material.base_color.rgb,
-        pbr_input.material.metallic,
-        pbr_input.material.reflectance,
-    );
-    lighting_input.F_ab = lighting::F_AB(pbr_input.material.perceptual_roughness, ndotv);
-
-    var direct = vec3<f32>(0.0);
-    for (var i = 0u; i < lights.n_directional_lights; i = i + 1u) {
-        var shadow = 1.0;
-        if (pbr_input.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-            && (lights.directional_lights[i].flags
-                & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
-            shadow = shadows::fetch_directional_shadow(
-                i,
-                pbr_input.world_position,
-                pbr_input.world_normal,
-                view_z,
-            );
-        }
-        direct += lighting::directional_light(i, &lighting_input, true) * shadow;
-    }
-    return view.exposure * (self_shadow - 1.0) * direct;
 }
 
 @fragment

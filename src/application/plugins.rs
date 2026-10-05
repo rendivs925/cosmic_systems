@@ -217,7 +217,14 @@ impl Plugin for SharedSimulationPlugin {
         });
         app.insert_resource(ScreenshotState { pending: false });
         app.insert_resource(PerformanceStats::default());
-        app.insert_resource(PerformanceMetricsConfig::from_environment());
+        let performance_config = PerformanceMetricsConfig::from_environment();
+        if performance_config.instrumentation_enabled()
+            && app.get_sub_app(bevy::render::RenderApp).is_some()
+        {
+            app.init_resource::<bevy::diagnostic::DiagnosticsStore>();
+            app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+        }
+        app.insert_resource(performance_config);
         app.init_resource::<PerformanceMetricsReporter>();
         app.insert_resource(UiPointerState::default());
         app.insert_resource(CameraInputState::default());
@@ -617,6 +624,9 @@ impl Plugin for RocketModePlugin {
         app.init_resource::<RocketMode>();
         // Rocket planet system resource.
         app.init_resource::<RocketBoundPlanet>();
+        app.add_plugins(bevy::pbr::MaterialPlugin::<
+            crate::infrastructure::bevy_adapters::rendering::materials::CloudMaterial,
+        >::default());
 
         // Cube-sphere terrain streaming around the rocket. It is the visible
         // Earth surface and shares its source with collision/altitude queries.

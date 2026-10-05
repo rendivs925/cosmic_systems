@@ -15,8 +15,9 @@
 //! - Coefficients (analytic approximations, documented limits): constant base
 //!   drag `Cd = 0.3`, linear lift `Cl = 1.5·α`, linear side `Cy = −0.8·β`.
 //!   Tabulated data can replace these behind the same interface.
-//! - Drag opposes velocity; lift acts along the body axis projected
-//!   perpendicular to velocity; side force is mutually perpendicular.
+//! - Drag opposes velocity. Signed pitch lift acts along body +X projected
+//!   perpendicular to velocity; signed side force completes that basis toward
+//!   body +Z for nose-first flight. Coefficient signs carry deflection direction.
 //! - Center of pressure is a simple geometric estimate (slightly above the
 //!   mid-length); aerodynamic torque is `τ = (r_CoP − r_COM) × F`.
 
@@ -110,7 +111,7 @@ pub fn drag_force_body(
     -body_velocity / speed * (dynamic_pressure_pa * drag_coefficient * reference_area_m2)
 }
 
-/// Lift force in the body frame: along the body axis projected perpendicular
+/// Lift force in the body frame: along body +X projected perpendicular
 /// to the velocity, magnitude `q·Cl·A`.
 pub fn lift_force_body(
     dynamic_pressure_pa: f64,
@@ -137,20 +138,20 @@ pub fn side_force_body(
     };
     let speed = body_velocity.length();
     let vel_unit = body_velocity / speed;
-    let side_dir = vel_unit.cross(lift_dir);
+    let side_dir = lift_dir.cross(vel_unit);
     side_dir * (dynamic_pressure_pa * side_coefficient * reference_area_m2)
 }
 
-/// Unit vector of lift direction: the body +Y axis projected perpendicular to
-/// the velocity, normalized. `None` when the projection is degenerate (flow
-/// aligned with the body axis).
+/// Signed pitch coefficients require a fixed +X normal-force basis. Projecting
+/// longitudinal +Y flips this basis with pitch and makes yaw produce pitch lift.
+/// `None` when the lateral projection is degenerate (flow aligned with +X).
 fn lift_direction(body_velocity: DVec3) -> Option<DVec3> {
     let speed = body_velocity.length();
     if speed < 1e-9 {
         return None;
     }
     let vel_unit = body_velocity / speed;
-    let projection = DVec3::Y - vel_unit * vel_unit.y;
+    let projection = DVec3::X - vel_unit * vel_unit.x;
     let len = projection.length();
     if len < 1e-9 {
         None
@@ -186,6 +187,36 @@ pub fn update_max_q(dynamic_pressure_pa: f64, max_q_pa: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_aerodynamic_coefficients_produce_mirrored_normal_forces() {
+        let q = 20_000.0;
+        for lateral in [-10.0, 10.0] {
+            let pitch_velocity = DVec3::new(lateral, 200.0, 0.0);
+            let (_, cl, _) = aerodynamic_coefficients(angle_of_attack(pitch_velocity), 0.0);
+            let lift = lift_force_body(q, cl, AREA, pitch_velocity);
+            assert!(
+                lift.x * lateral < 0.0,
+                "pitch force must oppose lateral flow: {lift:?}"
+            );
+            assert!(
+                lift.dot(pitch_velocity).abs() < 1e-6,
+                "lift must do no work"
+            );
+
+            let yaw_velocity = DVec3::new(0.0, 200.0, lateral);
+            let (_, _, cy) = aerodynamic_coefficients(0.0, angle_of_sideslip(yaw_velocity));
+            let side = side_force_body(q, cy, AREA, yaw_velocity);
+            assert!(
+                side.z * lateral < 0.0,
+                "side force must oppose lateral flow: {side:?}"
+            );
+            assert!(
+                side.dot(yaw_velocity).abs() < 1e-6,
+                "side force must do no work"
+            );
+        }
+    }
 
     const AREA: f64 = std::f64::consts::PI * 1.85 * 1.85; // ~10.75 m²
 
