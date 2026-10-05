@@ -105,6 +105,7 @@ use crate::infrastructure::bevy_adapters::rocket::events::{
     TouchdownEvent,
 };
 use crate::infrastructure::bevy_adapters::rocket::flight_conditions::refresh_flight_conditions;
+use crate::infrastructure::bevy_adapters::rocket::game_flow::RocketGameFlowPlugin;
 use crate::infrastructure::bevy_adapters::rocket::gravity_orbit::{
     update_orbital_elements, update_rocket_gravity, ActiveForceModel,
 };
@@ -662,6 +663,9 @@ impl Plugin for RocketModePlugin {
         // flight depth range to solar-map distances.
         app.add_systems(Startup, configure_flight_starfield.after(setup_space));
 
+        // Rocket-only game-flow states (title through debrief).
+        app.add_plugins(RocketGameFlowPlugin);
+
         // Rocket debug visualization plugin.
         app.add_plugins(RocketDebugPlugin);
 
@@ -936,7 +940,11 @@ mod tests {
         ));
 
         let mut rocket = App::new();
-        rocket.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        rocket.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            bevy::state::app::StatesPlugin,
+        ));
         rocket.add_plugins((SharedSimulationPlugin, RocketModePlugin));
 
         let solar_epoch = epoch_after_completed_ticks(&mut solar, 12);

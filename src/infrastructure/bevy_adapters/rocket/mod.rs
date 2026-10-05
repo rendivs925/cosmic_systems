@@ -11,6 +11,7 @@ pub mod entry;
 pub mod environment;
 pub mod events;
 pub mod flight_conditions;
+pub mod game_flow;
 pub mod gravity_orbit;
 pub mod ground_presentation;
 pub mod guidance;

@@ -31,7 +31,14 @@
   `Rocket::total_mass_kg`, invalid-draft rejection, and locked-part rejection.
   `part_catalog` tests assert the shipped catalog loads and validates; the
   earlier `domain/game` tests cover stack compatibility and diagnostics.
-- [ ] 1.5 Add rocket-mode game-flow state composition for title, profile, assembly, briefing, flight, pause, and debrief without registering it in normal or craft modes.
+- [x] 1.5 Add rocket-mode game-flow state composition for title, profile, assembly, briefing, flight, pause, and debrief without registering it in normal or craft modes.
+
+  Added `rocket/game_flow.rs` with the `RocketGameFlow` Bevy state (Title,
+  Profile, Assembly, Briefing, Flight, Pause, Debrief; default Title) and
+  `RocketGameFlowPlugin`, registered only by `RocketModePlugin`. Tests cover
+  default initialization and transitions; normal and craft modes are unchanged
+  (all three bounded startup smoke runs exit 0, and the shared-epoch mode test
+  still passes).
 
 ## 2. Player Command Authority
 
