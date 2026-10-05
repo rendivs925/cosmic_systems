@@ -169,13 +169,15 @@ impl WaterParams {
 }
 
 /// Quality budget for the water surface. One algorithm, data-driven values: the
-/// defaults are the maximum tier, and lower tiers reduce wave components, foam
-/// coverage, and displacement subdivision without changing any code path.
+/// defaults are the maximum tier, and lower tiers reduce wave components and
+/// foam coverage without changing any code path.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct WaterQualityConfig {
     /// Reserved subdivision budget for independently tessellated waves. The
-    /// current cap shares terrain topology; it cannot be decimated separately
-    /// without changing sphere sag and breaking stitched shoreline coverage.
+    /// current implementation shares terrain topology and evaluates the wave sum
+    /// in the fragment stage, so this is unused; it cannot be decimated
+    /// separately without changing sphere sag and breaking stitched shoreline
+    /// coverage.
     pub max_subdivision: u32,
     /// Number of active Gerstner wave components, clamped to `1..=4`.
     pub wave_components: u32,

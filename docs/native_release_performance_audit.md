@@ -167,15 +167,29 @@ The earlier resident-patch prioritization change held through ascent: no
 geometry backlog accumulated and per-frame terrain scheduling stayed sub-
 millisecond.
 
+### Orbital and no-vsync follow-up — 2026-10-05
+
+- **Orbital capture:** a chase view at 89.4 km (T+78.3 s, 1698 m/s) renders the
+  curved horizon, deep-blue ocean band, and atmosphere limb correctly. This
+  closes the earlier "no exoatmospheric capture" gap.
+- **No-vsync run:** with the window temporarily set to `AutoNoVsync`, the ascent
+  p50 stayed at 16.4–18.6 ms (about 58 fps) rather than dropping to the ~4 ms
+  implied by the measured passes. GPU passes summed to ~3.7 ms (opaque ~2.0,
+  transparent ~1.2, bloom ~0.38, tonemapping ~0.11, upscaling ~0.06) and terrain
+  scheduling p95 stayed below ~1.9 ms, so the ~17 ms frame is not explained by
+  the instrumented passes. The p95/p99 tail worsened to 27–46 ms, with a worst
+  terrain frame of ~7.1 ms. The present-mode override was reverted; the
+  environment may still pace to vblank, or the remaining ~13 ms is unmeasured
+  GPU/main-thread work. This is a real open question, not a resolved bottleneck.
+
 ### Remaining limits
 
-- Vsync masks absolute CPU/GPU headroom; a present-mode-off run would be needed
-  to measure true frame cost.
-- No exoatmospheric/orbital capture was taken; the highest verified sample was
-  52.9 km.
-- The terrain at altitude still renders as broad low-relief ground with
-  disconnected water polygons; that appearance was not accepted or rejected
-  here.
+- The no-vsync result above leaves ~13 ms/frame unaccounted for; further
+  investigation needs full GPU timing and main-thread/render-thread stall
+  attribution.
+- Water appearance at altitude was improved this session (visible-depth scale
+  4 km → 60 m), but the terrain itself still renders as broad low-relief ground
+  at coarse LOD; that is not judged.
 - The large circular ground shadow traced to the visual Sun-disc proxy casting
   shadows is no longer present in these captures (the disc now has
   `NotShadowCaster`/`NotShadowReceiver`), but the fix has not been compared
