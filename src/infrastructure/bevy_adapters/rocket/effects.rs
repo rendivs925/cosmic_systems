@@ -275,32 +275,34 @@ pub(crate) fn update_rocket_engine_effects(
             }
         }
 
-        for station in &desired {
-            for layer in [
-                EngineEffectLayer::Core,
-                EngineEffectLayer::Inner,
-                EngineEffectLayer::Outer,
-            ] {
-                if owned.contains_key(&(station.key, layer)) {
-                    continue;
+        if quality.level.effects_enabled() {
+            for station in &desired {
+                for layer in [
+                    EngineEffectLayer::Core,
+                    EngineEffectLayer::Inner,
+                    EngineEffectLayer::Outer,
+                ] {
+                    if owned.contains_key(&(station.key, layer)) {
+                        continue;
+                    }
+                    let (mesh, material) = effect_asset_handles(&effect_assets, layer);
+                    commands.entity(rocket_entity).with_children(|parent| {
+                        parent.spawn((
+                            RocketEngineEffect {
+                                owner: rocket_entity,
+                                key: station.key,
+                                layer,
+                                station_m: station.station_m,
+                                rated_thrust_kn: station.rated_thrust_kn,
+                                running: station.running,
+                            },
+                            Mesh3d(mesh),
+                            MeshMaterial3d(material),
+                            Transform::default(),
+                            Visibility::Hidden,
+                        ));
+                    });
                 }
-                let (mesh, material) = effect_asset_handles(&effect_assets, layer);
-                commands.entity(rocket_entity).with_children(|parent| {
-                    parent.spawn((
-                        RocketEngineEffect {
-                            owner: rocket_entity,
-                            key: station.key,
-                            layer,
-                            station_m: station.station_m,
-                            rated_thrust_kn: station.rated_thrust_kn,
-                            running: station.running,
-                        },
-                        Mesh3d(mesh),
-                        MeshMaterial3d(material),
-                        Transform::default(),
-                        Visibility::Hidden,
-                    ));
-                });
             }
         }
 
@@ -351,7 +353,8 @@ pub(crate) fn update_rocket_engine_effects(
                 effect.rated_thrust_kn = station.rated_thrust_kn;
                 effect.running = station.running;
             }
-            let visible = effect.running
+            let visible = quality.level.effects_enabled()
+                && effect.running
                 && intensity > 0.002
                 && distance_m <= quality.max_effect_distance_m
                 && layer_is_within_quality_budget(effect.layer, distance_m, *quality);
@@ -510,6 +513,11 @@ fn layer_is_within_quality_budget(
     distance_m: f32,
     quality: RocketPresentationQuality,
 ) -> bool {
+    // Reduced quality keeps only the core plume layer; the inner and outer
+    // layers are secondary detail that never affects flight readability.
+    if !quality.level.full_detail() && !matches!(layer, EngineEffectLayer::Core) {
+        return false;
+    }
     let max_distance_m = match layer {
         EngineEffectLayer::Core => quality.max_effect_distance_m,
         EngineEffectLayer::Inner => quality.max_effect_distance_m * 0.5,
@@ -522,6 +530,10 @@ fn layer_is_within_quality_budget(
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::{ParallelBoosters, Rocket};
+    use crate::domain::services::simulation_time::SimulationTime;
+    use crate::infrastructure::bevy_adapters::rocket::atmospheric_effects::{
+        update_rocket_atmospheric_effects, RocketAtmosphericEffectAssets,
+    };
     use bevy_mesh::VertexAttributeValues;
 
     #[test]
@@ -694,5 +706,76 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(detached_count, 27);
+    }
+
+    #[test]
+    fn presentation_updates_leave_authoritative_state_untouched() {
+        let mut app = App::new();
+        app.insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .init_resource::<Time>()
+            .init_resource::<RocketPresentationQuality>()
+            .init_resource::<RocketPresentationMetrics>()
+            .init_resource::<RocketEngineEffectAssets>()
+            .init_resource::<RocketAtmosphericEffectAssets>()
+            .insert_resource(SimulationTime::new(0.02))
+            .add_systems(
+                Update,
+                (
+                    update_rocket_engine_effects,
+                    update_rocket_atmospheric_effects,
+                    capture_rocket_presentation_metrics,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .spawn((Camera3d::default(), Transform::default()));
+        let rocket = app
+            .world_mut()
+            .spawn((
+                RocketPropulsion::for_fresh_flight(Rocket::falcon9_test_fixture(), 0.0, 0.0),
+                RocketGeometry {
+                    radius_m: 1.8,
+                    height_m: 40.0,
+                    lower_extent_y_m: -20.0,
+                },
+                RocketFlightConditions::default(),
+                ThermalState::default(),
+                Transform::default(),
+            ))
+            .id();
+
+        let (throttle_before, stage_before, propellant_before) = {
+            let propulsion = app
+                .world()
+                .entity(rocket)
+                .get::<RocketPropulsion>()
+                .expect("rocket has propulsion");
+            (
+                propulsion.throttle,
+                propulsion.active_stage,
+                propulsion.propellant_remaining_kg.clone(),
+            )
+        };
+        let (sim_before, real_before) = {
+            let time = app.world().resource::<SimulationTime>();
+            (time.sim_time_s, time.real_time_s)
+        };
+
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let propulsion = app
+            .world()
+            .entity(rocket)
+            .get::<RocketPropulsion>()
+            .expect("rocket still has propulsion");
+        assert_eq!(propulsion.throttle, throttle_before);
+        assert_eq!(propulsion.active_stage, stage_before);
+        assert_eq!(propulsion.propellant_remaining_kg, propellant_before);
+        let time = app.world().resource::<SimulationTime>();
+        assert_eq!(time.sim_time_s, sim_before);
+        assert_eq!(time.real_time_s, real_before);
     }
 }

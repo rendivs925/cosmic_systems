@@ -132,12 +132,13 @@ pub(crate) fn update_rocket_ground_presentation(
     });
     let camera_distance_m =
         super::camera::nearest_active_camera_distance_m(pad_transform.translation, &cameras);
-    let visible = ground_effect_visible(
-        parameters.ground_effect_intensity_unit,
-        terrain.radar_altitude_m,
-        camera_distance_m,
-        quality.max_effect_distance_m,
-    );
+    let visible = quality.level.effects_enabled()
+        && ground_effect_visible(
+            parameters.ground_effect_intensity_unit,
+            terrain.radar_altitude_m,
+            camera_distance_m,
+            quality.max_effect_distance_m,
+        );
     for (effect, mut transform, mut visibility) in &mut effects {
         *visibility = if visible {
             Visibility::Visible

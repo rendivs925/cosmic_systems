@@ -65,6 +65,9 @@ use crate::infrastructure::bevy_adapters::planet_systems::{
     preserve_sun_disc_at_overview_distances, rebase_solar_presentation, update_orbit_positions,
     update_planet_positions, update_planet_rotations,
 };
+use crate::infrastructure::bevy_adapters::rocket::atmospheric_effects::{
+    update_rocket_atmospheric_effects, RocketAtmosphericEffectAssets,
+};
 use crate::infrastructure::bevy_adapters::rocket::audio::{
     apply_rocket_audio_playback, ensure_rocket_audio_playback, update_rocket_audio_controls,
     RocketAudioControlCadence,
@@ -120,6 +123,9 @@ use crate::infrastructure::bevy_adapters::rocket::hud::{
 use crate::infrastructure::bevy_adapters::rocket::lifecycle::{
     apply_relaunch_requests, constrain_terminal_time_warp, emit_mission_phase_events_system,
     handle_relaunch_input_system, handle_rocket_launch_input, RelaunchCommandQueue,
+};
+use crate::infrastructure::bevy_adapters::rocket::lifecycle_effects::{
+    spawn_rocket_lifecycle_effects, update_rocket_transient_effects, RocketLifecycleEffectAssets,
 };
 use crate::infrastructure::bevy_adapters::rocket::orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket::planet::{
@@ -595,10 +601,12 @@ impl Plugin for RocketModePlugin {
 
         // Rocket telemetry resource for HUD and flight log.
         app.init_resource::<RocketTelemetry>();
-        app.init_resource::<RocketPresentationQuality>();
+        app.insert_resource(RocketPresentationQuality::from_env());
         app.init_resource::<RocketAudioControlCadence>();
         app.init_resource::<RocketEngineEffectAssets>();
         app.init_resource::<RocketGroundPresentationAssets>();
+        app.init_resource::<RocketAtmosphericEffectAssets>();
+        app.init_resource::<RocketLifecycleEffectAssets>();
         app.init_resource::<RocketPresentationMetrics>();
         app.init_resource::<ActiveForceModel>();
         app.init_resource::<RocketEventFeed>();
@@ -673,11 +681,14 @@ impl Plugin for RocketModePlugin {
                     .after(recenter_render_origin)
                     .after(handle_rocket_launch_input),
                 update_rocket_engine_effects.after(interpolate_render_transform),
+                update_rocket_atmospheric_effects.after(update_rocket_engine_effects),
                 update_rocket_audio_controls.after(update_rocket_engine_effects),
                 ensure_rocket_audio_playback.after(update_rocket_audio_controls),
                 apply_rocket_audio_playback.after(ensure_rocket_audio_playback),
                 sync_launch_pad_presentation.after(recenter_render_origin),
                 update_rocket_ground_presentation.after(sync_launch_pad_presentation),
+                spawn_rocket_lifecycle_effects.after(update_rocket_ground_presentation),
+                update_rocket_transient_effects.after(spawn_rocket_lifecycle_effects),
                 capture_rocket_presentation_metrics
                     .after(update_rocket_ground_presentation)
                     .before(PerformanceMetricsSet::Report),

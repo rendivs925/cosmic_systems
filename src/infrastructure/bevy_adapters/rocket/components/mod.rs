@@ -95,8 +95,51 @@ pub struct RocketAudioControls {
     pub external_attenuation_unit: f32,
 }
 
-/// Rocket-mode presentation quality limits. This resource bounds future
-/// render-only effect work without storing or duplicating simulation state.
+/// Render-only Rocket effect quality. Reduces or disables presentation work
+/// without touching fixed simulation, force models, or authoritative state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RocketEffectQualityLevel {
+    #[default]
+    Full,
+    Reduced,
+    Disabled,
+}
+
+impl RocketEffectQualityLevel {
+    /// Optional startup override, read once when the quality resource is built.
+    pub const ENV_VAR: &'static str = "COSMIC_SYSTEMS_ROCKET_EFFECT_QUALITY";
+
+    /// Parses a case-insensitive level name or numeric shorthand.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "full" | "high" | "1" => Some(Self::Full),
+            "reduced" | "low" | "0.5" => Some(Self::Reduced),
+            "disabled" | "off" | "none" | "0" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+
+    /// Reads [`Self::ENV_VAR`], defaulting to [`Self::Full`] when unset or invalid.
+    pub fn from_env() -> Self {
+        std::env::var(Self::ENV_VAR)
+            .ok()
+            .and_then(|value| Self::parse(&value))
+            .unwrap_or_default()
+    }
+
+    /// `false` only when all effect presentation is disabled.
+    pub const fn effects_enabled(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    /// `true` only for the full-detail level; reduced hides secondary layers.
+    pub const fn full_detail(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+/// Rocket-mode presentation quality limits. This resource bounds render-only
+/// effect work without storing or duplicating simulation state.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct RocketPresentationQuality {
     pub max_effect_distance_m: f32,
@@ -104,6 +147,8 @@ pub struct RocketPresentationQuality {
     /// Beyond this the pad, tower, and facilities are hidden.
     pub max_structure_distance_m: f32,
     pub minimum_screen_coverage_unit: f32,
+    /// Presentation work level; never affects fixed simulation.
+    pub level: RocketEffectQualityLevel,
 }
 
 impl Default for RocketPresentationQuality {
@@ -112,7 +157,54 @@ impl Default for RocketPresentationQuality {
             max_effect_distance_m: 20_000.0,
             max_structure_distance_m: 6_000.0,
             minimum_screen_coverage_unit: 0.001,
+            level: RocketEffectQualityLevel::Full,
         }
+    }
+}
+
+impl RocketPresentationQuality {
+    /// Builds the default quality with an optional environment override.
+    pub fn from_env() -> Self {
+        Self {
+            level: RocketEffectQualityLevel::from_env(),
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod effect_quality_tests {
+    use super::RocketEffectQualityLevel;
+
+    #[test]
+    fn parses_named_and_numeric_levels() {
+        assert_eq!(
+            RocketEffectQualityLevel::parse("FULL"),
+            Some(RocketEffectQualityLevel::Full)
+        );
+        assert_eq!(
+            RocketEffectQualityLevel::parse(" reduced "),
+            Some(RocketEffectQualityLevel::Reduced)
+        );
+        assert_eq!(
+            RocketEffectQualityLevel::parse("off"),
+            Some(RocketEffectQualityLevel::Disabled)
+        );
+        assert_eq!(
+            RocketEffectQualityLevel::parse("0"),
+            Some(RocketEffectQualityLevel::Disabled)
+        );
+        assert_eq!(RocketEffectQualityLevel::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn level_gates_presentation_work_only() {
+        assert!(RocketEffectQualityLevel::Full.effects_enabled());
+        assert!(RocketEffectQualityLevel::Full.full_detail());
+        assert!(RocketEffectQualityLevel::Reduced.effects_enabled());
+        assert!(!RocketEffectQualityLevel::Reduced.full_detail());
+        assert!(!RocketEffectQualityLevel::Disabled.effects_enabled());
+        assert!(!RocketEffectQualityLevel::Disabled.full_detail());
     }
 }
 

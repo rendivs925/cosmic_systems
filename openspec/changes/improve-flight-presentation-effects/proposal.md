@@ -1,19 +1,23 @@
 ## Why
 
-Rocket flight has authoritative physics and scientific reference validation, but
-its presentation does not yet communicate propulsion, atmospheric flight,
-staging, and vehicle motion with a polished, coherent visual language.
+Rocket flight has authoritative physics and scientific reference validation, and
+`premium-rocket-flight-presentation` already added engine plumes, ground
+interaction, pad illumination, audio controls, and render-origin-stable effect
+children. Three presentation gaps remain uncovered: effect quality cannot be
+reduced or disabled, atmospheric shock/heating state is computed but not shown,
+and lifecycle transitions such as staging and recovery have no transient visual
+feedback.
 
 ## What Changes
 
-- Add state-driven rocket presentation effects for engine operation, atmospheric
-  flight, staging, and recovery without altering physical state or forces.
-- Improve visual animation and camera-facing presentation from existing fixed
-  simulation snapshots and lifecycle events.
-- Provide explicit quality controls and graceful degradation for presentation
-  effects so they do not compromise simulation cadence or mode startup.
-- Add debug-friendly validation of effect lifecycle, render-origin conversion,
-  and presentation/simulation isolation.
+- Add explicit effect-quality levels (full, reduced, disabled) to the existing
+  Rocket presentation-quality resource without altering physics or simulation
+  time.
+- Add bounded atmospheric-flight visual feedback (shock and heating) derived
+  from the existing smoothed presentation parameters.
+- Add bounded, one-shot lifecycle feedback for staging, fairing separation,
+  touchdown, splashdown, and crash, derived from existing authoritative events.
+- Add presentation/simulation isolation and quality-gating regression tests.
 
 ## Capabilities
 
@@ -28,10 +32,10 @@ staging, and vehicle motion with a polished, coherent visual language.
 
 ## Impact
 
-- Presentation: rocket presentation, camera, render interpolation, materials,
-  lights, particle or mesh effects, and HUD feedback.
+- Presentation: rocket effect quality resource, atmospheric shock/heating
+  children, transient lifecycle effects, and HUD feedback.
 - Infrastructure: rocket-mode plugin composition and effect asset ownership.
-- Validation: pure presentation-state and lifecycle tests plus bounded rocket
-  startup checks.
+- Validation: pure presentation-state, quality-isolation, and lifecycle tests
+  plus bounded rocket startup checks.
 - Simulation: no new physics model, force, coordinate system, or runtime
   scientific authority.

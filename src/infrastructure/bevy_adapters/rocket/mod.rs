@@ -1,3 +1,4 @@
+pub mod atmospheric_effects;
 pub mod audio;
 pub mod camera;
 pub mod components;
@@ -16,6 +17,7 @@ pub mod guidance;
 pub mod hud;
 pub mod hud_units;
 pub mod lifecycle;
+pub mod lifecycle_effects;
 pub mod orbit;
 pub mod planet;
 pub mod presentation;
