@@ -78,7 +78,12 @@ const WATER_SEA_LEVEL_M: f64 = 0.0;
 /// coincident far-field fallback globe instead of z-fighting it.
 const WATER_SURFACE_OFFSET_M: f64 = 0.5;
 /// Depth mapped to full deep-water colour and opacity. Deeper samples clamp.
-const WATER_MAX_VISIBLE_DEPTH_M: f64 = 4_000.0;
+/// Clear water becomes visually deep within tens of metres, not kilometres, so
+/// a 4 km scale left every coastal and inland water body at the shallowest
+/// colour and opacity, reading as a flat translucent decal. Sixty metres keeps
+/// coastal bathymetry and swamp channels on a visible shallow-to-deep ramp while
+/// the open ocean still clamps to the deep colour.
+const WATER_MAX_VISIBLE_DEPTH_M: f64 = 60.0;
 /// Cached parents stay visible until every visible descendant has a render
 /// entity. CPU streaming readiness alone is not sufficient: asset creation is
 /// deliberately spread across frames.

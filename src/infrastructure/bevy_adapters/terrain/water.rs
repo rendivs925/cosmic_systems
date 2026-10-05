@@ -122,7 +122,9 @@ impl Default for WaterParams {
             opacity_shallow: 0.45,
             opacity_deep: 0.92,
             foam_color: Vec4::new(0.82, 0.88, 0.9, 1.0),
-            foam_depth_normalized: 0.004,
+            // About 3 m at the 60 m visible-depth scale: a narrow surf band that
+            // follows the waterline instead of washing over shallow flats.
+            foam_depth_normalized: 0.05,
             foam_strength: 0.7,
             ripple_scale: 0.6,
             ripple_strength: 0.12,
