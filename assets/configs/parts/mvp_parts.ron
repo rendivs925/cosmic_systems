@@ -1,0 +1,81 @@
+// MVP stack-part catalog for the vehicle assembly screen.
+//
+// These are deliberately small, representative parts. Values are simulator
+// design figures for a fictional small-lift stack, not source-verified data;
+// the compiled vehicle is marked Representative for the same reason. Player
+// drafts reference these ids and are compiled into the authoritative
+// VehicleDef before launch.
+[
+    (
+        id: "engine_kestrel",
+        name: "Kestrel Engine",
+        category: Engine,
+        dry_mass_kg: 800.0,
+        diameter_m: 1.5,
+        height_m: 1.8,
+        engine: (
+            rated_thrust_n: 320000.0,
+            isp_sea_level_s: 265.0,
+            isp_vacuum_s: 300.0,
+            gimbal_range_deg: 6.0,
+            throttle_min: 0.4,
+            throttle_max: 1.0,
+            max_ignitions: 5,
+        ),
+    ),
+    (
+        id: "tank_small",
+        name: "Small Tank",
+        category: FuelTank,
+        dry_mass_kg: 900.0,
+        diameter_m: 1.5,
+        height_m: 6.0,
+        propellant_mass_kg: 9000.0,
+    ),
+    (
+        id: "capsule_1",
+        name: "Command Capsule",
+        category: CommandCapsule,
+        dry_mass_kg: 1200.0,
+        diameter_m: 1.5,
+        height_m: 2.5,
+    ),
+    (
+        id: "payload_sat",
+        name: "Satellite Payload",
+        category: Payload,
+        dry_mass_kg: 400.0,
+        diameter_m: 1.5,
+        height_m: 1.5,
+    ),
+    (
+        id: "separator_1",
+        name: "Stage Separator",
+        category: Separator,
+        dry_mass_kg: 120.0,
+        diameter_m: 1.5,
+        height_m: 0.6,
+    ),
+    (
+        id: "fairing_1",
+        name: "Payload Fairing",
+        category: Fairing,
+        dry_mass_kg: 300.0,
+        diameter_m: 1.5,
+        height_m: 3.0,
+    ),
+    (
+        id: "legs_1",
+        name: "Landing Legs",
+        category: LandingLegs,
+        dry_mass_kg: 250.0,
+        diameter_m: 1.5,
+        height_m: 0.8,
+        landing_legs: (
+            count: 4,
+            base_radius_m: 1.8,
+            stroke_m: 1.2,
+            deploy_altitude_m: 2000.0,
+        ),
+    ),
+]

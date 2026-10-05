@@ -1,8 +1,10 @@
 pub mod craft_startup;
 pub mod headless_scenario;
 pub mod modes;
+pub mod part_catalog;
 pub mod plugins;
 pub mod rocket_config;
 pub mod rocket_spawning;
 pub mod solar_system_startup;
 pub mod starfield;
+pub mod vehicle_assembly;

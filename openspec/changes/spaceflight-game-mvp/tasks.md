@@ -14,8 +14,23 @@
   `Reward`, `MissionDef`, `MissionRecord`, debrief summaries), and `profile.rs`
   (`GameSettings`, versioned `PlayerProfile`). All derive serde and carry
   explicit SI units and typed errors. 18 deterministic unit tests pass.
-- [ ] 1.3 Extend the existing RON-backed catalog with a bounded unlocked part catalog and compile valid player drafts into the authoritative `VehicleDef`.
-- [ ] 1.4 Add deterministic unit tests for draft validation, stack compatibility, mass/stage derivation, and invalid-build diagnostics.
+- [x] 1.3 Extend the existing RON-backed catalog with a bounded unlocked part catalog and compile valid player drafts into the authoritative `VehicleDef`.
+
+  Added `assets/configs/parts/mvp_parts.ron` (engine, tank, capsule, payload,
+  separator, fairing, landing legs), `application/part_catalog.rs`
+  (`load_default_part_catalog`, fail-fast RON loading), and
+  `application/vehicle_assembly.rs` (`compile_draft`). Compilation groups the
+  draft into stages, derives per-stage dry/propellant mass, dimensions, engine
+  stations, landing gear, and fairing, marks the result `Representative`, and
+  runs `VehicleDef::validate` before returning. `VehicleDef` remains the sole
+  flight-configuration authority.
+- [x] 1.4 Add deterministic unit tests for draft validation, stack compatibility, mass/stage derivation, and invalid-build diagnostics.
+
+  `vehicle_assembly` tests cover single-stage mass/geometry derivation,
+  two-stage bottom-to-top ordering with gear, `to_domain` parity against
+  `Rocket::total_mass_kg`, invalid-draft rejection, and locked-part rejection.
+  `part_catalog` tests assert the shipped catalog loads and validates; the
+  earlier `domain/game` tests cover stack compatibility and diagnostics.
 - [ ] 1.5 Add rocket-mode game-flow state composition for title, profile, assembly, briefing, flight, pause, and debrief without registering it in normal or craft modes.
 
 ## 2. Player Command Authority

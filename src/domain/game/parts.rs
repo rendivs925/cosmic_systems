@@ -341,6 +341,10 @@ impl fmt::Display for PartCatalogError {
     }
 }
 
+impl std::error::Error for PartIdError {}
+impl std::error::Error for PartDefError {}
+impl std::error::Error for PartCatalogError {}
+
 /// Diameters are stack-compatible when they match within tolerance.
 pub fn diameters_are_compatible(lower_m: f64, upper_m: f64) -> bool {
     (lower_m - upper_m).abs() <= STACK_DIAMETER_TOLERANCE_M
