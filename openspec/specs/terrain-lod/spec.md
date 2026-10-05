@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines hierarchical terrain rendering and streaming: a cube-sphere planetary surface with quadtree subdivision, screen-space LOD with crack-free transitions, deterministic generation, and a streaming lifecycle (requested, generating, loading, ready, visible, cached, evicted) with explicit memory limits.
-
 ## Requirements
-
 ### Requirement: Planetary surface uses cube-sphere topology
 
 The system SHALL represent a planet's surface as a cube-sphere mesh, not a flat plane, so the rocket can fly from orbit to the surface.
@@ -80,3 +78,21 @@ Procedural terrain patches SHALL be generated deterministically from seed and pa
 
 - **WHEN** terrain patches are generated
 - **THEN** results do not depend on frame rate or camera movement
+
+### Requirement: LOD uses per-tile geometric error from the elevation payload
+
+Terrain LOD selection SHALL derive a patch's geometric error from the
+corresponding elevation payload tile's declared error and elevation range,
+rather than only from a planet-wide conservative envelope.
+
+#### Scenario: Detailed region refines earlier
+
+- **WHEN** a patch covers a payload tile with high measured relief
+- **THEN** its projected error causes refinement at a greater distance than a
+  low-relief patch at the same level
+
+#### Scenario: Coarse coverage stays conservative
+
+- **WHEN** a patch has no high-resolution payload tile
+- **THEN** its geometric error uses the declared conservative fallback bound
+
