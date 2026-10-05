@@ -1,7 +1,19 @@
 ## 1. MVP Foundations
 
-- [ ] 1.1 Complete and validate the separate precision Earth-orbit insertion change before building map-dependent gameplay.
-- [ ] 1.2 Define pure, serializable MVP part, vehicle-draft, player-profile, mission, objective, and reward value objects with explicit units and validation errors.
+- [x] 1.1 Complete and validate the separate precision Earth-orbit insertion change before building map-dependent gameplay.
+
+  `precision-earth-orbit-mission` is archived (2026-08-27) with all 9 tasks
+  complete and its `precision-orbit-insertion` and `analytic-orbit-markers`
+  capabilities synced into the main specs. No dependent work remains.
+- [x] 1.2 Define pure, serializable MVP part, vehicle-draft, player-profile, mission, objective, and reward value objects with explicit units and validation errors.
+
+  New pure `domain/game` module: `parts.rs` (`PartId`, `PartCategory`,
+  `PartDef`, `EnginePartSpec`, `PartCatalog`, validation errors),
+  `vehicle_draft.rs` (`VehicleDraft`, stage grouping, collected
+  `DraftValidationError` diagnostics), `mission.rs` (`MissionId`, `Objective`,
+  `Reward`, `MissionDef`, `MissionRecord`, debrief summaries), and `profile.rs`
+  (`GameSettings`, versioned `PlayerProfile`). All derive serde and carry
+  explicit SI units and typed errors. 18 deterministic unit tests pass.
 - [ ] 1.3 Extend the existing RON-backed catalog with a bounded unlocked part catalog and compile valid player drafts into the authoritative `VehicleDef`.
 - [ ] 1.4 Add deterministic unit tests for draft validation, stack compatibility, mass/stage derivation, and invalid-build diagnostics.
 - [ ] 1.5 Add rocket-mode game-flow state composition for title, profile, assembly, briefing, flight, pause, and debrief without registering it in normal or craft modes.
