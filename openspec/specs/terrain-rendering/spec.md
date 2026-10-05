@@ -6,7 +6,7 @@ Spawns GPU meshes and materials for cube-sphere LOD terrain patches from the str
 ## Requirements
 ### Requirement: Cube-sphere patches render as Bevy meshes
 
-The system SHALL convert each ready terrain patch into a Bevy `Mesh` asset and spawn it with a `Material` so the patch appears in the rendered scene. For close-range patches that support vegetation, the rendered patch SHALL also include a single merged vegetation/scatter mesh produced from deterministic placement, per-species geometry, and land cover.
+The system SHALL convert each ready terrain patch into a Bevy `Mesh` asset and spawn it with a `Material` so the patch appears in the rendered scene. For close-range patches that support vegetation, the rendered patch SHALL also include a single merged vegetation/scatter mesh produced from deterministic placement, per-species geometry, and land cover. The active terrain leaf set SHALL provide the bound planet's visible surface in rocket mode, including coarse global tiles outside the local detail region.
 
 #### Scenario: Patch mesh spawned on ready
 
@@ -15,22 +15,32 @@ The system SHALL convert each ready terrain patch into a Bevy `Mesh` asset and s
 
 #### Scenario: Patch mesh despawned on evict
 
-- **WHEN** a terrain patch is evicted from the streaming cache
-- **THEN** its Bevy mesh entity is despawned and the mesh asset is released
+- **WHEN** a non-visible terrain patch is evicted from the streaming cache
+- **THEN** its Bevy mesh entity is despawned and the mesh asset is released without leaving its parent coverage absent
 
 #### Scenario: Merged vegetation mesh accompanies a close patch
 
 - **WHEN** a ready patch is at or finer than the vegetation LOD threshold and its ground is vegetated
 - **THEN** its merged vegetation mesh is spawned with the patch in the same local frame, as one mesh rather than per-plant entities
 
+#### Scenario: Whole-planet presentation
+
+- **WHEN** rocket mode presents a bound planet at any supported flight altitude
+- **THEN** the rendered terrain hierarchy supplies the planet silhouette and horizon without a separate bound-planet globe proxy
+
 ### Requirement: LOD transitions are crack-free in rendering
 
-The system SHALL render adjacent patches at different LOD levels without visible cracks or T-vertex artifacts.
+The system SHALL render adjacent patches at different LOD levels, including patches joined across cube-face boundaries, without visible cracks or T-vertex artifacts.
 
 #### Scenario: Skirt geometry stitches edges
 
 - **WHEN** two adjacent patches have different LOD levels
 - **THEN** the finer patch's skirt vertices align with the coarser patch's edge vertices and no gaps appear
+
+#### Scenario: Neighbor stitching
+
+- **WHEN** two adjacent visible terrain leaves differ in LOD or share a cube-face edge
+- **THEN** their shared boundary is stitched or otherwise covered without a visible gap
 
 #### Scenario: No vertex popping
 
@@ -267,4 +277,41 @@ The system SHALL derive river and wet-biome appearance from the authoritative mo
 
 - **WHEN** moisture rises along a drainage network
 - **THEN** the selected material and vegetation reflect the wetter biome
+
+### Requirement: Terrain participates in shared lighting and aerial perspective
+
+Terrain rendering SHALL cast and receive the shared ephemeris-derived
+directional shadows and SHALL derive aerial perspective from the shared
+atmospheric optics, while keeping terrain geometry, LOD, collision, streaming,
+and render-origin authority unchanged.
+
+#### Scenario: Terrain casts and receives directional shadow
+
+- **WHEN** a sunlit terrain patch occludes the shared directional Sun
+- **THEN** it both casts shadow onto other geometry and receives shadow from
+  geometry in front of it, excluding the enclosing far-field globe
+
+#### Scenario: Terrain aerial perspective matches the sky
+
+- **WHEN** a terrain fragment is viewed through a long air path
+- **THEN** its in-scattered and transmitted colour is computed from the same
+  atmospheric optics used by the sky and does not use an independent fog colour
+
+### Requirement: Surface microdetail remains presentation-only and source-derived
+Terrain rendering SHALL derive microdetail appearance from the authoritative terrain source and prepared surface data while keeping geometry, streaming, collision, and LOD authority unchanged.
+
+#### Scenario: Near terrain material detail
+- **WHEN** a sufficiently detailed terrain patch is rendered near the flight camera
+- **THEN** its material can provide bounded local color, normal, and roughness variation derived from prepared source data
+
+#### Scenario: Patch eviction
+- **WHEN** a terrain patch is evicted from the streaming cache
+- **THEN** all presentation-only surface assets associated with that patch are released with the patch and no terrain authority data is changed
+
+### Requirement: Papua surface presentation remains offline and deterministic
+The Papua launch-region terrain presentation SHALL derive its tropical biome, vegetation, and material variation from existing offline terrain samples and deterministic patch inputs. It MUST NOT fetch terrain, imagery, land-cover, or vegetation data at runtime.
+
+#### Scenario: Reproducible Papua patch presentation
+- **WHEN** a Papua-region patch is prepared repeatedly with the same terrain source and configuration
+- **THEN** its presentation data is equivalent regardless of preparation order or runtime network availability
 

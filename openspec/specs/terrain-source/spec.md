@@ -137,17 +137,6 @@ cache hit for the same tile.
 - **THEN** the reloaded tile produces identical elevation samples to the
   original
 
-### Requirement: Measured local elevation overrides global elevation where covered
-
-Where a reviewed measured local elevation package covers a region, the terrain
-authority SHALL use its samples for that coverage and the global payload tile
-elsewhere, with a deterministic transition between them.
-
-#### Scenario: Local coverage boundary
-
-- **WHEN** a query crosses from local measured coverage into global coverage
-- **THEN** elevation transitions continuously without a seam or cliff artifact
-
 ### Requirement: Terrain authority composes one eroded hydrology field
 
 The system SHALL compose the deterministic erosion/hydrology field into the single authoritative `TerrainSource`, so collision, mesh generation, and surface-material consumers all sample the same eroded elevation and hydrology rather than a separate erosion path.
@@ -189,4 +178,20 @@ The system SHALL expose flow-derived moisture and river-channel strength from th
 
 - **WHEN** any consumer reads moisture or river-channel strength
 - **THEN** the value lies within `[0, 1]`
+
+### Requirement: Layered terrain elevation is coherent across LOD
+
+The system SHALL compose base planetary shape, global elevation, optional local DEM elevation, and bounded procedural detail through the active shared terrain source. The same geographic coordinate SHALL resolve to a continuous terrain surface independent of the current render LOD.
+
+#### Scenario: Parent-child elevation agreement
+- **WHEN** a parent terrain tile is replaced by child tiles at the same geographic boundary
+- **THEN** their shared edge samples resolve to the same terrain height within the configured numerical tolerance
+
+#### Scenario: Procedural detail fade
+- **WHEN** procedural detail is unavailable or intentionally omitted at a coarse LOD
+- **THEN** its contribution fades continuously to the shared base surface rather than producing a height step
+
+#### Scenario: DEM fallback
+- **WHEN** local DEM coverage is unavailable for a coordinate
+- **THEN** the terrain source remains deterministic and supplies its configured global or procedural fallback height
 

@@ -18,14 +18,17 @@
   shadow-map resource sized to near-flight scale.
 - [x] 2.2 Mark the far-field planet shell and cloud shell as
   `NotShadowCaster`/`NotShadowReceiver` so they cannot darken the scene.
-- [ ] 2.3 Confirm terrain, vehicle, and pad cast/receive and add regression
+- [x] 2.3 Confirm terrain, vehicle, and pad cast/receive and add regression
   tests for shadow participation and enclosing-globe exclusion.
 
   Conclusive Xvfb capture shows the vehicle casting a correctly directed pad
-  shadow from the ephemeris Sun; the enclosing-shell exclusion is enforced by
-  the inserted markers. A direct ECS regression test for the markers was not
-  added because spawning the spawn paths requires asset-server setup, so this
-  task remains open pending a lighter-weight assertion.
+  shadow from the ephemeris Sun. ECS regressions were added with asset-server
+  setup: `far_field_planet_and_cloud_shells_never_cast_or_receive_shadows`
+  spawns the bound-planet surface and asserts both the far-field globe and its
+  cloud shell carry `NotShadowCaster`/`NotShadowReceiver`; the launch-pad
+  regression asserts no pad structure carries an exclusion marker, so the pad
+  and its facilities participate in shadows. The vehicle and terrain spawn
+  paths add no exclusion markers, so they cast and receive by default.
 - [x] 2.4 Visually validate shadow direction near the pad against the
   ephemeris Sun via a headless startup check (or Xvfb screenshot).
 

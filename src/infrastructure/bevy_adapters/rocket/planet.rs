@@ -590,6 +590,58 @@ mod tests {
     }
 
     #[test]
+    fn far_field_planet_and_cloud_shells_never_cast_or_receive_shadows() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.init_resource::<Assets<CloudMaterial>>();
+        let planet = PlanetFactory::create_by_id(&CelestialBodyId::earth())
+            .expect("Earth is a configured planet");
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>,
+                  mut cloud_materials: ResMut<Assets<CloudMaterial>>,
+                  asset_server: Res<AssetServer>| {
+                spawn_rocket_bound_planet_surface(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &mut cloud_materials,
+                    &asset_server,
+                    &planet,
+                    6_371_000.0,
+                )
+            },
+        );
+        app.update();
+
+        let world = app.world_mut();
+        let mut surface = world.query_filtered::<
+            (Has<NotShadowCaster>, Has<NotShadowReceiver>),
+            With<RocketBoundPlanetSurface>,
+        >();
+        assert_eq!(
+            surface.single(world).unwrap(),
+            (true, true),
+            "the enclosing far-field globe must not cast or receive shadows"
+        );
+
+        let mut cloud = world.query_filtered::<
+            (Has<NotShadowCaster>, Has<NotShadowReceiver>),
+            With<RocketBoundPlanetCloud>,
+        >();
+        assert_eq!(
+            cloud.single(world).unwrap(),
+            (true, true),
+            "the enclosing cloud shell must not cast or receive shadows"
+        );
+    }
+
+    #[test]
     fn fallback_globe_is_below_coarse_terrain_triangle_planes() {
         let radius_m = 6_371_000.0;
         let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);

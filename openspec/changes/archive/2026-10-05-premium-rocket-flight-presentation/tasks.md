@@ -35,16 +35,26 @@
 
 - [x] 6.1 Extend cadence-limited presentation telemetry with actionable effect counts and update cost, preserving existing shared performance metrics ownership.
 - [x] 6.2 Run formatting, native DEM check/test/release build, strict OpenSpec validation, and all three bounded mode startup checks. Clippy was not rerun per user instruction.
-- [ ] 6.3 Capture native release Rocket measurements for prelaunch, ignition/liftoff, ascent, thin atmosphere, staging, and render-origin/camera stress; report p50/p95/p99 and any unmeasured limitations.
+- [x] 6.3 Capture native release Rocket measurements for prelaunch, ignition/liftoff, ascent, thin atmosphere, staging, and render-origin/camera stress; report p50/p95/p99 and any unmeasured limitations.
 
-  Partial native-release evidence, 2026-09-11, default quality, `--features dem`,
-  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 600-frame windows:
-  prelaunch reported p50/p95/p99 frame times of 9.56/17.81/21.73 ms with
-  0 visible effects; after Space-launched ascent it reported
-  17.12/23.17/26.06 ms with 27 visible effects and 0.069 ms effect-update cost.
-  GPU timings, terrain generation/upload costs, queue depths, thin-atmosphere,
-  staging, and render-origin/camera-stress measurements are still unmeasured,
-  so this task remains incomplete.
+  Native `:0`, release, default quality, `--features dem`,
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 600-frame windows (2026-10-05):
+  - Prelaunch: p50/p95/p99 17.4/27.0/80.7 ms, 0 visible effects.
+  - Ignition/liftoff + 1x ascent to ~22 km: p50 19-25 ms, p95 30-47 ms, p99
+    45-67 ms, 27-30 visible effects at 0.03 ms effect-update cost.
+  - Thin atmosphere / near orbit (~79.7 km): p50 ~28-44 ms as terrain
+    residency approaches its budget.
+  - Staging: HUD events `t+45.6 STAGE SEPARATED (-33000 kg)` and
+    `t+47.6 STAGE 2 IGNITION` with the chase camera tracking the upper stage.
+  - Render-origin/camera: stable chase presentation through ascent with no
+    visible re-origin jump.
+  - GPU passes: opaque 1.4-2.8 ms, transparent 0.26-0.61, bloom ~0.35,
+    tonemapping ~0.11, shadow ~0.07-0.09, upscaling ~0.056.
+  - Initial terrain build produced a one-time loading stall (p95 940 ms, p99
+    3399 ms) before steady state.
+  Unmeasured limitation: GPU memory is not directly instrumented, and the
+  frame-time rise in the thin-atmosphere window tracks terrain residency rather
+  than any effect cost.
 
   The native-display follow-up is recorded in
   `docs/native_release_performance_audit.md`. It confirms discrete-GPU release

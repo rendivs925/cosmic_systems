@@ -863,6 +863,7 @@ mod tests {
     use crate::domain::entities::rocket::{
         EngineState, RocketEngine, RocketStage, ThrustReference,
     };
+    use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
     #[test]
     fn procedural_pad_is_geodetically_anchored_and_presentation_only() {
@@ -908,6 +909,13 @@ mod tests {
             Or<(With<TerrainCollisionState>, With<RocketPhysicsState>)>,
         )>();
         assert_eq!(physics.iter(world).count(), 0);
+
+        // Pad structures participate in shadows: none carries an exclusion marker.
+        let mut excluded = world.query_filtered::<Entity, (
+            With<LaunchSiteStructure>,
+            Or<(With<NotShadowCaster>, With<NotShadowReceiver>)>,
+        )>();
+        assert_eq!(excluded.iter(world).count(), 0);
     }
 
     #[test]

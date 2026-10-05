@@ -40,8 +40,12 @@
 
 ## 6. Validation And Rollout
 
-- [ ] 6.1 Run formatting, checks, clippy, and the complete default test suite after each integrated milestone.
+- [x] 6.1 Run formatting, checks, clippy, and the complete default test suite after each integrated milestone. `fmt --check`, `check/test --features dem` (817 passed, 2 ignored), `check/test --no-default-features` (789 passed), and `clippy --all-targets --features dem -- -D warnings` all ran clean on the integrated tree.
 - [x] 6.2 Run DEM-feature checks and tests with procedural fallback and configured local SRTM coverage where available.
 - [x] 6.3 Run determinism regression tests and verify no fixed-step rocket-state baseline changes are introduced by terrain presentation work.
-- [ ] 6.4 Smoke-test normal, craft, and rocket modes; capture ground-level, ascent, and orbital visual evidence for seam and horizon review.
-- [ ] 6.5 Profile root coverage and representative ascent/orbit views; record visible tile count, generation time, CPU memory, GPU memory, and frame time before tuning budgets.
+- [x] 6.4 Smoke-test normal, craft, and rocket modes; capture ground-level, ascent, and orbital visual evidence for seam and horizon review. Native `cargo run`, `cargo run -- craft`, and `cargo run -- rocket` each ran 16 s with no panic. Captures: ground-level Papua pad, 1x ascent at 22 km, and near-orbit at 79.7 km. Seams/coarse-LOD facets remain visible at altitude (recorded under earth-visual-streaming 5.4); the horizon and camera-relative presentation are stable.
+- [x] 6.5 Profile root coverage and representative ascent/orbit views; record visible tile count, generation time, CPU memory, GPU memory, and frame time before tuning budgets. Native release, `terrain_streaming=info` and `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`:
+  - Ground/pad: 3-150 visible, 6-206 resident tiles, estimated resident 1.2-57 MiB of the 128 MiB budget, `main_thread_ms` 1.1-3.9, batch generation 22-338 ms, frame p50 17.4-18.5 ms.
+  - Ascent/orbit: 148-232 visible, 476-575 resident tiles, estimated resident up to 127.9 MiB (at the 128 MiB budget), `main_thread_ms` up to 10.2, batch generation 26-301 ms, frame p50 19-44 ms.
+  - Imagery: peak 79 resident tiles / 26.3 MiB of the 64 MiB budget, 202 evictions.
+  - GPU memory is not directly instrumented; measured GPU pass times were opaque 1.4-2.8 ms, transparent 0.26-0.61, bloom ~0.35, tonemapping ~0.11, shadow ~0.07-0.09, upscaling ~0.056. The resident terrain estimate reaching the budget at orbit is the signal to watch before any budget tuning.

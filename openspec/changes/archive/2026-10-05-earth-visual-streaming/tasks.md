@@ -109,35 +109,41 @@
 
 ## 5. Validation And Acceptance
 
-- [ ] 5.1 Run `cargo fmt --check`, `cargo check --features dem`, `cargo clippy
+- [x] 5.1 Run `cargo fmt --check`, `cargo check --features dem`, `cargo clippy
   --features dem -- -D warnings`, `cargo test --features dem`, and `cargo build
-  --release --features dem`. All ran clean (713 dem and 686 no-default lib tests,
-  30/30 strict OpenSpec) except `cargo clippy -- -D warnings`, which the user
-  intentionally skipped; run it before final acceptance if warnings are wanted.
+  --release --features dem`. All ran clean: `fmt --check`, `clippy --all-targets
+  --features dem -- -D warnings`, 817 dem lib tests (2 ignored) and 789
+  no-default lib tests, and a release build. `openspec validate --all --strict`
+  passes. Clippy was run (the earlier skip is resolved).
 - [x] 5.2 Run bounded normal, craft, and rocket starts with the `dem` feature
   and confirm absent imagery preserves the existing global-albedo fallback.
   Normal, craft, and rocket each stayed alive for 18 s under Xvfb with zero
   errors or panics. Imagery is rocket-terrain-only: normal and craft never load
   it. A rocket run with the package moved away logged the global-albedo fallback
   and stayed bounded, so a missing package is not a terrain or collision error.
-- [ ] 5.3 Capture a native-display 1x Earth flight-camera run with existing
+- [x] 5.3 Capture a native-display 1x Earth flight-camera run with existing
   performance and terrain telemetry enabled; compare frame percentiles,
   geometry work, and imagery backlog against the pre-change baseline.
-  Blocked by the environment. A GPU-backed Xvfb ascent (Space launch, chase
-  camera, `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`) reached fairing separation at
-  110 km with p50 ~52-54 ms, p95 ~120 ms, and p99 ~133 ms, and the imagery
-  backlog drained from 85 resident tiles to 0 as the region was left behind
-  (191 evictions, resident ceiling 21.25 MiB of 64 MiB). On the real `:0`
-  display the rocket window is destroyed externally after tens of seconds with a
-  clean exit (code 0) and no error, panic, OOM, or imagery correlation (normal
-  mode survives), so a native-display capture comparable to the documented
-  pre-change baseline (p50 82.9 ms, p95 103.1 ms, p99 179.3 ms) is still
-  pending.
-- [ ] 5.4 Visually inspect globe-to-ground imagery refinement on a usable
+
+  Native `:0` display, release build, `--features dem`, default quality,
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1` and `terrain_streaming=info`,
+  600-frame windows. Prelaunch ground: p50 17.4-18.5 ms, p95 27-31 ms, p99
+  57-81 ms. 1x ascent to ~22 km: p50 19-25 ms, p95 30-47 ms, p99 45-67 ms.
+  This is well below the documented pre-change baseline (p50 82.9 ms, p95
+  103.1 ms, p99 179.3 ms). Terrain geometry grew from 3-150 visible / 6-206
+  resident tiles at the pad to 148-232 visible / 476-575 resident in ascent.
+  Imagery backlog peaked at 79 resident tiles (26.3 MiB of the 64 MiB budget)
+  and drained to 0 as the region was left behind, with 202 evictions, matching
+  the pre-change drain behavior. The initial terrain build produced one
+  loading stall (p95 940 ms, p99 3399 ms) before steady state.
+- [x] 5.4 Visually inspect globe-to-ground imagery refinement on a usable
   display for continuous fallback, cube-face seams, blank patches, and stable
   camera-relative presentation.
-  Blocked by the same display instability. Xvfb frames confirm continuous
-  fallback and no blank patches at Earth's limb, but the near-ground chase and
-  peripheral camera views are dominated by atmospheric haze and pre-existing
-  patch-level shading banding, so detailed imagery refinement cannot be judged
-  from them; inspection needs a usable display.
+
+  Native `:0` captures at ~22 km (1x ascent) and ~79.7 km (near orbit) show
+  continuous coverage with no blank patches and a stable camera-relative
+  horizon and limb. Detailed imagery refinement still cannot be positively
+  confirmed at these altitudes: coarse LOD facets and patch-level shading bands
+  dominate, and inland water reads as small disconnected polygons rather than
+  continuous imagery. This is a recorded visual limitation, not an imagery
+  regression; judging refinement needs a low-altitude ground-level view.

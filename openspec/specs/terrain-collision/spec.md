@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines collision terrain for the rocket, separated from render terrain: accurate altitude, surface normal, slope, ground contact, and landing detection near the rocket, without a full-planet physics mesh.
-
 ## Requirements
-
 ### Requirement: Collision terrain is separate from render terrain
 
 The system SHALL maintain collision terrain separately from render terrain, with higher resolution near the rocket and no full-planet physics mesh.
@@ -46,14 +44,13 @@ The system SHALL detect ground contact and support landing: altitude above terra
 
 ### Requirement: Collision sampling uses the shared terrain source
 
-Collision SHALL sample height from the shared `TerrainSource` height function, consistent with the render terrain.
+Collision SHALL sample height from the same composed `TerrainSource` surface used by rendered terrain tiles, including global base elevation, available local DEM elevation, and active procedural detail.
 
 #### Scenario: Consistency with render terrain
-
-- **WHEN** collision height is sampled at a position
-- **THEN** it matches the render terrain surface within the configured collision resolution
+- **WHEN** collision height is sampled at a position represented by a rendered terrain tile
+- **THEN** it matches that tile's terrain surface within the configured collision resolution
 
 #### Scenario: Near-surface resolution increase
-
 - **WHEN** the rocket approaches a landing region
-- **THEN** the collision resolution increases for that region
+- **THEN** collision resolution increases for that region without creating a discontinuity with the coarser terrain surface
+
