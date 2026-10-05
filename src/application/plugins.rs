@@ -106,7 +106,8 @@ use crate::infrastructure::bevy_adapters::rocket::gravity_orbit::{
     update_orbital_elements, update_rocket_gravity, ActiveForceModel,
 };
 use crate::infrastructure::bevy_adapters::rocket::ground_presentation::{
-    update_rocket_ground_presentation, RocketGroundPresentationAssets,
+    update_launch_site_structure_visibility, update_rocket_ground_presentation,
+    RocketGroundPresentationAssets,
 };
 use crate::infrastructure::bevy_adapters::rocket::guidance::{
     guidance_system, update_drone_ship_landing_targets,
@@ -682,6 +683,7 @@ impl Plugin for RocketModePlugin {
                     .before(PerformanceMetricsSet::Report),
                 update_rocket_camera,
                 update_rocket_camera_projection,
+                update_launch_site_structure_visibility.after(update_rocket_camera_projection),
             )
                 .chain(),
         );

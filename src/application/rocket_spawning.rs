@@ -172,7 +172,7 @@ fn spawn_rocket_core(commands: &mut Commands, setup: &LaunchSetup) -> Entity {
         AerodynamicForces::default(),
         MaxQTracker::default(),
         RocketCommands::default(),
-        RocketAutopilot::default(),
+        RocketAutopilot::for_launch_site(f64::from(setup.launch_site.latitude_deg)),
         TerrainCollisionState::default(),
         // The vehicle spawns standing on the pad: the resting-contact
         // constraint holds it there until thrust exceeds weight (real physics
@@ -297,8 +297,11 @@ pub(crate) fn spawn_rockets(
     );
 }
 
-/// Spawn a procedural service tower at the exact terrain launch point. It has
-/// no collision authority.
+/// Spawn a procedural service tower and supporting facilities at the exact
+/// terrain launch point. Every child is presentation-only: it has no collision
+/// authority, contributes no terrain height, and applies no forces. All
+/// structure children are marked [`LaunchSiteStructure`] so they can be hidden
+/// beyond the presentation structure draw distance.
 fn spawn_procedural_launch_pad(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -332,8 +335,22 @@ fn spawn_procedural_launch_pad(
         perceptual_roughness: 0.35,
         ..default()
     });
+    let floodlight = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.95, 0.94, 0.86),
+        emissive: Color::srgb(1.0, 0.96, 0.82).to_linear() * 4.0,
+        perceptual_roughness: 0.4,
+        ..default()
+    });
+    let hazard = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.62, 0.05),
+        metallic: 0.1,
+        perceptual_roughness: 0.6,
+        ..default()
+    });
     let tower_height_m = rocket_height_m * 0.82;
     let tower_offset_m = rocket_diameter_m * 0.5 + 10.0;
+    let mast_height_m = tower_height_m + 18.0;
+    let arm_length_m = tower_offset_m - rocket_diameter_m * 0.5;
     let root = commands
         .spawn((
             anchor,
@@ -343,23 +360,34 @@ fn spawn_procedural_launch_pad(
         ))
         .id();
     commands.entity(root).with_children(|parent| {
-        // The deck is centered on the authoritative terrain anchor. It remains
-        // visible while coarse streamed tiles refine around the meter-scale pad.
+        // A wide concrete apron grounds the facility visually; the deck sits on
+        // top. Both remain visible while coarse streamed tiles refine.
         parent.spawn((
+            LaunchSiteStructure,
+            Mesh3d(meshes.add(Cuboid::new(64.0, 0.2, 64.0))),
+            MeshMaterial3d(concrete.clone()),
+            Transform::from_xyz(0.0, -0.2, 0.0),
+            Name::new("LaunchPadApron"),
+        ));
+        // The deck is centered on the authoritative terrain anchor.
+        parent.spawn((
+            LaunchSiteStructure,
             Mesh3d(meshes.add(Cuboid::new(36.0, 0.2, 36.0))),
             MeshMaterial3d(concrete.clone()),
             Transform::from_xyz(0.0, -0.1, 0.0),
             Name::new("LaunchPadDeck"),
         ));
-        // These are local procedural facility details only. The terrain and pad
-        // anchor remain the sole source of surface placement.
+        // Local procedural facility details only. The terrain and pad anchor
+        // remain the sole source of surface placement.
         parent.spawn((
+            LaunchSiteStructure,
             Mesh3d(meshes.add(Cuboid::new(9.0, 5.0, 16.0))),
             MeshMaterial3d(concrete.clone()),
             Transform::from_xyz(0.0, -2.55, 0.0),
             Name::new("LaunchPadFlameTrench"),
         ));
         parent.spawn((
+            LaunchSiteStructure,
             Mesh3d(meshes.add(Cuboid::new(10.0, 2.5, 1.0))),
             MeshMaterial3d(steel.clone()),
             Transform::from_xyz(0.0, -1.15, -7.0),
@@ -367,27 +395,43 @@ fn spawn_procedural_launch_pad(
         ));
         for x in [-11.0_f32, 11.0] {
             parent.spawn((
+                LaunchSiteStructure,
                 Mesh3d(meshes.add(Cuboid::new(0.35, 1.4, 26.0))),
                 MeshMaterial3d(water.clone()),
                 Transform::from_xyz(x, 0.45, 0.0),
                 Name::new("LaunchPadDelugeRail"),
             ));
         }
+        // Hold-down clamps around the vehicle base.
+        for (x, z) in [(-3.0_f32, -3.0_f32), (-3.0, 3.0), (3.0, -3.0), (3.0, 3.0)] {
+            parent.spawn((
+                LaunchSiteStructure,
+                Mesh3d(meshes.add(Cuboid::new(1.2, 0.8, 1.2))),
+                MeshMaterial3d(hazard.clone()),
+                Transform::from_xyz(x, 0.5, z),
+                Name::new("LaunchPadHoldDownClamp"),
+            ));
+        }
+        // Service tower legs, cross levels, and braces.
         for x in [-4.0_f32, 4.0] {
             for z in [-4.0_f32, 4.0] {
                 parent.spawn((
+                    LaunchSiteStructure,
                     Mesh3d(meshes.add(Cuboid::new(0.55, tower_height_m, 0.55))),
                     MeshMaterial3d(steel.clone()),
                     Transform::from_xyz(tower_offset_m + x, tower_height_m * 0.5, z),
+                    Name::new("LaunchPadTowerLeg"),
                 ));
             }
         }
         for level in 1..5 {
             let y = tower_height_m * level as f32 / 5.0;
             parent.spawn((
+                LaunchSiteStructure,
                 Mesh3d(meshes.add(Cuboid::new(9.0, 0.35, 9.0))),
                 MeshMaterial3d(steel.clone()),
                 Transform::from_xyz(tower_offset_m, y, 0.0),
+                Name::new("LaunchPadTowerLevel"),
             ));
         }
         for level in [
@@ -396,18 +440,98 @@ fn spawn_procedural_launch_pad(
             tower_height_m * 0.85,
         ] {
             parent.spawn((
+                LaunchSiteStructure,
                 Mesh3d(meshes.add(Cuboid::new(12.0, 0.22, 0.22))),
                 MeshMaterial3d(steel.clone()),
                 Transform::from_xyz(tower_offset_m, level, 0.0),
                 Name::new("LaunchPadTowerBrace"),
             ));
         }
+        // Service access arm reaching from the tower toward the vehicle, and a
+        // lower umbilical arm.
+        parent.spawn((
+            LaunchSiteStructure,
+            Mesh3d(meshes.add(Cuboid::new(arm_length_m, 0.5, 0.5))),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_xyz(
+                tower_offset_m - arm_length_m * 0.5,
+                tower_height_m * 0.72,
+                0.0,
+            ),
+            Name::new("LaunchPadServiceArm"),
+        ));
+        parent.spawn((
+            LaunchSiteStructure,
+            Mesh3d(meshes.add(Cuboid::new(arm_length_m * 0.8, 0.4, 0.4))),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_xyz(
+                tower_offset_m - arm_length_m * 0.4,
+                tower_height_m * 0.35,
+                0.0,
+            ),
+            Name::new("LaunchPadUmbilicalArm"),
+        ));
+        // Lightning mast rising above the tower.
+        parent.spawn((
+            LaunchSiteStructure,
+            Mesh3d(meshes.add(Cylinder::new(0.22, mast_height_m - tower_height_m))),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_xyz(tower_offset_m, (tower_height_m + mast_height_m) * 0.5, 0.0),
+            Name::new("LaunchPadLightningMast"),
+        ));
+        parent.spawn((
+            LaunchSiteStructure,
+            Mesh3d(meshes.add(Sphere::new(0.5))),
+            MeshMaterial3d(warning_light.clone()),
+            Transform::from_xyz(tower_offset_m, mast_height_m, 0.0),
+            Name::new("LaunchPadMastBeacon"),
+        ));
         for z in [-4.0_f32, 4.0] {
             parent.spawn((
+                LaunchSiteStructure,
                 Mesh3d(meshes.add(Sphere::new(0.28))),
                 MeshMaterial3d(warning_light.clone()),
                 Transform::from_xyz(tower_offset_m + 4.4, tower_height_m + 0.4, z),
                 Name::new("LaunchPadTowerBeacon"),
+            ));
+        }
+        // Supporting facilities: water tanks, a control blockhouse, and
+        // perimeter floodlight poles.
+        for (x, z, radius) in [(-20.0_f32, 16.0_f32, 3.2_f32), (-13.0, 20.0, 2.4)] {
+            parent.spawn((
+                LaunchSiteStructure,
+                Mesh3d(meshes.add(Cylinder::new(radius, 10.0))),
+                MeshMaterial3d(steel.clone()),
+                Transform::from_xyz(x, 5.0, z),
+                Name::new("LaunchPadWaterTank"),
+            ));
+        }
+        parent.spawn((
+            LaunchSiteStructure,
+            Mesh3d(meshes.add(Cuboid::new(12.0, 4.0, 8.0))),
+            MeshMaterial3d(concrete.clone()),
+            Transform::from_xyz(-22.0, 2.0, -16.0),
+            Name::new("LaunchPadBlockhouse"),
+        ));
+        for (x, z) in [
+            (-16.0_f32, -16.0_f32),
+            (-16.0, 16.0),
+            (16.0, -16.0),
+            (16.0, 16.0),
+        ] {
+            parent.spawn((
+                LaunchSiteStructure,
+                Mesh3d(meshes.add(Cylinder::new(0.18, 12.0))),
+                MeshMaterial3d(steel.clone()),
+                Transform::from_xyz(x, 6.0, z),
+                Name::new("LaunchPadFloodlightPole"),
+            ));
+            parent.spawn((
+                LaunchSiteStructure,
+                Mesh3d(meshes.add(Cuboid::new(1.4, 0.5, 0.6))),
+                MeshMaterial3d(floodlight.clone()),
+                Transform::from_xyz(x, 12.2, z),
+                Name::new("LaunchPadFloodlightHead"),
             ));
         }
     });
@@ -732,13 +856,59 @@ pub(crate) fn build_serial_stage_mesh(
 #[cfg(test)]
 #[expect(
     clippy::items_after_test_module,
-    reason = "The mesh-layout regression stays beside the catalog-driven mesh builder."
+    reason = "The spawn regressions stay beside the catalog-driven mesh builder."
 )]
-mod mesh_layout_tests {
+mod tests {
     use super::*;
     use crate::domain::entities::rocket::{
         EngineState, RocketEngine, RocketStage, ThrustReference,
     };
+
+    #[test]
+    fn procedural_pad_is_geodetically_anchored_and_presentation_only() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_systems(
+            Startup,
+            |mut commands: Commands,
+             mut meshes: ResMut<Assets<Mesh>>,
+             mut materials: ResMut<Assets<StandardMaterial>>| {
+                spawn_procedural_launch_pad(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    LaunchPadPresentation {
+                        planet_name: CelestialBodyId::earth(),
+                        position_body_fixed_m: DVec3::new(6_371_000.0, 0.0, 0.0),
+                        normal_body_fixed: DVec3::X,
+                        heading_body_fixed: DVec3::Z,
+                    },
+                    70.0,
+                    3.7,
+                );
+            },
+        );
+        app.update();
+
+        let world = app.world_mut();
+        let mut anchors = world.query_filtered::<Entity, With<LaunchPadPresentation>>();
+        assert_eq!(anchors.iter(world).count(), 1);
+
+        let mut structures = world.query_filtered::<Entity, With<LaunchSiteStructure>>();
+        assert!(
+            structures.iter(world).count() > 20,
+            "the pad should present detailed structures"
+        );
+
+        // No structure may carry collision or physics state.
+        let mut physics = world.query_filtered::<Entity, (
+            With<LaunchSiteStructure>,
+            Or<(With<TerrainCollisionState>, With<RocketPhysicsState>)>,
+        )>();
+        assert_eq!(physics.iter(world).count(), 0);
+    }
 
     #[test]
     fn data_driven_mesh_layout_honors_non_falcon_dimensions_and_stations() {

@@ -1,5 +1,4 @@
-//! Data-backed planet terrain sources (Earth, Moon, Mars) and the local
-//! elevation overlay.
+//! Data-backed planet terrain sources (Earth, Moon, Mars).
 
 #[cfg(feature = "dem")]
 use super::{
@@ -9,10 +8,6 @@ use super::{
 use super::{ElevationBounds, TerrainSource};
 #[cfg(not(feature = "dem"))]
 use super::{ProceduralTerrainConfig, ProceduralTerrainSource};
-#[cfg(feature = "dem")]
-use crate::domain::math::DVec3;
-#[cfg(feature = "dem")]
-use crate::domain::services::cube_sphere::face_uv;
 use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 #[cfg(feature = "dem")]
 use crate::domain::services::dem_terrain_source::{DemError, DemTerrainSource};
@@ -23,8 +18,6 @@ use crate::domain::services::elevation_pyramid::{
 };
 #[cfg(feature = "dem")]
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
-#[cfg(feature = "dem")]
-use crate::domain::services::local_elevation::{LocalElevationError, LocalElevationPackage};
 #[cfg(feature = "dem")]
 use crate::domain::services::planet_factory::PlanetFactory;
 #[cfg(feature = "dem")]
@@ -50,38 +43,6 @@ pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT: &str =
 const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";
 #[cfg(feature = "dem")]
 const DEFAULT_MARS_DEM_PATH: &str = "assets/large_files/terrain/mars_mola_megr_32_cs2048_v2.csdem";
-
-#[cfg(feature = "dem")]
-impl LocalElevationOverlayTerrainSource {
-    fn local_intersects_patch(&self, patch: &TerrainPatch) -> bool {
-        let (west, south, east, north) = self.local.coverage_bounds_deg();
-        let mut bounds: Option<(f64, f64, f64, f64)> = None;
-        for (latitude_deg, longitude_deg) in
-            [(south, west), (south, east), (north, west), (north, east)]
-        {
-            let latitude_rad = latitude_deg.to_radians();
-            let longitude_rad = longitude_deg.to_radians();
-            let direction = DVec3::new(
-                latitude_rad.cos() * longitude_rad.cos(),
-                latitude_rad.sin(),
-                latitude_rad.cos() * longitude_rad.sin(),
-            );
-            let (face, u, v) = face_uv(direction);
-            if face != patch.face {
-                return true;
-            }
-            bounds = Some(match bounds {
-                Some((u0, v0, u1, v1)) => (u0.min(u), v0.min(v), u1.max(u), v1.max(v)),
-                None => (u, v, u, v),
-            });
-        }
-        let Some((u0, v0, u1, v1)) = bounds else {
-            return true;
-        };
-        let (patch_u0, patch_v0, patch_u1, patch_v1) = patch.uv_bounds();
-        u0 <= patch_u1 && u1 >= patch_u0 && v0 <= patch_v1 && v1 >= patch_v0
-    }
-}
 
 /// Deterministic seed for Earth's procedural detail contribution.
 #[cfg(feature = "dem")]
@@ -195,7 +156,7 @@ impl EarthTerrainSource {
                 }),
             );
             let root = Path::new(DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT);
-            Self::assemble(measured, None, Some(root)).unwrap_or_else(|_| {
+            Self::assemble(measured, Some(root)).unwrap_or_else(|_| {
                 let measured: Arc<dyn TerrainSource> = Arc::new(
                     DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
                         .expect("resident Earth DEM was validated above"),
@@ -236,48 +197,16 @@ impl EarthTerrainSource {
         manifest_root: impl AsRef<Path>,
     ) -> Result<Self, EarthTerrainDataError> {
         let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path(global_dem_path)?);
-        Self::assemble(base, None, Some(manifest_root.as_ref()))
+        Self::assemble(base, Some(manifest_root.as_ref()))
     }
 
-    /// Use a reviewed local elevation package as an absolute replacement within
-    /// its coverage. Its samples must already use the Earth's terrain datum;
-    /// this constructor does not transform horizontal or vertical reference
-    /// frames. The global DEM remains authoritative outside local coverage.
-    #[cfg(feature = "dem")]
-    pub fn with_dem_and_local_elevation_paths(
-        global_dem_path: impl AsRef<Path>,
-        local_elevation_path: impl AsRef<Path>,
-    ) -> Result<Self, EarthTerrainDataError> {
-        let global: Arc<dyn TerrainSource> =
-            Arc::new(DemTerrainSource::from_path(global_dem_path)?);
-        let local = load_local_elevation(local_elevation_path)?;
-        Self::assemble(global, Some(local), None)
-    }
-
-    /// Compose the reviewed measured local package over the global streamed
-    /// coverage. Local samples override both the resident base and any resident
-    /// payload tile within their footprint, with the package's declared
-    /// continuous blend border. Payload tiles remain authoritative elsewhere.
-    #[cfg(feature = "dem")]
-    pub fn with_dem_local_and_elevation_manifest_paths(
-        global_dem_path: impl AsRef<Path>,
-        local_elevation_path: impl AsRef<Path>,
-        manifest_root: impl AsRef<Path>,
-    ) -> Result<Self, EarthTerrainDataError> {
-        let global: Arc<dyn TerrainSource> =
-            Arc::new(DemTerrainSource::from_path(global_dem_path)?);
-        let local = load_local_elevation(local_elevation_path)?;
-        Self::assemble(global, Some(local), Some(manifest_root.as_ref()))
-    }
-
-    /// Build the single authority from a measured global source, an optional
-    /// reviewed local overlay, and an optional payload package root. The
-    /// payload, when present, sits between the measured base and the local
-    /// overlay so local measured data always wins where it is covered.
+    /// Build the single authority from a measured global source and an optional
+    /// payload package root. The payload, when present, sits over the measured
+    /// base; the resident CSDEM remains authoritative where no payload tile is
+    /// resident.
     #[cfg(feature = "dem")]
     fn assemble(
         measured_global: Arc<dyn TerrainSource>,
-        local: Option<Arc<LocalElevationPackage>>,
         manifest_root: Option<&Path>,
     ) -> Result<Self, EarthTerrainDataError> {
         let (global, tiles) = match manifest_root {
@@ -291,44 +220,19 @@ impl EarthTerrainSource {
             }
             None => (measured_global, None),
         };
-        let authority: Arc<dyn TerrainSource> = match local {
-            Some(local) => Arc::new(LocalElevationOverlayTerrainSource { global, local }),
-            None => global,
-        };
         Ok(Self {
-            source: Arc::new(earth_layered_terrain(authority)),
+            source: Arc::new(earth_layered_terrain(global)),
             tiles,
         })
     }
 }
 
-/// Validate and load a reviewed local elevation package as Earth coverage.
-#[cfg(feature = "dem")]
-fn load_local_elevation(
-    local_elevation_path: impl AsRef<Path>,
-) -> Result<Arc<LocalElevationPackage>, EarthTerrainDataError> {
-    let local = LocalElevationPackage::from_path(local_elevation_path)?;
-    if local.metadata().body != "Earth" {
-        return Err(EarthTerrainDataError::InvalidLocalElevation(
-            "local elevation package body must be Earth".into(),
-        ));
-    }
-    if local.elevation_bounds_m().is_none() {
-        return Err(EarthTerrainDataError::InvalidLocalElevation(
-            "local elevation package contains no valid samples".into(),
-        ));
-    }
-    Ok(Arc::new(local))
-}
-
-/// Failures when assembling Earth's reviewed global and local elevation data.
+/// Failures when assembling Earth's reviewed global elevation data.
 #[cfg(feature = "dem")]
 #[derive(Debug)]
 pub enum EarthTerrainDataError {
     GlobalDem(DemError),
-    LocalElevation(LocalElevationError),
     ElevationPyramid(ElevationPyramidError),
-    InvalidLocalElevation(String),
 }
 
 #[cfg(feature = "dem")]
@@ -339,68 +243,9 @@ impl From<DemError> for EarthTerrainDataError {
 }
 
 #[cfg(feature = "dem")]
-impl From<LocalElevationError> for EarthTerrainDataError {
-    fn from(error: LocalElevationError) -> Self {
-        Self::LocalElevation(error)
-    }
-}
-
-#[cfg(feature = "dem")]
 impl From<ElevationPyramidError> for EarthTerrainDataError {
     fn from(error: ElevationPyramidError) -> Self {
         Self::ElevationPyramid(error)
-    }
-}
-
-/// Selects measured, datum-normalized local elevation over the global source.
-/// The global side is any authoritative source, including the tile-backed
-/// composition, so streamed payload tiles remain authoritative outside the
-/// local footprint.
-#[cfg(feature = "dem")]
-#[derive(Debug)]
-pub(crate) struct LocalElevationOverlayTerrainSource {
-    pub(crate) global: Arc<dyn TerrainSource>,
-    pub(crate) local: Arc<LocalElevationPackage>,
-}
-
-#[cfg(feature = "dem")]
-impl TerrainSource for LocalElevationOverlayTerrainSource {
-    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let global = self.global.height_m(latitude_deg, longitude_deg);
-        let Some(local) = self.local.sample_m(latitude_deg, longitude_deg) else {
-            return global;
-        };
-        let border_deg = self.local.metadata().blend_border_m / 111_320.0;
-        if border_deg == 0.0 {
-            return local;
-        }
-        let edge_distance = self.local.edge_distance_deg(latitude_deg, longitude_deg);
-        let t = (edge_distance / border_deg).clamp(0.0, 1.0);
-        global + (local - global) * (t * t * (3.0 - 2.0 * t))
-    }
-
-    fn elevation_bounds_m(&self) -> ElevationBounds {
-        let global = self.global.elevation_bounds_m();
-        let Some((local_min_m, local_max_m)) = self.local.elevation_bounds_m() else {
-            return global;
-        };
-        ElevationBounds::new(global.min_m.min(local_min_m), global.max_m.max(local_max_m))
-    }
-
-    fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
-        if !self.local_intersects_patch(patch) {
-            return self.global.patch_geometric_error(patch);
-        }
-        let bounds = self.elevation_bounds_m();
-        PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
-    }
-
-    fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
-        if self.height_m(latitude_deg, longitude_deg) <= 0.0 {
-            SurfaceClass::Ocean
-        } else {
-            SurfaceClass::Land
-        }
     }
 }
 

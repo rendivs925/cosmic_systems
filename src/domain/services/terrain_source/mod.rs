@@ -257,13 +257,9 @@ impl TerrainSource for FlatTerrainSource {
 mod tests {
     #[cfg(feature = "dem")]
     use super::catalog::earth_eroded_base;
-    #[cfg(feature = "dem")]
-    use super::catalog::LocalElevationOverlayTerrainSource;
     use super::*;
     #[cfg(feature = "dem")]
     use crate::domain::services::dem_terrain_source::{CubeSphereDem, DemTerrainSource};
-    #[cfg(feature = "dem")]
-    use crate::domain::services::local_elevation::LocalElevationPackage;
     #[cfg(feature = "dem")]
     use crate::domain::services::planet_factory::PlanetFactory;
     #[cfg(feature = "dem")]
@@ -373,100 +369,6 @@ mod tests {
 
         assert_eq!(source.height_m(0.0, 0.0), -200.0);
         assert_eq!(source.surface_class(0.0, 0.0), SurfaceClass::Land);
-    }
-
-    #[cfg(feature = "dem")]
-    #[test]
-    fn local_elevation_overlay_replaces_only_covered_global_samples() {
-        let source = LocalElevationOverlayTerrainSource {
-            global: Arc::new(DemTerrainSource::from_dem(
-                CubeSphereDem::new(2, vec![10; 24]).expect("valid cube-sphere DEM"),
-            )),
-            local: Arc::new(
-                LocalElevationPackage::from_samples(
-                    2,
-                    2,
-                    -1.0,
-                    -1.0,
-                    1.0,
-                    1.0,
-                    crate::domain::services::local_elevation::LocalElevationMetadata {
-                        body: "Earth".into(),
-                        coordinate_frame: "terrain-radial-degrees".into(),
-                        horizontal_datum: "WGS84".into(),
-                        vertical_datum: "test".into(),
-                        source_resolution_m: 1.0,
-                        nodata_policy: "fallback".into(),
-                        source_sha256: "0".repeat(64),
-                        license: "test".into(),
-                        conversion_version: 1,
-                        blend_border_m: 0.0,
-                    },
-                    vec![50.0; 4],
-                )
-                .expect("valid local elevation package"),
-            ),
-        };
-
-        assert_eq!(source.height_m(0.0, 0.0), 50.0);
-        assert_eq!(source.height_m(10.0, 10.0), 10.0);
-        assert_eq!(
-            source.elevation_bounds_m(),
-            ElevationBounds::new(10.0, 50.0)
-        );
-    }
-
-    #[cfg(feature = "dem")]
-    #[test]
-    fn local_elevation_overlay_blends_continuously_into_global_coverage() {
-        let global: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_dem(
-            CubeSphereDem::new(2, vec![100; 24]).expect("valid cube-sphere DEM"),
-        ));
-        let local = Arc::new(
-            LocalElevationPackage::from_samples(
-                2,
-                2,
-                -1.0,
-                -1.0,
-                1.0,
-                1.0,
-                crate::domain::services::local_elevation::LocalElevationMetadata {
-                    body: "Earth".into(),
-                    coordinate_frame: "terrain-radial-degrees".into(),
-                    horizontal_datum: "WGS84".into(),
-                    vertical_datum: "test".into(),
-                    source_resolution_m: 1.0,
-                    nodata_policy: "fallback".into(),
-                    source_sha256: "0".repeat(64),
-                    license: "test".into(),
-                    conversion_version: 1,
-                    blend_border_m: 5_000.0,
-                },
-                vec![400.0; 4],
-            )
-            .expect("valid local elevation package"),
-        );
-        let source = LocalElevationOverlayTerrainSource { global, local };
-
-        // Exactly on the coverage edge the blend weight is zero, so the global
-        // value is returned with no cliff.
-        assert!((source.height_m(0.0, -1.0) - 100.0).abs() < 1e-9);
-
-        // Immediately inside, the surface moves smoothly toward the measured
-        // local value instead of stepping to it.
-        let steps: Vec<f64> = (0..=10)
-            .map(|index| source.height_m(0.0, -1.0 + index as f64 * 0.001))
-            .collect();
-        for pair in steps.windows(2) {
-            assert!(
-                (pair[1] - pair[0]).abs() < 20.0,
-                "local blend must be continuous: {pair:?}"
-            );
-        }
-        assert!(
-            steps[10] > 100.0,
-            "measured local coverage must raise the surface above the global base"
-        );
     }
 
     #[test]

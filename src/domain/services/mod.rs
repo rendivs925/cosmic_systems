@@ -17,7 +17,6 @@ pub mod imagery_package;
 pub mod imagery_tiles;
 pub mod land_cover;
 pub mod landing_gear;
-pub mod local_elevation;
 pub mod long_arc_propagation;
 pub mod physics;
 pub mod physics_orbital;

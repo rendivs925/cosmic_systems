@@ -41,6 +41,8 @@ impl Default for LowEarthOrbitTarget {
             target_periapsis_altitude_m: 200_000.0,
             altitude_tolerance_m: 25_000.0,
             maximum_eccentricity: 0.02,
+            // Neutral reference inclination for tests and non-launch uses. The
+            // flight spawn overrides it with the active launch-site latitude.
             target_inclination_rad: 28.5_f64.to_radians(),
             inclination_tolerance_rad: 2.0_f64.to_radians(),
             minimum_safe_periapsis_altitude_m: 160_000.0,

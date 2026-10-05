@@ -1,10 +1,9 @@
 //! Offline converter: equirectangular Earth imagery -> cube-sphere tiles.
 //!
 //! Input is an already normalized equirectangular RGB(A) image in WGS 84
-//! body-fixed coordinates (the imagery equivalent of the normalized DEM that
-//! `local_elevation_convert` accepts). This tool does not reproject UTM or
-//! infer transforms; a Sentinel-2 granule must be reprojected to WGS 84
-//! geographic before conversion.
+//! body-fixed coordinates. This tool does not reproject UTM or infer
+//! transforms; a Sentinel-2 granule must be reprojected to WGS 84 geographic
+//! before conversion.
 //!
 //! Output layout matches the imagery manifest:
 //! `<output_dir>/<face>/<level>/<tile_x>_<tile_y>.png`

@@ -23,8 +23,6 @@ pub struct AscentGuidanceProfile {
     pub turn_start_time_s: f64,
     /// Time (s) after liftoff when pitch-over ends.
     pub turn_end_time_s: f64,
-    /// Target orbital inclination (radians) - determines launch azimuth.
-    pub target_inclination_rad: f64,
     /// Pitch-gate: minimum altitude (m) the vehicle must reach before any
     /// pitch-over begins, so low-thrust vehicles clear the pad/tower first
     /// regardless of what the time schedule says.
@@ -44,7 +42,6 @@ impl Default for AscentGuidanceProfile {
             max_turn_angle_rad: 80.0_f64.to_radians(),
             turn_start_time_s: 10.0,
             turn_end_time_s: 160.0,
-            target_inclination_rad: 28.5_f64.to_radians(), // KSC latitude
             // Tower-clearance gates: ~8 vehicle heights up and climbing
             // decisively before the gravity turn may start.
             pitch_gate_min_altitude_m: 150.0,
@@ -67,7 +64,6 @@ impl AscentGuidanceProfile {
             max_turn_angle_rad,
             turn_start_time_s: 10.0,
             turn_end_time_s: 160.0,
-            target_inclination_rad: 28.5_f64.to_radians(),
             pitch_gate_min_altitude_m: 150.0,
             pitch_gate_min_vertical_speed_mps: 30.0,
         }

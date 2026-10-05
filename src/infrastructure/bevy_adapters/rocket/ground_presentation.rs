@@ -4,8 +4,8 @@
 //! distance input. They neither sample visual terrain nor affect flight state.
 
 use super::components::{
-    LaunchPadPresentation, PrimaryVehicle, RocketFlightConditions, RocketPresentationQuality,
-    RocketPropulsion, TerrainCollisionState,
+    LaunchPadPresentation, LaunchSiteStructure, PrimaryVehicle, RocketFlightConditions,
+    RocketPresentationQuality, RocketPropulsion, TerrainCollisionState,
 };
 use super::effects::RocketPresentationMetrics;
 use super::presentation_parameters::{map_presentation_parameters, RocketPresentationInputs};
@@ -166,6 +166,41 @@ pub(crate) fn update_rocket_ground_presentation(
     presentation_metrics.record_ground_update(update_started.elapsed());
 }
 
+/// Hides the launch-site structures once the camera is beyond the presentation
+/// structure draw distance. Structures are presentation-only and never affect
+/// simulation state.
+#[expect(
+    clippy::type_complexity,
+    reason = "The disjoint camera, pad, and structure queries keep Bevy access explicit."
+)]
+pub(crate) fn update_launch_site_structure_visibility(
+    quality: Res<RocketPresentationQuality>,
+    cameras: Query<(&Camera, &Transform), (With<Camera3d>, Without<LaunchSiteStructure>)>,
+    pads: Query<&Transform, (With<LaunchPadPresentation>, Without<LaunchSiteStructure>)>,
+    mut structures: Query<&mut Visibility, With<LaunchSiteStructure>>,
+) {
+    let Some(pad_transform) = pads.iter().next() else {
+        return;
+    };
+    let camera_distance_m =
+        super::camera::nearest_active_camera_distance_m(pad_transform.translation, &cameras);
+    let visible = structure_visible(camera_distance_m, quality.max_structure_distance_m);
+    let target = if visible {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut structures {
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+}
+
+fn structure_visible(camera_distance_m: f32, max_structure_distance_m: f32) -> bool {
+    camera_distance_m.is_finite() && camera_distance_m <= max_structure_distance_m
+}
+
 fn ground_effect_visible(
     intensity_unit: f64,
     terrain_distance_m: f64,
@@ -248,5 +283,14 @@ mod tests {
         ));
         assert!(!ground_effect_visible(1.0, 0.0, 1_000.1, 1_000.0));
         assert!(!ground_effect_visible(f64::NAN, 0.0, 100.0, 1_000.0));
+    }
+
+    #[test]
+    fn launch_site_structures_are_bounded_by_draw_distance() {
+        assert!(structure_visible(0.0, 6_000.0));
+        assert!(structure_visible(6_000.0, 6_000.0));
+        assert!(!structure_visible(6_000.1, 6_000.0));
+        assert!(!structure_visible(f32::INFINITY, 6_000.0));
+        assert!(!structure_visible(f32::NAN, 6_000.0));
     }
 }

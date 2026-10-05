@@ -168,6 +168,42 @@ mod tests {
     }
 
     #[test]
+    fn papua_site_targets_its_own_latitude_inclination_due_east() {
+        use crate::domain::services::body_orientation::BodyOrientation;
+        use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+        use crate::domain::services::planet_factory::PlanetFactory;
+        use crate::domain::services::reference_frames::{
+            body_fixed_to_planet_inertial, geodetic_to_body_fixed, planet_inertial_spin_axis,
+        };
+        use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
+
+        let orientation = BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "guidance-papua-heading-test".to_owned(),
+            DQuat::IDENTITY,
+            DVec3::Z,
+        );
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let site = predefined_sites::papua_indonesia_coastal_lowland();
+        let position_m =
+            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&site, &earth), &orientation);
+        let spin_axis = planet_inertial_spin_axis(&orientation);
+        let basis = planet_inertial_enu_basis(position_m, spin_axis).unwrap();
+        let target_inclination_rad = (site.latitude_deg as f64).abs().to_radians();
+        let heading =
+            prograde_ascending_node_launch_heading(position_m, spin_axis, target_inclination_rad)
+                .unwrap();
+
+        // A prograde launch to an inclination equal to the site latitude is
+        // (near) due east and reaches the target plane. Geodetic site latitude
+        // differs slightly from the geocentric latitude the heading uses, so
+        // the azimuth is close to, not exactly, 90 degrees.
+        assert!(heading.azimuth_east_of_north_rad.to_degrees() > 80.0);
+        assert!(heading.direction_pci.dot(basis.east) > 0.98);
+    }
+
+    #[test]
     fn polar_orbit_from_equator_launches_northbound() {
         let spin_axis = DVec3::Z;
         let position_m = DVec3::X;

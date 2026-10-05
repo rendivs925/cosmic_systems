@@ -100,6 +100,9 @@ pub struct RocketAudioControls {
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct RocketPresentationQuality {
     pub max_effect_distance_m: f32,
+    /// Maximum camera distance (m) at which launch-site structures are drawn.
+    /// Beyond this the pad, tower, and facilities are hidden.
+    pub max_structure_distance_m: f32,
     pub minimum_screen_coverage_unit: f32,
 }
 
@@ -107,6 +110,7 @@ impl Default for RocketPresentationQuality {
     fn default() -> Self {
         Self {
             max_effect_distance_m: 20_000.0,
+            max_structure_distance_m: 6_000.0,
             minimum_screen_coverage_unit: 0.001,
         }
     }
@@ -511,6 +515,20 @@ pub struct RocketAutopilot {
     pub transfer_target_radius_m: f64,
 }
 
+impl RocketAutopilot {
+    /// Autopilot configured for a launch site at `latitude_deg`.
+    ///
+    /// A prograde launch due east from latitude `phi` reaches an orbital
+    /// inclination of `|phi|`, so the minimum-energy ascent plane is the site
+    /// latitude. This sets the one authoritative target inclination consumed by
+    /// ascent guidance and orbit-insertion checks.
+    pub fn for_launch_site(latitude_deg: f64) -> Self {
+        let mut autopilot = Self::default();
+        autopilot.target_orbit.target_inclination_rad = latitude_deg.abs().to_radians();
+        autopilot
+    }
+}
+
 /// Net force accumulator (world/planet-inertial frame), cleared each frame by integrate_6dof.
 /// Written by: gravity, aero, propulsion, parachutes, retro-propulsion.
 #[derive(Component, Debug, Clone, Copy, Default)]
@@ -582,6 +600,12 @@ pub struct LaunchPadPresentation {
     pub normal_body_fixed: DVec3,
     pub heading_body_fixed: DVec3,
 }
+
+/// Marks a launch-site structure child (pad, tower, facilities). These are
+/// presentation-only and are hidden past the presentation quality's structure
+/// draw distance; they never contribute collision, height, or forces.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct LaunchSiteStructure;
 
 /// Authoritative gravitational acceleration (m/s²) acting on vehicle.
 /// Computed by update_rocket_gravity, consumed by accumulate_forces.
@@ -1051,6 +1075,25 @@ mod camera_controller_tests {
         assert_eq!(controller.target_mode, RocketCameraMode::Cockpit);
         assert_eq!(controller.transition_progress, 0.0);
         assert!(controller.transition_start_pose.is_none());
+    }
+}
+
+#[cfg(test)]
+mod autopilot_tests {
+    use super::*;
+
+    #[test]
+    fn for_launch_site_targets_the_site_latitude_inclination() {
+        let papua = RocketAutopilot::for_launch_site(-8.0);
+        assert!(
+            (papua.target_orbit.target_inclination_rad - 8.0_f64.to_radians()).abs() < 1e-12,
+            "a southern site must target its absolute latitude"
+        );
+
+        let northern = RocketAutopilot::for_launch_site(28.5);
+        assert!(
+            (northern.target_orbit.target_inclination_rad - 28.5_f64.to_radians()).abs() < 1e-12
+        );
     }
 }
 
