@@ -334,16 +334,22 @@ pub fn handle_rocket_launch_input(
         &mut RocketMissionState,
         &RocketPhysicsState,
         &mut RocketRenderState,
+        &mut RocketAutopilot,
     )>,
 ) {
     if keyboard.just_pressed(KeyCode::Space) {
-        for (mut mission, rocket, mut render) in mission_query.iter_mut() {
+        for (mut mission, rocket, mut render, mut autopilot) in mission_query.iter_mut() {
             if *mission == RocketMissionState::PreLaunch {
                 // Prelaunch renders the latest body-fixed pad state rather
                 // than its interpolation buffer. Reset that buffer before
                 // enabling airborne interpolation to avoid blending two
                 // stale rotating-pad snapshots on the launch transition.
                 *render = RocketRenderState::new(rocket.dynamics);
+                // A launch order starts a new ascent, so the tower-clearance
+                // gate must be re-armed from the pad. Carrying a prior flight's
+                // latched pitch-over into a relaunch would command an immediate
+                // turn while the vehicle is still on the ground.
+                autopilot.ascent_pitch_over_engaged = false;
                 *mission = RocketMissionState::Launch;
             }
         }

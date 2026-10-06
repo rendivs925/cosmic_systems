@@ -2978,6 +2978,10 @@ mod render_interpolation_tests {
                     prev: stale_snapshot,
                     current: stale_snapshot,
                 },
+                RocketAutopilot {
+                    ascent_pitch_over_engaged: true,
+                    ..Default::default()
+                },
             ))
             .id();
         app.add_systems(Update, handle_rocket_launch_input);
@@ -2995,6 +2999,13 @@ mod render_interpolation_tests {
         let render = world.get::<RocketRenderState>(rocket).unwrap();
         assert_eq!(render.prev, dynamics);
         assert_eq!(render.current, dynamics);
+        assert!(
+            !world
+                .get::<RocketAutopilot>(rocket)
+                .unwrap()
+                .ascent_pitch_over_engaged,
+            "a launch order must re-arm the tower-clearance gate from the pad"
+        );
     }
 }
 
