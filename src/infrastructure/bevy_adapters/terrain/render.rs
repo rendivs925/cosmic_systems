@@ -2155,6 +2155,31 @@ fn neutral_occlusion_image(
         .clone()
 }
 
+/// Move a patch from its baked occlusion map to the shared neutral map. Both the
+/// terrain material and this patch's ocean material sample the occlusion image,
+/// so both must be rebound; leaving either pointing at an evicted handle would
+/// render with a dangling asset. The patch forgets its field and baked Sun so a
+/// later re-upload bakes fresh instead of refreshing a map it no longer owns.
+fn bind_neutral_terrain_occlusion(
+    state: &mut TerrainPatchRenderState,
+    neutral: Handle<Image>,
+    terrain_materials: &mut Assets<TerrainMaterial>,
+    water_materials: &mut Assets<WaterMaterial>,
+) {
+    if let Some(material) = terrain_materials.get_mut(&state.material_handle) {
+        material.extension.terrain_occlusion = neutral.clone();
+    }
+    if let Some(water_handle) = state.water_material_handle.as_ref() {
+        if let Some(water) = water_materials.get_mut(water_handle) {
+            water.extension.terrain_occlusion = neutral.clone();
+        }
+    }
+    state.occlusion_texture = neutral;
+    state.occlusion_owned = false;
+    state.occlusion_field = None;
+    state.baked_sun_body = DVec3::ZERO;
+}
+
 /// The body-fixed unit direction from a catalog body toward the shared
 /// ephemeris Sun, or `None` when the snapshot has no valid Sun state.
 fn body_fixed_sun_direction(
@@ -2217,11 +2242,18 @@ fn bake_terrain_occlusion_for_patch(
 /// Refresh visible terrain as the Sun moves in its body-fixed frame, including
 /// planetary rotation. Keep the texture handle stable so terrain and ocean
 /// materials both observe the new shadow map without dangling image handles.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The refresh reads the ephemeris/config/planet state and must mutate the shared image, material, and terrain-render assets to install or rebind each map."
+)]
 fn refresh_terrain_occlusion(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     occlusion_config: Res<TerrainOcclusionConfig>,
     planet_query: Query<&PlanetComponent>,
     mut images: ResMut<Assets<Image>>,
+    mut render_assets: ResMut<TerrainRenderAssets>,
+    mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut query: Query<(&mut TerrainPatchRenderState, &Visibility)>,
 ) {
     if occlusion_config.max_refreshes_per_frame == 0 {
@@ -2257,11 +2289,17 @@ fn refresh_terrain_occlusion(
         }
         // Validate the writable main-world image *before* the expensive bake so a
         // missing/evicted map cannot burn the per-frame refresh budget on work
-        // that can never be installed. Dropping ownership lets the patch fall
-        // back to the shared neutral map and rebake from a later upload instead
-        // of retrying an unrecoverable handle every frame.
+        // that can never be installed. Rebind the terrain and ocean materials to
+        // the shared neutral map, because clearing ownership alone would leave
+        // both materials sampling a dangling handle.
         if !images.contains(&state.occlusion_texture) {
-            state.occlusion_owned = false;
+            let neutral = neutral_occlusion_image(&mut render_assets, &mut images);
+            bind_neutral_terrain_occlusion(
+                &mut state,
+                neutral,
+                &mut terrain_materials,
+                &mut water_materials,
+            );
             continue;
         }
         let Some(field) = state.occlusion_field.as_ref() else {
@@ -2269,7 +2307,13 @@ fn refresh_terrain_occlusion(
         };
         let (values, _) = bake_terrain_occlusion(field, sun_direction_body, &occlusion_config);
         let Some(image) = images.get_mut(&state.occlusion_texture) else {
-            state.occlusion_owned = false;
+            let neutral = neutral_occlusion_image(&mut render_assets, &mut images);
+            bind_neutral_terrain_occlusion(
+                &mut state,
+                neutral,
+                &mut terrain_materials,
+                &mut water_materials,
+            );
             continue;
         };
         *image = terrain_occlusion_image(occlusion_config.texture_resolution, &values);
@@ -2331,6 +2375,94 @@ mod tests {
             "occlusion maps are refreshed through Assets<Image> and must stay in the main world"
         );
         assert!(image.asset_usage.contains(RenderAssetUsages::RENDER_WORLD));
+    }
+
+    /// Regression: when a patch's baked occlusion map is evicted, clearing
+    /// `occlusion_owned` alone left both the terrain material and the per-patch
+    /// ocean material sampling a dangling handle. The fallback must rebind both
+    /// materials to the shared neutral map.
+    #[test]
+    fn evicted_occlusion_map_rebinds_materials_to_neutral() {
+        let mut terrain_materials = Assets::<TerrainMaterial>::default();
+        let mut water_materials = Assets::<WaterMaterial>::default();
+        let mut images = Assets::<Image>::default();
+
+        let baked = images.add(terrain_occlusion_image(4, &[1.0; 32]));
+        let neutral = images.add(neutral_occlusion_image_value());
+        let material_handle = terrain_materials.add(TerrainMaterial {
+            base: StandardMaterial::default(),
+            extension: TerrainSurfaceExtension {
+                terrain_occlusion: baked.clone(),
+                ..Default::default()
+            },
+        });
+        let water_material_handle = water_materials.add(WaterMaterial {
+            base: water_base_material(false),
+            extension: WaterExtension::new(WaterParams::default(), baked.clone()),
+        });
+        let mut state = TerrainPatchRenderState {
+            patch: TerrainPatch::for_direction(DVec3::X, 0),
+            mesh_handle: Handle::default(),
+            material_handle: material_handle.clone(),
+            base_material: StandardMaterial::default(),
+            local_albedo: Handle::default(),
+            local_normal: Handle::default(),
+            local_detail_weight: 0.0,
+            global_albedo: Handle::default(),
+            imagery_albedo: Handle::default(),
+            imagery_weight: 0.0,
+            morph_start_m: 0.0,
+            morph_end_m: 0.0,
+            detail_texture: Handle::default(),
+            detail_scale: 0.0,
+            local_surface_handles: None,
+            layer: LayerMaterialState::default(),
+            vegetation_mesh_handle: None,
+            water_mesh_handle: None,
+            water_material_handle: Some(water_material_handle.clone()),
+            river_mesh_handle: None,
+            planet_entity: Entity::PLACEHOLDER,
+            body_to_inertial_at_spawn: DQuat::IDENTITY,
+            render_origin_at_spawn: DVec3::ZERO,
+            occlusion_texture: baked.clone(),
+            occlusion_owned: true,
+            occlusion_field: None,
+            baked_sun_body: DVec3::X,
+        };
+
+        // Evict the baked map while both materials still point at it.
+        images.remove(baked.id());
+        assert!(!images.contains(&baked));
+
+        bind_neutral_terrain_occlusion(
+            &mut state,
+            neutral.clone(),
+            &mut terrain_materials,
+            &mut water_materials,
+        );
+
+        assert_eq!(
+            terrain_materials
+                .get(&material_handle)
+                .unwrap()
+                .extension
+                .terrain_occlusion,
+            neutral,
+            "terrain material must stop sampling the evicted map"
+        );
+        assert_eq!(
+            water_materials
+                .get(&water_material_handle)
+                .unwrap()
+                .extension
+                .terrain_occlusion,
+            neutral,
+            "ocean material must stop sampling the evicted map"
+        );
+        assert_eq!(state.occlusion_texture, neutral);
+        assert!(!state.occlusion_owned);
+        assert!(state.occlusion_field.is_none());
+        assert_eq!(state.baked_sun_body, DVec3::ZERO);
     }
 
     #[test]
