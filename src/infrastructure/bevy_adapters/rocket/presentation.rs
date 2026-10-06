@@ -122,4 +122,84 @@ mod tests {
         let transform = render_transform(dynamics, local_origin, &scale);
         assert_eq!(transform.translation, Vec3::new(1.0, -2.0, 3.0));
     }
+
+    /// A render-origin change must rebase translation without altering the
+    /// rendered attitude. This pins the presentation boundary that previously
+    /// passed orientation through unchanged.
+    #[test]
+    fn render_transform_preserves_rotation_across_origin_rebase() {
+        let scale = PhysicalScale::default();
+        let orientation = DQuat::from_axis_angle(DVec3::new(0.2, 0.9, -0.3).normalize(), 1.2);
+        let base_position_m = DVec3::new(6_600_000.0, -1_200_000.0, 300_000.0);
+        let dynamics = RocketDynamicsState::new(
+            base_position_m,
+            DVec3::ZERO,
+            orientation,
+            1.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let before = render_transform(dynamics, base_position_m, &scale);
+        let after = render_transform(
+            dynamics,
+            base_position_m + DVec3::new(50.0, -10.0, 5.0),
+            &scale,
+        );
+        assert_eq!(before.rotation, after.rotation);
+        assert_eq!(before.rotation, orientation.as_quat());
+    }
+
+    /// The interpolated render quaternion must land between the two fixed
+    /// snapshots and exactly on each endpoint, even when one snapshot is stored
+    /// in the opposite quaternion hemisphere (`q` and `-q` are the same
+    /// rotation). This is the intermediate-frame interpolation the flight
+    /// matrix compares against.
+    #[test]
+    fn render_dynamics_state_slerps_intermediate_orientation() {
+        let a = DQuat::from_axis_angle(DVec3::Y, 0.10);
+        let b = DQuat::from_axis_angle(DVec3::Y, 0.70);
+        let dynamics_at = |orientation: DQuat| {
+            RocketDynamicsState::new(
+                DVec3::new(1.0, 2.0, 3.0),
+                DVec3::new(4.0, 5.0, 6.0),
+                orientation,
+                10.0,
+                DMat3::IDENTITY,
+                DVec3::ZERO,
+            )
+        };
+        let render = RocketRenderState {
+            prev: dynamics_at(a),
+            current: dynamics_at(b),
+        };
+
+        let start = render_dynamics_state(render, 0.0);
+        let end = render_dynamics_state(render, 1.0);
+        let mid = render_dynamics_state(render, 0.5);
+        assert!(start.orientation.angle_between(a) < 1e-12);
+        assert!(end.orientation.angle_between(b) < 1e-12);
+        assert!(
+            (mid.orientation.angle_between(a) - (b.angle_between(a) * 0.5)).abs() < 1e-9,
+            "midpoint interpolation must be the half-angle slerp"
+        );
+        assert!(mid.position_m.abs_diff_eq(DVec3::new(1.0, 2.0, 3.0), 1e-12));
+    }
+
+    /// The presentation adapter is a pure projection of the authoritative
+    /// state: producing a render transform must not mutate physical dynamics.
+    #[test]
+    fn render_transform_leaves_physical_state_unchanged() {
+        let scale = PhysicalScale::default();
+        let original = RocketDynamicsState::new(
+            DVec3::new(6_600_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 7_000.0, 0.0),
+            DQuat::from_axis_angle(DVec3::Z, 0.4),
+            1_000.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        );
+        let before = original;
+        let _ = render_transform(original, DVec3::ZERO, &scale);
+        assert_eq!(original, before);
+    }
 }

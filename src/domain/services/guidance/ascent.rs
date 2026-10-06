@@ -181,6 +181,12 @@ pub fn ascent_pitch_gate_clear(
 
 /// Pitch angle of the gated ascent schedule: strictly vertical until the
 /// tower-clearance gate passes, then the combined altitude/time schedule.
+///
+/// This is a stateless view of the gate and is only appropriate before the
+/// pitch-over has begun. Once engaged, use [`gravity_turn_pitch_angle_engaged`]:
+/// a stateless re-evaluation would command a return to vertical every time the
+/// vehicle's vertical speed naturally falls back below the gate while coasting
+/// through apogee at high altitude.
 pub fn gravity_turn_pitch_angle_gated(
     profile: &AscentGuidanceProfile,
     altitude_m: f64,
@@ -191,6 +197,55 @@ pub fn gravity_turn_pitch_angle_gated(
         return 0.0;
     }
     gravity_turn_pitch_angle_combined(profile, altitude_m, time_since_liftoff_s)
+}
+
+/// Latch the tower-clearance pitch-over gate: once the vehicle has cleared the
+/// pad/tower it stays engaged for the rest of the ascent. Without the latch a
+/// normal gravity turn would revert to a vertical attitude whenever vertical
+/// speed dipped below the gate (e.g. coasting through high-altitude apogee),
+/// producing the "almost upright at high altitude" regression.
+pub fn ascent_pitch_gate_engaged(
+    previously_engaged: bool,
+    profile: &AscentGuidanceProfile,
+    altitude_m: f64,
+    vertical_speed_mps: f64,
+) -> bool {
+    previously_engaged || ascent_pitch_gate_clear(profile, altitude_m, vertical_speed_mps)
+}
+
+/// Pitch angle of the latched ascent schedule. Before engagement the vehicle
+/// holds the local vertical; afterwards it follows the combined altitude/time
+/// pitch schedule for the remainder of the ascent, independent of momentary
+/// vertical speed.
+pub fn gravity_turn_pitch_angle_engaged(
+    profile: &AscentGuidanceProfile,
+    altitude_m: f64,
+    time_since_liftoff_s: f64,
+    pitch_over_engaged: bool,
+) -> f64 {
+    if !pitch_over_engaged {
+        return 0.0;
+    }
+    gravity_turn_pitch_angle_combined(profile, altitude_m, time_since_liftoff_s)
+}
+
+/// Desired body-axis direction for the latched ascent schedule. See
+/// [`gravity_turn_pitch_angle_engaged`] for why the gate is a latch.
+pub fn gravity_turn_direction_engaged(
+    profile: &AscentGuidanceProfile,
+    up_dir: DVec3,
+    pitch_axis: DVec3,
+    altitude_m: f64,
+    time_since_liftoff_s: f64,
+    pitch_over_engaged: bool,
+) -> DVec3 {
+    let angle = gravity_turn_pitch_angle_engaged(
+        profile,
+        altitude_m,
+        time_since_liftoff_s,
+        pitch_over_engaged,
+    );
+    (DQuat::from_axis_angle(pitch_axis, angle) * up_dir).normalize()
 }
 
 /// Desired body-axis direction for the gravity turn: the local vertical

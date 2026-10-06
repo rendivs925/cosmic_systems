@@ -601,6 +601,11 @@ pub struct RocketAutopilot {
     pub mode: crate::domain::services::guidance::AutopilotMode,
     pub time_since_liftoff_s: f64,
     pub target_landing_position_m: DVec3,
+    /// Latched ascent gravity-turn gate. Set once the vehicle clears the
+    /// pad/tower (altitude and vertical-speed gate) and never cleared during
+    /// the ascent, so a natural reduction in vertical speed cannot command a
+    /// return to a vertical attitude at high altitude.
+    pub ascent_pitch_over_engaged: bool,
     /// Target circular-orbit radius for [`crate::domain::services::guidance::
     /// AutopilotMode::Transfer`] (planet-centered, meters). Zero disables the
     /// mode (no configured target).

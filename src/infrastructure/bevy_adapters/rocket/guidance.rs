@@ -1,8 +1,8 @@
 use super::components::*;
 use crate::domain::services::guidance::{
-    advance_ascent_phase, advance_descent_phase, attitude_from_direction,
-    banked_attitude_from_direction, boostback_guidance, default_surface_landing_target,
-    gravity_turn_direction_gated, pitch_axis_from_reference,
+    advance_ascent_phase, advance_descent_phase, ascent_pitch_gate_engaged,
+    attitude_from_direction, banked_attitude_from_direction, boostback_guidance,
+    default_surface_landing_target, gravity_turn_direction_engaged, pitch_axis_from_reference,
     prograde_ascending_node_launch_heading, prograde_attitude, reentry_bank_angle,
     reentry_bank_angle_enhanced, target_surface_range_errors_m, terminal_landing_guidance,
     transfer_burn_phase, AutopilotMode, DescentGuidanceConfig, TransferBurnPhase,
@@ -264,8 +264,17 @@ pub fn guidance_system(
                 // vehicle clears the pad/tower (altitude AND vertical speed),
                 // then follow the altitude/time pitch ramp. Low-thrust
                 // vehicles must never start the turn while still near the
-                // ground just because the wall clock says so.
+                // ground just because the wall clock says so. The gate is
+                // latched: once engaged, a later reduction in vertical speed
+                // (e.g. coasting through high-altitude apogee) must not command
+                // the vehicle back to a vertical attitude.
                 let vertical_speed_mps = inertial_velocity_mps.dot(up_dir);
+                autopilot.ascent_pitch_over_engaged = ascent_pitch_gate_engaged(
+                    autopilot.ascent_pitch_over_engaged,
+                    &autopilot.ascent_profile,
+                    altitude_m,
+                    vertical_speed_mps,
+                );
                 commands.target_attitude = match prograde_ascending_node_launch_heading(
                     position_m,
                     reference_normal,
@@ -276,13 +285,13 @@ pub fn guidance_system(
                         // perpendicular pitch axis is always defined.
                         let pitch_axis = pitch_axis_from_reference(up_dir, heading.direction_pci)
                             .expect("a horizontal ascent heading has a pitch axis");
-                        attitude_from_direction(gravity_turn_direction_gated(
+                        attitude_from_direction(gravity_turn_direction_engaged(
                             &autopilot.ascent_profile,
                             up_dir,
                             pitch_axis,
                             altitude_m,
                             autopilot.time_since_liftoff_s,
-                            vertical_speed_mps,
+                            autopilot.ascent_pitch_over_engaged,
                         ))
                     }
                     // A polar site or unreachable inclination has no safe
@@ -821,6 +830,77 @@ mod tests {
         assert!(
             low_heading.dot(high_heading) < 0.9,
             "distinct inclination targets must not share an ascent heading"
+        );
+    }
+
+    #[test]
+    fn engaged_ascent_guidance_keeps_pitch_over_at_apogee() {
+        // Regression for the high-altitude "almost upright" defect. At apogee
+        // the vertical component of velocity falls through zero, below the
+        // tower-clearance gate. Because the gate is latched (as it is set by the
+        // real guidance adapter), the commanded attitude must remain the
+        // gravity-turn pitch, not snap back to local vertical.
+        let orientation = earth_orientation();
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let radius_m = earth.radius_km as f64 * 1_000.0;
+        let up_dir = DVec3::X;
+        let position_m = up_dir * (radius_m + 298_000.0);
+        // Nearly horizontal with a downwards vertical component (< the 30 m/s
+        // gate), as happens coasting through apogee.
+        let inertial_velocity_mps = DVec3::Z * 3_000.0 - up_dir * 40.0;
+
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(1.0 / 64.0));
+        app.insert_resource(earth_snapshot(orientation));
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth,
+            material: Handle::default(),
+            has_texture: false,
+            base_reflectance: 1.0,
+            base_roughness: 1.0,
+        });
+        let engaged = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            DVec3::ZERO,
+            RocketMissionState::Ascent,
+            AutopilotMode::Ascent,
+            298_000.0,
+        );
+        let disengaged = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            inertial_velocity_mps,
+            DVec3::ZERO,
+            RocketMissionState::Ascent,
+            AutopilotMode::Ascent,
+            298_000.0,
+        );
+        for (entity, latched) in [(engaged, true), (disengaged, false)] {
+            let mut autopilot = app.world_mut().get_mut::<RocketAutopilot>(entity).unwrap();
+            autopilot.time_since_liftoff_s = 200.0;
+            autopilot.ascent_pitch_over_engaged = latched;
+        }
+        app.add_systems(Update, guidance_system);
+        app.update();
+
+        let target_up = |entity| {
+            (app.world()
+                .get::<RocketCommands>(entity)
+                .unwrap()
+                .target_attitude
+                * DVec3::Y)
+                .dot(up_dir)
+        };
+        assert!(
+            target_up(disengaged) > 0.999,
+            "a vehicle that has not cleared the gate must hold local vertical"
+        );
+        assert!(
+            target_up(engaged) < 0.5,
+            "an engaged pitch-over must stay pitched over through apogee, got {}",
+            target_up(engaged)
         );
     }
 }

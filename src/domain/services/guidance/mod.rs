@@ -34,8 +34,9 @@ mod landing;
 mod transfer;
 
 pub use ascent::{
-    advance_ascent_phase, ascent_pitch_gate_clear, gravity_turn_direction,
-    gravity_turn_direction_gated, gravity_turn_pitch_angle, gravity_turn_pitch_angle_combined,
+    advance_ascent_phase, ascent_pitch_gate_clear, ascent_pitch_gate_engaged,
+    gravity_turn_direction, gravity_turn_direction_engaged, gravity_turn_direction_gated,
+    gravity_turn_pitch_angle, gravity_turn_pitch_angle_combined, gravity_turn_pitch_angle_engaged,
     gravity_turn_pitch_angle_gated, gravity_turn_pitch_angle_time,
     prograde_ascending_node_launch_heading, target_attitude_for_phase, AscendingNodeLaunchHeading,
     AscendingNodeLaunchHeadingError, AscentGuidanceProfile,
@@ -320,6 +321,42 @@ mod tests {
             p.pitch_gate_min_altitude_m,
             p.pitch_gate_min_vertical_speed_mps
         ));
+    }
+
+    #[test]
+    fn latched_pitch_over_survives_high_altitude_vertical_speed_drop() {
+        // Regression: a vehicle that has already cleared the tower and pitched
+        // over must keep its gravity-turn attitude when vertical speed dips
+        // below the gate while coasting near apogee. The stateless gate would
+        // command a return to vertical, which is the "almost upright at high
+        // altitude" defect.
+        let p = profile();
+        let mut engaged = false;
+        engaged = ascent_pitch_gate_engaged(engaged, &p, 200.0, 60.0);
+        assert!(engaged, "clearing the gate engages the pitch-over");
+
+        // Later, high and nearly out of vertical speed (through apogee).
+        engaged = ascent_pitch_gate_engaged(engaged, &p, 298_000.0, -40.0);
+        assert!(engaged, "the gate must not disengage for the ascent");
+
+        let t = 200.0;
+        let angle = gravity_turn_pitch_angle_engaged(&p, 298_000.0, t, engaged);
+        let combined = gravity_turn_pitch_angle_combined(&p, 298_000.0, t);
+        assert!(
+            (angle - combined).abs() < 1e-12,
+            "engaged ascent must keep following the pitch schedule, got {angle}"
+        );
+        assert!(
+            angle > 1.0,
+            "the vehicle must remain pitched over, not revert vertical"
+        );
+
+        let axis = pitch_axis_from_reference(up_dir(), DVec3::Z).unwrap();
+        let dir = gravity_turn_direction_engaged(&p, up_dir(), axis, 298_000.0, t, true);
+        assert!(
+            dir.dot(up_dir()) < 0.5,
+            "the latched direction must not snap back to the local vertical"
+        );
     }
 
     #[test]
