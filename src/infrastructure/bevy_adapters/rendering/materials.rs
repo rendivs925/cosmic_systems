@@ -105,22 +105,27 @@ pub fn create_cloud_material(
 /// Flight clouds use the existing geographic texture as coverage, not a black
 /// opaque layer. The shared standard-material factory still owns lighting.
 ///
-/// The extension separates the four visual inputs: the sampled base colour is
-/// coverage, `shape_scale` drives low-frequency cloud masses, `detail_scale`
-/// drives higher-frequency edges, and a bounded wind vector scrolls the detail
-/// coherently. All four are presentation-only uniforms; no whole-field texture
-/// is regenerated per frame.
+/// The extension separates the visual inputs: the sampled base colour luminance
+/// times its authored alpha is coverage, `shape_scale` drives low-frequency
+/// cloud masses, `detail_scale` drives higher-frequency edges, and a bounded
+/// wind vector advects the whole procedural field coherently. Noise is sampled
+/// over a body-fixed direction rebuilt from the sphere UV, so the pattern is
+/// stable when the shared render origin recentres. All inputs are
+/// presentation-only uniforms; no whole-field texture is regenerated per frame.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub struct CloudExtension {
     #[uniform(100)]
     pub coverage: f32,
-    /// Low-frequency structure scale, cycles per render unit.
+    /// Low-frequency structure scale, in cycles per unit projected body-fixed
+    /// coordinate (a unit-sphere projection, unlike the recentring world space).
     #[uniform(100)]
     pub shape_scale: f32,
-    /// High-frequency detail scale, cycles per render unit.
+    /// High-frequency detail scale, in cycles per unit projected body-fixed
+    /// coordinate.
     #[uniform(100)]
     pub detail_scale: f32,
-    /// Detail scroll speed along the coherent wind direction.
+    /// Detail scroll speed along the coherent wind direction, in projected
+    /// coordinate units per second.
     #[uniform(100)]
     pub wind_speed: f32,
     /// Presentation clock in seconds, advanced once per frame.
@@ -130,12 +135,19 @@ pub struct CloudExtension {
 
 impl CloudExtension {
     /// Bounded defaults for one cloud deck. Phases match the WGSL struct order.
+    ///
+    /// The shader projects the unit body-fixed direction onto a disk of radius
+    /// one (`~1` radian), so one noise cell at `shape_scale = 6` spans roughly a
+    /// sixth of a hemisphere (order 1000 km on Earth) and one `detail_scale = 28`
+    /// cell is order 200 km. `wind_speed` is an advection of the whole
+    /// procedural field in cells per second; the detail octave drifts at
+    /// `1.7x`, giving mid-latitude cloud motion of order 100 m/s.
     pub fn deck() -> Self {
         Self {
             coverage: 1.0,
-            shape_scale: 0.9,
-            detail_scale: 4.5,
-            wind_speed: 0.015,
+            shape_scale: 6.0,
+            detail_scale: 28.0,
+            wind_speed: 3.0e-4,
             time_s: 0.0,
         }
     }

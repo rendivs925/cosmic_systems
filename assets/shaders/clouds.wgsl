@@ -1,13 +1,24 @@
 // Geographic cloud map with separated coverage, shape, detail, and coherent
-// wind motion. Coverage is the sampled geographic luminance; shape and detail
-// are bounded procedural value noise over the planet-centred position, and the
-// detail octave drifts along one coherent wind vector. Presentation only: no
-// texture is regenerated per frame and nothing here feeds simulation state.
+// wind motion. Coverage is the sampled geographic luminance/opacity; shape and
+// detail are bounded procedural value noise over a body-fixed direction
+// reconstructed from the sphere UV, and one coherent wind vector advects the
+// whole procedural field. Presentation only: no texture is regenerated per
+// frame and nothing here feeds simulation state.
+//
+// The noise is deliberately a function of the mesh UV rather than
+// `world_position`: the flight frame recentres its shared render origin
+// (AGENTS.md section 13), which translates every fragment's world position by
+// the origin delta and would otherwise slide the cloud pattern across the
+// planet. UV is baked to the sphere vertices, so it is stable under render
+// origin changes and co-rotates with the planet.
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
 }
+
+const TAU: f32 = 6.283185307179586;
+const PI: f32 = 3.141592653589793;
 
 // Field order and types must match `CloudExtension` in materials.rs.
 struct CloudParams {
@@ -40,22 +51,32 @@ fn value_noise(p: vec2<f32>) -> f32 {
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr = pbr_input_from_standard_material(in, is_front);
     let mapped = pbr.material.base_color;
-    let coverage = clamp(dot(mapped.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
 
-    // Planet-centred position. The cloud shell is a child of the bound planet,
-    // so its world position is small render-frame coordinates.
-    let position = in.world_position.xyz;
-    let planar = position.xz + position.xy * 0.5;
+    // Coverage is the geographic texture luminance weighted by its authored
+    // alpha, matching the original single-texture cloud deck.
+    let coverage = clamp(dot(mapped.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0)
+        * clamp(mapped.a, 0.0, 1.0);
 
-    // Shape: low-frequency masses that break the deck into coherent lobes.
-    let shape = value_noise(planar * clouds.shape_scale);
-    // Detail: higher-frequency edges, scrolled along one wind vector so the
-    // whole field drifts coherently instead of each cell moving independently.
+    // Reconstruct the unit body-fixed direction from the sphere UV. The
+    // stereographic-style projection stays continuous across the sphere
+    // (except the antipode) and is invariant under render-origin recentring.
+    let lon = in.uv.x * TAU;
+    let lat = (in.uv.y - 0.5) * PI;
+    let cos_lat = cos(lat);
+    let dir = vec3<f32>(cos_lat * cos(lon), sin(lat), cos_lat * sin(lon));
+    let planar = dir.xz / (1.0 + abs(dir.y));
+
+    // One coherent wind vector advects the entire procedural field so shape and
+    // detail drift together instead of each octave moving independently.
     let wind = vec2<f32>(
         clouds.time_s * clouds.wind_speed,
         clouds.time_s * clouds.wind_speed * 0.35,
     );
-    let detail = value_noise(planar * clouds.detail_scale + wind);
+
+    // Shape: low-frequency masses that break the deck into coherent lobes.
+    let shape = value_noise(planar * clouds.shape_scale + wind);
+    // Detail: higher-frequency edges sharing the same advection.
+    let detail = value_noise(planar * clouds.detail_scale + wind * 1.7);
 
     // Both factors are centred on their sampled noise mean (0.5) so the deck's
     // average opacity is preserved; only the structure changes.

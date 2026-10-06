@@ -542,9 +542,9 @@ fn rocket_sun_disc_radius_m(planet_sun_distance_m: f64) -> f64 {
 }
 
 /// Advance the presentation clock for the rocket-mode cloud decks. The shader
-/// scrolls its detail octave along a coherent wind vector from `time_s`; this
-/// only writes a small uniform and never regenerates a texture or touches
-/// simulation state.
+/// advects its whole procedural shape/detail field along one coherent wind
+/// vector from `time_s`; this only writes a small uniform and never regenerates
+/// a texture or touches simulation state.
 pub fn advance_cloud_motion(
     time: Res<Time>,
     mut materials: ResMut<Assets<CloudMaterial>>,
