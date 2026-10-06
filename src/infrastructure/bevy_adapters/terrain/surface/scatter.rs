@@ -18,7 +18,7 @@ use crate::domain::services::vegetation::{
     vegetation_candidates, VegetationSpecies, GRASS_CANDIDATE_SALT, TREE_CANDIDATE_SALT,
 };
 use bevy::asset::RenderAssetUsages;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 
 /// Blue-noise candidate oversampling: generate more jittered-grid cells than the
@@ -61,6 +61,17 @@ pub(super) struct MeshAccum {
     colors: Vec<[f32; 4]>,
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+}
+
+/// Any unit vector perpendicular to `tangent`, used when the transported frame
+/// degenerates. Picks the world axis least aligned with the tangent.
+fn perpendicular_fallback(tangent: DVec3) -> DVec3 {
+    let seed = if tangent.x.abs() < 0.9 {
+        DVec3::X
+    } else {
+        DVec3::Z
+    };
+    (seed - tangent * seed.dot(tangent)).normalize_or_zero()
 }
 
 impl MeshAccum {
@@ -150,24 +161,60 @@ impl MeshAccum {
         if points.len() < 2 || points.len() != radii.len() || segments == 0 {
             return;
         }
+        // Per-point unit tangents. A zero-length segment (coincident points)
+        // reuses the previous tangent so the frame stays defined.
+        let mut tangents = Vec::with_capacity(points.len());
+        for index in 0..points.len() {
+            let candidate = if index + 1 < points.len() {
+                points[index + 1] - points[index]
+            } else {
+                points[index] - points[index - 1]
+            };
+            let tangent = candidate.normalize_or_zero();
+            tangents.push(if tangent.length_squared() > 0.0 {
+                tangent
+            } else {
+                tangents.last().copied().unwrap_or(DVec3::Y)
+            });
+        }
+        // Rotation-minimizing (parallel-transport) frame: begin with any normal
+        // perpendicular to the first tangent, then rotate the previous normal by
+        // the minimal rotation that carries the previous tangent onto the current
+        // one. A fixed world reference makes the ring basis jump when the
+        // tangent crosses that reference and twist along a curve; transporting
+        // the frame keeps ring orientations continuous.
+        let seed = if tangents[0].y.abs() < 0.9 {
+            DVec3::Y
+        } else {
+            DVec3::X
+        };
+        let mut normal = (seed - tangents[0] * seed.dot(tangents[0])).normalize_or_zero();
+        if normal.length_squared() <= 0.0 {
+            normal = perpendicular_fallback(tangents[0]);
+        }
         let mut ring_starts = Vec::with_capacity(points.len());
         for (index, (&center, &radius)) in points.iter().zip(radii).enumerate() {
-            let direction = if index + 1 < points.len() {
-                (points[index + 1] - center).normalize_or_zero()
-            } else {
-                (center - points[index - 1]).normalize_or_zero()
-            };
-            let reference = if direction.y.abs() < 0.9 {
-                DVec3::Y
-            } else {
-                DVec3::X
-            };
-            let tangent = direction.cross(reference).normalize_or_zero();
-            let bitangent = direction.cross(tangent).normalize_or_zero();
+            if index > 0 {
+                let previous = tangents[index - 1];
+                let current = tangents[index];
+                let axis = previous.cross(current);
+                let sin = axis.length();
+                if sin > 1e-9 {
+                    let angle = sin.atan2(previous.dot(current).clamp(-1.0, 1.0));
+                    normal = DQuat::from_axis_angle(axis / sin, angle) * normal;
+                }
+                // Re-orthogonalize against the current tangent to bound the
+                // drift that accumulates along a long curved branch.
+                normal = (normal - current * normal.dot(current)).normalize_or_zero();
+                if normal.length_squared() <= 0.0 {
+                    normal = perpendicular_fallback(current);
+                }
+            }
+            let bitangent = tangents[index].cross(normal).normalize_or_zero();
             ring_starts.push(self.positions.len() as u32);
             for s in 0..=segments {
                 let a = s as f64 / segments as f64 * std::f64::consts::TAU;
-                let radial = tangent * a.cos() + bitangent * a.sin();
+                let radial = normal * a.cos() + bitangent * a.sin();
                 let point = center + radial * radius;
                 self.positions
                     .push([point.x as f32, point.y as f32, point.z as f32]);
@@ -1189,5 +1236,44 @@ mod tests {
             first_indices, second_indices,
             "the index buffer must be identical across regenerations"
         );
+    }
+
+    /// Regression: the ring basis used to be built from a fixed world reference,
+    /// so it flipped ~90 degrees the moment the branch tangent crossed that
+    /// reference, twisting the tube. A quarter-arc that sweeps from a
+    /// Y-perpendicular tangent to an X-reference tangent must instead transport
+    /// its frame smoothly: consecutive rings stay closely aligned.
+    #[test]
+    fn branch_frames_transport_smoothly_across_reference_flip() {
+        let segments = BRANCH_SEGMENTS;
+        let steps = 8usize;
+        let points: Vec<DVec3> = (0..=steps)
+            .map(|i| {
+                let t = i as f64 / steps as f64 * std::f64::consts::FRAC_PI_2;
+                DVec3::new(t.sin(), t.cos(), 0.0)
+            })
+            .collect();
+        let radii = vec![0.1; points.len()];
+        let mut accum = MeshAccum::new();
+        accum.push_branch_curve(&points, &radii, segments, [0.2, 0.1, 0.05]);
+        let mesh = accum.into_mesh();
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x3(values) => values,
+            other => panic!("unexpected position attribute {other:?}"),
+        };
+        let mut previous: Option<DVec3> = None;
+        for (ring, center) in points.iter().enumerate() {
+            let index = ring * (segments + 1);
+            let vertex = DVec3::from_array(positions[index].map(f64::from));
+            let radial = (vertex - *center).normalize();
+            if let Some(previous) = previous {
+                let alignment = previous.dot(radial);
+                assert!(
+                    alignment > 0.9,
+                    "ring {ring} frame jumped: alignment {alignment} across the reference flip"
+                );
+            }
+            previous = Some(radial);
+        }
     }
 }
