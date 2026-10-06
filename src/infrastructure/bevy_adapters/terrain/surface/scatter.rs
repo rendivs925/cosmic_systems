@@ -3,10 +3,11 @@
 
 use super::surface_maps::micro_noise;
 use super::{
-    direction_to_lat_lon, face_uv_to_direction, BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV,
-    GRASS_CARD_PLANES, GRASS_CLUMP_COUNT, GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV,
-    RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT, ROCK_MAX_LUMPS, ROCK_RINGS,
-    ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_COUNT, TREE_MIN_DENSITY, TRUNK_SEGMENTS,
+    direction_to_lat_lon, face_uv_to_direction, BRANCH_CANOPY_CARD_PLANES, BRANCH_SEGMENTS,
+    BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV, GRASS_CARD_PLANES, GRASS_CLUMP_COUNT,
+    GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT,
+    ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_COUNT,
+    TREE_MIN_DENSITY, TRUNK_SEGMENTS,
 };
 use crate::domain::services::cube_sphere::{patch_world_size_m, PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::LandCoverPackage;
@@ -135,6 +136,59 @@ impl MeshAccum {
         }
     }
 
+    /// Extrude a continuous, tapered branch tube through `points` with a radius
+    /// per point, connecting consecutive rings. Unlike stacking separate
+    /// cylinders, the shared rings leave no gap at a branch joint, and the
+    /// radius follows the da Vinci pipe model taper supplied by the caller.
+    fn push_branch_curve(
+        &mut self,
+        points: &[DVec3],
+        radii: &[f64],
+        segments: usize,
+        color: [f32; 3],
+    ) {
+        if points.len() < 2 || points.len() != radii.len() || segments == 0 {
+            return;
+        }
+        let mut ring_starts = Vec::with_capacity(points.len());
+        for (index, (&center, &radius)) in points.iter().zip(radii).enumerate() {
+            let direction = if index + 1 < points.len() {
+                (points[index + 1] - center).normalize_or_zero()
+            } else {
+                (center - points[index - 1]).normalize_or_zero()
+            };
+            let reference = if direction.y.abs() < 0.9 {
+                DVec3::Y
+            } else {
+                DVec3::X
+            };
+            let tangent = direction.cross(reference).normalize_or_zero();
+            let bitangent = direction.cross(tangent).normalize_or_zero();
+            ring_starts.push(self.positions.len() as u32);
+            for s in 0..=segments {
+                let a = s as f64 / segments as f64 * std::f64::consts::TAU;
+                let radial = tangent * a.cos() + bitangent * a.sin();
+                let point = center + radial * radius;
+                self.positions
+                    .push([point.x as f32, point.y as f32, point.z as f32]);
+                self.normals
+                    .push([radial.x as f32, radial.y as f32, radial.z as f32]);
+                self.colors.push([color[0], color[1], color[2], 1.0]);
+                self.uvs.push(OPAQUE_UV);
+            }
+        }
+        for window in ring_starts.windows(2) {
+            let (lower, upper) = (window[0], window[1]);
+            for s in 0..segments {
+                let a0 = lower + s as u32;
+                let a1 = lower + s as u32 + 1;
+                let b0 = upper + s as u32;
+                let b1 = upper + s as u32 + 1;
+                self.indices.extend_from_slice(&[a0, b0, a1, a1, b0, b1]);
+            }
+        }
+    }
+
     /// Push one procedurally generated rock body into the merged mesh.
     ///
     /// A closed ring/segment base shape is displaced along each vertex's radial
@@ -234,6 +288,10 @@ impl MeshAccum {
     /// Push `planes` crossed, double-sided vertical billboards sharing a base.
     /// `uv` selects the atlas region; the region's top maps to the billboard's
     /// top. Used for grass tufts and tree canopies.
+    ///
+    /// When `volumetric_center` is `Some`, each corner normal is bent toward the
+    /// outward direction from the canopy cluster centre, so the card stack reads
+    /// as one volumetric mass instead of flat intersecting planes.
     #[expect(
         clippy::too_many_arguments,
         reason = "The billboard helper accepts the complete plant geometry and atlas inputs."
@@ -248,6 +306,7 @@ impl MeshAccum {
         rotation_rad: f64,
         uv: [f32; 4],
         color: [f32; 3],
+        volumetric_center: Option<DVec3>,
     ) {
         if planes == 0 || width_m <= 0.0 || height_m <= 0.0 {
             return;
@@ -275,8 +334,18 @@ impl MeshAccum {
             for (point, uv) in corners {
                 self.positions
                     .push([point.x as f32, point.y as f32, point.z as f32]);
-                self.normals
-                    .push([normal.x as f32, normal.y as f32, normal.z as f32]);
+                let vertex_normal = match volumetric_center {
+                    Some(center) => {
+                        let outward = (point - center).normalize_or_zero();
+                        (normal * 0.25 + outward * 0.75).normalize_or_zero()
+                    }
+                    None => normal,
+                };
+                self.normals.push([
+                    vertex_normal.x as f32,
+                    vertex_normal.y as f32,
+                    vertex_normal.z as f32,
+                ]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
                 self.uvs.push(uv);
             }
@@ -741,10 +810,53 @@ pub(super) fn build_grounded_vegetation_mesh(
             TRUNK_SEGMENTS,
             trunk_color,
         );
+        let rotation = hash01(k as u64, patch.tile_x as u64, 7) * std::f64::consts::TAU;
+        let canopy_center = base + up * (trunk_h + canopy_h * 0.5);
+        // Continuous primary branches extruded from the trunk, tapered by the
+        // da Vinci pipe model so the parent cross-section is conserved across
+        // the child set. Each branch tip carries its own canopy lobe, giving the
+        // crown volume instead of a single stacked-card column.
+        let branch_count = profile.branch_count as usize;
+        if branch_count > 0 && trunk_h > 0.02 {
+            let reference = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
+            let tangent = up.cross(reference).normalize();
+            let bitangent = up.cross(tangent).normalize();
+            let branch_base = base + up * trunk_h * 0.72;
+            let branch_radius = trunk_r * (branch_count as f64).powf(-0.5);
+            let branch_length = (canopy_w * 0.42).max(trunk_h * 0.3);
+            for b in 0..branch_count {
+                let azimuth = rotation
+                    + b as f64 * std::f64::consts::TAU / branch_count as f64
+                    + (hash01(b as u64, patch.tile_x as u64, patch.tile_y as u64) - 0.5) * 0.5;
+                let elevation =
+                    (0.62 + hash01(b as u64, patch.tile_y as u64, 11) * 0.35).clamp(0.5, 1.05);
+                let radial = tangent * azimuth.cos() + bitangent * azimuth.sin();
+                let direction = (up * elevation.cos() + radial * elevation.sin()).normalize();
+                let mid = branch_base + direction * (branch_length * 0.55);
+                let tip = branch_base + direction * branch_length + up * (branch_length * 0.22);
+                accum.push_branch_curve(
+                    &[branch_base, mid, tip],
+                    &[branch_radius, branch_radius * 0.68, branch_radius * 0.4],
+                    BRANCH_SEGMENTS,
+                    trunk_color,
+                );
+                let lobe_center = tip + up * (canopy_h * 0.16);
+                accum.push_cross_cards(
+                    tip,
+                    up,
+                    canopy_w * 0.52,
+                    canopy_h * 0.62,
+                    BRANCH_CANOPY_CARD_PLANES,
+                    azimuth,
+                    canopy_uv,
+                    foliage_color,
+                    Some(lobe_center),
+                );
+            }
+        }
         // Stack the species' canopy layers with diminishing size so broadleaf
         // trees read round while conifers read tall and narrow.
         let layers = profile.canopy_layers.max(1) as usize;
-        let rotation = hash01(k as u64, patch.tile_x as u64, 7) * std::f64::consts::TAU;
         for layer in 0..layers {
             let t = layer as f64 / layers as f64;
             let layer_scale = 1.0 - t * 0.32;
@@ -758,6 +870,7 @@ pub(super) fn build_grounded_vegetation_mesh(
                 rotation + layer as f64 * std::f64::consts::FRAC_PI_3,
                 canopy_uv,
                 foliage_color,
+                Some(canopy_center),
             );
         }
     }
@@ -796,6 +909,7 @@ pub(super) fn build_grounded_vegetation_mesh(
             hash01(patch.tile_x as u64, patch.tile_y as u64, k as u64) * std::f64::consts::TAU,
             GRASS_UV,
             grass_color,
+            None,
         );
     }
 
@@ -965,4 +1079,72 @@ pub fn build_river_mesh(
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     Some(mesh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A branch is one continuous ring extrusion: exactly one ring per curve
+    /// point (no duplicated joint ring) and a connecting quad strip per segment.
+    /// This is the geometric property that removes the gaps a stack of separate
+    /// cylinders leaves at branch joints.
+    #[test]
+    fn branch_curve_is_a_continuous_tapered_ring_extrusion() {
+        let segments = BRANCH_SEGMENTS;
+        let points = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(0.5, 0.3, 0.0),
+            DVec3::new(0.9, 0.7, 0.1),
+        ];
+        let radii = [0.2, 0.13, 0.07];
+        let mut accum = MeshAccum::new();
+        accum.push_branch_curve(&points, &radii, segments, [0.1, 0.05, 0.02]);
+        let mesh = accum.into_mesh();
+
+        assert_eq!(mesh.count_vertices(), points.len() * (segments + 1));
+        let indices = mesh.indices().expect("branch extrusion has indices").len();
+        assert_eq!(indices, (points.len() - 1) * segments * 6);
+
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x3(values) => values,
+            other => panic!("unexpected position attribute {other:?}"),
+        };
+        for (ring, (center, radius)) in points.iter().zip(radii).enumerate() {
+            for s in 0..segments {
+                let index = ring * (segments + 1) + s;
+                let position = DVec3::from_array(positions[index].map(f64::from));
+                let offset = (position - *center).length();
+                assert!(
+                    (offset - radius).abs() < 1e-5,
+                    "ring {ring} vertex {s} sits at {offset}, expected {radius}"
+                );
+                assert!(position.is_finite());
+            }
+        }
+    }
+
+    /// The branch helper must be deterministic: identical points and radii
+    /// produce a bit-identical merged mesh, so streaming regeneration is stable.
+    #[test]
+    fn branch_curve_generation_is_deterministic() {
+        let points = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(0.4, 0.5, -0.1),
+            DVec3::new(0.7, 1.1, -0.2),
+        ];
+        let radii = [0.18, 0.12, 0.06];
+        let build = || {
+            let mut accum = MeshAccum::new();
+            accum.push_branch_curve(&points, &radii, BRANCH_SEGMENTS, [0.2, 0.1, 0.05]);
+            accum.into_mesh()
+        };
+        let first = build();
+        let second = build();
+        assert_eq!(first.count_vertices(), second.count_vertices());
+        assert_eq!(
+            first.indices().map(|i| i.len()),
+            second.indices().map(|i| i.len())
+        );
+    }
 }

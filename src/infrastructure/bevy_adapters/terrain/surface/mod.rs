@@ -64,6 +64,17 @@ const GRASS_MIN_DENSITY: f64 = VegetationConfig::DEFAULT.grass_min_density;
 const ROCK_MAX_LUMPS: usize = 3;
 /// Solid trunk prisms share the single rock tessellation budget.
 const TRUNK_SEGMENTS: usize = 6;
+/// Radial segments around an extruded branch. Branches are thin and short, so
+/// they need fewer segments than the trunk while remaining round in the near field.
+const BRANCH_SEGMENTS: usize = 4;
+/// Maximum primary branches across all species (palm uses six). Used only to
+/// reserve the merged-mesh byte budget.
+const BRANCH_MAX_COUNT: usize = 6;
+/// Points (rings) along one extruded branch curve, including both endpoints.
+const BRANCH_RINGS: usize = 3;
+/// Crossed planes per branch-tip canopy lobe. Fewer than the trunk canopy so the
+/// per-branch foliage stays inside the bounded vegetation mesh reservation.
+const BRANCH_CANOPY_CARD_PLANES: usize = 2;
 /// Procedural rock base-shape tessellation. Rings and segments are bounded so
 /// the displaced rock reads as faceted geology without inflating the per-patch
 /// merged-mesh reservation beyond the previous boulder footprint by more than a
@@ -145,8 +156,14 @@ pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 =
 /// Conservative maximum allocation for one merged vegetation mesh. Streaming
 /// reserves it for close patches before worker generation knows their biome.
 pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
-    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1) + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 4;
-    let tree_indices = TRUNK_SEGMENTS * 6 + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 6;
+    let tree_vertices = 2 * (TRUNK_SEGMENTS + 1)
+        + BRANCH_MAX_COUNT * BRANCH_RINGS * (BRANCH_SEGMENTS + 1)
+        + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 4
+        + BRANCH_MAX_COUNT * BRANCH_CANOPY_CARD_PLANES * 4;
+    let tree_indices = TRUNK_SEGMENTS * 6
+        + BRANCH_MAX_COUNT * (BRANCH_RINGS - 1) * BRANCH_SEGMENTS * 6
+        + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 6
+        + BRANCH_MAX_COUNT * BRANCH_CANOPY_CARD_PLANES * 6;
     let boulder_vertices = (ROCK_RINGS + 1) * ROCK_SEGMENTS;
     let boulder_indices = ROCK_RINGS * ROCK_SEGMENTS * 6;
     let rock_vertices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_vertices;

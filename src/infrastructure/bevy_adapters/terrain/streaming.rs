@@ -69,7 +69,13 @@ const SCREEN_ERROR_PX: f64 = 4.0;
 const DOMAIN_BYTES_PER_VERTEX: u64 = 64;
 const RENDER_BYTES_PER_VERTEX: u64 = 56;
 const BYTES_PER_INDEX: u64 = 4;
-const DEFAULT_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+/// Streaming byte budget for resident terrain geometry. Raised from 128 MiB to
+/// 160 MiB to match the conservative near-patch vegetation reservation, which
+/// now includes extruded branch tubes and terminal canopy lobes. Measured
+/// resident usage stays far below this cap (tens of MiB during ascent), so the
+/// increase preserves near-camera scatter refinement without admitting new
+/// streaming spikes.
+const DEFAULT_BUDGET_BYTES: u64 = 160 * 1024 * 1024;
 const METRICS_GENERATED_TILE_INTERVAL: usize = 32;
 /// Elevation payload decoding is strictly lower priority than geometry
 /// publication. Admit at most this many tile decodes per reconciliation so a
