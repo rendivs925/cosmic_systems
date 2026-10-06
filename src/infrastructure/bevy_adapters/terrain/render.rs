@@ -2089,6 +2089,10 @@ fn bake_terrain_occlusion(
 
 /// R8G8 image carrying the baked self-shadow (red) and sky occlusion (green),
 /// sampled with linear filtering over the patch-local UV.
+///
+/// Residency includes `MAIN_WORLD`: the Sun-driven refresh rewrites this image
+/// in place through `Assets<Image>`, which is unavailable for a RENDER_WORLD-only
+/// asset once extraction has released the CPU copy.
 fn terrain_occlusion_image(resolution: u32, values: &[f32]) -> Image {
     let res = resolution.max(1) as usize;
     let mut data = vec![0u8; res * res * 2];
@@ -2115,7 +2119,7 @@ fn terrain_occlusion_image(resolution: u32, values: &[f32]) -> Image {
         TextureDimension::D2,
         data,
         TextureFormat::Rg8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::default(),
     );
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         mag_filter: ImageFilterMode::Linear,
@@ -2232,9 +2236,6 @@ fn refresh_terrain_occlusion(
         if !state.occlusion_owned || *visibility == Visibility::Hidden {
             continue;
         }
-        let Some(field) = state.occlusion_field.as_ref() else {
-            continue;
-        };
         let Ok(planet) = planet_query.get(state.planet_entity) else {
             continue;
         };
@@ -2254,9 +2255,21 @@ fn refresh_terrain_occlusion(
         if !occlusion_needs_refresh(state.baked_sun_body, sun_direction_body, tolerance_cos) {
             continue;
         }
+        // Validate the writable main-world image *before* the expensive bake so a
+        // missing/evicted map cannot burn the per-frame refresh budget on work
+        // that can never be installed. Dropping ownership lets the patch fall
+        // back to the shared neutral map and rebake from a later upload instead
+        // of retrying an unrecoverable handle every frame.
+        if !images.contains(&state.occlusion_texture) {
+            state.occlusion_owned = false;
+            continue;
+        }
+        let Some(field) = state.occlusion_field.as_ref() else {
+            continue;
+        };
         let (values, _) = bake_terrain_occlusion(field, sun_direction_body, &occlusion_config);
         let Some(image) = images.get_mut(&state.occlusion_texture) else {
-            bevy::log::warn!("missing terrain shadow map for {:?}", state.patch);
+            state.occlusion_owned = false;
             continue;
         };
         *image = terrain_occlusion_image(occlusion_config.texture_resolution, &values);
@@ -2302,6 +2315,22 @@ mod tests {
             new_sun_body,
             tolerance_cos
         ));
+    }
+
+    /// Regression: the sun-driven refresh rewrites occlusion images in the main
+    /// world. A `RENDER_WORLD`-only image is released from `Assets<Image>` once
+    /// extracted, so the refresh loop could never install a map and logged
+    /// "missing terrain shadow map" every frame. The bake must be main-world
+    /// resident so the refresh can mutate it in place.
+    #[test]
+    fn refreshable_occlusion_images_stay_main_world_resident() {
+        let config = small_occlusion_config();
+        let image = terrain_occlusion_image(config.texture_resolution, &[1.0; 64]);
+        assert!(
+            image.asset_usage.contains(RenderAssetUsages::MAIN_WORLD),
+            "occlusion maps are refreshed through Assets<Image> and must stay in the main world"
+        );
+        assert!(image.asset_usage.contains(RenderAssetUsages::RENDER_WORLD));
     }
 
     #[test]
