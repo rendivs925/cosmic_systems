@@ -232,7 +232,7 @@ fn spawn_rocket_bound_planet_surface(
             base.cull_mode = None;
             let cloud_material = cloud_materials.add(CloudMaterial {
                 base,
-                extension: CloudExtension { coverage: 1.0 },
+                extension: CloudExtension::deck(),
             });
             commands.entity(surface_entity).with_children(|parent| {
                 parent.spawn((
@@ -541,6 +541,26 @@ fn rocket_sun_disc_radius_m(planet_sun_distance_m: f64) -> f64 {
     ROCKET_SUN_DISC_DISTANCE_M * (SUN_RADIUS_M / planet_sun_distance_m)
 }
 
+/// Advance the presentation clock for the rocket-mode cloud decks. The shader
+/// scrolls its detail octave along a coherent wind vector from `time_s`; this
+/// only writes a small uniform and never regenerates a texture or touches
+/// simulation state.
+pub fn advance_cloud_motion(
+    time: Res<Time>,
+    mut materials: ResMut<Assets<CloudMaterial>>,
+    clouds: Query<&MeshMaterial3d<CloudMaterial>, With<RocketBoundPlanetCloud>>,
+) {
+    let elapsed_s = time.elapsed_secs();
+    if !elapsed_s.is_finite() {
+        return;
+    }
+    for handle in &clouds {
+        if let Some(material) = materials.get_mut(&handle.0) {
+            material.extension.time_s = elapsed_s;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,6 +576,16 @@ mod tests {
     use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
     use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::math::{DMat3, DQuat, DVec3};
+
+    #[test]
+    fn cloud_extension_defaults_are_bounded_and_finite() {
+        let deck = CloudExtension::deck();
+        assert!((0.0..=1.0).contains(&deck.coverage));
+        assert!(deck.shape_scale.is_finite() && deck.shape_scale > 0.0);
+        assert!(deck.detail_scale.is_finite() && deck.detail_scale > deck.shape_scale);
+        assert!(deck.wind_speed.is_finite() && deck.wind_speed > 0.0);
+        assert_eq!(deck.time_s, 0.0);
+    }
 
     #[test]
     fn visual_sun_disc_never_casts_or_receives_local_shadows() {

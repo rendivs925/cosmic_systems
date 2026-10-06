@@ -104,10 +104,41 @@ pub fn create_cloud_material(
 
 /// Flight clouds use the existing geographic texture as coverage, not a black
 /// opaque layer. The shared standard-material factory still owns lighting.
+///
+/// The extension separates the four visual inputs: the sampled base colour is
+/// coverage, `shape_scale` drives low-frequency cloud masses, `detail_scale`
+/// drives higher-frequency edges, and a bounded wind vector scrolls the detail
+/// coherently. All four are presentation-only uniforms; no whole-field texture
+/// is regenerated per frame.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub struct CloudExtension {
     #[uniform(100)]
     pub coverage: f32,
+    /// Low-frequency structure scale, cycles per render unit.
+    #[uniform(100)]
+    pub shape_scale: f32,
+    /// High-frequency detail scale, cycles per render unit.
+    #[uniform(100)]
+    pub detail_scale: f32,
+    /// Detail scroll speed along the coherent wind direction.
+    #[uniform(100)]
+    pub wind_speed: f32,
+    /// Presentation clock in seconds, advanced once per frame.
+    #[uniform(100)]
+    pub time_s: f32,
+}
+
+impl CloudExtension {
+    /// Bounded defaults for one cloud deck. Phases match the WGSL struct order.
+    pub fn deck() -> Self {
+        Self {
+            coverage: 1.0,
+            shape_scale: 0.9,
+            detail_scale: 4.5,
+            wind_speed: 0.015,
+            time_s: 0.0,
+        }
+    }
 }
 
 impl MaterialExtension for CloudExtension {

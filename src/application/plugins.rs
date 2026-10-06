@@ -130,7 +130,7 @@ use crate::infrastructure::bevy_adapters::rocket::lifecycle_effects::{
 };
 use crate::infrastructure::bevy_adapters::rocket::orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket::planet::{
-    isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets,
+    advance_cloud_motion, isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets,
     update_rocket_sun_disc, RocketBoundPlanet,
 };
 use crate::infrastructure::bevy_adapters::rocket::presentation::{
@@ -826,6 +826,8 @@ impl Plugin for RocketModePlugin {
         // Rocket-mode celestial proxies use SimulationTime directly, independent
         // of the wall-clock shared solar-map presentation.
         app.add_systems(Update, update_rocket_planets.after(recenter_render_origin));
+        // Coherent cloud-deck drift: one small uniform update per frame.
+        app.add_systems(Update, advance_cloud_motion);
         app.add_systems(
             Update,
             update_rocket_sun_disc.after(update_rocket_camera_projection),
