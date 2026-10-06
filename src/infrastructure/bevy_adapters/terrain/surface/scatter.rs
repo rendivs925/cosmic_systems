@@ -1146,5 +1146,48 @@ mod tests {
             first.indices().map(|i| i.len()),
             second.indices().map(|i| i.len())
         );
+        // Counts alone would pass for a reordered or drifted mesh. Streaming
+        // regeneration must reproduce the exact geometry, so compare the bit
+        // patterns of every vertex attribute and the full index buffer.
+        fn attribute_bits(mesh: &Mesh, attribute: bevy_mesh::MeshVertexAttribute) -> Vec<u32> {
+            match mesh.attribute(attribute).expect("branch mesh attribute") {
+                bevy_mesh::VertexAttributeValues::Float32x3(values) => values
+                    .iter()
+                    .flatten()
+                    .map(|value| value.to_bits())
+                    .collect(),
+                bevy_mesh::VertexAttributeValues::Float32x2(values) => values
+                    .iter()
+                    .flatten()
+                    .map(|value| value.to_bits())
+                    .collect(),
+                other => panic!("unexpected attribute layout {other:?}"),
+            }
+        }
+        for attribute in [
+            Mesh::ATTRIBUTE_POSITION,
+            Mesh::ATTRIBUTE_NORMAL,
+            Mesh::ATTRIBUTE_UV_0,
+        ] {
+            assert_eq!(
+                attribute_bits(&first, attribute),
+                attribute_bits(&second, attribute),
+                "attribute {attribute:?} must be bit-identical across regenerations"
+            );
+        }
+        let first_indices: Vec<usize> = first
+            .indices()
+            .expect("branch mesh indices")
+            .iter()
+            .collect();
+        let second_indices: Vec<usize> = second
+            .indices()
+            .expect("branch mesh indices")
+            .iter()
+            .collect();
+        assert_eq!(
+            first_indices, second_indices,
+            "the index buffer must be identical across regenerations"
+        );
     }
 }
