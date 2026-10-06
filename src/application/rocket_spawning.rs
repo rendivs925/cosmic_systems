@@ -1021,6 +1021,64 @@ mod tests {
 
         assert!(meshes.get(&mesh).is_some());
     }
+
+    /// Checkpoint 3 acceptance: the vehicle must rest on the same authoritative
+    /// terrain surface that collision and rendering use. The held prelaunch
+    /// state samples the procedural surface rather than a fixed altitude, so a
+    /// regression that floats or sinks the pad would detach it from the ground
+    /// it is drawn on.
+    #[test]
+    fn launch_vehicle_rests_on_authoritative_terrain() {
+        use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+        use crate::domain::services::terrain_source::ProceduralTerrainSource;
+        use bevy::math::DQuat;
+
+        let catalog = RocketCatalog::from_dir()
+            .expect("the shipped vehicle catalog must load for the launch regression");
+        let selection = VehicleSelection::Default;
+        let terrain_source = ProceduralTerrainSource::new(42, 2_500.0, 1_200.0, 0);
+        let orientation = BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "test-orientation".to_string(),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        );
+
+        // Independently reproduce the authoritative surface sample at the site.
+        let papua = predefined_sites::papua_indonesia_coastal_lowland();
+        let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
+        let earth_radius_m = earth.radius_km as f64 * 1000.0;
+        let (terrain_latitude_deg, terrain_longitude_deg) =
+            geodetic_to_terrain_lat_lon(&papua, &earth);
+        let sample = sample_surface(
+            &terrain_source,
+            terrain_latitude_deg,
+            terrain_longitude_deg,
+            earth_radius_m,
+        );
+
+        let setup = build_launch_setup(&catalog, &selection, &terrain_source, &orientation);
+
+        // The stack centre is raised half its height above the resting base
+        // along the launch up axis (+Y body).
+        let up = (setup.dynamics.orientation * DVec3::Y).normalize();
+        let base = setup.dynamics.position_m - up * (setup.rocket.height_m as f64 * 0.5);
+        let expected_radius_m = earth_radius_m + sample.height_m;
+        assert!(
+            (base.length() - expected_radius_m).abs() < 1e-3,
+            "vehicle base radius {} must match the terrain radius {expected_radius_m}",
+            base.length()
+        );
+
+        // The held attitude stands on the terrain normal, not the ellipsoid radial.
+        let expected_up = body_fixed_to_planet_inertial_rotation(&orientation) * sample.normal;
+        assert!(
+            up.dot(expected_up) > 0.999,
+            "vehicle up {} must follow the terrain normal {expected_up}",
+            up
+        );
+    }
 }
 
 /// Spawn one visual strut per configured landing leg as a child of the
