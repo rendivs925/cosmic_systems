@@ -63,15 +63,20 @@ fn main() {
         validate_vehicle_selection(selection);
     }
 
+    // Bevy's default is hard FIFO vsync, which quantizes any frame that overruns
+    // a vblank to the next one and reads as judder. AutoVsync selects relaxed
+    // FIFO where the driver supports it, and a short present queue keeps pacing
+    // and input latency consistent. `COSMIC_SYSTEMS_PRESENT_MODE=none` disables
+    // vsync for profiling only, so measured frame cost is not quantized.
+    let present_mode = match std::env::var("COSMIC_SYSTEMS_PRESENT_MODE").as_deref() {
+        Ok("none") => bevy::window::PresentMode::AutoNoVsync,
+        _ => bevy::window::PresentMode::AutoVsync,
+    };
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
             title: mode.title().to_string(),
             resolution: (1280, 720).into(),
-            // Bevy's default is hard FIFO vsync, which quantizes any frame that
-            // overruns a vblank to the next one and reads as judder. AutoVsync
-            // selects relaxed FIFO where the driver supports it, and a short
-            // present queue keeps pacing and input latency consistent.
-            present_mode: bevy::window::PresentMode::AutoVsync,
+            present_mode,
             desired_maximum_frame_latency: NonZero::<u32>::new(2),
             ..default()
         }),

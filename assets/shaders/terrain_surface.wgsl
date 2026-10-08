@@ -76,7 +76,27 @@ struct TerrainSurfaceExtension {
     near_detail_scale: f32,
     // Gain of the near-camera detail overlay, faded by view distance.
     near_detail_strength: f32,
+    // Fractional body-fixed tiling phase of the render origin, one vector per
+    // tiling scale. Added after projecting the precise render-relative fragment
+    // position so ground detail keeps sub-metre phase without evaluating
+    // planet-scale f32 coordinates per fragment.
+    detail_anchor: vec3<f32>,
+    near_detail_anchor: vec3<f32>,
+    layer_anchor: vec3<f32>,
+    // Contrast of the height-aware ground-layer blend.
+    layer_height_contrast: f32,
     planet_center: vec3<f32>,
+    // Rotation from the current inertial render frame into the body-fixed frame
+    // (xyzw quaternion). Ground texture fields are evaluated in body-fixed
+    // coordinates so they neither slide with planetary rotation nor break phase
+    // at patch and cube-face boundaries.
+    inertial_to_body: vec4<f32>,
+}
+
+/// Rotate `v` by the unit quaternion `q` (xyz = axis*sin, w = cos).
+fn rotate_by_quat(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -103,48 +123,68 @@ struct TerrainSurfaceExtension {
 // remaining unit, so one RGBA8 map encodes all five layers.
 @group(#{MATERIAL_BIND_GROUP}) @binding(117) var terrain_layer_weights: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(118) var terrain_layer_weights_sampler: sampler;
+// Shared per-layer micro-height array (red channel), sampled at the same UV as
+// the layer albedo/normal arrays for height-aware blending.
+@group(#{MATERIAL_BIND_GROUP}) @binding(119) var terrain_layer_height: texture_2d_array<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(120) var terrain_layer_height_sampler: sampler;
 
 const LAYER_COUNT: u32 = 5u;
 // Overlay fade bands. Each is evaluated per pixel so shared patch edges agree.
 const NEAR_DETAIL_FADE_START_M: f32 = 140.0;
 const NEAR_DETAIL_FADE_END_M: f32 = 700.0;
-// Orientation band over which the patch-local projection blends into the
-// world-axis (triplanar) projection on steep faces.
-const PROJECTION_BLEND_START: f32 = 0.25;
-const PROJECTION_BLEND_END: f32 = 0.6;
-
 // Triplanar sample of the shared micro-detail texture. Projecting on the three
-// world axes avoids both UV stretching on steep faces and cube-sphere seams.
-fn sample_detail_triplanar(world_position: vec3<f32>, normal: vec3<f32>, scale: f32) -> vec4<f32> {
+// axes avoids both UV stretching on steep faces and cube-sphere seams.
+// `local_position` is the render-relative fragment position rotated into the
+// body frame (small, precise); `anchor` is the fractional body-fixed phase of
+// the render origin at this scale, so the summed coordinate stays continuous
+// across patches while retaining sub-metre precision.
+fn sample_detail_triplanar(
+    local_position: vec3<f32>,
+    anchor: vec3<f32>,
+    normal: vec3<f32>,
+    scale: f32,
+) -> vec4<f32> {
     var weights = abs(normal);
     weights = weights / max(weights.x + weights.y + weights.z, 1e-4);
-    let x = textureSample(terrain_detail, terrain_detail_sampler, world_position.zy * scale);
-    let y = textureSample(terrain_detail, terrain_detail_sampler, world_position.xz * scale);
-    let z = textureSample(terrain_detail, terrain_detail_sampler, world_position.xy * scale);
+    let x = textureSample(
+        terrain_detail,
+        terrain_detail_sampler,
+        local_position.zy * scale + anchor.zy,
+    );
+    let y = textureSample(
+        terrain_detail,
+        terrain_detail_sampler,
+        local_position.xz * scale + anchor.xz,
+    );
+    let z = textureSample(
+        terrain_detail,
+        terrain_detail_sampler,
+        local_position.xy * scale + anchor.xy,
+    );
     return x * weights.x + y * weights.y + z * weights.z;
 }
 
-// Continuous world-axis projection blended with the patch-local UV. The three
-// axis-plane coordinates are mixed by surface orientation into one UV, so steep
-// faces stop stretching without introducing a projection seam. Blending into the
-// patch-local projection keeps the flatter terrain's existing alignment.
-fn blended_layer_uv(
-    world_position: vec3<f32>,
+// Body-fixed axis-plane (triplanar) projection. The three axis-plane
+// coordinates are mixed by surface orientation into one continuous UV. Because
+// the input is body-fixed, neighbouring patches and cube faces share one texture
+// phase (no seams) and the fields stay pinned to the rotating ground instead of
+// sliding with planetary rotation. Patch-local UV cannot provide both.
+fn body_layer_uv(
+    local_position: vec3<f32>,
+    anchor: vec3<f32>,
     normal: vec3<f32>,
-    patch_uv: vec2<f32>,
-    world_scale: f32,
-    patch_scale: f32,
+    scale: f32,
 ) -> vec2<f32> {
     let axis = abs(normal);
     let axis_sum = max(axis.x + axis.y + axis.z, 1e-4);
     let axis_weights = axis / axis_sum;
-    let triplanar = world_position.zy * axis_weights.x
-        + world_position.xz * axis_weights.y
-        + world_position.xy * axis_weights.z;
-    let radial = normalize(world_position - terrain_surface.planet_center);
-    let steep = 1.0 - clamp(abs(dot(normal, radial)), 0.0, 1.0);
-    let blend = smoothstep(PROJECTION_BLEND_START, PROJECTION_BLEND_END, steep);
-    return mix(patch_uv * patch_scale, triplanar * world_scale, blend);
+    let projected = local_position.zy * axis_weights.x
+        + local_position.xz * axis_weights.y
+        + local_position.xy * axis_weights.z;
+    let anchored = anchor.zy * axis_weights.x
+        + anchor.xz * axis_weights.y
+        + anchor.xy * axis_weights.z;
+    return projected * scale + anchored;
 }
 
 // Blend every ground layer with the same weights for albedo, roughness, and the
@@ -181,6 +221,42 @@ fn sample_layers(uv: vec2<f32>, weights: array<f32, LAYER_COUNT>) -> LayeredSamp
     }
     result.normal_ts = normal_accum;
     return result;
+}
+
+// Height-aware layer weights (Module 4, section 1.1). A layer keeps its weight
+// only while its combined coverage + micro-height score stays within `contrast`
+// of the locally tallest layer, so gravel/rock erupts out of soil instead of
+// cross-fading through it. The result is renormalized and sums to one.
+fn height_aware_weights(uv: vec2<f32>, alpha: array<f32, LAYER_COUNT>) -> array<f32, LAYER_COUNT> {
+    var modified: array<f32, LAYER_COUNT>;
+    var max_value = -1e-6;
+    for (var i = 0u; i < LAYER_COUNT; i = i + 1u) {
+        let height = textureSample(
+            terrain_layer_height,
+            terrain_layer_height_sampler,
+            uv,
+            i32(i),
+        ).r;
+        modified[i] = alpha[i] + height;
+        max_value = max(max_value, modified[i]);
+    }
+    let threshold = max_value - max(terrain_surface.layer_height_contrast, 0.0);
+    var output: array<f32, LAYER_COUNT>;
+    var sum = 0.0;
+    for (var i = 0u; i < LAYER_COUNT; i = i + 1u) {
+        output[i] = max(modified[i] - threshold + 1e-5, 0.0);
+        sum += output[i];
+    }
+    if sum > 1e-9 {
+        for (var i = 0u; i < LAYER_COUNT; i = i + 1u) {
+            output[i] = output[i] / sum;
+        }
+    } else {
+        for (var i = 0u; i < LAYER_COUNT; i = i + 1u) {
+            output[i] = alpha[i];
+        }
+    }
+    return output;
 }
 
 // Terrain vertex stage. Mirrors Bevy's default mesh vertex path for the
@@ -254,10 +330,27 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_occlusion_sampler,
         in.uv_b,
     );
-    let self_shadow = clamp(occlusion.r, 0.0, 1.0);
+    let baked_self_shadow = clamp(occlusion.r, 0.0, 1.0);
     let sky_occlusion = clamp(occlusion.g, 0.0, 1.0);
     // Per-pixel fade keeps detail continuous across patch and LOD boundaries.
     let view_distance = distance(in.world_position.xyz, view.world_position);
+    // Ground texture fields are evaluated in the body-fixed frame so they are
+    // continuous across patches and pinned to the rotating surface. This
+    // planet-scale coordinate is only used for the low-frequency macro field,
+    // where sub-metre error is invisible.
+    let body_position = rotate_by_quat(
+        terrain_surface.inertial_to_body,
+        in.world_position.xyz - terrain_surface.planet_center,
+    );
+    // Render-relative position rotated into the body frame: a small, precise
+    // vector. The per-scale anchors below restore the absolute tiling phase, so
+    // high-frequency ground detail keeps sub-metre precision without evaluating
+    // a planet-scale f32 coordinate per fragment.
+    let body_local = rotate_by_quat(terrain_surface.inertial_to_body, in.world_position.xyz);
+    // The triplanar axis weights must be selected in the same frame as the
+    // position they project, so rotate the geometric normal into body-fixed too.
+    // Lighting keeps the inertial `pbr_input.N`.
+    let body_normal = rotate_by_quat(terrain_surface.inertial_to_body, pbr_input.N);
     let detail_fade = 1.0 - smoothstep(
         DETAIL_FADE_START_M,
         DETAIL_FADE_END_M,
@@ -297,14 +390,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let local_normal = local_surface.xyz * 2.0 - vec3<f32>(1.0);
     let local_roughness = local_surface.w;
     // Macro albedo variation at a scale the streamed imagery does not resolve.
-    let macro_variation = value_noise(in.world_position.xyz * MACRO_FREQUENCY) * 2.0 - 1.0;
+    let macro_variation = value_noise(body_position * MACRO_FREQUENCY) * 2.0 - 1.0;
     // Shared micro-detail carries the surface grain below the imagery/texture
     // resolution. It fades out sooner than the patch maps so it never aliases.
     let micro_fade = 1.0 - smoothstep(300.0, 1500.0, view_distance);
     let micro_weight = detail_fade * micro_fade;
     let detail = sample_detail_triplanar(
-        in.world_position.xyz,
-        pbr_input.N,
+        body_local,
+        terrain_surface.detail_anchor,
+        body_normal,
         terrain_surface.detail_scale,
     );
     let micro_albedo = 1.0 + (detail.b - 0.5) * 0.4 * micro_weight;
@@ -317,8 +411,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         view_distance,
     );
     let near_detail = sample_detail_triplanar(
-        in.world_position.xyz,
-        pbr_input.N,
+        body_local,
+        terrain_surface.near_detail_anchor,
+        body_normal,
         terrain_surface.near_detail_scale,
     );
     let near_normal = near_detail.xy * 2.0 - vec2<f32>(1.0, 1.0);
@@ -344,14 +439,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             splat.a,
             max(0.0, 1.0 - (splat.r + splat.g + splat.b + splat.a)),
         );
-        let layer_uv = blended_layer_uv(
-            in.world_position.xyz,
-            pbr_input.N,
-            in.uv_b,
+        let layer_uv = body_layer_uv(
+            body_local,
+            terrain_surface.layer_anchor,
+            body_normal,
             terrain_surface.layer_tiling_scale,
-            terrain_surface.layer_patch_uv_scale,
         );
-        let layered = sample_layers(layer_uv, weights);
+        let layered = sample_layers(layer_uv, height_aware_weights(layer_uv, weights));
         layered_albedo = layered.albedo;
         layered_roughness = layered.roughness;
         layered_normal_ts = layered.normal_ts;
@@ -369,7 +463,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // not step in brightness and coarse patches keep their existing look.
     let crevice = mix(texture_crevice, 1.0, 1.0 - sky_occlusion);
     let detail_albedo = mix(base_albedo, local_albedo.rgb, 0.4 * detail_weight);
-    let layered_base = mix(detail_albedo, layered_albedo, layer_fade);
+    // The layered material is a unit-luminance tint over the continuous
+    // geographic base, not a replacement. A patch that lacks layer maps (coarse
+    // LOD, or before its weight map is ready) therefore cannot show a
+    // rectangular base-colour step against a neighbour that has them; it only
+    // loses the layer grain. `layer_fade` fades with view distance as before.
+    let layered_luma = max(dot(layered_albedo, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.02);
+    let layered_tint = layered_albedo / layered_luma;
+    let layers_modulated = clamp(
+        detail_albedo * layered_tint,
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    let layered_base = mix(detail_albedo, layers_modulated, layer_fade);
     pbr_input.material.base_color = vec4(
         layered_base
             * (1.0 + macro_variation * MACRO_STRENGTH)
@@ -394,6 +500,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let uv_dx = dpdx(in.uv_b);
     let uv_dy = dpdy(in.uv_b);
     let determinant = uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x;
+    // Patch-local UVs span the whole patch, so their screen-space derivatives and
+    // determinant shrink steeply at grazing angles and distance. An absolute
+    // threshold guards only genuinely degenerate (edge-on) quads; lowering it to
+    // O(1e-14) admitted near-degenerate frames and produced tiled normal-map
+    // artifacts across the terrain, so the conservative threshold stands.
     if abs(determinant) > 1e-6 {
         let raw_tangent = (position_dx * uv_dy.y - position_dy * uv_dx.y) / determinant;
         let tangent = normalize(raw_tangent - pbr_input.N * dot(pbr_input.N, raw_tangent));
@@ -428,7 +539,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     );
     // The sky-occlusion term scales only the indirect contribution; the
     // self-shadow term scales only the direct-sun contribution below.
-    let self_shadow_term = mix(1.0, self_shadow, terrain_surface.self_shadow_strength);
+    let self_shadow_term = mix(
+        1.0,
+        baked_self_shadow,
+        terrain_surface.self_shadow_strength,
+    );
     let sky_occlusion_term =
         mix(1.0, sky_occlusion, terrain_surface.sky_occlusion_strength);
     pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * sky_occlusion_term;

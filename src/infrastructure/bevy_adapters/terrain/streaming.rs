@@ -40,8 +40,9 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
-    max_river_mesh_bytes, prepare_patch_surface, supports_local_surfaces, supports_vegetation,
-    PreparedPatchSurface, LOCAL_SURFACE_MAP_BYTES, MAX_VEGETATION_MESH_BYTES,
+    max_river_mesh_bytes, prepare_patch_surface, supports_local_surfaces, PreparedPatchSurface,
+    LOCAL_SURFACE_MAP_BYTES, MAX_COARSE_VEGETATION_MESH_BYTES, MAX_VEGETATION_MESH_BYTES,
+    VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL, VEGETATION_MIN_PATCH_LEVEL,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -1315,8 +1316,14 @@ fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     if supports_local_surfaces(patch.level) {
         terrain_bytes += LOCAL_SURFACE_MAP_BYTES + max_river_mesh_bytes(resolution as u32);
     }
-    if supports_vegetation(patch.level) {
+    // Full-density scatter (trees, ground cover, and rocks) is reserved on close
+    // patches. Coarser patches between the tree and ground-cover gates build a
+    // tree-only mesh; its capped cost is reserved too so no generated vegetation
+    // resides outside the accounted patch budget.
+    if patch.level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL {
         terrain_bytes += MAX_VEGETATION_MESH_BYTES;
+    } else if patch.level >= VEGETATION_MIN_PATCH_LEVEL {
+        terrain_bytes += MAX_COARSE_VEGETATION_MESH_BYTES;
     }
     terrain_bytes
 }
@@ -1392,9 +1399,7 @@ mod tests {
     use crate::domain::services::cube_sphere::{face_uv_to_direction, CubeFace};
     #[cfg(feature = "dem")]
     use crate::domain::services::terrain_source::EarthTerrainSource;
-    use crate::infrastructure::bevy_adapters::terrain::surface::{
-        LOCAL_SURFACE_MIN_PATCH_LEVEL, VEGETATION_MIN_PATCH_LEVEL,
-    };
+    use crate::infrastructure::bevy_adapters::terrain::surface::LOCAL_SURFACE_MIN_PATCH_LEVEL;
 
     #[derive(Debug)]
     struct DivergentOverviewSource;
@@ -2301,8 +2306,9 @@ mod tests {
     fn vegetation_budget_applies_only_to_close_range_patches() {
         let coarse = TerrainPatch::root(CubeFace::PosZ);
         let plain = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL - 1);
-        let surfaced = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL);
-        let vegetated = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL);
+        let local_only = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL);
+        let full_vegetated =
+            TerrainPatch::for_direction(DVec3::Z, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL);
 
         assert_eq!(
             estimated_patch_bytes(plain, 33),
@@ -2310,16 +2316,33 @@ mod tests {
             "only close patches reserve local material maps and scatter"
         );
         assert_eq!(
-            estimated_patch_bytes(surfaced, 33),
-            estimated_patch_bytes(coarse, 33) + LOCAL_SURFACE_MAP_BYTES + max_river_mesh_bytes(33),
-            "local maps begin one level before vegetation"
-        );
-        assert_eq!(
-            estimated_patch_bytes(vegetated, 33),
+            estimated_patch_bytes(local_only, 33),
             estimated_patch_bytes(coarse, 33)
                 + LOCAL_SURFACE_MAP_BYTES
                 + max_river_mesh_bytes(33)
-                + MAX_VEGETATION_MESH_BYTES
+                + MAX_COARSE_VEGETATION_MESH_BYTES,
+            "the tree-only gate reserves the coarse vegetation mesh"
+        );
+        assert_eq!(
+            estimated_patch_bytes(full_vegetated, 33),
+            estimated_patch_bytes(coarse, 33)
+                + LOCAL_SURFACE_MAP_BYTES
+                + max_river_mesh_bytes(33)
+                + MAX_VEGETATION_MESH_BYTES,
+            "full-density scatter reserves the vegetation mesh"
+        );
+    }
+
+    #[test]
+    fn coarse_vegetation_is_accounted_and_bounded_by_full_density() {
+        const { assert!(MAX_COARSE_VEGETATION_MESH_BYTES > 0) };
+        const { assert!(MAX_COARSE_VEGETATION_MESH_BYTES < MAX_VEGETATION_MESH_BYTES) };
+        // A tree-only patch between the two gates must reserve vegetation bytes.
+        let coarse_tree = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL);
+        let no_tree = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL - 1);
+        assert!(
+            estimated_patch_bytes(coarse_tree, 33) > estimated_patch_bytes(no_tree, 33),
+            "coarse tree-only patches must reserve their vegetation mesh"
         );
     }
 

@@ -7,7 +7,7 @@ use super::{
     BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV, GRASS_CARD_PLANES, GRASS_CLUMP_COUNT,
     GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT,
     ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_COUNT,
-    TREE_MIN_DENSITY, TRUNK_SEGMENTS,
+    TREE_MIN_DENSITY, TRUNK_SEGMENTS, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
 };
 use crate::domain::services::cube_sphere::{patch_world_size_m, PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::LandCoverPackage;
@@ -24,6 +24,13 @@ use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 /// Blue-noise candidate oversampling: generate more jittered-grid cells than the
 /// accepted rock budget so slope weighting can select a well-spread subset.
 const ROCK_CANDIDATE_OVERSAMPLE: usize = 2;
+/// Upper tree budget for a coarse, tree-only patch. The tree gate sits one LOD
+/// ring coarser than ground cover, and the whole sphere's coarse leaves are
+/// selected at once, so this cap is deliberately small: it reserves a bounded
+/// amount of the streaming budget on every coarse leaf while keeping some
+/// recognisable vegetation instead of dropping to none. It is not a substitute
+/// for a true far-field impostor representation.
+pub(super) const COARSE_TREE_BUDGET_CAP: usize = 8;
 /// Fraction of a grid cell used for the deterministic jitter. The remaining
 /// margin keeps neighbouring candidates separated, approximating blue noise.
 const ROCK_CELL_JITTER: f64 = 0.35;
@@ -516,6 +523,19 @@ fn rock_normals(local: &[DVec3], rings: usize, segments: usize) -> Vec<DVec3> {
     normals
 }
 
+/// Tree budget for a patch. Ground-cover-capable patches use the full-density
+/// budget; coarse tree-only patches use a tighter cap so the distant
+/// representation stays bounded in geometry, draw calls, and shadow casters
+/// while keeping every tree at its true physical size.
+pub(super) fn tree_budget_for_level(patch_level: u32) -> usize {
+    let budget = scatter_count_for_level(TREE_COUNT, patch_level);
+    if patch_level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL {
+        budget
+    } else {
+        budget.min(COARSE_TREE_BUDGET_CAP)
+    }
+}
+
 /// Coarse leaves decimate scatter to keep generation and draw sizes bounded.
 /// Beyond the full-density level, divide by area to retain that target density.
 pub(super) fn scatter_count_for_level(max_count: usize, patch_level: u32) -> usize {
@@ -776,7 +796,13 @@ pub(super) fn build_grounded_vegetation_mesh(
     };
     let mut accum = MeshAccum::new();
 
-    let tree_budget = scatter_count_for_level(TREE_COUNT, patch.level);
+    // Coarser patches place the same bounded tree budget over a much larger
+    // area. Trees keep their true physical size and a tighter budget, so the
+    // distant representation is bounded in geometry, draw calls, and shadow
+    // casters; ground cover and rocks are skipped because they cannot be
+    // resolved at that range and would only inflate the coarse mesh.
+    let place_ground_cover = patch.level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL;
+    let tree_budget = tree_budget_for_level(patch.level);
     let tree_sites = vegetation_candidates(patch, tree_budget, TREE_CANDIDATE_SALT, |u, v| {
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
@@ -923,19 +949,23 @@ pub(super) fn build_grounded_vegetation_mesh(
     }
 
     let grass_budget = scatter_count_for_level(GRASS_CLUMP_COUNT, patch.level);
-    let grass_sites = vegetation_candidates(patch, grass_budget, GRASS_CANDIDATE_SALT, |u, v| {
-        let dir = face_uv_to_direction(patch.face, u, v);
-        let (lat, lon) = direction_to_lat_lon(dir);
-        let h = source.mesh_height_m(lat, lon, patch.level);
-        if h < 0.5 {
-            return false;
-        }
-        let slope = slope_deg_at(source, lat, lon);
-        if slope > 30.0 {
-            return false;
-        }
-        density_at(lat, lon) * clump_mask(lat, lon) >= GRASS_MIN_DENSITY
-    });
+    let grass_sites = if place_ground_cover {
+        vegetation_candidates(patch, grass_budget, GRASS_CANDIDATE_SALT, |u, v| {
+            let dir = face_uv_to_direction(patch.face, u, v);
+            let (lat, lon) = direction_to_lat_lon(dir);
+            let h = source.mesh_height_m(lat, lon, patch.level);
+            if h < 0.5 {
+                return false;
+            }
+            let slope = slope_deg_at(source, lat, lon);
+            if slope > 30.0 {
+                return false;
+            }
+            density_at(lat, lon) * clump_mask(lat, lon) >= GRASS_MIN_DENSITY
+        })
+    } else {
+        Vec::new()
+    };
 
     for (k, (u, v)) in grass_sites.into_iter().enumerate() {
         let dir = face_uv_to_direction(patch.face, u, v);
@@ -960,9 +990,12 @@ pub(super) fn build_grounded_vegetation_mesh(
         );
     }
 
-    for body in plan_grounded_rock_bodies(source, patch, radius_m, mesh_origin_body_fixed, geometry)
-    {
-        accum.push_rock(body);
+    if place_ground_cover {
+        for body in
+            plan_grounded_rock_bodies(source, patch, radius_m, mesh_origin_body_fixed, geometry)
+        {
+            accum.push_rock(body);
+        }
     }
 
     if accum.positions.is_empty() {

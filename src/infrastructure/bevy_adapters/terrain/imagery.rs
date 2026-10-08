@@ -11,12 +11,17 @@ use crate::domain::services::imagery_package::{
     EarthImageryPackage, ImageryResolution, GLOBAL_OVERVIEW_FILE,
 };
 use crate::domain::services::imagery_tiles::cube_face_name;
+use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::value_objects::imagery_manifest::EarthImageryManifest;
+use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
+use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain::mips::{mip_chain_rgba8, MipFilter};
 use crate::infrastructure::bevy_adapters::terrain::render::{
-    build_terrain_material, TerrainMaterial, TerrainOcclusionConfig, TerrainPatchRenderState,
+    body_texture_anchor, build_terrain_material, TerrainMaterial, TerrainOcclusionConfig,
+    TerrainPatchRenderState,
 };
 use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
+use crate::infrastructure::bevy_adapters::terrain::surface::LAYER_HEIGHT_CONTRAST;
 use bevy::asset::{AssetServer, Handle, LoadState};
 use bevy::image::Image;
 use bevy::prelude::*;
@@ -249,10 +254,16 @@ pub(crate) fn stream_terrain_imagery(
 
 /// Upgrade a patch material once its detailed imagery tile is ready. Geometry
 /// and collision are untouched; only the albedo source changes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The upgrade reads imagery, occlusion, ephemeris, origin, and planet state and must mutate the material asset and patch query."
+)]
 pub(crate) fn apply_terrain_imagery(
     imagery: Res<TerrainImageryResource>,
     occlusion_config: Res<TerrainOcclusionConfig>,
+    ephemeris_snapshot: Option<Res<EphemerisSnapshot>>,
     render_origin: Res<super::render::RenderOrigin>,
+    planet_query: Query<&PlanetComponent>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut query: Query<(Entity, &mut TerrainPatchRenderState)>,
     mut commands: Commands,
@@ -269,6 +280,40 @@ pub(crate) fn apply_terrain_imagery(
         }
         state.imagery_albedo = handle.clone();
         state.imagery_weight = 1.0;
+        // Rebuild with the current body-fixed frame and precision anchors so the
+        // upgraded material matches every other terrain material.
+        let orientation = ephemeris_snapshot.as_deref().and_then(|snapshot| {
+            planet_query
+                .get(state.planet_entity)
+                .ok()
+                .and_then(|planet| {
+                    snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+                })
+        });
+        let (inertial_to_body, detail_anchor, near_detail_anchor, layer_anchor) =
+            if let Some(orientation) = orientation {
+                let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+                (
+                    Vec4::from_array(body_to_inertial.inverse().as_quat().to_array()),
+                    body_texture_anchor(
+                        render_origin.origin,
+                        body_to_inertial,
+                        f64::from(state.detail_scale),
+                    ),
+                    body_texture_anchor(
+                        render_origin.origin,
+                        body_to_inertial,
+                        f64::from(state.layer.near_detail_scale),
+                    ),
+                    body_texture_anchor(
+                        render_origin.origin,
+                        body_to_inertial,
+                        f64::from(state.layer.tiling_scale),
+                    ),
+                )
+            } else {
+                (Vec4::W, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO)
+            };
         let material = build_terrain_material(
             state.base_material.clone(),
             state.local_albedo.clone(),
@@ -287,13 +332,19 @@ pub(crate) fn apply_terrain_imagery(
             state.layer.albedo_roughness.clone(),
             state.layer.normal.clone(),
             state.layer.weights.clone(),
+            state.layer.height.clone(),
             state.layer.blend_weight,
             state.layer.tiling_scale,
             state.layer.patch_uv_scale,
             state.layer.normal_strength,
             state.layer.near_detail_scale,
             state.layer.near_detail_strength,
+            detail_anchor,
+            near_detail_anchor,
+            layer_anchor,
+            LAYER_HEIGHT_CONTRAST,
             (-render_origin.origin).as_vec3(),
+            inertial_to_body,
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing

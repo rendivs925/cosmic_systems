@@ -1,5 +1,6 @@
 pub mod craft_startup;
 pub mod headless_scenario;
+pub mod launch_tower;
 pub mod modes;
 pub mod part_catalog;
 pub mod plugins;

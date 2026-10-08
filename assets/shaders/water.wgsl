@@ -59,6 +59,10 @@ struct WaterParams {
     /// Phase speed of the flow-directed river ripple, in radians per second.
     /// Zero for the ocean; rivers animate along their per-vertex flow direction.
     flow_speed: f32,
+    /// Planet centre in the same rebased inertial metre frame as mesh fragments.
+    /// Subtracting it recovers an origin-invariant body position, so the wave and
+    /// foam fields do not slide when the render origin recentres.
+    planet_center: vec3<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: WaterParams;
@@ -171,7 +175,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Shoaling: full wave amplitude in open water, damped at the shoreline.
     let shoal = smoothstep(0.0, 0.06, depth);
     let footprint_m = max(length(dpdx(in.world_position.xyz)), length(dpdy(in.world_position.xyz)));
-    let wave = gerstner_sample(in.world_position.xyz, pbr.N, water.time_s, footprint_m);
+    // Origin-invariant body position. The shared render origin recentres every
+    // few kilometres, translating every fragment's world position by the origin
+    // delta; subtracting the planet centre (the negated origin) cancels it, so
+    // the wave and foam fields stay pinned to the surface instead of sliding.
+    let body_position = in.world_position.xyz - water.planet_center;
+    let wave = gerstner_sample(body_position, pbr.N, water.time_s, footprint_m);
     // Analytic gradient of the wave field, projected into the tangent plane.
     let gradient = wave.grad * shoal * water.wave_strength;
     // Flow-directed ripple: rivers carry a normalized flow direction in the
@@ -189,8 +198,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         dot(flow_world, wave.bitangent),
     );
     let flow_position = vec2<f32>(
-        dot(in.world_position.xyz, wave.tangent),
-        dot(in.world_position.xyz, wave.bitangent),
+        dot(body_position, wave.tangent),
+        dot(body_position, wave.bitangent),
     );
     let flow_phase =
         dot(flow_t, flow_position) * water.ripple_scale * 4.0 - water.time_s * water.flow_speed;
@@ -231,8 +240,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let foam_band = 1.0 - smoothstep(0.0, max(water.foam_depth_normalized, 1e-5), depth);
     let foam_resolved = 1.0 - smoothstep(4.0, 9.0, footprint_m);
     let foam_pattern =
-        0.5 + 0.5 * sin(in.world_position.x * 0.35 + water.time_s * 1.3)
-            * sin(in.world_position.z * 0.31 - water.time_s * 1.05) * foam_resolved;
+        0.5 + 0.5 * sin(body_position.x * 0.35 + water.time_s * 1.3)
+            * sin(body_position.z * 0.31 - water.time_s * 1.05) * foam_resolved;
     // Expose wave crests as whitecaps in open water as the swell steepens.
     let whitecap = smoothstep(0.75, 1.0, wave.height / max(water.wave_height_m, 1e-3))
         * water.foam_strength;

@@ -1,3 +1,6 @@
+use crate::application::launch_tower::{
+    diagonal_braces, perimeter_braces, service_arms, TowerLayout, TowerMember, PLATFORM_THICKNESS_M,
+};
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
 use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::body_orientation::BodyOrientation;
@@ -315,11 +318,15 @@ fn spawn_procedural_launch_pad(
         metallic: 0.35,
         perceptual_roughness: 0.48,
         reflectance: 0.5,
+        // Pull pad steel slightly toward the camera so it wins depth ties with
+        // terrain that interpolates to the same height at the anchor.
+        depth_bias: 1.5,
         ..default()
     });
     let concrete = materials.add(StandardMaterial {
         base_color: Color::srgb(0.18, 0.19, 0.18),
         perceptual_roughness: 0.88,
+        depth_bias: 2.0,
         ..default()
     });
     let water = materials.add(StandardMaterial {
@@ -347,10 +354,10 @@ fn spawn_procedural_launch_pad(
         perceptual_roughness: 0.6,
         ..default()
     });
-    let tower_height_m = rocket_height_m * 0.82;
-    let tower_offset_m = rocket_diameter_m * 0.5 + 10.0;
-    let mast_height_m = tower_height_m + 18.0;
-    let arm_length_m = tower_offset_m - rocket_diameter_m * 0.5;
+    let tower = TowerLayout::from_vehicle(rocket_height_m, rocket_diameter_m);
+    let tower_height_m = tower.height_m;
+    let tower_offset_m = tower.center_x_m;
+    let mast_height_m = tower.mast_height_m;
     let root = commands
         .spawn((
             anchor,
@@ -361,20 +368,26 @@ fn spawn_procedural_launch_pad(
         .id();
     commands.entity(root).with_children(|parent| {
         // A wide concrete apron grounds the facility visually; the deck sits on
-        // top. Both remain visible while coarse streamed tiles refine.
+        // top. Both are low slabs whose top face sits a few centimetres above
+        // the sampled surface height, so streamed terrain that interpolates to
+        // the same height cannot z-fight with or hide the pad, while the slab
+        // still reads as a prepared pad rather than a raised platform.
         parent.spawn((
             LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(64.0, 0.2, 64.0))),
+            Mesh3d(meshes.add(Cuboid::new(64.0, 0.5, 64.0))),
             MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(0.0, -0.2, 0.0),
+            Transform::from_xyz(0.0, -0.20, 0.0),
             Name::new("LaunchPadApron"),
         ));
-        // The deck is centered on the authoritative terrain anchor.
+        // The deck is centered on the authoritative terrain anchor with its top
+        // 0.06 m proud of the sampled surface; the vehicle rests on the surface,
+        // so its base sits inside the slab, which reads as a launch mount rather
+        // than a floating pad.
         parent.spawn((
             LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(36.0, 0.2, 36.0))),
+            Mesh3d(meshes.add(Cuboid::new(36.0, 0.5, 36.0))),
             MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(0.0, -0.1, 0.0),
+            Transform::from_xyz(0.0, -0.19, 0.0),
             Name::new("LaunchPadDeck"),
         ));
         // Local procedural facility details only. The terrain and pad anchor
@@ -412,65 +425,45 @@ fn spawn_procedural_launch_pad(
                 Name::new("LaunchPadHoldDownClamp"),
             ));
         }
-        // Service tower legs, cross levels, and braces.
-        for x in [-4.0_f32, 4.0] {
-            for z in [-4.0_f32, 4.0] {
-                parent.spawn((
-                    LaunchSiteStructure,
-                    Mesh3d(meshes.add(Cuboid::new(0.55, tower_height_m, 0.55))),
-                    MeshMaterial3d(steel.clone()),
-                    Transform::from_xyz(tower_offset_m + x, tower_height_m * 0.5, z),
-                    Name::new("LaunchPadTowerLeg"),
-                ));
-            }
-        }
-        for level in 1..5 {
-            let y = tower_height_m * level as f32 / 5.0;
+        // Service tower legs. The braces below attach to these columns.
+        for center in tower.column_centers() {
             parent.spawn((
                 LaunchSiteStructure,
-                Mesh3d(meshes.add(Cuboid::new(9.0, 0.35, 9.0))),
+                Mesh3d(meshes.add(Cuboid::new(0.55, tower_height_m, 0.55))),
+                MeshMaterial3d(steel.clone()),
+                Transform::from_xyz(center[0], tower_height_m * 0.5, center[2]),
+                Name::new("LaunchPadTowerLeg"),
+            ));
+        }
+        // Platforms span the full tower height so the topmost supports the
+        // lightning mast, and they enclose the columns so levels brace every leg.
+        for y in tower.platform_levels_y() {
+            parent.spawn((
+                LaunchSiteStructure,
+                Mesh3d(meshes.add(Cuboid::new(
+                    tower.platform_half_span_m * 2.0,
+                    PLATFORM_THICKNESS_M,
+                    tower.platform_half_span_m * 2.0,
+                ))),
                 MeshMaterial3d(steel.clone()),
                 Transform::from_xyz(tower_offset_m, y, 0.0),
                 Name::new("LaunchPadTowerLevel"),
             ));
         }
-        for level in [
-            tower_height_m * 0.25,
-            tower_height_m * 0.55,
-            tower_height_m * 0.85,
-        ] {
-            parent.spawn((
-                LaunchSiteStructure,
-                Mesh3d(meshes.add(Cuboid::new(12.0, 0.22, 0.22))),
-                MeshMaterial3d(steel.clone()),
-                Transform::from_xyz(tower_offset_m, level, 0.0),
-                Name::new("LaunchPadTowerBrace"),
-            ));
+        // Horizontal perimeter rings and face diagonals. Both are built from
+        // explicit column/platform attachment points, so no member floats in the
+        // tower interior between the legs.
+        for member in perimeter_braces(&tower) {
+            spawn_tower_member(parent, meshes, &steel, member, "LaunchPadTowerBrace");
         }
-        // Service access arm reaching from the tower toward the vehicle, and a
-        // lower umbilical arm.
-        parent.spawn((
-            LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(arm_length_m, 0.5, 0.5))),
-            MeshMaterial3d(steel.clone()),
-            Transform::from_xyz(
-                tower_offset_m - arm_length_m * 0.5,
-                tower_height_m * 0.72,
-                0.0,
-            ),
-            Name::new("LaunchPadServiceArm"),
-        ));
-        parent.spawn((
-            LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(arm_length_m * 0.8, 0.4, 0.4))),
-            MeshMaterial3d(steel.clone()),
-            Transform::from_xyz(
-                tower_offset_m - arm_length_m * 0.4,
-                tower_height_m * 0.35,
-                0.0,
-            ),
-            Name::new("LaunchPadUmbilicalArm"),
-        ));
+        for member in diagonal_braces(&tower) {
+            spawn_tower_member(parent, meshes, &steel, member, "LaunchPadTowerDiagonal");
+        }
+        // Service and umbilical arms start on the platform edge nearest the
+        // vehicle and reach its surface, so each arm is carried by the platform.
+        for member in service_arms(&tower, rocket_diameter_m) {
+            spawn_tower_member(parent, meshes, &steel, member, "LaunchPadServiceArm");
+        }
         // Lightning mast rising above the tower.
         parent.spawn((
             LaunchSiteStructure,
@@ -491,7 +484,7 @@ fn spawn_procedural_launch_pad(
                 LaunchSiteStructure,
                 Mesh3d(meshes.add(Sphere::new(0.28))),
                 MeshMaterial3d(warning_light.clone()),
-                Transform::from_xyz(tower_offset_m + 4.4, tower_height_m + 0.4, z),
+                Transform::from_xyz(tower_offset_m + 4.4, tower_height_m + 0.2, z),
                 Name::new("LaunchPadTowerBeacon"),
             ));
         }
@@ -535,6 +528,30 @@ fn spawn_procedural_launch_pad(
             ));
         }
     });
+}
+
+/// Spawn one straight tower member mesh between its explicit attachment points.
+/// The cuboid is authored along +X and rotated onto the member direction, so the
+/// endpoints land exactly where the geometry module placed them.
+fn spawn_tower_member(
+    parent: &mut ChildSpawnerCommands,
+    meshes: &mut Assets<Mesh>,
+    steel: &Handle<StandardMaterial>,
+    member: TowerMember,
+    name: &'static str,
+) {
+    let start = Vec3::from_array(member.start);
+    let end = Vec3::from_array(member.end);
+    let delta = end - start;
+    let length = delta.length().max(1e-3);
+    let rotation = Quat::from_rotation_arc(Vec3::X, delta / length);
+    parent.spawn((
+        LaunchSiteStructure,
+        Mesh3d(meshes.add(Cuboid::new(length, member.thickness, member.thickness))),
+        MeshMaterial3d(steel.clone()),
+        Transform::from_translation((start + end) * 0.5).with_rotation(rotation),
+        Name::new(name),
+    ));
 }
 
 /// Synchronize the facility from its body-fixed anchor through the same shared
@@ -916,6 +933,89 @@ mod tests {
             Or<(With<NotShadowCaster>, With<NotShadowReceiver>)>,
         )>();
         assert_eq!(excluded.iter(world).count(), 0);
+    }
+
+    /// Integration test over the actually spawned meshes: expand every brace and
+    /// diagonal beam from its spawned transform and assert both physical endpoints
+    /// land on a spawned column or platform, not in the tower interior. This
+    /// catches the original defect (braces centred on the tower axis at z = 0,
+    /// meeting no column) even if the layout functions are untouched.
+    #[test]
+    fn spawned_tower_members_attach_to_columns_or_platforms() {
+        let height_m = 70.0;
+        let diameter_m = 3.7;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>| {
+                spawn_procedural_launch_pad(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    LaunchPadPresentation {
+                        planet_name: CelestialBodyId::earth(),
+                        position_body_fixed_m: DVec3::new(6_371_000.0, 0.0, 0.0),
+                        normal_body_fixed: DVec3::X,
+                        heading_body_fixed: DVec3::Z,
+                    },
+                    height_m,
+                    diameter_m,
+                );
+            },
+        );
+        app.update();
+
+        let world = app.world_mut();
+        let layout = TowerLayout::from_vehicle(height_m, diameter_m);
+        let columns: Vec<[f32; 2]> = layout
+            .column_centers()
+            .iter()
+            .map(|center| [center[0], center[2]])
+            .collect();
+        let platforms: Vec<f32> = layout.platform_levels_y().to_vec();
+        // The parent root is spawned with an identity transform, so a child's
+        // local translation equals its position in pad space.
+        let mut query = world.query::<(&Name, &Transform, &Mesh3d)>();
+        let meshes = world.resource::<Assets<Mesh>>();
+        let mut checked = 0usize;
+        for (name, transform, mesh3d) in query.iter(world) {
+            let kind = name.as_str();
+            if kind != "LaunchPadTowerBrace" && kind != "LaunchPadTowerDiagonal" {
+                continue;
+            }
+            let mesh = meshes
+                .get(&mesh3d.0)
+                .expect("spawned tower member mesh must exist");
+            let Some(bevy_mesh::VertexAttributeValues::Float32x3(positions)) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("tower member mesh must carry Float32x3 positions");
+            };
+            let half_length = positions.iter().map(|p| p[0].abs()).fold(0.0f32, f32::max);
+            let axis = transform.rotation * Vec3::X * half_length;
+            for endpoint in [transform.translation - axis, transform.translation + axis] {
+                let on_column = columns
+                    .iter()
+                    .any(|c| (endpoint.x - c[0]).hypot(endpoint.z - c[1]) < 0.35);
+                let on_platform = platforms
+                    .iter()
+                    .any(|y| (endpoint.y - y).abs() < PLATFORM_THICKNESS_M);
+                assert!(
+                    on_column || on_platform,
+                    "{kind} endpoint {endpoint:?} attaches to neither a column nor a platform"
+                );
+            }
+            checked += 1;
+        }
+        assert!(
+            checked >= 8,
+            "expected the spawned tower to contain perimeter and diagonal braces, found {checked}"
+        );
     }
 
     #[test]

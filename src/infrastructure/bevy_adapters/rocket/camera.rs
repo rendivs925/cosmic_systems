@@ -345,8 +345,7 @@ pub fn update_rocket_camera(
                 .map(|previous| interpolate_camera_pose(previous, mode_pose, smoothing))
                 .unwrap_or(current_pose)
         };
-        controller.smoothed_pose = Some(smoothed_pose);
-        *camera_transform = camera_pose_from_reference(
+        let mut render_pose = camera_pose_from_reference(
             rocket_pos_flight,
             rocket_rot,
             smoothed_pose,
@@ -357,8 +356,11 @@ pub fn update_rocket_camera(
                 streaming.as_deref(),
                 ephemeris.orientation_for_catalog_body(&planet.domain_planet.name),
             ) {
-                camera_transform.translation = camera_above_streamed_surface(
-                    camera_transform.translation,
+                // Enforce clearance on the final exterior pose. The corrected
+                // position is persisted below, so repeated frames cannot slowly
+                // sink the camera through terrain as it moves.
+                render_pose.translation = camera_above_streamed_surface(
+                    render_pose.translation,
                     render_origin.origin,
                     body_fixed_to_planet_inertial_rotation(orientation),
                     streaming
@@ -368,6 +370,17 @@ pub fn update_rocket_camera(
                 );
             }
         }
+        // Store the cleared pose back in the controller's reference frame. The
+        // previous code stored the pre-clearance pose and lerped partway toward
+        // clearance every frame, so the invariant never held and terrain patch
+        // churn read as the ground vibrating under the camera.
+        controller.smoothed_pose = Some(camera_reference_pose(
+            rocket_pos_flight,
+            rocket_rot,
+            render_pose,
+            controller.target_mode,
+        ));
+        *camera_transform = render_pose;
     }
 }
 
@@ -783,6 +796,53 @@ mod tests {
             Vec3::ZERO,
             "missing patches must never trigger terrain generation"
         );
+    }
+
+    #[test]
+    fn cleared_camera_pose_round_trips_and_stays_clear() {
+        let radius_m = 6_371_000.0;
+        let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
+        let patch = TerrainPatch::for_direction(direction, 14);
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        let ground_radius_m = surface_radius(&patch, &geometry, direction).unwrap();
+        let rotation = DQuat::from_rotation_z(0.4) * DQuat::from_rotation_y(0.7);
+        let origin = rotation * (direction * (ground_radius_m - 10.0));
+        let rocket_position = Vec3::new(5.0, -3.0, 2.0);
+        let rocket_rotation = Quat::from_rotation_y(0.3);
+
+        // A camera placed inside the terrain is pushed to the clearance surface.
+        let cleared = camera_above_streamed_surface(
+            Vec3::ZERO,
+            origin,
+            rotation,
+            std::iter::once((&patch, &geometry)),
+        );
+        let body_position = rotation.conjugate() * (origin + cleared.as_dvec3());
+        assert!(body_position.length() >= ground_radius_m + 2.0 - 1e-4);
+
+        // Persisting the cleared pose in the reference frame and reapplying it
+        // must not lose clearance (the previous code stored the pre-clear pose).
+        let reference = camera_reference_pose(
+            rocket_position,
+            rocket_rotation,
+            Transform::from_translation(cleared),
+            RocketCameraMode::Orbital,
+        );
+        let reapplied = camera_pose_from_reference(
+            rocket_position,
+            rocket_rotation,
+            reference,
+            RocketCameraMode::Orbital,
+        );
+        assert!((reapplied.translation - cleared).length() < 1e-3);
+        let re_cleared = camera_above_streamed_surface(
+            reapplied.translation,
+            origin,
+            rotation,
+            std::iter::once((&patch, &geometry)),
+        );
+        assert!((re_cleared - cleared).length() < 1e-3);
     }
 
     #[test]

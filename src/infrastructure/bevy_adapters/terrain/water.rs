@@ -62,6 +62,7 @@ const WATER_PARAM_FIELDS: &[&str] = &[
     "wave_components",
     "foam_coverage",
     "flow_speed",
+    "planet_center",
 ];
 
 /// Shared uniform for every water patch. Must match `WaterParams` in
@@ -107,6 +108,11 @@ pub struct WaterParams {
     /// Phase speed of the flow-directed river ripple, in radians per second.
     /// Zero for the ocean; rivers animate along their per-vertex flow direction.
     pub flow_speed: f32,
+    /// Planet centre in the same rebased inertial metre frame as mesh fragments
+    /// (i.e. the negated render origin). Subtracting it recovers an
+    /// origin-invariant body position, so the wave and foam fields stay pinned to
+    /// the planet when the render origin recentres (AGENTS.md section 13).
+    pub planet_center: Vec3,
 }
 
 impl Default for WaterParams {
@@ -136,6 +142,7 @@ impl Default for WaterParams {
             wave_components: DEFAULT_WAVE_COMPONENTS as f32,
             foam_coverage: DEFAULT_FOAM_COVERAGE,
             flow_speed: 0.0,
+            planet_center: Vec3::ZERO,
         }
     }
 }
@@ -271,6 +278,17 @@ mod tests {
         // channel, which stays shallow, small, and strongly absorbing.
         assert!(ocean.wave_height_m > river.wave_height_m);
         assert!(ocean.absorption < river.absorption);
+    }
+
+    #[test]
+    fn water_params_default_to_the_origin_center_and_stay_finite() {
+        // Materials are created with a zero planet centre and the origin is
+        // written every frame, so a freshly added cap is never left unbound.
+        let ocean = WaterParams::default();
+        assert_eq!(ocean.planet_center, Vec3::ZERO);
+        assert!(ocean.planet_center.is_finite());
+        // The river preset spreads `Default`, so it inherits the same centre.
+        assert_eq!(WaterParams::river().planet_center, Vec3::ZERO);
     }
 
     #[test]

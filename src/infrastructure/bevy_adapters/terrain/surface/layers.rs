@@ -47,6 +47,10 @@ pub(crate) const LAYER_NORMAL_STRENGTH: f32 = 0.5;
 pub(crate) const NEAR_DETAIL_SCALE: f32 = 2.2;
 /// Gain of the near-camera detail overlay, faded by view distance in the shader.
 pub(crate) const NEAR_DETAIL_STRENGTH: f32 = 0.28;
+/// Contrast of the height-aware layer blend. Layers only cross-fade over the
+/// band `contrast` below the locally tallest layer, so smaller values make
+/// gravel/soil/rock boundaries physically crisp instead of linearly translucent.
+pub(crate) const LAYER_HEIGHT_CONTRAST: f32 = 0.08;
 
 /// Identity of one bounded ground layer. The order is the shader's layer index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +226,85 @@ fn layer_albedo_roughness_layers() -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// Seamless micro-height field for one layer, in roughly `[0, 1]`. The normal
+/// map is its gradient and the height texture array samples it directly for
+/// height-aware blending, so both stay consistent by construction.
+fn layer_height_field(descriptor: &LayerDescriptor) -> Vec<f64> {
+    let res = LAYER_TEXTURE_RES as usize;
+    let mut height = vec![0.0f64; res * res];
+    for j in 0..res {
+        for i in 0..res {
+            let u = i as f64 / res as f64;
+            let v = j as f64 / res as f64;
+            height[j * res + i] =
+                0.5 + 0.5 * layer_noise(descriptor.seed, u, v) * descriptor.feature_scale;
+        }
+    }
+    height
+}
+
+/// Build the per-layer height RGBA array: rgb carries the layer micro-height
+/// (replicated for filtering robustness), alpha is opaque. It is sampled at the
+/// same UV as the albedo/normal arrays.
+fn layer_height_layers() -> Vec<Vec<u8>> {
+    let res = LAYER_TEXTURE_RES as usize;
+    GROUND_LAYERS
+        .iter()
+        .map(|descriptor| {
+            let height = layer_height_field(descriptor);
+            let mut data = vec![0u8; res * res * 4];
+            for (index, value) in height.iter().enumerate() {
+                let encoded = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let base = index * 4;
+                data[base] = encoded;
+                data[base + 1] = encoded;
+                data[base + 2] = encoded;
+                data[base + 3] = 255;
+            }
+            data
+        })
+        .collect()
+}
+
+/// Height-aware blend weights (Module 4, section 1.1):
+/// `W_i = max(0, A_i + H_i - M + eps)`, `M = max_j(A_j + H_j) - contrast`,
+/// then normalized. `alpha` must sum to one; `height` is each layer's
+/// micro-height. Layers whose combined score falls more than `contrast` below
+/// the tallest are dropped, so a protruding gravel layer erupts out of soil
+/// instead of blending through it. Pure and deterministic.
+///
+/// This is the Rust reference mirror of `height_aware_weights` in
+/// `assets/shaders/terrain_surface.wgsl`; it is compiled for tests so the blend
+/// law stays pinned independently of the shader.
+#[cfg(test)]
+pub(crate) fn compute_height_aware_weights(
+    alpha: [f32; GROUND_LAYER_COUNT],
+    height: [f32; GROUND_LAYER_COUNT],
+    contrast: f32,
+) -> [f32; GROUND_LAYER_COUNT] {
+    let contrast = contrast.max(0.0);
+    let mut modified = [0.0f32; GROUND_LAYER_COUNT];
+    let mut max_value = f32::NEG_INFINITY;
+    for i in 0..GROUND_LAYER_COUNT {
+        modified[i] = alpha[i] + height[i];
+        max_value = max_value.max(modified[i]);
+    }
+    let threshold = max_value - contrast;
+    let mut sum = 0.0f32;
+    let mut output = [0.0f32; GROUND_LAYER_COUNT];
+    for i in 0..GROUND_LAYER_COUNT {
+        output[i] = (modified[i] - threshold + 1e-5).max(0.0);
+        sum += output[i];
+    }
+    if !sum.is_finite() || sum <= 1e-9 {
+        return alpha;
+    }
+    for value in output.iter_mut() {
+        *value /= sum;
+    }
+    output
+}
+
 /// Build the per-layer tangent-space normal RGBA array: rgb is the encoded
 /// normal, alpha is unused (kept neutral). The normal comes from the gradient of
 /// the same seamless layer height field.
@@ -230,15 +313,7 @@ fn layer_normal_layers() -> Vec<Vec<u8>> {
     GROUND_LAYERS
         .iter()
         .map(|descriptor| {
-            let mut height = vec![0.0f64; res * res];
-            for j in 0..res {
-                for i in 0..res {
-                    let u = i as f64 / res as f64;
-                    let v = j as f64 / res as f64;
-                    height[j * res + i] =
-                        0.5 + 0.5 * layer_noise(descriptor.seed, u, v) * descriptor.feature_scale;
-                }
-            }
+            let height = layer_height_field(descriptor);
             let sample = |i: i64, j: i64| {
                 let i = i.rem_euclid(res as i64) as usize;
                 let j = j.rem_euclid(res as i64) as usize;
@@ -277,6 +352,8 @@ fn layer_normal_layers() -> Vec<Vec<u8>> {
 pub(crate) struct LayerTextureSet {
     pub(crate) albedo_roughness: Image,
     pub(crate) normal: Image,
+    /// Per-layer micro-height (red channel) for height-aware blending.
+    pub(crate) height: Image,
 }
 
 /// Build one 2D texture array from per-layer RGBA8 base levels, concatenating
@@ -320,6 +397,7 @@ pub(crate) fn layer_texture_set() -> LayerTextureSet {
     LayerTextureSet {
         albedo_roughness: layer_array_image(layer_albedo_roughness_layers(), MipFilter::Color),
         normal: layer_array_image(layer_normal_layers(), MipFilter::Normal),
+        height: layer_array_image(layer_height_layers(), MipFilter::Color),
     }
 }
 
@@ -501,6 +579,7 @@ mod tests {
         let second = layer_texture_set();
         assert_eq!(first.albedo_roughness.data, second.albedo_roughness.data);
         assert_eq!(first.normal.data, second.normal.data);
+        assert_eq!(first.height.data, second.height.data);
         assert_eq!(
             first
                 .albedo_roughness
@@ -511,6 +590,10 @@ mod tests {
         );
         assert_eq!(
             first.normal.texture_descriptor.size.depth_or_array_layers,
+            GROUND_LAYER_COUNT as u32
+        );
+        assert_eq!(
+            first.height.texture_descriptor.size.depth_or_array_layers,
             GROUND_LAYER_COUNT as u32
         );
         assert_eq!(first.albedo_roughness.width(), LAYER_TEXTURE_RES);
@@ -639,6 +722,60 @@ mod tests {
             source.height_m(12.0, 34.0),
             before,
             "material generation reads the source only and writes no simulation state"
+        );
+    }
+
+    #[test]
+    fn height_aware_weights_are_normalized_and_bounded() {
+        let alpha = [0.25, 0.25, 0.25, 0.25, 0.0];
+        for heights in [
+            [0.5, 0.5, 0.5, 0.5, 0.5],
+            [0.1, 0.2, 0.3, 0.4, 0.9],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0, 1.0],
+        ] {
+            let weights = compute_height_aware_weights(alpha, heights, LAYER_HEIGHT_CONTRAST);
+            let sum: f32 = weights.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 1e-4,
+                "weights must sum to one, got {sum}"
+            );
+            for weight in weights {
+                assert!(
+                    (0.0..=1.0).contains(&weight),
+                    "weight out of range: {weight}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn height_aware_blend_sharpens_toward_the_tallest_layer() {
+        // Three layers with nearly equal coverage; the third sits one step lower
+        // in micro-height. A tight contrast drops the lower layer entirely, while
+        // a wide contrast keeps it in the mix, so the tallest layer's share is
+        // larger under the tight blend.
+        let alpha = [0.34, 0.33, 0.33, 0.0, 0.0];
+        let heights = [0.6, 0.6, 0.5, 0.0, 0.0];
+        let sharp = compute_height_aware_weights(alpha, heights, 0.02);
+        let soft = compute_height_aware_weights(alpha, heights, 0.5);
+        assert!(
+            sharp[2] < soft[2],
+            "a tighter contrast must drop the recessed layer: {sharp:?} vs {soft:?}"
+        );
+        assert!(
+            sharp[0] > soft[0],
+            "a tighter contrast must give the tallest layer a larger share: {sharp:?} vs {soft:?}"
+        );
+    }
+
+    #[test]
+    fn height_aware_weights_are_deterministic() {
+        let alpha = [0.3, 0.2, 0.25, 0.15, 0.1];
+        let heights = [0.4, 0.6, 0.1, 0.9, 0.2];
+        assert_eq!(
+            compute_height_aware_weights(alpha, heights, LAYER_HEIGHT_CONTRAST),
+            compute_height_aware_weights(alpha, heights, LAYER_HEIGHT_CONTRAST),
         );
     }
 

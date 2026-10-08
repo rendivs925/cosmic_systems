@@ -10,6 +10,7 @@ use self::uploads::{
     enqueue_ready_uploads, PendingTerrainPatchUploads, TerrainPatchRenderIndex,
     TerrainPatchRenderKey,
 };
+use super::mips::{mip_chain_rgba8, MipFilter};
 use crate::domain::services::cube_sphere::{
     face_uv, face_uv_to_direction, CubeFace, PatchGeometry, TerrainPatch,
 };
@@ -24,7 +25,7 @@ use crate::infrastructure::bevy_adapters::rendering::textures::{
 };
 use crate::infrastructure::bevy_adapters::rocket::camera::update_rocket_camera_projection;
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    PrimaryVehicle, RocketPhysicsState,
+    PrimaryVehicle, RocketPhysicsState, RocketPlanetBinding,
 };
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     apply_terrain_imagery, load_earth_imagery_package, stream_terrain_imagery,
@@ -36,7 +37,8 @@ use crate::infrastructure::bevy_adapters::terrain::streaming::{
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
     layer_texture_set, local_detail_weight, terrain_detail_texture, vegetation_atlas,
-    LAYER_NORMAL_STRENGTH, LAYER_TILING_SCALE, NEAR_DETAIL_SCALE, NEAR_DETAIL_STRENGTH,
+    LAYER_HEIGHT_CONTRAST, LAYER_NORMAL_STRENGTH, LAYER_TILING_SCALE, NEAR_DETAIL_SCALE,
+    NEAR_DETAIL_STRENGTH,
 };
 use crate::infrastructure::bevy_adapters::terrain::water::{
     WaterExtension, WaterMaterial, WaterParams, WaterQualityConfig,
@@ -153,6 +155,11 @@ pub(crate) struct TerrainSurfaceExtension {
     #[texture(117)]
     #[sampler(118)]
     layer_weights: Handle<Image>,
+    /// Shared per-layer micro-height texture array; red is the layer's height in
+    /// [0, 1], sampled for height-aware blending.
+    #[texture(119, dimension = "2d_array")]
+    #[sampler(120)]
+    layer_height: Handle<Image>,
     /// One while the layered path is active for this patch, zero for the
     /// single-layer fallback. Evaluated per patch, not per fragment.
     #[uniform(104)]
@@ -173,9 +180,28 @@ pub(crate) struct TerrainSurfaceExtension {
     /// Gain of the near-camera detail overlay, faded by view distance.
     #[uniform(104)]
     near_detail_strength: f32,
+    /// Fractional body-fixed tiling phase of the render origin at the micro
+    /// detail scale. Added to the precise render-relative projection so the
+    /// summed coordinate keeps sub-metre phase across patches.
+    #[uniform(104)]
+    detail_anchor: Vec3,
+    /// Fractional body-fixed phase of the render origin at the near-detail scale.
+    #[uniform(104)]
+    near_detail_anchor: Vec3,
+    /// Fractional body-fixed phase of the render origin at the layer tiling scale.
+    #[uniform(104)]
+    layer_anchor: Vec3,
+    /// Contrast of the height-aware ground-layer blend.
+    #[uniform(104)]
+    layer_height_contrast: f32,
     /// Planet centre in the same rebased inertial metre frame as mesh fragments.
     #[uniform(104)]
     planet_center: Vec3,
+    /// Rotation from the current inertial render frame into the body-fixed
+    /// frame. Ground texture fields are evaluated in body-fixed coordinates so
+    /// they are continuous across patches and pinned to the rotating surface.
+    #[uniform(104)]
+    inertial_to_body: Vec4,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -214,13 +240,19 @@ pub(crate) fn build_terrain_material(
     layer_albedo_roughness: Handle<Image>,
     layer_normal: Handle<Image>,
     layer_weights: Handle<Image>,
+    layer_height: Handle<Image>,
     layer_blend_weight: f32,
     layer_tiling_scale: f32,
     layer_patch_uv_scale: f32,
     layer_normal_strength: f32,
     near_detail_scale: f32,
     near_detail_strength: f32,
+    detail_anchor: Vec3,
+    near_detail_anchor: Vec3,
+    layer_anchor: Vec3,
+    layer_height_contrast: f32,
     planet_center: Vec3,
+    inertial_to_body: Vec4,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -241,15 +273,46 @@ pub(crate) fn build_terrain_material(
             layer_albedo_roughness,
             layer_normal,
             layer_weights,
+            layer_height,
             layer_blend_weight,
             layer_tiling_scale,
             layer_patch_uv_scale,
             layer_normal_strength,
             near_detail_scale,
             near_detail_strength,
+            detail_anchor,
+            near_detail_anchor,
+            layer_anchor,
+            layer_height_contrast,
             planet_center,
+            inertial_to_body,
         },
     }
+}
+
+/// Fractional body-fixed tiling phase of the render origin at `scale`, per axis.
+///
+/// The fragment reconstructs `body_local = R * world_position` from the
+/// render-relative position (small, precise). The absolute body-fixed tiling
+/// phase is `R * render_origin`, which is planet-scale and cannot be represented
+/// in f32 without sub-metre error. Passing only its fractional part lets the
+/// shader add the anchor after the precise projection, keeping cross-patch
+/// continuity and metre/sub-metre detail at the same time.
+pub(crate) fn body_texture_anchor(
+    render_origin_m: DVec3,
+    body_to_inertial: DQuat,
+    scale: f64,
+) -> Vec3 {
+    let body_origin = body_to_inertial.inverse() * render_origin_m;
+    let fractional = |value: f64| {
+        let scaled = value * scale;
+        (scaled - scaled.floor()) as f32
+    };
+    Vec3::new(
+        fractional(body_origin.x),
+        fractional(body_origin.y),
+        fractional(body_origin.z),
+    )
 }
 /// Layered-material inputs for one patch, preserved so an imagery upgrade can
 /// rebuild the shared material without re-deriving layer state.
@@ -259,6 +322,8 @@ pub(crate) struct LayerMaterialState {
     pub(crate) albedo_roughness: Handle<Image>,
     /// Shared per-layer normal array (never released per patch).
     pub(crate) normal: Handle<Image>,
+    /// Shared per-layer height array (never released per patch).
+    pub(crate) height: Handle<Image>,
     /// Per-patch layer-weight map, or the shared neutral placeholder.
     pub(crate) weights: Handle<Image>,
     /// One while the layered path is active, zero for the single-layer fallback.
@@ -277,6 +342,7 @@ impl Default for LayerMaterialState {
         Self {
             albedo_roughness: Handle::default(),
             normal: Handle::default(),
+            height: Handle::default(),
             weights: Handle::default(),
             blend_weight: 0.0,
             tiling_scale: 1.0,
@@ -372,6 +438,8 @@ struct TerrainRenderAssets {
     layer_albedo_roughness: Option<Handle<Image>>,
     /// Shared per-layer tangent-space normal texture array.
     layer_normal: Option<Handle<Image>>,
+    /// Shared per-layer micro-height texture array for height-aware blending.
+    layer_height: Option<Handle<Image>>,
     /// One shared neutral layer-weight map so coarse patches and the single-layer
     /// fallback never allocate a per-patch image.
     neutral_layer_weights: Option<Handle<Image>>,
@@ -540,6 +608,7 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainImageryResource>()
             .init_resource::<TerrainOcclusionConfig>()
             .init_resource::<WaterQualityConfig>()
+            .init_resource::<TerrainMaterialFrame>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_message::<TerrainPatchReady>()
@@ -654,6 +723,7 @@ fn prepare_terrain_render_assets(
     let layer_set = layer_texture_set();
     render_assets.layer_albedo_roughness = Some(images.add(layer_set.albedo_roughness));
     render_assets.layer_normal = Some(images.add(layer_set.normal));
+    render_assets.layer_height = Some(images.add(layer_set.height));
     ensure_neutral_layer_weights(&mut render_assets, &mut images);
     // One alpha-masked foliage material is shared by every patch. It is created
     // once here so no patch spawn path needs the image assets.
@@ -709,28 +779,110 @@ fn water_base_material(refraction: bool) -> StandardMaterial {
     }
 }
 
-/// Advance the shared water wave phase. Presentation only; never read by the
-/// simulation, terrain source, or collision.
-fn update_water_material(time: Res<Time>, mut water_materials: ResMut<Assets<WaterMaterial>>) {
+/// Advance the shared water wave phase and keep every water material bound to
+/// the current render origin. Presentation only; never read by the simulation,
+/// terrain source, or collision. The origin is refreshed here rather than in a
+/// change-detected system so materials created after a recentre are correct on
+/// their first frame, and it costs nothing extra because the clock already marks
+/// the uniform dirty each frame.
+fn update_water_material(
+    time: Res<Time>,
+    render_origin: Res<RenderOrigin>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
+) {
     let elapsed_s = time.elapsed_secs();
+    let planet_center = (-render_origin.origin).as_vec3();
     // Every water material (shared and per-patch) advances the same presentation
     // clock, so a shared wave field stays coherent across all caps.
     for (_, material) in water_materials.iter_mut() {
         material.extension.params.time_s = elapsed_s;
+        material.extension.params.planet_center = planet_center;
     }
 }
 
-/// Rebasing changes only the render-frame centre, not physical terrain data.
+/// The complete set of shader-relevant values written into every terrain
+/// material. Every field is derived from authoritative state (f64 render origin
+/// and body rotation), including the fractional anchors, so equality of all
+/// fields is the correct invalidation test. Comparing only a reduced f32
+/// projection of the origin/rotation could skip a required anchor update.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct TerrainMaterialFrameValue {
+    planet_center: Vec3,
+    inertial_to_body: Vec4,
+    detail_anchor: Vec3,
+    near_detail_anchor: Vec3,
+    layer_anchor: Vec3,
+}
+
+/// Last presentation frame written to every terrain material. The body
+/// orientation changes every frame in principle, but the full derived frame is
+/// often bit-identical between frames at 1x time, so comparing the anchors
+/// against this bound cache avoids re-extracting every material when nothing
+/// visible changed.
+#[derive(Resource, Default)]
+struct TerrainMaterialFrame {
+    last: Option<TerrainMaterialFrameValue>,
+}
+
+/// Keep every terrain material's presentation frame current: the rebased planet
+/// centre, the inertial-to-body rotation used to anchor ground textures to the
+/// rotating surface, and the fractional tiling anchors that restore precise
+/// body-fixed detail phase. Rebasing changes the centre, and time acceleration
+/// changes the rotation; both are detected against the last written frame so a
+/// stationary 1x scene does not re-upload every material each frame.
 fn update_terrain_material_origin(
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
     render_origin: Res<RenderOrigin>,
+    rocket_query: Query<&RocketPlanetBinding, PrimaryVehicle>,
+    planet_query: Query<&PlanetComponent>,
+    mut frame: ResMut<TerrainMaterialFrame>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
-    if !render_origin.is_changed() {
+    let Some(binding) = rocket_query.iter().next() else {
+        return;
+    };
+    let Some(planet) = planet_query
+        .iter()
+        .find(|planet| planet.matches_body(&binding.planet_name))
+    else {
+        return;
+    };
+    let Some(orientation) =
+        ephemeris_snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
+    else {
+        return;
+    };
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+    let value = TerrainMaterialFrameValue {
+        planet_center: (-render_origin.origin).as_vec3(),
+        inertial_to_body: Vec4::from_array(body_to_inertial.inverse().as_quat().to_array()),
+        detail_anchor: body_texture_anchor(
+            render_origin.origin,
+            body_to_inertial,
+            f64::from(TERRAIN_DETAIL_SCALE),
+        ),
+        near_detail_anchor: body_texture_anchor(
+            render_origin.origin,
+            body_to_inertial,
+            f64::from(NEAR_DETAIL_SCALE),
+        ),
+        layer_anchor: body_texture_anchor(
+            render_origin.origin,
+            body_to_inertial,
+            f64::from(LAYER_TILING_SCALE),
+        ),
+    };
+    if frame.last == Some(value) {
         return;
     }
     for (_, material) in materials.iter_mut() {
-        material.extension.planet_center = (-render_origin.origin).as_vec3();
+        material.extension.planet_center = value.planet_center;
+        material.extension.inertial_to_body = value.inertial_to_body;
+        material.extension.detail_anchor = value.detail_anchor;
+        material.extension.near_detail_anchor = value.near_detail_anchor;
+        material.extension.layer_anchor = value.layer_anchor;
     }
+    frame.last = Some(value);
 }
 
 fn ensure_neutral_local_surface_maps(
@@ -775,6 +927,7 @@ fn build_layer_material_state(
         .clone()
         .unwrap_or_default();
     let normal = render_assets.layer_normal.clone().unwrap_or_default();
+    let height = render_assets.layer_height.clone().unwrap_or_default();
     let (weights, weights_owned, blend_weight) = match patch_layer_weights {
         Some(image) => (images.add(image), true, 1.0),
         None => (
@@ -786,6 +939,7 @@ fn build_layer_material_state(
     LayerMaterialState {
         albedo_roughness,
         normal,
+        height,
         weights,
         blend_weight,
         tiling_scale: LAYER_TILING_SCALE,
@@ -1018,13 +1172,31 @@ fn spawn_patch_mesh_system(
             layer.albedo_roughness.clone(),
             layer.normal.clone(),
             layer.weights.clone(),
+            layer.height.clone(),
             layer.blend_weight,
             layer.tiling_scale,
             layer.patch_uv_scale,
             layer.normal_strength,
             layer.near_detail_scale,
             layer.near_detail_strength,
+            body_texture_anchor(
+                render_origin.origin,
+                body_to_inertial,
+                f64::from(TERRAIN_DETAIL_SCALE),
+            ),
+            body_texture_anchor(
+                render_origin.origin,
+                body_to_inertial,
+                f64::from(NEAR_DETAIL_SCALE),
+            ),
+            body_texture_anchor(
+                render_origin.origin,
+                body_to_inertial,
+                f64::from(LAYER_TILING_SCALE),
+            ),
+            LAYER_HEIGHT_CONTRAST,
             (-render_origin.origin).as_vec3(),
+            Vec4::from_array(body_to_inertial.inverse().as_quat().to_array()),
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -2095,7 +2267,10 @@ fn bake_terrain_occlusion(
 /// asset once extraction has released the CPU copy.
 fn terrain_occlusion_image(resolution: u32, values: &[f32]) -> Image {
     let res = resolution.max(1) as usize;
-    let mut data = vec![0u8; res * res * 2];
+    // Store self-shadow/sky-occlusion in a mipmapped RGBA8 map. Without a mip
+    // chain, minifying the per-patch map (distance, grazing angles) aliases the
+    // baked shadow into shimmering "vibrating" shadows across the terrain.
+    let mut base = vec![0u8; res * res * 4];
     for index in 0..res * res {
         let self_shadow = values
             .get(index * 2)
@@ -2107,23 +2282,28 @@ fn terrain_occlusion_image(resolution: u32, values: &[f32]) -> Image {
             .copied()
             .unwrap_or(1.0)
             .clamp(0.0, 1.0);
-        data[index * 2] = (self_shadow * 255.0).round() as u8;
-        data[index * 2 + 1] = (sky_occlusion * 255.0).round() as u8;
+        base[index * 4] = (self_shadow * 255.0).round() as u8;
+        base[index * 4 + 1] = (sky_occlusion * 255.0).round() as u8;
+        base[index * 4 + 2] = 0;
+        base[index * 4 + 3] = 255;
     }
-    let mut image = Image::new(
+    let (data, levels) = mip_chain_rgba8(res as u32, res as u32, &base, MipFilter::Color);
+    let mut image = Image::new_uninit(
         Extent3d {
             width: res as u32,
             height: res as u32,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        data,
-        TextureFormat::Rg8Unorm,
+        TextureFormat::Rgba8Unorm,
         RenderAssetUsages::default(),
     );
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = levels;
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
         address_mode_u: ImageAddressMode::ClampToEdge,
         address_mode_v: ImageAddressMode::ClampToEdge,
         ..Default::default()
@@ -2139,8 +2319,8 @@ fn neutral_occlusion_image_value() -> Image {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        vec![255, 255],
-        TextureFormat::Rg8Unorm,
+        vec![255, 255, 0, 255],
+        TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     )
 }
@@ -2341,6 +2521,91 @@ mod tests {
     };
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn body_texture_anchor_reconstructs_the_absolute_phase_precisely() {
+        // A planet-scale render origin cannot be represented in f32 without
+        // sub-metre error. The anchor must carry the fractional phase so that
+        // `anchor + precise_local * scale` equals the absolute body-fixed phase.
+        let scale = f64::from(NEAR_DETAIL_SCALE);
+        let body_to_inertial = DQuat::from_rotation_y(0.9) * DQuat::from_rotation_x(0.3);
+        let origin = DVec3::new(4_000_000.0, 1_500_000.0, -4_500_000.0);
+        let fragment = DVec3::new(120.0, -45.0, 80.0);
+        let anchor = body_texture_anchor(origin, body_to_inertial, scale);
+        let local = (body_to_inertial.inverse() * fragment).as_vec3();
+        let absolute = body_to_inertial.inverse() * (origin + fragment);
+        let frac = |value: f64| (value * scale).rem_euclid(1.0);
+        let expected = [frac(absolute.x), frac(absolute.y), frac(absolute.z)];
+        for axis in 0..3 {
+            let reconstructed = f64::from(anchor[axis]) + f64::from(local[axis]) * scale;
+            let error = (reconstructed - expected[axis]).rem_euclid(1.0);
+            assert!(
+                error < 1e-3 || error > 1.0 - 1e-3,
+                "axis {axis}: reconstructed {reconstructed} vs expected {}",
+                expected[axis]
+            );
+        }
+    }
+
+    #[test]
+    fn material_frame_invalidates_on_anchor_change_only() {
+        let base = TerrainMaterialFrameValue {
+            planet_center: Vec3::new(1.0, 2.0, 3.0),
+            inertial_to_body: Vec4::new(0.0, 0.0, 0.0, 1.0),
+            detail_anchor: Vec3::new(0.1, 0.2, 0.3),
+            near_detail_anchor: Vec3::new(0.4, 0.5, 0.6),
+            layer_anchor: Vec3::new(0.7, 0.8, 0.9),
+        };
+        // Unchanged frame is a cache hit.
+        assert_eq!(base, base);
+        // An anchor-only change (e.g. from f64 rotation drift) must invalidate.
+        let mut anchor_changed = base;
+        anchor_changed.layer_anchor.x += 1e-6;
+        assert_ne!(base, anchor_changed);
+        // A rotation-only change must invalidate too.
+        let mut rotation_changed = base;
+        rotation_changed.inertial_to_body.y += 1e-6;
+        assert_ne!(base, rotation_changed);
+    }
+
+    /// The per-axis anchor plus the render-relative body coordinate must recover
+    /// the same body-fixed phase for a fixed ground point regardless of origin
+    /// rebasing or planetary rotation. The integer part of the absolute scaled
+    /// coordinate cancels under texture wrapping, so coordinate blending of the
+    /// axes stays invariant.
+    #[test]
+    fn body_texture_phase_is_invariant_under_rebase_and_rotation() {
+        let scale = f64::from(LAYER_TILING_SCALE);
+        let ground_body = DVec3::new(3_111_234.5, -2_004_500.25, 4_512_999.75);
+        let vehicle_offset = DVec3::new(120.0, -45.0, 80.0);
+        let expected: [f64; 3] =
+            std::array::from_fn(|axis| (ground_body[axis] * scale).rem_euclid(1.0));
+        for rotation in [
+            DQuat::IDENTITY,
+            DQuat::from_rotation_y(0.9) * DQuat::from_rotation_x(0.3),
+            DQuat::from_rotation_z(2.1),
+        ] {
+            let ground_inertial = rotation * ground_body;
+            for offset in [
+                vehicle_offset,
+                vehicle_offset + DVec3::new(500.0, 0.0, 0.0),
+                vehicle_offset - DVec3::new(0.0, 700.0, 0.0),
+            ] {
+                let render_origin = rotation * (ground_body + offset);
+                let local = rotation.inverse() * (ground_inertial - render_origin);
+                let anchor = body_texture_anchor(render_origin, rotation, scale).as_dvec3();
+                for axis in 0..3 {
+                    let phase = (local[axis] * scale + anchor[axis]).rem_euclid(1.0);
+                    let error = (phase - expected[axis]).rem_euclid(1.0);
+                    assert!(
+                        error < 1e-3 || error > 1.0 - 1e-3,
+                        "axis {axis}: phase {phase} vs expected {}",
+                        expected[axis]
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn rotating_terrain_refreshes_shadows_under_a_fixed_inertial_sun() {

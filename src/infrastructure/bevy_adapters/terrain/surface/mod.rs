@@ -28,8 +28,8 @@ pub use surface_maps::build_patch_surfaces;
 use surface_maps::SURFACE_TEX_RES;
 
 pub(crate) use layers::{
-    build_layer_weight_map, layer_texture_set, LAYER_NORMAL_STRENGTH, LAYER_TILING_SCALE,
-    NEAR_DETAIL_SCALE, NEAR_DETAIL_STRENGTH,
+    build_layer_weight_map, layer_texture_set, LAYER_HEIGHT_CONTRAST, LAYER_NORMAL_STRENGTH,
+    LAYER_TILING_SCALE, NEAR_DETAIL_SCALE, NEAR_DETAIL_STRENGTH,
 };
 
 use super::mips::{mip_chain_rgba8, MipFilter};
@@ -124,7 +124,14 @@ pub(crate) fn max_river_mesh_bytes(resolution: u32) -> u64 {
 }
 /// Vegetation is deferred until close-range geometry is available; coarser
 /// patches retain the global geographic albedo and scalar surface properties.
-pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 12;
+/// Trees persist one LOD ring coarser than ground cover and rocks so zooming out
+/// does not abruptly remove all recognisable vegetation.
+pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 11;
+
+/// Ground cover (grass) and small rocks are only placed on close patches. They
+/// are too small to resolve further out, so they use a tighter level gate than
+/// trees and never inflate a coarse patch's mesh budget.
+pub(crate) const VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL: u32 = 12;
 
 /// Local albedo/normal maps begin one level coarser than vegetation. A patch's
 /// detail then fades in over three LOD rings instead of appearing on a single
@@ -153,9 +160,9 @@ pub(crate) fn local_detail_weight(patch_level: u32) -> f32 {
 pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 =
     SURFACE_TEX_RES as u64 * SURFACE_TEX_RES as u64 * 8 * 4 / 3;
 
-/// Conservative maximum allocation for one merged vegetation mesh. Streaming
-/// reserves it for close patches before worker generation knows their biome.
-pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
+/// Conservative mesh bytes for `tree_count` merged canopy trees. Shared by the
+/// full-density and coarse-only budgets so the two can never drift apart.
+const fn tree_vegetation_mesh_bytes(tree_count: usize) -> u64 {
     let tree_vertices = 2 * (TRUNK_SEGMENTS + 1)
         + BRANCH_MAX_COUNT * BRANCH_RINGS * (BRANCH_SEGMENTS + 1)
         + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 4
@@ -164,16 +171,33 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
         + BRANCH_MAX_COUNT * (BRANCH_RINGS - 1) * BRANCH_SEGMENTS * 6
         + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 6
         + BRANCH_MAX_COUNT * BRANCH_CANOPY_CARD_PLANES * 6;
+    tree_count as u64
+        * (tree_vertices as u64 * VEGETATION_BYTES_PER_VERTEX
+            + tree_indices as u64 * VEGETATION_BYTES_PER_INDEX)
+}
+
+/// Conservative maximum allocation for one full-density merged vegetation mesh.
+/// Streaming reserves it for close patches before worker generation knows their
+/// biome.
+pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
     let boulder_vertices = (ROCK_RINGS + 1) * ROCK_SEGMENTS;
     let boulder_indices = ROCK_RINGS * ROCK_SEGMENTS * 6;
     let rock_vertices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_vertices;
     let rock_indices = ROCK_COUNT * ROCK_MAX_LUMPS * boulder_indices;
     let grass_vertices = GRASS_CARD_PLANES * 4;
     let grass_indices = GRASS_CARD_PLANES * 6;
-    let vertices = TREE_COUNT * tree_vertices + rock_vertices + GRASS_CLUMP_COUNT * grass_vertices;
-    let indices = TREE_COUNT * tree_indices + rock_indices + GRASS_CLUMP_COUNT * grass_indices;
-    vertices as u64 * VEGETATION_BYTES_PER_VERTEX + indices as u64 * VEGETATION_BYTES_PER_INDEX
+    let vertices = rock_vertices + GRASS_CLUMP_COUNT * grass_vertices;
+    let indices = rock_indices + GRASS_CLUMP_COUNT * grass_indices;
+    tree_vegetation_mesh_bytes(TREE_COUNT)
+        + vertices as u64 * VEGETATION_BYTES_PER_VERTEX
+        + indices as u64 * VEGETATION_BYTES_PER_INDEX
 };
+
+/// Conservative maximum allocation for one coarse, tree-only vegetation mesh.
+/// Coarse patches build no rocks or ground cover, so only the capped trees are
+/// reserved. Keeps coarse vegetation inside the accounted streaming budget.
+pub(crate) const MAX_COARSE_VEGETATION_MESH_BYTES: u64 =
+    tree_vegetation_mesh_bytes(scatter::COARSE_TREE_BUDGET_CAP);
 
 pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
     patch_level >= VEGETATION_MIN_PATCH_LEVEL
@@ -541,7 +565,7 @@ pub(crate) fn prepare_patch_surface(
 mod tests {
     use super::scatter::{
         plan_rock_bodies, rock_acceptance_probability, rock_candidates, scatter_count_for_level,
-        MeshAccum, RockBody,
+        tree_budget_for_level, MeshAccum, RockBody, COARSE_TREE_BUDGET_CAP,
     };
     use super::surface_maps::{
         mesh_surface_frame, papua_tropical_profile, terrain_albedo, SURFACE_TEX_RES,
@@ -1312,12 +1336,24 @@ mod tests {
     }
 
     #[test]
+    fn coarse_tree_budget_is_bounded_and_nonzero() {
+        // Coarse tree-only patches keep trees (no hard drop to zero) but within
+        // a tighter cap than full-density patches, at true physical size.
+        let coarse = tree_budget_for_level(VEGETATION_MIN_PATCH_LEVEL);
+        assert!(coarse > 0 && coarse <= COARSE_TREE_BUDGET_CAP);
+        let full = tree_budget_for_level(VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL);
+        assert!(full >= coarse);
+    }
+
+    #[test]
     fn local_surface_maps_are_restricted_to_close_range_patches() {
         assert!(!supports_local_surfaces(LOCAL_SURFACE_MIN_PATCH_LEVEL - 1));
         assert!(supports_local_surfaces(LOCAL_SURFACE_MIN_PATCH_LEVEL));
-        // Vegetation still starts one level finer than local maps.
-        assert!(!supports_vegetation(LOCAL_SURFACE_MIN_PATCH_LEVEL));
-        assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
+        // Trees persist one level coarser than ground cover, so zooming out
+        // keeps recognisable vegetation instead of dropping it abruptly.
+        const { assert!(VEGETATION_MIN_PATCH_LEVEL <= LOCAL_SURFACE_MIN_PATCH_LEVEL) };
+        const { assert!(VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL == LOCAL_SURFACE_MIN_PATCH_LEVEL + 1) };
+        assert!(supports_vegetation(VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL));
     }
 
     #[test]
@@ -1363,24 +1399,18 @@ mod tests {
 
     #[test]
     fn scatter_reaches_local_density_without_exceeding_patch_caps() {
+        // Coarse patches keep the full tree budget (area density falls, but
+        // trees never vanish), and only over-coarse levels shrink by area.
+        for level in 11..=14 {
+            assert_eq!(
+                scatter_count_for_level(TREE_COUNT, level),
+                128,
+                "level {level} must keep the full tree budget"
+            );
+        }
+        assert_eq!(scatter_count_for_level(TREE_COUNT, 15), 32);
         assert_eq!(
-            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL),
-            128
-        );
-        assert_eq!(
-            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 1),
-            128
-        );
-        assert_eq!(
-            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 2),
-            128
-        );
-        assert_eq!(
-            scatter_count_for_level(TREE_COUNT, VEGETATION_MIN_PATCH_LEVEL + 3),
-            32
-        );
-        assert_eq!(
-            scatter_count_for_level(ROCK_COUNT, VEGETATION_MIN_PATCH_LEVEL + 2),
+            scatter_count_for_level(ROCK_COUNT, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL),
             28
         );
     }
