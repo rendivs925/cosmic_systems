@@ -204,8 +204,28 @@ in `earth_erosion_config` and re-measuring with vsync off:
 Disabling ~90% of worker CPU did **not** lower the frame time, so worker
 contention is not the frame-pacing bottleneck.
 
-The frame time is, however, strongly **resolution-dependent**, which rules out a
-pure present/pacing explanation. Re-measured with vsync off after settling:
+Logging **all** instrumented GPU passes (temporarily raising the telemetry cap
+from 5 to 64) after settling, vsync off, 1280x720:
+
+| GPU pass | ms |
+| --- | --- |
+| main_opaque_pass_3d | 1.92 |
+| bloom | 0.25 |
+| main_transparent_pass_3d | 0.17 |
+| shadow cascade 2 | 0.11 |
+| shadow cascade 3 | 0.09 |
+| tonemapping | 0.07 |
+| shadow cascades 0/1 | 0.07 |
+| upscaling | 0.04 |
+| early/late mesh preprocessing | 0.05 |
+| ui + 2d passes | 0.04 |
+| **sum of instrumented passes** | **~2.8 ms** |
+
+So the simulator's own rendering is ~2.8 ms/frame. The remaining ~15-19 ms is
+not in any instrumented pass.
+
+The frame time is strongly **resolution-dependent**, which rules out a pure
+present/pacing explanation. Re-measured with vsync off after settling:
 
 | Window size (no vsync) | steady p50 |
 | --- | --- |
@@ -219,20 +239,23 @@ scaling, the ~18.5 ms frame is dominated by a resolution-dependent **GPU
 render/present path**, not by CPU simulation and not purely by vblank pacing.
 The environment is a hybrid laptop: the NVIDIA dGPU renders while the panel is
 driven by the AMD iGPU, so the frame is also copied across GPUs before display.
+The `desired_maximum_frame_latency` setting is not the lever: lowering it from 2
+to 1 changed the no-vsync steady p50 only from 21.8 to 21.1 ms (within noise).
 
-**Corrected conclusion:** the frame cost is GPU/present-path bound and scales
-with pixels; the earlier claim that it is purely "present/swapchain pacing" was
-an overstatement, and the "2.5 ms GPU" figure only covered instrumented passes.
-No terrain/erosion optimization is justified by the profile; reducing GPU pixel
-work (shading/shadows/upscale) is the lever, and that is out of scope here.
+**Corrected conclusion:** the simulator's own rendering is only ~2.8 ms/frame;
+the frame cost is dominated by an un-instrumented, resolution-dependent
+present/copy path. The earlier claims that it is purely "present/swapchain
+pacing" and that the GPU costs ~2.5 ms were both overstatements. Neither CPU
+simulation nor the instrumented render passes explain the ~15-19 ms; no
+terrain/erosion/GPU-shader optimization is justified by this profile.
 
 ## Remaining issues
 
-- The ~18.5 ms frame is GPU/present-path bound and resolution-dependent on a
-  hybrid AMD-iGPU + NVIDIA-dGPU display path. It needs per-pass GPU timing and
-  present tracing to attribute, and the fix is likely reducing GPU pixel work,
-  not CPU simulation. No terrain/erosion optimization is justified by the
-  profile.
+- The ~15-23 ms frame is dominated by an un-instrumented, resolution-dependent
+  present/copy path on a hybrid AMD-iGPU + NVIDIA-dGPU display. Instrumented
+  render passes total only ~2.8 ms and CPU simulation is small, so the next step
+  is GPU/swapchain present tracing (Vulkan present timing, PRIME copy path) and
+  running on a display wired to the rendering GPU, not a simulator change.
 - Far-field vegetation continuity is only bounded, not truly solved: the level-11
   coarse tier keeps a small, physically sized tree presence so cover does not drop
   to zero, but density at level 11 is far below level 12. A real impostor /
