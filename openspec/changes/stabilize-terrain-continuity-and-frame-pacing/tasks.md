@@ -27,7 +27,7 @@
 
 - [x] 5.1 Re-baseline release with fixed camera/epoch/resolution/quality against a recoverable pre-repair state, separate startup from settled residency
 - [x] 5.2 Profile CPU extraction/preparation, worker contention, all GPU passes, and resident asset growth
-- [x] 5.3 Apply the smallest profile-supported fix; re-measure the same scenario (profile showed the floor is present/swapchain pacing, not CPU/GPU simulator work; disabling 90% of worker CPU did not change frame time, so no terrain fix was justified)
+- [x] 5.3 Apply the smallest profile-supported fix; re-measure the same scenario (disabling 90% of worker CPU did not change frame time; frame cost is resolution-dependent, so it is GPU/present-path bound, not CPU simulation. No terrain/erosion fix was justified; reducing GPU pixel work is the lever and is out of scope.)
 - [x] 5.4 Record measured before/after and remaining bottlenecks in `docs/ground_tower_vegetation_repair.md`
 
 ## 6. Validation

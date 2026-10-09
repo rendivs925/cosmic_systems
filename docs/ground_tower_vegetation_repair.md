@@ -172,8 +172,10 @@ quantization and gives the true frame cost:
 | no vsync | **18.5 ms** (min 15.2, max 19.9) |
 
 So the ~30 ms is vsync quantization: the true frame cost is ~18.5 ms, just over
-the 16.6 ms 60 Hz budget, and any frame that overruns a vblank is doubled to
-~33 ms. An opt-in `COSMIC_SYSTEMS_PRESENT_MODE=none` switch was added to
+the 16.6 ms budget, and any frame that overruns a vblank is doubled to ~33 ms.
+Note the panel reports 240 Hz (`xrandr`), yet the observed quantization behaves
+like ~60 Hz, which is itself consistent with the cross-GPU present path capping
+delivery. An opt-in `COSMIC_SYSTEMS_PRESENT_MODE=none` switch was added to
 `main.rs` for this measurement; the default remains vsync.
 
 ### CPU/GPU profile of the ~18.5 ms floor
@@ -183,9 +185,12 @@ the 16.6 ms 60 Hz budget, and any frame that overruns a vblank is doubled to
 - ~57% of CPU on the `AsyncComputeTaskPool` and ~32% on `ComputeTaskPool`,
   dominated by terrain generation — `erosion::simulate::steepest_downhill_with_spacing`
   alone is ~29%, with hydraulic/thermal erosion, D8 flow accumulation, and
-  `DemTerrainSource` sampling close behind.
-- The main thread uses only ~8.5% CPU (idle/waiting).
-- The five logged GPU passes total ~2.5 ms.
+  `DemTerrainSource` sampling close behind. This is the *startup* streaming burst.
+- Reading `/proc/<pid>/task/*` after the scene settles shows the distribution is
+  very different once terrain stops streaming: the busiest thread is the render
+  thread (~23% CPU), then the main thread (~14%), with the worker pools low.
+- The five logged GPU passes total ~2.5 ms, but **that is only the instrumented
+  passes**, not the full GPU frame (see below).
 
 The obvious hypothesis — that the saturated erosion workers stall the frame —
 was tested directly by temporarily setting `droplets: 0, thermal_iterations: 0`
@@ -197,18 +202,37 @@ in `earth_erosion_config` and re-measuring with vsync off:
 | Erosion disabled | 21.7 ms |
 
 Disabling ~90% of worker CPU did **not** lower the frame time, so worker
-contention is not the frame-pacing bottleneck. With the main thread idle, GPU
-passes at ~2.5 ms, and worker load irrelevant, the ~18.5 ms floor is in the
-present/swapchain/driver pacing path, not in simulator CPU or GPU work. There is
-therefore no profile-supported terrain/erosion optimization to apply; the lever
-for a stable 60 Hz is presentation pacing, which is out of scope for this change.
+contention is not the frame-pacing bottleneck.
+
+The frame time is, however, strongly **resolution-dependent**, which rules out a
+pure present/pacing explanation. Re-measured with vsync off after settling:
+
+| Window size (no vsync) | steady p50 |
+| --- | --- |
+| 640x360 | 15.3 ms |
+| 1280x720 | 21.8 ms |
+| 1920x1080 | 23.5 ms |
+
+`nvidia-smi` reports ~55-66% GPU utilization at ~50 W and 1380-1455 MHz while
+this runs — the GPU is active but not saturated. Combined with the resolution
+scaling, the ~18.5 ms frame is dominated by a resolution-dependent **GPU
+render/present path**, not by CPU simulation and not purely by vblank pacing.
+The environment is a hybrid laptop: the NVIDIA dGPU renders while the panel is
+driven by the AMD iGPU, so the frame is also copied across GPUs before display.
+
+**Corrected conclusion:** the frame cost is GPU/present-path bound and scales
+with pixels; the earlier claim that it is purely "present/swapchain pacing" was
+an overstatement, and the "2.5 ms GPU" figure only covered instrumented passes.
+No terrain/erosion optimization is justified by the profile; reducing GPU pixel
+work (shading/shadows/upscale) is the lever, and that is out of scope here.
 
 ## Remaining issues
 
-- The ~18.5 ms frame floor is not CPU- or GPU-simulator work (profiled and
-  tested above); it needs GPU/swapchain present tracing (e.g. Vulkan present
-  timing / GPUView-equivalent) to attribute. No terrain/erosion optimization is
-  justified by the profile.
+- The ~18.5 ms frame is GPU/present-path bound and resolution-dependent on a
+  hybrid AMD-iGPU + NVIDIA-dGPU display path. It needs per-pass GPU timing and
+  present tracing to attribute, and the fix is likely reducing GPU pixel work,
+  not CPU simulation. No terrain/erosion optimization is justified by the
+  profile.
 - Far-field vegetation continuity is only bounded, not truly solved: the level-11
   coarse tier keeps a small, physically sized tree presence so cover does not drop
   to zero, but density at level 11 is far below level 12. A real impostor /
