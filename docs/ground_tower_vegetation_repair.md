@@ -66,6 +66,24 @@ specification.
   per-axis integer phase cancels under texture wrapping, so the body-fixed phase
   is invariant under origin rebase and planetary rotation.
 
+#### Ground-seam A/B
+
+The base-composition change was validated by a controlled A/B with the release
+binary and no rebuild: shaders are loaded at runtime, so only the four
+base-composition lines in `terrain_surface.wgsl` were swapped between runs while
+the new bindings/uniform layout were kept intact. Both runs used the same
+prelaunch chase camera (fixed rocket state, same epoch, vsync off) and were
+captured with the in-app F12 path.
+
+- **Old behaviour** (`layered_base = mix(detail_albedo, layered_albedo, layer_fade)`):
+  the mid-distance ground shows straight, rectangular patch-shaped colour steps
+  where a patch's layer albedo replaces the continuous geographic base.
+- **Current behaviour** (unit-luminance tint): the same ground blends smoothly;
+  only grain changes, with no rectangular base-colour boundary.
+
+This is the direct visual confirmation that the rectangular ground discontinuity
+is fixed. The shader file was restored afterwards; no shader change was committed.
+
 ### Launch tower (`application/launch_tower.rs`, `application/rocket_spawning.rs`)
 
 - New Bevy-free geometry module with explicit member endpoints. Perimeter rings
@@ -262,9 +280,8 @@ terrain/erosion/GPU-shader optimization is justified by this profile.
   billboard representation is the correct long-term fix and is out of scope here.
   A global body-fixed candidate lattice would give stable cross-LOD identity but
   iterating it at fine patch resolution is not affordable.
-- Visual confirmation of the marked ground seam and the zoom transition used the
-  available display but could not reproduce the exact source camera pose; the
-  high-level captures look continuous. A matched-camera A/B remains to be done.
+- The ground-seam fix is now confirmed by a controlled A/B at a matched prelaunch
+  camera (see "Ground-seam A/B" below); no matched-camera follow-up remains.
 - Tower spawned meshes are covered by an integration test
   (`spawned_tower_members_attach_to_columns_or_platforms`) that expands each
   spawned brace/diagonal from its transform and asserts its endpoints land on a
