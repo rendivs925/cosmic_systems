@@ -118,6 +118,17 @@ specification.
   planetary rotation.
 - `rocket::camera`: cleared camera pose round-trips through the reference frame
   and re-clearing is idempotent.
+- `rocket::camera::camera_clearance_survives_patch_replacement_and_refinement`:
+  walks a fine-to-coarse patch replacement sequence and asserts the camera always
+  clears the finest resident patch, that adding finer relief never lowers it, and
+  that a hole (no resident patch) never moves the camera or generates terrain.
+- `rocket::camera::camera_clearance_is_invariant_under_origin_rebase`: the same
+  physical camera point clears identically after a large render-origin rebase.
+- `rocket::camera::update_rocket_camera_keeps_clearance_through_mode_transitions`:
+  drives the real `update_rocket_camera` system with the rocket, camera, and
+  origin below the streamed surface, then steps through Chase → Orbital → Free
+  transitions and asserts the cleared pose holds every frame. Mutation-checked:
+  disabling the clearance call makes it fail.
 
 ## Measured results
 
@@ -210,7 +221,18 @@ for a stable 60 Hz is presentation pacing, which is out of scope for this change
 - Tower spawned meshes are covered by an integration test
   (`spawned_tower_members_attach_to_columns_or_platforms`) that expands each
   spawned brace/diagonal from its transform and asserts its endpoints land on a
-  spawned column or platform. Camera/shadow temporal validation is still not
-  automated.
-- Shadow stability was not demonstrated; only the camera-clearance defect was
-  directly corrected.
+  spawned column or platform.
+- Camera clearance is now automated across patch replacement, origin rebase, and
+  mode transitions (tests above, mutation-verified). Rendered stationary and
+  camera-transition sequences were captured with the in-app F12 framebuffer
+  screenshot path (`COSMIC_SYSTEMS_PRESENT_MODE=none`, 1280x720, release, rocket
+  mode) and inspected: shadows are present and consistently placed, with no
+  visible flicker across the stationary sequence.
+- Shadow stability could **not** be isolated by frame differencing in this
+  environment: consecutive stationary frames differ by ~0.9% normalized RMSE, but
+  the scene keeps changing because terrain patches finish streaming and the
+  clouds/wind animate every frame, so the residual is not attributable to
+  shadows. A true shadow-stability check needs a frozen-scene capture harness
+  (fixed epoch, terrain generation paused, clouds frozen), which does not exist.
+  No shadow defect was identified by the captures, so per the plan the result is
+  recorded rather than "fixed".

@@ -1011,6 +1011,249 @@ mod tests {
         );
     }
 
+    #[test]
+    fn camera_clearance_survives_patch_replacement_and_refinement() {
+        let radius_m = 6_371_000.0;
+        let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let levels = [12u32, 13, 14];
+        let patches: Vec<(TerrainPatch, PatchGeometry)> = levels
+            .iter()
+            .map(|&level| {
+                let patch = TerrainPatch::for_direction(direction, level);
+                let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+                (patch, geometry)
+            })
+            .collect();
+        let rotation = DQuat::from_rotation_z(0.4) * DQuat::from_rotation_y(0.7);
+        let finest_ground = surface_radius(&patches[2].0, &patches[2].1, direction).unwrap();
+        let origin = rotation * (direction * (finest_ground - 10.0));
+
+        // Replacement sequence: refine one level at a time, then evict the coarse
+        // end, then replace the whole set with the coarsest patch.
+        let refinement: [&[usize]; 3] = [&[0], &[0, 1], &[0, 1, 2]];
+        let replacement: [&[usize]; 3] = [&[1, 2], &[2], &[0]];
+        let mut previous_radius = 0.0f64;
+        for (set, monotonic) in refinement
+            .iter()
+            .map(|set| (*set, true))
+            .chain(replacement.iter().map(|set| (*set, false)))
+        {
+            let ground = set
+                .iter()
+                .map(|&i| surface_radius(&patches[i].0, &patches[i].1, direction).unwrap())
+                .fold(f64::MIN, f64::max);
+            let corrected = camera_above_streamed_surface(
+                Vec3::ZERO,
+                origin,
+                rotation,
+                set.iter().map(|&i| (&patches[i].0, &patches[i].1)),
+            );
+            let body_position = rotation.conjugate() * (origin + corrected.as_dvec3());
+            assert!(
+                body_position.length() >= ground + 2.0 - 1e-4,
+                "set {set:?} must clear its finest resident patch"
+            );
+            if monotonic {
+                // Adding finer relief must never lower the cleared camera.
+                assert!(
+                    body_position.length() + 1e-6 >= previous_radius,
+                    "refinement to {set:?} lowered the camera"
+                );
+                previous_radius = body_position.length();
+            }
+        }
+
+        // A hole (no resident patch) must never move the camera or generate
+        // terrain for the missing cover.
+        assert_eq!(
+            camera_above_streamed_surface(Vec3::ZERO, origin, rotation, std::iter::empty()),
+            Vec3::ZERO
+        );
+    }
+
+    #[test]
+    fn camera_clearance_is_invariant_under_origin_rebase() {
+        let radius_m = 6_371_000.0;
+        let direction = DVec3::new(0.3, 0.4, 1.0).normalize();
+        let patch = TerrainPatch::for_direction(direction, 14);
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        let rotation = DQuat::from_rotation_z(0.4) * DQuat::from_rotation_y(0.7);
+        let ground = surface_radius(&patch, &geometry, direction).unwrap();
+
+        let origin_a = rotation * (direction * (ground - 10.0));
+        let corrected_a = camera_above_streamed_surface(
+            Vec3::ZERO,
+            origin_a,
+            rotation,
+            std::iter::once((&patch, &geometry)),
+        );
+
+        // Rebase the render origin by a large delta. The same physical camera
+        // point is then expressed relative to the new origin.
+        let delta = DVec3::new(50_000.0, -18_000.0, 12_000.0);
+        let origin_b = origin_a + delta;
+        let camera_b = (-delta).as_vec3();
+        let corrected_b = camera_above_streamed_surface(
+            camera_b,
+            origin_b,
+            rotation,
+            std::iter::once((&patch, &geometry)),
+        );
+
+        let body_a = rotation.conjugate() * (origin_a + corrected_a.as_dvec3());
+        let body_b = rotation.conjugate() * (origin_b + corrected_b.as_dvec3());
+        assert!(
+            (body_a - body_b).length() < 0.02,
+            "clearance must not depend on the render origin"
+        );
+        assert!(body_a.length() >= ground + 2.0 - 1e-4);
+    }
+
+    #[test]
+    fn update_rocket_camera_keeps_clearance_through_mode_transitions() {
+        use crate::domain::services::body_orientation::BodyOrientation;
+        use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+        use crate::domain::services::gravity::gravitational_parameter;
+        use crate::domain::services::planet_factory::PlanetFactory;
+        use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+        use crate::infrastructure::bevy_adapters::terrain::streaming::CachedTerrainGeometry;
+        use bevy::ecs::system::RunSystemOnce;
+        use std::time::Duration;
+
+        let radius_m = 6_371_000.0;
+        let direction = DVec3::X;
+        let patch = TerrainPatch::for_direction(direction, 0);
+        let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
+        let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        let ground = surface_radius(&patch, &geometry, direction).unwrap();
+
+        let mut world = World::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_millis(16));
+        world.insert_resource(time);
+        world.insert_resource(Time::<Fixed>::default());
+        world.insert_resource(RocketCameraConfig::default());
+
+        // Rocket, camera, and render origin all start 50 m below the surface so
+        // the exterior camera must be raised to the clearance surface.
+        let below = direction * (ground - 50.0);
+        world.insert_resource(RenderOrigin {
+            origin: below,
+            last_camera_pos: below,
+        });
+
+        let mut streaming = TerrainStreamingResource::default();
+        streaming
+            .generated
+            .insert(patch, CachedTerrainGeometry::from_geometry(geometry));
+        world.insert_resource(streaming);
+
+        let earth_mass = PlanetFactory::create_by_name("Earth").unwrap().mass_kg;
+        world.insert_resource(
+            EphemerisSnapshot::from_states_orientations_and_gravitational_parameters(
+                Vec::new(),
+                vec![BodyOrientation::from_kernel(
+                    NaifBodyId::EARTH,
+                    TdbEpoch::j2000(),
+                    "test-orientation".to_string(),
+                    DQuat::IDENTITY,
+                    DVec3::ZERO,
+                )],
+                vec![(NaifBodyId::EARTH, gravitational_parameter(earth_mass))],
+            ),
+        );
+
+        world.spawn((
+            PlanetComponent {
+                domain_planet: PlanetFactory::create_by_name("Earth").unwrap(),
+                material: Handle::default(),
+                has_texture: false,
+                base_reflectance: 0.0,
+                base_roughness: 1.0,
+            },
+            Transform::IDENTITY,
+        ));
+        world.spawn((
+            RocketPlanetBinding {
+                planet_name: CelestialBodyId::earth(),
+            },
+            RocketRenderState::new(
+                crate::domain::services::rocket_dynamics::RocketDynamicsState::new(
+                    direction * (ground - 50.0),
+                    DVec3::ZERO,
+                    DQuat::IDENTITY,
+                    1.0,
+                    bevy::math::DMat3::IDENTITY,
+                    DVec3::ZERO,
+                ),
+            ),
+            RocketGeometry {
+                radius_m: 2.0,
+                height_m: 70.0,
+                lower_extent_y_m: -35.0,
+            },
+            Transform::IDENTITY,
+        ));
+        let camera = world
+            .spawn((
+                Camera3d::default(),
+                Transform::IDENTITY,
+                RocketCameraController::default(),
+            ))
+            .id();
+
+        let clearance_margin = |world: &World| {
+            let body = world
+                .get::<Transform>(camera)
+                .unwrap()
+                .translation
+                .as_dvec3()
+                + world.resource::<RenderOrigin>().origin;
+            let camera_ground = surface_radius(
+                &patch,
+                &world
+                    .resource::<TerrainStreamingResource>()
+                    .generated
+                    .get(&patch)
+                    .unwrap()
+                    .geometry,
+                body.normalize(),
+            )
+            .unwrap();
+            body.length() - camera_ground
+        };
+
+        // Chase mode: a few settled frames.
+        for _ in 0..5 {
+            world.run_system_once(update_rocket_camera).unwrap();
+        }
+        assert!(
+            clearance_margin(&world) >= 2.0 - 1e-3,
+            "chase camera must be cleared against the streamed surface"
+        );
+
+        // Step through a transition into orbital and free views; the cleared
+        // exterior pose must hold on every frame of the transition.
+        for mode in [RocketCameraMode::Orbital, RocketCameraMode::Free] {
+            world
+                .get_mut::<RocketCameraController>(camera)
+                .unwrap()
+                .request_mode(mode);
+            for _ in 0..30 {
+                world
+                    .resource_mut::<Time>()
+                    .advance_by(Duration::from_millis(16));
+                world.run_system_once(update_rocket_camera).unwrap();
+                assert!(
+                    clearance_margin(&world) >= 2.0 - 1e-3,
+                    "{mode:?} transition must keep the camera clear"
+                );
+            }
+        }
+    }
+
     fn dynamics_state_at(radius_m: f64) -> RocketPhysicsState {
         RocketPhysicsState {
             dynamics: crate::domain::services::rocket_dynamics::RocketDynamicsState::new(

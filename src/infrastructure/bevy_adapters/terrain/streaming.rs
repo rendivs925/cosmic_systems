@@ -382,6 +382,20 @@ pub struct CachedTerrainGeometry {
     stitch_mask: u8,
 }
 
+impl CachedTerrainGeometry {
+    /// Build a cache entry from geometry alone. Test-only: production entries
+    /// are always produced off-thread with their prepared surface and stitch
+    /// mask by `collect_completed_generation`.
+    #[cfg(test)]
+    pub(crate) fn from_geometry(geometry: PatchGeometry) -> Self {
+        Self {
+            geometry,
+            surface: None,
+            stitch_mask: 0,
+        }
+    }
+}
+
 struct InflightTerrainPatch {
     task: Task<GeneratedTerrainPatch>,
     started_at: Instant,

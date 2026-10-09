@@ -20,8 +20,8 @@
 ## 4. Camera, shadows, tower
 
 - [x] 4.1 Add tower integration tests over spawned meshes (attachment, thickness, orientation)
-- [ ] 4.2 Exercise camera clearance across patch replacement, origin rebase, and mode transitions; capture stationary and moving shadow sequences
-- [ ] 4.3 Fix only shadow causes identified by the captures; otherwise record the result
+- [x] 4.2 Exercise camera clearance across patch replacement, origin rebase, and mode transitions; capture stationary and moving shadow sequences (automated tests added and mutation-checked; rendered stationary + camera-transition sequences captured and inspected)
+- [x] 4.3 Fix only shadow causes identified by the captures; otherwise record the result (no shadow defect identified; residual frame difference is streaming/animated-cloud motion, recorded in the repair notes)
 
 ## 5. Measurement and optimization
 
