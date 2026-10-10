@@ -12,7 +12,11 @@ authority.
 The system SHALL blend a bounded set of ground layers (grass, soil, rock, sand,
 snow) using continuous weights derived only from authoritative terrain samples:
 elevation, slope, moisture, and latitude zone. The blend MUST be continuous across
-layer transitions and MUST NOT use hard biome bands.
+layer transitions and MUST NOT use hard biome bands. The wetness signal that drives
+the biome ecotone MUST be representable at the resolution of the per-patch
+layer-weight map, so that neighbouring patches at different LOD levels reconstruct
+the same wetness at shared world directions under the map's filtering, not only at
+coincident point samples.
 
 #### Scenario: Slope exposes rock
 
@@ -31,6 +35,13 @@ layer transitions and MUST NOT use hard biome bands.
 - **WHEN** two adjacent patches at different LOD levels share a boundary
 - **THEN** their layer weights agree at shared source samples so the seam shows no
   material discontinuity
+
+#### Scenario: Filtered LOD edge agreement
+
+- **WHEN** two adjacent patches at different LOD levels share a boundary
+- **THEN** the coarse patch's layer-weight map, reconstructed by bilinear filtering
+  the way the GPU samples it, agrees with the fine patch's own weights at the same
+  world direction, so the ecotone does not step where the LODs meet
 
 #### Scenario: Deterministic weights
 
