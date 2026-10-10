@@ -143,12 +143,25 @@ actual defect rather than merely the chosen constant.
   (`VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL`).
 - The tree-size enlargement hack is removed: coarse trees keep their true
   physical size.
-- Coarse tree-only patches are capped at a small budget
-  (`COARSE_TREE_BUDGET_CAP = 8`). The cap is small because the whole sphere's
-  coarse leaves are selected together, so a larger cap consumes most of the
-  160 MiB selection budget; a larger cap made the near-camera max-level patch
-  fail to be requested. The exact cap was chosen by that budget constraint.
-- Coarse-tree bytes are now part of `estimated_patch_bytes`
+- Tree sites now come from one shared lattice keyed only by the world direction
+  (`tree_site_candidates`), anchored to level-14 fine cells. A patch selects every
+  `2^(14 - level)`-th cell, so a coarse patch's sites are a strict subset of the
+  finer patches that replace it: refining adds trees but never moves or removes
+  one. The ecological gate (`tree_site_gate`) reads only level-independent signals
+  (`height_m`, slope, moisture, cover, clumping), so acceptance nests across LODs.
+  Grounding still uses the level-specific mesh height.
+- The per-patch in-species spacing filter was removed: the lattice guarantees
+  spacing, and a patch-local filter would break cross-LOD stability.
+- Coarse tree-only patches use a reduced lattice (`TREE_CANDIDATE_SIDE_COARSE = 5`,
+  25 sites) and thin to `COARSE_TREE_BUDGET_CAP = 24` by a position-ranked hash.
+  Finer levels never thin, so the trimmed coarse set is still a subset of the
+  finer accepted set — thinning bounds the reservation without reintroducing
+  popping.
+- The full lattice uses `TREE_CANDIDATE_SIDE = 10` (100 sites), at or below the
+  configured 128-tree budget, so the per-patch reservation does not grow and the
+  near-camera max-level patch is still requested (a side of 12, i.e. 144 sites,
+  pushed the streaming selection down one ring).
+- Coarse-tree bytes remain part of `estimated_patch_bytes`
   (`MAX_COARSE_VEGETATION_MESH_BYTES`), sharing the tree mesh formula with the
   full-density estimate so the two cannot drift.
 
@@ -174,7 +187,15 @@ actual defect rather than merely the chosen constant.
 - `application::rocket_spawning::spawned_tower_members_attach_to_columns_or_platforms`:
   expands the actually spawned brace/diagonal meshes and asserts both endpoints
   touch a spawned column or platform, catching the original floating-member defect.
-- `terrain::surface`: gate relationships, coarse tree budget bounded and nonzero.
+- `terrain::surface`: gate relationships, coarse tree lattice bounded and nested.
+- `domain::services::vegetation::tree_site_lattice_nests_across_lods`: a level-11
+  patch's sites (positions and a level-independent gate) are a subset of its four
+  level-12 children's sites, so refining never teleports a tree.
+- `domain::services::vegetation::tree_site_lattice_is_deterministic_and_bounded`:
+  identical inputs give identical sites, sites stay in patch bounds, a rejecting
+  gate yields none.
+- `terrain::surface::launch_site_trees_survive_lod_refinement` (DEM): with the real
+  Earth source at the Papua launch site, every coarse tree survives refinement.
 - `terrain::streaming`: coarse vegetation accounted for and strictly less than
   the full-density reservation; budget test unchanged for close patches.
 - `terrain::render`: `body_texture_anchor` reconstructs the absolute body-fixed
@@ -331,12 +352,13 @@ terrain/erosion/GPU-shader optimization is justified by this profile.
   render passes total only ~2.8 ms and CPU simulation is small, so the next step
   is GPU/swapchain present tracing (Vulkan present timing, PRIME copy path) and
   running on a display wired to the rendering GPU, not a simulator change.
-- Far-field vegetation continuity is only bounded, not truly solved: the level-11
-  coarse tier keeps a small, physically sized tree presence so cover does not drop
-  to zero, but density at level 11 is far below level 12. A real impostor /
-  billboard representation is the correct long-term fix and is out of scope here.
-  A global body-fixed candidate lattice would give stable cross-LOD identity but
-  iterating it at fine patch resolution is not affordable.
+- Far-field vegetation is now stable across LODs (a shared world-direction
+  lattice, level-independent acceptance, nested coarse thinning), but it is still
+  sparse: level 11 holds at most 24 trees over a ~4.9 km patch (~1 tree/km²)
+  against ~21/km² at level 12. Density is bounded by the 160 MiB selection budget,
+  because a larger coarse reservation drops the near-camera max-level patch. A true
+  impostor / billboard representation is the correct long-term fix for genuinely
+  dense distant forest and is out of scope here.
 - The ground-seam fix is now confirmed by a controlled A/B at a matched prelaunch
   camera (see "Ground-seam A/B" below); no matched-camera follow-up remains.
 - Tower spawned meshes are covered by an integration test

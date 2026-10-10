@@ -188,7 +188,7 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
     let grass_indices = GRASS_CARD_PLANES * 6;
     let vertices = rock_vertices + GRASS_CLUMP_COUNT * grass_vertices;
     let indices = rock_indices + GRASS_CLUMP_COUNT * grass_indices;
-    tree_vegetation_mesh_bytes(TREE_COUNT)
+    tree_vegetation_mesh_bytes(scatter::FULL_TREE_BUDGET_CAP)
         + vertices as u64 * VEGETATION_BYTES_PER_VERTEX
         + indices as u64 * VEGETATION_BYTES_PER_INDEX
 };
@@ -198,6 +198,13 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
 /// reserved. Keeps coarse vegetation inside the accounted streaming budget.
 pub(crate) const MAX_COARSE_VEGETATION_MESH_BYTES: u64 =
     tree_vegetation_mesh_bytes(scatter::COARSE_TREE_BUDGET_CAP);
+
+// The full lattice must stay within the configured tree budget, so the config
+// remains the single source of truth for per-patch placement capacity.
+const _: () = assert!(
+    scatter::FULL_TREE_BUDGET_CAP <= TREE_COUNT,
+    "the full tree lattice must stay within the configured tree budget"
+);
 
 pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
     patch_level >= VEGETATION_MIN_PATCH_LEVEL
@@ -565,7 +572,8 @@ pub(crate) fn prepare_patch_surface(
 mod tests {
     use super::scatter::{
         plan_rock_bodies, rock_acceptance_probability, rock_candidates, scatter_count_for_level,
-        tree_budget_for_level, MeshAccum, RockBody, COARSE_TREE_BUDGET_CAP,
+        tree_side_for_level, tree_site_gate, MeshAccum, RockBody, COARSE_TREE_BUDGET_CAP,
+        FULL_TREE_BUDGET_CAP,
     };
     use super::surface_maps::{
         mesh_surface_frame, papua_tropical_profile, terrain_albedo, SURFACE_TEX_RES,
@@ -582,6 +590,9 @@ mod tests {
     #[cfg(feature = "dem")]
     use crate::domain::services::terrain_source::EarthTerrainSource;
     use crate::domain::services::terrain_source::{ElevationBounds, ProceduralTerrainSource};
+    use crate::domain::services::vegetation::{
+        tree_site_candidates, TREE_CANDIDATE_SALT, TREE_CANDIDATE_SIDE, TREE_CANDIDATE_SIDE_COARSE,
+    };
     #[cfg(feature = "dem")]
     use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
     use bevy_mesh::VertexAttributeValues;
@@ -1336,13 +1347,22 @@ mod tests {
     }
 
     #[test]
-    fn coarse_tree_budget_is_bounded_and_nonzero() {
-        // Coarse tree-only patches keep trees (no hard drop to zero) but within
-        // a tighter cap than full-density patches, at true physical size.
-        let coarse = tree_budget_for_level(VEGETATION_MIN_PATCH_LEVEL);
-        assert!(coarse > 0 && coarse <= COARSE_TREE_BUDGET_CAP);
-        let full = tree_budget_for_level(VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL);
-        assert!(full >= coarse);
+    fn coarse_tree_lattice_is_bounded_and_nested() {
+        // Coarse tree-only patches keep trees (no hard drop to zero) on a
+        // reduced lattice whose sites nest inside the finer lattice, so
+        // refining a patch never moves or removes a tree.
+        let coarse_side = tree_side_for_level(VEGETATION_MIN_PATCH_LEVEL);
+        let full_side = tree_side_for_level(VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL);
+        assert!(coarse_side > 0 && coarse_side <= TREE_CANDIDATE_SIDE_COARSE);
+        assert!(full_side >= coarse_side);
+        assert_eq!(full_side, TREE_CANDIDATE_SIDE);
+        // Both sides divide the full side by a power of two, so the coarse
+        // lattice is a strict subset of the finer one.
+        assert_eq!(TREE_CANDIDATE_SIDE % coarse_side, 0);
+        assert!((TREE_CANDIDATE_SIDE / coarse_side).is_power_of_two());
+        // The coarse cap is at most the coarse lattice's candidate count.
+        assert!(COARSE_TREE_BUDGET_CAP <= coarse_side * coarse_side);
+        assert_eq!(full_side * full_side, FULL_TREE_BUDGET_CAP);
     }
 
     #[test]
@@ -1469,6 +1489,49 @@ mod tests {
             exposed_canopies > TREE_COUNT,
             "canopies are buried or patch-local spacing is incorrectly compared with face UV"
         );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn launch_site_trees_survive_lod_refinement() {
+        // With the real Earth source, a coarse tree must remain in place when
+        // the patch refines. The gate reads level-independent signals, so the
+        // coarse accepted set nests inside the finer one.
+        let source = EarthTerrainSource::new();
+        let site = predefined_sites::papua_indonesia_coastal_lowland();
+        let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
+        let (lat, lon) = geodetic_to_terrain_lat_lon(&site, &earth);
+        let direction =
+            crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(lat, lon);
+        let density_at = |lat: f64, lon: f64| source.vegetation_density(lat, lon);
+        let parent = TerrainPatch::for_direction(direction, VEGETATION_MIN_PATCH_LEVEL);
+        let parent_sites = tree_site_candidates(
+            &parent,
+            tree_side_for_level(parent.level),
+            TREE_CANDIDATE_SALT,
+            |u, v| tree_site_gate(&source, &parent, &density_at, u, v),
+        );
+        assert!(
+            !parent_sites.is_empty(),
+            "the coarse launch-site patch must keep trees"
+        );
+        let mut child_sites = Vec::new();
+        for child in parent.children() {
+            child_sites.extend(tree_site_candidates(
+                &child,
+                tree_side_for_level(child.level),
+                TREE_CANDIDATE_SALT,
+                |u, v| tree_site_gate(&source, &child, &density_at, u, v),
+            ));
+        }
+        for (u, v) in &parent_sites {
+            assert!(
+                child_sites
+                    .iter()
+                    .any(|(cu, cv)| (cu - u).abs() < 1e-12 && (cv - v).abs() < 1e-12),
+                "coarse tree ({u}, {v}) must survive LOD refinement"
+            );
+        }
     }
 
     #[cfg(feature = "dem")]

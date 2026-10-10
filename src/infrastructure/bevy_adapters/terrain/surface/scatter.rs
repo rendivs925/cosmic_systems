@@ -6,16 +6,17 @@ use super::{
     direction_to_lat_lon, face_uv_to_direction, BRANCH_CANOPY_CARD_PLANES, BRANCH_SEGMENTS,
     BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV, GRASS_CARD_PLANES, GRASS_CLUMP_COUNT,
     GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT,
-    ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_COUNT,
-    TREE_MIN_DENSITY, TRUNK_SEGMENTS, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
+    ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY,
+    TRUNK_SEGMENTS, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
 };
-use crate::domain::services::cube_sphere::{patch_world_size_m, PatchGeometry, TerrainPatch};
+use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::LandCoverPackage;
 use crate::domain::services::terrain_collision::surface_normal;
 use crate::domain::services::terrain_source::{slope_deg_at, TerrainSource};
 use crate::domain::services::vegetation::{
     clump_mask, combined_cover_density, embed_depth_m, scatter_hash01 as hash01, select_species,
-    vegetation_candidates, VegetationSpecies, GRASS_CANDIDATE_SALT, TREE_CANDIDATE_SALT,
+    tree_candidate_side, tree_site_candidates, vegetation_candidates, VegetationSpecies,
+    GRASS_CANDIDATE_SALT, TREE_CANDIDATE_SALT, TREE_CANDIDATE_SIDE,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::math::{DQuat, DVec3};
@@ -24,13 +25,18 @@ use bevy_mesh::{Indices, Mesh, PrimitiveTopology};
 /// Blue-noise candidate oversampling: generate more jittered-grid cells than the
 /// accepted rock budget so slope weighting can select a well-spread subset.
 const ROCK_CANDIDATE_OVERSAMPLE: usize = 2;
-/// Upper tree budget for a coarse, tree-only patch. The tree gate sits one LOD
-/// ring coarser than ground cover, and the whole sphere's coarse leaves are
-/// selected at once, so this cap is deliberately small: it reserves a bounded
-/// amount of the streaming budget on every coarse leaf while keeping some
-/// recognisable vegetation instead of dropping to none. It is not a substitute
-/// for a true far-field impostor representation.
-pub(super) const COARSE_TREE_BUDGET_CAP: usize = 8;
+/// Hard upper bound on trees a coarse, tree-only patch can emit. Coarse patches
+/// thin their accepted sites down to this cap by a position-deterministic rank.
+/// Because finer levels never thin, every coarse tree still survives refinement:
+/// the cap only trims a coarse patch, it never removes a tree a finer patch
+/// would keep. The cap keeps the streaming reservation bounded; a true
+/// far-field impostor representation would be needed for genuinely dense
+/// distant forest.
+pub(super) const COARSE_TREE_BUDGET_CAP: usize = 24;
+/// Hard upper bound on trees a full-density patch can emit: the full lattice's
+/// candidate count. Sites are accepted, never thinned, so refining a patch only
+/// adds trees and keeps every coarser tree in place.
+pub(super) const FULL_TREE_BUDGET_CAP: usize = TREE_CANDIDATE_SIDE * TREE_CANDIDATE_SIDE;
 /// Fraction of a grid cell used for the deterministic jitter. The remaining
 /// margin keeps neighbouring candidates separated, approximating blue noise.
 const ROCK_CELL_JITTER: f64 = 0.35;
@@ -523,17 +529,65 @@ fn rock_normals(local: &[DVec3], rings: usize, segments: usize) -> Vec<DVec3> {
     normals
 }
 
-/// Tree budget for a patch. Ground-cover-capable patches use the full-density
-/// budget; coarse tree-only patches use a tighter cap so the distant
-/// representation stays bounded in geometry, draw calls, and shadow casters
-/// while keeping every tree at its true physical size.
-pub(super) fn tree_budget_for_level(patch_level: u32) -> usize {
-    let budget = scatter_count_for_level(TREE_COUNT, patch_level);
-    if patch_level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL {
-        budget
-    } else {
-        budget.min(COARSE_TREE_BUDGET_CAP)
+/// Candidate sites per patch edge for a level. Ground-cover-capable patches use
+/// the full lattice; coarse tree-only patches use the reduced lattice whose
+/// sites are a strict subset, so refining a patch keeps every coarse tree.
+pub(super) fn tree_side_for_level(patch_level: u32) -> usize {
+    tree_candidate_side(patch_level, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL)
+}
+
+/// Whether a tree site at face UV `(u, v)` passes the ecological gate. It reads
+/// only level-independent signals (`height_m`, slope, cover, clumping), never a
+/// level-specific mesh height, so the accepted set nests across LODs: a tree
+/// accepted on a coarse patch is accepted by every finer patch covering it.
+pub(super) fn tree_site_gate(
+    source: &dyn TerrainSource,
+    patch: &TerrainPatch,
+    density_at: &impl Fn(f64, f64) -> f64,
+    u: f64,
+    v: f64,
+) -> bool {
+    let dir = face_uv_to_direction(patch.face, u, v);
+    let (lat, lon) = direction_to_lat_lon(dir);
+    if source.height_m(lat, lon) < 0.5 {
+        return false;
     }
+    if slope_deg_at(source, lat, lon) > 34.0 {
+        return false;
+    }
+    // Candidates are thinned by the climate cover multiplied by a low-frequency
+    // clumping mask, so wet forest is dense, dry ground is sparse, and clearings
+    // open naturally rather than uniformly.
+    density_at(lat, lon) * clump_mask(lat, lon) >= TREE_MIN_DENSITY
+}
+
+/// Trim a coarse patch's accepted tree sites down to `budget`, keeping the
+/// lowest-ranked sites so the result is deterministic and position-keyed. Only
+/// coarse levels thin; finer levels accept every site, so the trimmed coarse set
+/// is still a subset of the finer set and no coarse tree is lost on refinement.
+pub(super) fn thin_coarse_sites(
+    patch: &TerrainPatch,
+    mut sites: Vec<(f64, f64)>,
+    budget: usize,
+) -> Vec<(f64, f64)> {
+    if sites.len() <= budget {
+        return sites;
+    }
+    sites.sort_by(|a, b| {
+        let rank_a = hash01(
+            patch.face as u64 ^ 0xB1A5_5EED,
+            a.0.to_bits(),
+            a.1.to_bits(),
+        );
+        let rank_b = hash01(
+            patch.face as u64 ^ 0xB1A5_5EED,
+            b.0.to_bits(),
+            b.1.to_bits(),
+        );
+        rank_a.total_cmp(&rank_b)
+    });
+    sites.truncate(budget);
+    sites
 }
 
 /// Coarse leaves decimate scatter to keep generation and draw sizes bounded.
@@ -796,65 +850,44 @@ pub(super) fn build_grounded_vegetation_mesh(
     };
     let mut accum = MeshAccum::new();
 
-    // Coarser patches place the same bounded tree budget over a much larger
-    // area. Trees keep their true physical size and a tighter budget, so the
-    // distant representation is bounded in geometry, draw calls, and shadow
-    // casters; ground cover and rocks are skipped because they cannot be
-    // resolved at that range and would only inflate the coarse mesh.
+    // Trees come from a shared world-direction lattice, so a coarse patch and
+    // the finer patches that replace it select the same sites: refining a patch
+    // adds trees but never moves or removes one. Acceptance reads only
+    // level-independent signals (`height_m`, slope, moisture, cover, clumping),
+    // so the accepted set nests across LODs. Coarse patches use a reduced
+    // lattice and skip ground cover and rocks, which cannot be resolved at that
+    // range and would only inflate the mesh.
     let place_ground_cover = patch.level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL;
-    let tree_budget = tree_budget_for_level(patch.level);
-    let tree_sites = vegetation_candidates(patch, tree_budget, TREE_CANDIDATE_SALT, |u, v| {
-        let dir = face_uv_to_direction(patch.face, u, v);
-        let (lat, lon) = direction_to_lat_lon(dir);
-        let h = source.mesh_height_m(lat, lon, patch.level);
-        if h < 0.5 {
-            return false;
-        }
-        let slope = slope_deg_at(source, lat, lon);
-        if slope > 34.0 {
-            return false;
-        }
-        // Candidates are thinned by the climate cover multiplied by a
-        // low-frequency clumping mask, so wet forest is dense, dry ground is
-        // sparse, and clearings open naturally rather than uniformly.
-        density_at(lat, lon) * clump_mask(lat, lon) >= TREE_MIN_DENSITY
+    let tree_side = tree_side_for_level(patch.level);
+    let tree_sites = tree_site_candidates(patch, tree_side, TREE_CANDIDATE_SALT, |u, v| {
+        tree_site_gate(source, patch, &density_at, u, v)
     });
-    // In-species minimum spacing in face UV, derived from the species' physical
-    // spacing and the patch's world size. Canopy species use larger spacing than
-    // understory shrubs.
-    let patch_size_m = patch_world_size_m(patch.level, radius_m).max(1.0);
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let mut placed: Vec<(VegetationSpecies, f64, f64)> = Vec::new();
+    let tree_sites = if place_ground_cover {
+        tree_sites
+    } else {
+        thin_coarse_sites(patch, tree_sites, COARSE_TREE_BUDGET_CAP)
+    };
     for (k, (u, v)) in tree_sites.into_iter().enumerate() {
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
-        let h = source.mesh_height_m(lat, lon, patch.level);
+        let gate_height_m = source.height_m(lat, lon);
         let local_slope = slope_deg_at(source, lat, lon);
         let moisture = source.moisture(lat, lon);
         // Clumping already gates placement. It describes spatial clearings,
         // not a different climate; applying it to species selection again
         // downgrades humid forest to tiny shrubs or grass.
         let density = density_at(lat, lon);
-        let Some(species) = select_species(lat, h, moisture, local_slope, density) else {
+        let Some(species) = select_species(lat, gate_height_m, moisture, local_slope, density)
+        else {
             continue;
         };
         if !species.is_tree() {
             continue;
         }
         let profile = species.profile();
-        let spacing_uv = profile.min_spacing_m / patch_size_m;
-        if placed.iter().any(|(other, other_u, other_v)| {
-            // Candidate coordinates are face UV, not patch-local [0, 1].
-            // Comparing them directly to a patch-local spacing rejects almost
-            // every tree on fine tiles (previously only one tree per species).
-            *other == species
-                && (((u - other_u) / (u1 - u0)).powi(2) + ((v - other_v) / (v1 - v0)).powi(2))
-                    .sqrt()
-                    < spacing_uv
-        }) {
-            continue;
-        }
-        placed.push((species, u, v));
+        // The lattice already guarantees spacing, so no per-patch filter is
+        // needed; a patch-local filter would also break cross-LOD stability.
+        let h = source.mesh_height_m(lat, lon, patch.level);
         let flight = dir * ground_radius(dir, h) - *mesh_origin_body_fixed;
         let up = surface_normal(source, lat, lon, radius_m);
         // Grounding: sink the base a fraction of the trunk into the slope so a

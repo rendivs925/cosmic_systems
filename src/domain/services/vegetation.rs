@@ -14,6 +14,22 @@ pub const TREE_CANDIDATE_SALT: u64 = 0x7A11_5EED;
 /// Salt for ground-cover (grass) candidates.
 pub const GRASS_CANDIDATE_SALT: u64 = 0x6A55_5EED;
 
+/// Finest cube-sphere level the tree-site lattice is defined on. Candidate
+/// positions are anchored to this level's fine cells, so a coarse patch and the
+/// finer patches that replace it select the same world positions for shared
+/// sites and refining a patch does not teleport its trees.
+pub const TREE_SITE_LEVEL: u32 = 14;
+/// Candidate sites per patch edge at full tree density. The lattice resolution
+/// is `TREE_CANDIDATE_SIDE << TREE_SITE_LEVEL` fine cells per face side. The
+/// full candidate count stays at or below the configured tree budget so the
+/// per-patch streaming reservation does not grow.
+pub const TREE_CANDIDATE_SIDE: usize = 10;
+/// Candidate sites per patch edge on a coarse, tree-only patch. It is a
+/// power-of-two fraction of [`TREE_CANDIDATE_SIDE`] so the coarse sites remain a
+/// strict subset of the finer sites (no popping), while keeping the far-field
+/// geometry bounded.
+pub const TREE_CANDIDATE_SIDE_COARSE: usize = 5;
+
 /// Named, validated vegetation configuration: the single source of truth for
 /// placement budgets, ecological thresholds, clumping, and the committed
 /// land-cover package path. Presets derive from [`Self::DEFAULT`] so tuning
@@ -383,6 +399,67 @@ pub fn vegetation_candidates(
     accepted
 }
 
+/// Candidate side for a patch level: coarse, tree-only patches use the reduced
+/// side; every level at ground-cover density and finer uses the full side. Both
+/// values are power-of-two related so their lattices nest.
+pub fn tree_candidate_side(patch_level: u32, ground_cover_level: u32) -> usize {
+    if patch_level >= ground_cover_level {
+        TREE_CANDIDATE_SIDE
+    } else {
+        TREE_CANDIDATE_SIDE_COARSE
+    }
+}
+
+/// Tree sites from one shared lattice, keyed only by the world direction.
+///
+/// Every candidate position is a function of a global fine-cell index on the
+/// cube face, not of the patch that contains it. A patch at level `L` selects
+/// every `2^(TREE_SITE_LEVEL - L) * (TREE_CANDIDATE_SIDE / side)`-th fine cell,
+/// so the selected cells of a coarse patch are a subset of those selected by the
+/// finer patches that replace it. Because the position and the caller's
+/// acceptance decision depend only on the world direction (and never on the
+/// patch level), a tree accepted on a coarse patch is accepted by every finer
+/// patch covering it: refining a patch adds trees but never moves or removes
+/// them.
+///
+/// Returns every accepted site without thinning, so the result is bounded by
+/// `side * side`. `side` MUST be a power-of-two fraction of
+/// [`TREE_CANDIDATE_SIDE`]; other values are clamped to the nearest valid one.
+pub fn tree_site_candidates(
+    patch: &TerrainPatch,
+    side: usize,
+    salt: u64,
+    mut accept: impl FnMut(f64, f64) -> bool,
+) -> Vec<(f64, f64)> {
+    let side = side.clamp(1, TREE_CANDIDATE_SIDE);
+    debug_assert!(
+        TREE_CANDIDATE_SIDE.is_multiple_of(side) && (TREE_CANDIDATE_SIDE / side).is_power_of_two(),
+        "tree candidate side must divide TREE_CANDIDATE_SIDE by a power of two"
+    );
+    let resolution = (TREE_CANDIDATE_SIDE as u64) << TREE_SITE_LEVEL;
+    let decimation = (TREE_CANDIDATE_SIDE / side) as u64;
+    let stride = (1u64 << TREE_SITE_LEVEL.saturating_sub(patch.level)) * decimation;
+    let cells_per_patch = resolution >> patch.level.min(TREE_SITE_LEVEL);
+    let base_i = patch.tile_x as u64 * cells_per_patch;
+    let base_j = patch.tile_y as u64 * cells_per_patch;
+
+    let mut accepted = Vec::with_capacity(side * side);
+    for m in 0..side as u64 {
+        let fine_i = base_i + m * stride;
+        for n in 0..side as u64 {
+            let fine_j = base_j + n * stride;
+            let jitter_u = scatter_hash01(patch.face as u64 ^ salt, fine_i, fine_j);
+            let jitter_v = scatter_hash01(patch.face as u64 ^ salt ^ 0x9E37, fine_j, fine_i);
+            let u = (fine_i as f64 + jitter_u) / resolution as f64;
+            let v = (fine_j as f64 + jitter_v) / resolution as f64;
+            if accept(u, v) {
+                accepted.push((u, v));
+            }
+        }
+    }
+    accepted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,5 +660,104 @@ mod tests {
         }
         // The generator is pure: it never consults the face direction itself.
         let _ = face_uv_to_direction(patch.face, 0.5, 0.5);
+    }
+
+    #[test]
+    fn tree_site_lattice_nests_across_lods() {
+        // A coarse patch and the finer patches that replace it must select the
+        // same world positions for shared sites, so refining never teleports a
+        // tree. Positions and acceptance depend only on the world direction.
+        use crate::domain::services::cube_sphere::CubeFace;
+        let face = CubeFace::PosX;
+        let parent = TerrainPatch {
+            face,
+            level: 11,
+            tile_x: 3,
+            tile_y: 5,
+        };
+        let accept = |_u: f64, _v: f64| true;
+        let parent_sites = tree_site_candidates(
+            &parent,
+            TREE_CANDIDATE_SIDE_COARSE,
+            TREE_CANDIDATE_SALT,
+            accept,
+        );
+        assert_eq!(
+            parent_sites.len(),
+            TREE_CANDIDATE_SIDE_COARSE * TREE_CANDIDATE_SIDE_COARSE
+        );
+
+        let mut child_sites = Vec::new();
+        for child in parent.children() {
+            child_sites.extend(tree_site_candidates(
+                &child,
+                TREE_CANDIDATE_SIDE,
+                TREE_CANDIDATE_SALT,
+                accept,
+            ));
+        }
+        for (u, v) in &parent_sites {
+            assert!(
+                child_sites
+                    .iter()
+                    .any(|(cu, cv)| (cu - u).abs() < 1e-12 && (cv - v).abs() < 1e-12),
+                "coarse site ({u}, {v}) must survive refinement"
+            );
+        }
+
+        // A level-independent ecological predicate keeps the nesting: every
+        // coarse site that passes is also a passing fine site.
+        let gate = |u: f64, v: f64| (u * 37.0 + v * 11.0).sin() > 0.0;
+        let parent_gated = tree_site_candidates(
+            &parent,
+            TREE_CANDIDATE_SIDE_COARSE,
+            TREE_CANDIDATE_SALT,
+            gate,
+        );
+        let mut child_gated = Vec::new();
+        for child in parent.children() {
+            child_gated.extend(tree_site_candidates(
+                &child,
+                TREE_CANDIDATE_SIDE,
+                TREE_CANDIDATE_SALT,
+                gate,
+            ));
+        }
+        for (u, v) in &parent_gated {
+            assert!(
+                child_gated
+                    .iter()
+                    .any(|(cu, cv)| (cu - u).abs() < 1e-12 && (cv - v).abs() < 1e-12),
+                "gated coarse site ({u}, {v}) must survive refinement"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_site_lattice_is_deterministic_and_bounded() {
+        use crate::domain::services::cube_sphere::CubeFace;
+        let patch = TerrainPatch {
+            face: CubeFace::NegZ,
+            level: 12,
+            tile_x: 1,
+            tile_y: 2,
+        };
+        let accept = |_u: f64, _v: f64| true;
+        let a = tree_site_candidates(&patch, TREE_CANDIDATE_SIDE, TREE_CANDIDATE_SALT, accept);
+        let b = tree_site_candidates(&patch, TREE_CANDIDATE_SIDE, TREE_CANDIDATE_SALT, accept);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), TREE_CANDIDATE_SIDE * TREE_CANDIDATE_SIDE);
+        // Sites stay inside the patch bounds.
+        let (u0, v0, u1, v1) = patch.uv_bounds();
+        for (u, v) in &a {
+            assert!((u0..u1).contains(u) && (v0..v1).contains(v));
+        }
+        // A rejecting gate yields no sites.
+        assert!(
+            tree_site_candidates(&patch, TREE_CANDIDATE_SIDE, TREE_CANDIDATE_SALT, |_, _| {
+                false
+            })
+            .is_empty()
+        );
     }
 }
