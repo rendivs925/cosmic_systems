@@ -726,11 +726,18 @@ pub fn update_rocket_camera_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::body_orientation::BodyOrientation;
     use crate::domain::services::cube_sphere::build_patch_geometry;
+    use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+    use crate::domain::services::gravity::gravitational_parameter;
+    use crate::domain::services::planet_factory::PlanetFactory;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::terrain_source::ProceduralTerrainSource;
     use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-    use bevy::ecs::system::SystemState;
-    use bevy::math::DVec3;
+    use crate::infrastructure::bevy_adapters::terrain::streaming::CachedTerrainGeometry;
+    use bevy::ecs::system::{RunSystemOnce, SystemState};
+    use bevy::math::{DMat3, DVec3};
+    use std::time::Duration;
 
     #[test]
     fn inactive_cameras_do_not_control_effect_or_audio_distance() {
@@ -1113,15 +1120,6 @@ mod tests {
 
     #[test]
     fn update_rocket_camera_keeps_clearance_through_mode_transitions() {
-        use crate::domain::services::body_orientation::BodyOrientation;
-        use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
-        use crate::domain::services::gravity::gravitational_parameter;
-        use crate::domain::services::planet_factory::PlanetFactory;
-        use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-        use crate::infrastructure::bevy_adapters::terrain::streaming::CachedTerrainGeometry;
-        use bevy::ecs::system::RunSystemOnce;
-        use std::time::Duration;
-
         let radius_m = 6_371_000.0;
         let direction = DVec3::X;
         let patch = TerrainPatch::for_direction(direction, 0);
@@ -1179,16 +1177,14 @@ mod tests {
             RocketPlanetBinding {
                 planet_name: CelestialBodyId::earth(),
             },
-            RocketRenderState::new(
-                crate::domain::services::rocket_dynamics::RocketDynamicsState::new(
-                    direction * (ground - 50.0),
-                    DVec3::ZERO,
-                    DQuat::IDENTITY,
-                    1.0,
-                    bevy::math::DMat3::IDENTITY,
-                    DVec3::ZERO,
-                ),
-            ),
+            RocketRenderState::new(RocketDynamicsState::new(
+                direction * (ground - 50.0),
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                1.0,
+                DMat3::IDENTITY,
+                DVec3::ZERO,
+            )),
             RocketGeometry {
                 radius_m: 2.0,
                 height_m: 70.0,
