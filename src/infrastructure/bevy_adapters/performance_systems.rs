@@ -65,10 +65,12 @@ pub fn take_pending_screenshot(
     let filename = if video_state.is_recording {
         format!("{}/{}.png", output_dir, filename_prefix)
     } else {
+        // Millisecond resolution so rapid captures (e.g. a validation burst)
+        // cannot overwrite one another within the same wall-clock second.
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_millis();
         format!("{}/cosmic_systems_{}.png", output_dir, timestamp)
     };
 
