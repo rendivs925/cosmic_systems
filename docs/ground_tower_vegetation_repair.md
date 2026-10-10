@@ -46,6 +46,16 @@ specification.
   `estimated_patch_bytes`, so it lived outside the accounted streaming budget and
   the quadtree selection under-counted it.
 
+### 6. Straight grass/sand ecotone from aliased moisture
+
+- `ProceduralDetailSource::moisture` returned the ~100-200 m drainage statistic
+  (`(1 - |2n-1|)^3` at scale `60_000`) directly as the biome wetness. The
+  per-patch weight map is only 32x32 (a texel is ~150 m at level 11), so it
+  point-sampled that fine signal, and neighbouring LODs filtered the alias
+  differently. The grass/sand ecotone therefore stepped in a straight line
+  across shared patch edges — a different seam class from the base-colour
+  replacement in root cause 1, and it survived the unit-luminance tint fix.
+
 ## Fixes
 
 ### Ground appearance (`assets/shaders/terrain_surface.wgsl`, `terrain/render.rs`)
@@ -83,6 +93,42 @@ captured with the in-app F12 path.
 
 This is the direct visual confirmation that the rectangular ground discontinuity
 is fixed. The shader file was restored afterwards; no shader change was committed.
+
+#### Moisture ecotone (`domain/services/terrain_source/procedural.rs`)
+
+- `ProceduralDetailSource::moisture` now returns a low-frequency fractal field
+  sampled on the unit sphere (`MOISTURE_NOISE_SCALE = 3000.0`, a base octave of
+  roughly 2 km on Earth) instead of the ~200 m drainage statistic. Every mesh
+  LOD's weight map can represent that scale, so neighbouring LODs reconstruct the
+  same wetness at a shared world direction.
+- Geometric drainage is untouched: it still shapes terrain height and detail
+  troughs via `drainage_strength_for_direction`. Only the presentation biome
+  signal changed, so collision and physics are unaffected.
+
+##### Moisture-seam A/B
+
+Two release binaries were built from the same tree, differing only in
+`ProceduralDetailSource::moisture`: the `HEAD` drainage version versus the
+landscape-field version. Both were captured at the fixed prelaunch chase camera
+and the wider orbital camera (`COSMIC_SYSTEMS_PRESENT_MODE=none`, vsync off,
+rocket mode, Papua launch site) with the in-app F12 path. Evidence:
+`~/cosmic_systems_images/evidence/terrain-moisture-seam/`.
+
+- **Drainage moisture**: a hard, straight grass/sand boundary cuts diagonally
+  across the ground, with flat tan patches abutting the green — the reported
+  split.
+- **Landscape moisture**: the same view shows only soft, broad green/olive
+  variation with no straight boundary; the wider orbital view is likewise
+  seamless across more LODs.
+
+The regression tests `earth_launch_site_weight_map_has_no_high_frequency_alias`,
+`earth_launch_site_weight_maps_stay_continuous_across_lods`, and
+`real_earth_adjacent_patch_weight_maps_agree_on_shared_edges` cover both real
+launch sites (Papua and KSC). The continuity test reconstructs each coarse
+weight map bilinearly — the way the GPU filters it — and fails if a fine LOD's
+texel disagrees with that reconstruction; raising `MOISTURE_NOISE_SCALE` back to
+the drainage frequency makes it fail (mutation-verified), so it guards the
+actual defect rather than merely the chosen constant.
 
 ### Launch tower (`application/launch_tower.rs`, `application/rocket_spawning.rs`)
 
@@ -147,6 +193,17 @@ is fixed. The shader file was restored afterwards; no shader change was committe
   origin below the streamed surface, then steps through Chase → Orbital → Free
   transitions and asserts the cleared pose holds every frame. Mutation-checked:
   disabling the clearance call makes it fail.
+- `terrain::surface::layers::earth_launch_site_weight_map_has_no_high_frequency_alias`:
+  builds the composed Earth weight maps at levels 11-14 for both real launch
+  sites and asserts no single coarse texel step exceeds a hard grass/sand band,
+  while the wetness still spans enough of `[0, 1]` to drive every material.
+- `terrain::surface::layers::earth_launch_site_weight_maps_stay_continuous_across_lods`:
+  compares each parent/child pair at both sites against the bilinearly
+  reconstructed coarse map (the GPU's filtering). Mutation-checked: restoring the
+  drainage-frequency moisture makes it fail.
+- `terrain::surface::layers::real_earth_adjacent_patch_weight_maps_agree_on_shared_edges`:
+  same-level and parent/child Earth neighbours agree on coincident shared-edge
+  samples at the Papua launch site.
 
 ## Measured results
 

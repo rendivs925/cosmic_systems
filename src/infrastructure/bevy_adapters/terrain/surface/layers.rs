@@ -467,6 +467,17 @@ pub(crate) fn build_layer_weight_map(source: &dyn TerrainSource, patch: &Terrain
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::cube_sphere::{CubeFace, PatchEdge};
+    #[cfg(feature = "dem")]
+    use crate::domain::services::planet_factory::PlanetFactory;
+    #[cfg(feature = "dem")]
+    use crate::domain::services::reference_frames::{
+        geodetic_to_terrain_lat_lon, terrain_lat_lon_to_body_fixed,
+    };
+    #[cfg(feature = "dem")]
+    use crate::domain::services::terrain_source::EarthTerrainSource;
+    #[cfg(feature = "dem")]
+    use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
     #[test]
     fn layer_weights_are_normalized_and_bounded() {
@@ -670,8 +681,6 @@ mod tests {
 
     #[test]
     fn adjacent_lod_weight_maps_agree_on_the_shared_edge() {
-        use crate::domain::services::cube_sphere::CubeFace;
-
         let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
             99, 2_000.0, 800.0, 0,
         );
@@ -707,6 +716,215 @@ mod tests {
                 sampled_texel(&fine_map, fu0, fv0, fu1, fv1, u, v),
                 "layer weights must not depend on mesh LOD at a shared sample"
             );
+        }
+    }
+
+    /// The composed Earth moisture once carried the detail layer's ~200 m
+    /// drainage spikes. Point-sampled into the small per-patch weight map they
+    /// aliased, and neighbouring LODs filtered the alias differently, which
+    /// seamed the ground at patch boundaries. The wetness is landscape-scale
+    /// now, so no coarse texel step may be a hard grass/sand band, while the
+    /// field must still span enough of `[0, 1]` for every material to appear.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn earth_launch_site_weight_map_has_no_high_frequency_alias() {
+        let source = EarthTerrainSource::new();
+        let res = LAYER_WEIGHT_TEX_RES as usize;
+
+        for (label, site) in [
+            ("papua", predefined_sites::papua_indonesia_coastal_lowland()),
+            ("ksc", predefined_sites::kennedy_space_center()),
+        ] {
+            let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
+            let (lat, lon) = geodetic_to_terrain_lat_lon(&site, &earth);
+            let dir = terrain_lat_lon_to_body_fixed(lat, lon);
+
+            for level in [11u32, 12, 13, 14] {
+                let patch = TerrainPatch::for_direction(dir, level);
+                let map = build_layer_weight_map(&source, &patch);
+                let data = map.data.as_ref().unwrap();
+                let mut mx = 0i32;
+                for j in 0..res {
+                    for i in 0..res - 1 {
+                        let a = &data[(j * res + i) * 4..(j * res + i) * 4 + 4];
+                        let b = &data[(j * res + i + 1) * 4..(j * res + i + 1) * 4 + 4];
+                        for k in 0..4 {
+                            mx = mx.max((i32::from(a[k]) - i32::from(b[k])).abs());
+                        }
+                    }
+                }
+                assert!(
+                    mx <= 128,
+                    "{label} level {level} weight map has an aliased {mx}-unit \
+                     step; the wetness must stay landscape-scale"
+                );
+            }
+
+            // The wetness must still vary broadly enough to produce grass, soil
+            // and sand across the region rather than a single flat material.
+            let (mut min_m, mut max_m) = (1.0f64, 0.0f64);
+            for a in -20..=20 {
+                for b in -20..=20 {
+                    let m = source.moisture(lat + a as f64 * 0.05, lon + b as f64 * 0.05);
+                    min_m = min_m.min(m);
+                    max_m = max_m.max(m);
+                }
+            }
+            assert!(
+                max_m - min_m > 0.2,
+                "{label} wetness is too flat to drive a biome: {min_m:.3}..{max_m:.3}"
+            );
+        }
+    }
+
+    /// Reconstruct a weight-map texel at a patch-local UV the way the GPU does:
+    /// bilinear filtering between the four surrounding texels. This is the value
+    /// the shader actually sees, so comparing it against a finer LOD's own texel
+    /// at the same world direction is the real seam test — point samples alone
+    /// miss filtering differences between LODs.
+    fn sample_weight_bilinear(
+        image: &Image,
+        u0: f64,
+        v0: f64,
+        u1: f64,
+        v1: f64,
+        u: f64,
+        v: f64,
+    ) -> [f64; 4] {
+        let res = LAYER_WEIGHT_TEX_RES as usize;
+        let fx = ((u - u0) / (u1 - u0)).clamp(0.0, 1.0) * (res - 1) as f64;
+        let fy = ((v - v0) / (v1 - v0)).clamp(0.0, 1.0) * (res - 1) as f64;
+        let i0 = fx.floor() as usize;
+        let j0 = fy.floor() as usize;
+        let i1 = (i0 + 1).min(res - 1);
+        let j1 = (j0 + 1).min(res - 1);
+        let tx = fx - i0 as f64;
+        let ty = fy - j0 as f64;
+        let data = image.data.as_ref().unwrap();
+        let texel = |i: usize, j: usize| -> [f64; 4] {
+            let index = (j * res + i) * 4;
+            [
+                f64::from(data[index]),
+                f64::from(data[index + 1]),
+                f64::from(data[index + 2]),
+                f64::from(data[index + 3]),
+            ]
+        };
+        let (a, b) = (texel(i0, j0), texel(i1, j0));
+        let (c, d) = (texel(i0, j1), texel(i1, j1));
+        let mut out = [0.0; 4];
+        for k in 0..4 {
+            let top = a[k] + (b[k] - a[k]) * tx;
+            let bottom = c[k] + (d[k] - c[k]) * tx;
+            out[k] = top + (bottom - top) * ty;
+        }
+        out
+    }
+
+    /// The visible seam came from a fine-LOD texel disagreeing with what the
+    /// coarse map reconstructs at the same world direction. Every parent/child
+    /// pair at both real launch sites must agree within a bounded tolerance, so
+    /// the ground does not step where two mesh LODs meet.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn earth_launch_site_weight_maps_stay_continuous_across_lods() {
+        let source = EarthTerrainSource::new();
+        let res = LAYER_WEIGHT_TEX_RES as usize;
+        let tolerance = 40.0;
+
+        for (label, site) in [
+            ("papua", predefined_sites::papua_indonesia_coastal_lowland()),
+            ("ksc", predefined_sites::kennedy_space_center()),
+        ] {
+            let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
+            let (lat, lon) = geodetic_to_terrain_lat_lon(&site, &earth);
+            let direction = terrain_lat_lon_to_body_fixed(lat, lon);
+
+            let coarse = TerrainPatch::for_direction(direction, 11);
+            let (cu0, cv0, cu1, cv1) = coarse.uv_bounds();
+            let coarse_map = build_layer_weight_map(&source, &coarse);
+
+            for child in coarse.children() {
+                let (fu0, fv0, fu1, fv1) = child.uv_bounds();
+                let child_map = build_layer_weight_map(&source, &child);
+                for j in 0..res {
+                    for i in 0..res {
+                        let u = fu0 + (fu1 - fu0) * i as f64 / (res - 1) as f64;
+                        let v = fv0 + (fv1 - fv0) * j as f64 / (res - 1) as f64;
+                        let fine = sampled_texel(&child_map, fu0, fv0, fu1, fv1, u, v);
+                        let coarse_est =
+                            sample_weight_bilinear(&coarse_map, cu0, cv0, cu1, cv1, u, v);
+                        for k in 0..4 {
+                            let diff = (f64::from(fine[k]) - coarse_est[k]).abs();
+                            assert!(
+                                diff <= tolerance,
+                                "{label}: LOD seam of {diff:.1} at i={i} j={j} \
+                                 ch={k} (fine {} vs coarse {:.1})",
+                                fine[k],
+                                coarse_est[k]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Build the real Earth composed source (measured base + erosion + detail)
+    /// and prove the per-patch weight maps of neighbouring launch-site patches
+    /// agree on their shared edges, for both same-level and parent/child pairs.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn real_earth_adjacent_patch_weight_maps_agree_on_shared_edges() {
+        let source = EarthTerrainSource::new();
+        let site = predefined_sites::papua_indonesia_coastal_lowland();
+        let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
+        let (lat, lon) = geodetic_to_terrain_lat_lon(&site, &earth);
+        let direction = terrain_lat_lon_to_body_fixed(lat, lon);
+
+        let coarse = TerrainPatch::for_direction(direction, 11);
+        let (cu0, cv0, cu1, cv1) = coarse.uv_bounds();
+        let coarse_map = build_layer_weight_map(&source, &coarse);
+        let res = LAYER_WEIGHT_TEX_RES as usize;
+
+        // Same-level east neighbour shares the coarse patch's east edge.
+        let east = coarse
+            .same_face_neighbor(PatchEdge::East)
+            .expect("launch-site patch must have an east neighbour");
+        let (eu0, ev0, eu1, ev1) = east.uv_bounds();
+        assert!((cu1 - eu0).abs() < 1e-12, "test setup: shared east edge");
+        let east_map = build_layer_weight_map(&source, &east);
+        for j in 0..res {
+            let v = cv0 + (cv1 - cv0) * j as f64 / (res - 1) as f64;
+            assert_eq!(
+                sampled_texel(&coarse_map, cu0, cv0, cu1, cv1, cu1, v),
+                sampled_texel(&east_map, eu0, ev0, eu1, ev1, eu0, v),
+                "same-level Earth neighbours disagree at shared edge j={j}"
+            );
+        }
+
+        // East children share the coarse patch's east edge; their v range is
+        // half the parent's, so compare only where the two texel grids coincide
+        // on the same world direction.
+        for child in [coarse.children()[1], coarse.children()[3]] {
+            let (fu0, fv0, fu1, fv1) = child.uv_bounds();
+            assert!((cu1 - fu1).abs() < 1e-12, "test setup: shared child edge");
+            let child_map = build_layer_weight_map(&source, &child);
+            for j in 0..res {
+                let v = cv0 + (cv1 - cv0) * j as f64 / (res - 1) as f64;
+                if !(fv0 - 1e-12..=fv1 + 1e-12).contains(&v) {
+                    continue;
+                }
+                let k_f = (v - fv0) / (fv1 - fv0) * (res - 1) as f64;
+                if (k_f - k_f.round()).abs() > 1e-9 {
+                    continue;
+                }
+                assert_eq!(
+                    sampled_texel(&coarse_map, cu0, cv0, cu1, cv1, cu1, v),
+                    sampled_texel(&child_map, fu0, fv0, fu1, fv1, fu1, v),
+                    "Earth parent/child disagree at shared edge j={j}"
+                );
+            }
         }
     }
 

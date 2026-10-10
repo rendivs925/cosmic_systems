@@ -9,6 +9,17 @@ use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 /// produce more, smaller features across the planet.
 const NOISE_SCALE: f64 = 10.0;
 
+/// Landscape scale of the wetness field that drives the biome/material law.
+/// The geometric drainage troughs are ~200 m (see
+/// [`ProceduralDetailSource::drainage_strength_for_direction`]); reusing that
+/// signal directly as moisture makes the material ecotone finer than the small
+/// per-patch weight map can resolve, so different mesh LODs alias it differently
+/// and the ground seams across shared patch edges. The wetness is therefore a
+/// low-frequency fractal field — one lattice cell of this scale is about 2 km on
+/// Earth — that every LOD can represent and that stays continuous across patches,
+/// while still spanning enough of `[0, 1]` for grass, soil and sand to appear.
+const MOISTURE_NOISE_SCALE: f64 = 3000.0;
+
 /// Domain-warp strength: how far the low-frequency warp field displaces the
 /// sample point before the fractals are evaluated. This is what makes ridgelines
 /// meander and removes the ubiquitous "noise-grid" look (inexorable best
@@ -376,16 +387,6 @@ impl ProceduralDetailSource {
         );
         (1.0 - (drainage_noise * 2.0 - 1.0).abs()).powi(3)
     }
-
-    fn drainage_strength(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        let lat = latitude_deg.to_radians();
-        let lon = longitude_deg.to_radians();
-        self.drainage_strength_for_direction(DVec3::new(
-            lat.cos() * lon.cos(),
-            lat.sin(),
-            lat.cos() * lon.sin(),
-        ))
-    }
 }
 
 impl TerrainSource for ProceduralDetailSource {
@@ -402,9 +403,18 @@ impl TerrainSource for ProceduralDetailSource {
         PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
     }
 
-    /// Drainage troughs double as a wetness signal for the continuous biome law.
+    /// Landscape-scale wetness for the continuous biome/material law. Sampling a
+    /// low-frequency fractal field (instead of the ~200 m drainage statistic)
+    /// keeps the wetness resolvable by the per-patch weight map at every LOD,
+    /// so the material ecotone does not alias into a LOD-dependent seam.
     fn moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
-        self.drainage_strength(latitude_deg, longitude_deg)
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        let p = direction * MOISTURE_NOISE_SCALE;
+        self.noise
+            .fbm(self.seed ^ 0xD2A1_6A6E, p.x, p.y, p.z, 3)
+            .clamp(0.0, 1.0)
     }
 
     // The detail noise is a moisture/trough signal, not accumulated flow.
