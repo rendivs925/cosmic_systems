@@ -338,20 +338,21 @@ driven by the AMD iGPU, so the frame is also copied across GPUs before display.
 The `desired_maximum_frame_latency` setting is not the lever: lowering it from 2
 to 1 changed the no-vsync steady p50 only from 21.8 to 21.1 ms (within noise).
 
-**Corrected conclusion:** the simulator's own rendering is only ~2.8 ms/frame;
-the frame cost is dominated by an un-instrumented, resolution-dependent
-present/copy path. The earlier claims that it is purely "present/swapchain
-pacing" and that the GPU costs ~2.5 ms were both overstatements. Neither CPU
-simulation nor the instrumented render passes explain the ~15-19 ms; no
-terrain/erosion/GPU-shader optimization is justified by this profile.
+**Qualified conclusion:** the instrumented rendering passes total ~2.8 ms/frame;
+they do not measure all GPU, queue, synchronization, or presentation costs. The
+remaining resolution-dependent gap suggests an uninstrumented render/present
+cost, but cross-GPU copying has not been established as its cause. Neither CPU
+simulation nor the instrumented render passes explain the older ~15-19 ms gap;
+no terrain/erosion/GPU-shader optimization is justified by this profile. A later
+same-process panel/HDMI comparison was inconclusive due to temporal drift and
+rolling-history overlap; see [the follow-up investigation](shadow_stability_investigation.md).
 
 ## Remaining issues
 
-- The ~15-23 ms frame is dominated by an un-instrumented, resolution-dependent
-  present/copy path on a hybrid AMD-iGPU + NVIDIA-dGPU display. Instrumented
-  render passes total only ~2.8 ms and CPU simulation is small, so the next step
-  is GPU/swapchain present tracing (Vulkan present timing, PRIME copy path) and
-  running on a display wired to the rendering GPU, not a simulator change.
+- The older ~15-23 ms frame measurement contains an uninstrumented,
+  resolution-dependent gap. Cross-GPU presentation is a hypothesis requiring
+  acquire/submit/present/copy tracing. A panel/HDMI A–B–B–A run did not isolate
+  a display-dependent effect; see the follow-up investigation above.
 - Far-field vegetation is now stable across LODs (a shared world-direction
   lattice, level-independent acceptance, nested coarse thinning), but it is still
   sparse: level 11 holds at most 24 trees over a ~4.9 km patch (~1 tree/km²)
@@ -371,11 +372,15 @@ terrain/erosion/GPU-shader optimization is justified by this profile.
   screenshot path (`COSMIC_SYSTEMS_PRESENT_MODE=none`, 1280x720, release, rocket
   mode) and inspected: shadows are present and consistently placed, with no
   visible flicker across the stationary sequence.
-- Shadow stability could **not** be isolated by frame differencing in this
-  environment: consecutive stationary frames differ by ~0.9% normalized RMSE, but
-  the scene keeps changing because terrain patches finish streaming and the
-  clouds/wind animate every frame, so the residual is not attributable to
-  shadows. A true shadow-stability check needs a frozen-scene capture harness
-  (fixed epoch, terrain generation paused, clouds frozen), which does not exist.
-  No shadow defect was identified by the captures, so per the plan the result is
-  recorded rather than "fixed".
+- A follow-up stationary-shadow experiment paused simulation and presentation
+  clocks after terrain settled. Three shadow-on images were pixel-identical;
+  three shadow-off images were pixel-identical; restoring shadows reproduced
+  the original image exactly. The on/off positive control changed 59,460 pixels.
+  Temporary diagnostic controls were removed and the normal executable rebuilt.
+  A subsequent 90-image camera-pose investigation reproduced every revisited
+  pose exactly in both shadow states. Small rotations retained overall shadow
+  placement; a 5 m-step dolly sweep localized gradual tree-shadow softening to
+  the first cascade's 200–250 m blend region. Continuous-motion transients,
+  other cascade boundaries, and streaming-enabled camera transitions remain
+  outside that test. Full methodology, evidence, and limitations are recorded
+  in [the shadow investigation](shadow_stability_investigation.md).
