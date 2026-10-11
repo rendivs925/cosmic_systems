@@ -43,7 +43,8 @@ use crate::infrastructure::bevy_adapters::terrain::surface::{
     NEAR_DETAIL_STRENGTH,
 };
 use crate::infrastructure::bevy_adapters::terrain::vegetation_material::{
-    VegetationExtension, VegetationMaterial, VegetationParams,
+    VegetationExtension, VegetationMaterial, VegetationParams, VEGETATION_THICKNESS_M,
+    VEGETATION_TRANSLUCENCY,
 };
 use crate::infrastructure::bevy_adapters::terrain::water::{
     WaterExtension, WaterMaterial, WaterParams, WaterQualityConfig,
@@ -818,6 +819,11 @@ fn prepare_terrain_render_assets(
             alpha_mode: AlphaMode::Mask(0.5),
             perceptual_roughness: 0.9,
             metallic: 0.0,
+            // Subsurface translucency for backlit foliage. The per-vertex weight
+            // in the mesh's second UV channel scales this down to zero for
+            // trunks, branches, and rocks.
+            diffuse_transmission: VEGETATION_TRANSLUCENCY,
+            thickness: VEGETATION_THICKNESS_M,
             // Billboards must be visible from both sides; Bevy flips normals for
             // the back face in PBR.
             cull_mode: None,

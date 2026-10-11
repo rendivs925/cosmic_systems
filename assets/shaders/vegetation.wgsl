@@ -92,6 +92,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var pbr = pbr_input_from_standard_material(in, is_front);
     pbr.material.base_color = alpha_discard(pbr.material, pbr.material.base_color);
 
+    // Scale the material's diffuse-transmission (translucency) lobe by the
+    // per-vertex weight in the second UV channel: thin leaf and grass cards
+    // transmit backlight while trunks, branches, and rocks stay opaque. The
+    // material uniform holds the maximum; woody vertices carry a low weight.
+#ifdef VERTEX_UVS_B
+    pbr.material.diffuse_transmission *= in.uv_b.y;
+#endif
+
     var out: FragmentOutput;
     if (pbr.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr);

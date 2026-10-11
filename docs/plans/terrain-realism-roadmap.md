@@ -178,9 +178,12 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   closed tapered fins at the trunk base. A wind-swayed vegetation material
   (`VegetationMaterial`, an `ExtendedMaterial` with a custom vertex shader)
   animates foliage on the GPU; the mesh's second UV channel carries a per-vertex
-  sway weight (0 at the base, 1 at the canopy) so the base stays planted.
-  Remaining: subsurface translucency, alpha-tested shadow depth, procedural
-  bark/foliage textures, impostor LOD, and the vegetation shadow-marker fix.
+  sway weight (0 at the base, 1 at the canopy) so the base stays planted. The
+  same channel's `y` component scales a diffuse-transmission (subsurface
+  translucency) lobe, so thin leaf and grass cards transmit backlight while
+  trunks, branches, and rocks stay opaque.
+  Remaining: alpha-tested shadow depth, procedural bark/foliage textures,
+  impostor LOD, and the vegetation shadow-marker fix.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 

@@ -25,6 +25,15 @@ const SWAY_FREQUENCY_RAD_S: f32 = 1.6;
 /// plants do not sway in lockstep.
 const WIND_SPATIAL_FREQUENCY_RAD_M: f32 = 0.08;
 
+/// Maximum diffuse transmission (translucency) applied at foliage weight 1.
+/// Thin leaf and grass cards transmit backlight, while the per-vertex weight
+/// scales this to zero for trunks, branches, and rocks. Above ~0.5 the lit side
+/// reads darker than the backlit side, which is the intended leaf look.
+pub const VEGETATION_TRANSLUCENCY: f32 = 0.55;
+/// Effective scattering thickness for the translucency lobe, in metres. The
+/// backlight lobe is offset along the surface normal by this distance.
+pub const VEGETATION_THICKNESS_M: f32 = 0.12;
+
 /// Shared uniform for the vegetation material. Must match `VegetationParams` in
 /// `assets/shaders/vegetation.wgsl` exactly.
 #[derive(Clone, Copy, Debug, ShaderType, Reflect)]
@@ -110,6 +119,18 @@ mod tests {
         assert!(params.wind_spatial_frequency > 0.0 && params.wind_spatial_frequency.is_finite());
         assert!((params.wind_direction.length() - 1.0).abs() < 1e-5);
         assert_eq!(params.planet_center, Vec3::ZERO);
+    }
+
+    #[test]
+    fn translucency_constants_are_in_range() {
+        assert!(
+            (0.0..=1.0).contains(&VEGETATION_TRANSLUCENCY),
+            "translucency must be a normalized weight"
+        );
+        assert!(
+            VEGETATION_THICKNESS_M > 0.0 && VEGETATION_THICKNESS_M.is_finite(),
+            "translucency lobe thickness must be a positive finite length"
+        );
     }
 
     #[test]
