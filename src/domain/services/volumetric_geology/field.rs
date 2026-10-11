@@ -72,6 +72,21 @@ impl PatchFrame {
             + self.north * (north_m / self.radius_m))
             .normalize_or_zero()
     }
+
+    /// Embed a local point `(x east, y north, z altitude above the mean radius)`
+    /// as a body-fixed planet-centred position. The embedding is a flat tangent
+    /// plane around the patch centre, exact to well under a metre over a patch
+    /// footprint.
+    pub fn local_to_body(&self, local: DVec3) -> DVec3 {
+        self.center_direction * (self.radius_m + local.z)
+            + self.east * local.x
+            + self.north * local.y
+    }
+
+    /// Rotate a local direction into the body-fixed frame without translation.
+    pub fn local_vector_to_body(&self, local: DVec3) -> DVec3 {
+        self.east * local.x + self.north * local.y + self.center_direction * local.z
+    }
 }
 
 /// The Module 3 density field bound to one terrain source and patch frame.

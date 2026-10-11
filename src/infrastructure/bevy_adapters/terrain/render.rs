@@ -12,11 +12,12 @@ use self::uploads::{
 };
 use super::mips::{mip_chain_rgba8, MipFilter};
 use crate::domain::services::cube_sphere::{
-    face_uv, face_uv_to_direction, CubeFace, PatchGeometry, TerrainPatch,
+    direction_to_lat_lon, face_uv, face_uv_to_direction, CubeFace, PatchGeometry, TerrainPatch,
 };
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::services::volumetric_geology::RockShell;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
@@ -500,6 +501,65 @@ impl TerrainRenderConfig {
     }
 }
 
+/// Settings for Module 3 volumetric geology rock shells.
+///
+/// Disabled by default, so the heightmap patch mesh remains the only visible
+/// terrain surface unless volumetric geology is explicitly enabled. When
+/// enabled, patches at or above `min_level` whose surface is steep enough are
+/// replaced by a Dual Contoured rock shell (overhangs, undercuts, arches). The
+/// authoritative heightmap is untouched: collision, altitude, guidance, and
+/// physics keep sampling [`TerrainSource::height_m`], and the shell is
+/// presentation-only.
+///
+/// Every field bounds work: the voxel size, scanned band, and sample cap limit
+/// the density evaluations a single patch bake may cost.
+#[derive(Resource, Debug, Clone)]
+pub struct VolumetricGeologySettings {
+    /// Master switch. Off by default; the heightmap surface is authoritative
+    /// and unchanged while this is false.
+    pub enabled: bool,
+    /// Only patches at or above this cube-sphere LOD level (smaller and nearer)
+    /// are considered, bounding the number of shells and their cost.
+    pub min_level: u32,
+    /// Voxel size in metres.
+    pub cell_m: f64,
+    /// Patch half-width scanned, as a fraction of the patch world size.
+    pub half_extent_factor: f64,
+    /// Vertical band scanned around the patch-centre height, in metres. It must
+    /// cover the patch relief so the shell spans the whole patch.
+    pub vertical_range_m: f64,
+    /// Hard cap on density samples per patch; patches exceeding it are skipped.
+    pub max_samples: usize,
+    /// The Module 3 density field configuration.
+    pub config: crate::domain::services::volumetric_geology::VolumetricGeologyConfig,
+}
+
+impl Default for VolumetricGeologySettings {
+    fn default() -> Self {
+        // Off unless explicitly requested, so the heightmap surface stays
+        // authoritative by default. The environment switch matches the other
+        // COSMIC_SYSTEMS_* terrain toggles used for experiments.
+        let enabled = matches!(
+            std::env::var("COSMIC_SYSTEMS_VOLUMETRIC_GEOLOGY").as_deref(),
+            Ok("1") | Ok("true") | Ok("on")
+        );
+        Self {
+            enabled,
+            min_level: 14,
+            cell_m: 8.0,
+            half_extent_factor: 0.5,
+            vertical_range_m: 128.0,
+            max_samples: 262_144,
+            config: crate::domain::services::volumetric_geology::VolumetricGeologyConfig {
+                // Lift the shell just above the heightmap so coplanar regions
+                // do not z-fight while the shell is a separate surface.
+                surface_bias_m: 0.25,
+                ..Default::default()
+            },
+        }
+    }
+}
+
 /// Bounded, deterministic configuration for baked terrain occlusion.
 ///
 /// Every field caps work rather than expressing a target: the per-bake sun and
@@ -601,6 +661,7 @@ impl Plugin for TerrainRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderOrigin>()
             .init_resource::<TerrainRenderConfig>()
+            .init_resource::<VolumetricGeologySettings>()
             .init_resource::<TerrainRenderAssets>()
             .init_resource::<PendingTerrainPatchUploads>()
             .init_resource::<TerrainPerformanceTelemetry>()
@@ -1078,6 +1139,13 @@ fn spawn_patch_mesh_system(
         // small near the camera (avoids precision loss at ~6371 km magnitudes
         // that degrades the sphere into a flat plane with broken triangles).
         let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+        // Module 3 rock shell, when volumetric geology produced one for this
+        // patch. Built here so it borrows the same body-fixed frame as the
+        // heightmap mesh; it is spawned as a child below.
+        let volumetric_mesh = cached_geometry
+            .volumetric
+            .as_ref()
+            .map(|shell| rock_shell_to_mesh(shell, &render_origin.origin, body_to_inertial));
         let mesh_construction_started = instrumentation_enabled.then(Instant::now);
         let mesh = patch_geometry_to_mesh(
             geometry,
@@ -1286,8 +1354,10 @@ fn spawn_patch_mesh_system(
             terrain_performance.current_mut(instrumentation_enabled),
         ) {
             record.cpu_to_gpu_submission_ms += started.elapsed().as_secs_f64() * 1_000.0;
-            record.mesh_assets_created +=
-                1 + vegetation_mesh_asset_count + usize::from(river_mesh_handle.is_some());
+            record.mesh_assets_created += 1
+                + vegetation_mesh_asset_count
+                + usize::from(river_mesh_handle.is_some())
+                + usize::from(volumetric_mesh.is_some());
             record.material_assets_created += 1 + vegetation_material_asset_count;
             record.image_assets_created += local_image_asset_count
                 + usize::from(occlusion_owned)
@@ -1441,6 +1511,27 @@ fn spawn_patch_mesh_system(
                 });
             }
         }
+        // The Module 3 rock shell is body-fixed planet-centred like the terrain
+        // mesh, so an identity child transform inherits the patch's pose. It is
+        // marked non-caster/non-receiver to match the terrain's baked self-shadow
+        // policy and avoid cascade shimmer at planet scale.
+        if let Some(shell_mesh) = volumetric_mesh {
+            let shell_handle = meshes.add(shell_mesh);
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Mesh3d(shell_handle),
+                    MeshMaterial3d(material_handle.clone()),
+                    Transform::IDENTITY,
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                    Name::new(format!(
+                        "RockShell_{:?}_{}_{}_{}",
+                        patch.face, patch.level, patch.tile_x, patch.tile_y
+                    )),
+                ));
+            });
+        }
+
         if let (Some(started), Some(record)) = (
             activation_started,
             terrain_performance.current_mut(instrumentation_enabled),
@@ -1853,6 +1944,67 @@ fn patch_geometry_to_mesh(
 
     // Indices.
     mesh.insert_indices(Indices::U32(geometry.indices.clone()));
+
+    mesh
+}
+
+/// Convert a body-fixed Module 3 rock shell to a Bevy mesh in the flight frame.
+/// Positions and normals are rebased exactly like `patch_geometry_to_mesh`; UV0
+/// is the equirectangular geographic coordinate for global imagery, and UV1 is
+/// the neutral centre of the patch occlusion map. The shell carries no LOD morph
+/// offset, so the vertex-colour red channel is zero.
+fn rock_shell_to_mesh(
+    shell: &RockShell,
+    render_origin: &DVec3,
+    body_to_inertial: bevy::math::DQuat,
+) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    let positions: Vec<[f32; 3]> = shell
+        .positions
+        .iter()
+        .map(|p| {
+            let v = body_to_inertial * DVec3::from_array(*p) - *render_origin;
+            [v.x as f32, v.y as f32, v.z as f32]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+
+    let normals: Vec<[f32; 3]> = shell
+        .normals
+        .iter()
+        .map(|n| {
+            let n = body_to_inertial * DVec3::from_array(*n);
+            [n.x as f32, n.y as f32, n.z as f32]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+
+    let uvs: Vec<[f32; 2]> = shell
+        .positions
+        .iter()
+        .map(|p| {
+            let direction = DVec3::from_array(*p).normalize_or_zero();
+            let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
+            [
+                ((longitude_deg + 180.0) / 360.0) as f32,
+                ((90.0 - latitude_deg) / 180.0) as f32,
+            ]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_1,
+        vec![[0.5f32, 0.5f32]; shell.positions.len()],
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        vec![[0.0f32, 0.0, 0.0, 1.0]; shell.positions.len()],
+    );
+    mesh.insert_indices(Indices::U32(shell.indices.clone()));
 
     mesh
 }
@@ -2581,6 +2733,27 @@ mod tests {
     };
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn rock_shell_mesh_has_matching_attributes() {
+        let shell = RockShell {
+            positions: vec![
+                [6_371_000.0, 0.0, 0.0],
+                [6_371_000.0, 1.0, 0.0],
+                [6_371_000.0, 0.0, 1.0],
+            ],
+            normals: vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            indices: vec![0, 1, 2],
+        };
+        let mesh = rock_shell_to_mesh(&shell, &DVec3::ZERO, DQuat::IDENTITY);
+        assert_eq!(mesh.count_vertices(), 3);
+        assert_eq!(mesh.indices().unwrap().len(), 3);
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
+    }
 
     #[test]
     fn body_texture_anchor_reconstructs_the_absolute_phase_precisely() {

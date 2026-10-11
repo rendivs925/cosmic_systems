@@ -27,9 +27,11 @@
 
 mod dual_contouring;
 mod field;
+mod shell;
 
 pub use dual_contouring::{extract_surface, ExtractedSurface, VoxelGrid};
 pub use field::{DensityField, PatchFrame};
+pub use shell::{build_rock_shell, RockShell};
 
 /// Configuration for the Module 3 volumetric density field. Every field carries
 /// explicit units; defaults follow `docs/technical_modules/3.md` section 4.
@@ -68,6 +70,11 @@ pub struct VolumetricGeologyConfig {
     /// metres. The Module 3 specification has no equivalent field; it is named
     /// here so the slope mask has a documented, configuration-driven scale.
     pub slope_probe_m: f64,
+    /// Presentation bias added to the density before extraction, in metres. A
+    /// small positive bias lifts the extracted shell just above the heightmap
+    /// surface so the two are not coplanar where the 3D perturbation vanishes,
+    /// avoiding z-fighting. It does not change the physical field.
+    pub surface_bias_m: f64,
     /// Deterministic seed for every noise and Voronoi lookup.
     pub seed: u64,
 }
@@ -87,6 +94,7 @@ impl Default for VolumetricGeologyConfig {
             joint_width: 0.25,
             joint_sharpness: 4.0,
             slope_probe_m: 2.0,
+            surface_bias_m: 0.0,
             seed: 0,
         }
     }
@@ -133,6 +141,9 @@ impl VolumetricGeologyConfig {
         }
         if !finite(self.slope_probe_m) || self.slope_probe_m <= 0.0 {
             return Err("slope_probe_m must be finite and positive");
+        }
+        if !finite(self.surface_bias_m) || self.surface_bias_m < 0.0 {
+            return Err("surface_bias_m must be finite and non-negative");
         }
         Ok(())
     }

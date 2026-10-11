@@ -60,6 +60,19 @@ impl VoxelGrid {
     /// Sample a density field onto a node lattice. Gradients use central
     /// differences at half a cell, matching the extraction resolution.
     pub fn sample(field: &DensityField<'_>, origin: DVec3, cell_m: f64, dims: [usize; 3]) -> Self {
+        Self::sample_with_bias(field, origin, cell_m, dims, 0.0)
+    }
+
+    /// Sample a density field with a constant bias added to every node density.
+    /// A bias shifts the isosurface without changing the field gradient, so the
+    /// gradients are unaffected.
+    pub fn sample_with_bias(
+        field: &DensityField<'_>,
+        origin: DVec3,
+        cell_m: f64,
+        dims: [usize; 3],
+        bias_m: f64,
+    ) -> Self {
         let mut densities = Vec::with_capacity(Self::node_count(dims));
         let mut gradients = Vec::with_capacity(Self::node_count(dims));
         let step = cell_m * 0.5;
@@ -67,7 +80,7 @@ impl VoxelGrid {
             for j in 0..dims[1] {
                 for i in 0..dims[0] {
                     let p = origin + DVec3::new(i as f64, j as f64, k as f64) * cell_m;
-                    densities.push(field.density(p));
+                    densities.push(field.density(p) + bias_m);
                     gradients.push(field.gradient(p, step));
                 }
             }
@@ -101,9 +114,11 @@ impl VoxelGrid {
 }
 
 /// The triangle mesh extracted from a [`VoxelGrid`], in patch-local metres.
+/// `normals` are outward unit normals parallel to `vertices`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExtractedSurface {
     pub vertices: Vec<DVec3>,
+    pub normals: Vec<DVec3>,
     pub indices: Vec<u32>,
 }
 
@@ -151,12 +166,14 @@ pub fn extract_surface(grid: &VoxelGrid) -> ExtractedSurface {
 
     let mut cell_vertex: Vec<Option<u32>> = vec![None; cell_count];
     let mut vertices: Vec<DVec3> = Vec::new();
+    let mut normals: Vec<DVec3> = Vec::new();
     for k in 0..cells[2] {
         for j in 0..cells[1] {
             for i in 0..cells[0] {
-                if let Some(vertex) = cell_vertex_position(grid, i, j, k) {
+                if let Some((vertex, normal)) = cell_vertex_position(grid, i, j, k) {
                     cell_vertex[cell_index(i, j, k)] = Some(vertices.len() as u32);
                     vertices.push(vertex);
+                    normals.push(normal);
                 }
             }
         }
@@ -216,7 +233,11 @@ pub fn extract_surface(grid: &VoxelGrid) -> ExtractedSurface {
         }
     }
 
-    ExtractedSurface { vertices, indices }
+    ExtractedSurface {
+        vertices,
+        normals,
+        indices,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -263,7 +284,12 @@ fn emit_quad(
 }
 
 /// Solve the cell QEF and clamp the result to the cell bounding box.
-fn cell_vertex_position(grid: &VoxelGrid, ci: usize, cj: usize, ck: usize) -> Option<DVec3> {
+fn cell_vertex_position(
+    grid: &VoxelGrid,
+    ci: usize,
+    cj: usize,
+    ck: usize,
+) -> Option<(DVec3, DVec3)> {
     let mut qef = Qef::new();
     for [a, b] in EDGES {
         let ca = CORNERS[a];
@@ -299,7 +325,8 @@ fn cell_vertex_position(grid: &VoxelGrid, ci: usize, cj: usize, ck: usize) -> Op
 
     let min = grid.position(ci, cj, ck);
     let max = min + DVec3::splat(grid.cell_m());
-    qef.solve(min, max)
+    let vertex = qef.solve(min, max)?;
+    Some((vertex, qef.outward_normal()))
 }
 
 /// A quadratic error function accumulated from Hermite edge samples.
@@ -308,6 +335,7 @@ struct Qef {
     ata: [[f64; 3]; 3],
     atb: [f64; 3],
     mass: DVec3,
+    normal_sum: DVec3,
     count: u32,
 }
 
@@ -317,6 +345,7 @@ impl Qef {
             ata: [[0.0; 3]; 3],
             atb: [0.0; 3],
             mass: DVec3::ZERO,
+            normal_sum: DVec3::ZERO,
             count: 0,
         }
     }
@@ -333,11 +362,23 @@ impl Qef {
             *b += d * n_i;
         }
         self.mass += point;
+        self.normal_sum += normal;
         self.count += 1;
     }
 
     fn mass_point(&self) -> DVec3 {
         self.mass / self.count as f64
+    }
+
+    /// Outward shading normal: opposite the average density gradient, which
+    /// points from air into rock. Falls back to +Z when the average cancels.
+    fn outward_normal(&self) -> DVec3 {
+        let normal = -self.normal_sum;
+        if normal.length_squared() > 1.0e-12 {
+            normal.normalize()
+        } else {
+            DVec3::Z
+        }
     }
 
     /// Minimize `E(x)` subject to a small regularization toward the mass point,
@@ -466,11 +507,14 @@ mod tests {
         });
         let surface = extract_surface(&grid);
         assert!(!surface.is_empty());
-        for v in &surface.vertices {
+        assert_eq!(surface.vertices.len(), surface.normals.len());
+        for (v, n) in surface.vertices.iter().zip(&surface.normals) {
             assert!(
                 (v.z - 1.2).abs() <= grid.cell_m() + 1e-9,
                 "vertex off plane: {v:?}"
             );
+            assert!((n.length() - 1.0).abs() < 1e-9);
+            assert!(n.z > 0.9, "vertex normal does not point up: {n:?}");
         }
         // Every triangle normal points up, from rock (below) into air (above).
         for tri in surface.indices.as_chunks::<3>().0 {

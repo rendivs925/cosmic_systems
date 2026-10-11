@@ -12,9 +12,9 @@
 //! in [`metrics`].
 
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, direction_to_lat_lon, select_quadtree_leaves,
-    visible_leaves_for_cover, CameraProjection, PatchEdge, PatchGeometry, QuadtreePatchState,
-    QuadtreeSelectionConfig, TerrainPatch,
+    build_patch_geometry_with_stitches, direction_to_lat_lon, patch_world_size_m,
+    select_quadtree_leaves, visible_leaves_for_cover, CameraProjection, PatchEdge, PatchGeometry,
+    QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
 };
 use crate::domain::services::elevation_pyramid::{
     ElevationPyramidError, ElevationTile, TileElevationSource,
@@ -26,6 +26,9 @@ use crate::domain::services::reference_frames::{
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use crate::domain::services::vegetation::VegetationConfig;
+use crate::domain::services::volumetric_geology::{
+    build_rock_shell, RockShell, VolumetricGeologyConfig,
+};
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
@@ -38,6 +41,7 @@ use crate::infrastructure::bevy_adapters::terrain::imagery::{
 use crate::infrastructure::bevy_adapters::terrain::performance::TerrainPerformanceTelemetry;
 use crate::infrastructure::bevy_adapters::terrain::render::{
     RenderOrigin, TerrainPatchCached, TerrainPatchEvicted, TerrainPatchReady, TerrainRenderConfig,
+    VolumetricGeologySettings,
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
     max_river_mesh_bytes, prepare_patch_surface, supports_local_surfaces, PreparedPatchSurface,
@@ -211,6 +215,7 @@ impl TerrainStreamingResource {
                     geometry: generated.geometry,
                     surface: Some(generated.surface),
                     stitch_mask: generated.stitch_mask,
+                    volumetric: generated.volumetric,
                 },
             );
             self.manager.mark_ready(&patch);
@@ -379,6 +384,9 @@ impl TerrainStreamingResource {
 pub struct CachedTerrainGeometry {
     pub geometry: PatchGeometry,
     pub(crate) surface: Option<PreparedPatchSurface>,
+    /// Optional Module 3 rock shell (body-fixed planet-centred), present only
+    /// when volumetric geology is enabled and the patch is steep enough.
+    pub(crate) volumetric: Option<RockShell>,
     stitch_mask: u8,
 }
 
@@ -391,6 +399,7 @@ impl CachedTerrainGeometry {
         Self {
             geometry,
             surface: None,
+            volumetric: None,
             stitch_mask: 0,
         }
     }
@@ -409,6 +418,17 @@ struct TerrainPatchBakeRequest {
     skirt_depth_m: f64,
     stitched_edges: Vec<PatchEdge>,
     land_cover: Option<Arc<LandCoverPackage>>,
+    /// Present when volumetric geology applies to this patch.
+    volumetric: Option<VolumetricBakeRequest>,
+}
+
+/// The bounded parameters for one Module 3 rock shell bake.
+#[derive(Debug, Clone, Copy)]
+struct VolumetricBakeRequest {
+    config: VolumetricGeologyConfig,
+    cell_m: f64,
+    half_extent_m: f64,
+    vertical_range_m: f64,
 }
 
 impl TerrainPatchBakeRequest {
@@ -433,9 +453,21 @@ impl TerrainPatchBakeRequest {
                 self.radius_m,
                 self.land_cover.as_deref(),
             );
+            let volumetric = self.volumetric.and_then(|request| {
+                build_rock_shell(
+                    self.source.as_ref(),
+                    patch.center_direction(),
+                    self.radius_m,
+                    request.half_extent_m,
+                    request.vertical_range_m,
+                    request.cell_m,
+                    request.config,
+                )
+            });
             GeneratedTerrainPatch {
                 geometry,
                 surface,
+                volumetric,
                 stitch_mask: stitch_mask(&self.stitched_edges),
                 generation_ms: generation_started.elapsed().as_secs_f64() * 1_000.0,
             }
@@ -508,8 +540,40 @@ impl TerrainCancellation {
 struct GeneratedTerrainPatch {
     geometry: PatchGeometry,
     surface: PreparedPatchSurface,
+    volumetric: Option<RockShell>,
     stitch_mask: u8,
     generation_ms: f64,
+}
+
+/// Decide whether a patch gets a Module 3 rock shell, and with what bounds.
+/// Returns `None` when volumetric geology is disabled, the patch is coarser than
+/// the configured level, or the bounded sample count would exceed the cap.
+fn volumetric_bake_for(
+    patch: TerrainPatch,
+    radius_m: f64,
+    settings: &VolumetricGeologySettings,
+) -> Option<VolumetricBakeRequest> {
+    if !settings.enabled || patch.level < settings.min_level || settings.config.validate().is_err()
+    {
+        return None;
+    }
+    let world_size = patch_world_size_m(patch.level, radius_m);
+    let half_extent_m = world_size * settings.half_extent_factor;
+    let cell_m = settings.cell_m;
+    if half_extent_m <= 0.0 || cell_m <= 0.0 || settings.vertical_range_m <= 0.0 {
+        return None;
+    }
+    let horizontal = ((half_extent_m * 2.0 / cell_m).round() as usize).max(1) + 1;
+    let vertical = ((settings.vertical_range_m / cell_m).round() as usize).max(1) + 1;
+    if horizontal * horizontal * vertical > settings.max_samples {
+        return None;
+    }
+    Some(VolumetricBakeRequest {
+        config: settings.config,
+        cell_m,
+        half_extent_m,
+        vertical_range_m: settings.vertical_range_m,
+    })
 }
 
 /// Streaming system: keep viewport-visible root tiles available for the bound
@@ -536,6 +600,7 @@ pub(crate) fn stream_terrain_patches(
     mut cached_events: MessageWriter<TerrainPatchCached>,
     mut evicted_events: MessageWriter<TerrainPatchEvicted>,
     config: Res<TerrainRenderConfig>,
+    volumetric_settings: Res<VolumetricGeologySettings>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     time: Res<Time>,
     render_origin: Res<RenderOrigin>,
@@ -895,6 +960,7 @@ pub(crate) fn stream_terrain_patches(
                 skirt_depth_m: config.skirt_depth_m,
                 stitched_edges: stitch_edges,
                 land_cover: land_cover.clone(),
+                volumetric: volumetric_bake_for(patch, radius_m, &volumetric_settings),
             },
             task_pool,
         );
@@ -2002,6 +2068,7 @@ mod tests {
                     indices: Vec::new(),
                 },
                 surface: None,
+                volumetric: None,
                 stitch_mask: 0,
             },
         );
@@ -2061,6 +2128,7 @@ mod tests {
                     indices: Vec::new(),
                 },
                 surface: None,
+                volumetric: None,
                 stitch_mask: 0,
             },
         );
@@ -2176,6 +2244,7 @@ mod tests {
                     indices: Vec::new(),
                 },
                 surface: None,
+                volumetric: None,
                 stitch_mask: 0,
             },
         );
@@ -2284,6 +2353,7 @@ mod tests {
                     indices: Vec::new(),
                 },
                 surface: None,
+                volumetric: None,
                 stitch_mask: stitch_mask(&stitch_edges_for(
                     patch,
                     &BTreeSet::from([patch, equal_neighbor]),
@@ -2387,6 +2457,7 @@ mod tests {
                     indices: Vec::new(),
                 },
                 surface: None,
+                volumetric: None,
                 stitch_mask: 0,
             },
         );
@@ -2493,5 +2564,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn volumetric_bake_gating_respects_switch_level_and_cap() {
+        use crate::domain::services::cube_sphere::CubeFace;
+        let patch = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 14,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let radius_m = 6_371_000.0;
+
+        let disabled = VolumetricGeologySettings::default();
+        if !disabled.enabled {
+            assert!(volumetric_bake_for(patch, radius_m, &disabled).is_none());
+        }
+
+        let mut enabled = VolumetricGeologySettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let request = volumetric_bake_for(patch, radius_m, &enabled)
+            .expect("an eligible patch within the sample cap should bake");
+        assert!(request.half_extent_m > 0.0);
+        assert!(request.cell_m > 0.0);
+
+        let coarse = TerrainPatch {
+            level: enabled.min_level.saturating_sub(1),
+            ..patch
+        };
+        assert!(volumetric_bake_for(coarse, radius_m, &enabled).is_none());
+
+        enabled.max_samples = 1;
+        assert!(volumetric_bake_for(patch, radius_m, &enabled).is_none());
     }
 }
