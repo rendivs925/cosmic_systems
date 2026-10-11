@@ -42,6 +42,9 @@ use crate::infrastructure::bevy_adapters::terrain::surface::{
     LAYER_HEIGHT_CONTRAST, LAYER_NORMAL_STRENGTH, LAYER_TILING_SCALE, NEAR_DETAIL_SCALE,
     NEAR_DETAIL_STRENGTH,
 };
+use crate::infrastructure::bevy_adapters::terrain::vegetation_material::{
+    VegetationExtension, VegetationMaterial, VegetationParams,
+};
 use crate::infrastructure::bevy_adapters::terrain::water::{
     WaterExtension, WaterMaterial, WaterParams, WaterQualityConfig,
 };
@@ -418,7 +421,7 @@ pub struct TerrainPatchRenderState {
 /// from their geographic surface sample.
 #[derive(Resource, Default)]
 struct TerrainRenderAssets {
-    vegetation_material: Option<Handle<StandardMaterial>>,
+    vegetation_material: Option<Handle<VegetationMaterial>>,
     /// One shared water material; every ocean patch reuses it.
     water_material: Option<Handle<WaterMaterial>>,
     /// One shared river material; every drainage ribbon reuses it.
@@ -689,6 +692,7 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainMaterialFrame>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
+            .add_plugins(MaterialPlugin::<VegetationMaterial>::default())
             .add_message::<TerrainPatchReady>()
             .add_message::<TerrainPatchCached>()
             .add_message::<TerrainPatchEvicted>()
@@ -703,6 +707,7 @@ impl Plugin for TerrainRenderPlugin {
                 (
                     recenter_render_origin.before(stream_terrain_patches),
                     update_water_material,
+                    update_vegetation_material,
                     update_terrain_material_origin.after(recenter_render_origin),
                 ),
             )
@@ -787,8 +792,8 @@ fn prepare_terrain_render_assets(
     imagery: Res<TerrainImageryResource>,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut images: ResMut<Assets<Image>>,
-    mut standard_materials: ResMut<Assets<StandardMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
+    mut vegetation_materials: ResMut<Assets<VegetationMaterial>>,
 ) {
     render_assets.patch_resolution = config.patch_resolution;
     render_assets.occlusion = occlusion_config.clone();
@@ -806,16 +811,19 @@ fn prepare_terrain_render_assets(
     // One alpha-masked foliage material is shared by every patch. It is created
     // once here so no patch spawn path needs the image assets.
     let vegetation_atlas = images.add(vegetation_atlas());
-    render_assets.vegetation_material = Some(standard_materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(vegetation_atlas.clone()),
-        alpha_mode: AlphaMode::Mask(0.5),
-        perceptual_roughness: 0.9,
-        metallic: 0.0,
-        // Billboards must be visible from both sides; Bevy flips normals for the
-        // back face in PBR.
-        cull_mode: None,
-        ..default()
+    render_assets.vegetation_material = Some(vegetation_materials.add(VegetationMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(vegetation_atlas.clone()),
+            alpha_mode: AlphaMode::Mask(0.5),
+            perceptual_roughness: 0.9,
+            metallic: 0.0,
+            // Billboards must be visible from both sides; Bevy flips normals for
+            // the back face in PBR.
+            cull_mode: None,
+            ..default()
+        },
+        extension: VegetationExtension::new(VegetationParams::default()),
     }));
     let neutral_occlusion = neutral_occlusion_image(&mut render_assets, &mut images);
     let ocean_params = WaterParams {
@@ -873,6 +881,24 @@ fn update_water_material(
     // Every water material (shared and per-patch) advances the same presentation
     // clock, so a shared wave field stays coherent across all caps.
     for (_, material) in water_materials.iter_mut() {
+        material.extension.params.time_s = elapsed_s;
+        material.extension.params.planet_center = planet_center;
+    }
+}
+
+/// Advance the shared vegetation wind phase and keep every vegetation material
+/// bound to the current render origin. Presentation only; never read by the
+/// simulation, terrain source, or collision. Like the water clock, the origin is
+/// refreshed here so materials created after a recentre are correct on their
+/// first frame.
+fn update_vegetation_material(
+    time: Res<Time>,
+    render_origin: Res<RenderOrigin>,
+    mut vegetation_materials: ResMut<Assets<VegetationMaterial>>,
+) {
+    let elapsed_s = time.elapsed_secs();
+    let planet_center = (-render_origin.origin).as_vec3();
+    for (_, material) in vegetation_materials.iter_mut() {
         material.extension.params.time_s = elapsed_s;
         material.extension.params.planet_center = planet_center;
     }

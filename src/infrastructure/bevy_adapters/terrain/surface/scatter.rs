@@ -73,6 +73,9 @@ pub(super) struct MeshAccum {
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     uvs: Vec<[f32; 2]>,
+    /// Per-vertex wind sway weight in `[0, 1]` (0 at the base, 1 at the canopy),
+    /// carried in the second UV channel for the vegetation vertex shader.
+    sway_weights: Vec<[f32; 2]>,
     indices: Vec<u32>,
 }
 
@@ -94,6 +97,7 @@ impl MeshAccum {
             normals: Vec::new(),
             colors: Vec::new(),
             uvs: Vec::new(),
+            sway_weights: Vec::new(),
             indices: Vec::new(),
         }
     }
@@ -149,6 +153,9 @@ impl MeshAccum {
             self.colors.push([color[0], color[1], color[2], 1.0]);
             self.uvs.push(OPAQUE_UV);
             self.uvs.push(OPAQUE_UV);
+            // Trunk base is planted; the top sways only slightly.
+            self.sway_weights.push([0.0, 0.0]);
+            self.sway_weights.push([0.15, 0.0]);
         }
 
         for s in 0..segments {
@@ -210,6 +217,8 @@ impl MeshAccum {
                     .push([normal.x as f32, normal.y as f32, normal.z as f32]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
                 self.uvs.push(OPAQUE_UV);
+                // Buttress roots stay planted.
+                self.sway_weights.push([0.0, 0.0]);
             }
         }
         let f = |index: u32| start + index;
@@ -306,6 +315,9 @@ impl MeshAccum {
             }
             let bitangent = tangents[index].cross(normal).normalize_or_zero();
             ring_starts.push(self.positions.len() as u32);
+            // Branches bend progressively from the trunk (0.15) to the tip.
+            let ring_t = index as f64 / (points.len() - 1).max(1) as f64;
+            let sway = (0.15 + 0.45 * ring_t) as f32;
             for s in 0..=segments {
                 let a = s as f64 / segments as f64 * std::f64::consts::TAU;
                 let radial = normal * a.cos() + bitangent * a.sin();
@@ -316,6 +328,7 @@ impl MeshAccum {
                     .push([radial.x as f32, radial.y as f32, radial.z as f32]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
                 self.uvs.push(OPAQUE_UV);
+                self.sway_weights.push([sway, 0.0]);
             }
         }
         for window in ring_starts.windows(2) {
@@ -413,6 +426,8 @@ impl MeshAccum {
                 1.0,
             ]);
             self.uvs.push(OPAQUE_UV);
+            // Rocks never sway.
+            self.sway_weights.push([0.0, 0.0]);
         }
 
         for r in 0..rings {
@@ -489,6 +504,8 @@ impl MeshAccum {
                 ]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
                 self.uvs.push(uv);
+                // Canopy and grass cards sway fully.
+                self.sway_weights.push([1.0, 0.0]);
             }
             self.indices.extend_from_slice(&[
                 start,
@@ -510,6 +527,7 @@ impl MeshAccum {
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, self.sway_weights);
         mesh.insert_indices(Indices::U32(self.indices));
         mesh
     }
@@ -1501,5 +1519,52 @@ mod tests {
             [0.0; 3],
         );
         assert_eq!(empty.into_mesh().count_vertices(), 0);
+    }
+
+    /// Every vegetation vertex must carry a wind sway weight in the second UV
+    /// channel: zero at the trunk base and buttress roots, one at the canopy and
+    /// grass cards, so the vertex shader keeps the base planted.
+    #[test]
+    fn vegetation_mesh_carries_sway_weights_in_uv1() {
+        let mut accum = MeshAccum::new();
+        accum.push_prism(DVec3::ZERO, DVec3::Y, 0.2, 0.16, 3.0, 4, [0.1, 0.05, 0.02]);
+        accum.push_buttress_root(
+            DVec3::ZERO,
+            DVec3::Y,
+            DVec3::X,
+            0.2,
+            0.5,
+            0.4,
+            0.1,
+            [0.1, 0.05, 0.02],
+        );
+        accum.push_cross_cards(
+            DVec3::new(0.0, 3.0, 0.0),
+            DVec3::Y,
+            2.0,
+            2.0,
+            2,
+            0.0,
+            [0.0, 0.5, 0.5, 1.0],
+            [0.2, 0.4, 0.1],
+            None,
+        );
+        let mesh = accum.into_mesh();
+        let weights = match mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x2(values) => values,
+            other => panic!("unexpected uv1 attribute {other:?}"),
+        };
+        assert_eq!(weights.len(), mesh.count_vertices());
+        assert!(
+            weights.iter().all(|w| (0.0..=1.0).contains(&w[0])),
+            "sway weights must be normalized"
+        );
+        let min = weights.iter().map(|w| w[0]).fold(f32::INFINITY, f32::min);
+        let max = weights.iter().map(|w| w[0]).fold(f32::MIN, f32::max);
+        assert!(min.abs() < 1e-6, "the base must be planted (min {min})");
+        assert!(
+            (max - 1.0).abs() < 1e-6,
+            "the canopy must sway fully (max {max})"
+        );
     }
 }
