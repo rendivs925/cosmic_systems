@@ -160,6 +160,7 @@ impl VegetationSpecies {
                 canopy_width_m: 6.0,
                 canopy_layers: 2,
                 branch_count: 4,
+                buttress_roots: 4,
                 min_density: 0.30,
                 min_spacing_m: 5.0,
                 max_slope_deg: 34.0,
@@ -173,6 +174,7 @@ impl VegetationSpecies {
                 canopy_width_m: 4.5,
                 canopy_layers: 2,
                 branch_count: 4,
+                buttress_roots: 3,
                 min_density: 0.24,
                 min_spacing_m: 4.5,
                 max_slope_deg: 34.0,
@@ -186,6 +188,7 @@ impl VegetationSpecies {
                 canopy_width_m: 3.0,
                 canopy_layers: 3,
                 branch_count: 3,
+                buttress_roots: 0,
                 min_density: 0.18,
                 min_spacing_m: 3.5,
                 max_slope_deg: 38.0,
@@ -199,6 +202,7 @@ impl VegetationSpecies {
                 canopy_width_m: 4.2,
                 canopy_layers: 1,
                 branch_count: 6,
+                buttress_roots: 0,
                 min_density: 0.45,
                 min_spacing_m: 5.5,
                 max_slope_deg: 24.0,
@@ -212,6 +216,7 @@ impl VegetationSpecies {
                 canopy_width_m: 1.7,
                 canopy_layers: 1,
                 branch_count: 3,
+                buttress_roots: 0,
                 min_density: 0.10,
                 min_spacing_m: 1.6,
                 max_slope_deg: 40.0,
@@ -225,6 +230,7 @@ impl VegetationSpecies {
                 canopy_width_m: 0.55,
                 canopy_layers: 1,
                 branch_count: 0,
+                buttress_roots: 0,
                 min_density: 0.05,
                 min_spacing_m: 0.6,
                 max_slope_deg: 32.0,
@@ -247,6 +253,9 @@ pub struct SpeciesProfile {
     /// Number of primary branches extruded continuously from the trunk before
     /// the canopy clusters. Zero for ground cover.
     pub branch_count: u8,
+    /// Number of flared root buttresses at the trunk base, or zero for species
+    /// without them. Buttress roots are a broadleaf-rainforest trait.
+    pub buttress_roots: u8,
     pub min_density: f64,
     /// Minimum in-species spacing, in meters. Canopy species need more room
     /// than understory shrubs, which need more than ground cover.
@@ -673,6 +682,33 @@ mod tests {
         assert!(conifer.canopy_width_m < broadleaf.canopy_width_m);
         assert!(palm.canopy_width_m > palm.canopy_height_m);
         assert!(VegetationSpecies::Shrub.profile().canopy_height_m < broadleaf.canopy_height_m);
+    }
+
+    #[test]
+    fn buttress_roots_are_a_broadleaf_trait() {
+        assert!(
+            VegetationSpecies::TropicalBroadleaf
+                .profile()
+                .buttress_roots
+                > 0
+        );
+        assert!(
+            VegetationSpecies::TemperateBroadleaf
+                .profile()
+                .buttress_roots
+                > 0
+        );
+        for species in [
+            VegetationSpecies::Conifer,
+            VegetationSpecies::Palm,
+            VegetationSpecies::Shrub,
+            VegetationSpecies::Grass,
+        ] {
+            assert_eq!(species.profile().buttress_roots, 0);
+        }
+        for species in VegetationSpecies::ALL {
+            assert!(species.profile().buttress_roots <= 6);
+        }
     }
 
     #[test]

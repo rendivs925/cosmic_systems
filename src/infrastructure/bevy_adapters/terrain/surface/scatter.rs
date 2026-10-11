@@ -160,6 +160,87 @@ impl MeshAccum {
         }
     }
 
+    /// Extrude a thin, tapered buttress-root fin from the trunk surface down and
+    /// outward to the ground. `outward` is the horizontal root direction,
+    /// `trunk_r` the trunk base radius, `length_m` the horizontal reach,
+    /// `height_m` how far up the trunk the fin meets it, and `thickness_m` the
+    /// fin thickness. The fin is a closed triangular wedge so it reads from both
+    /// sides.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The buttress fin accepts its complete wedge geometry."
+    )]
+    fn push_buttress_root(
+        &mut self,
+        base: DVec3,
+        up: DVec3,
+        outward: DVec3,
+        trunk_r: f64,
+        length_m: f64,
+        height_m: f64,
+        thickness_m: f64,
+        color: [f32; 3],
+    ) {
+        if length_m <= 0.0 || height_m <= 0.0 || thickness_m <= 0.0 {
+            return;
+        }
+        let radial = (outward - up * outward.dot(up)).normalize_or_zero();
+        if radial.length_squared() <= 0.0 {
+            return;
+        }
+        let side = up.cross(radial).normalize_or_zero();
+        if side.length_squared() <= 0.0 {
+            return;
+        }
+        let half = thickness_m * 0.5;
+        // A fin that meets the trunk high and reaches the ground outward.
+        let inner_top = base + radial * (trunk_r * 0.6) + up * height_m;
+        let inner_bottom = base + radial * (trunk_r * 0.9);
+        let outer = base + radial * length_m - up * 0.03;
+        let profile = [inner_top, inner_bottom, outer];
+
+        let start = self.positions.len() as u32;
+        for sign in [1.0f64, -1.0] {
+            let offset = side * (half * sign);
+            let normal = (side * sign + up * 0.4).normalize_or_zero();
+            for point in profile {
+                let p = point + offset;
+                self.positions.push([p.x as f32, p.y as f32, p.z as f32]);
+                self.normals
+                    .push([normal.x as f32, normal.y as f32, normal.z as f32]);
+                self.colors.push([color[0], color[1], color[2], 1.0]);
+                self.uvs.push(OPAQUE_UV);
+            }
+        }
+        let f = |index: u32| start + index;
+        self.indices.extend_from_slice(&[
+            f(0),
+            f(1),
+            f(2), // front face
+            f(3),
+            f(5),
+            f(4), // back face
+            f(0),
+            f(2),
+            f(5),
+            f(0),
+            f(5),
+            f(3), // outer edge
+            f(2),
+            f(1),
+            f(4),
+            f(2),
+            f(4),
+            f(5), // base edge
+            f(1),
+            f(0),
+            f(3),
+            f(1),
+            f(3),
+            f(4), // trunk edge
+        ]);
+    }
+
     /// Extrude a continuous, tapered branch tube through `points` with a radius
     /// per point, connecting consecutive rings. Unlike stacking separate
     /// cylinders, the shared rings leave no gap at a branch joint, and the
@@ -924,6 +1005,32 @@ pub(super) fn build_grounded_vegetation_mesh(
             trunk_color,
         );
         let rotation = hash01(k as u64, patch.tile_x as u64, 7) * std::f64::consts::TAU;
+        // Flared root buttresses anchor broadleaf trees to the slope.
+        if profile.buttress_roots > 0 && trunk_h > 0.02 {
+            let reference = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
+            let tangent = up.cross(reference).normalize();
+            let bitangent = up.cross(tangent).normalize();
+            let roots = profile.buttress_roots as usize;
+            for r in 0..roots {
+                let azimuth = rotation
+                    + r as f64 * std::f64::consts::TAU / roots as f64
+                    + (hash01(r as u64, patch.tile_x as u64, 13) - 0.5) * 0.6;
+                let outward = tangent * azimuth.cos() + bitangent * azimuth.sin();
+                let reach = trunk_r * (2.4 + hash01(r as u64, patch.tile_y as u64, 17) * 0.9);
+                let root_height =
+                    trunk_h * (0.20 + hash01(r as u64, patch.tile_x as u64, 19) * 0.14);
+                accum.push_buttress_root(
+                    base,
+                    up,
+                    outward,
+                    trunk_r,
+                    reach,
+                    root_height,
+                    trunk_r * 0.5,
+                    trunk_color,
+                );
+            }
+        }
         let canopy_center = base + up * (trunk_h + canopy_h * 0.5);
         // Continuous primary branches extruded from the trunk, tapered by the
         // da Vinci pipe model so the parent cross-section is conserved across
@@ -1348,5 +1455,51 @@ mod tests {
             }
             previous = Some(radial);
         }
+    }
+
+    /// A buttress root is a closed, tapered fin: two sides of a triangular
+    /// profile (six vertices), a front and back face, and three quad edges. It
+    /// reaches outward to `length_m` and rises to `height_m`.
+    #[test]
+    fn buttress_root_is_a_closed_tapered_fin() {
+        let mut accum = MeshAccum::new();
+        accum.push_buttress_root(
+            DVec3::ZERO,
+            DVec3::Y,
+            DVec3::X,
+            0.2,
+            0.6,
+            0.5,
+            0.1,
+            [0.1, 0.05, 0.02],
+        );
+        let mesh = accum.into_mesh();
+        assert_eq!(mesh.count_vertices(), 6);
+        let indices = mesh.indices().expect("buttress has indices").len();
+        assert_eq!(indices, 2 * 3 + 3 * 6);
+
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x3(values) => values,
+            other => panic!("unexpected position attribute {other:?}"),
+        };
+        let max_x = positions.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
+        let max_y = positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        assert!((max_x - 0.6).abs() < 1e-5, "reach {max_x}");
+        assert!((max_y - 0.5).abs() < 1e-5, "height {max_y}");
+        assert!(positions.iter().all(|p| p.iter().all(|c| c.is_finite())));
+
+        // A degenerate request emits no geometry.
+        let mut empty = MeshAccum::new();
+        empty.push_buttress_root(
+            DVec3::ZERO,
+            DVec3::Y,
+            DVec3::X,
+            0.2,
+            0.0,
+            0.5,
+            0.1,
+            [0.0; 3],
+        );
+        assert_eq!(empty.into_mesh().count_vertices(), 0);
     }
 }

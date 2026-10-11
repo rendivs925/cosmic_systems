@@ -173,10 +173,11 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   Per-species `min_spacing_m` needs no placement filter: the tree lattice cell
   (~61 m at `TREE_SITE_LEVEL` on Earth) already exceeds the largest minimum, and
   a patch-local filter would break the cross-LOD nesting guarantee; a regression
-  test pins this (`lattice_spacing_exceeds_per_species_minimum`). Remaining:
-  buttress roots, canopy-lobe normals, the dedicated material (translucency,
-  GPU wind, alpha-tested shadows), procedural bark/foliage, impostor LOD, and
-  the vegetation shadow-marker fix.
+  test pins this (`lattice_spacing_exceeds_per_species_minimum`). Flared root
+  buttresses are now part of the broadleaf species profiles and extruded as
+  closed tapered fins at the trunk base. Remaining: canopy-lobe normals, the
+  dedicated material (translucency, GPU wind, alpha-tested shadows), procedural
+  bark/foliage, impostor LOD, and the vegetation shadow-marker fix.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 
