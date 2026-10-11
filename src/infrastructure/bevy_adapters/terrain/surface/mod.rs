@@ -146,6 +146,13 @@ pub(crate) fn max_river_mesh_bytes(resolution: u32) -> u64 {
 /// does not abruptly remove all recognisable vegetation.
 pub(crate) const VEGETATION_MIN_PATCH_LEVEL: u32 = 11;
 
+/// Far-field trees are drawn as cheap crossed-card impostors below the full-tree
+/// gate, down to this level, so zooming out keeps recognisable distant forest
+/// instead of dropping all vegetation at the coarse-tree boundary. Impostor
+/// sites use the same nested lattice, so a patch refining past this gate turns
+/// its impostors into the full trees that occupy the same positions.
+pub(crate) const VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL: u32 = 8;
+
 /// Ground cover (grass) and small rocks are only placed on close patches. They
 /// are too small to resolve further out, so they use a tighter level gate than
 /// trees and never inflate a coarse patch's mesh budget.
@@ -217,6 +224,17 @@ pub(crate) const MAX_VEGETATION_MESH_BYTES: u64 = {
 pub(crate) const MAX_COARSE_VEGETATION_MESH_BYTES: u64 =
     tree_vegetation_mesh_bytes(scatter::COARSE_TREE_BUDGET_CAP);
 
+/// Conservative maximum allocation for one far-field impostor vegetation mesh.
+/// Impostor patches build only crossed cards, so the reservation is a small
+/// fraction of a coarse tree-only mesh.
+pub(crate) const MAX_IMPOSTOR_VEGETATION_MESH_BYTES: u64 = {
+    let vertices =
+        scatter::IMPOSTOR_TREE_BUDGET_CAP as u64 * scatter::IMPOSTOR_CARD_PLANES as u64 * 4;
+    let indices =
+        scatter::IMPOSTOR_TREE_BUDGET_CAP as u64 * scatter::IMPOSTOR_CARD_PLANES as u64 * 6;
+    vertices * VEGETATION_BYTES_PER_VERTEX + indices * VEGETATION_BYTES_PER_INDEX
+};
+
 // The full lattice must stay within the configured tree budget, so the config
 // remains the single source of truth for per-patch placement capacity.
 const _: () = assert!(
@@ -225,7 +243,13 @@ const _: () = assert!(
 );
 
 pub(crate) fn supports_vegetation(patch_level: u32) -> bool {
-    patch_level >= VEGETATION_MIN_PATCH_LEVEL
+    patch_level >= VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL
+}
+
+/// Whether a vegetated patch is drawn as far-field impostors only (below the
+/// full-tree gate) rather than full trunk/branch/canopy geometry.
+pub(crate) fn vegetation_is_impostor_only(patch_level: u32) -> bool {
+    patch_level < VEGETATION_MIN_PATCH_LEVEL
 }
 
 pub(crate) fn supports_local_surfaces(patch_level: u32) -> bool {
@@ -691,7 +715,7 @@ mod tests {
     use super::scatter::{
         plan_rock_bodies, rock_acceptance_probability, rock_candidates, scatter_count_for_level,
         tree_side_for_level, tree_site_gate, MeshAccum, RockBody, COARSE_TREE_BUDGET_CAP,
-        FULL_TREE_BUDGET_CAP,
+        FULL_TREE_BUDGET_CAP, IMPOSTOR_CARD_PLANES,
     };
     use super::surface_maps::{
         mesh_surface_frame, papua_tropical_profile, terrain_albedo, SURFACE_TEX_RES,
@@ -1500,9 +1524,65 @@ mod tests {
     }
 
     #[test]
+    fn far_field_vegetation_is_impostor_cards() {
+        let source = DenseFlatTerrain;
+        let dir = DVec3::new(0.3, 0.4, 1.0).normalize();
+        let impostor_patch = TerrainPatch::for_direction(dir, VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL);
+        let impostor = build_vegetation_mesh(&source, &impostor_patch, 6_371_000.0, &DVec3::ZERO)
+            .expect("dense flat ground must grow impostors");
+        // Impostors are crossed cards only: no trunk/branch geometry, so the
+        // vertex count is a whole number of cards.
+        assert!(impostor.count_vertices() > 0);
+        assert_eq!(impostor.count_vertices() % (IMPOSTOR_CARD_PLANES * 4), 0);
+        let Some(VertexAttributeValues::Float32x2(uvs)) = impostor.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("impostor mesh must carry atlas coordinates");
+        };
+        // Every UV lands in a foliage cell, never the bark (trunk) cell.
+        let in_conifer = |uv: &[f32; 2]| {
+            uv[0] >= CONIFER_UV[0]
+                && uv[0] <= CONIFER_UV[2]
+                && uv[1] >= CONIFER_UV[1]
+                && uv[1] <= CONIFER_UV[3]
+        };
+        let in_broadleaf = |uv: &[f32; 2]| {
+            uv[0] >= BROADLEAF_UV[0]
+                && uv[0] <= BROADLEAF_UV[2]
+                && uv[1] >= BROADLEAF_UV[1]
+                && uv[1] <= BROADLEAF_UV[3]
+        };
+        assert!(uvs.iter().all(|uv| in_conifer(uv) || in_broadleaf(uv)));
+
+        // The full-tree gate keeps real trunk geometry (bark UVs) on the same
+        // ground, so the two tiers are genuinely different representations.
+        let full_patch = TerrainPatch::for_direction(dir, VEGETATION_MIN_PATCH_LEVEL);
+        let full = build_vegetation_mesh(&source, &full_patch, 6_371_000.0, &DVec3::ZERO)
+            .expect("dense flat ground must grow full trees");
+        let Some(VertexAttributeValues::Float32x2(full_uvs)) = full.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("full mesh must carry atlas coordinates");
+        };
+        assert!(
+            full_uvs
+                .iter()
+                .any(|uv| uv[0] >= BARK_UV[0] && uv[1] >= BARK_UV[1]),
+            "full trees must keep bark-mapped trunk geometry"
+        );
+    }
+
+    #[test]
     fn deterministic_vegetation_is_restricted_to_close_range_patches() {
-        assert!(!supports_vegetation(VEGETATION_MIN_PATCH_LEVEL - 1));
-        assert!(supports_vegetation(VEGETATION_MIN_PATCH_LEVEL));
+        assert!(!supports_vegetation(
+            VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL - 1
+        ));
+        assert!(supports_vegetation(VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL));
+        // Impostors cover the gap below the full-tree gate; full geometry begins
+        // at the full-tree level.
+        const { assert!(VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL < VEGETATION_MIN_PATCH_LEVEL) };
+        assert!(vegetation_is_impostor_only(VEGETATION_MIN_PATCH_LEVEL - 1));
+        assert!(!vegetation_is_impostor_only(VEGETATION_MIN_PATCH_LEVEL));
+        const { assert!(MAX_IMPOSTOR_VEGETATION_MESH_BYTES > 0) };
+        const { assert!(MAX_IMPOSTOR_VEGETATION_MESH_BYTES < MAX_COARSE_VEGETATION_MESH_BYTES) };
     }
 
     #[test]

@@ -189,8 +189,16 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   non-casters), documented on the spawn site. The procedural atlas now carries
   surface detail as well as alpha shape: leaf mottling on the grass, conifer, and
   broadleaf cells and vertical grain on a new bark cell that trunks, branches,
-  and buttresses sample, with a reserved opaque patch for boulders.
-  Remaining: impostor LOD.
+  and buttresses sample, with a reserved opaque patch for boulders. Far-field
+  impostor LOD now covers patches below the full-tree gate: from
+  `VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL` (8) up to `VEGETATION_MIN_PATCH_LEVEL`
+  (11) each accepted tree site emits one crossed card carrying the whole-tree
+  silhouette (foliage atlas region, no trunk/branch/buttress geometry), reusing
+  the same nested lattice so refinement to full geometry happens in place. The
+  streaming byte budget accounts the impostor tier separately
+  (`MAX_IMPOSTOR_VEGETATION_MESH_BYTES`), bounded below the coarse tree mesh, so
+  no generated vegetation resides outside the accounted patch budget. Phase 4
+  complete.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 

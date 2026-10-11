@@ -3,11 +3,11 @@
 
 use super::surface_maps::micro_noise;
 use super::{
-    bark_uv, direction_to_lat_lon, face_uv_to_direction, BRANCH_CANOPY_CARD_PLANES,
-    BRANCH_SEGMENTS, BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV, GRASS_CARD_PLANES,
-    GRASS_CLUMP_COUNT, GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH,
-    RIVER_SURFACE_OFFSET_M, ROCK_COUNT, ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS,
-    SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY, TRUNK_SEGMENTS,
+    bark_uv, direction_to_lat_lon, face_uv_to_direction, vegetation_is_impostor_only,
+    BRANCH_CANOPY_CARD_PLANES, BRANCH_SEGMENTS, BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV,
+    GRASS_CARD_PLANES, GRASS_CLUMP_COUNT, GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV,
+    RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT, ROCK_MAX_LUMPS, ROCK_RINGS,
+    ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY, TRUNK_SEGMENTS,
     VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
 };
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
@@ -17,7 +17,7 @@ use crate::domain::services::terrain_source::{slope_deg_at, TerrainSource};
 use crate::domain::services::vegetation::{
     clump_mask, combined_cover_density, embed_depth_m, scatter_hash01 as hash01, select_species,
     tree_candidate_side, tree_site_candidates, vegetation_candidates, VegetationSpecies,
-    GRASS_CANDIDATE_SALT, TREE_CANDIDATE_SALT, TREE_CANDIDATE_SIDE,
+    GRASS_CANDIDATE_SALT, TREE_CANDIDATE_SALT, TREE_CANDIDATE_SIDE, TREE_CANDIDATE_SIDE_COARSE,
 };
 use bevy::asset::RenderAssetUsages;
 use bevy::math::{DQuat, DVec3};
@@ -38,6 +38,15 @@ pub(super) const COARSE_TREE_BUDGET_CAP: usize = 24;
 /// candidate count. Sites are accepted, never thinned, so refining a patch only
 /// adds trees and keeps every coarser tree in place.
 pub(super) const FULL_TREE_BUDGET_CAP: usize = TREE_CANDIDATE_SIDE * TREE_CANDIDATE_SIDE;
+/// Crossed planes per far-field impostor card. Two planes read as a tree from
+/// every horizontal direction without any per-frame camera facing, and stay a
+/// fraction of the cost of a full trunk/branch/canopy tree.
+pub(super) const IMPOSTOR_CARD_PLANES: usize = 2;
+/// Maximum impostor cards a coarse patch can emit: the coarse lattice's
+/// candidate count (side squared), so the lattice itself bounds the count and no
+/// thinning is required.
+pub(super) const IMPOSTOR_TREE_BUDGET_CAP: usize =
+    TREE_CANDIDATE_SIDE_COARSE * TREE_CANDIDATE_SIDE_COARSE;
 /// Fraction of a grid cell used for the deterministic jitter. The remaining
 /// margin keeps neighbouring candidates separated, approximating blue noise.
 const ROCK_CELL_JITTER: f64 = 0.35;
@@ -973,12 +982,16 @@ pub(super) fn build_grounded_vegetation_mesh(
     // lattice and skip ground cover and rocks, which cannot be resolved at that
     // range and would only inflate the mesh.
     let place_ground_cover = patch.level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL;
+    // Below the full-tree gate, trees are drawn as cheap crossed-card impostors.
+    let impostor_only = vegetation_is_impostor_only(patch.level);
     let tree_side = tree_side_for_level(patch.level);
     let tree_sites = tree_site_candidates(patch, tree_side, TREE_CANDIDATE_SALT, |u, v| {
         tree_site_gate(source, patch, &density_at, u, v)
     });
     let tree_sites = if place_ground_cover {
         tree_sites
+    } else if impostor_only {
+        thin_coarse_sites(patch, tree_sites, IMPOSTOR_TREE_BUDGET_CAP)
     } else {
         thin_coarse_sites(patch, tree_sites, COARSE_TREE_BUDGET_CAP)
     };
@@ -1029,6 +1042,26 @@ pub(super) fn build_grounded_vegetation_mesh(
             VegetationSpecies::Conifer => CONIFER_UV,
             _ => BROADLEAF_UV,
         };
+        let rotation = hash01(k as u64, patch.tile_x as u64, 7) * std::f64::consts::TAU;
+        if impostor_only {
+            // Far-field impostor: one crossed card carrying the whole-tree
+            // silhouette (the atlas region holds trunk and crown). The lattice
+            // already bounds the count, so no trunk, branches, or buttress are
+            // built. Refining past the full-tree gate replaces this with the
+            // full tree at the same lattice position.
+            accum.push_cross_cards(
+                base,
+                up,
+                canopy_w,
+                trunk_h + canopy_h,
+                IMPOSTOR_CARD_PLANES,
+                rotation,
+                canopy_uv,
+                foliage_color,
+                None,
+            );
+            continue;
+        }
         accum.push_prism(
             base,
             up,
@@ -1038,7 +1071,6 @@ pub(super) fn build_grounded_vegetation_mesh(
             TRUNK_SEGMENTS,
             trunk_color,
         );
-        let rotation = hash01(k as u64, patch.tile_x as u64, 7) * std::f64::consts::TAU;
         // Flared root buttresses anchor broadleaf trees to the slope.
         if profile.buttress_roots > 0 && trunk_h > 0.02 {
             let reference = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };

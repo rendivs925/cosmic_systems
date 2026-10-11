@@ -45,8 +45,9 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
 };
 use crate::infrastructure::bevy_adapters::terrain::surface::{
     max_river_mesh_bytes, prepare_patch_surface, supports_local_surfaces, PreparedPatchSurface,
-    LOCAL_SURFACE_MAP_BYTES, MAX_COARSE_VEGETATION_MESH_BYTES, MAX_VEGETATION_MESH_BYTES,
-    VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL, VEGETATION_MIN_PATCH_LEVEL,
+    LOCAL_SURFACE_MAP_BYTES, MAX_COARSE_VEGETATION_MESH_BYTES, MAX_IMPOSTOR_VEGETATION_MESH_BYTES,
+    MAX_VEGETATION_MESH_BYTES, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
+    VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL, VEGETATION_MIN_PATCH_LEVEL,
 };
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::{math::DVec3, prelude::*};
@@ -1403,12 +1404,15 @@ fn estimated_patch_bytes(patch: TerrainPatch, resolution: u32) -> u64 {
     }
     // Full-density scatter (trees, ground cover, and rocks) is reserved on close
     // patches. Coarser patches between the tree and ground-cover gates build a
-    // tree-only mesh; its capped cost is reserved too so no generated vegetation
-    // resides outside the accounted patch budget.
+    // tree-only mesh; far-field patches below the full-tree gate build a small
+    // impostor mesh. Each tier's capped cost is reserved so no generated
+    // vegetation resides outside the accounted patch budget.
     if patch.level >= VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL {
         terrain_bytes += MAX_VEGETATION_MESH_BYTES;
     } else if patch.level >= VEGETATION_MIN_PATCH_LEVEL {
         terrain_bytes += MAX_COARSE_VEGETATION_MESH_BYTES;
+    } else if patch.level >= VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL {
+        terrain_bytes += MAX_IMPOSTOR_VEGETATION_MESH_BYTES;
     }
     terrain_bytes
 }
@@ -2394,7 +2398,8 @@ mod tests {
     #[test]
     fn vegetation_budget_applies_only_to_close_range_patches() {
         let coarse = TerrainPatch::root(CubeFace::PosZ);
-        let plain = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL - 1);
+        let plain = TerrainPatch::for_direction(DVec3::Z, VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL - 1);
+        let impostor = TerrainPatch::for_direction(DVec3::Z, VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL);
         let local_only = TerrainPatch::for_direction(DVec3::Z, LOCAL_SURFACE_MIN_PATCH_LEVEL);
         let full_vegetated =
             TerrainPatch::for_direction(DVec3::Z, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL);
@@ -2403,6 +2408,11 @@ mod tests {
             estimated_patch_bytes(plain, 33),
             estimated_patch_bytes(coarse, 33),
             "only close patches reserve local material maps and scatter"
+        );
+        assert_eq!(
+            estimated_patch_bytes(impostor, 33),
+            estimated_patch_bytes(coarse, 33) + MAX_IMPOSTOR_VEGETATION_MESH_BYTES,
+            "far-field patches reserve the impostor vegetation mesh"
         );
         assert_eq!(
             estimated_patch_bytes(local_only, 33),
@@ -2426,12 +2436,20 @@ mod tests {
     fn coarse_vegetation_is_accounted_and_bounded_by_full_density() {
         const { assert!(MAX_COARSE_VEGETATION_MESH_BYTES > 0) };
         const { assert!(MAX_COARSE_VEGETATION_MESH_BYTES < MAX_VEGETATION_MESH_BYTES) };
+        const { assert!(MAX_IMPOSTOR_VEGETATION_MESH_BYTES > 0) };
+        const { assert!(MAX_IMPOSTOR_VEGETATION_MESH_BYTES < MAX_COARSE_VEGETATION_MESH_BYTES) };
         // A tree-only patch between the two gates must reserve vegetation bytes.
         let coarse_tree = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL);
-        let no_tree = TerrainPatch::for_direction(DVec3::Z, VEGETATION_MIN_PATCH_LEVEL - 1);
+        let impostor = TerrainPatch::for_direction(DVec3::Z, VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL);
+        let no_tree =
+            TerrainPatch::for_direction(DVec3::Z, VEGETATION_IMPOSTOR_MIN_PATCH_LEVEL - 1);
         assert!(
-            estimated_patch_bytes(coarse_tree, 33) > estimated_patch_bytes(no_tree, 33),
-            "coarse tree-only patches must reserve their vegetation mesh"
+            estimated_patch_bytes(coarse_tree, 33) > estimated_patch_bytes(impostor, 33),
+            "coarse tree-only patches must reserve more than impostor patches"
+        );
+        assert!(
+            estimated_patch_bytes(impostor, 33) > estimated_patch_bytes(no_tree, 33),
+            "far-field impostor patches must reserve their vegetation mesh"
         );
     }
 
