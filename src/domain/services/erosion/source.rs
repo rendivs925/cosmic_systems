@@ -170,6 +170,7 @@ impl ErodedTerrainSource {
             || tile.data.len() != expected
             || tile.flow.len() != expected
             || tile.moisture.len() != expected
+            || tile.water_surface.len() != expected
         {
             return Err(ErosionTileError::InvalidTile(
                 "tile channels are inconsistent with its dimensions".into(),
@@ -191,6 +192,7 @@ impl ErodedTerrainSource {
             .iter()
             .chain(tile.flow.iter())
             .chain(tile.moisture.iter())
+            .chain(tile.water_surface.iter())
             .any(|value| !value.is_finite())
         {
             return Err(ErosionTileError::InvalidTile(
@@ -458,6 +460,19 @@ impl TerrainSource for ErodedTerrainSource {
         let weight = erosion_weight(edge, self.cfg.edge_feather);
         let base = self.base.flow(latitude_deg, longitude_deg);
         base + (eroded - base) * weight
+    }
+
+    fn lake_depth_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        let tile = self.get_tile(latitude_deg, longitude_deg);
+        let (surface, edge) =
+            sample_channel(&tile, &tile.water_surface, latitude_deg, longitude_deg);
+        let (height, _) = sample(&tile, latitude_deg, longitude_deg);
+        let depth = (surface - height).max(0.0);
+        // Feather the depth to zero at tile edges so adjacent independently
+        // baked tiles cannot show a lake-depth step at their shared boundary.
+        let weight = erosion_weight(edge, self.cfg.edge_feather);
+        depth * weight
     }
 
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {

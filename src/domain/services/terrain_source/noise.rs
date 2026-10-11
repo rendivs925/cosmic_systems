@@ -91,4 +91,41 @@ impl ValueNoise {
         }
         sum / norm
     }
+
+    /// Ridged noise with dynamic self-attenuation (Module 1, section 1.3): each
+    /// octave's weight is reduced by the previous octave's ridge output, so high
+    /// frequencies concentrate on already-established crests instead of adding
+    /// uniform roughness everywhere. This yields sharper arretes over flatter
+    /// valley floors than plain ridged fBm.
+    pub(crate) fn ridged_noise_attenuated(
+        &self,
+        seed: u64,
+        x: f64,
+        y: f64,
+        z: f64,
+        octaves: u32,
+    ) -> f64 {
+        let mut sum = 0.0;
+        let mut amp = 0.5;
+        let mut freq = 1.0;
+        let mut norm = 0.0;
+        let mut weight = 1.0;
+        for octave in 0..octaves {
+            let n = self.value_noise3(
+                seed.wrapping_add((octave as u64).wrapping_mul(0x6EED_0E9D_9D95_A5C5)),
+                x * freq,
+                y * freq,
+                z * freq,
+            );
+            let ridge = 1.0 - (2.0 * n - 1.0).abs();
+            let ridge = ridge * ridge;
+            sum += amp * ridge * weight;
+            norm += amp;
+            // Feed the crest strength into the next octave's weight.
+            weight = (ridge * 1.2).clamp(0.0, 1.0);
+            amp *= 0.5;
+            freq *= 2.0;
+        }
+        sum / norm
+    }
 }

@@ -467,16 +467,18 @@ mod tests {
     #[test]
     fn mesh_conforms_to_sphere() {
         let patch = TerrainPatch::for_direction(DVec3::new(1.0, 0.0, 0.0), 1);
-        let geom = build_patch_geometry(&patch, &source(), 6_371_000.0, 5, 50.0);
+        let source = source();
+        let bounds = source.elevation_bounds_m();
+        let geom = build_patch_geometry(&patch, &source, 6_371_000.0, 5, 50.0);
         assert!(geom.positions.len() >= 25);
         for p in &geom.positions {
             let r = DVec3::from_array(*p).length();
-            // Radius stays near planet radius ± (rolling amplitude + mountain
-            // amplitude). source() uses amplitude 2000 + mountain 800, so the
-            // envelope is ±2800 m; +100 m margin for domain-warp peaks.
+            // Radius stays within the source's declared elevation envelope, plus
+            // a margin for domain-warp peaks.
+            let height = r - 6_371_000.0;
             assert!(
-                (r - 6_371_000.0).abs() < 2_900.0,
-                "vertex radius {r} off the sphere"
+                height >= bounds.min_m - 100.0 && height <= bounds.max_m + 100.0,
+                "vertex radius {r} off the sphere (height {height}, bounds {bounds:?})"
             );
         }
         assert!(!geom.indices.is_empty());

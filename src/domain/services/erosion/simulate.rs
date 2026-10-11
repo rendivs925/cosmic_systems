@@ -328,9 +328,83 @@ pub fn carve_rivers(
     }
 }
 
+/// Priority-flood depression fill. Treats the tile boundary as the drainage
+/// outlet and raises every interior cell to the level of the lowest spill point
+/// on its path to that boundary, so `filled - h` is the depth of each
+/// closed basin. Deterministic (heap ties break on cell index) and independent
+/// of frame rate. This is the standing-water analogue of the D8 flow field: it
+/// designates where water ponds, it does not simulate it over time.
+pub(super) fn depression_fill(h: &[f32], w: usize, hgt: usize) -> Vec<f32> {
+    use std::cmp::Ordering;
+    use std::collections::BinaryHeap;
+
+    #[derive(PartialEq)]
+    struct Node {
+        height: f32,
+        index: usize,
+    }
+    impl Eq for Node {}
+    impl PartialOrd for Node {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for Node {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // Min-heap by height, then by index for a stable tie-break.
+            other
+                .height
+                .total_cmp(&self.height)
+                .then_with(|| other.index.cmp(&self.index))
+        }
+    }
+
+    let mut filled = vec![f32::INFINITY; w * hgt];
+    let mut visited = vec![false; w * hgt];
+    let mut heap: BinaryHeap<Node> = BinaryHeap::new();
+    let seed =
+        |index: usize, filled: &mut [f32], visited: &mut [bool], heap: &mut BinaryHeap<Node>| {
+            if !visited[index] {
+                visited[index] = true;
+                filled[index] = h[index];
+                heap.push(Node {
+                    height: h[index],
+                    index,
+                });
+            }
+        };
+    for x in 0..w {
+        seed(idx(x, 0, w), &mut filled, &mut visited, &mut heap);
+        seed(idx(x, hgt - 1, w), &mut filled, &mut visited, &mut heap);
+    }
+    for y in 0..hgt {
+        seed(idx(0, y, w), &mut filled, &mut visited, &mut heap);
+        seed(idx(w - 1, y, w), &mut filled, &mut visited, &mut heap);
+    }
+
+    while let Some(node) = heap.pop() {
+        let x = node.index % w;
+        let y = node.index / w;
+        for ny in y.saturating_sub(1)..=(y + 1).min(hgt - 1) {
+            for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                let neighbor = idx(nx, ny, w);
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    filled[neighbor] = h[neighbor].max(node.height);
+                    heap.push(Node {
+                        height: filled[neighbor],
+                        index: neighbor,
+                    });
+                }
+            }
+        }
+    }
+    filled
+}
+
 /// Erode an entire tile starting from the analytic `base` source, returning a
-/// raster with height, flow and moisture channels. Deterministic for a fixed
-/// `(base, cfg, tile key)`.
+/// raster with height, flow, moisture, and standing-water channels.
+/// Deterministic for a fixed `(base, cfg, tile key)`.
 pub fn erode_tile(
     base: &dyn TerrainSource,
     lat_min: f64,
@@ -376,6 +450,20 @@ pub fn erode_tile(
         cfg.river_depth_m,
     );
 
+    // Standing water: fill closed basins on the final carved surface, but only
+    // where there is enough upstream catchment to feed a real lake.
+    let filled = depression_fill(&h, res, res);
+    let mut water_surface = vec![0.0f32; res * res];
+    for i in 0..h.len() {
+        let depth = filled[i] - h[i];
+        let has_catchment = flow[i] > cfg.river_flow_threshold;
+        water_surface[i] = if depth > cfg.lake_min_depth_m && has_catchment {
+            filled[i]
+        } else {
+            h[i]
+        };
+    }
+
     HeightRaster {
         lat_min,
         lat_max,
@@ -386,6 +474,7 @@ pub fn erode_tile(
         data: h,
         flow,
         moisture,
+        water_surface,
     }
 }
 

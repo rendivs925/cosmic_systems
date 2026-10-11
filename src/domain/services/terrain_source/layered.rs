@@ -260,6 +260,11 @@ impl TerrainSource for LayeredTerrainSource {
             .unwrap_or(primary)
     }
 
+    fn lake_depth_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.primary_surface()
+            .lake_depth_m(latitude_deg, longitude_deg)
+    }
+
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.primary_surface()
             .overview_moisture(latitude_deg, longitude_deg)

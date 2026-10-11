@@ -16,6 +16,7 @@ use crate::domain::services::cube_sphere::{
 };
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
+use crate::domain::services::terrain_source::TerrainSource;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
@@ -1012,7 +1013,7 @@ fn spawn_patch_mesh_system(
     imagery: Res<TerrainImageryResource>,
     render_origin: Res<RenderOrigin>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
-    planet_query: Query<&PlanetComponent>,
+    planet_query: Query<(&PlanetComponent, Option<&PlanetTerrain>)>,
     water_quality: Res<WaterQualityConfig>,
     performance_config: Res<PerformanceMetricsConfig>,
     mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
@@ -1054,7 +1055,7 @@ fn spawn_patch_mesh_system(
         if render_index.0.contains_key(&key) {
             continue;
         }
-        let Ok(planet) = planet_query.get(event.planet_entity) else {
+        let Ok((planet, planet_terrain)) = planet_query.get(event.planet_entity) else {
             continue;
         };
         let Some(orientation) =
@@ -1232,22 +1233,20 @@ fn spawn_patch_mesh_system(
             record.material_ms += started.elapsed().as_secs_f64() * 1_000.0;
         }
 
-        // Ocean patches contribute a sea-level water cap in the same baked frame
+        // Ocean and inland-lake water contribute a cap in the same baked frame
         // as the terrain mesh. The water material is shared.
-        let water_mesh_handle = if planet.domain_planet.has_ocean {
-            water_mesh_for_patch(
-                geometry,
-                // Keep the terrain topology, including stitched edge vertices.
-                // Decimating only water changes sphere sag and exposes the bed.
-                render_assets.patch_resolution,
-                planet.domain_planet.radius_km as f64 * 1_000.0,
-                &render_origin.origin,
-                body_to_inertial,
-                &mut meshes,
-            )
-        } else {
-            None
-        };
+        let water_mesh_handle = water_mesh_for_patch(
+            geometry,
+            // Keep the terrain topology, including stitched edge vertices.
+            // Decimating only water changes sphere sag and exposes the bed.
+            render_assets.patch_resolution,
+            planet.domain_planet.radius_km as f64 * 1_000.0,
+            &render_origin.origin,
+            body_to_inertial,
+            planet.domain_planet.has_ocean,
+            planet_terrain.map(|terrain| terrain.source.as_ref()),
+            &mut meshes,
+        );
         // Ocean water over a baked patch gets its own material so the patch's
         // terrain occlusion map can shade the sea beyond the shadow cascades.
         let water_material_handle = (water_mesh_handle.is_some() && occlusion_owned).then(|| {
@@ -1858,22 +1857,31 @@ fn patch_geometry_to_mesh(
     mesh
 }
 
-/// Build a sea-level water cap for the ocean part of a patch, or `None` when
-/// the patch contains no ocean. Positions share the terrain mesh's baked
+/// Build a water cap for the ocean and inland lakes of a patch, or `None` when
+/// the patch contains no water. Positions share the terrain mesh's baked
 /// inertial/render-origin frame so the water can parent to the patch entity
 /// with an identity transform. The red vertex-colour channel carries normalized
 /// depth for the shader's shallow/deep ramp.
+///
+/// The ocean surface is the sea-level datum; a lake surface sits `lake_depth_m`
+/// above the terrain bed, so both are expressed as a radius offset from the
+/// terrain vertex radius. `source` supplies the lake depth (presentation
+/// metadata from the same authoritative terrain source); `None` yields an
+/// ocean-only cap.
+#[allow(clippy::too_many_arguments)]
 fn water_mesh_for_patch(
     geometry: &PatchGeometry,
     resolution: u32,
     planet_radius_m: f64,
     render_origin: &DVec3,
     body_to_inertial: DQuat,
+    has_ocean: bool,
+    source: Option<&dyn TerrainSource>,
     meshes: &mut Assets<Mesh>,
 ) -> Option<Handle<Mesh>> {
     let res = resolution as usize;
     let core = res.checked_mul(res)?;
-    if res < 2 || geometry.positions.len() < core {
+    if res < 2 || geometry.positions.len() < core || geometry.uvs.len() < core {
         return None;
     }
     let sea_level_radius_m = planet_radius_m + WATER_SEA_LEVEL_M + WATER_SURFACE_OFFSET_M;
@@ -1882,28 +1890,43 @@ fn water_mesh_for_patch(
     let mut positions = Vec::with_capacity(core);
     let mut normals = Vec::with_capacity(core);
     let mut depths = Vec::with_capacity(core);
-    for point in &geometry.positions[..core] {
-        let position = DVec3::from_array(*point);
+    let mut has_water = Vec::with_capacity(core);
+    for index in 0..core {
+        let position = DVec3::from_array(geometry.positions[index]);
         let radius = position.length();
         let radial = if radius > f64::EPSILON {
             position / radius
         } else {
             DVec3::Y
         };
-        let water_position = body_to_inertial * (radial * sea_level_radius_m) - *render_origin;
+        // UV0 is the continuous body-fixed equirectangular coordinate.
+        let uv = geometry.uvs[index];
+        let longitude_deg = f64::from(uv[0]) * 360.0 - 180.0;
+        let latitude_deg = 90.0 - f64::from(uv[1]) * 180.0;
+        let ocean_depth = if has_ocean {
+            (sea_level_radius_m - radius).max(0.0)
+        } else {
+            0.0
+        };
+        let lake_depth = source
+            .map(|source| source.lake_depth_m(latitude_deg, longitude_deg).max(0.0))
+            .unwrap_or(0.0);
+        let depth = ocean_depth.max(lake_depth);
+        let water_radius = radius + depth;
+        let water_position = body_to_inertial * (radial * water_radius) - *render_origin;
         positions.push(water_position.as_vec3().to_array());
         normals.push((body_to_inertial * radial).as_vec3().to_array());
-        let depth = ((sea_level_radius_m - radius).max(0.0) * inverse_max_depth).min(1.0) as f32;
-        depths.push(depth);
+        depths.push((depth * inverse_max_depth).min(1.0) as f32);
+        has_water.push(depth > 0.0);
     }
 
     // Reuse the terrain's outward winding, diagonal, and collapsed stitch edges.
     // A different diagonal intersects the bed even when all vertex heights agree.
-    // Exclude the downward skirt; it is not part of the sea surface.
+    // Exclude the downward skirt; it is not part of the water surface.
     let mut indices: Vec<u32> = Vec::new();
     for triangle in geometry.indices.as_chunks::<3>().0 {
         if triangle.iter().all(|index| (*index as usize) < core)
-            && triangle.iter().any(|index| depths[*index as usize] > 0.0)
+            && triangle.iter().any(|index| has_water[*index as usize])
         {
             indices.extend_from_slice(triangle);
         }
@@ -2850,6 +2873,8 @@ mod tests {
                 6_371_000.0,
                 &origin,
                 DQuat::IDENTITY,
+                true,
+                None,
                 &mut meshes,
             )
             .expect("sea-level terrain needs an ocean cap");
@@ -3004,15 +3029,11 @@ mod tests {
         // an extra extruded vertex and a skirt quad is emitted per segment.
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
         let res = 5usize;
-        let geom = build_patch_geometry(
-            &patch,
-            &crate::domain::services::terrain_source::ProceduralTerrainSource::new(
-                99, 2_000.0, 800.0, 0,
-            ),
-            6_371_000.0,
-            res as u32,
-            40.0,
+        let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
+            99, 2_000.0, 800.0, 0,
         );
+        let max_radius = 6_371_000.0 + source.elevation_bounds_m().max_m + 100.0;
+        let geom = build_patch_geometry(&patch, &source, 6_371_000.0, res as u32, 40.0);
         // Platform vertices + one skirt vertex per boundary vertex.
         let boundary_count = 4 * (res - 1); // res*res grid has 4(res-1) boundary verts
         assert_eq!(
@@ -3026,7 +3047,7 @@ mod tests {
         for pos in geom.positions.iter().skip(non_skirt) {
             let r = DVec3::from_array(*pos).length();
             assert!(
-                r < 6_371_000.0 + 2_900.0,
+                r < max_radius,
                 "skirt vertex at radius {r} not extruded inward"
             );
         }

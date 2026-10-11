@@ -182,6 +182,14 @@ pub trait TerrainSource: Send + Sync + Debug {
         0.0
     }
 
+    /// Depth of standing inland water (lakes, ponds) in meters, zero where the
+    /// surface is dry or on the open ocean. Presentation metadata derived from
+    /// the same authoritative terrain source; sources without hydrology default
+    /// to zero. It is never read by collision, altitude, or physics.
+    fn lake_depth_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+
     /// Normalized vegetation cover in `[0, 1]` used to place scatter. This is
     /// the authoritative presentation signal for whether ground is forest,
     /// grassland, or bare. It is deliberately independent of the rendered

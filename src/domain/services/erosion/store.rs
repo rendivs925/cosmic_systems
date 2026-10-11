@@ -29,12 +29,12 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAGIC: [u8; 4] = *b"CET2";
-const VERSION: u32 = 2;
+const MAGIC: [u8; 4] = *b"CET3";
+const VERSION: u32 = 3;
 /// Tile file extension. It tracks `MAGIC`/`VERSION` so a reader for one format is
 /// never presented with another, and `enforce_budget` can purge superseded
 /// formats without counting them.
-const TILE_EXTENSION: &str = "cet2";
+const TILE_EXTENSION: &str = "cet3";
 /// Grid dimension of the base probe stored with each tile.
 pub const PROBE_SIDE: usize = 4;
 /// Number of probe samples: `PROBE_SIDE * PROBE_SIDE`.
@@ -42,7 +42,7 @@ pub const PROBE_LEN: usize = PROBE_SIDE * PROBE_SIDE;
 /// magic + version + signature + key(2×i64) + 4 bounds + width + height +
 /// probe_side + checksum + probe.
 const HEADER_BYTES: usize = 4 + 4 + 8 + 8 + 8 + 8 * 4 + 4 + 4 + 4 + 8 + PROBE_LEN * 4;
-const CHANNELS: usize = 3;
+const CHANNELS: usize = 4;
 /// Bytes written per baked tile at a given resolution.
 pub fn tile_bytes(resolution: u32) -> u64 {
     HEADER_BYTES as u64 + CHANNELS as u64 * resolution as u64 * resolution as u64 * 4
@@ -298,10 +298,12 @@ impl ErosionTileStore {
         let data = decode_channel(channels[0]);
         let flow = decode_channel(channels[1]);
         let moisture = decode_channel(channels[2]);
+        let water_surface = decode_channel(channels[3]);
         if data
             .iter()
             .chain(flow.iter())
             .chain(moisture.iter())
+            .chain(water_surface.iter())
             .any(|value| !value.is_finite())
             || moisture.iter().any(|value| !(0.0..=1.0).contains(value))
         {
@@ -319,6 +321,7 @@ impl ErosionTileStore {
                 data,
                 flow,
                 moisture,
+                water_surface,
             },
             BaseProbe(probe_samples),
         ))
@@ -374,7 +377,7 @@ impl ErosionTileStore {
             buffer.extend_from_slice(&value.to_le_bytes());
         }
         let payload_start = buffer.len();
-        for channel in [&tile.data, &tile.flow, &tile.moisture] {
+        for channel in [&tile.data, &tile.flow, &tile.moisture, &tile.water_surface] {
             for value in channel {
                 buffer.extend_from_slice(&value.to_le_bytes());
             }
@@ -501,6 +504,7 @@ fn channels_are_valid(tile: &HeightRaster) -> bool {
         .iter()
         .chain(tile.flow.iter())
         .chain(tile.moisture.iter())
+        .chain(tile.water_surface.iter())
         .all(|value| value.is_finite())
         && tile
             .moisture
@@ -536,6 +540,7 @@ mod tests {
             data: vec![fill; n],
             flow: vec![fill + 1.0; n],
             moisture: vec![0.25; n],
+            water_surface: vec![fill; n],
         }
     }
 
@@ -559,6 +564,7 @@ mod tests {
         assert_eq!(loaded.data, tile.data);
         assert_eq!(loaded.flow, tile.flow);
         assert_eq!(loaded.moisture, tile.moisture);
+        assert_eq!(loaded.water_surface, tile.water_surface);
         assert_eq!(loaded.lat_min, tile.lat_min);
         assert_eq!(loaded.lat_max, tile.lat_max);
         assert_eq!(loaded.lon_min, tile.lon_min);

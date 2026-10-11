@@ -43,6 +43,32 @@ const CONTINENTAL_AMPLITUDE: f64 = 1.1;
 const ROLLING_AMPLITUDE: f64 = 1.4;
 const OROGENY_SCALE: f64 = 0.32;
 
+/// Continental elevation curve thresholds on the normalized continental mask.
+/// Below [`COAST_MASK`] is ocean basin, up to [`FOOTHILL_MASK`] is coastal
+/// lowland, and above is the alpine ramp (Module 1, stage 4).
+const COAST_MASK: f64 = 0.52;
+const FOOTHILL_MASK: f64 = 0.75;
+
+/// Piecewise monotonic remap of the normalized continental mask into a signed
+/// elevation. The ocean segment is kept identical to the established linear
+/// basin so coastlines and launch-site land/ocean classification never shift;
+/// the land segment flattens coastal lowlands and then steepens toward the
+/// alpine peaks (Module 1, stage 4). `C^0`-continuous at every join.
+fn continental_curve(mask: f64) -> f64 {
+    let mask = mask.clamp(0.0, 1.0);
+    if mask < COAST_MASK {
+        mask - COAST_MASK
+    } else if mask < FOOTHILL_MASK {
+        let t = (mask - COAST_MASK) / (FOOTHILL_MASK - COAST_MASK);
+        // Gentle coastal lowland and rolling hills.
+        0.15 * t * t
+    } else {
+        let t = (mask - FOOTHILL_MASK) / (1.0 - FOOTHILL_MASK);
+        // Steepening alpine ramp toward the highest peaks.
+        0.15 + 0.85 * t.powf(1.5)
+    }
+}
+
 /// Typed, validated parameters for deterministic procedural terrain.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProceduralTerrainConfig {
@@ -120,12 +146,14 @@ impl ProceduralTerrainSource {
     }
 
     /// Conservative analytic envelope of the rolling, ridge, and crater terms.
+    /// The ocean segment is unchanged from the linear basin (`-0.52`); the land
+    /// segment reaches `1.0`, and the rolling term spans `[-0.5, 0.5]`.
     pub fn elevation_bounds_m(&self) -> ElevationBounds {
         let crater_depth_m = self.config.crater_count as f64 * 1_600.0;
         let crater_rim_m = self.config.crater_count as f64 * 480.0;
         ElevationBounds::new(
             -1.3 * self.config.rolling_amplitude_m - crater_depth_m,
-            1.3 * self.config.rolling_amplitude_m + self.config.mountain_amplitude_m + crater_rim_m,
+            1.8 * self.config.rolling_amplitude_m + self.config.mountain_amplitude_m + crater_rim_m,
         )
     }
 
@@ -219,17 +247,18 @@ impl TerrainSource for ProceduralTerrainSource {
         let continental_mask = self.continental_mask(direction);
         let mountain_region_mask = self.mountain_region_mask(direction, continental_mask);
 
-        let continental_elevation =
-            (continental_mask - 0.52) * CONTINENTAL_AMPLITUDE * self.config.rolling_amplitude_m;
+        let continental_elevation = continental_curve(continental_mask)
+            * CONTINENTAL_AMPLITUDE
+            * self.config.rolling_amplitude_m;
         let rolling01 = self
             .noise
             .fbm(self.config.seed, p.x, p.y, p.z, 4)
             .clamp(0.0, 1.0);
         let rolling = rolling01.powf(SHAPE_POWER) - 0.5;
         let hills = rolling * ROLLING_AMPLITUDE * self.config.rolling_amplitude_m;
-        let ridges = self
-            .noise
-            .ridged_noise(self.config.seed.wrapping_add(7), p.x, p.y, p.z, 4);
+        let ridges =
+            self.noise
+                .ridged_noise_attenuated(self.config.seed.wrapping_add(7), p.x, p.y, p.z, 5);
         let mountains = ridges * mountain_region_mask * self.config.mountain_amplitude_m;
         let mut h = continental_elevation + hills + mountains;
         if self.config.crater_count > 0 {
@@ -444,5 +473,52 @@ impl TerrainSource for ProceduralDetailSource {
         );
         let drainage = self.drainage_strength_for_direction(direction);
         (base * (0.5 + 0.5 * regional) + drainage * 0.35).clamp(0.0, 1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continental_curve_preserves_the_ocean_and_reshapes_land() {
+        // The ocean segment is exactly the previous linear basin, so coastlines
+        // and launch-site land/ocean classification do not shift.
+        assert!((continental_curve(0.30) - (0.30 - COAST_MASK)).abs() < 1e-12);
+        // Coastal lowland is flatter than the old linear slope...
+        let old_lowland = 0.60 - COAST_MASK;
+        assert!(
+            continental_curve(0.60) < old_lowland,
+            "lowland must be flatter than the old linear form"
+        );
+        // ...and the alpine ramp is steeper near the peaks.
+        let old_alpine = 0.95 - COAST_MASK;
+        assert!(
+            continental_curve(0.95) > old_alpine,
+            "alpine ramp must be steeper than the old linear form"
+        );
+    }
+
+    #[test]
+    fn continental_curve_is_continuous_at_every_join() {
+        let mut previous = continental_curve(0.0);
+        for step in 1..=1000 {
+            let mask = step as f64 / 1000.0;
+            let current = continental_curve(mask);
+            assert!(
+                (current - previous).abs() < 0.02,
+                "curve jumped at mask {mask}: {previous} -> {current}"
+            );
+            previous = current;
+        }
+    }
+
+    #[test]
+    fn self_attenuating_ridge_stays_bounded_and_deterministic() {
+        let noise = ValueNoise;
+        let a = noise.ridged_noise_attenuated(7, 1.3, -2.4, 0.9, 5);
+        let b = noise.ridged_noise_attenuated(7, 1.3, -2.4, 0.9, 5);
+        assert_eq!(a, b, "self-attenuated ridge must be deterministic");
+        assert!((0.0..=1.0).contains(&a), "ridge out of range: {a}");
     }
 }

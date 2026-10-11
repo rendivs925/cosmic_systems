@@ -26,7 +26,7 @@ pub use simulate::{carve_rivers, erode_tile, flow_accumulation, hydraulic_erode,
 pub use source::{ErodedTerrainSource, ErosionTileError};
 pub use store::{tile_bytes, BaseProbe, ErosionTileStore, PROBE_LEN};
 
-/// accumulation and moisture channels.
+/// accumulation, moisture, and standing-water channels.
 #[derive(Debug, Clone)]
 pub struct HeightRaster {
     pub lat_min: f64,
@@ -41,6 +41,12 @@ pub struct HeightRaster {
     pub flow: Vec<f32>,
     /// Row-major normalized moisture `[0, 1]`.
     pub moisture: Vec<f32>,
+    /// Row-major inland water-surface height, meters. It equals `data` where
+    /// there is no standing water and the depression-filled spill level where a
+    /// lake exists, so `water_surface - data` is the lake depth. Derived
+    /// deterministically from the eroded height and flow (never an independent
+    /// terrain authority).
+    pub water_surface: Vec<f32>,
 }
 
 impl HeightRaster {
@@ -75,6 +81,10 @@ pub struct ErosionConfig {
     pub river_flow_threshold: f32,
     /// River channel carve depth, meters.
     pub river_depth_m: f64,
+    /// Minimum lake depth, meters. Depressions shallower than this (or without
+    /// enough upstream flow) stay dry, so the filled surface does not turn every
+    /// grid pit into a puddle.
+    pub lake_min_depth_m: f32,
     /// Boundary feather band (fraction of the tile) blended back to the base
     /// analytic terrain to hide tile seams.
     pub edge_feather: f64,
@@ -99,6 +109,7 @@ impl Default for ErosionConfig {
             droplet_evaporation: 0.02,
             river_flow_threshold: 60.0,
             river_depth_m: 40.0,
+            lake_min_depth_m: 4.0,
             edge_feather: 0.12,
             cache_max_tiles: 64,
             seed: 0xE0D1_5EED,
@@ -149,6 +160,10 @@ impl ErosionConfig {
         assert!(
             self.river_depth_m.is_finite() && self.river_depth_m >= 0.0,
             "erosion river_depth_m must be finite and non-negative"
+        );
+        assert!(
+            self.lake_min_depth_m.is_finite() && self.lake_min_depth_m >= 0.0,
+            "erosion lake_min_depth_m must be finite and non-negative"
         );
         assert!(
             self.edge_feather.is_finite() && (0.0..=0.5).contains(&self.edge_feather),
@@ -227,6 +242,7 @@ impl ErosionConfig {
         feed(&self.droplet_evaporation.to_le_bytes());
         feed(&self.river_flow_threshold.to_le_bytes());
         feed(&self.river_depth_m.to_le_bytes());
+        feed(&self.lake_min_depth_m.to_le_bytes());
         feed(&self.edge_feather.to_le_bytes());
         feed(&self.seed.to_le_bytes());
         hash
@@ -236,7 +252,7 @@ impl ErosionConfig {
 #[cfg(test)]
 mod tests {
     use super::simulate::{
-        idx, steepest_downhill, steepest_downhill_with_spacing, GridSpacing, Rng,
+        depression_fill, idx, steepest_downhill, steepest_downhill_with_spacing, GridSpacing, Rng,
     };
     use super::source::{erosion_weight, sample};
     use super::*;
@@ -269,12 +285,13 @@ mod tests {
     fn default_config_bake_and_cache_memory_baseline() {
         // Performance baseline for task 1.3: cold-bake time and the resident
         // erosion-cache ceiling for the default config. Each tile raster holds
-        // height, flow, and moisture as f32 at `resolution` vertices per side.
+        // height, flow, moisture, and standing-water channels as f32 at
+        // `resolution` vertices per side.
         let cfg = ErosionConfig::default();
         cfg.validate();
         let source = ErodedTerrainSource::new(Arc::new(base()), cfg.clone());
 
-        let bytes_per_tile = 3 * cfg.resolution as u64 * cfg.resolution as u64 * 4;
+        let bytes_per_tile = 4 * cfg.resolution as u64 * cfg.resolution as u64 * 4;
         let capacity_bytes = bytes_per_tile * cfg.cache_max_tiles as u64;
 
         let cold_start = Instant::now();
@@ -402,6 +419,69 @@ mod tests {
     }
 
     #[test]
+    fn depression_fill_raises_a_closed_basin_to_its_rim() {
+        // A flat rim at 100 m with a single central pit at 50 m fills to the
+        // lowest spill point (the rim).
+        let w = 5;
+        let hgt = 5;
+        let mut h = vec![100.0f32; w * hgt];
+        h[idx(2, 2, w)] = 50.0;
+        let filled = depression_fill(&h, w, hgt);
+        assert_eq!(filled[idx(2, 2, w)], 100.0, "the pit must fill to its rim");
+        assert_eq!(filled[idx(0, 0, w)], 100.0, "dry rim stays unchanged");
+    }
+
+    #[test]
+    fn depression_fill_leaves_a_draining_slope_unchanged() {
+        // Every cell drains to the boundary, so nothing ponds.
+        let w = 5;
+        let hgt = 5;
+        let mut h = vec![0.0f32; w * hgt];
+        for y in 0..hgt {
+            for x in 0..w {
+                h[idx(x, y, w)] = (w - x) as f32 * 10.0;
+            }
+        }
+        assert_eq!(depression_fill(&h, w, hgt), h);
+    }
+
+    #[test]
+    fn erode_tile_water_surface_is_at_least_the_terrain() {
+        let tile = erode_tile(&base(), 10.0, 12.0, 20.0, 22.0, &cfg(), 7);
+        assert_eq!(tile.water_surface.len(), tile.data.len());
+        assert!(tile.water_surface.iter().all(|value| value.is_finite()));
+        assert!(
+            tile.water_surface
+                .iter()
+                .zip(tile.data.iter())
+                .all(|(surface, height)| *surface >= *height - 1e-3),
+            "a filled surface can never sit below the terrain"
+        );
+    }
+
+    #[test]
+    fn lake_depth_is_installed_and_feathered_at_the_edge() {
+        let source = ErodedTerrainSource::new(Arc::new(base()), cfg());
+        let mut tile = source.bake_tile_containing(11.0, 21.0);
+        for value in tile.water_surface.iter_mut() {
+            *value += 30.0;
+        }
+        source
+            .install_baked_tile(tile)
+            .expect("a raised water surface is still valid");
+
+        assert!(
+            source.lake_depth_m(11.0, 21.0) > 0.0,
+            "the tile interior must report standing water"
+        );
+        assert_eq!(
+            source.lake_depth_m(10.0, 21.0),
+            0.0,
+            "lake depth must feather to zero at the tile boundary"
+        );
+    }
+
+    #[test]
     fn rivers_carve_below_surroundings() {
         let w = 16;
         let hgt = 16;
@@ -477,6 +557,7 @@ mod tests {
             data: vec![0.0; 4],
             moisture: vec![0.0; 4],
             flow: vec![0.0; 4],
+            water_surface: vec![0.0; 4],
         };
 
         assert_eq!(sample(&raster, 11.0, 21.0).1, 0.0);
