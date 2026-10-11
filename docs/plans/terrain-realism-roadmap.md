@@ -124,6 +124,22 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   no cracks at transitions; base collision unchanged.
 - Risk: highest-risk phase (new geometry path, LOD stitching, budget pressure);
   sequenced after Phases 1-2 with its own validation.
+- Status: **implemented, gated off by default** (`COSMIC_SYSTEMS_VOLUMETRIC_GEOLOGY=1`).
+  `domain/services/volumetric_geology/` owns the deterministic density field
+  (`D(p)=H(x,y)-z+Ω(p)` with slope mask, tilted strata/hardness, domain-warped
+  overhang noise, Voronoi jointing) and Dual Contouring (QEF). The streaming
+  layer builds a bounded rock shell for steep patches at or above a configured
+  LOD level and the render layer spawns it as a presentation-only child of the
+  heightmap patch; collision, altitude, guidance, and physics keep sampling
+  `heightmap`. Shell activity is reported through `TerrainPerformanceTelemetry`
+  (`volumetric_shells`, `volumetric_shell_triangles`).
+  Documented limitations (next phase work): shells only trigger on high-LOD
+  (small, near) patches, which at the launch region only occur in flight and
+  require steep terrain; the shell is an *overlapping* surface (a small
+  `surface_bias_m` avoids coplanar z-fighting) rather than a replacement, so
+  patch seams and LOD-transition cells (Transvoxel) are not yet handled; a
+  real-cliff capture is still pending (the render path was validated
+  synthetically).
 
 ### Phase 4 — Trees and vegetation (Module 5 + tree spec)
 

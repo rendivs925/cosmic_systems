@@ -367,6 +367,8 @@ pub(crate) fn log_performance_metrics(
             ready_received = aggregate.ready_received,
             ready_backfilled = aggregate.ready_backfilled,
             ready_rejected = aggregate.ready_rejected,
+            volumetric_shells = aggregate.volumetric_shells,
+            volumetric_shell_triangles = aggregate.volumetric_shell_triangles,
             top_frame_cpu_ms = top.total_cpu_ms(),
             top_frame_id = top.frame_id,
             top_frame_mesh_ms = top.cpu_mesh_construction_ms,

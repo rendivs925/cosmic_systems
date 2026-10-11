@@ -47,6 +47,11 @@ pub(crate) struct TerrainFrameAttribution {
     pub mesh_assets_created: usize,
     pub material_assets_created: usize,
     pub image_assets_created: usize,
+    /// Module 3 rock shells spawned this frame (zero unless volumetric geology
+    /// is enabled and a steep high-LOD patch is in view).
+    pub volumetric_shells: usize,
+    /// Total triangles across the Module 3 rock shells spawned this frame.
+    pub volumetric_shell_triangles: usize,
 }
 
 impl TerrainFrameAttribution {
@@ -107,6 +112,8 @@ impl TerrainFrameAttribution {
         self.mesh_assets_created += record.mesh_assets_created;
         self.material_assets_created += record.material_assets_created;
         self.image_assets_created += record.image_assets_created;
+        self.volumetric_shells += record.volumetric_shells;
+        self.volumetric_shell_triangles += record.volumetric_shell_triangles;
     }
 }
 

@@ -1146,6 +1146,10 @@ fn spawn_patch_mesh_system(
             .volumetric
             .as_ref()
             .map(|shell| rock_shell_to_mesh(shell, &render_origin.origin, body_to_inertial));
+        let volumetric_shell_present = volumetric_mesh.is_some();
+        let volumetric_shell_triangles = volumetric_mesh.as_ref().map_or(0, |mesh| {
+            mesh.indices().map_or(0, |indices| indices.len() / 3)
+        });
         let mesh_construction_started = instrumentation_enabled.then(Instant::now);
         let mesh = patch_geometry_to_mesh(
             geometry,
@@ -1357,7 +1361,7 @@ fn spawn_patch_mesh_system(
             record.mesh_assets_created += 1
                 + vegetation_mesh_asset_count
                 + usize::from(river_mesh_handle.is_some())
-                + usize::from(volumetric_mesh.is_some());
+                + usize::from(volumetric_shell_present);
             record.material_assets_created += 1 + vegetation_material_asset_count;
             record.image_assets_created += local_image_asset_count
                 + usize::from(occlusion_owned)
@@ -1538,6 +1542,8 @@ fn spawn_patch_mesh_system(
         ) {
             record.activation_ms += started.elapsed().as_secs_f64() * 1_000.0;
             record.patches_activated += 1;
+            record.volumetric_shells += usize::from(volumetric_shell_present);
+            record.volumetric_shell_triangles += volumetric_shell_triangles;
         }
     }
     if let Some(record) = terrain_performance.current_mut(instrumentation_enabled) {
