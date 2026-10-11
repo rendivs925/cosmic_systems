@@ -164,29 +164,6 @@ fn sample_detail_triplanar(
     return x * weights.x + y * weights.y + z * weights.z;
 }
 
-// Body-fixed axis-plane (triplanar) projection. The three axis-plane
-// coordinates are mixed by surface orientation into one continuous UV. Because
-// the input is body-fixed, neighbouring patches and cube faces share one texture
-// phase (no seams) and the fields stay pinned to the rotating ground instead of
-// sliding with planetary rotation. Patch-local UV cannot provide both.
-fn body_layer_uv(
-    local_position: vec3<f32>,
-    anchor: vec3<f32>,
-    normal: vec3<f32>,
-    scale: f32,
-) -> vec2<f32> {
-    let axis = abs(normal);
-    let axis_sum = max(axis.x + axis.y + axis.z, 1e-4);
-    let axis_weights = axis / axis_sum;
-    let projected = local_position.zy * axis_weights.x
-        + local_position.xz * axis_weights.y
-        + local_position.xy * axis_weights.z;
-    let anchored = anchor.zy * axis_weights.x
-        + anchor.xz * axis_weights.y
-        + anchor.xy * axis_weights.z;
-    return projected * scale + anchored;
-}
-
 // Blend every ground layer with the same weights for albedo, roughness, and the
 // tangent-space normal. `weights` sums to one, so the result is the weighted
 // material mix without a hard biome band.
@@ -257,6 +234,53 @@ fn height_aware_weights(uv: vec2<f32>, alpha: array<f32, LAYER_COUNT>) -> array<
         }
     }
     return output;
+}
+
+// Triplanar body-fixed projection of the layered ground material.
+//
+// Each axis plane is sampled and layer-blended separately, then the three
+// material results are mixed by surface orientation. This mirrors
+// `sample_detail_triplanar` and is required for coordinate invariance: the
+// `anchor` supplied by the CPU is only the fractional phase of a planet-scale
+// body coordinate, so it wraps by whole tiles. Blending the three axis
+// *coordinates* into one UV first (the previous approach) turns a whole-tile
+// wrap of one axis, multiplied by a fractional orientation weight, into a
+// partial-tile shift of the sampled texture. That shifted the ground albedo,
+// roughness, normal, and height-blended layer choice whenever the render origin
+// or body rotation advanced, producing the green/brown terrain flicker. Sampling
+// each plane at its own phase and blending the sampled values preserves the
+// invariance, because a repeating texture sampled a whole tile away is
+// unchanged.
+fn sample_layered_triplanar(
+    local_position: vec3<f32>,
+    anchor: vec3<f32>,
+    normal: vec3<f32>,
+    scale: f32,
+    alpha: array<f32, LAYER_COUNT>,
+) -> LayeredSample {
+    let axis = abs(normal);
+    let axis_sum = max(axis.x + axis.y + axis.z, 1e-4);
+    let axis_weights = axis / axis_sum;
+
+    let uv_x = local_position.zy * scale + anchor.zy;
+    let uv_y = local_position.xz * scale + anchor.xz;
+    let uv_z = local_position.xy * scale + anchor.xy;
+
+    let sample_x = sample_layers(uv_x, height_aware_weights(uv_x, alpha));
+    let sample_y = sample_layers(uv_y, height_aware_weights(uv_y, alpha));
+    let sample_z = sample_layers(uv_z, height_aware_weights(uv_z, alpha));
+
+    var result: LayeredSample;
+    result.albedo = sample_x.albedo * axis_weights.x
+        + sample_y.albedo * axis_weights.y
+        + sample_z.albedo * axis_weights.z;
+    result.roughness = sample_x.roughness * axis_weights.x
+        + sample_y.roughness * axis_weights.y
+        + sample_z.roughness * axis_weights.z;
+    result.normal_ts = sample_x.normal_ts * axis_weights.x
+        + sample_y.normal_ts * axis_weights.y
+        + sample_z.normal_ts * axis_weights.z;
+    return result;
 }
 
 // Terrain vertex stage. Mirrors Bevy's default mesh vertex path for the
@@ -439,13 +463,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             splat.a,
             max(0.0, 1.0 - (splat.r + splat.g + splat.b + splat.a)),
         );
-        let layer_uv = body_layer_uv(
+        let layered = sample_layered_triplanar(
             body_local,
             terrain_surface.layer_anchor,
             body_normal,
             terrain_surface.layer_tiling_scale,
+            weights,
         );
-        let layered = sample_layers(layer_uv, height_aware_weights(layer_uv, weights));
         layered_albedo = layered.albedo;
         layered_roughness = layered.roughness;
         layered_normal_ts = layered.normal_ts;

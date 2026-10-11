@@ -46,7 +46,7 @@ use crate::infrastructure::bevy_adapters::terrain::water::{
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::ecs::message::Message;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::light::NotShadowCaster;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::{DQuat, DVec3};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
@@ -1146,6 +1146,15 @@ fn spawn_patch_mesh_system(
         let morph_start_m = (patch_size_m * MORPH_START_SIZE_FACTOR) as f32;
         let morph_end_m = (patch_size_m * MORPH_END_SIZE_FACTOR) as f32;
         let detail_texture = render_assets.detail_texture.clone().unwrap_or_default();
+        // Apply already-resident imagery at spawn. A patch that is replaced
+        // during LOD refinement or streaming must not flash procedural albedo
+        // for one or more frames before `apply_terrain_imagery` re-upgrades it;
+        // reusing the resident imagery tile keeps the visible surface stable.
+        let ready_imagery = imagery.imagery_for_patch(patch).cloned();
+        let initial_imagery_albedo = ready_imagery
+            .clone()
+            .unwrap_or_else(|| local_albedo.clone());
+        let initial_imagery_weight = if ready_imagery.is_some() { 1.0 } else { 0.0 };
         // Select the layered path versus the single-layer fallback from whether
         // a per-patch weight map was produced (native `dem` only).
         let layer = build_layer_material_state(
@@ -1160,8 +1169,8 @@ fn spawn_patch_mesh_system(
             local_normal.clone(),
             local_detail_weight,
             global_albedo.clone(),
-            local_albedo.clone(),
-            0.0,
+            initial_imagery_albedo.clone(),
+            initial_imagery_weight,
             morph_start_m,
             morph_end_m,
             detail_texture.clone(),
@@ -1293,6 +1302,16 @@ fn spawn_patch_mesh_system(
                 Mesh3d(mesh_handle.clone()),
                 MeshMaterial3d(material_handle.clone()),
                 transform,
+                // Landscape self-shadow is baked per patch and applied in the
+                // terrain shader. Sampling the real-time cascade shadow map for
+                // terrain as well is both redundant and unstable at planet
+                // scale: the cascades cover only the near field and re-snap as
+                // the body frame rotates, so the terrain's lit/shadowed regions
+                // shimmer frame to frame (the visible green/brown flicker). Mark
+                // terrain as neither caster nor receiver; the baked term stays
+                // the single authoritative self-shadow.
+                NotShadowCaster,
+                NotShadowReceiver,
                 TerrainPatchRenderState {
                     patch,
                     mesh_handle: mesh_handle.clone(),
@@ -1302,8 +1321,8 @@ fn spawn_patch_mesh_system(
                     local_normal: local_normal.clone(),
                     local_detail_weight,
                     global_albedo: global_albedo.clone(),
-                    imagery_albedo: local_albedo.clone(),
-                    imagery_weight: 0.0,
+                    imagery_albedo: initial_imagery_albedo.clone(),
+                    imagery_weight: initial_imagery_weight,
                     morph_start_m,
                     morph_end_m,
                     detail_texture,
@@ -2570,9 +2589,10 @@ mod tests {
 
     /// The per-axis anchor plus the render-relative body coordinate must recover
     /// the same body-fixed phase for a fixed ground point regardless of origin
-    /// rebasing or planetary rotation. The integer part of the absolute scaled
-    /// coordinate cancels under texture wrapping, so coordinate blending of the
-    /// axes stays invariant.
+    /// rebasing or planetary rotation. This is the invariance
+    /// `sample_layered_triplanar` relies on by sampling each triplanar axis
+    /// separately: a whole-tile anchor wrap cancels under texture wrapping. It
+    /// does NOT hold if the three axes are blended into one coordinate first.
     #[test]
     fn body_texture_phase_is_invariant_under_rebase_and_rotation() {
         let scale = f64::from(LAYER_TILING_SCALE);
@@ -2605,6 +2625,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Regression guard for the terrain green/brown flicker. `body_layer_uv`
+    /// used to blend the three triplanar axis *coordinates* into one UV before
+    /// sampling, which is not invariant: a whole-tile anchor wrap on one axis,
+    /// scaled by a fractional orientation weight, shifted the sampled layer
+    /// texture and stepped the ground albedo/roughness/normal/layer choice as the
+    /// render origin and body rotation advanced. `sample_layered_triplanar` now
+    /// samples each axis separately, so this must be non-invariant if a single
+    /// blended coordinate is reintroduced.
+    #[test]
+    fn blended_layer_coordinate_is_not_invariant() {
+        let scale = f64::from(LAYER_TILING_SCALE);
+        let ground_body = DVec3::new(1_234_567.25, 2_345_678.5, 3_456_789.75);
+        let rotation = DQuat::from_rotation_y(0.9) * DQuat::from_rotation_x(0.3);
+        let ground_inertial = rotation * ground_body;
+        // Orientation weights chosen to match the shader's normalized axis mix.
+        let weights = DVec3::new(0.2, 0.3, 0.5);
+        // One whole layer tile in body metres. Moving the render origin by this
+        // amount crosses an integer anchor boundary on the x axis.
+        let tile_m = 1.0 / scale;
+
+        let blended_uv_x = |offset: DVec3| -> f64 {
+            let render_origin = rotation * (ground_body + offset);
+            let local = rotation.inverse() * (ground_inertial - render_origin);
+            let anchor = body_texture_anchor(render_origin, rotation, scale).as_dvec3();
+            let projected = local.z * weights.x + local.x * weights.y + local.x * weights.z;
+            let anchored = anchor.z * weights.x + anchor.x * weights.y + anchor.x * weights.z;
+            (projected * scale + anchored).rem_euclid(1.0)
+        };
+
+        let before = blended_uv_x(DVec3::ZERO);
+        let after = blended_uv_x(DVec3::new(tile_m, 0.0, 0.0));
+        let shift = (after - before).rem_euclid(1.0);
+        assert!(
+            shift > 1e-3 && shift < 1.0 - 1e-3,
+            "expected the blended-coordinate form to shift under a whole-tile wrap, \
+             but phases were {before} vs {after}"
+        );
     }
 
     #[test]
