@@ -142,7 +142,7 @@ pub(crate) struct TerrainSurfaceExtension {
     sky_occlusion_strength: f32,
     /// Shared per-layer albedo/roughness texture array; rgb is the tiled albedo
     /// variation and alpha is the layer roughness. Layer index matches the
-    /// terrain layer catalog.
+    /// terrain layer catalog (grass, soil, rock, sand, snow, gravel, mud).
     #[texture(113, dimension = "2d_array")]
     #[sampler(114)]
     layer_albedo_roughness: Handle<Image>,
@@ -150,9 +150,10 @@ pub(crate) struct TerrainSurfaceExtension {
     #[texture(115, dimension = "2d_array")]
     #[sampler(116)]
     layer_normal: Handle<Image>,
-    /// Per-patch layer-weight map ([grass, soil, rock, sand]); snow is the
-    /// remaining unit. Neutral (1, 0, 0, 0) for coarse patches and the fallback.
-    #[texture(117)]
+    /// Per-patch layer-weight map as a two-layer RGBA8 array: layer 0 is
+    /// `[grass, soil, rock, sand]`, layer 1 is `[snow, gravel, mud, unused]`.
+    /// Neutral `[1, 0, 0, 0]`/`[0, 0, 0, 0]` for coarse patches and the fallback.
+    #[texture(117, dimension = "2d_array")]
     #[sampler(118)]
     layer_weights: Handle<Image>,
     /// Shared per-layer micro-height texture array; red is the layer's height in
@@ -901,15 +902,16 @@ fn ensure_neutral_local_surface_maps(
 }
 
 /// Neutral layer-weight map used by coarse patches and the single-layer
-/// fallback. The red channel is fully set so the derived snow remainder is zero;
-/// the shader ignores the map entirely while `layer_blend_weight` is zero.
+/// fallback: a two-layer RGBA8 array whose red channel is fully set so the
+/// layered branch (which is skipped anyway while `layer_blend_weight` is zero)
+/// would read a pure grass weight.
 fn ensure_neutral_layer_weights(
     render_assets: &mut TerrainRenderAssets,
     images: &mut Assets<Image>,
 ) -> Handle<Image> {
     render_assets
         .neutral_layer_weights
-        .get_or_insert_with(|| images.add(neutral_surface_image([255, 0, 0, 0])))
+        .get_or_insert_with(|| images.add(neutral_layer_weight_image()))
         .clone()
 }
 
@@ -960,6 +962,22 @@ fn neutral_surface_image(data: [u8; 4]) -> Image {
         },
         TextureDimension::D2,
         data.to_vec(),
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// Neutral two-layer layer-weight map: 1x1, layer 0 red = grass, layer 1 clear.
+/// Matches the per-patch weight-map array shape without allocating a real map.
+fn neutral_layer_weight_image() -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 2,
+        },
+        TextureDimension::D2,
+        vec![255, 0, 0, 0, 0, 0, 0, 0],
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     )

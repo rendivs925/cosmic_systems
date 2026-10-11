@@ -63,7 +63,7 @@ pub enum SurfaceClass {
 
 /// A coherent terrain sample from the authoritative source.
 ///
-/// Heights are meters above mean radius; moisture and river strength are
+/// Heights are meters above mean radius; moisture, river strength, and flow are
 /// normalized to `[0, 1]`. The type deliberately excludes a surface normal:
 /// normals require a body radius and remain the responsibility of
 /// `terrain_collision::sample_surface`.
@@ -72,6 +72,11 @@ pub struct TerrainSurfaceSample {
     pub final_height_m: f64,
     pub moisture: f64,
     pub river_strength: f64,
+    /// Normalized hydrological flow accumulation in `[0, 1]`, distinct from
+    /// `river_strength`: it is nonzero well below the channel-carving threshold,
+    /// so it can drive riparian / alluvial material even where no river is
+    /// carved. Sources without a hydrology model default to zero.
+    pub flow: f64,
     pub surface_class: SurfaceClass,
 }
 
@@ -81,6 +86,7 @@ impl Default for TerrainSurfaceSample {
             final_height_m: 0.0,
             moisture: 0.5,
             river_strength: 0.0,
+            flow: 0.0,
             surface_class: SurfaceClass::Unknown,
         }
     }
@@ -120,6 +126,7 @@ pub trait TerrainSource: Send + Sync + Debug {
             river_strength: self
                 .river_strength(latitude_deg, longitude_deg)
                 .clamp(0.0, 1.0),
+            flow: self.flow(latitude_deg, longitude_deg).clamp(0.0, 1.0),
             surface_class: self.surface_class(latitude_deg, longitude_deg),
         }
     }
@@ -165,6 +172,13 @@ pub trait TerrainSource: Send + Sync + Debug {
     /// metadata derived from the same authoritative terrain source; a default
     /// of zero keeps sources without hydrology dry.
     fn river_strength(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+
+    /// Normalized hydrological flow accumulation in `[0, 1]`, nonzero below the
+    /// river-carving threshold. Presentation metadata derived from the same
+    /// authoritative terrain source; sources without hydrology default to zero.
+    fn flow(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
         0.0
     }
 
@@ -289,6 +303,7 @@ mod tests {
                 final_height_m: 0.0,
                 moisture: 0.5,
                 river_strength: 0.0,
+                flow: 0.0,
                 surface_class: SurfaceClass::Ocean,
             }
         );
@@ -298,6 +313,7 @@ mod tests {
     struct TerrainMetadataSource {
         moisture: f64,
         river_strength: f64,
+        flow: f64,
     }
 
     impl TerrainSource for TerrainMetadataSource {
@@ -316,6 +332,10 @@ mod tests {
         fn river_strength(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
             self.river_strength
         }
+
+        fn flow(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.flow
+        }
     }
 
     #[test]
@@ -326,6 +346,7 @@ mod tests {
                 Arc::new(TerrainMetadataSource {
                     moisture: 0.2,
                     river_strength: 0.1,
+                    flow: 0.05,
                 }),
                 ElevationBounds::new(0.0, 0.0),
             )),
@@ -333,6 +354,7 @@ mod tests {
                 Arc::new(TerrainMetadataSource {
                     moisture: 0.8,
                     river_strength: 0.7,
+                    flow: 0.6,
                 }),
                 ElevationBounds::new(0.0, 0.0),
                 DetailLodFade::new(3, 6),
@@ -341,6 +363,7 @@ mod tests {
 
         assert!((layered.moisture(0.0, 0.0) - 0.59).abs() < 1e-12);
         assert_eq!(layered.river_strength(0.0, 0.0), 0.7);
+        assert_eq!(layered.flow(0.0, 0.0), 0.6);
     }
 
     #[cfg(feature = "dem")]

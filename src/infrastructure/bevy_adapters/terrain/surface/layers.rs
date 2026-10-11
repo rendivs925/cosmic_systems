@@ -19,9 +19,10 @@ use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerD
 use bevy::prelude::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-/// Bounded ground-layer count. Five layers keep the per-fragment sampling budget
-/// finite while covering the grass / soil / rock / sand / snow spectrum.
-pub(crate) const GROUND_LAYER_COUNT: usize = 5;
+/// Bounded ground-layer count. Seven layers cover the grass / soil / rock /
+/// sand / snow spectrum plus the flow-driven gravel and mud materials, while
+/// keeping the per-fragment sampling budget finite.
+pub(crate) const GROUND_LAYER_COUNT: usize = 7;
 
 /// Resolution (texels per side) of each shared procedural layer texture. The set
 /// is uploaded once and shared by every patch, so residency does not grow with
@@ -32,10 +33,16 @@ pub(crate) const LAYER_TEXTURE_RES: u32 = 128;
 /// ecotones, so a small map is sufficient and keeps per-patch memory bounded.
 pub(crate) const LAYER_WEIGHT_TEX_RES: u32 = 32;
 
+/// Array layers of the per-patch weight map. Each array layer is one RGBA8
+/// texel: layer 0 is `[grass, soil, rock, sand]` and layer 1 is
+/// `[snow, gravel, mud, unused]`. Seven layers therefore need two RGBA8 maps.
+pub(crate) const LAYER_WEIGHT_ARRAY_LAYERS: u32 = 2;
+
 /// Stored bytes for one layer-weight map including its mip chain. Used for
 /// budget telemetry; it is deliberately small relative to the local surface maps.
 pub(crate) const LAYER_WEIGHT_MAP_BYTES: u64 =
-    LAYER_WEIGHT_TEX_RES as u64 * LAYER_WEIGHT_TEX_RES as u64 * 4 * 4 / 3;
+    LAYER_WEIGHT_TEX_RES as u64 * LAYER_WEIGHT_TEX_RES as u64 * 4 * 4 / 3
+        * LAYER_WEIGHT_ARRAY_LAYERS as u64;
 
 /// Repetitions per metre of a ground-layer texture. About 250 m per tile keeps
 /// the medium-scale layer pattern readable without aliasing at close range.
@@ -60,6 +67,8 @@ pub(crate) enum GroundLayer {
     Rock,
     Sand,
     Snow,
+    Gravel,
+    Mud,
 }
 
 /// Data-driven definition of one ground layer: its albedo tint, roughness,
@@ -122,9 +131,26 @@ pub(crate) const GROUND_LAYERS: [LayerDescriptor; GROUND_LAYER_COUNT] = [
         feature_scale: 0.9,
         seed: 53,
     },
+    LayerDescriptor {
+        layer: GroundLayer::Gravel,
+        albedo: [0.24, 0.22, 0.19],
+        roughness: 0.85,
+        normal_strength: 9.0,
+        feature_scale: 3.2,
+        seed: 67,
+    },
+    LayerDescriptor {
+        layer: GroundLayer::Mud,
+        albedo: [0.13, 0.10, 0.07],
+        roughness: 0.70,
+        normal_strength: 2.6,
+        feature_scale: 1.1,
+        seed: 71,
+    },
 ];
 
-/// There must always be five layers in index order; keep it a compile-time fact.
+/// There must always be `GROUND_LAYER_COUNT` layers in index order; keep it a
+/// compile-time fact.
 const _: () = assert!(GROUND_LAYERS.len() == GROUND_LAYER_COUNT);
 
 /// Hermite smoothstep over `[edge0, edge1]`. Continuous and used for every layer
@@ -141,14 +167,20 @@ fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
 /// samples. The output sums to one and is a pure function of its inputs, so
 /// adjacent LODs that share a source sample agree exactly and regeneration is
 /// deterministic.
+///
+/// `flow` is the normalized hydrological flow accumulation (Module 4, section 2).
+/// It is nonzero in drainage below the river-carving threshold, so it selects
+/// alluvial material where the channel is not yet a carved river.
 pub(crate) fn layer_weights(
     height_m: f64,
     slope_deg: f64,
     moisture: f64,
+    flow: f64,
     zone_lat: f64,
 ) -> [f32; GROUND_LAYER_COUNT] {
     let slope = slope_deg.max(0.0);
     let moisture = moisture.clamp(0.0, 1.0);
+    let flow = flow.clamp(0.0, 1.0);
     let zone_lat = zone_lat.clamp(0.0, 1.0);
     let polar = ((zone_lat - 0.5).abs() * 2.0).clamp(0.0, 1.0);
 
@@ -163,21 +195,42 @@ pub(crate) fn layer_weights(
     let low = 1.0 - smoothstep(2.0, 70.0, height_m.max(0.0));
     let dry = 1.0 - smoothstep(0.18, 0.55, moisture);
     let sand = low * dry * (1.0 - rock) * (1.0 - snow);
-    let bare = (1.0 - rock) * (1.0 - snow) * (1.0 - sand);
+    // Wet, draining ground below the channel threshold is mud (alluvial flats and
+    // riparian banks). The flow band starts well below the carve threshold so mud
+    // appears across the drainage network, not only on carved rivers.
+    let flow_w = smoothstep(0.02, 0.35, flow);
+    let mud =
+        flow_w * smoothstep(0.35, 0.72, moisture) * (1.0 - rock) * (1.0 - snow) * (1.0 - sand);
+    // Exposed, moderately steep, dry ground just below the rock band is gravel.
+    let slope_gravel = smoothstep(12.0, 32.0, slope);
+    let gravel = slope_gravel
+        * (1.0 - rock)
+        * (1.0 - snow)
+        * (1.0 - sand)
+        * (1.0 - mud)
+        * (1.0 - smoothstep(0.40, 0.75, moisture));
+    let bare = (1.0 - rock) * (1.0 - snow) * (1.0 - sand) * (1.0 - mud) * (1.0 - gravel);
     let wet = smoothstep(0.28, 0.68, moisture);
     let grass = bare * wet;
     let soil = bare * (1.0 - wet);
 
-    let mut weights = [grass, soil, rock, sand, snow];
+    let weights = [grass, soil, rock, sand, snow, gravel, mud];
     let sum: f64 = weights.iter().sum();
     if !sum.is_finite() || sum <= 1e-9 {
-        return [0.0, 1.0, 0.0, 0.0, 0.0];
+        return layer_weights_fallback();
     }
     let mut normalized = [0.0f32; GROUND_LAYER_COUNT];
-    for (output, weight) in normalized.iter_mut().zip(weights.iter_mut()) {
+    for (output, weight) in normalized.iter_mut().zip(weights.iter()) {
         *output = (*weight / sum) as f32;
     }
     normalized
+}
+
+/// Safe default when the weight law degenerates: bare soil.
+fn layer_weights_fallback() -> [f32; GROUND_LAYER_COUNT] {
+    let mut weights = [0.0f32; GROUND_LAYER_COUNT];
+    weights[GroundLayer::Soil as usize] = 1.0;
+    weights
 }
 
 /// Deterministic seamless layer noise. Integer offsets preserve seamlessness
@@ -401,14 +454,15 @@ pub(crate) fn layer_texture_set() -> LayerTextureSet {
     }
 }
 
-/// Build the per-patch layer-weight map. RGB carry grass / soil / rock / sand
-/// weights; snow is derived in the shader as the remaining unit, so one RGBA8
-/// map encodes all five layers. Channels are floored so the stored sum never
-/// exceeds one and the derived snow weight is never spuriously negative.
+/// Build the per-patch layer-weight map as a two-layer RGBA8 texture array.
+/// Array layer 0 carries `[grass, soil, rock, sand]`; array layer 1 carries
+/// `[snow, gravel, mud, unused]`. Channels are floored so the stored total never
+/// exceeds one, keeping the normalized blend stable after 8-bit quantization.
 pub(crate) fn build_layer_weight_map(source: &dyn TerrainSource, patch: &TerrainPatch) -> Image {
     let res = LAYER_WEIGHT_TEX_RES as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
-    let mut stored = vec![0u8; res * res * 4];
+    let mut layer0 = vec![0u8; res * res * 4];
+    let mut layer1 = vec![0u8; res * res * 4];
     for j in 0..res {
         for i in 0..res {
             let u = u0 + (u1 - u0) * i as f64 / (res - 1).max(1) as f64;
@@ -419,22 +473,35 @@ pub(crate) fn build_layer_weight_map(source: &dyn TerrainSource, patch: &Terrain
                 source.height_m(latitude_deg, longitude_deg),
                 slope_deg_at(source, latitude_deg, longitude_deg),
                 source.moisture(latitude_deg, longitude_deg),
+                source.flow(latitude_deg, longitude_deg),
                 source.zone_lat(latitude_deg),
             );
             let index = (j * res + i) * 4;
             for channel in 0..4 {
-                stored[index + channel] = (f64::from(weights[channel]) * 255.0)
+                layer0[index + channel] = (f64::from(weights[channel]) * 255.0)
+                    .floor()
+                    .clamp(0.0, 255.0) as u8;
+            }
+            // Layer 1 holds the remaining layers; its spare fourth channel stays 0.
+            for channel in 0..(GROUND_LAYER_COUNT - 4) {
+                layer1[index + channel] = (f64::from(weights[channel + 4]) * 255.0)
                     .floor()
                     .clamp(0.0, 255.0) as u8;
             }
         }
     }
-    let (data, levels) = mip_chain_rgba8(
-        LAYER_WEIGHT_TEX_RES,
-        LAYER_WEIGHT_TEX_RES,
-        &stored,
-        MipFilter::Color,
-    );
+    let mut data = Vec::new();
+    let mut levels = 1u32;
+    for base in [&layer0, &layer1] {
+        let (chain, chain_levels) = mip_chain_rgba8(
+            LAYER_WEIGHT_TEX_RES,
+            LAYER_WEIGHT_TEX_RES,
+            base,
+            MipFilter::Color,
+        );
+        data.extend_from_slice(&chain);
+        levels = chain_levels;
+    }
     // Centralized budget guard: the per-patch weight map must stay inside the
     // layer budget before it is uploaded.
     assert!(
@@ -445,7 +512,7 @@ pub(crate) fn build_layer_weight_map(source: &dyn TerrainSource, patch: &Terrain
         Extent3d {
             width: LAYER_WEIGHT_TEX_RES,
             height: LAYER_WEIGHT_TEX_RES,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: LAYER_WEIGHT_ARRAY_LAYERS,
         },
         TextureDimension::D2,
         TextureFormat::Rgba8Unorm,
@@ -481,18 +548,19 @@ mod tests {
 
     #[test]
     fn layer_weights_are_normalized_and_bounded() {
-        for (height, slope, moisture, zone) in [
-            (0.0, 0.0, 0.5, 0.5),
-            (300.0, 5.0, 0.8, 0.5),
-            (1_500.0, 42.0, 0.3, 0.2),
-            (5_500.0, 10.0, 0.5, 0.95),
-            (-500.0, 1.0, 0.1, 0.5),
+        for (height, slope, moisture, flow, zone) in [
+            (0.0, 0.0, 0.5, 0.0, 0.5),
+            (300.0, 5.0, 0.8, 0.3, 0.5),
+            (1_500.0, 42.0, 0.3, 0.0, 0.2),
+            (5_500.0, 10.0, 0.5, 0.0, 0.95),
+            (-500.0, 1.0, 0.1, 0.9, 0.5),
+            (20.0, 18.0, 0.4, 0.05, 0.5),
         ] {
-            let weights = layer_weights(height, slope, moisture, zone);
+            let weights = layer_weights(height, slope, moisture, flow, zone);
             let sum: f32 = weights.iter().sum();
             assert!(
                 (sum - 1.0).abs() < 1e-4,
-                "weights must sum to one at {height}/{slope}/{moisture}/{zone}, got {sum}"
+                "weights must sum to one at {height}/{slope}/{moisture}/{flow}/{zone}, got {sum}"
             );
             for weight in weights {
                 assert!(
@@ -505,8 +573,8 @@ mod tests {
 
     #[test]
     fn slope_transitions_smoothly_toward_rock() {
-        let gentle = layer_weights(200.0, 5.0, 0.6, 0.5);
-        let steep = layer_weights(200.0, 60.0, 0.6, 0.5);
+        let gentle = layer_weights(200.0, 5.0, 0.6, 0.0, 0.5);
+        let steep = layer_weights(200.0, 60.0, 0.6, 0.0, 0.5);
         assert!(
             steep[GroundLayer::Rock as usize] > gentle[GroundLayer::Rock as usize],
             "steeper ground must expose more rock"
@@ -515,8 +583,8 @@ mod tests {
 
     #[test]
     fn elevation_transitions_smoothly_toward_snow() {
-        let low = layer_weights(1_000.0, 5.0, 0.5, 0.5);
-        let high = layer_weights(5_000.0, 5.0, 0.5, 0.5);
+        let low = layer_weights(1_000.0, 5.0, 0.5, 0.0, 0.5);
+        let high = layer_weights(5_000.0, 5.0, 0.5, 0.0, 0.5);
         assert!(
             high[GroundLayer::Snow as usize] > low[GroundLayer::Snow as usize],
             "higher ground must expose more snow"
@@ -524,13 +592,38 @@ mod tests {
     }
 
     #[test]
+    fn flow_transitions_smoothly_toward_mud() {
+        let dry = layer_weights(20.0, 3.0, 0.8, 0.0, 0.5);
+        let wet = layer_weights(20.0, 3.0, 0.8, 0.9, 0.5);
+        assert!(
+            wet[GroundLayer::Mud as usize] > dry[GroundLayer::Mud as usize],
+            "flowing wet ground must expose more mud"
+        );
+    }
+
+    #[test]
+    fn moderate_slope_exposes_gravel_but_steep_is_rock() {
+        let flat = layer_weights(400.0, 2.0, 0.3, 0.0, 0.5);
+        let moderate = layer_weights(400.0, 24.0, 0.3, 0.0, 0.5);
+        let steep = layer_weights(400.0, 55.0, 0.3, 0.0, 0.5);
+        assert!(
+            moderate[GroundLayer::Gravel as usize] > flat[GroundLayer::Gravel as usize],
+            "moderate slopes must expose more gravel than flat ground"
+        );
+        assert!(
+            steep[GroundLayer::Rock as usize] > steep[GroundLayer::Gravel as usize],
+            "steep ground must read as rock, not gravel"
+        );
+    }
+
+    #[test]
     fn layer_weights_change_continuously_without_hard_bands() {
         // Over a fine slope sweep every weight moves smoothly; a hard biome band
         // would show up as a step much larger than the local gradient allows.
-        let mut previous = layer_weights(500.0, 0.0, 0.5, 0.5);
+        let mut previous = layer_weights(500.0, 0.0, 0.5, 0.0, 0.5);
         for index in 1..=400 {
             let slope = index as f64 * 2.0;
-            let current = layer_weights(500.0, slope, 0.5, 0.5);
+            let current = layer_weights(500.0, slope, 0.5, 0.0, 0.5);
             for (a, b) in previous.iter().zip(current.iter()) {
                 assert!(
                     (a - b).abs() < 0.12,
@@ -540,10 +633,10 @@ mod tests {
             previous = current;
         }
         // The same holds across the snow band as elevation rises.
-        let mut previous = layer_weights(0.0, 5.0, 0.5, 0.5);
+        let mut previous = layer_weights(0.0, 5.0, 0.5, 0.0, 0.5);
         for index in 1..=300 {
             let height = index as f64 * 20.0;
-            let current = layer_weights(height, 5.0, 0.5, 0.5);
+            let current = layer_weights(height, 5.0, 0.5, 0.0, 0.5);
             for (a, b) in previous.iter().zip(current.iter()) {
                 assert!(
                     (a - b).abs() < 0.12,
@@ -552,12 +645,25 @@ mod tests {
             }
             previous = current;
         }
+        // And across the flow band as drainage increases.
+        let mut previous = layer_weights(20.0, 3.0, 0.8, 0.0, 0.5);
+        for index in 1..=200 {
+            let flow = index as f64 / 200.0;
+            let current = layer_weights(20.0, 3.0, 0.8, flow, 0.5);
+            for (a, b) in previous.iter().zip(current.iter()) {
+                assert!(
+                    (a - b).abs() < 0.12,
+                    "layer weight jumped between flow samples: {a} -> {b}"
+                );
+            }
+            previous = current;
+        }
     }
 
     #[test]
     fn layer_weights_are_deterministic() {
-        let first = layer_weights(1_234.0, 33.0, 0.42, 0.61);
-        let second = layer_weights(1_234.0, 33.0, 0.42, 0.61);
+        let first = layer_weights(1_234.0, 33.0, 0.42, 0.2, 0.61);
+        let second = layer_weights(1_234.0, 33.0, 0.42, 0.2, 0.61);
         assert_eq!(first, second);
     }
 
@@ -573,12 +679,14 @@ mod tests {
             source.height_m(lat, lon),
             slope_deg_at(&source, lat, lon),
             source.moisture(lat, lon),
+            source.flow(lat, lon),
             source.zone_lat(lat),
         );
         let repeat = layer_weights(
             source.height_m(lat, lon),
             slope_deg_at(&source, lat, lon),
             source.moisture(lat, lon),
+            source.flow(lat, lon),
             source.zone_lat(lat),
         );
         assert_eq!(weights, repeat);
@@ -653,30 +761,50 @@ mod tests {
         let second = build_layer_weight_map(&source, &patch);
         assert_eq!(first.data, second.data);
         assert_eq!(first.width(), LAYER_WEIGHT_TEX_RES);
+        assert_eq!(
+            first.texture_descriptor.size.depth_or_array_layers,
+            LAYER_WEIGHT_ARRAY_LAYERS
+        );
         assert!(first.texture_descriptor.mip_level_count > 1);
-        let data = first.data.as_ref().unwrap();
-        for texel in data.as_chunks::<4>().0 {
-            let stored_sum: u32 = texel[..4].iter().map(|value| u32::from(*value)).sum();
-            assert!(
-                stored_sum <= 255,
-                "stored layer weights must leave a non-negative snow remainder"
-            );
+        let res = LAYER_WEIGHT_TEX_RES as usize;
+        for j in 0..res {
+            for i in 0..res {
+                let stored_sum: u32 = (0..GROUND_LAYER_COUNT)
+                    .map(|channel| u32::from(stored_weight(&first, i, j, channel)))
+                    .sum();
+                assert!(stored_sum <= 255, "stored weights must not overflow one");
+                // The unused eighth channel stays clear.
+                assert_eq!(stored_weight(&first, i, j, 7), 0);
+            }
         }
     }
 
+    /// Read one stored weight channel (`0..GROUND_LAYER_COUNT`) from the base mip
+    /// of a two-layer weight map. Array layer 0 is channels 0..4, layer 1 is
+    /// channels 4..8; both layers share one mip-chain length.
+    fn stored_weight(image: &Image, i: usize, j: usize, channel: usize) -> u8 {
+        let res = LAYER_WEIGHT_TEX_RES as usize;
+        let data = image.data.as_ref().unwrap();
+        let layer_len = data.len() / LAYER_WEIGHT_ARRAY_LAYERS as usize;
+        let layer = channel / 4;
+        let component = channel % 4;
+        data[layer * layer_len + (j * res + i) * 4 + component]
+    }
+
     /// Sample the base level of a generated layer-weight map at a patch-local UV.
-    fn sampled_texel(image: &Image, u0: f64, v0: f64, u1: f64, v1: f64, u: f64, v: f64) -> [u8; 4] {
+    fn sampled_texel(
+        image: &Image,
+        u0: f64,
+        v0: f64,
+        u1: f64,
+        v1: f64,
+        u: f64,
+        v: f64,
+    ) -> [u8; GROUND_LAYER_COUNT] {
         let res = LAYER_WEIGHT_TEX_RES as usize;
         let i = (((u - u0) / (u1 - u0)).clamp(0.0, 1.0) * (res - 1) as f64).round() as usize;
         let j = (((v - v0) / (v1 - v0)).clamp(0.0, 1.0) * (res - 1) as f64).round() as usize;
-        let data = image.data.as_ref().unwrap();
-        let index = (j * res + i) * 4;
-        [
-            data[index],
-            data[index + 1],
-            data[index + 2],
-            data[index + 3],
-        ]
+        std::array::from_fn(|channel| stored_weight(image, i, j, channel))
     }
 
     #[test]
@@ -742,14 +870,13 @@ mod tests {
             for level in [11u32, 12, 13, 14] {
                 let patch = TerrainPatch::for_direction(dir, level);
                 let map = build_layer_weight_map(&source, &patch);
-                let data = map.data.as_ref().unwrap();
                 let mut mx = 0i32;
                 for j in 0..res {
                     for i in 0..res - 1 {
-                        let a = &data[(j * res + i) * 4..(j * res + i) * 4 + 4];
-                        let b = &data[(j * res + i + 1) * 4..(j * res + i + 1) * 4 + 4];
-                        for k in 0..4 {
-                            mx = mx.max((i32::from(a[k]) - i32::from(b[k])).abs());
+                        for channel in 0..GROUND_LAYER_COUNT {
+                            let a = i32::from(stored_weight(&map, i, j, channel));
+                            let b = i32::from(stored_weight(&map, i + 1, j, channel));
+                            mx = mx.max((a - b).abs());
                         }
                     }
                 }
@@ -790,7 +917,7 @@ mod tests {
         v1: f64,
         u: f64,
         v: f64,
-    ) -> [f64; 4] {
+    ) -> [f64; GROUND_LAYER_COUNT] {
         let res = LAYER_WEIGHT_TEX_RES as usize;
         let fx = ((u - u0) / (u1 - u0)).clamp(0.0, 1.0) * (res - 1) as f64;
         let fy = ((v - v0) / (v1 - v0)).clamp(0.0, 1.0) * (res - 1) as f64;
@@ -800,20 +927,13 @@ mod tests {
         let j1 = (j0 + 1).min(res - 1);
         let tx = fx - i0 as f64;
         let ty = fy - j0 as f64;
-        let data = image.data.as_ref().unwrap();
-        let texel = |i: usize, j: usize| -> [f64; 4] {
-            let index = (j * res + i) * 4;
-            [
-                f64::from(data[index]),
-                f64::from(data[index + 1]),
-                f64::from(data[index + 2]),
-                f64::from(data[index + 3]),
-            ]
+        let texel = |i: usize, j: usize| -> [f64; GROUND_LAYER_COUNT] {
+            std::array::from_fn(|channel| f64::from(stored_weight(image, i, j, channel)))
         };
         let (a, b) = (texel(i0, j0), texel(i1, j0));
         let (c, d) = (texel(i0, j1), texel(i1, j1));
-        let mut out = [0.0; 4];
-        for k in 0..4 {
+        let mut out = [0.0; GROUND_LAYER_COUNT];
+        for k in 0..GROUND_LAYER_COUNT {
             let top = a[k] + (b[k] - a[k]) * tx;
             let bottom = c[k] + (d[k] - c[k]) * tx;
             out[k] = top + (bottom - top) * ty;
@@ -854,7 +974,7 @@ mod tests {
                         let fine = sampled_texel(&child_map, fu0, fv0, fu1, fv1, u, v);
                         let coarse_est =
                             sample_weight_bilinear(&coarse_map, cu0, cv0, cu1, cv1, u, v);
-                        for k in 0..4 {
+                        for k in 0..GROUND_LAYER_COUNT {
                             let diff = (f64::from(fine[k]) - coarse_est[k]).abs();
                             assert!(
                                 diff <= tolerance,
@@ -945,12 +1065,12 @@ mod tests {
 
     #[test]
     fn height_aware_weights_are_normalized_and_bounded() {
-        let alpha = [0.25, 0.25, 0.25, 0.25, 0.0];
+        let alpha = [0.2, 0.2, 0.2, 0.2, 0.0, 0.1, 0.1];
         for heights in [
-            [0.5, 0.5, 0.5, 0.5, 0.5],
-            [0.1, 0.2, 0.3, 0.4, 0.9],
-            [0.0, 0.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0, 1.0, 1.0],
+            [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+            [0.1, 0.2, 0.3, 0.4, 0.9, 0.0, 0.6],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
         ] {
             let weights = compute_height_aware_weights(alpha, heights, LAYER_HEIGHT_CONTRAST);
             let sum: f32 = weights.iter().sum();
@@ -973,8 +1093,8 @@ mod tests {
         // in micro-height. A tight contrast drops the lower layer entirely, while
         // a wide contrast keeps it in the mix, so the tallest layer's share is
         // larger under the tight blend.
-        let alpha = [0.34, 0.33, 0.33, 0.0, 0.0];
-        let heights = [0.6, 0.6, 0.5, 0.0, 0.0];
+        let alpha = [0.34, 0.33, 0.33, 0.0, 0.0, 0.0, 0.0];
+        let heights = [0.6, 0.6, 0.5, 0.0, 0.0, 0.0, 0.0];
         let sharp = compute_height_aware_weights(alpha, heights, 0.02);
         let soft = compute_height_aware_weights(alpha, heights, 0.5);
         assert!(
@@ -989,8 +1109,8 @@ mod tests {
 
     #[test]
     fn height_aware_weights_are_deterministic() {
-        let alpha = [0.3, 0.2, 0.25, 0.15, 0.1];
-        let heights = [0.4, 0.6, 0.1, 0.9, 0.2];
+        let alpha = [0.3, 0.2, 0.25, 0.15, 0.1, 0.0, 0.0];
+        let heights = [0.4, 0.6, 0.1, 0.9, 0.2, 0.3, 0.5];
         assert_eq!(
             compute_height_aware_weights(alpha, heights, LAYER_HEIGHT_CONTRAST),
             compute_height_aware_weights(alpha, heights, LAYER_HEIGHT_CONTRAST),
@@ -1002,6 +1122,8 @@ mod tests {
         assert_eq!(GROUND_LAYERS.len(), GROUND_LAYER_COUNT);
         assert_eq!(GROUND_LAYERS[0].layer, GroundLayer::Grass);
         assert_eq!(GROUND_LAYERS[4].layer, GroundLayer::Snow);
+        assert_eq!(GROUND_LAYERS[5].layer, GroundLayer::Gravel);
+        assert_eq!(GROUND_LAYERS[6].layer, GroundLayer::Mud);
         let seeds = GROUND_LAYERS.map(|descriptor| descriptor.seed);
         assert!(seeds.windows(2).all(|pair| pair[0] != pair[1]));
     }

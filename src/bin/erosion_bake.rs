@@ -146,61 +146,6 @@ fn validate_region(region: (f64, f64, f64, f64)) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(list: &[&str]) -> Result<Args, String> {
-        parse_args_from(list.iter().map(|value| value.to_string()))
-    }
-
-    #[test]
-    fn defaults_to_standard_quality_and_the_all_region() {
-        let parsed = parse(&["--cache", "/tmp/x", "--all"]).expect("parse");
-        assert_eq!(parsed.quality, "standard");
-        assert_eq!(parsed.region, (-90.0, 90.0, -180.0, 180.0));
-        assert_eq!(parsed.max_bytes, DEFAULT_EROSION_CACHE_MAX_BYTES);
-        assert_eq!(parsed.cache_dir, PathBuf::from("/tmp/x"));
-    }
-
-    #[test]
-    fn parses_quality_region_and_budget() {
-        let parsed = parse(&[
-            "--cache",
-            "/c",
-            "--quality",
-            "ultra",
-            "--max-bytes",
-            "2048",
-            "--region",
-            "10",
-            "12",
-            "20",
-            "22",
-        ])
-        .expect("parse");
-        assert_eq!(parsed.quality, "ultra");
-        assert_eq!(parsed.region, (10.0, 12.0, 20.0, 22.0));
-        assert_eq!(parsed.max_bytes, 2048);
-    }
-
-    #[test]
-    fn rejects_missing_or_conflicting_selectors() {
-        assert!(parse(&["--all"]).is_err());
-        assert!(parse(&["--cache", "/c"]).is_err());
-        assert!(parse(&["--cache", "/c", "--all", "--region", "0", "1", "0", "1"]).is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_values() {
-        assert!(parse(&["--cache", "/c", "--quality", "bogus", "--all"]).is_err());
-        assert!(parse(&["--cache", "/c", "--max-bytes", "0", "--all"]).is_err());
-        assert!(parse(&["--cache", "/c", "--region", "0", "1", "0"]).is_err());
-        assert!(parse(&["--cache", "/c", "--region", "5", "5", "0", "1"]).is_err());
-        assert!(parse(&["--cache", "/c", "--region", "-95", "1", "0", "1"]).is_err());
-    }
-}
-
 fn main() {
     let args = parse_args();
 
@@ -298,4 +243,59 @@ fn main() {
          (checksum {checksum:.3}, write_failures={write_failures}); cache at {}",
         store.root().display()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(list: &[&str]) -> Result<Args, String> {
+        parse_args_from(list.iter().map(|value| value.to_string()))
+    }
+
+    #[test]
+    fn defaults_to_standard_quality_and_the_all_region() {
+        let parsed = parse(&["--cache", "/tmp/x", "--all"]).expect("parse");
+        assert_eq!(parsed.quality, "standard");
+        assert_eq!(parsed.region, (-90.0, 90.0, -180.0, 180.0));
+        assert_eq!(parsed.max_bytes, DEFAULT_EROSION_CACHE_MAX_BYTES);
+        assert_eq!(parsed.cache_dir, PathBuf::from("/tmp/x"));
+    }
+
+    #[test]
+    fn parses_quality_region_and_budget() {
+        let parsed = parse(&[
+            "--cache",
+            "/c",
+            "--quality",
+            "ultra",
+            "--max-bytes",
+            "2048",
+            "--region",
+            "10",
+            "12",
+            "20",
+            "22",
+        ])
+        .expect("parse");
+        assert_eq!(parsed.quality, "ultra");
+        assert_eq!(parsed.region, (10.0, 12.0, 20.0, 22.0));
+        assert_eq!(parsed.max_bytes, 2048);
+    }
+
+    #[test]
+    fn rejects_missing_or_conflicting_selectors() {
+        assert!(parse(&["--all"]).is_err());
+        assert!(parse(&["--cache", "/c"]).is_err());
+        assert!(parse(&["--cache", "/c", "--all", "--region", "0", "1", "0", "1"]).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_values() {
+        assert!(parse(&["--cache", "/c", "--quality", "bogus", "--all"]).is_err());
+        assert!(parse(&["--cache", "/c", "--max-bytes", "0", "--all"]).is_err());
+        assert!(parse(&["--cache", "/c", "--region", "0", "1", "0"]).is_err());
+        assert!(parse(&["--cache", "/c", "--region", "5", "5", "0", "1"]).is_err());
+        assert!(parse(&["--cache", "/c", "--region", "-95", "1", "0", "1"]).is_err());
+    }
 }

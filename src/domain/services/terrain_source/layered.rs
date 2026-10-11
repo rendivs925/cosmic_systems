@@ -252,6 +252,14 @@ impl TerrainSource for LayeredTerrainSource {
             .unwrap_or(primary)
     }
 
+    fn flow(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let primary = self.primary_surface().flow(latitude_deg, longitude_deg);
+        self.procedural_detail
+            .as_ref()
+            .map(|detail| primary.max(detail.source.flow(latitude_deg, longitude_deg)))
+            .unwrap_or(primary)
+    }
+
     fn overview_moisture(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.primary_surface()
             .overview_moisture(latitude_deg, longitude_deg)

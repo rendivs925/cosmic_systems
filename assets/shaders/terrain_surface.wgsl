@@ -113,22 +113,22 @@ fn rotate_by_quat(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 @group(#{MATERIAL_BIND_GROUP}) @binding(111) var terrain_occlusion: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(112) var terrain_occlusion_sampler: sampler;
 // Shared per-layer PBR sets. Layer order matches the terrain layer catalog:
-// grass, soil, rock, sand, snow. Albedo/roughness packs rgb + roughness, and the
-// normal array carries a tangent-space normal in rgb.
+// grass, soil, rock, sand, snow, gravel, mud. Albedo/roughness packs rgb +
+// roughness, and the normal array carries a tangent-space normal in rgb.
 @group(#{MATERIAL_BIND_GROUP}) @binding(113) var terrain_layer_albedo: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(114) var terrain_layer_albedo_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(115) var terrain_layer_normal: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(116) var terrain_layer_normal_sampler: sampler;
-// Per-patch layer weights: rgb = grass, soil, rock; a = sand. Snow is the
-// remaining unit, so one RGBA8 map encodes all five layers.
-@group(#{MATERIAL_BIND_GROUP}) @binding(117) var terrain_layer_weights: texture_2d<f32>;
+// Per-patch layer weights as a two-layer RGBA8 array. Array layer 0 carries
+// [grass, soil, rock, sand]; array layer 1 carries [snow, gravel, mud, unused].
+@group(#{MATERIAL_BIND_GROUP}) @binding(117) var terrain_layer_weights: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(118) var terrain_layer_weights_sampler: sampler;
 // Shared per-layer micro-height array (red channel), sampled at the same UV as
 // the layer albedo/normal arrays for height-aware blending.
 @group(#{MATERIAL_BIND_GROUP}) @binding(119) var terrain_layer_height: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(120) var terrain_layer_height_sampler: sampler;
 
-const LAYER_COUNT: u32 = 5u;
+const LAYER_COUNT: u32 = 7u;
 // Overlay fade bands. Each is evaluated per pixel so shared patch edges agree.
 const NEAR_DETAIL_FADE_START_M: f32 = 140.0;
 const NEAR_DETAIL_FADE_END_M: f32 = 700.0;
@@ -137,31 +137,97 @@ const NEAR_DETAIL_FADE_END_M: f32 = 700.0;
 // `local_position` is the render-relative fragment position rotated into the
 // body frame (small, precise); `anchor` is the fractional body-fixed phase of
 // the render origin at this scale, so the summed coordinate stays continuous
-// across patches while retaining sub-metre precision.
+// across patches while retaining sub-metre precision. `offset` is an optional
+// body-frame parallax displacement in metres (zero for the micro layer).
 fn sample_detail_triplanar(
     local_position: vec3<f32>,
     anchor: vec3<f32>,
     normal: vec3<f32>,
     scale: f32,
+    offset: vec3<f32>,
 ) -> vec4<f32> {
     var weights = abs(normal);
     weights = weights / max(weights.x + weights.y + weights.z, 1e-4);
     let x = textureSample(
         terrain_detail,
         terrain_detail_sampler,
-        local_position.zy * scale + anchor.zy,
+        local_position.zy * scale + anchor.zy + offset.zy * scale,
     );
     let y = textureSample(
         terrain_detail,
         terrain_detail_sampler,
-        local_position.xz * scale + anchor.xz,
+        local_position.xz * scale + anchor.xz + offset.xz * scale,
     );
     let z = textureSample(
         terrain_detail,
         terrain_detail_sampler,
-        local_position.xy * scale + anchor.xy,
+        local_position.xy * scale + anchor.xy + offset.xy * scale,
     );
     return x * weights.x + y * weights.y + z * weights.z;
+}
+
+// Parallax occlusion mapping for the near-camera detail (Module 4, section 1.2).
+// The shared detail texture stores its micro-height in the blue channel
+// (`0.5 + 0.5 * height` by construction), so no extra texture is needed. The
+// march uses an explicit LOD sample because it runs in per-fragment (non-uniform)
+// control flow, where implicit-derivative `textureSample` is not permitted.
+const POM_STEPS: i32 = 8;
+/// Displacement of the tallest detail texel as a fraction of one detail tile.
+const POM_HEIGHT_TILES: f32 = 0.06;
+/// View distance over which parallax fades out; beyond it the ground is too far
+/// for the displacement to be visible and the extra samples are not worth it.
+const POM_FADE_START_M: f32 = 160.0;
+const POM_FADE_END_M: f32 = 320.0;
+
+fn detail_height_at(uv: vec2<f32>) -> f32 {
+    return textureSampleLevel(terrain_detail, terrain_detail_sampler, uv, 0.0).b;
+}
+
+/// March one triplanar plane toward the eye and return the 2D UV displacement.
+fn pom_plane_offset(uv: vec2<f32>, view_tan: vec3<f32>) -> vec2<f32> {
+    // Clamp the grazing denominator so near-horizontal rays cannot demand a
+    // huge step count; the displacement just saturates instead.
+    let dir = view_tan.xy / max(abs(view_tan.z), 0.4);
+    let step_uv = -dir * (POM_HEIGHT_TILES / f32(POM_STEPS));
+    let layer_depth = 1.0 / f32(POM_STEPS);
+    var current = uv;
+    var depth = 0.0;
+    var height = detail_height_at(current);
+    for (var i = 0; i < POM_STEPS; i = i + 1) {
+        if depth >= height {
+            break;
+        }
+        current += step_uv;
+        height = detail_height_at(current);
+        depth += layer_depth;
+    }
+    return current - uv;
+}
+
+/// Dominant-axis parallax displacement in the body frame for the near detail.
+fn near_detail_parallax_offset(
+    local_position: vec3<f32>,
+    anchor: vec3<f32>,
+    normal: vec3<f32>,
+    scale: f32,
+    view_dir_body: vec3<f32>,
+) -> vec3<f32> {
+    let axis = abs(normal);
+    if axis.z >= axis.x && axis.z >= axis.y {
+        let n = vec3<f32>(0.0, 0.0, select(-1.0, 1.0, normal.z >= 0.0));
+        let view_tan = vec3<f32>(view_dir_body.x, view_dir_body.y, dot(view_dir_body, n));
+        let o = pom_plane_offset(local_position.xy * scale + anchor.xy, view_tan);
+        return vec3<f32>(o.x, o.y, 0.0);
+    } else if axis.x >= axis.y {
+        let n = vec3<f32>(select(-1.0, 1.0, normal.x >= 0.0), 0.0, 0.0);
+        let view_tan = vec3<f32>(view_dir_body.z, view_dir_body.y, dot(view_dir_body, n));
+        let o = pom_plane_offset(local_position.zy * scale + anchor.zy, view_tan);
+        return vec3<f32>(0.0, o.y, o.x);
+    }
+    let n = vec3<f32>(0.0, select(-1.0, 1.0, normal.y >= 0.0), 0.0);
+    let view_tan = vec3<f32>(view_dir_body.x, view_dir_body.z, dot(view_dir_body, n));
+    let o = pom_plane_offset(local_position.xz * scale + anchor.xz, view_tan);
+    return vec3<f32>(o.x, 0.0, o.y);
 }
 
 // Blend every ground layer with the same weights for albedo, roughness, and the
@@ -424,6 +490,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_surface.detail_anchor,
         body_normal,
         terrain_surface.detail_scale,
+        vec3<f32>(0.0),
     );
     let micro_albedo = 1.0 + (detail.b - 0.5) * 0.4 * micro_weight;
     // Near-camera detail overlay: higher frequency than the shared micro detail,
@@ -434,11 +501,33 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         NEAR_DETAIL_FADE_END_M,
         view_distance,
     );
+    // Parallax occlusion of the near detail. Only the very closest ground pays
+    // for the march, and the displacement is faded to zero so the transition
+    // cannot pop. The eye direction is measured in the body frame, matching the
+    // projection frame of the sampled detail.
+    let pom_fade = 1.0 - smoothstep(POM_FADE_START_M, POM_FADE_END_M, view_distance);
+    var near_offset = vec3<f32>(0.0);
+    if pom_fade > 0.0 {
+        let view_dir_body = normalize(
+            rotate_by_quat(
+                terrain_surface.inertial_to_body,
+                view.world_position.xyz - in.world_position.xyz,
+            ),
+        );
+        near_offset = near_detail_parallax_offset(
+            body_local,
+            terrain_surface.near_detail_anchor,
+            body_normal,
+            terrain_surface.near_detail_scale,
+            view_dir_body,
+        ) * pom_fade;
+    }
     let near_detail = sample_detail_triplanar(
         body_local,
         terrain_surface.near_detail_anchor,
         body_normal,
         terrain_surface.near_detail_scale,
+        near_offset,
     );
     let near_normal = near_detail.xy * 2.0 - vec2<f32>(1.0, 1.0);
     let near_albedo =
@@ -451,17 +540,26 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var layered_normal_ts = vec3<f32>(0.0, 0.0, 1.0);
     let layer_fade = terrain_surface.layer_blend_weight * detail_fade;
     if terrain_surface.layer_blend_weight > 0.0 {
-        let splat = textureSample(
+        let splat0 = textureSample(
             terrain_layer_weights,
             terrain_layer_weights_sampler,
             in.uv_b,
+            0,
+        );
+        let splat1 = textureSample(
+            terrain_layer_weights,
+            terrain_layer_weights_sampler,
+            in.uv_b,
+            1,
         );
         let weights = array<f32, LAYER_COUNT>(
-            splat.r,
-            splat.g,
-            splat.b,
-            splat.a,
-            max(0.0, 1.0 - (splat.r + splat.g + splat.b + splat.a)),
+            splat0.r,
+            splat0.g,
+            splat0.b,
+            splat0.a,
+            splat1.r,
+            splat1.g,
+            splat1.b,
         );
         let layered = sample_layered_triplanar(
             body_local,

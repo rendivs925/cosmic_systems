@@ -444,6 +444,22 @@ impl TerrainSource for ErodedTerrainSource {
         base + (eroded - base) * weight
     }
 
+    fn flow(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        let tile = self.get_tile(latitude_deg, longitude_deg);
+        let (flow, edge) = sample_channel(&tile, &tile.flow, latitude_deg, longitude_deg);
+        // Linear against the same full-scale reference as `river_strength`
+        // (three times the carving threshold), so `flow` is nonzero in the
+        // drainage below the channel threshold and saturates where a river is
+        // carved. This is a presentation signal for alluvial/riparian material;
+        // it is never read by collision or physics.
+        let reference = f64::from(self.cfg.river_flow_threshold.max(f32::MIN_POSITIVE)) * 3.0;
+        let eroded = (flow / reference).clamp(0.0, 1.0);
+        let weight = erosion_weight(edge, self.cfg.edge_feather);
+        let base = self.base.flow(latitude_deg, longitude_deg);
+        base + (eroded - base) * weight
+    }
+
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
         self.base.overview_height_m(latitude_deg, longitude_deg)
