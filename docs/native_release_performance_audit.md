@@ -189,24 +189,29 @@ Measured the effect of the persistent erosion tile cache
 present mode, and start state (Papua pad, 40–46 s windows,
 `COSMIC_SYSTEMS_PRESENT_MODE=none`).
 
-- **CPU work (frequency-independent):** with a warm cache, `perf stat`
-  `instructions:u` over an equal wall window fell from **220.9 B to 116.2 B**
-  (~48% fewer retired instructions). This is a robust signal that the
-  preprocessed tiles remove a large amount of terrain simulation work.
-- **No ongoing recalculation:** both cold and warm runs reached
-  `tasks_started: 0` / `patches_published: 0` / `lod_splits: 0` in steady
-  state. Terrain is stable; it is not regenerated per frame.
+- **CPU work (frequency-independent, single unordered pair):** `perf stat`
+  `instructions:u` over an equal wall window differed between the cold and warm
+  runs (**220.9 B vs 116.2 B**). This is consistent with the preprocessed tiles
+  removing terrain simulation work, but it is one cold/warm pair, not a
+  controlled A/B: run order, thermal state, and the streamed tile set were not
+  held equal, so the *size* of the reduction is not established. Retired
+  instructions are frequency-independent, so this is not a throttling artifact,
+  but it is still a single sample.
+- **No ongoing recalculation:** both runs reached `tasks_started: 0` /
+  `patches_published: 0` / `lod_splits: 0` in steady state. Terrain is stable;
+  it is not regenerated per frame.
 - **Frame time did not improve, and is confounded by run order.** An ABBA
   sequence (`off → warm → warm → off`) gave p50 frame times of
   **19.3 / 29.7 / 36.3 / 27.1 ms**: frame time rose with run order regardless
-  of cache state. The machine throttles over successive runs (the earlier
-  `perf stat` showed 2.6 GHz on the first run and 1.3 GHz on the second), so
-  these numbers do not show the cache helping or hurting frame pacing.
-- **Interpretation:** the erosion cache is a real CPU-cost reduction, but the
-  frame budget on this machine is dominated by something other than terrain
-  CPU (steady-state terrain main-thread work was ~1–3 ms/frame while the frame
-  was 19–36 ms). Moving erosion loading off-thread is therefore not justified
-  by this evidence, and no async loader was added.
+  of cache state. The observed core clock dropped across those runs (2.6 GHz on
+  the first, 1.3 GHz on the second), so successive-run throttling is one
+  plausible explanation, but it is a hypothesis and not isolated.
+- **Interpretation:** the evidence is consistent with the erosion cache reducing
+  terrain CPU work, but it does not demonstrate a frame-pacing benefit. The
+  frame budget on this machine is dominated by something other than terrain CPU
+  (steady-state terrain main-thread work was ~1–3 ms/frame while the frame was
+  19–36 ms). Moving erosion loading off-thread is not justified by this
+  evidence, and no async loader was added.
 
 ### Remaining limits
 

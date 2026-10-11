@@ -46,9 +46,11 @@ cargo run --release --features dem --bin erosion_bake -- \
 ```
 
 The tool prints estimated bytes, per-100-tile progress, and a final
-`baked`/`reused`/`total` summary. Re-running with the same configuration reuses
-existing tiles. `--max-bytes` bounds the cache directory; the oldest tiles (by
-mtime) are pruned first when it is exceeded.
+`baked`/`reused`/`total`/`write_failures` summary. Re-running with the same
+configuration reuses only tiles that still decode *and* whose base probe matches
+the live DEM; a corrupt or stale tile is re-baked. `--max-bytes` bounds the cache
+directory; the oldest tiles (by mtime) are pruned first when it is exceeded, and
+the ceiling is re-applied as tiles are written so a long run stays bounded.
 
 ## Runtime cache
 
