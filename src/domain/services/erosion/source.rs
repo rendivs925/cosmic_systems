@@ -61,6 +61,13 @@ pub struct ErodedTerrainSource {
 /// with an O(1) logical timestamp per tile rather than a reordered list, so the
 /// hot `get` path never scans the whole cache; the only O(n) step is finding
 /// the least-recently-used tile when an insert must evict.
+///
+/// Resident tiles are **not** revalidated against the base on a hit. A
+/// `TerrainSource` is immutable for the life of the source (the measured DEM is
+/// "entirely resident, immutable"; no source mutates its elevation in place), so
+/// a tile keyed by `(tx, ty)` always maps to the same deterministic bake for the
+/// base this source holds. Cross-`TerrainSource`/cross-run staleness is the disk
+/// store's concern, guarded there by the recorded base probe.
 #[derive(Debug)]
 pub(super) struct TileCache {
     pub(super) tiles: HashMap<(i64, i64), Arc<HeightRaster>>,

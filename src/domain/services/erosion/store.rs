@@ -31,6 +31,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAGIC: [u8; 4] = *b"CET2";
 const VERSION: u32 = 2;
+/// Tile file extension. It tracks `MAGIC`/`VERSION` so a reader for one format is
+/// never presented with another, and `enforce_budget` can purge superseded
+/// formats without counting them.
+const TILE_EXTENSION: &str = "cet2";
 /// Grid dimension of the base probe stored with each tile.
 pub const PROBE_SIDE: usize = 4;
 /// Number of probe samples: `PROBE_SIDE * PROBE_SIDE`.
@@ -93,6 +97,17 @@ pub struct ErosionTileStore {
     /// Distinguishes temporary files from concurrent writers so two processes
     /// baking the same tile never interleave writes into one temp file.
     temp_counter: AtomicU64,
+    /// Optional hard ceiling applied as tiles are written, so a long session
+    /// cannot grow the cache past the limit given to
+    /// [`Self::open_with_budget`].
+    budget_bytes: Option<u64>,
+    /// Approximate on-disk bytes, seeded from the open-time scan and adjusted by
+    /// each write, so a write can trigger pruning the moment it would exceed the
+    /// ceiling instead of only at open or shutdown.
+    resident_bytes: AtomicU64,
+    /// Best-effort persistence failure count, so an offline caller can report
+    /// tiles that could not be written instead of assuming success.
+    write_failures: AtomicU64,
 }
 
 impl ErosionTileStore {
@@ -101,6 +116,29 @@ impl ErosionTileStore {
     /// [`ErosionConfig::bake_signature`](super::ErosionConfig::bake_signature)
     /// so tiles from a different quality, seed, or namespace are never mixed.
     pub fn open(root: impl Into<PathBuf>, signature: u64) -> io::Result<Self> {
+        Self::open_with_optional_budget(root, signature, None)
+    }
+
+    /// Open the cache and prune it down to `max_bytes` before use. Existing
+    /// caches can otherwise grow without bound; the oldest tiles (by mtime) are
+    /// discarded first because they are the least likely to be revisited. The
+    /// ceiling is re-applied periodically as tiles are written.
+    pub fn open_with_budget(
+        root: impl Into<PathBuf>,
+        signature: u64,
+        max_bytes: u64,
+    ) -> io::Result<Self> {
+        let store = Self::open_with_optional_budget(root, signature, Some(max_bytes))?;
+        let resident = store.enforce_budget(max_bytes)?;
+        store.resident_bytes.store(resident, Ordering::Relaxed);
+        Ok(store)
+    }
+
+    fn open_with_optional_budget(
+        root: impl Into<PathBuf>,
+        signature: u64,
+        budget_bytes: Option<u64>,
+    ) -> io::Result<Self> {
         // Namespace by signature so two qualities (or two DEMs) never share
         // files, and a stale signature cannot even be discovered.
         let root = root.into().join(format!("{signature:016x}"));
@@ -109,20 +147,15 @@ impl ErosionTileStore {
             root,
             signature,
             temp_counter: AtomicU64::new(0),
+            budget_bytes,
+            resident_bytes: AtomicU64::new(0),
+            write_failures: AtomicU64::new(0),
         })
     }
 
-    /// Open the cache and prune it down to `max_bytes` before use. Existing
-    /// caches can otherwise grow without bound; the oldest tiles (by mtime) are
-    /// discarded first because they are the least likely to be revisited.
-    pub fn open_with_budget(
-        root: impl Into<PathBuf>,
-        signature: u64,
-        max_bytes: u64,
-    ) -> io::Result<Self> {
-        let store = Self::open(root, signature)?;
-        store.enforce_budget(max_bytes)?;
-        Ok(store)
+    /// Number of tile writes that failed since this store was opened.
+    pub fn write_failures(&self) -> u64 {
+        self.write_failures.load(Ordering::Relaxed)
     }
 
     /// Root directory of the cache.
@@ -131,7 +164,7 @@ impl ErosionTileStore {
     }
 
     fn path_for(&self, tx: i64, ty: i64) -> PathBuf {
-        self.root.join(format!("{tx}_{ty}.cet1"))
+        self.root.join(format!("{tx}_{ty}.{TILE_EXTENSION}"))
     }
 
     /// Whether a tile file exists (without validating its contents).
@@ -220,6 +253,18 @@ impl ErosionTileStore {
             *sample = read_f32(84 + index * 4)?;
         }
 
+        // Reject non-finite header values explicitly: a NaN bound would compare
+        // false against every span check below and slip through to build an
+        // invalid `HeightRaster`.
+        if !lat_min.is_finite()
+            || !lat_max.is_finite()
+            || !lon_min.is_finite()
+            || !lon_max.is_finite()
+            || probe_samples.iter().any(|value| !value.is_finite())
+        {
+            return None;
+        }
+
         if width != resolution
             || height != resolution
             || (lat_max - lat_min - tile_deg).abs() > 1e-9
@@ -287,6 +332,20 @@ impl ErosionTileStore {
     /// tiles on a crash is harmless, while syncing thousands of tiles would
     /// dominate bake time.
     pub fn save(&self, tx: i64, ty: i64, tile: &HeightRaster, probe: BaseProbe) -> io::Result<()> {
+        let result = self.save_inner(tx, ty, tile, probe);
+        if result.is_err() {
+            self.write_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    fn save_inner(
+        &self,
+        tx: i64,
+        ty: i64,
+        tile: &HeightRaster,
+        probe: BaseProbe,
+    ) -> io::Result<()> {
         if !raster_is_consistent(tile) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -323,21 +382,55 @@ impl ErosionTileStore {
         let checksum = payload_checksum(&buffer[payload_start..]);
         buffer[checksum_offset..checksum_offset + 8].copy_from_slice(&checksum.to_le_bytes());
 
-        let nonce = self.temp_counter.fetch_add(1, Ordering::Relaxed);
-        let temp = self
-            .root
-            .join(format!("{tx}_{ty}.{}.{nonce}.tmp", process::id()));
-        {
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(&buffer)?;
+        // Create the temporary file exclusively: a pre-existing file is never
+        // truncated, and a concurrent writer sharing the PID/counter space
+        // cannot have its temp clobbered. Retry with a fresh nonce on collision.
+        let (temp, mut file) = loop {
+            let nonce = self.temp_counter.fetch_add(1, Ordering::Relaxed);
+            let candidate = self
+                .root
+                .join(format!("{tx}_{ty}.{}.{nonce}.tmp", process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(file) => break (candidate, file),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        };
+        file.write_all(&buffer)?;
+        fs::rename(&temp, &path)?;
+        self.account_write(buffer.len() as u64);
+        Ok(())
+    }
+
+    /// Add a written tile to the tracked residency and prune if it pushed the
+    /// cache past its ceiling. Pruning is best-effort: a failure (for example a
+    /// transient `read_dir` error) leaves the tracked count to be corrected on
+    /// the next prune, because the cache is regenerable and the runtime bake
+    /// stays authoritative for this session.
+    fn account_write(&self, bytes: u64) {
+        let Some(budget_bytes) = self.budget_bytes else {
+            return;
+        };
+        let resident = self.resident_bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        if resident <= budget_bytes {
+            return;
         }
-        fs::rename(&temp, &path)
+        if let Ok(remaining) = self.enforce_budget(budget_bytes) {
+            self.resident_bytes.store(remaining, Ordering::Relaxed);
+        }
     }
 
     /// Delete the oldest tiles (by modification time) until the cache is within
-    /// `max_bytes`. Best-effort: a concurrent writer's file may be removed, but
-    /// every tile is regenerable. Leftover temporary files are always removed.
-    pub fn enforce_budget(&self, max_bytes: u64) -> io::Result<()> {
+    /// `max_bytes`, returning the resident bytes that remain. Best-effort: a
+    /// concurrent writer's file may be removed, but every tile is regenerable.
+    /// Leftover temporary files and tiles written in a superseded on-disk format
+    /// are removed and never counted toward the budget, so a format change does
+    /// not strand dead bytes in the namespace.
+    pub fn enforce_budget(&self, max_bytes: u64) -> io::Result<u64> {
         let mut entries: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
         let mut total: u64 = 0;
         for entry in fs::read_dir(&self.root)? {
@@ -347,7 +440,7 @@ impl ErosionTileStore {
             if !metadata.is_file() {
                 continue;
             }
-            if path.extension().and_then(|ext| ext.to_str()) == Some("tmp") {
+            if path.extension().and_then(|ext| ext.to_str()) != Some(TILE_EXTENSION) {
                 let _ = fs::remove_file(&path);
                 continue;
             }
@@ -357,7 +450,7 @@ impl ErosionTileStore {
             entries.push((modified, size, path));
         }
         if total <= max_bytes {
-            return Ok(());
+            return Ok(total);
         }
         entries.sort_by_key(|(modified, _, _)| *modified);
         // Leave headroom so the next run does not immediately re-prune.
@@ -370,7 +463,7 @@ impl ErosionTileStore {
                 total = total.saturating_sub(size);
             }
         }
-        Ok(())
+        Ok(total)
     }
 }
 
@@ -396,6 +489,23 @@ fn raster_is_consistent(tile: &HeightRaster) -> bool {
         && tile.lon_max.is_finite()
         && tile.lat_max > tile.lat_min
         && tile.lon_max > tile.lon_min
+        && channels_are_valid(tile)
+}
+
+/// Every channel must be finite and every moisture sample normalized. Rejecting
+/// invalid values before writing keeps a bad raster from being persisted as a
+/// file that `decode` would always reject (a permanent, silent miss) and keeps
+/// `HeightRaster` construction rules identical on the write and read paths.
+fn channels_are_valid(tile: &HeightRaster) -> bool {
+    tile.data
+        .iter()
+        .chain(tile.flow.iter())
+        .chain(tile.moisture.iter())
+        .all(|value| value.is_finite())
+        && tile
+            .moisture
+            .iter()
+            .all(|value| (0.0..=1.0).contains(value))
 }
 
 impl HeightRaster {
@@ -607,6 +717,87 @@ mod tests {
 
         store.enforce_budget(u64::MAX).expect("prune");
         assert!(!leftover.exists(), "stale temp files must be removed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn enforce_budget_purges_superseded_format_files() {
+        let root = temp_dir("stale_format");
+        let store = ErosionTileStore::open(&root, 53).expect("open");
+        let stale = store.root().join("5_5.cet1");
+        fs::write(&stale, b"old format").expect("write");
+
+        let remaining = store.enforce_budget(u64::MAX).expect("prune");
+        assert!(!stale.exists(), "superseded-format tiles must be removed");
+        assert_eq!(remaining, 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_with_budget_bounds_residency_while_writing() {
+        let root = temp_dir("continuous_budget");
+        let per_tile = tile_bytes(4);
+        // A ceiling of five tiles; writing far more must stay bounded without an
+        // explicit end-of-run prune.
+        let store = ErosionTileStore::open_with_budget(&root, 41, per_tile * 5).expect("open");
+        let tile = raster(2.0, 4, 1.0);
+        for tx in 0..200 {
+            store
+                .save(tx, 9, &tile, BaseProbe([0.0; PROBE_LEN]))
+                .expect("save");
+        }
+        let remaining = fs::read_dir(store.root()).expect("read").count();
+        assert!(
+            remaining <= 5,
+            "writes must keep the cache within its ceiling: {remaining} files"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn save_rejects_invalid_channels_and_counts_the_failure() {
+        let root = temp_dir("invalid_save");
+        let store = ErosionTileStore::open(&root, 43).expect("open");
+        let (tx, ty) = raster(2.0, 4, 1.0).tile_key(2.0);
+
+        let mut non_finite = raster(2.0, 4, 1.0);
+        non_finite.data[0] = f32::NAN;
+        assert!(store
+            .save(tx, ty, &non_finite, BaseProbe([0.0; PROBE_LEN]))
+            .is_err());
+
+        let mut out_of_range = raster(2.0, 4, 1.0);
+        out_of_range.moisture[3] = 1.5;
+        assert!(store
+            .save(tx, ty, &out_of_range, BaseProbe([0.0; PROBE_LEN]))
+            .is_err());
+
+        assert_eq!(store.write_failures(), 2);
+        assert!(!store.contains(tx, ty), "invalid tiles must not be written");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn decode_rejects_non_finite_bounds_and_probe() {
+        let root = temp_dir("finite_decode");
+        let store = ErosionTileStore::open(&root, 47).expect("open");
+        let tile = raster(2.0, 4, 1.0);
+        let (tx, ty) = tile.tile_key(2.0);
+        store
+            .save(tx, ty, &tile, BaseProbe([0.0; PROBE_LEN]))
+            .expect("save");
+        let bytes = fs::read(store.path_for(tx, ty)).expect("read");
+
+        // lat_min is the first bound at offset 32; the probe starts at 84. The
+        // payload checksum does not cover either, so only the finite checks can
+        // reject them.
+        let mut nan_bounds = bytes.clone();
+        nan_bounds[32..40].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(ErosionTileStore::decode(&nan_bounds, 47, tx, ty, 4, 2.0).is_none());
+
+        let mut nan_probe = bytes.clone();
+        nan_probe[84..88].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(ErosionTileStore::decode(&nan_probe, 47, tx, ty, 4, 2.0).is_none());
         let _ = fs::remove_dir_all(&root);
     }
 }
