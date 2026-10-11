@@ -181,9 +181,13 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   sway weight (0 at the base, 1 at the canopy) so the base stays planted. The
   same channel's `y` component scales a diffuse-transmission (subsurface
   translucency) lobe, so thin leaf and grass cards transmit backlight while
-  trunks, branches, and rocks stay opaque.
-  Remaining: alpha-tested shadow depth, procedural bark/foliage textures,
-  impostor LOD, and the vegetation shadow-marker fix.
+  trunks, branches, and rocks stay opaque. The depth/shadow pass uses a
+  wind-matched prepass vertex shader, so a tree's cast shadow tracks its swaying
+  canopy; the base `StandardMaterial` prepass fragment supplies alpha testing, so
+  leaf cards cast dappled shadows. The vegetation child is intentionally a shadow
+  caster and receiver (terrain stays baked-only; water/river and rock shells are
+  non-casters), documented on the spawn site.
+  Remaining: procedural bark/foliage textures and impostor LOD.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 

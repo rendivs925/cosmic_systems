@@ -16,6 +16,9 @@ use bevy::shader::ShaderRef;
 
 /// Shader for the wind-swayed vegetation surface.
 pub const VEGETATION_SHADER: &str = "shaders/vegetation.wgsl";
+/// Depth/shadow vertex shader that applies the same wind as [`VEGETATION_SHADER`]
+/// so cast shadows track the swaying foliage.
+pub const VEGETATION_PREPASS_SHADER: &str = "shaders/vegetation_prepass.wgsl";
 
 /// Peak horizontal sway displacement at the canopy, in metres.
 const WIND_STRENGTH_M: f32 = 0.35;
@@ -89,6 +92,10 @@ impl MaterialExtension for VegetationExtension {
     fn fragment_shader() -> ShaderRef {
         VEGETATION_SHADER.into()
     }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        VEGETATION_PREPASS_SHADER.into()
+    }
 }
 
 /// Vegetation material: alpha-masked, double-sided, and wind-swayed.
@@ -105,6 +112,28 @@ const VEGETATION_PARAM_FIELDS: &[&str] = &[
     "wind_direction",
     "planet_center",
 ];
+
+/// Extract the field names of the first `VegetationParams` struct in a shader.
+#[cfg(test)]
+fn vegetation_params_fields(shader: &str) -> Vec<String> {
+    let start = shader
+        .find("struct VegetationParams {")
+        .expect("vegetation shader must declare VegetationParams");
+    let body = &shader[start..];
+    let end = body.find('}').expect("VegetationParams struct must close");
+    body[..end]
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("//") {
+                return None;
+            }
+            line.split_once(':')
+                .map(|(name, _)| name.trim().to_string())
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -135,31 +164,35 @@ mod tests {
 
     #[test]
     fn wgsl_vegetation_params_match_the_rust_field_order() {
-        let shader = include_str!("../../../../assets/shaders/vegetation.wgsl");
-        let start = shader
-            .find("struct VegetationParams {")
-            .expect("vegetation shader must declare VegetationParams");
-        let body = &shader[start..];
-        let end = body.find('}').expect("VegetationParams struct must close");
-        let fields: Vec<String> = body[..end]
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with("//") {
-                    return None;
-                }
-                line.split_once(':')
-                    .map(|(name, _)| name.trim().to_string())
-            })
-            .collect();
-        let expected: Vec<String> = VEGETATION_PARAM_FIELDS
-            .iter()
-            .map(|name| name.to_string())
-            .collect();
-        assert_eq!(
-            fields, expected,
-            "VegetationParams field order drifted from assets/shaders/vegetation.wgsl"
-        );
+        for source in [
+            include_str!("../../../../assets/shaders/vegetation.wgsl"),
+            include_str!("../../../../assets/shaders/vegetation_prepass.wgsl"),
+        ] {
+            assert_eq!(
+                vegetation_params_fields(source),
+                VEGETATION_PARAM_FIELDS
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect::<Vec<_>>(),
+                "VegetationParams field order drifted from a vegetation shader"
+            );
+        }
+    }
+
+    /// The depth/shadow vertex pass must apply the identical wind displacement as
+    /// the colour pass, or a tree's cast shadow would lag its swaying canopy.
+    #[test]
+    fn prepass_applies_the_same_wind_as_the_colour_pass() {
+        let colour = include_str!("../../../../assets/shaders/vegetation.wgsl");
+        let prepass = include_str!("../../../../assets/shaders/vegetation_prepass.wgsl");
+        for line in [
+            "let bend = sway_weight * sway_weight;",
+            "let sway = sin(phase) * vegetation.wind_strength * bend;",
+            "let displaced = vertex.position + vegetation.wind_direction * sway;",
+            "let phase = vegetation.time_s * vegetation.sway_frequency",
+        ] {
+            assert!(colour.contains(line), "colour shader is missing `{line}`");
+            assert!(prepass.contains(line), "prepass shader is missing `{line}`");
+        }
     }
 }

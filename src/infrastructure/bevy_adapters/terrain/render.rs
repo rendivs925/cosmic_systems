@@ -1497,6 +1497,12 @@ fn spawn_patch_mesh_system(
             vegetation_anchor,
         ) {
             commands.entity(entity).with_children(|parent| {
+                // Unlike the terrain (baked self-shadow) and the water/river and
+                // rock-shell children (non-casters), vegetation is intentionally
+                // both a shadow caster and receiver: trees self-shadow and cast
+                // onto water. The depth pass runs the wind-matched, alpha-tested
+                // vegetation prepass shader, so shadows track the swaying canopy
+                // and leaf cards discard their transparent texels.
                 parent.spawn((
                     Mesh3d(vegetation_mesh_handle),
                     MeshMaterial3d(vegetation_material),
