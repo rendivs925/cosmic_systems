@@ -54,7 +54,8 @@ pub fn build_rock_shell(
     }
 
     let frame = PatchFrame::new(center_direction, radius_m);
-    let field = DensityField::new(source, frame, config);
+    let field = DensityField::new(source, frame, config)
+        .with_edge_taper(half_extent_m, config.edge_taper_fraction);
 
     // Steepness gate: a nearly flat patch has no overhang and stays a pure
     // heightmap, so skip the whole volumetric evaluation.

@@ -143,11 +143,15 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   Resolution: Module 3 overhang cavities are only a few metres deep, so the
   shell footprint is decoupled from the patch size (`footprint_m`, default
   90 m) and sampled at `cell_m` (default 1.5 m); covering a whole LOD-14 patch
-  at metre resolution would exceed any sample budget. Regression tests assert
-  the field produces overhang cavities
-  (`default_field_produces_overhang_cavities_on_a_cliff`) and that the extracted
+  at metre resolution would exceed any sample budget. The 3D perturbation fades
+  to zero over the outer footprint (`edge_taper_fraction`, default 0.35) so the
+  shell meets the surrounding heightmap without a hard boundary wall.
+  Regression tests assert the field produces overhang cavities
+  (`default_field_produces_overhang_cavities_on_a_cliff`), that the extracted
   mesh contains genuine downward-facing (overhanging) normals at streaming
-  resolution (`shell_at_streaming_resolution_contains_overhangs`).
+  resolution (`shell_at_streaming_resolution_contains_overhangs`), and that the
+  edge taper reaches zero at the footprint boundary
+  (`edge_taper_fades_omega_to_zero_at_the_footprint_boundary`).
 
 ### Phase 4 — Trees and vegetation (Module 5 + tree spec)
 

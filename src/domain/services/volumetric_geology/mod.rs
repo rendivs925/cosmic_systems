@@ -75,6 +75,12 @@ pub struct VolumetricGeologyConfig {
     /// surface so the two are not coplanar where the 3D perturbation vanishes,
     /// avoiding z-fighting. It does not change the physical field.
     pub surface_bias_m: f64,
+    /// Fraction of the shell footprint over which the 3D perturbation fades
+    /// from full amplitude to zero at the boundary, in `[0, 1)`. This blends
+    /// the extracted shell into the surrounding heightmap so the shell edge is
+    /// not a hard wall of rock (a crack at the footprint boundary). Zero
+    /// disables the taper.
+    pub edge_taper_fraction: f64,
     /// Deterministic seed for every noise and Voronoi lookup.
     pub seed: u64,
 }
@@ -95,6 +101,7 @@ impl Default for VolumetricGeologyConfig {
             joint_sharpness: 4.0,
             slope_probe_m: 2.0,
             surface_bias_m: 0.0,
+            edge_taper_fraction: 0.35,
             seed: 0,
         }
     }
@@ -145,6 +152,9 @@ impl VolumetricGeologyConfig {
         if !finite(self.surface_bias_m) || self.surface_bias_m < 0.0 {
             return Err("surface_bias_m must be finite and non-negative");
         }
+        if !finite(self.edge_taper_fraction) || !(0.0..1.0).contains(&self.edge_taper_fraction) {
+            return Err("edge_taper_fraction must be finite and within 0..1");
+        }
         Ok(())
     }
 }
@@ -173,6 +183,15 @@ mod tests {
     fn validate_rejects_non_positive_frequencies() {
         let cfg = VolumetricGeologyConfig {
             joint_scale_per_m: 0.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_edge_taper() {
+        let cfg = VolumetricGeologyConfig {
+            edge_taper_fraction: 1.0,
             ..Default::default()
         };
         assert!(cfg.validate().is_err());

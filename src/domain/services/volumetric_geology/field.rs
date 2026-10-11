@@ -95,6 +95,11 @@ pub struct DensityField<'a> {
     frame: PatchFrame,
     config: VolumetricGeologyConfig,
     noise: ValueNoise,
+    /// Optional `(half_extent_m, inner_fraction)` edge taper: the 3D
+    /// perturbation fades to zero between `inner_fraction * half_extent` and
+    /// `half_extent` so the extracted shell meets the surrounding heightmap
+    /// without a hard boundary wall.
+    edge_taper: Option<(f64, f64)>,
 }
 
 impl<'a> DensityField<'a> {
@@ -110,7 +115,30 @@ impl<'a> DensityField<'a> {
             frame,
             config,
             noise: ValueNoise,
+            edge_taper: None,
         }
+    }
+
+    /// Fade the 3D perturbation to zero over the outer
+    /// `inner_fraction * half_extent_m` of the footprint. `half_extent_m` is in
+    /// the field's local metres and must match the extraction volume so the
+    /// taper reaches zero exactly at the shell boundary.
+    pub fn with_edge_taper(mut self, half_extent_m: f64, inner_fraction: f64) -> Self {
+        self.edge_taper = Some((
+            half_extent_m.max(f64::MIN_POSITIVE),
+            inner_fraction.clamp(0.0, 0.999),
+        ));
+        self
+    }
+
+    /// Radial edge falloff in `[0, 1]`: one in the shell interior, zero at the
+    /// footprint boundary, one everywhere when no taper is configured.
+    fn edge_falloff(&self, east_m: f64, north_m: f64) -> f64 {
+        let Some((half_extent, inner_fraction)) = self.edge_taper else {
+            return 1.0;
+        };
+        let radius = (east_m * east_m + north_m * north_m).sqrt();
+        1.0 - ss(half_extent * inner_fraction, half_extent, radius)
     }
 
     pub fn config(&self) -> &VolumetricGeologyConfig {
@@ -266,7 +294,7 @@ impl<'a> DensityField<'a> {
 
         let total =
             overhang * cfg.overhang_amplitude_m + strata_displacement + fracture_displacement;
-        total * self.slope_mask(p.x, p.y)
+        total * self.slope_mask(p.x, p.y) * self.edge_falloff(p.x, p.y)
     }
 
     /// Deterministic hash of a 3D lattice cell to `[0, 1)`.
@@ -419,5 +447,26 @@ mod tests {
             found,
             "default Module 3 field should produce overhang cavities on a cliff"
         );
+    }
+
+    #[test]
+    fn edge_taper_fades_omega_to_zero_at_the_footprint_boundary() {
+        let source = RampSource {
+            radius_m: 6_371_000.0,
+            gradient: 2.0,
+        };
+        let frame = PatchFrame::new(DVec3::new(0.2, 0.3, 0.93), 6_371_000.0);
+        let config = VolumetricGeologyConfig::default();
+        let untapered = DensityField::new(&source, frame, config);
+        let tapered = DensityField::new(&source, frame, config).with_edge_taper(45.0, 0.35);
+
+        // Full amplitude in the interior (falloff is exactly one there).
+        let center = DVec3::new(0.0, 0.0, untapered.height_m(0.0, 0.0));
+        assert!((tapered.omega(center) - untapered.omega(center)).abs() < 1e-9);
+
+        // Zero at and beyond the footprint boundary, so the shell meets the
+        // heightmap without a hard edge.
+        let edge = DVec3::new(45.0, 0.0, untapered.height_m(45.0, 0.0));
+        assert!(tapered.omega(edge).abs() < 1e-9);
     }
 }
