@@ -95,14 +95,32 @@ const VEGETATION_BYTES_PER_INDEX: u64 = 4;
 /// Resolution (texels per side) of the procedural foliage atlas. The atlas is
 /// generated deterministically at startup, so no binary texture asset is
 /// committed and the shapes stay reproducible for a fixed build.
-pub(crate) const VEGETATION_ATLAS_RES: u32 = 128;
-/// Atlas quadrants, in `[u0, v0, u1, v1]`. `v0` is the top of the region.
+pub(crate) const VEGETATION_ATLAS_RES: u32 = 256;
+/// Atlas regions are laid out 2x2 (each cell half the atlas on a side), in
+/// `[u0, v0, u1, v1]`. `v0` is the top of the region.
 const GRASS_UV: [f32; 4] = [0.0, 0.0, 0.5, 0.5];
 const CONIFER_UV: [f32; 4] = [0.5, 0.0, 1.0, 0.5];
 const BROADLEAF_UV: [f32; 4] = [0.0, 0.5, 0.5, 1.0];
-/// A fully opaque atlas texel for solid geometry (trunks and boulders) that must
-/// not be discarded by the foliage material's alpha mask.
-const OPAQUE_UV: [f32; 2] = [0.75, 0.75];
+/// Bark fills the bottom-right cell, excluding a reserved opaque patch in its
+/// top-left corner that boulders sample. Trunks, branches, and buttresses map
+/// their full UV range into this box.
+const BARK_UV: [f32; 4] = [0.625, 0.625, 1.0, 1.0];
+/// A fully opaque texel for solid geometry (boulders) that must not be discarded
+/// by the foliage material's alpha mask. Sits at the centre of the reserved
+/// opaque patch at the bark cell's top-left corner.
+const OPAQUE_UV: [f32; 2] = [0.5625, 0.5625];
+
+/// Map a normalized `(u, v)` into the bark region: `u` wraps around the trunk
+/// and `v = 0` is the base, `v = 1` the tip, so the vertical grain runs up the
+/// plant. Trunks, branches, and buttresses share this mapping.
+pub(crate) fn bark_uv(u: f64, v: f64) -> [f32; 2] {
+    let u = u.rem_euclid(1.0) as f32;
+    let v = v.clamp(0.0, 1.0) as f32;
+    [
+        BARK_UV[0] + u * (BARK_UV[2] - BARK_UV[0]),
+        BARK_UV[3] + v * (BARK_UV[1] - BARK_UV[3]),
+    ]
+}
 
 /// Minimum drainage strength at which a river ribbon texel is emitted.
 const RIVER_MIN_STRENGTH: f64 = 0.28;
@@ -323,19 +341,31 @@ pub(crate) fn terrain_detail_texture() -> Image {
     image
 }
 
-/// Build the deterministic foliage atlas used by the vegetation material. Every
-/// texel is white so the per-vertex colour fully controls hue; only the alpha
-/// channel carries shape. A fully opaque quadrant exists for solid trunks and
-/// boulders so the material's alpha mask never discards them.
+/// Build the deterministic foliage atlas used by the vegetation material. The
+/// per-vertex colour still controls hue; the atlas carries the alpha cut-out
+/// shapes plus procedural surface detail: leaf mottling on the foliage cells and
+/// vertical grain on the bark cell. A reserved opaque patch at the bark cell's
+/// top-left corner lets boulders sample solid geometry that the alpha mask never
+/// discards.
 pub(crate) fn vegetation_atlas() -> Image {
     let res = VEGETATION_ATLAS_RES as usize;
-    let half = res / 2;
+    let cell = res / 2;
     let mut data = vec![0u8; res * res * 4];
 
-    draw_grass_tuft(&mut data, res, 0, 0, half);
-    draw_conifer(&mut data, res, half, 0, half);
-    draw_broadleaf_canopy(&mut data, res, 0, half, half);
-    fill_region(&mut data, res, half, half, half, 255);
+    draw_grass_tuft(&mut data, res, 0, 0, cell);
+    draw_conifer(&mut data, res, cell, 0, cell);
+    draw_broadleaf_canopy(&mut data, res, 0, cell, cell);
+    draw_bark(&mut data, res, cell, cell, cell);
+
+    // Reserve a fully opaque, detail-free patch for boulders at the bark cell's
+    // top-left corner, so rocks never inherit bark grain or the alpha mask.
+    fill_region(&mut data, res, cell, cell, BARK_OPAQUE_PATCH, 255);
+
+    // Leaf mottling on the three foliage cells, applied only where the alpha
+    // shape is present so the cut-out silhouettes are preserved.
+    mottle_foliage(&mut data, res, 0, 0, cell, 0x6A11);
+    mottle_foliage(&mut data, res, cell, 0, cell, 0x0C0F);
+    mottle_foliage(&mut data, res, 0, cell, cell, 0x1B0A);
 
     let mut image = Image::new(
         Extent3d {
@@ -358,6 +388,10 @@ pub(crate) fn vegetation_atlas() -> Image {
     image
 }
 
+/// Side of the reserved opaque rock patch at the bark cell's top-left corner, in
+/// texels. Its centre is [`OPAQUE_UV`].
+const BARK_OPAQUE_PATCH: usize = 32;
+
 fn fill_region(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize, alpha: u8) {
     for y in oy..(oy + size).min(res) {
         for x in ox..(ox + size).min(res) {
@@ -379,14 +413,98 @@ fn raise_alpha(data: &mut [u8], res: usize, x: usize, y: usize, alpha: u8) {
 }
 
 fn set_alpha(data: &mut [u8], res: usize, x: usize, y: usize, alpha: u8) {
+    set_texel(data, res, x, y, alpha, [255, 255, 255]);
+}
+
+/// Write one texel's colour and alpha.
+fn set_texel(data: &mut [u8], res: usize, x: usize, y: usize, alpha: u8, rgb: [u8; 3]) {
     if x >= res || y >= res {
         return;
     }
     let index = (y * res + x) * 4;
-    data[index] = 255;
-    data[index + 1] = 255;
-    data[index + 2] = 255;
+    data[index] = rgb[0];
+    data[index + 1] = rgb[1];
+    data[index + 2] = rgb[2];
     data[index + 3] = alpha;
+}
+
+/// Deterministic per-texel hash in `[0, 1]`.
+fn atlas_hash(x: usize, y: usize, seed: u32) -> f32 {
+    let mut h = (x as u32)
+        .wrapping_mul(0x27d4_eb2d)
+        .wrapping_add((y as u32).wrapping_mul(0x1656_67b1))
+        .wrapping_add(seed);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    (h & 0xffff) as f32 / 65535.0
+}
+
+/// Bilinear value noise over the atlas grid, sampled at `(x, y)` scaled by
+/// `freq` cells across the region. Smooth and deterministic.
+fn atlas_value_noise(x: usize, y: usize, freq: usize, seed: u32) -> f32 {
+    let freq = freq.max(1);
+    let fx = x as f32 * freq as f32 / VEGETATION_ATLAS_RES as f32;
+    let fy = y as f32 * freq as f32 / VEGETATION_ATLAS_RES as f32;
+    let x0 = fx.floor() as usize;
+    let y0 = fy.floor() as usize;
+    let tx = fx - x0 as f32;
+    let ty = fy - y0 as f32;
+    let sx = tx * tx * (3.0 - 2.0 * tx);
+    let sy = ty * ty * (3.0 - 2.0 * ty);
+    let a = atlas_hash(x0, y0, seed);
+    let b = atlas_hash(x0 + 1, y0, seed);
+    let c = atlas_hash(x0, y0 + 1, seed);
+    let d = atlas_hash(x0 + 1, y0 + 1, seed);
+    let top = a + (b - a) * sx;
+    let bottom = c + (d - c) * sx;
+    top + (bottom - top) * sy
+}
+
+/// Paint vertical bark grain into one cell. The grain varies strongly across the
+/// circumference (constant down the trunk) so ridges read as vertical streaks,
+/// with a little per-texel roughness. Colour is kept near-neutral so the
+/// per-vertex trunk colour still supplies the hue.
+fn draw_bark(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize) {
+    for y in 0..size {
+        for x in 0..size {
+            let gx = ox + x;
+            let gy = oy + y;
+            let across = atlas_value_noise(gx, 0, 16, 0x00BA);
+            let ridge = atlas_value_noise(gx, 0, 5, 0x0BA2);
+            let rough = atlas_hash(gx, gy, 0x5EED);
+            let shade = (0.60 + 0.26 * across + 0.14 * ridge + 0.06 * rough).clamp(0.45, 1.0);
+            let value = (shade * 255.0) as u8;
+            set_texel(data, res, gx, gy, 255, [value, value, value]);
+        }
+    }
+}
+
+/// Add procedural leaf mottling to one foliage cell, preserving the alpha shape.
+/// A coarse two-octave brightness field breaks up the flat card colour; a slight
+/// warm/cool shift keeps the foliage from reading as a uniform tint.
+fn mottle_foliage(data: &mut [u8], res: usize, ox: usize, oy: usize, size: usize, seed: u32) {
+    for y in 0..size {
+        for x in 0..size {
+            let gx = ox + x;
+            let gy = oy + y;
+            let index = (gy * res + gx) * 4;
+            if data[index + 3] == 0 {
+                continue;
+            }
+            let coarse = atlas_value_noise(gx, gy, 5, seed);
+            let fine = atlas_value_noise(gx, gy, 13, seed ^ 0x9E37);
+            let brightness = (0.68 + 0.24 * coarse + 0.12 * fine).clamp(0.45, 1.0);
+            // Warm the brighter clumps (yellow-green) and cool the darker ones.
+            let warm = (coarse - 0.5) * 0.14;
+            let r = (brightness * (1.0 + warm) * 255.0).clamp(0.0, 255.0) as u8;
+            let g = (brightness * 255.0).clamp(0.0, 255.0) as u8;
+            let b = (brightness * (1.0 - warm) * 255.0).clamp(0.0, 255.0) as u8;
+            data[index] = r;
+            data[index + 1] = g;
+            data[index + 2] = b;
+        }
+    }
 }
 
 /// A tuft of tapered blades rising from the bottom edge of the region.
@@ -1187,9 +1305,50 @@ mod tests {
             "grass region needs shape, not a solid fill"
         );
 
-        // The solid quadrant used by trunks and boulders must be fully opaque.
-        let opaque_index = ((res / 2 + 10) * res + (res / 2 + 10)) * 4;
-        assert_eq!(data[opaque_index + 3], 255);
+        // The reserved patch used by boulders must be fully opaque.
+        let ox = (OPAQUE_UV[0] * res as f32) as usize;
+        let oy = (OPAQUE_UV[1] * res as f32) as usize;
+        let opaque_index = (oy * res + ox) * 4;
+        assert_eq!(data[opaque_index + 3], 255, "rock patch must be opaque");
+    }
+
+    #[test]
+    fn vegetation_atlas_carries_procedural_detail() {
+        let atlas = vegetation_atlas();
+        let data = atlas.data.as_ref().expect("atlas must own its texels");
+        let res = VEGETATION_ATLAS_RES as usize;
+        // Bark grain: the bark region must vary in colour (not flat white).
+        let mut bark_min = 255u8;
+        let mut bark_max = 0u8;
+        for_each_region_texel(data, res, BARK_UV, |texel| {
+            bark_min = bark_min.min(texel[0]);
+            bark_max = bark_max.max(texel[0]);
+        });
+        assert!(
+            bark_max - bark_min > 40,
+            "bark region must carry visible grain (min {bark_min}, max {bark_max})"
+        );
+
+        // Foliage mottling: at least one opaque grass texel is not pure white.
+        let mut any_tinted = false;
+        for_each_region_texel(data, res, GRASS_UV, |texel| {
+            any_tinted |= texel[3] > 0 && texel[0] < 240;
+        });
+        assert!(any_tinted, "foliage cells must carry procedural mottling");
+    }
+
+    /// Visit every texel of an atlas region `[u0, v0, u1, v1]`.
+    fn for_each_region_texel(data: &[u8], res: usize, region: [f32; 4], mut f: impl FnMut(&[u8])) {
+        let x0 = (region[0] * res as f32) as usize;
+        let y0 = (region[1] * res as f32) as usize;
+        let x1 = (region[2] * res as f32) as usize;
+        let y1 = (region[3] * res as f32) as usize;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let index = (y * res + x) * 4;
+                f(&data[index..index + 4]);
+            }
+        }
     }
 
     #[derive(Debug)]

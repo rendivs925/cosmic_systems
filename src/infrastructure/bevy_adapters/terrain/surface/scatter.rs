@@ -3,11 +3,12 @@
 
 use super::surface_maps::micro_noise;
 use super::{
-    direction_to_lat_lon, face_uv_to_direction, BRANCH_CANOPY_CARD_PLANES, BRANCH_SEGMENTS,
-    BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV, GRASS_CARD_PLANES, GRASS_CLUMP_COUNT,
-    GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT,
-    ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY,
-    TRUNK_SEGMENTS, VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
+    bark_uv, direction_to_lat_lon, face_uv_to_direction, BRANCH_CANOPY_CARD_PLANES,
+    BRANCH_SEGMENTS, BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV, GRASS_CARD_PLANES,
+    GRASS_CLUMP_COUNT, GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH,
+    RIVER_SURFACE_OFFSET_M, ROCK_COUNT, ROCK_MAX_LUMPS, ROCK_RINGS, ROCK_SEGMENTS,
+    SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY, TRUNK_SEGMENTS,
+    VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
 };
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::LandCoverPackage;
@@ -130,7 +131,8 @@ impl MeshAccum {
         let top = base + up * height;
 
         for s in 0..=segments {
-            let a = s as f64 / segments as f64 * std::f64::consts::TAU;
+            let t = s as f64 / segments as f64;
+            let a = t * std::f64::consts::TAU;
             let ca = a.cos();
             let sa = a.sin();
             let radial = tangent * ca + bitangent * sa;
@@ -153,8 +155,9 @@ impl MeshAccum {
             ]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
             self.colors.push([color[0], color[1], color[2], 1.0]);
-            self.uvs.push(OPAQUE_UV);
-            self.uvs.push(OPAQUE_UV);
+            // Bark grain runs up the trunk: u wraps around, v is base to top.
+            self.uvs.push(bark_uv(t, 0.0));
+            self.uvs.push(bark_uv(t, 1.0));
             // Trunk base is planted and opaque; the top sways slightly and
             // transmits a little light.
             self.foliage_weights.push([0.0, 0.0]);
@@ -210,16 +213,23 @@ impl MeshAccum {
         let profile = [inner_top, inner_bottom, outer];
 
         let start = self.positions.len() as u32;
-        for sign in [1.0f64, -1.0] {
+        for (side_index, sign) in [1.0f64, -1.0].into_iter().enumerate() {
             let offset = side * (half * sign);
             let normal = (side * sign + up * 0.4).normalize_or_zero();
-            for point in profile {
+            for (profile_index, point) in profile.into_iter().enumerate() {
                 let p = point + offset;
                 self.positions.push([p.x as f32, p.y as f32, p.z as f32]);
                 self.normals
                     .push([normal.x as f32, normal.y as f32, normal.z as f32]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
-                self.uvs.push(OPAQUE_UV);
+                // Bark grain on the woody fin: the top point maps high, the
+                // ground contact low.
+                let v = match profile_index {
+                    0 => 1.0,
+                    1 => 0.0,
+                    _ => 0.3,
+                };
+                self.uvs.push(bark_uv(side_index as f64 * 0.5, v));
                 // Buttress roots stay planted and opaque.
                 self.foliage_weights.push([0.0, 0.0]);
             }
@@ -332,7 +342,8 @@ impl MeshAccum {
                 self.normals
                     .push([radial.x as f32, radial.y as f32, radial.z as f32]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
-                self.uvs.push(OPAQUE_UV);
+                // Bark grain runs along the branch: u wraps, v is trunk to tip.
+                self.uvs.push(bark_uv(s as f64 / segments as f64, ring_t));
                 self.foliage_weights.push([sway, translucency]);
             }
         }

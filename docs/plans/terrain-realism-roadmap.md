@@ -186,8 +186,11 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   canopy; the base `StandardMaterial` prepass fragment supplies alpha testing, so
   leaf cards cast dappled shadows. The vegetation child is intentionally a shadow
   caster and receiver (terrain stays baked-only; water/river and rock shells are
-  non-casters), documented on the spawn site.
-  Remaining: procedural bark/foliage textures and impostor LOD.
+  non-casters), documented on the spawn site. The procedural atlas now carries
+  surface detail as well as alpha shape: leaf mottling on the grass, conifer, and
+  broadleaf cells and vertical grain on a new bark cell that trunks, branches,
+  and buttresses sample, with a reserved opaque patch for boulders.
+  Remaining: impostor LOD.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 
