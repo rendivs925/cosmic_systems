@@ -132,8 +132,10 @@ impl<'a> DensityField<'a> {
     }
 
     /// Radial edge falloff in `[0, 1]`: one in the shell interior, zero at the
-    /// footprint boundary, one everywhere when no taper is configured.
-    fn edge_falloff(&self, east_m: f64, north_m: f64) -> f64 {
+    /// footprint boundary, one everywhere when no taper is configured. Also
+    /// scales the presentation bias so the shell meets the heightmap exactly at
+    /// the boundary instead of leaving a bias-high lip.
+    pub fn edge_falloff(&self, east_m: f64, north_m: f64) -> f64 {
         let Some((half_extent, inner_fraction)) = self.edge_taper else {
             return 1.0;
         };
@@ -468,5 +470,10 @@ mod tests {
         // heightmap without a hard edge.
         let edge = DVec3::new(45.0, 0.0, untapered.height_m(45.0, 0.0));
         assert!(tapered.omega(edge).abs() < 1e-9);
+
+        // The falloff is one in the interior and zero at the boundary.
+        assert!((tapered.edge_falloff(0.0, 0.0) - 1.0).abs() < 1e-9);
+        assert!(tapered.edge_falloff(45.0, 0.0).abs() < 1e-9);
+        assert!(untapered.edge_falloff(45.0, 0.0) == 1.0);
     }
 }

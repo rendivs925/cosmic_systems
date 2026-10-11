@@ -63,9 +63,11 @@ impl VoxelGrid {
         Self::sample_with_bias(field, origin, cell_m, dims, 0.0)
     }
 
-    /// Sample a density field with a constant bias added to every node density.
-    /// A bias shifts the isosurface without changing the field gradient, so the
-    /// gradients are unaffected.
+    /// Sample a density field with a bias added to every node density. A bias
+    /// shifts the isosurface without changing the field gradient, so the
+    /// gradients are unaffected. The bias is scaled by the field's edge falloff
+    /// so that, when an edge taper is configured, the shell meets the heightmap
+    /// exactly at the footprint boundary rather than a bias-high lip.
     pub fn sample_with_bias(
         field: &DensityField<'_>,
         origin: DVec3,
@@ -80,7 +82,8 @@ impl VoxelGrid {
             for j in 0..dims[1] {
                 for i in 0..dims[0] {
                     let p = origin + DVec3::new(i as f64, j as f64, k as f64) * cell_m;
-                    densities.push(field.density(p) + bias_m);
+                    let local_bias = bias_m * field.edge_falloff(p.x, p.y);
+                    densities.push(field.density(p) + local_bias);
                     gradients.push(field.gradient(p, step));
                 }
             }
