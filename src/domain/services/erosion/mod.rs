@@ -20,9 +20,11 @@
 
 mod simulate;
 mod source;
+mod store;
 
 pub use simulate::{carve_rivers, erode_tile, flow_accumulation, hydraulic_erode, thermal_erode};
 pub use source::{ErodedTerrainSource, ErosionTileError};
+pub use store::{tile_bytes, BaseProbe, ErosionTileStore, PROBE_LEN};
 
 /// accumulation and moisture channels.
 #[derive(Debug, Clone)]
@@ -156,6 +158,78 @@ impl ErosionConfig {
             self.cache_max_tiles > 0,
             "erosion cache_max_tiles must be positive"
         );
+    }
+
+    /// The current runtime quality: a coarse, fast per-tile bake.
+    pub fn standard() -> Self {
+        Self::default()
+    }
+
+    /// A denser bake for larger viewports and closer terrain.
+    pub fn high() -> Self {
+        Self {
+            resolution: 128,
+            droplets: 12_000,
+            thermal_iterations: 5,
+            cache_max_tiles: 96,
+            ..Self::default()
+        }
+    }
+
+    /// An offline-oriented quality: many more samples and droplets than a
+    /// per-frame budget would ever allow. Intended to be preprocessed into an
+    /// [`ErosionTileStore`] rather than baked on demand.
+    pub fn ultra() -> Self {
+        Self {
+            resolution: 256,
+            droplets: 48_000,
+            thermal_iterations: 8,
+            cache_max_tiles: 128,
+            ..Self::default()
+        }
+    }
+
+    /// Resolve a quality name from configuration/environment. Unknown names
+    /// fall back to [`Self::standard`].
+    pub fn from_quality_name(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "high" => Self::high(),
+            "ultra" => Self::ultra(),
+            _ => Self::standard(),
+        }
+    }
+
+    /// A stable 64-bit identity for the *content* of a baked tile: every field
+    /// that changes the simulated raster, plus a caller namespace (for example
+    /// the base DEM path). It deliberately excludes `cache_max_tiles`, which
+    /// only bounds residency. A changed signature invalidates a persisted
+    /// [`ErosionTileStore`].
+    pub fn bake_signature(&self, namespace: &str) -> u64 {
+        // FNV-1a over a fixed little-endian encoding, so the identity is stable
+        // across runs and platforms.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |bytes: &[u8]| {
+            for byte in bytes {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+            }
+        };
+        feed(namespace.as_bytes());
+        feed(&self.tile_deg.to_le_bytes());
+        feed(&self.resolution.to_le_bytes());
+        feed(&self.droplets.to_le_bytes());
+        feed(&self.thermal_iterations.to_le_bytes());
+        feed(&self.talus_slope.to_le_bytes());
+        feed(&self.droplet_inertia.to_le_bytes());
+        feed(&self.droplet_capacity.to_le_bytes());
+        feed(&self.droplet_erosion.to_le_bytes());
+        feed(&self.droplet_deposition.to_le_bytes());
+        feed(&self.droplet_evaporation.to_le_bytes());
+        feed(&self.river_flow_threshold.to_le_bytes());
+        feed(&self.river_depth_m.to_le_bytes());
+        feed(&self.edge_feather.to_le_bytes());
+        feed(&self.seed.to_le_bytes());
+        hash
     }
 }
 
@@ -749,6 +823,87 @@ mod tests {
                 source.mesh_height_m(latitude_deg, longitude_deg, 9)
             );
         }
+    }
+
+    #[test]
+    fn preprocessed_store_serves_a_tile_without_rebaking() {
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "cosmic_erosion_source_store_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let bake_cfg = ErosionConfig {
+            resolution: 16,
+            droplets: 0,
+            thermal_iterations: 0,
+            ..cfg()
+        };
+        let store = Arc::new(
+            ErosionTileStore::open(&root, bake_cfg.bake_signature("test")).expect("open store"),
+        );
+
+        // First source bakes and writes the tile to the store.
+        let first = ErodedTerrainSource::with_store(
+            Arc::new(CountingTerrain::default()),
+            bake_cfg.clone(),
+            Some(Arc::clone(&store)),
+        );
+        let first_height = first.height_m(11.0, 21.0);
+        assert!(store.contains(10, 5), "the bake must persist a tile");
+
+        // A second source sharing the store loads the tile instead of baking:
+        // it only samples the base four times for the probe, not res^2 times.
+        let counting = Arc::new(CountingTerrain::default());
+        let second = ErodedTerrainSource::with_store(
+            Arc::clone(&counting) as Arc<dyn TerrainSource>,
+            bake_cfg,
+            Some(store),
+        );
+        assert_eq!(second.height_m(11.0, 21.0), first_height);
+        assert_eq!(
+            counting.height_samples.load(Ordering::Relaxed),
+            PROBE_LEN,
+            "a store hit must not re-run the tile bake"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn store_is_invalidated_when_the_quality_changes() {
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "cosmic_erosion_source_quality_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let low = ErosionConfig {
+            resolution: 16,
+            droplets: 0,
+            thermal_iterations: 0,
+            ..cfg()
+        };
+        let high = ErosionConfig {
+            resolution: 32,
+            ..low.clone()
+        };
+        let low_store =
+            Arc::new(ErosionTileStore::open(&root, low.bake_signature("test")).expect("open"));
+        let source =
+            ErodedTerrainSource::with_store(Arc::new(base()), low.clone(), Some(low_store));
+        let _ = source.height_m(11.0, 21.0);
+
+        // A different quality resolves to a different signature and store root
+        // namespace, so it cannot read the low-quality tile.
+        let high_store =
+            Arc::new(ErosionTileStore::open(&root, high.bake_signature("test")).expect("open"));
+        assert!(!high_store.contains(10, 5));
+        assert_ne!(low.bake_signature("test"), high.bake_signature("test"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

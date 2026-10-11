@@ -182,6 +182,32 @@ millisecond.
   environment may still pace to vblank, or the remaining ~13 ms is unmeasured
   GPU/main-thread work. This is a real open question, not a resolved bottleneck.
 
+### Erosion preprocessing measurement — 2026-10-10
+
+Measured the effect of the persistent erosion tile cache
+(`docs/erosion_preprocessing.md`) on the same release Rocket binary, window,
+present mode, and start state (Papua pad, 40–46 s windows,
+`COSMIC_SYSTEMS_PRESENT_MODE=none`).
+
+- **CPU work (frequency-independent):** with a warm cache, `perf stat`
+  `instructions:u` over an equal wall window fell from **220.9 B to 116.2 B**
+  (~48% fewer retired instructions). This is a robust signal that the
+  preprocessed tiles remove a large amount of terrain simulation work.
+- **No ongoing recalculation:** both cold and warm runs reached
+  `tasks_started: 0` / `patches_published: 0` / `lod_splits: 0` in steady
+  state. Terrain is stable; it is not regenerated per frame.
+- **Frame time did not improve, and is confounded by run order.** An ABBA
+  sequence (`off → warm → warm → off`) gave p50 frame times of
+  **19.3 / 29.7 / 36.3 / 27.1 ms**: frame time rose with run order regardless
+  of cache state. The machine throttles over successive runs (the earlier
+  `perf stat` showed 2.6 GHz on the first run and 1.3 GHz on the second), so
+  these numbers do not show the cache helping or hurting frame pacing.
+- **Interpretation:** the erosion cache is a real CPU-cost reduction, but the
+  frame budget on this machine is dominated by something other than terrain
+  CPU (steady-state terrain main-thread work was ~1–3 ms/frame while the frame
+  was 19–36 ms). Moving erosion loading off-thread is therefore not justified
+  by this evidence, and no async loader was added.
+
 ### Remaining limits
 
 - The no-vsync result above leaves ~13 ms/frame unaccounted for; further

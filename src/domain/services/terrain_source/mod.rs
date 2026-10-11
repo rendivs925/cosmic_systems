@@ -31,8 +31,10 @@ pub use appearance::{slope_deg_at, surface_appearance, with_river_appearance, Su
 pub use catalog::EarthTerrainSource;
 #[cfg(feature = "dem")]
 pub use catalog::{
-    EarthTerrainDataError, MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
-    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT,
+    earth_eroded_base, earth_erosion_config, erosion_store, EarthTerrainDataError,
+    MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
+    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EROSION_CACHE_MAX_BYTES,
+    EARTH_EROSION_NAMESPACE,
 };
 pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
 pub use noise::ValueNoise;

@@ -17,7 +17,7 @@ use crate::domain::services::elevation_pyramid::{
     ElevationPyramidError, DEFAULT_ELEVATION_TILE_CAPACITY,
 };
 #[cfg(feature = "dem")]
-use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
+use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig, ErosionTileStore};
 #[cfg(feature = "dem")]
 use crate::domain::services::planet_factory::PlanetFactory;
 #[cfg(feature = "dem")]
@@ -27,7 +27,9 @@ use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(feature = "dem")]
 use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 #[cfg(feature = "dem")]
-use std::path::Path;
+use std::env;
+#[cfg(feature = "dem")]
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Default measured Earth height package path.
@@ -57,22 +59,95 @@ const EARTH_PAD_FLAT_RADIUS_M: f64 = 750.0;
 #[cfg(feature = "dem")]
 const EARTH_PAD_BLEND_RADIUS_M: f64 = 3_000.0;
 
-/// Earth's declared, validated erosion configuration. It shares the planet's
-/// deterministic seed so a baked and a runtime-eroded tile are identical.
+/// Namespace that scopes Earth's preprocessed erosion tiles to this measured
+/// base. Changing the DEM path invalidates any persisted tiles.
 #[cfg(feature = "dem")]
-pub(crate) fn earth_erosion_config() -> ErosionConfig {
-    ErosionConfig {
-        seed: EARTH_EROSION_SEED,
-        ..ErosionConfig::default()
+pub const EARTH_EROSION_NAMESPACE: &str = DEFAULT_EARTH_DEM_PATH;
+
+/// Default ceiling for the on-disk erosion tile cache. The cache is a
+/// regenerable preprocessed artifact, so it is bounded rather than allowed to
+/// grow without limit. Override with `COSMIC_SYSTEMS_EROSION_CACHE_MAX_BYTES`.
+#[cfg(feature = "dem")]
+pub const DEFAULT_EROSION_CACHE_MAX_BYTES: u64 = 4 << 30;
+
+/// Earth's declared, validated erosion configuration. It shares the planet's
+/// deterministic seed so a baked and a runtime-eroded tile are identical. The
+/// quality preset is selectable with `COSMIC_SYSTEMS_EROSION_QUALITY`
+/// (`standard`, `high`, or `ultra`).
+#[cfg(feature = "dem")]
+pub fn earth_erosion_config() -> ErosionConfig {
+    let quality = env::var("COSMIC_SYSTEMS_EROSION_QUALITY").unwrap_or_default();
+    let mut cfg = ErosionConfig::from_quality_name(&quality);
+    cfg.seed = EARTH_EROSION_SEED;
+    // Residency only bounds the in-memory LRU; it never changes the raster, so
+    // it is a runtime knob rather than part of the bake signature.
+    if let Some(tiles) = env::var("COSMIC_SYSTEMS_EROSION_CACHE_TILES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|tiles| *tiles > 0)
+    {
+        cfg.cache_max_tiles = tiles;
     }
+    cfg
+}
+
+/// The preprocessed erosion store for a configuration, or `None` when caching
+/// is disabled. `COSMIC_SYSTEMS_EROSION_CACHE` selects the directory (`off`
+/// disables it); otherwise a per-user cache directory is used. Tests never
+/// touch the disk.
+#[cfg(feature = "dem")]
+pub fn erosion_store(cfg: &ErosionConfig, namespace: &str) -> Option<Arc<ErosionTileStore>> {
+    if cfg!(test) {
+        return None;
+    }
+    let root = match env::var("COSMIC_SYSTEMS_EROSION_CACHE") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("off") => return None,
+        Ok(value) if !value.trim().is_empty() => PathBuf::from(value.trim()),
+        _ => default_erosion_cache_root()?,
+    };
+    let signature = cfg.bake_signature(namespace);
+    match ErosionTileStore::open_with_budget(root, signature, erosion_cache_max_bytes()) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            eprintln!("erosion cache unavailable, continuing without preprocessed tiles: {error}");
+            None
+        }
+    }
+}
+
+/// The configured disk ceiling for the erosion tile cache.
+#[cfg(feature = "dem")]
+fn erosion_cache_max_bytes() -> u64 {
+    env::var("COSMIC_SYSTEMS_EROSION_CACHE_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|bytes| *bytes > 0)
+        .unwrap_or(DEFAULT_EROSION_CACHE_MAX_BYTES)
+}
+
+#[cfg(feature = "dem")]
+fn default_erosion_cache_root() -> Option<PathBuf> {
+    if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
+        if !xdg.trim().is_empty() {
+            return Some(PathBuf::from(xdg.trim()).join("cosmic_systems/erosion"));
+        }
+    }
+    env::var("HOME")
+        .ok()
+        .filter(|home| !home.trim().is_empty())
+        .map(|home| PathBuf::from(home.trim()).join(".cache/cosmic_systems/erosion"))
 }
 
 /// Wrap an Earth elevation layer in the one authoritative erosion/hydrology
 /// field. The cached `ErodedTerrainSource` samples the eroded height plus D8
 /// flow, moisture, and river strength; it is the only erosion implementation.
+/// When a preprocessed store is available, tiles are loaded from disk instead
+/// of being simulated at runtime.
 #[cfg(feature = "dem")]
-pub(crate) fn earth_eroded_base(base: Arc<dyn TerrainSource>) -> Arc<dyn TerrainSource> {
-    Arc::new(ErodedTerrainSource::new(base, earth_erosion_config()))
+pub fn earth_eroded_base(base: Arc<dyn TerrainSource>) -> Arc<dyn TerrainSource> {
+    let cfg = earth_erosion_config();
+    let store = erosion_store(&cfg, EARTH_EROSION_NAMESPACE);
+    Arc::new(ErodedTerrainSource::with_store(base, cfg, store))
 }
 
 /// Compose Earth's measured base terrain with the bounded procedural detail

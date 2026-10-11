@@ -45,6 +45,17 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "CanvasRende
 serde-wasm-bindgen = "0.6"  # Web Worker communication
 futures-channel = "0.3"
 
+[profile.dev]
+# `cargo run` must stay usable: the simulator is CPU-heavy even before the
+# renderer, and an unoptimized build makes it unplayable. Optimize this crate
+# lightly so debug info and fast rebuilds remain useful.
+opt-level = 1
+
+[profile.dev.package."*"]
+# Dependencies (Bevy, physics math, image decoding) have no debugger value
+# here; optimize them fully so `cargo run` performance approaches release.
+opt-level = 3
+
 [features]
 default = ["native"]
 native = ["dem"]
@@ -68,6 +79,11 @@ required-features = ["dem"]
 [[bin]]
 name = "terrain_overview_bake"
 path = "src/bin/terrain_overview_bake.rs"
+required-features = ["dem"]
+
+[[bin]]
+name = "erosion_bake"
+path = "src/bin/erosion_bake.rs"
 required-features = ["dem"]
 
 [[bin]]

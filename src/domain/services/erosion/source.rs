@@ -2,10 +2,12 @@
 //! demand and implements the shared `TerrainSource` contract.
 
 use super::simulate::{canonical_lat_lon, sample_channel};
-use super::{erode_tile, ErosionConfig, HeightRaster};
+use super::{erode_tile, BaseProbe, ErosionConfig, ErosionTileStore, HeightRaster};
 use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, TerrainSource};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Failure installing an offline-baked erosion tile into the runtime cache.
@@ -15,8 +17,8 @@ pub enum ErosionTileError {
     InvalidTile(String),
 }
 
-impl std::fmt::Display for ErosionTileError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ErosionTileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTile(message) => {
                 write!(formatter, "invalid baked erosion tile: {message}")
@@ -25,7 +27,7 @@ impl std::fmt::Display for ErosionTileError {
     }
 }
 
-impl std::error::Error for ErosionTileError {}
+impl Error for ErosionTileError {}
 
 pub(super) fn sample(raster: &HeightRaster, lat: f64, lon: f64) -> (f64, f64) {
     sample_channel(raster, &raster.data, lat, lon)
@@ -49,21 +51,29 @@ pub struct ErodedTerrainSource {
     cfg: ErosionConfig,
     pub(super) cache: Mutex<TileCache>,
     in_flight: Mutex<HashMap<(i64, i64), Arc<TileBuild>>>,
+    /// Optional persistent preprocessed tiles. A hit short-circuits the bake;
+    /// a miss falls back to the authoritative runtime bake and, when writable,
+    /// records the result for later runs.
+    store: Option<Arc<ErosionTileStore>>,
 }
 
-/// One lock keeps LRU metadata and resident tiles coherent. The vector is the
-/// complete recency order, so eviction never depends on hash-map iteration.
+/// One lock keeps LRU metadata and resident tiles coherent. Recency is tracked
+/// with an O(1) logical timestamp per tile rather than a reordered list, so the
+/// hot `get` path never scans the whole cache; the only O(n) step is finding
+/// the least-recently-used tile when an insert must evict.
 #[derive(Debug)]
 pub(super) struct TileCache {
     pub(super) tiles: HashMap<(i64, i64), Arc<HeightRaster>>,
-    order: Vec<(i64, i64)>,
+    last_used: HashMap<(i64, i64), u64>,
+    clock: u64,
 }
 
 impl TileCache {
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
             tiles: HashMap::with_capacity(capacity),
-            order: Vec::with_capacity(capacity),
+            last_used: HashMap::with_capacity(capacity),
+            clock: 0,
         }
     }
 
@@ -76,19 +86,23 @@ impl TileCache {
     }
 
     fn insert(&mut self, key: (i64, i64), tile: Arc<HeightRaster>, capacity: usize) {
-        while self.tiles.len() >= capacity {
-            let lru = self.order.remove(0);
-            self.tiles.remove(&lru);
+        if !self.tiles.contains_key(&key) {
+            while self.tiles.len() >= capacity {
+                let Some((&victim, _)) = self.last_used.iter().min_by_key(|(_, used)| **used)
+                else {
+                    break;
+                };
+                self.tiles.remove(&victim);
+                self.last_used.remove(&victim);
+            }
         }
         self.tiles.insert(key, tile);
-        self.order.push(key);
+        self.touch(key);
     }
 
     fn touch(&mut self, key: (i64, i64)) {
-        if let Some(index) = self.order.iter().position(|candidate| *candidate == key) {
-            self.order.remove(index);
-            self.order.push(key);
-        }
+        self.clock = self.clock.wrapping_add(1);
+        self.last_used.insert(key, self.clock);
     }
 }
 
@@ -103,6 +117,17 @@ struct TileBuild {
 
 impl ErodedTerrainSource {
     pub fn new(base: Arc<dyn TerrainSource>, cfg: ErosionConfig) -> Self {
+        Self::with_store(base, cfg, None)
+    }
+
+    /// Construct with an optional preprocessed tile store. The store is keyed by
+    /// the bake identity the caller encoded into it; tiles whose base probe no
+    /// longer matches the live base are ignored and re-baked.
+    pub fn with_store(
+        base: Arc<dyn TerrainSource>,
+        cfg: ErosionConfig,
+        store: Option<Arc<ErosionTileStore>>,
+    ) -> Self {
         cfg.validate();
         let cache_capacity = cfg.cache_max_tiles;
         Self {
@@ -112,7 +137,15 @@ impl ErodedTerrainSource {
             // metadata storage before the first terrain task reaches it.
             cache: Mutex::new(TileCache::with_capacity(cache_capacity)),
             in_flight: Mutex::new(HashMap::with_capacity(cache_capacity.min(8))),
+            store,
         }
+    }
+
+    /// Sample the pre-erosion base across a tile on the store's probe grid.
+    /// Stored with every baked tile so a cache hit is rejected when the base
+    /// changes.
+    fn base_probe(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> BaseProbe {
+        BaseProbe::sample(self.base.as_ref(), lat_min, lat_max, lon_min, lon_max)
     }
 
     /// Install an offline-baked erosion tile. The tile is keyed by its
@@ -260,6 +293,33 @@ impl ErodedTerrainSource {
         let lat_max = lat_min + tile_deg;
         let lon_min = tx as f64 * tile_deg;
         let lon_max = lon_min + tile_deg;
+
+        // Preprocessed tiles short-circuit the runtime bake. A stored tile is
+        // trusted only when its recorded base probe still matches the live base,
+        // so a changed DEM or a newly resident elevation payload re-bakes.
+        if let Some(store) = &self.store {
+            if let Some((stored, stored_probe)) = store.load(tx, ty, self.cfg.resolution, tile_deg)
+            {
+                let live_probe = self.base_probe(lat_min, lat_max, lon_min, lon_max);
+                if stored_probe.matches(live_probe) {
+                    let tile = Arc::new(stored);
+                    self.cache.lock().expect("erosion cache lock").insert(
+                        (tx, ty),
+                        Arc::clone(&tile),
+                        self.cfg.cache_max_tiles,
+                    );
+                    let mut completed_tile = build.tile.lock().expect("erosion tile build lock");
+                    *completed_tile = Some(Arc::clone(&tile));
+                    build.completed.notify_all();
+                    self.in_flight
+                        .lock()
+                        .expect("erosion in-flight lock")
+                        .remove(&(tx, ty));
+                    return tile;
+                }
+            }
+        }
+
         let tile = Arc::new(erode_tile(
             self.base.as_ref(),
             lat_min,
@@ -269,6 +329,13 @@ impl ErodedTerrainSource {
             &self.cfg,
             self.tile_seed(tx, ty),
         ));
+
+        // Record the freshly baked tile for later runs. A write failure is not
+        // fatal: the runtime bake remains authoritative for this session.
+        if let Some(store) = &self.store {
+            let probe = self.base_probe(lat_min, lat_max, lon_min, lon_max);
+            let _ = store.save(tx, ty, tile.as_ref(), probe);
+        }
 
         self.cache.lock().expect("erosion cache lock").insert(
             (tx, ty),
