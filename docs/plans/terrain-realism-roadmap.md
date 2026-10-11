@@ -140,6 +140,14 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   patch seams and LOD-transition cells (Transvoxel) are not yet handled; a
   real-cliff capture is still pending (the render path was validated
   synthetically).
+  Resolution: Module 3 overhang cavities are only a few metres deep, so the
+  shell footprint is decoupled from the patch size (`footprint_m`, default
+  90 m) and sampled at `cell_m` (default 1.5 m); covering a whole LOD-14 patch
+  at metre resolution would exceed any sample budget. Regression tests assert
+  the field produces overhang cavities
+  (`default_field_produces_overhang_cavities_on_a_cliff`) and that the extracted
+  mesh contains genuine downward-facing (overhanging) normals at streaming
+  resolution (`shell_at_streaming_resolution_contains_overhangs`).
 
 ### Phase 4 — Trees and vegetation (Module 5 + tree spec)
 

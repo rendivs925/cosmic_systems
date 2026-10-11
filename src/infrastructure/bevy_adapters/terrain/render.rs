@@ -505,14 +505,21 @@ impl TerrainRenderConfig {
 ///
 /// Disabled by default, so the heightmap patch mesh remains the only visible
 /// terrain surface unless volumetric geology is explicitly enabled. When
-/// enabled, patches at or above `min_level` whose surface is steep enough are
-/// replaced by a Dual Contoured rock shell (overhangs, undercuts, arches). The
-/// authoritative heightmap is untouched: collision, altitude, guidance, and
-/// physics keep sampling [`TerrainSource::height_m`], and the shell is
-/// presentation-only.
+/// enabled, patches at or above `min_level` whose surface is steep enough gain
+/// an additional, overlapping Dual Contoured rock shell (overhangs, undercuts,
+/// arches) presented as a child of the heightmap patch. The authoritative
+/// heightmap is untouched: collision, altitude, guidance, and physics keep
+/// sampling [`TerrainSource::height_m`], and the shell is presentation-only.
 ///
-/// Every field bounds work: the voxel size, scanned band, and sample cap limit
-/// the density evaluations a single patch bake may cost.
+/// The shell footprint is bounded independently of the patch size
+/// (`footprint_m`) and sampled at `cell_m`. This decoupling matters: Module 3
+/// overhang cavities are only a few metres deep, so the voxel size — not the
+/// patch size — must be fine enough to resolve them. Covering a whole LOD-14
+/// patch at metre resolution would need hundreds of cells per axis and exceed
+/// any sane sample budget.
+///
+/// Every field bounds work: the voxel size, footprint, scanned band, and sample
+/// cap limit the density evaluations a single patch bake may cost.
 #[derive(Resource, Debug, Clone)]
 pub struct VolumetricGeologySettings {
     /// Master switch. Off by default; the heightmap surface is authoritative
@@ -521,12 +528,17 @@ pub struct VolumetricGeologySettings {
     /// Only patches at or above this cube-sphere LOD level (smaller and nearer)
     /// are considered, bounding the number of shells and their cost.
     pub min_level: u32,
-    /// Voxel size in metres.
+    /// Voxel size in metres. Must be small enough to resolve Module 3 overhang
+    /// cavities (a few metres), so it is deliberately decoupled from the patch
+    /// size.
     pub cell_m: f64,
-    /// Patch half-width scanned, as a fraction of the patch world size.
-    pub half_extent_factor: f64,
-    /// Vertical band scanned around the patch-centre height, in metres. It must
-    /// cover the patch relief so the shell spans the whole patch.
+    /// Maximum shell footprint (full width) in metres. The shell is a bounded
+    /// neighbourhood centred on the patch, never the whole patch, so metre-scale
+    /// resolution stays within `max_samples`. It is also clamped to the patch
+    /// width so a shell never extends into a neighbouring patch.
+    pub footprint_m: f64,
+    /// Vertical band scanned around the patch-centre height, in metres. It
+    /// should be at least the footprint so a 45-degree face is fully spanned.
     pub vertical_range_m: f64,
     /// Hard cap on density samples per patch; patches exceeding it are skipped.
     pub max_samples: usize,
@@ -546,9 +558,12 @@ impl Default for VolumetricGeologySettings {
         Self {
             enabled,
             min_level: 14,
-            cell_m: 8.0,
-            half_extent_factor: 0.5,
-            vertical_range_m: 128.0,
+            // 1.5 m cells resolve the few-metre overhang cavities the density
+            // field produces; an 8 m cell (patch-scale) cannot.
+            cell_m: 1.5,
+            // 90 m footprint at 1.5 m cells is 61^3 samples, under the cap.
+            footprint_m: 90.0,
+            vertical_range_m: 90.0,
             max_samples: 262_144,
             config: crate::domain::services::volumetric_geology::VolumetricGeologyConfig {
                 // Lift the shell just above the heightmap so coplanar regions

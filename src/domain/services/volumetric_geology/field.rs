@@ -379,4 +379,45 @@ mod tests {
         let g = field.gradient(p, 1.0);
         assert!((g.length() - 1.0).abs() < 1e-9);
     }
+
+    /// `D = H - z + Omega` only overhangs where `dOmega/dz > 1`. On a steep
+    /// face the slope mask is saturated, so the default configuration must
+    /// produce at least one column with three sign changes (solid -> air ->
+    /// solid): a cave/undercut. This guards the field against silently
+    /// degenerating into a single-valued heightfield.
+    #[test]
+    fn default_field_produces_overhang_cavities_on_a_cliff() {
+        let source = RampSource {
+            radius_m: 6_371_000.0,
+            gradient: 2.0,
+        };
+        let field = field_for(&source);
+        let mut found = false;
+        let horizontal_step = 6.0;
+        for i in 0..32 {
+            for j in 0..32 {
+                let x = -96.0 + i as f64 * horizontal_step;
+                let y = -96.0 + j as f64 * horizontal_step;
+                let base = field.height_m(x, y);
+                let mut previous = field.density(DVec3::new(x, y, base - 30.0));
+                let mut crossings = 0;
+                let mut z = base - 30.0 + 1.5;
+                while z < base + 30.0 {
+                    let current = field.density(DVec3::new(x, y, z));
+                    if (previous < 0.0) != (current < 0.0) {
+                        crossings += 1;
+                    }
+                    previous = current;
+                    z += 1.5;
+                }
+                if crossings >= 3 {
+                    found = true;
+                }
+            }
+        }
+        assert!(
+            found,
+            "default Module 3 field should produce overhang cavities on a cliff"
+        );
+    }
 }

@@ -207,4 +207,35 @@ mod tests {
         };
         assert_eq!(build(), build());
     }
+
+    /// At the streaming resolution the extracted mesh must contain genuine
+    /// overhangs, not just steep heightfield facets: a pure heightmap can never
+    /// produce a face whose normal points back toward the planet centre.
+    #[test]
+    fn shell_at_streaming_resolution_contains_overhangs() {
+        let source = Cliff {
+            radius_m: 6_371_000.0,
+        };
+        let center = DVec3::new(0.2, 0.3, 0.93);
+        let shell = build_rock_shell(
+            &source,
+            center,
+            6_371_000.0,
+            45.0,
+            90.0,
+            1.5,
+            VolumetricGeologyConfig::default(),
+        )
+        .expect("steep patch should produce a shell");
+        let up = center.normalize_or_zero();
+        let min_radial = shell
+            .normals
+            .iter()
+            .map(|n| DVec3::from_array(*n).dot(up))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            min_radial < 0.0,
+            "expected an overhanging (downward-facing) normal, got min radial {min_radial}"
+        );
+    }
 }

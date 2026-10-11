@@ -558,7 +558,12 @@ fn volumetric_bake_for(
         return None;
     }
     let world_size = patch_world_size_m(patch.level, radius_m);
-    let half_extent_m = world_size * settings.half_extent_factor;
+    // The shell is a bounded neighbourhood, not the whole patch: clamp the
+    // configured footprint to the patch so it never crosses into a neighbour,
+    // and never let the half-extent fall below one voxel.
+    let half_extent_m = (settings.footprint_m * 0.5)
+        .min(world_size * 0.5)
+        .max(settings.cell_m);
     let cell_m = settings.cell_m;
     if half_extent_m <= 0.0 || cell_m <= 0.0 || settings.vertical_range_m <= 0.0 {
         return None;
