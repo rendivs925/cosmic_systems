@@ -166,6 +166,17 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
   animated bounds.
 - Acceptance: no disconnected near-field branches; believable canopy volume; no
   LOD popping; bounded patch batching preserved.
+- Status: started. Land-cover class now decides the vegetation *form* in
+  `select_species` (water/snow/built-up host nothing; open classes never host
+  trees; a measured tree-cover class selects the best tree for the climate and
+  is not downgraded to ground cover by the climate density threshold).
+  Per-species `min_spacing_m` needs no placement filter: the tree lattice cell
+  (~61 m at `TREE_SITE_LEVEL` on Earth) already exceeds the largest minimum, and
+  a patch-local filter would break the cross-LOD nesting guarantee; a regression
+  test pins this (`lattice_spacing_exceeds_per_species_minimum`). Remaining:
+  buttress roots, canopy-lobe normals, the dedicated material (translucency,
+  GPU wind, alpha-tested shadows), procedural bark/foliage, impostor LOD, and
+  the vegetation shadow-marker fix.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 

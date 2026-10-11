@@ -6,6 +6,7 @@
 //! here feeds collision, altitude, or physics: vegetation is presentation only.
 
 use crate::domain::services::cube_sphere::TerrainPatch;
+use crate::domain::services::land_cover::LandCoverClass;
 use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
 use crate::domain::services::terrain_source::ValueNoise;
 
@@ -261,20 +262,39 @@ pub fn embed_depth_m(profile: SpeciesProfile) -> f64 {
     (profile.trunk_height_m * 0.12).max(0.12)
 }
 
-/// Deterministic species selection from climate and terrain inputs. Returns
-/// `None` when the site cannot support the species set (water, cliff, or too
-/// cold/dry). Never random: the same inputs always select the same species.
+/// Deterministic species selection from climate, terrain, and measured land
+/// cover. Returns `None` when the site cannot support any vegetation (water,
+/// snow, built-up, cliff, or too cold/dry). Never random: the same inputs
+/// always select the same species.
+///
+/// `land_cover` is the measured surface class where a package covers the site.
+/// It decides the vegetation *form*: open classes never host trees, and a
+/// measured tree-cover class selects the best tree for the climate instead of
+/// dropping to shrub or grass. When it is `None` the selection falls back to the
+/// climate and latitude rules alone.
 pub fn select_species(
     latitude_deg: f64,
     elevation_m: f64,
     moisture: f64,
     slope_deg: f64,
     density: f64,
+    land_cover: Option<LandCoverClass>,
 ) -> Option<VegetationSpecies> {
     if !elevation_m.is_finite() || elevation_m < 0.5 || slope_deg > 40.0 || density <= 0.0 {
         return None;
     }
     let abs_lat = latitude_deg.abs();
+
+    // Measured land cover is authoritative for the vegetation form where it is
+    // present. Water, snow, and built-up ground host nothing regardless of
+    // climate.
+    if matches!(
+        land_cover,
+        Some(LandCoverClass::PermanentWater | LandCoverClass::SnowIce | LandCoverClass::BuiltUp)
+    ) {
+        return None;
+    }
+
     // A latitude-dependent treeline: high peaks and polar ground drop to
     // shrub/ground cover rather than hosting full trees.
     let treeline_m = (4_200.0 - abs_lat * 28.0).max(400.0);
@@ -282,32 +302,79 @@ pub fn select_species(
         return (density >= 0.06 && slope_deg <= 36.0).then_some(VegetationSpecies::Shrub);
     }
 
-    let candidate = if abs_lat < 23.0 {
-        if elevation_m < 400.0 && moisture > 0.55 && density > 0.45 {
-            VegetationSpecies::Palm
-        } else if density > 0.30 {
-            VegetationSpecies::TropicalBroadleaf
-        } else {
-            VegetationSpecies::Shrub
-        }
-    } else if abs_lat < 48.0 {
-        if moisture > 0.5 && density > 0.24 {
+    // Best tree for the climate, never ground cover.
+    let climate_tree = || {
+        if abs_lat < 23.0 {
+            if elevation_m < 400.0 && moisture > 0.55 && density > 0.45 {
+                VegetationSpecies::Palm
+            } else {
+                VegetationSpecies::TropicalBroadleaf
+            }
+        } else if abs_lat < 48.0 {
             VegetationSpecies::TemperateBroadleaf
         } else {
-            VegetationSpecies::Shrub
-        }
-    } else if abs_lat < 66.0 {
-        if density > 0.18 {
             VegetationSpecies::Conifer
-        } else {
-            VegetationSpecies::Shrub
         }
-    } else {
-        VegetationSpecies::Shrub
+    };
+
+    let candidate = match land_cover {
+        Some(LandCoverClass::Mangroves) => {
+            if abs_lat < 23.0 {
+                VegetationSpecies::Palm
+            } else {
+                VegetationSpecies::TemperateBroadleaf
+            }
+        }
+        Some(LandCoverClass::TreeCover) => climate_tree(),
+        Some(
+            LandCoverClass::Shrubland
+            | LandCoverClass::HerbaceousWetland
+            | LandCoverClass::MossLichen,
+        ) => VegetationSpecies::Shrub,
+        Some(LandCoverClass::Grassland | LandCoverClass::Cropland | LandCoverClass::BareSparse) => {
+            VegetationSpecies::Grass
+        }
+        Some(
+            LandCoverClass::PermanentWater | LandCoverClass::SnowIce | LandCoverClass::BuiltUp,
+        ) => {
+            unreachable!("handled above")
+        }
+        None => {
+            if abs_lat < 23.0 {
+                if elevation_m < 400.0 && moisture > 0.55 && density > 0.45 {
+                    VegetationSpecies::Palm
+                } else if density > 0.30 {
+                    VegetationSpecies::TropicalBroadleaf
+                } else {
+                    VegetationSpecies::Shrub
+                }
+            } else if abs_lat < 48.0 {
+                if moisture > 0.5 && density > 0.24 {
+                    VegetationSpecies::TemperateBroadleaf
+                } else {
+                    VegetationSpecies::Shrub
+                }
+            } else if abs_lat < 66.0 {
+                if density > 0.18 {
+                    VegetationSpecies::Conifer
+                } else {
+                    VegetationSpecies::Shrub
+                }
+            } else {
+                VegetationSpecies::Shrub
+            }
+        }
     };
 
     let profile = candidate.profile();
-    if density < profile.min_density
+    // A measured tree-cover class confirms the canopy form, so the climate
+    // density threshold must not downgrade it to ground cover; slope and
+    // elevation still bound where it can grow.
+    let confirmed_by_land_cover = matches!(
+        land_cover,
+        Some(LandCoverClass::TreeCover | LandCoverClass::Mangroves)
+    );
+    if (!confirmed_by_land_cover && density < profile.min_density)
         || slope_deg > profile.max_slope_deg
         || elevation_m < profile.min_elevation_m
         || elevation_m > profile.max_elevation_m
@@ -501,38 +568,100 @@ mod tests {
     fn species_selection_is_deterministic_and_ecological() {
         // Humid tropical lowland -> palm.
         assert_eq!(
-            select_species(-3.0, 40.0, 0.8, 4.0, 0.6),
+            select_species(-3.0, 40.0, 0.8, 4.0, 0.6, None),
             Some(VegetationSpecies::Palm)
         );
         // Temperate wet -> broadleaf; dry -> shrub.
         assert_eq!(
-            select_species(40.0, 300.0, 0.7, 5.0, 0.5),
+            select_species(40.0, 300.0, 0.7, 5.0, 0.5, None),
             Some(VegetationSpecies::TemperateBroadleaf)
         );
         assert_eq!(
-            select_species(40.0, 300.0, 0.3, 5.0, 0.15),
+            select_species(40.0, 300.0, 0.3, 5.0, 0.15, None),
             Some(VegetationSpecies::Shrub)
         );
         // Boreal -> conifer.
         assert_eq!(
-            select_species(58.0, 500.0, 0.5, 10.0, 0.4),
+            select_species(58.0, 500.0, 0.5, 10.0, 0.4, None),
             Some(VegetationSpecies::Conifer)
         );
         // Water and cliffs reject.
-        assert_eq!(select_species(0.0, -10.0, 0.5, 5.0, 0.8), None);
-        assert_eq!(select_species(0.0, 100.0, 0.5, 60.0, 0.8), None);
+        assert_eq!(select_species(0.0, -10.0, 0.5, 5.0, 0.8, None), None);
+        assert_eq!(select_species(0.0, 100.0, 0.5, 60.0, 0.8, None), None);
         // Above the treeline only ground cover remains.
         assert_eq!(
-            select_species(30.0, 4_500.0, 0.5, 10.0, 0.4),
+            select_species(30.0, 4_500.0, 0.5, 10.0, 0.4, None),
             Some(VegetationSpecies::Shrub)
         );
-        assert_eq!(select_species(30.0, 4_500.0, 0.5, 10.0, 0.02), None);
+        assert_eq!(select_species(30.0, 4_500.0, 0.5, 10.0, 0.02, None), None);
         // Identical inputs select identical species.
         for species in VegetationSpecies::ALL {
             let profile = species.profile();
             assert!(profile.canopy_layers >= 1 && profile.canopy_layers <= 3);
             assert!(profile.min_density >= 0.0 && profile.min_density <= 1.0);
         }
+    }
+
+    #[test]
+    fn measured_land_cover_decides_the_vegetation_form() {
+        // Water, snow, and built-up ground host nothing regardless of climate.
+        for class in [
+            LandCoverClass::PermanentWater,
+            LandCoverClass::SnowIce,
+            LandCoverClass::BuiltUp,
+        ] {
+            assert_eq!(select_species(-3.0, 40.0, 0.9, 2.0, 0.9, Some(class)), None);
+        }
+        // A measured tree-cover class selects a tree even where the climate
+        // density alone would have chosen shrub, and the density threshold does
+        // not downgrade it to ground cover.
+        assert_eq!(
+            select_species(40.0, 300.0, 0.3, 5.0, 0.15, Some(LandCoverClass::TreeCover)),
+            Some(VegetationSpecies::TemperateBroadleaf)
+        );
+        // Open classes never host trees.
+        assert_eq!(
+            select_species(-3.0, 40.0, 0.9, 2.0, 0.9, Some(LandCoverClass::Grassland)),
+            Some(VegetationSpecies::Grass)
+        );
+        assert_eq!(
+            select_species(-3.0, 40.0, 0.9, 2.0, 0.9, Some(LandCoverClass::Shrubland)),
+            Some(VegetationSpecies::Shrub)
+        );
+        assert_eq!(
+            select_species(-3.0, 40.0, 0.9, 2.0, 0.9, Some(LandCoverClass::Cropland)),
+            Some(VegetationSpecies::Grass)
+        );
+        // Tropical mangroves resolve to a coastal palm.
+        assert_eq!(
+            select_species(-3.0, 5.0, 0.9, 2.0, 0.9, Some(LandCoverClass::Mangroves)),
+            Some(VegetationSpecies::Palm)
+        );
+        // Selection stays deterministic under land cover.
+        assert_eq!(
+            select_species(40.0, 300.0, 0.3, 5.0, 0.15, Some(LandCoverClass::TreeCover)),
+            select_species(40.0, 300.0, 0.3, 5.0, 0.15, Some(LandCoverClass::TreeCover))
+        );
+    }
+
+    #[test]
+    fn lattice_spacing_exceeds_per_species_minimum() {
+        // The finest tree lattice cell (level TREE_SITE_LEVEL at full density) is
+        // far wider than the largest per-species `min_spacing_m`, so the lattice
+        // alone enforces spacing and no patch-local filter is needed. A local
+        // filter would also break the cross-LOD nesting guarantee.
+        let earth_radius_m = 6_371_000.0;
+        let face_length_m = std::f64::consts::FRAC_PI_2 * earth_radius_m;
+        let cells = (TREE_CANDIDATE_SIDE << TREE_SITE_LEVEL) as f64;
+        let spacing_m = face_length_m / cells;
+        let max_min_spacing = VegetationSpecies::ALL
+            .iter()
+            .map(|species| species.profile().min_spacing_m)
+            .fold(0.0, f64::max);
+        assert!(
+            spacing_m > max_min_spacing,
+            "lattice spacing {spacing_m} must exceed {max_min_spacing}"
+        );
     }
 
     #[test]

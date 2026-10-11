@@ -877,8 +877,15 @@ pub(super) fn build_grounded_vegetation_mesh(
         // not a different climate; applying it to species selection again
         // downgrades humid forest to tiny shrubs or grass.
         let density = density_at(lat, lon);
-        let Some(species) = select_species(lat, gate_height_m, moisture, local_slope, density)
-        else {
+        let land_cover_class = land_cover.and_then(|package| package.sample_class(lat, lon));
+        let Some(species) = select_species(
+            lat,
+            gate_height_m,
+            moisture,
+            local_slope,
+            density,
+            land_cover_class,
+        ) else {
             continue;
         };
         if !species.is_tree() {
