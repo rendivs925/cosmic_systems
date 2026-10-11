@@ -40,3 +40,4 @@ pub mod terrain_source;
 pub mod trajectory;
 pub mod vacuum_physics;
 pub mod vegetation;
+pub mod volumetric_geology;
