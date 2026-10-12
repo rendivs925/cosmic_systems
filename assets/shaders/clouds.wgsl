@@ -1,93 +1,304 @@
-// Geographic cloud map with separated coverage, shape, detail, and coherent
-// wind motion. Coverage is the sampled geographic luminance/opacity; shape and
-// detail are bounded procedural value noise over a body-fixed direction
-// reconstructed from the sphere UV, and one coherent wind vector advects the
-// whole procedural field. Presentation only: no texture is regenerated per
-// frame and nothing here feeds simulation state.
+// Volumetric ray-marched planetary clouds (cloud engine spec sections 3-6).
 //
-// The noise is deliberately a function of the mesh UV rather than
-// `world_position`: the flight frame recentres its shared render origin
-// (AGENTS.md section 13), which translates every fragment's world position by
-// the origin delta and would otherwise slide the cloud pattern across the
-// planet. UV is baked to the sphere vertices, so it is stable under render
-// origin changes and co-rotates with the planet.
-#import bevy_pbr::{
-    forward_io::{VertexOutput, FragmentOutput},
-    pbr_fragment::pbr_input_from_standard_material,
-    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
-}
+// The cloud deck is a spherical slab between `bottom_radius` and `top_radius`.
+// Each fragment marches the view ray through the slab, sampling a 3D
+// Perlin-Worley density field (co-rotating with the planet), carving it with the
+// weather map and high-frequency Worley erosion, then integrating
+// sun-scattering with a triple-lobe Henyey-Greenstein phase, a powder
+// (dark-edge) term, and multi-scatter octaves. Output is premultiplied: rgb is
+// the scattered radiance in the same radiometric scale as the PBR directional
+// light (colour * illuminance), and alpha is 1 - transmittance, so the blend
+// over terrain and sky is `cloud_radiance + background * transmittance`.
+//
+// Presentation only: nothing here feeds collision or any simulation state.
 
-const TAU: f32 = 6.283185307179586;
-const PI: f32 = 3.141592653589793;
+#define_import_path cosmic_systems::clouds
 
-// Field order and types must match `CloudExtension` in materials.rs.
+#import bevy_pbr::mesh_view_bindings::view
+#import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}
+
+// Field order and types must match `CloudParams` in rendering/materials.rs.
 struct CloudParams {
-    coverage: f32,
-    shape_scale: f32,
-    detail_scale: f32,
-    wind_speed: f32,
+    planet_center: vec3<f32>,
+    bottom_radius: f32,
+    top_radius: f32,
+    planet_rotation: mat3x3<f32>,
+    sun_direction: vec3<f32>,
+    sun_irradiance: vec3<f32>,
     time_s: f32,
+    coverage: f32,
+    cloud_type: f32,
+    density_scale: f32,
+    absorption: f32,
+    forward_g: f32,
+    powder_strength: f32,
+    noise_scale: f32,
+    detail_scale: f32,
+    erosion_scale: f32,
+    wind_speed: f32,
+    wind_direction: vec2<f32>,
+    aerial_haze: f32,
+    primary_steps: f32,
+    light_steps: f32,
+    multi_scatter_octaves: f32,
+    strength: f32,
+    sky_color: vec3<f32>,
+    ground_color: vec3<f32>,
+    ambient_fraction: f32,
+    direct_boost: f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> clouds: CloudParams;
 
-fn hash21(p: vec2<f32>) -> f32 {
-    var q = fract(p * vec2<f32>(123.34, 345.45));
-    q += dot(q, q + 34.345);
-    return fract(q.x * q.y);
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> clouds: CloudParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var base_noise: texture_3d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var base_noise_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(3) var detail_noise: texture_3d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(4) var detail_noise_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(5) var weather_map: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(6) var weather_map_sampler: sampler;
+
+const PI: f32 = 3.141592653589793;
+// Hard upper bounds keep the loop trip counts statically bounded; the actual
+// counts come from the quality uniform and may be lower.
+const MAX_PRIMARY_STEPS: u32 = 128u;
+const MAX_LIGHT_STEPS: u32 = 8u;
+const MAX_MULTI_OCTAVES: u32 = 4u;
+
+fn saturate(x: f32) -> f32 {
+    return clamp(x, 0.0, 1.0);
 }
 
-fn value_noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let a = hash21(i);
-    let b = hash21(i + vec2<f32>(1.0, 0.0));
-    let c = hash21(i + vec2<f32>(0.0, 1.0));
-    let d = hash21(i + vec2<f32>(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+fn remap(v: f32, l1: f32, h1: f32, l2: f32, h2: f32) -> f32 {
+    return l2 + (v - l1) / max(h1 - l1, 1e-6) * (h2 - l2);
+}
+
+fn hash12(p: vec2<f32>) -> f32 {
+    var q = fract(p * vec2<f32>(0.1031, 0.1030));
+    q += dot(q, q.yx + 33.33);
+    return fract((q.x + q.y) * q.x);
+}
+
+// Positive near/far intersection distances, or a negative pair on a miss.
+fn ray_sphere(origin: vec3<f32>, dir: vec3<f32>, radius: f32) -> vec2<f32> {
+    let b = dot(origin, dir);
+    let c = dot(origin, origin) - radius * radius;
+    let discriminant = b * b - c;
+    if discriminant < 0.0 {
+        return vec2(-1.0, -1.0);
+    }
+    let root = sqrt(discriminant);
+    return vec2(-b - root, -b + root);
+}
+
+// Lifted-condensation-level vertical profile: stratus is a thin flat layer,
+// cumulus has a flat base and billowing middle (spec section 3.3).
+fn height_profile(height_fraction: f32, cloud_type: f32) -> f32 {
+    let stratus = saturate(remap(height_fraction, 0.0, 0.1, 0.0, 1.0))
+        * saturate(remap(height_fraction, 0.15, 0.35, 1.0, 0.0));
+    let cumulus = saturate(remap(height_fraction, 0.0, 0.15, 0.0, 1.0))
+        * saturate(remap(height_fraction, 0.45, 0.9, 1.0, 0.0));
+    return mix(stratus, cumulus, cloud_type);
+}
+
+fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    let denom = max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4);
+    return (1.0 - g2) / (4.0 * PI * pow(denom, 1.5));
+}
+
+// Forward silver-lining lobe plus backward and side fill (spec section 4.2).
+fn triple_lobe_phase(cos_theta: f32, g_forward: f32) -> f32 {
+    let forward_lobe = henyey_greenstein(cos_theta, g_forward);
+    let backward_lobe = henyey_greenstein(cos_theta, -0.35);
+    let side_lobe = henyey_greenstein(cos_theta, 0.1);
+    return mix(mix(forward_lobe, backward_lobe, 0.25), side_lobe, 0.15);
+}
+
+fn weather_uv(body_dir: vec3<f32>) -> vec2<f32> {
+    let u = atan2(body_dir.z, body_dir.x) / (2.0 * PI) + 0.5;
+    let v = asin(clamp(body_dir.y, -1.0, 1.0)) / PI + 0.5;
+    return vec2(u, v);
+}
+
+// Cloud density at a planet-relative position, in [0, 1].
+fn sample_density(body_pos: vec3<f32>) -> f32 {
+    let altitude = length(body_pos) - clouds.bottom_radius;
+    let layer = max(clouds.top_radius - clouds.bottom_radius, 1.0);
+    let height_fraction = saturate(altitude / layer);
+    if altitude < 0.0 || altitude > layer {
+        return 0.0;
+    }
+
+    // Co-rotating body-fixed position: undo the planet rotation so the noise
+    // field stays pinned to the ground instead of sliding in inertial space.
+    let body_fixed = transpose(clouds.planet_rotation) * body_pos;
+    let wind_offset = vec3<f32>(clouds.wind_direction.x, 0.0, clouds.wind_direction.y)
+        * (clouds.time_s * clouds.wind_speed * clouds.noise_scale);
+
+    // Weather map: coverage carves clear air, cloud type morphs the profile.
+    let body_dir = normalize(body_pos);
+    let weather = textureSample(
+        weather_map,
+        weather_map_sampler,
+        weather_uv(body_dir) + clouds.wind_direction * clouds.time_s * 1.0e-6,
+    );
+    let coverage = saturate(clouds.coverage * weather.r * 1.4);
+    if coverage < 0.01 {
+        return 0.0;
+    }
+    let cloud_type = saturate(mix(clouds.cloud_type, weather.b, 0.5));
+    let gradient = height_profile(height_fraction, cloud_type);
+    if gradient <= 0.001 {
+        return 0.0;
+    }
+
+    let sample_pos = body_fixed * clouds.noise_scale + wind_offset;
+    let base = textureSample(base_noise, base_noise_sampler, sample_pos);
+    let low_fbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
+    var base_density = remap(base.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
+    base_density = base_density * gradient;
+    let density_with_coverage = saturate(remap(base_density, 1.0 - coverage, 1.0, 0.0, 1.0));
+    if density_with_coverage <= 0.001 {
+        return 0.0;
+    }
+
+    let detail = textureSample(
+        detail_noise,
+        detail_noise_sampler,
+        sample_pos * clouds.detail_scale + wind_offset * 1.5,
+    );
+    let high_fbm = detail.r * 0.625 + detail.g * 0.25 + detail.b * 0.125;
+    let erosion = mix(high_fbm, 1.0 - high_fbm, saturate(height_fraction * 2.0));
+    let final_density = saturate(remap(
+        density_with_coverage,
+        erosion * clouds.erosion_scale * 0.55,
+        1.0,
+        0.0,
+        1.0,
+    ));
+    return saturate(final_density * clouds.density_scale);
+}
+
+// Sun visibility: march toward the Sun, then fold in multi-scatter octaves and
+// the powder (dark-edge) term (spec sections 4.3-4.4).
+fn march_to_sun(body_pos: vec3<f32>, cos_theta: f32) -> f32 {
+    let layer = clouds.top_radius - clouds.bottom_radius;
+    let light_step = clouds.sun_direction * (layer / max(clouds.light_steps, 1.0) * 0.12);
+    var total_density = 0.0;
+    var p = body_pos;
+    for (var i: u32 = 0u; i < MAX_LIGHT_STEPS; i = i + 1u) {
+        if f32(i) >= clouds.light_steps {
+            break;
+        }
+        p += light_step;
+        total_density += sample_density(p);
+    }
+
+    var multi = 0.0;
+    for (var octave: u32 = 0u; octave < MAX_MULTI_OCTAVES; octave = octave + 1u) {
+        if f32(octave) >= clouds.multi_scatter_octaves {
+            break;
+        }
+        let optical_depth = total_density * clouds.absorption * pow(0.5, f32(octave));
+        multi += exp(-optical_depth) * pow(0.5, f32(octave));
+    }
+
+    let powder = 1.0 - exp(-total_density * clouds.absorption * 2.5 * clouds.powder_strength);
+    let powder_blend = mix(1.0, powder, saturate(cos_theta * 0.5 + 0.5));
+    return multi * powder_blend;
 }
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
-    var pbr = pbr_input_from_standard_material(in, is_front);
-    let mapped = pbr.material.base_color;
-
-    // Coverage is the geographic texture luminance weighted by its authored
-    // alpha, matching the original single-texture cloud deck.
-    let coverage = clamp(dot(mapped.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0)
-        * clamp(mapped.a, 0.0, 1.0);
-
-    // Reconstruct the unit body-fixed direction from the sphere UV. The
-    // stereographic-style projection stays continuous across the sphere
-    // (except the antipode) and is invariant under render-origin recentring.
-    let lon = in.uv.x * TAU;
-    let lat = (in.uv.y - 0.5) * PI;
-    let cos_lat = cos(lat);
-    let dir = vec3<f32>(cos_lat * cos(lon), sin(lat), cos_lat * sin(lon));
-    let planar = dir.xz / (1.0 + abs(dir.y));
-
-    // One coherent wind vector advects the entire procedural field so shape and
-    // detail drift together instead of each octave moving independently.
-    let wind = vec2<f32>(
-        clouds.time_s * clouds.wind_speed,
-        clouds.time_s * clouds.wind_speed * 0.35,
-    );
-
-    // Shape: low-frequency masses that break the deck into coherent lobes.
-    let shape = value_noise(planar * clouds.shape_scale + wind);
-    // Detail: higher-frequency edges sharing the same advection.
-    let detail = value_noise(planar * clouds.detail_scale + wind * 1.7);
-
-    // Both factors are centred on their sampled noise mean (0.5) so the deck's
-    // average opacity is preserved; only the structure changes.
-    let shaped = coverage * (0.75 + 0.5 * shape);
-    let alpha = clamp(shaped * (0.9 + 0.2 * detail) * clouds.coverage, 0.0, 1.0);
-
-    pbr.material.base_color = vec4<f32>(vec3<f32>(1.0), alpha);
-    pbr.material.perceptual_roughness = 1.0;
-    pbr.material.reflectance = vec3<f32>(0.0);
     var out: FragmentOutput;
-    out.color = apply_pbr_lighting(pbr);
-    out.color = main_pass_post_lighting_processing(pbr, out.color);
+
+    let camera_world = view.world_position;
+    let ray_dir = normalize(in.world_position.xyz - camera_world);
+    let cam_pos = camera_world - clouds.planet_center;
+    let cam_radius = length(cam_pos);
+
+    // The dome is camera-centred, so only its far hemisphere (back faces) is
+    // ever visible; keeping exactly one face avoids double-blending.
+    if is_front {
+        out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
+    }
+
+    // Robust spherical-shell slab intersection, valid whether the camera sits
+    // inside or outside the [bottom_radius, top_radius] shell.
+    let top_hit = ray_sphere(cam_pos, ray_dir, clouds.top_radius);
+    if top_hit.y <= 0.0 {
+        out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
+    }
+    var segment_start = max(top_hit.x, 0.0);
+    var segment_end = top_hit.y;
+    let bottom_hit = ray_sphere(cam_pos, ray_dir, clouds.bottom_radius);
+    if bottom_hit.x > 0.0 {
+        segment_end = min(segment_end, bottom_hit.x);
+    }
+    if cam_radius < clouds.bottom_radius {
+        segment_start = max(segment_start, bottom_hit.y);
+    }
+    if segment_end <= segment_start {
+        out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
+    }
+
+    let cos_theta = dot(ray_dir, clouds.sun_direction);
+    let phase = triple_lobe_phase(cos_theta, clouds.forward_g);
+
+    let steps = max(clouds.primary_steps, 1.0);
+    let step_size = (segment_end - segment_start) / steps;
+    // Mild per-pixel dither (amplitude < a full step) breaks banding without
+    // the static that full white-noise jitter produces at these step counts.
+    let jitter = 0.5 + (hash12(in.position.xy) - 0.5) * 0.4;
+    var t = segment_start + step_size * jitter;
+    var transmittance = 1.0;
+    var in_scatter = vec3<f32>(0.0);
+
+    let layer = max(clouds.top_radius - clouds.bottom_radius, 1.0);
+    for (var i: u32 = 0u; i < MAX_PRIMARY_STEPS; i = i + 1u) {
+        if f32(i) >= steps || t > segment_end || transmittance < 0.005 {
+            break;
+        }
+        let sample_pos = cam_pos + ray_dir * t;
+        let density = sample_density(sample_pos);
+        if density > 0.001 {
+            let sigma_e = density * clouds.absorption;
+            let step_optical_depth = sigma_e * step_size;
+            let step_transmittance = exp(-step_optical_depth);
+            let sun_visibility = march_to_sun(sample_pos, cos_theta);
+            // Direct single-scatter (silver lining emphasised by direct_boost)
+            // plus a height-graded ambient term standing in for the sky and
+            // ground light that multiple scattering would deliver (spec 4.2-4.4).
+            let height_fraction = saturate(
+                (length(sample_pos) - clouds.bottom_radius) / layer,
+            );
+            let direct = clouds.sun_irradiance * sun_visibility * phase
+                * clouds.direct_boost;
+            let ambient_color = mix(
+                clouds.ground_color * 0.35,
+                clouds.sky_color * 0.85,
+                height_fraction,
+            );
+            let ambient = clouds.sun_irradiance * clouds.ambient_fraction
+                * ambient_color;
+            let scattering = (direct + ambient) * density;
+            // The analytic step integral is exact for constant density across
+            // the step: integral of scattering * exp(-sigma_e * s) ds.
+            let inscatter = scattering * (1.0 - step_transmittance)
+                / max(sigma_e, 1e-6);
+            in_scatter += transmittance * inscatter;
+            transmittance *= step_transmittance;
+            t += step_size;
+        } else {
+            // Adaptive empty-space skipping.
+            t += step_size * 1.8;
+        }
+    }
+
+    let radiance = in_scatter * clouds.strength * view.exposure;
+    let opacity = saturate(1.0 - transmittance);
+    out.color = vec4<f32>(radiance, opacity);
     return out;
 }

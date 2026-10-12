@@ -202,16 +202,23 @@ Each phase lists its doc source, reuse, changes, tests, acceptance, and risk.
 
 ### Phase 5 — Volumetric clouds (cloud spec)
 
-- Reuse: `rendering/materials.rs` `CloudExtension`/`CloudMaterial`,
-  `rocket/planet.rs` flight shell, `environment.rs`.
-- Changes: fragment ray-marched volumetric clouds; startup-generated
-  Perlin-Worley 3D noise `Image` assets (CPU, seeded); 2D weather map;
-  triple-lobe Henyey-Greenstein with multi-scatter and powder; blue-noise
-  jitter and adaptive/empty-space steps; curl-noise wind advection.
-- Tests: noise determinism; density/height-profile units; weather-map decode.
-- Acceptance: natural multilayer structure from ground to orbit; no whole-field
-  per-frame regeneration; GPU within budget (quarter-res/temporal reprojection
-  only if profiling demands it).
+- Reuse: `rendering/materials.rs` `CloudMaterial`, `rocket/planet.rs` flight
+  shell, `rocket/sky.rs` camera-anchored dome, `environment.rs`.
+- Changes: `domain/services/cloud_noise.rs` seeded Perlin-Worley base volume,
+  Worley detail volume, and 2D weather map; `rendering/cloud_assets.rs`
+  startup-generated 3D/2D `Image` assets; custom `CloudMaterial` (premultiplied,
+  no culling) with a `CloudParams` uniform; `clouds.wgsl` fragment ray-march over
+  a camera-anchored dome that analytically intersects the planet-centred
+  `[bottom, top]` shell, samples the co-rotating noise field, carves it with the
+  weather map and detail erosion, and integrates direct (triple-lobe
+  Henyey-Greenstein, silver lining) plus height-graded ambient scattering with a
+  powder term and multi-scatter octaves.
+- Tests: `cloud_noise` determinism/bounds (8); `cloud_assets` volume dimensions
+  and sampler (2).
+- Acceptance: continuous cloud deck from ground through ascent; deterministic,
+  no per-frame field regeneration; no new render-graph nodes. Architecture
+  complete. Remaining: coverage/erosion tuning for more broken cumulus structure
+  (the deck currently reads as a solid overcast from below).
 
 ### Phase 6 — Atmosphere and water (Module 6)
 

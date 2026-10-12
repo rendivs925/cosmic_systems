@@ -65,6 +65,7 @@ use crate::infrastructure::bevy_adapters::planet_systems::{
     preserve_sun_disc_at_overview_distances, rebase_solar_presentation, update_orbit_positions,
     update_planet_positions, update_planet_rotations,
 };
+use crate::infrastructure::bevy_adapters::rendering::cloud_assets::setup_cloud_noise_assets;
 use crate::infrastructure::bevy_adapters::rocket::atmospheric_effects::{
     update_rocket_atmospheric_effects, RocketAtmosphericEffectAssets,
 };
@@ -130,7 +131,7 @@ use crate::infrastructure::bevy_adapters::rocket::lifecycle_effects::{
 };
 use crate::infrastructure::bevy_adapters::rocket::orbit::RocketOrbitPlugin;
 use crate::infrastructure::bevy_adapters::rocket::planet::{
-    advance_cloud_motion, isolate_rocket_presentation, setup_rocket_planets, update_rocket_planets,
+    isolate_rocket_presentation, setup_rocket_planets, update_rocket_clouds, update_rocket_planets,
     update_rocket_sun_disc, RocketBoundPlanet,
 };
 use crate::infrastructure::bevy_adapters::rocket::presentation::{
@@ -792,6 +793,7 @@ impl Plugin for RocketModePlugin {
                 isolate_rocket_presentation,
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
+                setup_cloud_noise_assets,
                 setup_rocket_planets,
                 setup_rocket_sun_light,
                 setup_rocket_sky_color,
@@ -808,6 +810,7 @@ impl Plugin for RocketModePlugin {
                 isolate_rocket_presentation,
                 setup_rocket_camera_and_origin,
                 setup_rocket_camera_controller,
+                setup_cloud_noise_assets,
                 setup_rocket_planets,
                 setup_rocket_sun_light,
                 setup_rocket_sky_color,
@@ -826,8 +829,12 @@ impl Plugin for RocketModePlugin {
         // Rocket-mode celestial proxies use SimulationTime directly, independent
         // of the wall-clock shared solar-map presentation.
         app.add_systems(Update, update_rocket_planets.after(recenter_render_origin));
-        // Coherent cloud-deck drift: one small uniform update per frame.
-        app.add_systems(Update, advance_cloud_motion);
+        // Volumetric cloud deck follows the active camera's far plane; one small
+        // uniform update per frame.
+        app.add_systems(
+            Update,
+            update_rocket_clouds.after(update_rocket_camera_projection),
+        );
         app.add_systems(
             Update,
             update_rocket_sun_disc.after(update_rocket_camera_projection),

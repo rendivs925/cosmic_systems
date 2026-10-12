@@ -10,6 +10,7 @@
 //! parent-relative moon approximation.
 
 use super::components::{PrimaryVehicle, RocketPhysicsState, RocketPlanetBinding};
+use super::environment::{bound_planet_sun, solar_illuminance_lux};
 use crate::application::solar_system_startup::solar_surface_luminance_nits;
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::physics::calculate_planet_position_f64;
@@ -24,9 +25,10 @@ use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
+use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseAssets;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
-    create_cloud_material, create_planet_material, flight_cloud_altitude_m, CloudExtension,
-    CloudMaterial, PlanetMaterialConfig,
+    create_planet_material, flight_cloud_altitude_m, flight_cloud_bottom_altitude_m, CloudMaterial,
+    CloudParams, PlanetMaterialConfig,
 };
 use crate::infrastructure::bevy_adapters::rendering::meshes::create_flight_globe_mesh;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
@@ -36,8 +38,9 @@ use crate::infrastructure::bevy_adapters::terrain::render::{RenderOrigin, Terrai
 // The far-field planet and cloud shells enclose the flight camera. If they cast
 // or receive directional shadows they produce a planet-scale dark arc, so they
 // are excluded from the shadow system while remaining fully lit.
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
-use bevy::math::DVec3;
+use bevy::math::{DVec3, Mat3};
 use bevy::prelude::*;
 
 /// Marks the local visual representation of the Sun. Its transform is camera
@@ -52,6 +55,9 @@ const SUN_RADIUS_M: f64 = 696_340_000.0;
 /// represents atmospheric refraction lifting the Sun slightly above the
 /// geometric horizon; it is zero in vacuum, where the disc sets geometrically.
 const SUN_DISC_HORIZON_ALTITUDE_RAD: f64 = -0.0087;
+/// The cloud deck is drawn on a camera-anchored dome just inside the far plane
+/// (matching the sky dome), so it stays within the flight camera's depth range.
+const CLOUD_DOME_FAR_FRACTION: f32 = 0.9;
 
 /// A low-detail geographic Earth shell beneath streamed terrain. It is a
 /// presentation fallback only: terrain meshes remain the sole source for
@@ -123,6 +129,7 @@ pub fn setup_rocket_planets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cloud_materials: ResMut<Assets<CloudMaterial>>,
+    cloud_noise: Res<CloudNoiseAssets>,
     terrain_config: Res<TerrainRenderConfig>,
     asset_server: Res<AssetServer>,
     solar_params: Res<SolarSystemParameters>,
@@ -151,10 +158,16 @@ pub fn setup_rocket_planets(
             &mut commands,
             &mut meshes,
             &mut materials,
-            &mut cloud_materials,
             &asset_server,
             &planet.domain_planet,
             fallback_radius_m as f32,
+        );
+        spawn_rocket_cloud_deck(
+            &mut commands,
+            &mut meshes,
+            &mut cloud_materials,
+            &cloud_noise,
+            &planet.domain_planet,
         );
     }
 
@@ -182,7 +195,6 @@ fn spawn_rocket_bound_planet_surface(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    cloud_materials: &mut Assets<CloudMaterial>,
     asset_server: &AssetServer,
     planet: &crate::domain::entities::planet::Planet,
     fallback_radius_m: f32,
@@ -206,50 +218,61 @@ fn spawn_rocket_bound_planet_surface(
         reflectance: 0.4,
         perceptual_roughness: 0.55,
     });
-    let surface_entity = commands
-        .spawn((
-            Mesh3d(create_flight_globe_mesh(meshes, fallback_radius_m)),
-            MeshMaterial3d(materials.add(material)),
-            Transform::default(),
-            RocketBoundPlanetSurface {
-                body: CelestialBodyId::new(planet.name.clone())
-                    .expect("configured bound planet must have a valid identifier"),
-            },
-            NotShadowCaster,
-            NotShadowReceiver,
-            Name::new(format!("RocketFarField{}", planet.name)),
-        ))
-        .id();
+    commands.spawn((
+        Mesh3d(create_flight_globe_mesh(meshes, fallback_radius_m)),
+        MeshMaterial3d(materials.add(material)),
+        Transform::default(),
+        RocketBoundPlanetSurface {
+            body: CelestialBodyId::new(planet.name.clone())
+                .expect("configured bound planet must have a valid identifier"),
+        },
+        NotShadowCaster,
+        NotShadowReceiver,
+        Name::new(format!("RocketFarField{}", planet.name)),
+    ));
+}
 
-    // Rocket mode hides the shared solar-map Earth, including its cloud layer.
-    // Reuse that same geographic cloud asset in the flight-frame proxy so the
-    // far-field planet remains continuous with local terrain presentation.
-    if let Some(clouds) = get_cloud_layer_config(&planet.name) {
-        let cloud_texture = load_texture(asset_server, Some(clouds.texture_path));
-        if let Some(cloud_texture) = cloud_texture {
-            let mut base = create_cloud_material(Some(cloud_texture), clouds.alpha);
-            // The flight camera can see both above and below the cloud deck.
-            base.cull_mode = None;
-            let cloud_material = cloud_materials.add(CloudMaterial {
-                base,
-                extension: CloudExtension::deck(),
-            });
-            commands.entity(surface_entity).with_children(|parent| {
-                parent.spawn((
-                    Mesh3d(create_flight_globe_mesh(
-                        meshes,
-                        planet.radius_km * 1_000.0 + flight_cloud_altitude_m(&planet.name),
-                    )),
-                    MeshMaterial3d(cloud_material),
-                    Transform::default(),
-                    RocketBoundPlanetCloud,
-                    NotShadowCaster,
-                    NotShadowReceiver,
-                    Name::new(format!("RocketFarField{}Clouds", planet.name)),
-                ));
-            });
-        }
+/// Spawn the volumetric cloud deck as a camera-anchored dome.
+///
+/// The deck's spherical slab is centred on the planet, but a planet-anchored
+/// shell would sit at the planet radius (thousands of kilometres) and fall far
+/// outside the flight camera's 100 km far plane, so it would never rasterize.
+/// Instead the deck is drawn on a small dome that follows the camera; the shader
+/// computes the ray's intersection with the cloud base/top spheres analytically
+/// from the camera and the planet centre, so the cloud content stays pinned to
+/// the planet while the proxy stays in the camera's depth range.
+fn spawn_rocket_cloud_deck(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    cloud_materials: &mut Assets<CloudMaterial>,
+    cloud_noise: &CloudNoiseAssets,
+    planet: &crate::domain::entities::planet::Planet,
+) {
+    if get_cloud_layer_config(&planet.name).is_none() {
+        return;
     }
+    let surface_radius_m = planet.radius_km * 1_000.0;
+    let top_radius = surface_radius_m + flight_cloud_altitude_m(&planet.name);
+    let bottom_radius = surface_radius_m + flight_cloud_bottom_altitude_m(&planet.name);
+    let mut params = CloudParams::deck();
+    params.bottom_radius = bottom_radius;
+    params.top_radius = top_radius;
+    let cloud_material = cloud_materials.add(CloudMaterial {
+        params,
+        base_noise: cloud_noise.base_noise.clone(),
+        detail_noise: cloud_noise.detail_noise.clone(),
+        weather_map: cloud_noise.weather_map.clone(),
+    });
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::new(1.0))),
+        MeshMaterial3d(cloud_material),
+        Transform::default(),
+        RocketBoundPlanetCloud,
+        NoFrustumCulling,
+        NotShadowCaster,
+        NotShadowReceiver,
+        Name::new(format!("RocketFarField{}Clouds", planet.name)),
+    ));
 }
 
 /// The geographic fallback must lie below even the coarsest streamed triangles,
@@ -541,22 +564,74 @@ fn rocket_sun_disc_radius_m(planet_sun_distance_m: f64) -> f64 {
     ROCKET_SUN_DISC_DISTANCE_M * (SUN_RADIUS_M / planet_sun_distance_m)
 }
 
-/// Advance the presentation clock for the rocket-mode cloud decks. The shader
-/// advects its whole procedural shape/detail field along one coherent wind
-/// vector from `time_s`; this only writes a small uniform and never regenerates
-/// a texture or touches simulation state.
-pub fn advance_cloud_motion(
+/// Update the rocket-mode volumetric cloud deck: position the camera-anchored
+/// dome on the active camera's far plane and refresh the cloud uniforms from the
+/// authoritative ephemeris Sun, the bound planet's orientation, and the shared
+/// render origin. Only a small uniform and the dome transform are written per
+/// frame; the noise textures are generated once at startup and never
+/// regenerated, and nothing here touches simulation state.
+#[expect(
+    clippy::type_complexity,
+    reason = "The query selects the active camera projection and the disjoint cloud dome."
+)]
+pub fn update_rocket_clouds(
+    render_origin: Res<RenderOrigin>,
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    bound_planet: Res<RocketBoundPlanet>,
     time: Res<Time>,
+    camera_query: Query<
+        (&Camera, &Transform, &Projection),
+        (With<Camera3d>, Without<RocketBoundPlanetCloud>),
+    >,
+    mut clouds: Query<
+        (&mut Transform, &MeshMaterial3d<CloudMaterial>),
+        With<RocketBoundPlanetCloud>,
+    >,
     mut materials: ResMut<Assets<CloudMaterial>>,
-    clouds: Query<&MeshMaterial3d<CloudMaterial>, With<RocketBoundPlanetCloud>>,
 ) {
+    let Some((_, camera_transform, projection)) =
+        camera_query.iter().find(|(camera, _, _)| camera.is_active)
+    else {
+        return;
+    };
+    let Some(bound_id) = bound_planet.0.as_ref() else {
+        return;
+    };
+    let Some(sun) = bound_planet_sun(&ephemeris_snapshot, bound_id) else {
+        return;
+    };
+    let Some(orientation) = ephemeris_snapshot.orientation_for_catalog_body(bound_id.as_str())
+    else {
+        return;
+    };
+    let planet_rotation =
+        Mat3::from_quat(body_fixed_to_planet_inertial_rotation(orientation).as_quat());
+    let planet_center = (-render_origin.origin).as_vec3();
+    let sun_direction = sun.direction.as_vec3();
+    let sun_color = LinearRgba::from(Color::srgb(1.0, 1.0, 0.98));
+    let sun_irradiance = Vec3::new(sun_color.red, sun_color.green, sun_color.blue)
+        * solar_illuminance_lux(sun.distance_m);
     let elapsed_s = time.elapsed_secs();
     if !elapsed_s.is_finite() {
         return;
     }
-    for handle in &clouds {
+
+    let dome_radius = match projection {
+        Projection::Perspective(perspective) => {
+            (perspective.far * CLOUD_DOME_FAR_FRACTION).max(1.0)
+        }
+        _ => 1.0,
+    };
+
+    for (mut transform, handle) in &mut clouds {
+        transform.translation = camera_transform.translation;
+        transform.scale = Vec3::splat(dome_radius);
         if let Some(material) = materials.get_mut(&handle.0) {
-            material.extension.time_s = elapsed_s;
+            material.params.planet_center = planet_center;
+            material.params.planet_rotation = planet_rotation;
+            material.params.sun_direction = sun_direction;
+            material.params.sun_irradiance = sun_irradiance;
+            material.params.time_s = elapsed_s;
         }
     }
 }
@@ -578,12 +653,18 @@ mod tests {
     use bevy::math::{DMat3, DQuat, DVec3};
 
     #[test]
-    fn cloud_extension_defaults_are_bounded_and_finite() {
-        let deck = CloudExtension::deck();
+    fn cloud_params_defaults_are_bounded_and_finite() {
+        let deck = CloudParams::deck();
         assert!((0.0..=1.0).contains(&deck.coverage));
-        assert!(deck.shape_scale.is_finite() && deck.shape_scale > 0.0);
-        assert!(deck.detail_scale.is_finite() && deck.detail_scale > deck.shape_scale);
+        assert!((0.0..=1.0).contains(&deck.cloud_type));
+        assert!(deck.density_scale.is_finite() && deck.density_scale > 0.0);
+        assert!(deck.absorption.is_finite() && deck.absorption > 0.0);
+        assert!((-1.0..1.0).contains(&deck.forward_g));
+        assert!(deck.noise_scale.is_finite() && deck.noise_scale > 0.0);
+        assert!(deck.detail_scale >= 1.0);
         assert!(deck.wind_speed.is_finite() && deck.wind_speed > 0.0);
+        assert!(deck.primary_steps >= 1.0 && deck.light_steps >= 1.0);
+        assert!(deck.multi_scatter_octaves >= 1.0);
         assert_eq!(deck.time_s, 0.0);
     }
 
@@ -635,16 +716,24 @@ mod tests {
                   mut meshes: ResMut<Assets<Mesh>>,
                   mut materials: ResMut<Assets<StandardMaterial>>,
                   mut cloud_materials: ResMut<Assets<CloudMaterial>>,
+                  mut images: ResMut<Assets<Image>>,
                   asset_server: Res<AssetServer>| {
+                let cloud_noise = CloudNoiseAssets::generate(&mut images, 1);
                 spawn_rocket_bound_planet_surface(
                     &mut commands,
                     &mut meshes,
                     &mut materials,
-                    &mut cloud_materials,
                     &asset_server,
                     &planet,
                     6_371_000.0,
-                )
+                );
+                spawn_rocket_cloud_deck(
+                    &mut commands,
+                    &mut meshes,
+                    &mut cloud_materials,
+                    &cloud_noise,
+                    &planet,
+                );
             },
         );
         app.update();
