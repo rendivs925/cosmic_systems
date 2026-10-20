@@ -1,5 +1,6 @@
 pub mod atmospheric_optics;
 pub mod celestial_body_id;
+pub mod dataset_manifest;
 pub mod imagery_manifest;
 pub mod launch_site_coordinates;
 pub mod planet_configs;

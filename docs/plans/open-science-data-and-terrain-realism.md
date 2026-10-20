@@ -1,6 +1,6 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan, not yet implemented.
+Status: approved plan; Phases 0-1 implemented.
 
 Date: 2026-10-20.
 

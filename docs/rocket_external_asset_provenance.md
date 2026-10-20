@@ -1,6 +1,7 @@
 # Rocket External Asset Provenance
 
-This record covers candidate non-terrain sources only. No candidate below is
+This record covers candidate external assets. Terrain and science data are
+governed separately in the section at the end of this file. No candidate below is
 approved or included in the repository. Every individual asset requires this
 review to be completed before it is added, including an exact source URL,
 license verification, attribution/notice decision, modification status, and
@@ -26,3 +27,29 @@ date. Reject the asset when any of these facts cannot be established.
 | --- | --- | --- | --- | --- | --- | --- |
 | `assets/sounds/rocket_engine_loop.ogg` | Not applicable: original project audio generated locally with FFmpeg `aevalsrc`; source equation is `0.34*tanh(3*(0.45*sin(2*PI*47*t)+0.25*sin(2*PI*94*t)+0.15*sin(2*PI*141*t)+0.12*sin(2*PI*283*t)+0.08*sin(2*PI*611*t)))`, then 28 Hz high-pass and 1.8 kHz low-pass. | Original project asset; no third-party media or license applies. | No external attribution required. | Vorbis-encoded 12-second, periodic engine-loop approximation. | Rocket-mode exterior engine loop only; its gain is attenuated by atmospheric density and observer distance. | 2026-09-11 |
 | `assets/sounds/rocket_ignition.ogg` | Not applicable: original project audio generated locally with FFmpeg `aevalsrc`; source equation is `(0.7*exp(-2.1*t)*sin(2*PI*(38+42*t)*t)+0.22*exp(-2.8*t)*sin(2*PI*127*t)+0.18*exp(-3.5*t)*sin(2*PI*431*t))`, then 24 Hz high-pass, 2.4 kHz low-pass, and endpoint fades. | Original project asset; no third-party media or license applies. | No external attribution required. | Vorbis-encoded 2.2-second transition accent. | Spawned only on Rocket ignition/staging state edges; never loops. | 2026-09-11 |
+
+## Terrain and Science Data
+
+Terrain and Earth-science datasets are not rocket external assets. They are
+governed by the unified registry at
+`assets/configs/terrain/earth_datasets_v1.ron`, the policy in
+`docs/datasets/open_science_data_v1.md`, and the open-science plan
+`docs/plans/open-science-data-and-terrain-realism.md`.
+
+Before a terrain or science dataset is used:
+
+1. add a registry entry with the exact source URL, version, resolution, bounds,
+   horizontal and vertical datum, license, attribution, source SHA-256, runtime
+   asset, runtime SHA-256, converter, and `status: Ready`;
+2. produce or verify the runtime package offline;
+3. run `cargo run --features dem --bin preprocess -- --check` and require it to
+   pass.
+
+No terrain or science path downloads data at runtime. Pending, missing, stale,
+or unverified data hard-fails. Copernicus GLO-30 remains visual and validation
+input only and is never a bare-earth collision authority. HydroSHEDS is not
+approved until its license is confirmed permissive.
+
+Planned sources, licenses, and roles are listed in
+`docs/datasets/open_science_data_v1.md`; they are added to the registry only
+after their runtime package exists and is checksummed.

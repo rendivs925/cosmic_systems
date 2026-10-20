@@ -250,8 +250,8 @@ the last two invalidates comparison with the committed baseline.
 
 ## 11. Follow-up work
 
-1. Phase 1: dataset registry and `preprocess --check` so the harness always
-   measures a validated authority.
+1. Phase 1 (complete): dataset registry and `preprocess --check` so the harness
+   always measures a validated authority.
 2. Phase 2: source-raster extrema and land statistics; launch-site height delta
    report; package resolution decision.
 3. Phase 3: regional high-resolution metrics against the hillslope and drainage
