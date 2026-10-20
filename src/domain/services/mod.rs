@@ -35,6 +35,7 @@ pub mod simulation_epoch;
 pub mod simulation_run;
 pub mod simulation_time;
 pub mod terrain_collision;
+pub mod terrain_metrics;
 pub mod terrain_overview;
 pub mod terrain_patch_manager;
 pub mod terrain_source;

@@ -22,7 +22,11 @@ mod simulate;
 mod source;
 mod store;
 
-pub use simulate::{carve_rivers, erode_tile, flow_accumulation, hydraulic_erode, thermal_erode};
+pub(crate) use simulate::d8_downstream_geographic;
+pub use simulate::{
+    carve_rivers, erode_tile, flow_accumulation, flow_accumulation_geographic, hydraulic_erode,
+    thermal_erode,
+};
 pub use source::{ErodedTerrainSource, ErosionTileError};
 pub use store::{tile_bytes, BaseProbe, ErosionTileStore, PROBE_LEN};
 

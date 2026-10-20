@@ -97,6 +97,11 @@ path = "src/bin/mola_megr_convert.rs"
 required-features = ["dem"]
 
 [[bin]]
+name = "terrain_metrics"
+path = "src/bin/terrain_metrics.rs"
+required-features = ["dem"]
+
+[[bin]]
 name = "imagery_convert"
 path = "src/bin/imagery_convert.rs"
 required-features = ["native"]

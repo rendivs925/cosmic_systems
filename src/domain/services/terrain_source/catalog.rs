@@ -42,9 +42,11 @@ pub const DEFAULT_EARTH_DEM_PATH: &str =
 pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT: &str =
     "assets/large_files/terrain/earth_elevation_pyramid";
 #[cfg(feature = "dem")]
-const DEFAULT_MOON_DEM_PATH: &str = "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";
+pub const DEFAULT_MOON_DEM_PATH: &str =
+    "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";
 #[cfg(feature = "dem")]
-const DEFAULT_MARS_DEM_PATH: &str = "assets/large_files/terrain/mars_mola_megr_32_cs2048_v2.csdem";
+pub const DEFAULT_MARS_DEM_PATH: &str =
+    "assets/large_files/terrain/mars_mola_megr_32_cs2048_v2.csdem";
 
 /// Deterministic seed for Earth's procedural detail contribution.
 #[cfg(feature = "dem")]

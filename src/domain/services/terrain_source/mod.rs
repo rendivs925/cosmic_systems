@@ -33,8 +33,8 @@ pub use catalog::EarthTerrainSource;
 pub use catalog::{
     earth_eroded_base, earth_erosion_config, erosion_store, EarthTerrainDataError,
     MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
-    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EROSION_CACHE_MAX_BYTES,
-    EARTH_EROSION_NAMESPACE,
+    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EROSION_CACHE_MAX_BYTES, DEFAULT_MARS_DEM_PATH,
+    DEFAULT_MOON_DEM_PATH, EARTH_EROSION_NAMESPACE,
 };
 pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
 pub use noise::ValueNoise;
@@ -284,6 +284,7 @@ mod tests {
     use super::*;
     #[cfg(feature = "dem")]
     use crate::domain::services::dem_terrain_source::{CubeSphereDem, DemTerrainSource};
+    use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
     #[cfg(feature = "dem")]
     use crate::domain::services::planet_factory::PlanetFactory;
     #[cfg(feature = "dem")]
@@ -638,8 +639,6 @@ mod tests {
 
     #[test]
     fn composed_layered_authority_consumes_the_eroded_field() {
-        use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig};
-
         let base = Arc::new(ProceduralTerrainSource::new(7, 2_000.0, 1_200.0, 0));
         let cfg = ErosionConfig {
             resolution: 16,

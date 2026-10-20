@@ -5,6 +5,8 @@
 use super::{ErosionConfig, HeightRaster};
 use crate::domain::services::terrain_source::TerrainSource;
 use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 thread_local! {
     // Flow routing is temporary tile-build state. Reusing it per worker avoids
@@ -69,9 +71,23 @@ impl GridSpacing {
         lon_max: f64,
         rows: usize,
     ) -> Self {
+        Self::from_grid(lat_min, lat_max, lon_min, lon_max, rows, rows)
+    }
+
+    /// Spacing for a non-square geographic raster such as the global
+    /// measurement grid (tiles are conventionally square).
+    pub(super) fn from_grid(
+        lat_min: f64,
+        lat_max: f64,
+        lon_min: f64,
+        lon_max: f64,
+        rows: usize,
+        columns: usize,
+    ) -> Self {
         let row_count = rows.max(2);
+        let column_count = columns.max(2);
         let north_south_m = ((lat_max - lat_min) / (row_count - 1) as f64).abs() * 111_320.0;
-        let longitude_step_deg = ((lon_max - lon_min) / (row_count - 1) as f64).abs();
+        let longitude_step_deg = ((lon_max - lon_min) / (column_count - 1) as f64).abs();
         let east_west_m = (0..rows)
             .map(|y| {
                 let lat = lat_min + (lat_max - lat_min) * y as f64 / (row_count - 1) as f64;
@@ -286,6 +302,49 @@ pub fn flow_accumulation(h: &[f32], w: usize, hgt: usize) -> Vec<f32> {
     flow_accumulation_with_spacing(h, w, hgt, &spacing)
 }
 
+/// D8 flow accumulation on a geographic sample grid.
+///
+/// `lat_min`/`lat_max` and `lon_min`/`lon_max` are the first and last
+/// **sample-center** coordinates, not the raster edges. Callers therefore pass
+/// a grid spaced by one cell width rather than the tile bounds. The shared
+/// [`GridSpacing::from_grid`] spacing keeps this measurement path consistent
+/// with the authoritative erosion routing.
+pub fn flow_accumulation_geographic(
+    h: &[f32],
+    w: usize,
+    hgt: usize,
+    lat_min: f64,
+    lat_max: f64,
+    lon_min: f64,
+    lon_max: f64,
+) -> Vec<f32> {
+    let spacing = GridSpacing::from_grid(lat_min, lat_max, lon_min, lon_max, hgt, w);
+    flow_accumulation_with_spacing(h, w, hgt, &spacing)
+}
+
+/// Downstream D8 neighbour and its distance in metres for every cell on a
+/// geographic sample grid. Bounds follow
+/// [`flow_accumulation_geographic`]. Measurement code uses this to recover
+/// channel slopes, basin lengths, and Strahler order without duplicating the
+/// authoritative D8 tie-breaking rules.
+pub(crate) fn d8_downstream_geographic(
+    h: &[f32],
+    w: usize,
+    hgt: usize,
+    lat_min: f64,
+    lat_max: f64,
+    lon_min: f64,
+    lon_max: f64,
+) -> Vec<Option<(usize, f64)>> {
+    let spacing = GridSpacing::from_grid(lat_min, lat_max, lon_min, lon_max, hgt, w);
+    (0..w * hgt)
+        .map(|index| {
+            steepest_downhill_with_spacing(index % w, index / w, h, w, hgt, &spacing)
+                .map(|(downstream, _, distance_m)| (downstream, distance_m))
+        })
+        .collect()
+}
+
 fn flow_accumulation_with_spacing(
     h: &[f32],
     w: usize,
@@ -335,9 +394,6 @@ pub fn carve_rivers(
 /// of frame rate. This is the standing-water analogue of the D8 flow field: it
 /// designates where water ponds, it does not simulate it over time.
 pub(super) fn depression_fill(h: &[f32], w: usize, hgt: usize) -> Vec<f32> {
-    use std::cmp::Ordering;
-    use std::collections::BinaryHeap;
-
     #[derive(PartialEq)]
     struct Node {
         height: f32,
