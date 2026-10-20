@@ -95,8 +95,9 @@ pub fn weather_map(seed: u64) -> Vec<u8> {
 }
 
 // Number of Perlin/Worley cells across the base volume. Low enough that a single
-// volume tile reads as large cloud masses when the renderer samples it.
-const BASE_PERLIN_CELLS: usize = 4;
+// volume tile reads as large cloud masses when the renderer samples it, high
+// enough to break the deck into distinct billows.
+const BASE_PERLIN_CELLS: usize = 6;
 const DETAIL_WORLEY_CELLS: usize = 8;
 
 const PERLIN_SALT: u64 = 0x1F1E_2D3C_4B5A_6978;

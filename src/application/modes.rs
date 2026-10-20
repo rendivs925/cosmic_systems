@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FormatterResult};
+
 /// Application run modes selectable from the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -23,8 +26,8 @@ pub enum LaunchOptionError {
     UnknownArgument(String),
 }
 
-impl std::fmt::Display for LaunchOptionError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for LaunchOptionError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FormatterResult {
         match self {
             Self::MissingVehicleValue => formatter.write_str("--vehicle requires a vehicle key"),
             Self::UnknownArgument(argument) => {
@@ -34,7 +37,7 @@ impl std::fmt::Display for LaunchOptionError {
     }
 }
 
-impl std::error::Error for LaunchOptionError {}
+impl Error for LaunchOptionError {}
 
 impl Mode {
     /// Parse the run mode from command-line arguments.

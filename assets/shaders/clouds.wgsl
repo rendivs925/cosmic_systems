@@ -15,7 +15,7 @@
 #define_import_path cosmic_systems::clouds
 
 #import bevy_pbr::mesh_view_bindings::view
-#import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}
+#import bevy_pbr::forward_io::VertexOutput
 
 // Field order and types must match `CloudParams` in rendering/materials.rs.
 struct CloudParams {
@@ -56,6 +56,21 @@ struct CloudParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var weather_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var weather_map_sampler: sampler;
 
+// The cloud dome is a camera-anchored proxy at a fixed radius, but the clouds
+// themselves sit on a planet-centred shell whose distance varies from a few km
+// (on the ground) to tens of km (at altitude). Writing the true shell-entry
+// distance as the fragment depth lets the depth test place the cloud ahead of
+// the terrain instead of the proxy's fixed radius doing so.
+struct CloudFragmentOutput {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
+fn clip_depth(world_point: vec3<f32>) -> f32 {
+    let clip = view.clip_from_world * vec4<f32>(world_point, 1.0);
+    return clip.z / clip.w;
+}
+
 const PI: f32 = 3.141592653589793;
 // Hard upper bounds keep the loop trip counts statically bounded; the actual
 // counts come from the quality uniform and may be lower.
@@ -71,10 +86,11 @@ fn remap(v: f32, l1: f32, h1: f32, l2: f32, h2: f32) -> f32 {
     return l2 + (v - l1) / max(h1 - l1, 1e-6) * (h2 - l2);
 }
 
-fn hash12(p: vec2<f32>) -> f32 {
-    var q = fract(p * vec2<f32>(0.1031, 0.1030));
-    q += dot(q, q.yx + 33.33);
-    return fract((q.x + q.y) * q.x);
+// Interleaved gradient noise (Jimenez): a cheap, well-distributed per-pixel
+// dither. Far less grainy than a white-noise hash at these step counts, so it
+// breaks ray-march banding without turning the deck into static.
+fn interleaved_gradient_noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
 }
 
 // Positive near/far intersection distances, or a negative pair on a miss.
@@ -208,8 +224,9 @@ fn march_to_sun(body_pos: vec3<f32>, cos_theta: f32) -> f32 {
 }
 
 @fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
-    var out: FragmentOutput;
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFragmentOutput {
+    var out: CloudFragmentOutput;
+    out.depth = 1.0;
 
     let camera_world = view.world_position;
     let ray_dir = normalize(in.world_position.xyz - camera_world);
@@ -243,6 +260,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return out;
     }
+    // Place the cloud at its true shell-entry depth for the depth test.
+    out.depth = clip_depth(camera_world + ray_dir * segment_start);
 
     let cos_theta = dot(ray_dir, clouds.sun_direction);
     let phase = triple_lobe_phase(cos_theta, clouds.forward_g);
@@ -251,7 +270,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let step_size = (segment_end - segment_start) / steps;
     // Mild per-pixel dither (amplitude < a full step) breaks banding without
     // the static that full white-noise jitter produces at these step counts.
-    let jitter = 0.5 + (hash12(in.position.xy) - 0.5) * 0.4;
+    let jitter = interleaved_gradient_noise(in.position.xy);
     var t = segment_start + step_size * jitter;
     var transmittance = 1.0;
     var in_scatter = vec3<f32>(0.0);
