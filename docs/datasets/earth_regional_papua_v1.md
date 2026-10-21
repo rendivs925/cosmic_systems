@@ -96,8 +96,8 @@ Runtime composition accepts several package roots through
 `TileElevationSource::from_manifest_roots`. Roots are ordered: the finest tile
 level wins, and a later root wins at an identical patch address. Decoded tiles
 share one bounded LRU. The default root list composes
-`earth_elevation_pyramid`, `earth_elevation_pyramid_ksc`, and
-`earth_elevation_pyramid_starbase`. Source rasters and the baked package remain
+`earth_elevation_pyramid`, `earth_elevation_pyramid_ksc`,
+`earth_elevation_pyramid_starbase`, and `earth_elevation_pyramid_vandenberg`. Source rasters and the baked package remain
 under gitignored `assets/large_files/`.
 
 ## Validation

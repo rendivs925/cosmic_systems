@@ -482,14 +482,16 @@ mod tests {
             std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_ksc");
         let starbase_root =
             std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_starbase");
-        if !ksc_root.exists() || !starbase_root.exists() {
+        let vandenberg_root =
+            std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_vandenberg");
+        if !ksc_root.exists() || !starbase_root.exists() || !vandenberg_root.exists() {
             return;
         }
         let source = EarthTerrainSource::new();
         let tiles = source
             .elevation_tile_source()
             .expect("default Earth source must expose composed payloads");
-        assert!(tiles.package_count() >= 3);
+        assert!(tiles.package_count() >= 4);
         let regions = tiles.coverage_regions();
         assert!(regions
             .iter()
@@ -531,6 +533,24 @@ mod tests {
         assert!(
             (height_m - -22.475).abs() < 0.5,
             "Starbase payload height {height_m} should match the verified probe"
+        );
+
+        let direction = crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(
+            34.7420, -120.5720,
+        );
+        let metadata = tiles
+            .covering_tile_for_direction(direction)
+            .expect("Vandenberg package must cover its site");
+        let bytes = std::fs::read(vandenberg_root.join(&metadata.payload_path))
+            .expect("Vandenberg payload tile must exist");
+        tiles.install_tile(
+            crate::domain::services::elevation_pyramid::ElevationTile::from_bytes(&bytes)
+                .expect("Vandenberg payload tile must decode"),
+        );
+        let height_m = tiles.height_m(34.7420, -120.5720);
+        assert!(
+            (height_m - 68.138).abs() < 0.5,
+            "Vandenberg payload height {height_m} should match the verified probe"
         );
     }
 

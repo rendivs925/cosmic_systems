@@ -89,5 +89,32 @@
                 ),
             ],
         ),
+        (
+            id: "vandenberg_california",
+            body: "Earth",
+            bounds: (
+                west_deg: -120.75,
+                south_deg: 34.60,
+                east_deg: -120.45,
+                north_deg: 34.85,
+            ),
+            min_level: 9,
+            max_level: 12,
+            tile_resolution: 64,
+            geoid_grid: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
+            source_name: "NASADEM_HGT v001, N34W121, 1 arc-second bare-earth",
+            license: "Public domain (NASA/NASADEM)",
+            vertical_datum: "WGS 84 ellipsoid / EPSG:4979",
+            resolution_m: 30.0,
+            sources: [
+                (
+                    path: "assets/large_files/terrain/raw/nasadem/NASADEM_HGT_n34w121.tif",
+                    sha256: "be9c3388c9ed196c23f6fcf473cf5ec7c978da569f79b60046590ee640e79e7e",
+                    west_deg: -121.0,
+                    north_deg: 35.0,
+                    pixel_deg: 0.0002777777777777778,
+                ),
+            ],
+        ),
     ],
 )

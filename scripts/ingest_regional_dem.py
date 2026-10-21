@@ -40,6 +40,12 @@ REGIONS = {
             "NASADEM_HGT_n25w098.tif": "2b0d248e76634623e77add69b577898f3ed1ff6d3aa922b4a60b2179199de3c4",
         },
     },
+    "vandenberg_california": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_n34w121.tif": "be9c3388c9ed196c23f6fcf473cf5ec7c978da569f79b60046590ee640e79e7e",
+        },
+    },
 }
 
 

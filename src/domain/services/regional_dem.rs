@@ -402,6 +402,12 @@ mod tests {
             .expect("Starbase region");
         assert_eq!(starbase.bounds.west_deg, -97.30);
         assert_eq!(starbase.sources[0].north_deg, 26.0);
+
+        let vandenberg = config
+            .region("vandenberg_california")
+            .expect("Vandenberg region");
+        assert_eq!(vandenberg.bounds.west_deg, -120.75);
+        assert_eq!(vandenberg.sources[0].north_deg, 35.0);
     }
 
     #[test]
