@@ -30,6 +30,7 @@ tokio = { version = "1.0", features = ["rt", "macros", "io-util", "time"] }  # A
 bevy_mesh = "0.17.3"
 bevy_asset = "0.17.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
+tiff = "0.11"            # Signed i16 GeoTIFF decoding for regional DEM ingest
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 console_error_panic_hook = "0.1"
@@ -89,6 +90,11 @@ required-features = ["dem"]
 [[bin]]
 name = "terrain_site_delta"
 path = "src/bin/terrain_site_delta.rs"
+required-features = ["dem"]
+
+[[bin]]
+name = "regional_dem_bake"
+path = "src/bin/regional_dem_bake.rs"
 required-features = ["dem"]
 
 [[bin]]

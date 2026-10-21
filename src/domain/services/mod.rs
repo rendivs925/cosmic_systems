@@ -27,6 +27,8 @@ pub mod physics_utils;
 pub mod planet_factory;
 pub mod recovery;
 pub mod reference_frames;
+#[cfg(feature = "dem")]
+pub mod regional_dem;
 pub mod regression;
 pub mod rocket_dynamics;
 pub mod rocket_propulsion;

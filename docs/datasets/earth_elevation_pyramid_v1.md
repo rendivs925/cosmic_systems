@@ -34,6 +34,7 @@ A package is a directory containing a manifest and its tile payloads:
 <package>/
     manifest.ron
     tiles/<face>/<level>/<x>_<y>.cstile
+    regions/<region-id>/tiles/<face>/<level>/<x>_<y>.cstile
 ```
 
 - `<face>` is the cube-sphere face name; `<level>`, `<x>`, and `<y>` are the
@@ -43,6 +44,11 @@ A package is a directory containing a manifest and its tile payloads:
 - The manifest is RON (`ElevationPyramidManifest`).
 - Large generated packages are not checked in; they live under the ignored
   `assets/large_files/terrain/` path.
+- The active root is
+  `assets/large_files/terrain/earth_elevation_pyramid`. Its first sparse
+  regional package is the Papua coastal lowland NASADEM payload described in
+  `earth_regional_papua_v1.md`. Until multi-root composition lands, one region
+  owns this root.
 
 ## Manifest
 

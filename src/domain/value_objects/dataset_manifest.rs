@@ -431,18 +431,26 @@ mod tests {
     fn layer_and_region_filters_select_ready_entries() {
         let registry = registry();
         let dems: Vec<_> = registry.selected(Some(DatasetLayer::Dem), None).collect();
-        assert_eq!(dems.len(), 2);
+        assert_eq!(dems.len(), 3);
         assert!(dems
             .iter()
             .any(|entry| entry.id == "earth_etopo1_ice_surface"));
         assert!(dems
             .iter()
             .any(|entry| entry.id == "earth_etopo2022_30s_ice_surface"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_papua"));
         let papua: Vec<_> = registry
             .selected(None, Some("papua_coastal_lowland"))
             .collect();
-        assert_eq!(papua.len(), 1);
-        assert_eq!(papua[0].id, "earth_imagery_sentinel2_papua");
+        assert_eq!(papua.len(), 2);
+        assert!(papua
+            .iter()
+            .any(|entry| entry.id == "earth_imagery_sentinel2_papua"));
+        assert!(papua
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_papua"));
     }
 
     #[test]

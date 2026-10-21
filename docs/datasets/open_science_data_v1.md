@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 2 ETOPO 2022 authority, validated.
+Status: Phase 3 Papua regional package, validated.
 
 Date: 2026-10-21.
 
@@ -55,6 +55,7 @@ checksum but are not required at runtime.
 | `earth_etopo2022_30s_ice_surface` | Dem | global | 30 arc-second (~927 m) | Public domain (NOAA/NCEI) | `etopo2022_convert` |
 | `earth_etopo1_ice_surface` | Dem | global | 1 arc-minute (~1.85 km) | Public domain (NOAA/NCEI) | `etopo1_convert` |
 | `earth_imagery_blue_marble_global` | Imagery | global | 2 km source, 8192x4096 runtime | Public domain (NASA) | `imagery_convert` |
+| `earth_regional_dem_papua` | Dem | 139.0..140.0E, 8.6..7.4S | 30 m | Public domain (NASA/NASADEM) | `regional_dem_bake` |
 | `earth_imagery_sentinel2_papua` | Imagery | 139.0..140.0E, 8.6..7.4S | 10 m | Copernicus Sentinel Data (attribution) | `imagery_convert` |
 
 Details:
@@ -75,6 +76,13 @@ Details:
   runtime SHA-256
   `5402d634be8c4ac3897eab53c3f60ee213000752f26bb426ba9c22fdafe60c83`.
   See `docs/datasets/earth_etopo1_ice_surface_v1.md`.
+- Papua regional NASADEM: 1 arc-second bare-earth over `139..140E`,
+  `8.6..7.4S`, EGM96 heights corrected with the runtime EGM2008 geoid.
+  Combined source SHA-256
+  `1d353269f0710334541f4404eafc4c3d7531f242bcd45873bef9fd7779455625`;
+  aggregate runtime SHA-256
+  `74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784`.
+  See `docs/datasets/earth_regional_papua_v1.md`.
 - Blue Marble: August 2004 global composite with topography and bathymetry,
   WGS 84 geographic, presentation albedo only.
 - Sentinel-2 L2A TCI: 2026-08-22, MGRS 54LTR/54LUR/54MTS/54MUS, reprojected
@@ -88,7 +96,7 @@ same provenance and checksum gate before use.
 
 | Dataset | Layer | Role | Resolution | License / attribution | Phase |
 | --- | --- | --- | --- | --- | --- |
-| NASADEM / SRTM | Dem | regional bare earth | 30 m | NASA/USGS, public domain | 3 |
+| SRTM GL1 (remaining regions) | Dem | regional bare earth | 30 m | NASA/USGS, public domain | 3 |
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
 | JRC Global Surface Water | Water | lakes and surface-water occurrence | 30 m monthly | EC JRC, attribution required | 3 |
@@ -131,12 +139,12 @@ python3 scripts/ingest_egm2008_geoid.py
 cargo run --features dem --bin preprocess -- --layer dem --check
 ```
 
-Phase 3 (planned):
+Phase 3 Papua (implemented):
 
 ```sh
-python3 scripts/ingest_regional_dem.py --region ksc --source nasadem
-cargo run --release --features dem --bin regional_dem_bake -- --region ksc
-cargo run --features dem --bin preprocess -- --region ksc --check
+python3 scripts/ingest_regional_dem.py --region papua_coastal_lowland
+cargo run --release --features dem --bin regional_dem_bake -- --region papua_coastal_lowland
+cargo run --features dem --bin preprocess -- --region papua_coastal_lowland --check
 ```
 
 ## Acceptance

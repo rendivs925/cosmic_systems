@@ -8,7 +8,7 @@
 //! and samples installed tiles only, so collision, radar altitude, and physics
 //! never load, decode, or block on a payload.
 
-use super::cube_sphere::{face_uv, PatchGeometricError, TerrainPatch};
+use super::cube_sphere::{face_uv, CubeFace, PatchGeometricError, TerrainPatch};
 use super::terrain_source::{ElevationBounds, TerrainSource};
 use crate::domain::math::DVec3;
 use serde::{Deserialize, Serialize};
@@ -169,15 +169,13 @@ impl ElevationPyramidManifest {
 
     /// Conservative global elevation interval across all declared tiles.
     pub fn global_bounds(&self) -> ElevationBounds {
-        self.tiles.iter().fold(
-            ElevationBounds::new(f64::INFINITY, f64::NEG_INFINITY),
-            |bounds, tile| {
-                ElevationBounds::new(
-                    bounds.min_m.min(tile.min_elevation_m),
-                    bounds.max_m.max(tile.max_elevation_m),
-                )
-            },
-        )
+        let mut min_m = f64::INFINITY;
+        let mut max_m = f64::NEG_INFINITY;
+        for tile in &self.tiles {
+            min_m = min_m.min(tile.min_elevation_m);
+            max_m = max_m.max(tile.max_elevation_m);
+        }
+        ElevationBounds::new(min_m, max_m)
     }
 
     /// The finest declared tile that covers `patch`, including the patch itself.
@@ -415,6 +413,72 @@ fn face_from_index(index: u32) -> Result<super::cube_sphere::CubeFace, Elevation
         .get(index as usize)
         .copied()
         .ok_or_else(|| ElevationPyramidError::InvalidFormat("invalid cube face index".into()))
+}
+
+/// Sample one patch as a `resolution * resolution` face-UV grid with shared
+/// edges. `sample_m` receives the face and UV of each sample; callers own the
+/// source accessor (a resident CSDEM or a regional raster).
+pub fn sample_elevation_tile<F>(
+    patch: TerrainPatch,
+    resolution: u32,
+    mut sample_m: F,
+) -> Result<ElevationTile, ElevationPyramidError>
+where
+    F: FnMut(CubeFace, f64, f64) -> f64,
+{
+    if resolution < 2 {
+        return Err(ElevationPyramidError::InvalidFormat(
+            "elevation tile resolution must be at least 2".into(),
+        ));
+    }
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    let last = f64::from(resolution - 1);
+    let mut samples = Vec::with_capacity((resolution as usize) * (resolution as usize));
+    let mut min_elevation_m = f64::INFINITY;
+    let mut max_elevation_m = f64::NEG_INFINITY;
+    for row in 0..resolution {
+        let v = v0 + (v1 - v0) * (f64::from(row) / last);
+        for column in 0..resolution {
+            let u = u0 + (u1 - u0) * (f64::from(column) / last);
+            let sample = sample_m(patch.face, u, v) as f32;
+            samples.push(sample);
+            min_elevation_m = min_elevation_m.min(f64::from(sample));
+            max_elevation_m = max_elevation_m.max(f64::from(sample));
+        }
+    }
+    let geometric_error_m = (max_elevation_m - min_elevation_m).max(0.0);
+    ElevationTile::from_samples(
+        patch,
+        resolution,
+        resolution,
+        min_elevation_m,
+        max_elevation_m,
+        geometric_error_m,
+        samples,
+    )
+}
+
+/// Stable package-relative payload path for a tile.
+pub fn elevation_tile_relative_path(patch: TerrainPatch) -> String {
+    format!(
+        "tiles/{}/{}/{}_{}.cstile",
+        elevation_face_directory(patch.face),
+        patch.level,
+        patch.tile_x,
+        patch.tile_y
+    )
+}
+
+/// Stable directory name for a cube face in a payload package.
+pub fn elevation_face_directory(face: CubeFace) -> &'static str {
+    match face {
+        CubeFace::PosX => "pos_x",
+        CubeFace::NegX => "neg_x",
+        CubeFace::PosY => "pos_y",
+        CubeFace::NegY => "neg_y",
+        CubeFace::PosZ => "pos_z",
+        CubeFace::NegZ => "neg_z",
+    }
 }
 
 /// Bounded, deterministic LRU of decoded elevation tiles. The vector is the

@@ -17,7 +17,8 @@ use std::process::ExitCode;
 use cosmic_systems_wasm::domain::services::cube_sphere::{CubeFace, TerrainPatch};
 use cosmic_systems_wasm::domain::services::dem_terrain_source::{CubeSphereDem, DemError};
 use cosmic_systems_wasm::domain::services::elevation_pyramid::{
-    ElevationPyramidError, ElevationPyramidManifest, ElevationTile, ElevationTileMetadata,
+    elevation_face_directory, elevation_tile_relative_path, sample_elevation_tile,
+    ElevationPyramidError, ElevationPyramidManifest, ElevationTileMetadata,
     ELEVATION_PYRAMID_FORMAT_VERSION,
 };
 use sha2::{Digest, Sha256};
@@ -202,7 +203,7 @@ fn convert_dem(
         for face in CubeFace::ALL {
             let face_dir = output_dir
                 .join("tiles")
-                .join(face_directory(face))
+                .join(elevation_face_directory(face))
                 .join(level.to_string());
             fs::create_dir_all(&face_dir)?;
             for tile_y in 0..span {
@@ -213,8 +214,11 @@ fn convert_dem(
                         tile_x: tile_x as u32,
                         tile_y: tile_y as u32,
                     };
-                    let tile = sample_tile(dem, patch, options.tile_resolution)?;
-                    let payload_path = tile_relative_path(patch);
+                    let tile =
+                        sample_elevation_tile(patch, options.tile_resolution, |face, u, v| {
+                            dem.sample_face_m(face, u, v)
+                        })?;
+                    let payload_path = elevation_tile_relative_path(patch);
                     let bytes = tile.to_bytes();
                     fs::write(output_dir.join(&payload_path), &bytes)?;
                     let mut metadata = tile.metadata(payload_path);
@@ -240,71 +244,6 @@ fn convert_dem(
     };
     manifest.validate()?;
     Ok(manifest)
-}
-
-/// Sample one patch as a `resolution * resolution` face-UV grid with shared
-/// edges (both endpoints of each axis are included), so adjacent tiles agree on
-/// their seam samples.
-fn sample_tile(
-    dem: &CubeSphereDem,
-    patch: TerrainPatch,
-    resolution: u32,
-) -> Result<ElevationTile, ConvertError> {
-    let (u0, v0, u1, v1) = patch.uv_bounds();
-    let last = f64::from(resolution - 1);
-    let mut samples_m = Vec::with_capacity((resolution as usize) * (resolution as usize));
-    let mut min_elevation_m = f64::INFINITY;
-    let mut max_elevation_m = f64::NEG_INFINITY;
-    for row in 0..resolution {
-        let v = v0 + (v1 - v0) * (f64::from(row) / last);
-        for column in 0..resolution {
-            let u = u0 + (u1 - u0) * (f64::from(column) / last);
-            // Bounds are tracked over the stored f32 samples so the declared
-            // interval always contains the decoded payload exactly.
-            let sample_m = dem.sample_face_m(patch.face, u, v) as f32;
-            samples_m.push(sample_m);
-            min_elevation_m = min_elevation_m.min(f64::from(sample_m));
-            max_elevation_m = max_elevation_m.max(f64::from(sample_m));
-        }
-    }
-    // Conservative geometric error: the tile's full elevation range bounds how
-    // far its linear interpolant can deviate from the source inside the patch.
-    // This over-estimates smooth terrain deliberately, matching the existing
-    // `PatchGeometricError::from_elevation_bounds` convention.
-    let geometric_error_m = (max_elevation_m - min_elevation_m).max(0.0);
-    ElevationTile::from_samples(
-        patch,
-        resolution,
-        resolution,
-        min_elevation_m,
-        max_elevation_m,
-        geometric_error_m,
-        samples_m,
-    )
-    .map_err(ConvertError::from)
-}
-
-/// Tile payload path relative to the package root, e.g.
-/// `tiles/pos_z/3/2_5.cstile`.
-fn tile_relative_path(patch: TerrainPatch) -> String {
-    format!(
-        "tiles/{}/{}/{}_{}.cstile",
-        face_directory(patch.face),
-        patch.level,
-        patch.tile_x,
-        patch.tile_y
-    )
-}
-
-fn face_directory(face: CubeFace) -> &'static str {
-    match face {
-        CubeFace::PosX => "pos_x",
-        CubeFace::NegX => "neg_x",
-        CubeFace::PosY => "pos_y",
-        CubeFace::NegY => "neg_y",
-        CubeFace::PosZ => "pos_z",
-        CubeFace::NegZ => "neg_z",
-    }
 }
 
 /// Approximate source ground sample distance: the cube-face arc length divided
@@ -371,8 +310,10 @@ mod tests {
             tile_x: 1,
             tile_y: 0,
         };
-        let first = sample_tile(&dem, patch, 4).expect("first tile");
-        let second = sample_tile(&dem, patch, 4).expect("second tile");
+        let first = sample_elevation_tile(patch, 4, |face, u, v| dem.sample_face_m(face, u, v))
+            .expect("first tile");
+        let second = sample_elevation_tile(patch, 4, |face, u, v| dem.sample_face_m(face, u, v))
+            .expect("second tile");
 
         assert_eq!(first.patch(), patch);
         assert_eq!(first.to_bytes(), second.to_bytes());

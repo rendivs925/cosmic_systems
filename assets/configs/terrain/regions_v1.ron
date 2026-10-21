@@ -1,0 +1,39 @@
+(
+    version: 1,
+    regions: [
+        (
+            id: "papua_coastal_lowland",
+            body: "Earth",
+            bounds: (
+                west_deg: 139.0,
+                south_deg: -8.6,
+                east_deg: 140.0,
+                north_deg: -7.4,
+            ),
+            min_level: 9,
+            max_level: 12,
+            tile_resolution: 64,
+            geoid_grid: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
+            source_name: "NASADEM_HGT v001, S08E139 + S09E139, 1 arc-second bare-earth",
+            license: "Public domain (NASA/NASADEM)",
+            vertical_datum: "WGS 84 ellipsoid / EPSG:4979",
+            resolution_m: 30.0,
+            sources: [
+                (
+                    path: "assets/large_files/terrain/raw/nasadem/NASADEM_HGT_s08e139.tif",
+                    sha256: "32de0bb1cae25d5df1400827ccc1a65601d58b7241bf726e0a1ba169807798de",
+                    west_deg: 139.0,
+                    north_deg: -7.0,
+                    pixel_deg: 0.0002777777777777778,
+                ),
+                (
+                    path: "assets/large_files/terrain/raw/nasadem/NASADEM_HGT_s09e139.tif",
+                    sha256: "54abf0dfd106b450031ba7885ae00081e8242725ac329f952b9e73200f7fa306",
+                    west_deg: 139.0,
+                    north_deg: -8.0,
+                    pixel_deg: 0.0002777777777777778,
+                ),
+            ],
+        ),
+    ],
+)

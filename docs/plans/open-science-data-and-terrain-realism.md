@@ -1,6 +1,6 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan; Phases 0-2 implemented.
+Status: approved plan; Phases 0-2 implemented; Phase 3 Papua package implemented.
 
 Date: 2026-10-20.
 
@@ -126,6 +126,11 @@ runtime: validate -> stream/read baked assets only
 
 ## Phase 3 - Regional DEM packages
 
+Status: the Papua coastal lowland package is implemented and registered in
+`earth_datasets_v1.ron`. KSC/Florida and the remaining regions are pending; KSC
+still needs a valid NAVD88-to-WGS 84 control and the adjacent 3DEP coverage
+reviewed together.
+
 ### Deliverables
 
 - `scripts/ingest_regional_dem.py`: NASADEM/SRTM, USGS 3DEP, Copernicus GLO-30
@@ -134,8 +139,11 @@ runtime: validate -> stream/read baked assets only
   builder; emit `.cstile` packages.
 - `assets/configs/terrain/regions_v1.ron`: region IDs, bounds, priority, layer
   set.
-- Packages under `assets/large_files/terrain/regions/<id>/`: `manifest.ron`,
-  `tiles/`, imagery/surface/scatter links.
+- Region payloads under
+  `assets/large_files/terrain/earth_elevation_pyramid/regions/<id>/tiles/`,
+  indexed by the root `manifest.ron`; imagery links stay in
+  `earth_imagery_v1.ron`. The current runtime composes one payload root, so a
+  second region needs multi-root composition first.
 - KSC absolute-datum task: resolve NAVD88 to WGS 84 using valid NOAA/NGS
   control or surveyed benchmarks. Until resolved, 3DEP supplies relative relief
   only, anchored to the global EGM2008/WGS 84 height; never apply the invalid
