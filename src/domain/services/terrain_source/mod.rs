@@ -461,6 +461,18 @@ mod tests {
             missing,
             Err(EarthTerrainDataError::ElevationPyramid(_))
         ));
+
+        let missing_roots = EarthTerrainSource::with_dem_and_elevation_manifest_roots(
+            DEFAULT_EARTH_DEM_PATH,
+            [
+                "assets/large_files/terrain/missing_elevation_root_a",
+                "assets/large_files/terrain/missing_elevation_root_b",
+            ],
+        );
+        assert!(matches!(
+            missing_roots,
+            Err(EarthTerrainDataError::ElevationPyramid(_))
+        ));
     }
 
     #[cfg(feature = "dem")]

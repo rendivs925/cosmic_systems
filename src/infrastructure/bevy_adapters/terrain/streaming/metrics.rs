@@ -46,6 +46,8 @@ pub(super) struct TerrainStreamingMetrics {
     elevation_resident_tiles: usize,
     elevation_load_backlog: usize,
     elevation_fallback_rate: f64,
+    elevation_packages: usize,
+    elevation_regions: Vec<String>,
     imagery: ImageryMetrics,
 }
 
@@ -78,6 +80,12 @@ impl TerrainStreamingMetrics {
             .map_or(0, |source| source.resident_tile_count());
         let elevation_load_backlog =
             streaming.elevation_inflight.len() + streaming.elevation_pending.len();
+        let (elevation_packages, elevation_regions) = streaming
+            .elevation_source
+            .as_ref()
+            .map_or((0, Vec::new()), |source| {
+                (source.package_count(), source.coverage_regions())
+            });
         let elevation_fallback_rate = if streaming.elevation_covered_patches == 0 {
             0.0
         } else {
@@ -114,6 +122,8 @@ impl TerrainStreamingMetrics {
             elevation_resident_tiles,
             elevation_load_backlog,
             elevation_fallback_rate,
+            elevation_packages,
+            elevation_regions,
             imagery,
         }
     }
@@ -148,6 +158,8 @@ impl TerrainStreamingMetrics {
             elevation_resident_tiles = self.elevation_resident_tiles,
             elevation_load_backlog = self.elevation_load_backlog,
             elevation_fallback_rate = self.elevation_fallback_rate,
+            elevation_packages = self.elevation_packages,
+            elevation_regions = ?self.elevation_regions,
             imagery_resident_tiles = self.imagery.resident_tiles,
             imagery_pending_tiles = self.imagery.pending_tiles,
             imagery_resident_mib = self.imagery.resident_mib,

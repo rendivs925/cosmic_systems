@@ -72,15 +72,31 @@ cargo run --release --features dem --bin regional_dem_bake -- \
     --config assets/configs/terrain/regions_v1.ron \
     --root . \
     --output assets/large_files/terrain/earth_elevation_pyramid \
-    --verify --probe -8.0 139.5
+    --verify --bench-load --probe -8.0 139.5
 ```
 
 The baker verifies each source checksum, adds the geoid, discovers every
 cube-sphere patch intersecting the region, samples 64 x 64 shared-edge grids,
-and writes a deterministic manifest. `--verify` re-reads the manifest and checks
-coverage across the reviewed bounds; `--probe` decodes the covering tile and
-prints its composed height. The Papua probe returns 71.963 m at the presentation
-site (`-8.0, 139.5`). Source rasters and the baked package remain
+and writes a deterministic manifest. `--verify` re-reads the manifest, checks
+coverage across the reviewed bounds, and compares 12,000 independent points
+against the source. Papua acceptance is RMSE 0.109 m and max absolute error
+0.866 m, below the 1.0 m / 5.0 m gates. `--bench-load` measures manifest and
+tile decode latency; the current 128-tile run is 19.9 ms for the manifest and
+p95 0.020 ms per tile, below the 50 ms gate. `--probe` decodes the covering tile
+and prints its composed height; the presentation site (`-8.0, 139.5`) returns
+71.963 m.
+
+Rocket-mode metrics with the package active (`COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`)
+reach 93 resident payload tiles, zero fallback for requested coverage, and
+111.5 MiB resident geometry against the 160 MiB budget. Decoding runs on worker
+tasks; terrain queries sample resident data only.
+
+Runtime composition accepts several package roots through
+`EarthTerrainSource::with_dem_and_elevation_manifest_roots` and
+`TileElevationSource::from_manifest_roots`. Roots are ordered: the finest tile
+level wins, and a later root wins at an identical patch address. Decoded tiles
+share one bounded LRU. The default root list currently contains only
+`earth_elevation_pyramid`. Source rasters and the baked package remain
 under gitignored `assets/large_files/`.
 
 ## Validation

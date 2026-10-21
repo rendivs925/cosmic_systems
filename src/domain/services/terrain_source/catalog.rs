@@ -48,6 +48,13 @@ pub const DEFAULT_EARTH_GEOID_PATH: &str =
 #[cfg(feature = "dem")]
 pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT: &str =
     "assets/large_files/terrain/earth_elevation_pyramid";
+/// Default elevation package roots, composed in order. Later roots refine
+/// earlier ones at identical patch addresses. The current package keeps every
+/// reviewed region under one root; separate roots are supported for future
+/// independently versioned regional packages.
+#[cfg(feature = "dem")]
+pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS: &[&str] =
+    &[DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT];
 #[cfg(feature = "dem")]
 pub const DEFAULT_MOON_DEM_PATH: &str =
     "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";
@@ -245,8 +252,18 @@ impl EarthTerrainSource {
                 }),
             );
             let fallback = Arc::clone(&measured);
-            let root = Path::new(DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT);
-            Self::assemble(measured, Some(root)).unwrap_or_else(|_| Self {
+            let roots: Vec<PathBuf> = DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS
+                .iter()
+                .map(PathBuf::from)
+                .filter(|root| root.exists())
+                .collect();
+            if roots.is_empty() {
+                return Self {
+                    source: Arc::new(earth_layered_terrain(fallback)),
+                    tiles: None,
+                };
+            }
+            Self::assemble_roots(measured, &roots).unwrap_or_else(|_| Self {
                 source: Arc::new(earth_layered_terrain(fallback)),
                 tiles: None,
             })
@@ -302,6 +319,27 @@ impl EarthTerrainSource {
         Self::assemble(base, Some(manifest_root.as_ref()))
     }
 
+    /// Construct Earth terrain from a validated CSDEM plus several elevation
+    /// package roots. Roots are composed in order; later roots refine earlier
+    /// ones at identical patch addresses. Unlike [`Self::new`], an invalid or
+    /// missing package is an error.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_and_elevation_manifest_roots<I, P>(
+        global_dem_path: impl AsRef<Path>,
+        manifest_roots: I,
+    ) -> Result<Self, EarthTerrainDataError>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path(global_dem_path)?);
+        let roots: Vec<PathBuf> = manifest_roots
+            .into_iter()
+            .map(|root| root.as_ref().to_path_buf())
+            .collect();
+        Self::assemble_roots(base, &roots)
+    }
+
     /// Build the single authority from a measured global source and an optional
     /// payload package root. The payload, when present, sits over the measured
     /// base; the resident CSDEM remains authoritative where no payload tile is
@@ -311,20 +349,30 @@ impl EarthTerrainSource {
         measured_global: Arc<dyn TerrainSource>,
         manifest_root: Option<&Path>,
     ) -> Result<Self, EarthTerrainDataError> {
-        let (global, tiles) = match manifest_root {
-            Some(root) => {
-                let tiles = Arc::new(TileElevationSource::from_manifest_root(
-                    measured_global,
-                    root,
-                    DEFAULT_ELEVATION_TILE_CAPACITY,
-                )?);
-                (Arc::clone(&tiles) as Arc<dyn TerrainSource>, Some(tiles))
-            }
-            None => (measured_global, None),
-        };
+        match manifest_root {
+            Some(root) => Self::assemble_roots(measured_global, &[root.to_path_buf()]),
+            None => Ok(Self {
+                source: Arc::new(earth_layered_terrain(measured_global)),
+                tiles: None,
+            }),
+        }
+    }
+
+    #[cfg(feature = "dem")]
+    fn assemble_roots(
+        measured_global: Arc<dyn TerrainSource>,
+        manifest_roots: &[PathBuf],
+    ) -> Result<Self, EarthTerrainDataError> {
+        let tiles = Arc::new(TileElevationSource::from_manifest_roots(
+            measured_global,
+            manifest_roots,
+            DEFAULT_ELEVATION_TILE_CAPACITY,
+        )?);
         Ok(Self {
-            source: Arc::new(earth_layered_terrain(global)),
-            tiles,
+            source: Arc::new(earth_layered_terrain(
+                Arc::clone(&tiles) as Arc<dyn TerrainSource>
+            )),
+            tiles: Some(tiles),
         })
     }
 }

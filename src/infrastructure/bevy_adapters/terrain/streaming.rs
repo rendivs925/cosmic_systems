@@ -946,7 +946,16 @@ pub(crate) fn stream_terrain_patches(
     }
     let task_admission_started = instrumentation_enabled.then(Instant::now);
     let task_pool = AsyncComputeTaskPool::get();
-    let generation_limit = generation_capacity(task_pool.thread_num(), streaming.inflight.len());
+    // Reserve one worker while payload coverage is still incomplete, otherwise
+    // continuous geometry bakes keep every worker busy and the regional DEM is
+    // never sampled. The reservation ends once requested coverage is resident.
+    let reserve_elevation_worker = streaming.elevation_source.is_some()
+        && (!streaming.elevation_inflight.is_empty()
+            || streaming.elevation_covered_patches > streaming.elevation_resident_patches);
+    let geometry_workers = task_pool
+        .thread_num()
+        .saturating_sub(usize::from(reserve_elevation_worker));
+    let generation_limit = generation_capacity(geometry_workers, streaming.inflight.len());
     let batch = generation_batch(
         &generation_order,
         &streaming.manager,
@@ -1049,11 +1058,11 @@ pub(crate) fn stream_terrain_patches(
             .filter(|tile| !streaming.elevation_inflight.contains_key(tile))
             .collect();
         let ordered = prioritize_elevation_requests(&streaming.elevation_pending, focus_direction);
-        let capacity = generation_capacity(
+        let capacity = elevation_capacity(
             task_pool.thread_num(),
-            streaming.inflight.len() + streaming.elevation_inflight.len(),
-        )
-        .min(MAX_ELEVATION_TILES_PER_FRAME);
+            streaming.inflight.len(),
+            streaming.elevation_inflight.len(),
+        );
         for patch in ordered.into_iter().take(capacity) {
             let Some(path) = source.resolved_payload_path(&patch) else {
                 continue;
@@ -1196,6 +1205,27 @@ fn generation_capacity(worker_count: usize, inflight_count: usize) -> usize {
     worker_count
         .saturating_sub(inflight_count)
         .min(MAX_TERRAIN_TASKS_PER_FRAME)
+}
+
+/// Admit payload decodes without letting continuous geometry bakes starve them
+/// forever. Geometry keeps priority while a worker is free, but when the pool is
+/// saturated one decode may queue if none is already in flight. That bounds
+/// elevation in-flight work to one until capacity opens, rather than adding one
+/// job every frame.
+fn elevation_capacity(
+    worker_count: usize,
+    geometry_inflight: usize,
+    elevation_inflight: usize,
+) -> usize {
+    let workers = worker_count.max(1);
+    let available = workers.saturating_sub(geometry_inflight + elevation_inflight);
+    if available > 0 {
+        available.min(MAX_ELEVATION_TILES_PER_FRAME)
+    } else if elevation_inflight == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 fn patch_needs_geometry(state: Option<PatchState>, has_geometry: bool) -> bool {
@@ -2497,6 +2527,17 @@ mod tests {
         assert_eq!(generation_capacity(8, 6), 2);
         assert_eq!(generation_capacity(8, 3), 5);
         assert_eq!(generation_capacity(64, 0), MAX_TERRAIN_TASKS_PER_FRAME);
+    }
+
+    #[test]
+    fn elevation_capacity_reserves_one_decode_when_geometry_saturates() {
+        assert_eq!(elevation_capacity(8, 0, 0), MAX_ELEVATION_TILES_PER_FRAME);
+        assert_eq!(elevation_capacity(8, 2, 1), MAX_ELEVATION_TILES_PER_FRAME);
+        assert_eq!(elevation_capacity(8, 7, 0), 1);
+        assert_eq!(elevation_capacity(8, 8, 0), 1);
+        assert_eq!(elevation_capacity(8, 8, 1), 0);
+        assert_eq!(elevation_capacity(1, 0, 0), 1);
+        assert_eq!(elevation_capacity(0, 0, 0), 1);
     }
 
     #[test]

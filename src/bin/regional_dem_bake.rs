@@ -14,6 +14,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use cosmic_systems_wasm::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, TerrainPatch,
@@ -40,6 +41,11 @@ const DEFAULT_OUTPUT: &str = "assets/large_files/terrain/earth_elevation_pyramid
 const PATCH_MARGIN_DEG: f64 = 0.02;
 /// Direction-grid step used to discover every patch intersecting the region.
 const PATCH_DISCOVERY_STEP_DEG: f64 = 0.004;
+/// Acceptance gates for independent source-versus-baked sampling. They are
+/// deliberately above the reviewed 30 m NASADEM resampling error but far below
+/// a datum, geoid, or path regression.
+const VERIFY_MAX_RMSE_M: f64 = 1.0;
+const VERIFY_MAX_ABS_M: f64 = 5.0;
 
 #[derive(Debug)]
 enum BakeError {
@@ -97,6 +103,7 @@ struct Options {
     output: PathBuf,
     probe: Option<(f64, f64)>,
     verify: bool,
+    bench_load: bool,
 }
 
 fn main() -> ExitCode {
@@ -184,8 +191,20 @@ fn run(options: Options) -> Result<(), BakeError> {
         options.output.display()
     );
     if options.verify {
-        verify_coverage(&options.output, &region)?;
-        println!("coverage verified for {}", region.id);
+        let error = verify_package(&options.output, &region, &dem)?;
+        if error.rmse_m > VERIFY_MAX_RMSE_M || error.max_abs_m > VERIFY_MAX_ABS_M {
+            return Err(BakeError::Arguments(format!(
+                "source-versus-baked error exceeds acceptance: RMSE {:.3} m (max {:.1}), max {:.3} m (max {:.1})",
+                error.rmse_m, VERIFY_MAX_RMSE_M, error.max_abs_m, VERIFY_MAX_ABS_M
+            )));
+        }
+        println!(
+            "coverage verified for {}; source RMSE {:.3} m, max {:.3} m over {} samples",
+            region.id, error.rmse_m, error.max_abs_m, error.samples
+        );
+    }
+    if options.bench_load {
+        bench_load(&options.output, 128)?;
     }
     if let Some((latitude, longitude)) = options.probe {
         let height = probe_package(&options.output, latitude, longitude)?;
@@ -194,11 +213,56 @@ fn run(options: Options) -> Result<(), BakeError> {
     Ok(())
 }
 
-fn verify_coverage(root: &std::path::Path, region: &RegionDefinition) -> Result<(), BakeError> {
+fn bench_load(root: &std::path::Path, samples: usize) -> Result<(), BakeError> {
+    let manifest_started = Instant::now();
     let manifest = ElevationPyramidManifest::from_path(root.join("manifest.ron"))?;
-    let source = TileElevationSource::new(Arc::new(ZeroTerrain), manifest, 1)?;
+    let manifest_ms = manifest_started.elapsed().as_secs_f64() * 1_000.0;
+    let mut durations_ms = Vec::with_capacity(samples.min(manifest.tiles.len()));
+    for metadata in manifest.tiles.iter().take(samples) {
+        let started = Instant::now();
+        let bytes = fs::read(root.join(&metadata.payload_path))?;
+        let _tile = ElevationTile::from_bytes(&bytes)?;
+        durations_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    if durations_ms.is_empty() {
+        return Err(BakeError::Arguments(
+            "load benchmark sampled no tiles".into(),
+        ));
+    }
+    durations_ms.sort_by(|a, b| a.total_cmp(b));
+    let percentile = |percent: usize| {
+        durations_ms[(durations_ms.len() * percent / 100).min(durations_ms.len() - 1)]
+    };
+    let p50 = percentile(50);
+    let p95 = percentile(95);
+    println!(
+        "load benchmark: manifest {manifest_ms:.3} ms; {} tiles p50 {p50:.3} ms, p95 {p95:.3} ms",
+        durations_ms.len()
+    );
+    if p95 > 50.0 {
+        return Err(BakeError::Arguments(format!(
+            "tile load p95 {p95:.3} ms exceeds the 50 ms acceptance gate"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VerifyStats {
+    samples: usize,
+    rmse_m: f64,
+    max_abs_m: f64,
+}
+
+fn verify_package(
+    root: &std::path::Path,
+    region: &RegionDefinition,
+    dem: &RegionalDem,
+) -> Result<VerifyStats, BakeError> {
+    let manifest = ElevationPyramidManifest::from_path(root.join("manifest.ron"))?;
+    let source = TileElevationSource::new(Arc::new(ZeroTerrain), manifest, 64)?;
     let bounds = region.bounds;
-    let step = 0.002;
+    let coverage_step = 0.002;
     let mut latitude = bounds.south_deg;
     while latitude <= bounds.north_deg {
         let mut longitude = bounds.west_deg;
@@ -209,11 +273,54 @@ fn verify_coverage(root: &std::path::Path, region: &RegionDefinition) -> Result<
                     "payload has no coverage at {latitude:.5},{longitude:.5}"
                 )));
             }
-            longitude += step;
+            longitude += coverage_step;
         }
-        latitude += step;
+        latitude += coverage_step;
     }
-    Ok(())
+
+    // Compare the composed payload against the reviewed source on an
+    // independent grid. The tile grid is the bake truth; this catches a bad
+    // geoid, path, manifest, or resampling regression.
+    let sample_step = 0.01;
+    let mut samples = 0usize;
+    let mut sum_squared = 0.0f64;
+    let mut max_abs_m = 0.0f64;
+    let mut latitude = bounds.south_deg + sample_step * 0.5;
+    while latitude < bounds.north_deg {
+        let mut longitude = bounds.west_deg + sample_step * 0.5;
+        while longitude < bounds.east_deg {
+            let direction = terrain_lat_lon_to_body_fixed(latitude, longitude);
+            let metadata = source
+                .covering_tile_for_direction(direction)
+                .ok_or_else(|| BakeError::Arguments("payload coverage gap".into()))?;
+            if !source.is_resident(metadata.patch) {
+                let bytes = fs::read(root.join(&metadata.payload_path))?;
+                source.install_tile(ElevationTile::from_bytes(&bytes)?);
+            }
+            let baked_m = source.height_m(latitude, longitude);
+            let source_m = dem.height_ellipsoid_m(latitude, longitude).ok_or_else(|| {
+                BakeError::Arguments(format!(
+                    "source has no coverage at {latitude:.5},{longitude:.5}"
+                ))
+            })?;
+            let error_m = baked_m - source_m;
+            samples += 1;
+            sum_squared += error_m * error_m;
+            max_abs_m = max_abs_m.max(error_m.abs());
+            longitude += sample_step;
+        }
+        latitude += sample_step;
+    }
+    if samples == 0 {
+        return Err(BakeError::Arguments(
+            "verification sampled no points".into(),
+        ));
+    }
+    Ok(VerifyStats {
+        samples,
+        rmse_m: (sum_squared / samples as f64).sqrt(),
+        max_abs_m,
+    })
 }
 
 fn probe_package(root: &std::path::Path, latitude: f64, longitude: f64) -> Result<f64, BakeError> {
@@ -283,6 +390,7 @@ fn parse_options() -> Result<Options, String> {
         output: PathBuf::from(DEFAULT_OUTPUT),
         probe: None,
         verify: false,
+        bench_load: false,
     };
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -300,6 +408,7 @@ fn parse_options() -> Result<Options, String> {
                 options.output = PathBuf::from(arguments.next().ok_or("--output requires a path")?);
             }
             "--verify" => options.verify = true,
+            "--bench-load" => options.bench_load = true,
             "--probe" => {
                 let latitude = arguments
                     .next()
@@ -322,7 +431,7 @@ fn parse_options() -> Result<Options, String> {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: regional_dem_bake [--region ID] [--config PATH] [--root PATH] [--output PATH]"
+        "usage: regional_dem_bake [--region ID] [--config PATH] [--root PATH] [--output PATH] [--verify] [--bench-load] [--probe LAT LON]"
     );
     ExitCode::FAILURE
 }

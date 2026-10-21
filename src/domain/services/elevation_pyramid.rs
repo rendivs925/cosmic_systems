@@ -26,9 +26,9 @@ pub const ELEVATION_MANIFEST_FILE_NAME: &str = "manifest.ron";
 
 /// Default bound on decoded elevation tiles held resident by a
 /// [`TileElevationSource`]. Tiles are small (a few tens of KiB at the reviewed
-/// 64x64 payload resolution), so this bounds the residency without competing
-/// with the geometry cache budget.
-pub const DEFAULT_ELEVATION_TILE_CAPACITY: usize = 64;
+/// 64x64 payload resolution), so this accommodates the full requested
+/// near-camera cover without competing with the geometry cache budget.
+pub const DEFAULT_ELEVATION_TILE_CAPACITY: usize = 256;
 
 const TILE_MAGIC: [u8; 8] = *b"CSTILE\0\0";
 const TILE_HEADER_BYTES: usize = 92;
@@ -520,19 +520,38 @@ impl TileCache {
     }
 }
 
+/// One validated manifest and the root that resolves its payload paths.
+#[derive(Debug)]
+struct ElevationPackage {
+    root: PathBuf,
+    manifest: ElevationPyramidManifest,
+}
+
+/// Address of a tile in the composed package set. Later roots take precedence
+/// at identical patch addresses, so a regional package can refine a broader
+/// package at the same LOD.
+#[derive(Debug, Clone, Copy)]
+struct TileLocation {
+    package: usize,
+    tile: usize,
+}
+
 /// A [`TerrainSource`] that composes a resident base with installed high
 /// resolution payload tiles. `height_m` reads resident data only; it never
 /// loads or decodes a tile, so fixed-step collision cannot block on payload I/O.
+///
+/// Several package roots may be composed. They must share a body and
+/// coordinate frame; coverage is resolved by finest tile level, with later
+/// roots winning at identical addresses. Decoded tiles share one bounded LRU,
+/// so adding regions does not multiply residency.
 pub struct TileElevationSource {
     base: Arc<dyn TerrainSource>,
-    manifest: ElevationPyramidManifest,
-    /// Package root used to resolve each declared tile's relative payload path.
-    /// Empty for an in-memory manifest whose paths already resolve.
-    root: PathBuf,
-    /// `patch -> manifest.tiles` index so a covering-tile lookup climbs at most
-    /// one address per level instead of scanning the whole package index.
-    tile_index: HashMap<TerrainPatch, usize>,
-    /// Finest declared tile level; the anchor for direction-based lookups.
+    packages: Vec<ElevationPackage>,
+    /// `patch -> package/tile` index so covering-tile lookup climbs at most one
+    /// address per level instead of scanning every package index.
+    tile_locations: HashMap<TerrainPatch, TileLocation>,
+    /// Finest declared tile level across all packages; the anchor for
+    /// direction-based lookups.
     max_tile_level: u32,
     cache: Mutex<TileCache>,
     capacity: usize,
@@ -540,9 +559,14 @@ pub struct TileElevationSource {
 
 impl Debug for TileElevationSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tiles: usize = self
+            .packages
+            .iter()
+            .map(|package| package.manifest.tiles.len())
+            .sum();
         f.debug_struct("TileElevationSource")
-            .field("body", &self.manifest.body)
-            .field("tiles", &self.manifest.tiles.len())
+            .field("packages", &self.packages.len())
+            .field("tiles", &tiles)
             .field("capacity", &self.capacity)
             .finish()
     }
@@ -555,7 +579,14 @@ impl TileElevationSource {
         manifest: ElevationPyramidManifest,
         capacity: usize,
     ) -> Result<Self, ElevationPyramidError> {
-        Self::with_root(base, manifest, PathBuf::new(), capacity)
+        Self::from_packages(
+            base,
+            vec![ElevationPackage {
+                root: PathBuf::new(),
+                manifest,
+            }],
+            capacity,
+        )
     }
 
     /// Load a package from `root` (a directory holding `manifest.ron` and its
@@ -566,54 +597,130 @@ impl TileElevationSource {
         root: impl AsRef<Path>,
         capacity: usize,
     ) -> Result<Self, ElevationPyramidError> {
-        let root = root.as_ref().to_path_buf();
-        let manifest =
-            ElevationPyramidManifest::from_path(root.join(ELEVATION_MANIFEST_FILE_NAME))?;
-        Self::with_root(base, manifest, root, capacity)
+        Self::from_manifest_roots(base, [root], capacity)
     }
 
-    fn with_root(
+    /// Load and compose several package roots over one resident base. Each
+    /// manifest is validated before use. Packages must describe the same body
+    /// in the same coordinate frame; their vertical datums may differ because
+    /// every payload is already normalized by ingestion.
+    pub fn from_manifest_roots<I, P>(
         base: Arc<dyn TerrainSource>,
-        manifest: ElevationPyramidManifest,
-        root: PathBuf,
+        roots: I,
+        capacity: usize,
+    ) -> Result<Self, ElevationPyramidError>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let mut packages = Vec::new();
+        for root in roots {
+            let root = root.as_ref().to_path_buf();
+            let manifest =
+                ElevationPyramidManifest::from_path(root.join(ELEVATION_MANIFEST_FILE_NAME))?;
+            packages.push(ElevationPackage { root, manifest });
+        }
+        if packages.is_empty() {
+            return Err(ElevationPyramidError::InvalidFormat(
+                "elevation manifest roots are empty".into(),
+            ));
+        }
+        Self::from_packages(base, packages, capacity)
+    }
+
+    fn from_packages(
+        base: Arc<dyn TerrainSource>,
+        packages: Vec<ElevationPackage>,
         capacity: usize,
     ) -> Result<Self, ElevationPyramidError> {
-        manifest.validate()?;
-        let tile_index = manifest
-            .tiles
+        if packages.is_empty() {
+            return Err(ElevationPyramidError::InvalidFormat(
+                "elevation package set is empty".into(),
+            ));
+        }
+        for package in &packages {
+            package.manifest.validate()?;
+        }
+        let body = &packages[0].manifest.body;
+        let coordinate_frame = &packages[0].manifest.coordinate_frame;
+        if packages
             .iter()
-            .enumerate()
-            .map(|(index, tile)| (tile.patch, index))
-            .collect();
-        let max_tile_level = manifest
-            .tiles
+            .any(|package| &package.manifest.body != body)
+        {
+            return Err(ElevationPyramidError::InvalidFormat(
+                "elevation packages disagree on body".into(),
+            ));
+        }
+        if packages
             .iter()
-            .map(|tile| tile.patch.level)
-            .max()
-            .unwrap_or(0);
+            .any(|package| &package.manifest.coordinate_frame != coordinate_frame)
+        {
+            return Err(ElevationPyramidError::InvalidFormat(
+                "elevation packages disagree on coordinate frame".into(),
+            ));
+        }
+
+        let mut tile_locations = HashMap::new();
+        let mut max_tile_level = 0;
+        for (package_index, package) in packages.iter().enumerate() {
+            for (tile_index, tile) in package.manifest.tiles.iter().enumerate() {
+                max_tile_level = max_tile_level.max(tile.patch.level);
+                tile_locations.insert(
+                    tile.patch,
+                    TileLocation {
+                        package: package_index,
+                        tile: tile_index,
+                    },
+                );
+            }
+        }
+
         Ok(Self {
             base,
-            manifest,
-            root,
-            tile_index,
+            packages,
+            tile_locations,
             max_tile_level,
             cache: Mutex::new(TileCache::default()),
             capacity: capacity.max(1),
         })
     }
 
-    pub fn manifest(&self) -> &ElevationPyramidManifest {
-        &self.manifest
+    /// Number of composed package roots.
+    pub fn package_count(&self) -> usize {
+        self.packages.len()
+    }
+
+    /// Region IDs declared by conventional `regions/<id>/...` payload paths.
+    /// Empty for in-memory test manifests with flat tile paths.
+    pub fn coverage_regions(&self) -> Vec<String> {
+        let mut regions = BTreeSet::new();
+        for package in &self.packages {
+            for tile in &package.manifest.tiles {
+                let Some(rest) = tile.payload_path.strip_prefix("regions/") else {
+                    continue;
+                };
+                if let Some(region) = rest.split('/').next().filter(|region| !region.is_empty()) {
+                    regions.insert(region.to_string());
+                }
+            }
+        }
+        regions.into_iter().collect()
     }
 
     /// The finest declared tile that covers `patch`, or `None` when the package
     /// has no coverage for it. Climbing one level per lookup keeps this usable
     /// from the per-patch LOD error path even for large packages.
     pub fn covering_tile_for(&self, patch: &TerrainPatch) -> Option<&ElevationTileMetadata> {
+        let location = self.covering_location(patch)?;
+        let package = self.packages.get(location.package)?;
+        package.manifest.tiles.get(location.tile)
+    }
+
+    fn covering_location(&self, patch: &TerrainPatch) -> Option<TileLocation> {
         let mut current = Some(*patch);
         while let Some(candidate) = current {
-            if let Some(index) = self.tile_index.get(&candidate) {
-                return self.manifest.tiles.get(*index);
+            if let Some(location) = self.tile_locations.get(&candidate) {
+                return Some(*location);
             }
             current = candidate.parent();
         }
@@ -628,8 +735,10 @@ impl TileElevationSource {
 
     /// Package-relative payload path for the tile covering `patch`.
     pub fn resolved_payload_path(&self, patch: &TerrainPatch) -> Option<PathBuf> {
-        self.covering_tile_for(patch)
-            .map(|tile| self.manifest.resolved_payload_path(&self.root, tile))
+        let location = self.covering_location(patch)?;
+        let package = self.packages.get(location.package)?;
+        let tile = package.manifest.tiles.get(location.tile)?;
+        Some(package.root.join(&tile.payload_path))
     }
 
     pub fn is_resident(&self, patch: TerrainPatch) -> bool {
@@ -697,8 +806,14 @@ impl TerrainSource for TileElevationSource {
 
     fn elevation_bounds_m(&self) -> ElevationBounds {
         let base = self.base.elevation_bounds_m();
-        let payload = self.manifest.global_bounds();
-        ElevationBounds::new(base.min_m.min(payload.min_m), base.max_m.max(payload.max_m))
+        let mut min_m = base.min_m;
+        let mut max_m = base.max_m;
+        for package in &self.packages {
+            let bounds = package.manifest.global_bounds();
+            min_m = min_m.min(bounds.min_m);
+            max_m = max_m.max(bounds.max_m);
+        }
+        ElevationBounds::new(min_m, max_m)
     }
 
     fn patch_geometric_error(&self, patch: &TerrainPatch) -> PatchGeometricError {
@@ -1143,6 +1258,66 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    fn write_package(dir: &std::path::Path, tiles: &[ElevationTile]) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir.join("tiles")).expect("tiles directory");
+        let mut metadata = Vec::with_capacity(tiles.len());
+        for (index, tile) in tiles.iter().enumerate() {
+            let relative = format!("tiles/{index}.cstile");
+            std::fs::write(dir.join(&relative), tile.to_bytes()).expect("tile payload");
+            metadata.push(tile.metadata(relative));
+        }
+        std::fs::write(
+            dir.join(ELEVATION_MANIFEST_FILE_NAME),
+            manifest_with(metadata)
+                .to_ron_string()
+                .expect("manifest ron"),
+        )
+        .expect("manifest file");
+        dir.to_path_buf()
+    }
+
+    #[test]
+    fn composes_multiple_manifest_roots_with_later_precedence() {
+        let first = scratch_dir("multi_first");
+        let second = scratch_dir("multi_second");
+        let pos_z = TerrainPatch::root(CubeFace::PosZ);
+        let pos_x = TerrainPatch::root(CubeFace::PosX);
+        let first_tile = tile_at(pos_z, 123.0, 5.0);
+        let second_pos_z = tile_at(pos_z, 456.0, 5.0);
+        let second_pos_x = tile_at(pos_x, 789.0, 5.0);
+        let first = write_package(&first, std::slice::from_ref(&first_tile));
+        let second = write_package(&second, &[second_pos_z.clone(), second_pos_x.clone()]);
+
+        let source = TileElevationSource::from_manifest_roots(
+            base(),
+            [first.as_path(), second.as_path()],
+            8,
+        )
+        .expect("composed packages");
+        assert_eq!(source.package_count(), 2);
+
+        // Later roots win at identical patch addresses.
+        let covering = source.covering_tile_for(&pos_z).expect("covered tile");
+        assert_eq!(covering.min_elevation_m, 456.0);
+        assert_eq!(
+            source.resolved_payload_path(&pos_z),
+            Some(second.join("tiles/0.cstile"))
+        );
+        assert_eq!(
+            source.resolved_payload_path(&pos_x),
+            Some(second.join("tiles/1.cstile"))
+        );
+
+        source.install_tile(first_tile);
+        source.install_tile(second_pos_z);
+        source.install_tile(second_pos_x);
+        assert_eq!(source.height_m(0.0, 90.0), 456.0);
+        assert_eq!(source.height_m(0.0, 0.0), 789.0);
+
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 
     #[test]

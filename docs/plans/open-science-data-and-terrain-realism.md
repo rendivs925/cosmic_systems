@@ -1,6 +1,8 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan; Phases 0-2 implemented; Phase 3 Papua package implemented.
+Status: approved plan; Phases 0-2 implemented; Phase 3 Papua package,
+multi-root composition, coverage telemetry, and acceptance metrics validated.
+KSC and the remaining priority regions are pending.
 
 Date: 2026-10-20.
 
@@ -127,9 +129,12 @@ runtime: validate -> stream/read baked assets only
 ## Phase 3 - Regional DEM packages
 
 Status: the Papua coastal lowland package is implemented and registered in
-`earth_datasets_v1.ron`. KSC/Florida and the remaining regions are pending; KSC
-still needs a valid NAVD88-to-WGS 84 control and the adjacent 3DEP coverage
-reviewed together.
+`earth_datasets_v1.ron`. Its acceptance evidence is source RMSE 0.109 m, max
+error 0.866 m, tile-load p95 0.020 ms, zero requested-coverage fallback at
+steady state, and 111.5 MiB peak resident geometry. Runtime composition accepts
+multiple roots and telemetry reports packages and region IDs. KSC/Florida and
+the remaining regions are pending; KSC still needs a valid NAVD88-to-WGS 84
+control and the adjacent 3DEP coverage reviewed together.
 
 ### Deliverables
 
@@ -142,8 +147,10 @@ reviewed together.
 - Region payloads under
   `assets/large_files/terrain/earth_elevation_pyramid/regions/<id>/tiles/`,
   indexed by the root `manifest.ron`; imagery links stay in
-  `earth_imagery_v1.ron`. The current runtime composes one payload root, so a
-  second region needs multi-root composition first.
+  `earth_imagery_v1.ron`. Runtime composition now accepts several package roots
+  (`from_manifest_roots` / `with_dem_and_elevation_manifest_roots`); the
+  default list still contains one root and later roots win at identical patch
+  addresses.
 - KSC absolute-datum task: resolve NAVD88 to WGS 84 using valid NOAA/NGS
   control or surveyed benchmarks. Until resolved, 3DEP supplies relative relief
   only, anchored to the global EGM2008/WGS 84 height; never apply the invalid
