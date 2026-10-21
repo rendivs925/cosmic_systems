@@ -53,8 +53,11 @@ pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT: &str =
 /// reviewed region under one root; separate roots are supported for future
 /// independently versioned regional packages.
 #[cfg(feature = "dem")]
-pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS: &[&str] =
-    &[DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT];
+pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS: &[&str] = &[
+    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT,
+    "assets/large_files/terrain/earth_elevation_pyramid_ksc",
+    "assets/large_files/terrain/earth_elevation_pyramid_starbase",
+];
 #[cfg(feature = "dem")]
 pub const DEFAULT_MOON_DEM_PATH: &str =
     "assets/large_files/terrain/moon_lola_ldem_16_cs2048_v2.csdem";

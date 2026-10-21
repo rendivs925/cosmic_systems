@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 Papua regional package, validated.
+Status: Phase 3 Papua, interim KSC, and Starbase regional packages, validated.
 
 Date: 2026-10-21.
 
@@ -83,6 +83,21 @@ Details:
   aggregate runtime SHA-256
   `74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784`.
   See `docs/datasets/earth_regional_papua_v1.md`.
+- KSC regional NASADEM: interim 1 arc-second bare-earth over `80.85..80.45W`,
+  `28.40..28.75N`, EGM96 heights corrected with the runtime EGM2008 geoid.
+  Source SHA-256
+  `62c3819f9ace4c785add8bbea485e3b031644087b62eaf5e951e3147c4573c09`;
+  aggregate runtime SHA-256
+  `88e30df9357131c1ee626542b82e251f4e3da3d98d61fc0095919582fa13ba0d`.
+  See `docs/datasets/earth_regional_ksc_v1.md`. The 1 m 3DEP source remains
+  planned until the launch-site NAVD88-to-WGS 84 control is resolved.
+- Starbase/Boca Chica regional NASADEM: 1 arc-second bare-earth over
+  `97.30..97.05W`, `25.85..26.10N`, EGM96 heights corrected with the runtime
+  EGM2008 geoid. Source SHA-256
+  `2b0d248e76634623e77add69b577898f3ed1ff6d3aa922b4a60b2179199de3c4`;
+  aggregate runtime SHA-256
+  `1d3d022088d11441ac882a2060d55aa32a53d9f099385af5742f4dfeb52ae7e3`.
+  See `docs/datasets/earth_regional_starbase_v1.md`.
 - Blue Marble: August 2004 global composite with topography and bathymetry,
   WGS 84 geographic, presentation albedo only.
 - Sentinel-2 L2A TCI: 2026-08-22, MGRS 54LTR/54LUR/54MTS/54MUS, reprojected

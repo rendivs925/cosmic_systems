@@ -477,6 +477,65 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
+    fn default_earth_source_composes_all_regional_payloads_when_present() {
+        let ksc_root =
+            std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_ksc");
+        let starbase_root =
+            std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_starbase");
+        if !ksc_root.exists() || !starbase_root.exists() {
+            return;
+        }
+        let source = EarthTerrainSource::new();
+        let tiles = source
+            .elevation_tile_source()
+            .expect("default Earth source must expose composed payloads");
+        assert!(tiles.package_count() >= 3);
+        let regions = tiles.coverage_regions();
+        assert!(regions
+            .iter()
+            .any(|region| region == "papua_coastal_lowland"));
+        assert!(regions.iter().any(|region| region == "ksc_florida"));
+        assert!(regions.iter().any(|region| region == "starbase_boca_chica"));
+
+        let direction = crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(
+            28.5721, -80.6480,
+        );
+        let metadata = tiles
+            .covering_tile_for_direction(direction)
+            .expect("KSC package must cover the launch site");
+        let bytes = std::fs::read(ksc_root.join(&metadata.payload_path))
+            .expect("KSC payload tile must exist");
+        tiles.install_tile(
+            crate::domain::services::elevation_pyramid::ElevationTile::from_bytes(&bytes)
+                .expect("KSC payload tile must decode"),
+        );
+        let height_m = tiles.height_m(28.5721, -80.6480);
+        assert!(
+            (height_m - -26.975).abs() < 0.5,
+            "KSC payload height {height_m} should match the verified probe"
+        );
+
+        let direction = crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(
+            25.9971, -97.1553,
+        );
+        let metadata = tiles
+            .covering_tile_for_direction(direction)
+            .expect("Starbase package must cover its site");
+        let bytes = std::fs::read(starbase_root.join(&metadata.payload_path))
+            .expect("Starbase payload tile must exist");
+        tiles.install_tile(
+            crate::domain::services::elevation_pyramid::ElevationTile::from_bytes(&bytes)
+                .expect("Starbase payload tile must decode"),
+        );
+        let height_m = tiles.height_m(25.9971, -97.1553);
+        assert!(
+            (height_m - -22.475).abs() < 0.5,
+            "Starbase payload height {height_m} should match the verified probe"
+        );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
     fn default_earth_source_adds_bounded_detail_over_the_eroded_dem_package() {
         let default_source = EarthTerrainSource::new();
         let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)

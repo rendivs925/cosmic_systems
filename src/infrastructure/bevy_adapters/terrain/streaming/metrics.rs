@@ -84,7 +84,7 @@ impl TerrainStreamingMetrics {
             .elevation_source
             .as_ref()
             .map_or((0, Vec::new()), |source| {
-                (source.package_count(), source.coverage_regions())
+                (source.package_count(), source.coverage_regions().to_vec())
             });
         let elevation_fallback_rate = if streaming.elevation_covered_patches == 0 {
             0.0

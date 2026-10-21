@@ -390,6 +390,18 @@ mod tests {
         assert_eq!(region.sources.len(), 2);
         assert_eq!(region.min_level, 9);
         assert_eq!(region.max_level, 12);
+
+        let ksc = config.region("ksc_florida").expect("KSC region");
+        assert_eq!(ksc.bounds.west_deg, -80.85);
+        assert_eq!(ksc.bounds.south_deg, 28.40);
+        assert_eq!(ksc.sources.len(), 1);
+        assert_eq!(ksc.sources[0].north_deg, 29.0);
+
+        let starbase = config
+            .region("starbase_boca_chica")
+            .expect("Starbase region");
+        assert_eq!(starbase.bounds.west_deg, -97.30);
+        assert_eq!(starbase.sources[0].north_deg, 26.0);
     }
 
     #[test]

@@ -28,6 +28,18 @@ REGIONS = {
             "NASADEM_HGT_s09e139.tif": "54abf0dfd106b450031ba7885ae00081e8242725ac329f952b9e73200f7fa306",
         },
     },
+    "ksc_florida": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_n28w081.tif": "62c3819f9ace4c785add8bbea485e3b031644087b62eaf5e951e3147c4573c09",
+        },
+    },
+    "starbase_boca_chica": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_n25w098.tif": "2b0d248e76634623e77add69b577898f3ed1ff6d3aa922b4a60b2179199de3c4",
+        },
+    },
 }
 
 

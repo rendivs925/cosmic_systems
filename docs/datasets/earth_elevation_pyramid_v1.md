@@ -47,8 +47,11 @@ A package is a directory containing a manifest and its tile payloads:
 - The active root is
   `assets/large_files/terrain/earth_elevation_pyramid`. Its first sparse
   regional package is the Papua coastal lowland NASADEM payload described in
-  `earth_regional_papua_v1.md`. Additional roots can be composed at runtime;
-  later roots win at identical patch addresses.
+  `earth_regional_papua_v1.md`; the KSC interim package uses
+  `earth_elevation_pyramid_ksc` (`earth_regional_ksc_v1.md`) and
+  `earth_elevation_pyramid_starbase` (`earth_regional_starbase_v1.md`).
+  Additional roots can be composed at runtime; later roots win at identical
+  patch addresses.
 
 ## Manifest
 

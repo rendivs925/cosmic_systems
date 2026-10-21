@@ -553,6 +553,8 @@ pub struct TileElevationSource {
     /// Finest declared tile level across all packages; the anchor for
     /// direction-based lookups.
     max_tile_level: u32,
+    /// Region IDs inferred once from conventional `regions/<id>/...` paths.
+    coverage_regions: Vec<String>,
     cache: Mutex<TileCache>,
     capacity: usize,
 }
@@ -662,9 +664,18 @@ impl TileElevationSource {
 
         let mut tile_locations = HashMap::new();
         let mut max_tile_level = 0;
+        let mut coverage_regions = BTreeSet::new();
         for (package_index, package) in packages.iter().enumerate() {
             for (tile_index, tile) in package.manifest.tiles.iter().enumerate() {
                 max_tile_level = max_tile_level.max(tile.patch.level);
+                if let Some(region) = tile
+                    .payload_path
+                    .strip_prefix("regions/")
+                    .and_then(|rest| rest.split('/').next())
+                    .filter(|region| !region.is_empty())
+                {
+                    coverage_regions.insert(region.to_string());
+                }
                 tile_locations.insert(
                     tile.patch,
                     TileLocation {
@@ -680,6 +691,7 @@ impl TileElevationSource {
             packages,
             tile_locations,
             max_tile_level,
+            coverage_regions: coverage_regions.into_iter().collect(),
             cache: Mutex::new(TileCache::default()),
             capacity: capacity.max(1),
         })
@@ -692,19 +704,8 @@ impl TileElevationSource {
 
     /// Region IDs declared by conventional `regions/<id>/...` payload paths.
     /// Empty for in-memory test manifests with flat tile paths.
-    pub fn coverage_regions(&self) -> Vec<String> {
-        let mut regions = BTreeSet::new();
-        for package in &self.packages {
-            for tile in &package.manifest.tiles {
-                let Some(rest) = tile.payload_path.strip_prefix("regions/") else {
-                    continue;
-                };
-                if let Some(region) = rest.split('/').next().filter(|region| !region.is_empty()) {
-                    regions.insert(region.to_string());
-                }
-            }
-        }
-        regions.into_iter().collect()
+    pub fn coverage_regions(&self) -> &[String] {
+        &self.coverage_regions
     }
 
     /// The finest declared tile that covers `patch`, or `None` when the package

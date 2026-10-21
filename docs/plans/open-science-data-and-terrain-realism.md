@@ -1,8 +1,9 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan; Phases 0-2 implemented; Phase 3 Papua package,
-multi-root composition, coverage telemetry, and acceptance metrics validated.
-KSC and the remaining priority regions are pending.
+Status: approved plan; Phases 0-2 implemented; Phase 3 Papua, interim KSC, and
+Starbase NASADEM packages, multi-root composition, coverage telemetry, and
+acceptance metrics validated. KSC 3DEP/vertical datum and the remaining priority
+regions are pending.
 
 Date: 2026-10-20.
 
@@ -128,13 +129,18 @@ runtime: validate -> stream/read baked assets only
 
 ## Phase 3 - Regional DEM packages
 
-Status: the Papua coastal lowland package is implemented and registered in
-`earth_datasets_v1.ron`. Its acceptance evidence is source RMSE 0.109 m, max
-error 0.866 m, tile-load p95 0.020 ms, zero requested-coverage fallback at
-steady state, and 111.5 MiB peak resident geometry. Runtime composition accepts
-multiple roots and telemetry reports packages and region IDs. KSC/Florida and
-the remaining regions are pending; KSC still needs a valid NAVD88-to-WGS 84
-control and the adjacent 3DEP coverage reviewed together.
+Status: the Papua coastal lowland, interim KSC/Florida, and Starbase/Boca Chica
+NASADEM packages are implemented and registered in `earth_datasets_v1.ron`.
+Papua acceptance is
+source RMSE 0.109 m, max error 0.866 m, tile-load p95 0.020 ms, zero
+requested-coverage fallback at steady state, and 111.5 MiB peak resident
+geometry. KSC acceptance is RMSE 0.147 m, max error 1.442 m, and tile-load p95
+0.040 ms; Starbase is RMSE 0.166 m, max error 1.333 m, and tile-load p95
+0.014 ms. Runtime composition accepts multiple roots and telemetry reports
+packages and region IDs. KSC still needs a valid NAVD88-to-WGS 84 control and
+the adjacent 3DEP coverage reviewed together; interactive rocket mode still
+launches at Papua and needs KSC site/scenario selection. The remaining priority
+regions are pending.
 
 ### Deliverables
 

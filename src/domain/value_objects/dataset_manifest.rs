@@ -431,7 +431,7 @@ mod tests {
     fn layer_and_region_filters_select_ready_entries() {
         let registry = registry();
         let dems: Vec<_> = registry.selected(Some(DatasetLayer::Dem), None).collect();
-        assert_eq!(dems.len(), 3);
+        assert_eq!(dems.len(), 5);
         assert!(dems
             .iter()
             .any(|entry| entry.id == "earth_etopo1_ice_surface"));
@@ -441,6 +441,12 @@ mod tests {
         assert!(dems
             .iter()
             .any(|entry| entry.id == "earth_regional_dem_papua"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_ksc"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_starbase"));
         let papua: Vec<_> = registry
             .selected(None, Some("papua_coastal_lowland"))
             .collect();
@@ -451,6 +457,14 @@ mod tests {
         assert!(papua
             .iter()
             .any(|entry| entry.id == "earth_regional_dem_papua"));
+        let ksc: Vec<_> = registry.selected(None, Some("ksc_florida")).collect();
+        assert_eq!(ksc.len(), 1);
+        assert_eq!(ksc[0].id, "earth_regional_dem_ksc");
+        let starbase: Vec<_> = registry
+            .selected(None, Some("starbase_boca_chica"))
+            .collect();
+        assert_eq!(starbase.len(), 1);
+        assert_eq!(starbase[0].id, "earth_regional_dem_starbase");
     }
 
     #[test]
