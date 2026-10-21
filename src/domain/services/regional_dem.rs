@@ -408,6 +408,16 @@ mod tests {
             .expect("Vandenberg region");
         assert_eq!(vandenberg.bounds.west_deg, -120.75);
         assert_eq!(vandenberg.sources[0].north_deg, 35.0);
+
+        let wallops = config.region("wallops_virginia").expect("Wallops region");
+        assert_eq!(wallops.bounds.west_deg, -75.70);
+        assert_eq!(wallops.sources[0].north_deg, 38.0);
+
+        let kourou = config
+            .region("kourou_french_guiana")
+            .expect("Kourou region");
+        assert_eq!(kourou.bounds.west_deg, -52.95);
+        assert_eq!(kourou.sources[0].north_deg, 6.0);
     }
 
     #[test]

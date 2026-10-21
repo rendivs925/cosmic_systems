@@ -46,6 +46,18 @@ REGIONS = {
             "NASADEM_HGT_n34w121.tif": "be9c3388c9ed196c23f6fcf473cf5ec7c978da569f79b60046590ee640e79e7e",
         },
     },
+    "wallops_virginia": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_n37w076.tif": "9c4c90cf4c47bfb8f07e2a28279a501b90f952f5dcaa99891117d3a5a59a0cb5",
+        },
+    },
+    "kourou_french_guiana": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_n05w053.tif": "f2709cb4365681f45695153775512033cc394440b1da5545f5c4083c5f7842e0",
+        },
+    },
 }
 
 

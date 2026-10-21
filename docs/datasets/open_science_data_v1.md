@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 Papua, interim KSC, Starbase, and Vandenberg regional packages, validated.
+Status: Phase 3 Papua, interim KSC, Starbase, Vandenberg, Wallops, and Kourou regional packages, validated.
 
 Date: 2026-10-21.
 
@@ -105,6 +105,20 @@ Details:
   aggregate runtime SHA-256
   `ce6f44f28d53f9286f7767668e2e70ed40842ffaf02de5f623c512f5bc4ee6ff`.
   See `docs/datasets/earth_regional_vandenberg_v1.md`.
+- Wallops regional NASADEM: 1 arc-second bare-earth over
+  `75.70..75.35W`, `37.80..38.05N`, EGM96 heights corrected with the runtime
+  EGM2008 geoid. Source SHA-256
+  `9c4c90cf4c47bfb8f07e2a28279a501b90f952f5dcaa99891117d3a5a59a0cb5`;
+  aggregate runtime SHA-256
+  `a39fb4363042654719f57b06a00e1d97d55750f7d29035c92118fe3882581f69`.
+  See `docs/datasets/earth_regional_wallops_v1.md`.
+- Kourou regional NASADEM: 1 arc-second bare-earth over `52.95..52.45W`,
+  `5.00..5.35N`, EGM96 heights corrected with the runtime EGM2008 geoid. Source
+  SHA-256
+  `f2709cb4365681f45695153775512033cc394440b1da5545f5c4083c5f7842e0`;
+  aggregate runtime SHA-256
+  `dfd264e18e95f0f6fe5e5690cd83a65dac6cd8e725d6e2e0986e67e3b2c63634`.
+  See `docs/datasets/earth_regional_kourou_v1.md`.
 - Blue Marble: August 2004 global composite with topography and bathymetry,
   WGS 84 geographic, presentation albedo only.
 - Sentinel-2 L2A TCI: 2026-08-22, MGRS 54LTR/54LUR/54MTS/54MUS, reprojected

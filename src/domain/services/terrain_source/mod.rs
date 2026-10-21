@@ -484,14 +484,23 @@ mod tests {
             std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_starbase");
         let vandenberg_root =
             std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_vandenberg");
-        if !ksc_root.exists() || !starbase_root.exists() || !vandenberg_root.exists() {
+        let wallops_root =
+            std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_wallops");
+        let kourou_root =
+            std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_kourou");
+        if !ksc_root.exists()
+            || !starbase_root.exists()
+            || !vandenberg_root.exists()
+            || !wallops_root.exists()
+            || !kourou_root.exists()
+        {
             return;
         }
         let source = EarthTerrainSource::new();
         let tiles = source
             .elevation_tile_source()
             .expect("default Earth source must expose composed payloads");
-        assert!(tiles.package_count() >= 4);
+        assert!(tiles.package_count() >= 6);
         let regions = tiles.coverage_regions();
         assert!(regions
             .iter()
@@ -551,6 +560,42 @@ mod tests {
         assert!(
             (height_m - 68.138).abs() < 0.5,
             "Vandenberg payload height {height_m} should match the verified probe"
+        );
+
+        let direction = crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(
+            37.9402, -75.4665,
+        );
+        let metadata = tiles
+            .covering_tile_for_direction(direction)
+            .expect("Wallops package must cover its site");
+        let bytes = std::fs::read(wallops_root.join(&metadata.payload_path))
+            .expect("Wallops payload tile must exist");
+        tiles.install_tile(
+            crate::domain::services::elevation_pyramid::ElevationTile::from_bytes(&bytes)
+                .expect("Wallops payload tile must decode"),
+        );
+        let height_m = tiles.height_m(37.9402, -75.4665);
+        assert!(
+            (height_m - -24.482).abs() < 0.5,
+            "Wallops payload height {height_m} should match the verified probe"
+        );
+
+        let direction = crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(
+            5.1590, -52.6490,
+        );
+        let metadata = tiles
+            .covering_tile_for_direction(direction)
+            .expect("Kourou package must cover its site");
+        let bytes = std::fs::read(kourou_root.join(&metadata.payload_path))
+            .expect("Kourou payload tile must exist");
+        tiles.install_tile(
+            crate::domain::services::elevation_pyramid::ElevationTile::from_bytes(&bytes)
+                .expect("Kourou payload tile must decode"),
+        );
+        let height_m = tiles.height_m(5.1590, -52.6490);
+        assert!(
+            (height_m - -38.213).abs() < 0.5,
+            "Kourou payload height {height_m} should match the verified probe"
         );
     }
 

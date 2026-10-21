@@ -97,7 +97,8 @@ Runtime composition accepts several package roots through
 level wins, and a later root wins at an identical patch address. Decoded tiles
 share one bounded LRU. The default root list composes
 `earth_elevation_pyramid`, `earth_elevation_pyramid_ksc`,
-`earth_elevation_pyramid_starbase`, and `earth_elevation_pyramid_vandenberg`. Source rasters and the baked package remain
+`earth_elevation_pyramid_starbase`, `earth_elevation_pyramid_vandenberg`,
+`earth_elevation_pyramid_wallops`, and `earth_elevation_pyramid_kourou`. Source rasters and the baked package remain
 under gitignored `assets/large_files/`.
 
 ## Validation

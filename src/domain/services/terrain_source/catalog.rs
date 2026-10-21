@@ -58,6 +58,8 @@ pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS: &[&str] = &[
     "assets/large_files/terrain/earth_elevation_pyramid_ksc",
     "assets/large_files/terrain/earth_elevation_pyramid_starbase",
     "assets/large_files/terrain/earth_elevation_pyramid_vandenberg",
+    "assets/large_files/terrain/earth_elevation_pyramid_wallops",
+    "assets/large_files/terrain/earth_elevation_pyramid_kourou",
 ];
 #[cfg(feature = "dem")]
 pub const DEFAULT_MOON_DEM_PATH: &str =
