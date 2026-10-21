@@ -109,7 +109,7 @@ pub fn build_patch_surfaces(
             let idx = j * res + i;
             let la = lat[idx];
             let lo = lon[idx];
-            let hi = h[idx];
+            let elevation_m = h[idx] - source.sea_level_height_m(la, lo);
             let moisture = source.moisture(la, lo);
             let zone = source.zone_lat(la);
             let (source_tangent_u, source_tangent_v) = grid_tangents(&positions, res, i, j);
@@ -123,11 +123,11 @@ pub fn build_patch_surfaces(
                 .acos()
                 .to_degrees();
             let appearance = with_river_appearance(
-                surface_appearance(hi, moisture, zone, source_slope_deg),
+                surface_appearance(elevation_m, moisture, zone, source_slope_deg),
                 source.river_strength(la, lo),
             );
 
-            let profile = papua_tropical_profile(la, lo, hi, moisture, source_slope_deg);
+            let profile = papua_tropical_profile(la, lo, elevation_m, moisture, source_slope_deg);
             let [r, g, b, _] = terrain_albedo(appearance, profile);
             albedo.extend_from_slice(&[
                 (r * 255.0) as u8,

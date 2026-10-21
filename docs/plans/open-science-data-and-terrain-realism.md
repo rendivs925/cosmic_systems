@@ -1,6 +1,6 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan; Phases 0-1 implemented.
+Status: approved plan; Phases 0-2 implemented.
 
 Date: 2026-10-20.
 
@@ -105,11 +105,14 @@ runtime: validate -> stream/read baked assets only
   normalized raster plus provenance.
 - Refactor the shared cube-sphere DEM resampler into a domain function;
   `etopo1_convert` and new `etopo2022_convert` become thin CLIs.
-- New package: `earth_etopo2022_30s_cs2048_v3.csdem`; config
+- New package: `earth_etopo2022_30s_ice_surface_cs2048_v3.csdem`; config
   `earth_etopo2022_30s_v1.ron`; docs
   `docs/datasets/earth_etopo2022_30s_v1.md`.
 - Regenerate `earth_terrain_overview_v1.png`; update `planet_configs.rs`
   terrain authority.
+- `scripts/ingest_egm2008_geoid.py` plus a generated 0.5 degree EGM2008
+  geoid grid and a `GeoidModel`/`TerrainSource::sea_level_height_m` authority,
+  so ellipsoidal heights keep sea level and land/ocean classification correct.
 - Launch-site height delta report (old versus new) before touching physics
   baselines.
 

@@ -183,39 +183,45 @@ without an explicit, reviewed rationale.
 
 ## 7. Baseline policy
 
-- Baseline: `tests/baselines/terrain-metrics-earth-etopo1.ron`.
-- The baseline records the current runtime authority: ETOPO1 Ice Surface
-  cube-sphere package at 2048 faces per side, 0.25 deg measurement grid,
-  32-cell channel threshold.
+- Baseline: `tests/baselines/terrain-metrics-earth-etopo2022.ron` (active).
+  `tests/baselines/terrain-metrics-earth-etopo1.ron` is retained for rollback.
+- The baseline records the current runtime authority: ETOPO 2022 30 arc-second
+  Ice Surface cube-sphere package at 2048 faces per side, 0.25 deg measurement
+  grid, 32-cell channel threshold.
 - Update the baseline only when the terrain authority changes intentionally.
   Every update must include a before/after table and the reason.
 - Never regenerate a baseline to hide a regression.
 
 ## 8. Current reading and limitations
 
-Measured on the ETOPO1 package (full pass, 2026-10-20):
+Measured on the ETOPO 2022 package (full pass, 2026-10-21):
 
 | Metric | Measured | Interpretation |
 | --- | --- | --- |
-| Land fraction | 0.29105 | Matches the 0.292 target. |
-| Ocean fraction | 0.70895 | Matches the 0.708 target. |
-| Land mean | 793.2 m | Within the documented source mean; confirm on ETOPO 2022. |
-| Min / max | -10,534.9 / 6,669.6 m | Smoothed by the 2048-face resample. |
-| Slope p50 / p95 | 0.15 / 1.27 deg | Coarse global relief; not the hillslope target. |
-| Drainage density | 0.0020 km/km^2 | Only large channels exceed 32 cells at 0.25 deg. |
-| Hack exponent | 0.760 | Slightly above the 0.7 upper bound; coarse proxy. |
-| Concavity theta | 0.094 | Coarse D8 network biases concavity low. |
-| Max Strahler order | 5 | Within the 3-5 target. |
-| Median sinuosity | 1.081 | Just below the 1.1 lower bound. |
-| Coastline length | 584,125 km | Coarse-grid edge length. |
-| Coastline fractal dimension | 1.189 | Close to the 1.2-1.3 target. |
-| PSD beta | 2.814 | At the upper bound. |
+| Land fraction | 0.29087 | Matches the 0.292 target. |
+| Ocean fraction | 0.70913 | Matches the 0.708 target. |
+| Land mean | 789.6 m | Within the documented source mean. |
+| Min / max | -10,303.7 / 6,767.6 m | Smoothed by the 2048-face resample. |
+| Slope p50 / p95 | 0.15 / 1.29 deg | Coarse global relief; not the hillslope target. |
+| Drainage density | 0.0022 km/km^2 | Only large channels exceed 32 cells at 0.25 deg. |
+| Hack exponent | 0.747 | Within the 0.7 upper bound; coarse proxy. |
+| Concavity theta | 0.139 | Coarse D8 network biases concavity low. |
+| Max Strahler order | 4 | Within the 3-5 target. |
+| Median sinuosity | 1.146 | Above the 1.1 lower bound. |
+| Coastline length | 593,818 km | Coarse-grid edge length. |
+| Coastline fractal dimension | 1.186 | Close to the 1.2-1.3 target. |
+| PSD beta | 2.812 | At the upper bound. |
+
+The ETOPO1 reading (land 0.29105, land mean 793.2 m) remains in
+`terrain-metrics-earth-etopo1.ron` for rollback comparison.
 
 Known limitations:
 
 - The 2048-face cube package is about 5 km at the equator and cannot preserve
-  single-summit extrema. Phase 2 must either raise package resolution or
-  document the retained-extrema delta.
+  single-summit extrema. On ETOPO 2022 this retains +6,767.6 m of the raster's
+  +8,325 m maximum and -10,303.7 m of its -10,741 m minimum, a documented
+  -1,557.4 m / +437.3 m extrema loss. The 50 MiB budget was kept deliberately;
+  summit-scale claims require a higher-face or regional package.
 - Coarse-grid drainage, Hack, concavity, and sinuosity are proxies, not
   hillslope measurements. The regional phase is authoritative for those targets.
 - The KSC absolute vertical datum is unresolved. 3DEP supplies relative relief
@@ -226,10 +232,12 @@ Known limitations:
 
 Current baseline source:
 
-- dataset: ETOPO1 Ice Surface, 1 arc-minute, grid registered, signed i16 LE;
-- config: `assets/configs/terrain/earth_etopo1_ice_surface_v1.ron`;
+- dataset: ETOPO 2022 v1 30 arc-second Ice Surface, WGS 84 ellipsoid heights;
+- config: `assets/configs/terrain/earth_etopo2022_30s_v1.ron`;
+- sea level: `assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw`;
 - runtime package:
-  `assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem`;
+  `assets/large_files/terrain/earth_etopo2022_30s_ice_surface_cs2048_v3.csdem`;
+- the ETOPO1 package remains the documented rollback authority;
 - source and runtime checksums are recorded in the dataset documentation and
   manifest. Large assets remain gitignored; manifests, docs, and the baseline
   are committed.

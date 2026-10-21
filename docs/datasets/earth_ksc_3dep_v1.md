@@ -31,7 +31,9 @@ reference point `28.573N, 80.604W`, but returns nodata at the project launch
 coordinate `28.57210N, 80.64800W`. The offshore result is not valid for KSC and
 must not be applied as a constant correction. A launch-site-valid vertical datum
 solution or surveyed KSC control points remain required before conversion.
-The current global Earth source uses mean-sea-level heights (EPSG:5715).
+The ETOPO1 rollback source uses EGM96 mean-sea-level heights (EPSG:5773). The
+active ETOPO 2022 authority uses WGS 84 ellipsoid heights plus the runtime
+EGM2008 geoid sea-level model.
 
 `local_elevation_convert` accepts only an already normalized terrain-radial TIFF
 and a provenance RON document. It verifies the normalized input checksum and

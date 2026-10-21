@@ -73,7 +73,6 @@ const MAX_PATCH_UPLOADS_PER_FRAME: usize = 6;
 /// Ready messages are coalesced and publication backfill makes a rejected entry
 /// retryable, so this cap bounds memory without dropping visible terrain forever.
 const MAX_PENDING_PATCH_UPLOADS: usize = 512;
-/// Sea level is the terrain datum: height 0 above the catalog mean radius.
 /// A patch morphs toward its coarser parent surface between these multiples of
 /// its world size. Reaching full morph before the coarser LOD takes over keeps
 /// the shared edge matching the neighbouring parent patch.
@@ -81,7 +80,6 @@ const MORPH_START_SIZE_FACTOR: f64 = 0.6;
 const MORPH_END_SIZE_FACTOR: f64 = 2.0;
 /// Micro-detail texture repetitions per metre squared. About 1.7 m features.
 const TERRAIN_DETAIL_SCALE: f32 = 0.6;
-const WATER_SEA_LEVEL_M: f64 = 0.0;
 /// Small lift so the translucent water cap wins the depth test against the
 /// coincident far-field fallback globe instead of z-fighting it.
 const WATER_SURFACE_OFFSET_M: f64 = 0.5;
@@ -2095,7 +2093,6 @@ fn water_mesh_for_patch(
     if res < 2 || geometry.positions.len() < core || geometry.uvs.len() < core {
         return None;
     }
-    let sea_level_radius_m = planet_radius_m + WATER_SEA_LEVEL_M + WATER_SURFACE_OFFSET_M;
     let inverse_max_depth = 1.0 / WATER_MAX_VISIBLE_DEPTH_M;
 
     let mut positions = Vec::with_capacity(core);
@@ -2114,6 +2111,10 @@ fn water_mesh_for_patch(
         let uv = geometry.uvs[index];
         let longitude_deg = f64::from(uv[0]) * 360.0 - 180.0;
         let latitude_deg = 90.0 - f64::from(uv[1]) * 180.0;
+        let sea_level_m = source
+            .map(|source| source.sea_level_height_m(latitude_deg, longitude_deg))
+            .unwrap_or(0.0);
+        let sea_level_radius_m = planet_radius_m + sea_level_m + WATER_SURFACE_OFFSET_M;
         let ocean_depth = if has_ocean {
             (sea_level_radius_m - radius).max(0.0)
         } else {

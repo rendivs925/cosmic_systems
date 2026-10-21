@@ -406,6 +406,10 @@ impl TerrainSource for ErodedTerrainSource {
         self.base.surface_class(latitude_deg, longitude_deg)
     }
 
+    fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.sea_level_height_m(latitude_deg, longitude_deg)
+    }
+
     fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.base.vegetation_density(latitude_deg, longitude_deg)
     }

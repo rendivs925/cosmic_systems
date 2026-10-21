@@ -13,7 +13,8 @@ pub fn terrain_overview_raster(source: &dyn TerrainSource, width: u32, height: u
         let latitude_deg = 90.0 - (y as f64 + 0.5) * 180.0 / height as f64;
         for x in 0..width {
             let longitude_deg = -180.0 + (x as f64 + 0.5) * 360.0 / width as f64;
-            let elevation_m = source.overview_height_m(latitude_deg, longitude_deg);
+            let elevation_m = source.overview_height_m(latitude_deg, longitude_deg)
+                - source.sea_level_height_m(latitude_deg, longitude_deg);
             let appearance = surface_appearance(
                 elevation_m,
                 source.overview_moisture(latitude_deg, longitude_deg),

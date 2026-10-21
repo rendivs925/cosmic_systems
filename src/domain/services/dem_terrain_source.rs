@@ -1,7 +1,8 @@
 //! Feature-gated, deterministic cube-sphere DEM terrain authority.
 //!
-//! The on-disk format stores signed meter elevations above the same mean-radius
-//! datum used by [`TerrainSource`]. It is intentionally small and std-only:
+//! The on-disk format stores signed meter elevations in the [`TerrainSource`]
+//! height frame; Earth packages use WGS 84 ellipsoidal heights plus a geoid
+//! model for sea level. It is intentionally small and std-only:
 //! a fixed header followed by six row-major `i16` faces in [`CubeFace::ALL`]
 //! order. Runtime loading is explicit and performs no network or background IO.
 
@@ -16,8 +17,10 @@ use crate::domain::math::DVec3;
 use crate::domain::services::cube_sphere::{
     face_uv, face_uv_to_direction, CubeFace, PatchGeometricError, TerrainPatch,
 };
+use crate::domain::services::geoid::{GeoidError, GeoidModel};
+use crate::domain::services::global_raster::GlobalRasterSpec;
 use crate::domain::services::reference_frames::body_fixed_to_terrain_lat_lon;
-use crate::domain::services::terrain_source::{ElevationBounds, SurfaceClass, TerrainSource};
+use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 
 /// Magic bytes for the versioned cube-sphere DEM format.
 pub const DEM_MAGIC: [u8; 8] = *b"CSDEM\0\0\0";
@@ -210,6 +213,7 @@ impl DemMetadataPyramid {
 pub enum DemError {
     Io(std::io::Error),
     InvalidFormat(String),
+    Geoid(GeoidError),
 }
 
 impl Display for DemError {
@@ -217,6 +221,7 @@ impl Display for DemError {
         match self {
             Self::Io(error) => write!(formatter, "DEM I/O error: {error}"),
             Self::InvalidFormat(message) => write!(formatter, "invalid DEM format: {message}"),
+            Self::Geoid(error) => write!(formatter, "DEM geoid error: {error}"),
         }
     }
 }
@@ -226,6 +231,7 @@ impl Error for DemError {
         match self {
             Self::Io(error) => Some(error),
             Self::InvalidFormat(_) => None,
+            Self::Geoid(error) => Some(error),
         }
     }
 }
@@ -233,6 +239,12 @@ impl Error for DemError {
 impl From<std::io::Error> for DemError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl From<GeoidError> for DemError {
+    fn from(error: GeoidError) -> Self {
+        Self::Geoid(error)
     }
 }
 
@@ -428,16 +440,36 @@ impl CubeSphereDem {
 
     /// Convert a complete ETOPO1 signed-`i16` little-endian raster into a
     /// cube-sphere DEM. ETOPO1 rows run north to south and its first/last
-    /// longitude columns are the same meridian; the converter wraps at the
-    /// first column to avoid a duplicated seam.
+    /// longitude columns are the same meridian; the shared sampler wraps at
+    /// the first column to avoid a duplicated seam.
     pub fn from_etopo1_raw(raw: &[u8], resolution: u32) -> Result<Self, DemError> {
-        let expected_bytes = ETOPO1_COLUMNS
-            .checked_mul(ETOPO1_ROWS)
-            .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
-            .expect("ETOPO1 raw byte count fits usize on supported targets");
+        Self::from_global_raster_raw(raw, GlobalRasterSpec::etopo1(), resolution)
+    }
+
+    /// Convert the normalized ETOPO 2022 30 arc-second raster emitted by
+    /// `scripts/ingest_etopo2022.py` into a cube-sphere DEM. Heights are WGS 84
+    /// ellipsoid metres, north-to-south, with a periodic longitude span.
+    pub fn from_etopo2022_raw(raw: &[u8], resolution: u32) -> Result<Self, DemError> {
+        Self::from_global_raster_raw(raw, GlobalRasterSpec::etopo2022_30s(), resolution)
+    }
+
+    /// Resample any normalized global equirectangular signed-`i16` raster onto
+    /// the cube-sphere. This is the one offline resampling path shared by the
+    /// ETOPO1 and ETOPO 2022 converters.
+    pub fn from_global_raster_raw(
+        raw: &[u8],
+        spec: GlobalRasterSpec,
+        resolution: u32,
+    ) -> Result<Self, DemError> {
+        spec.validate().map_err(DemError::InvalidFormat)?;
+        let expected_bytes = spec.expected_bytes().ok_or_else(|| {
+            DemError::InvalidFormat("global raster byte count overflows usize".into())
+        })?;
         if raw.len() != expected_bytes {
             return Err(DemError::InvalidFormat(format!(
-                "ETOPO1 raw input must be {expected_bytes} bytes for {ETOPO1_COLUMNS}x{ETOPO1_ROWS} signed i16 LE samples, found {}",
+                "global raster input must be {expected_bytes} bytes for {}x{} signed i16 LE samples, found {}",
+                spec.columns,
+                spec.rows,
                 raw.len()
             )));
         }
@@ -451,8 +483,11 @@ impl CubeSphereDem {
                     let u = column as f64 / (resolution - 1) as f64;
                     let direction = face_uv_to_direction(face, u, v);
                     let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
-                    heights_m
-                        .push(sample_etopo1_m(raw, latitude_deg, longitude_deg).round() as i16);
+                    heights_m.push(round_height_m(spec.sample_m(
+                        raw,
+                        latitude_deg,
+                        longitude_deg,
+                    ))?);
                 }
             }
         }
@@ -553,15 +588,41 @@ impl CubeSphereDem {
 #[derive(Debug, Clone)]
 pub struct DemTerrainSource {
     dem: Arc<CubeSphereDem>,
+    /// Local sea-level offset in the same ellipsoidal frame as the DEM. Earth
+    /// packages use EGM2008; other bodies leave it at zero.
+    geoid: Option<Arc<GeoidModel>>,
 }
 
 impl DemTerrainSource {
     pub fn from_dem(dem: CubeSphereDem) -> Self {
-        Self { dem: Arc::new(dem) }
+        Self {
+            dem: Arc::new(dem),
+            geoid: None,
+        }
+    }
+
+    pub fn from_dem_with_geoid(dem: CubeSphereDem, geoid: Arc<GeoidModel>) -> Self {
+        Self {
+            dem: Arc::new(dem),
+            geoid: Some(geoid),
+        }
     }
 
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
         Ok(Self::from_dem(CubeSphereDem::read_path(path)?))
+    }
+
+    /// Load a resident DEM together with its geoid model. The geoid is required
+    /// for ellipsoidal Earth terrain; loading it here keeps sea-level queries on
+    /// the same immutable data as the height field.
+    pub fn from_path_with_geoid(
+        path: impl AsRef<Path>,
+        geoid_path: impl AsRef<Path>,
+        geoid_spec: GlobalRasterSpec,
+    ) -> Result<Self, DemError> {
+        let dem = CubeSphereDem::read_path(path)?;
+        let geoid = GeoidModel::from_path(geoid_path, geoid_spec)?;
+        Ok(Self::from_dem_with_geoid(dem, Arc::new(geoid)))
     }
 
     pub fn resolution(&self) -> u32 {
@@ -593,12 +654,11 @@ impl TerrainSource for DemTerrainSource {
         self.dem.patch_geometric_error(patch)
     }
 
-    fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
-        if self.height_m(latitude_deg, longitude_deg) <= 0.0 {
-            SurfaceClass::Ocean
-        } else {
-            SurfaceClass::Land
-        }
+    fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.geoid
+            .as_ref()
+            .map(|geoid| geoid.undulation_m(latitude_deg, longitude_deg))
+            .unwrap_or(0.0)
     }
 }
 
@@ -611,6 +671,18 @@ pub fn convert_etopo1_raw(
 ) -> Result<(), DemError> {
     let raw = fs::read(input_path)?;
     CubeSphereDem::from_etopo1_raw(&raw, resolution)?.write_path(output_path)
+}
+
+/// Convert the normalized ETOPO 2022 30 arc-second WGS 84 raster into the
+/// versioned cube-sphere format. This is an offline tool; the simulator never
+/// reads source rasters.
+pub fn convert_etopo2022_raw(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    resolution: u32,
+) -> Result<(), DemError> {
+    let raw = fs::read(input_path)?;
+    CubeSphereDem::from_etopo2022_raw(&raw, resolution)?.write_path(output_path)
 }
 
 /// Convert the PDS LOLA LDEM_16 raw radius map into the versioned cube-sphere
@@ -705,28 +777,6 @@ fn direction_to_lat_lon(direction: DVec3) -> (f64, f64) {
     body_fixed_to_terrain_lat_lon(direction)
 }
 
-fn sample_etopo1_m(raw: &[u8], latitude_deg: f64, longitude_deg: f64) -> f64 {
-    let latitude = latitude_deg.clamp(-90.0, 90.0);
-    let longitude = (longitude_deg + 180.0).rem_euclid(360.0) - 180.0;
-    let x = (longitude + 180.0) / 360.0 * (ETOPO1_COLUMNS - 1) as f64;
-    let y = (90.0 - latitude) / 180.0 * (ETOPO1_ROWS - 1) as f64;
-    let x0 = x.floor() as usize;
-    let y0 = y.floor() as usize;
-    let x1 = (x0 + 1) % (ETOPO1_COLUMNS - 1);
-    let y1 = (y0 + 1).min(ETOPO1_ROWS - 1);
-    let tx = x - x0 as f64;
-    let ty = y - y0 as f64;
-    let height = |column, row| etopo1_height_m(raw, column, row) as f64;
-    let north = height(x0, y0) + (height(x1, y0) - height(x0, y0)) * tx;
-    let south = height(x0, y1) + (height(x1, y1) - height(x0, y1)) * tx;
-    north + (south - north) * ty
-}
-
-fn etopo1_height_m(raw: &[u8], column: usize, row: usize) -> i16 {
-    let offset = (row * ETOPO1_COLUMNS + column) * HEIGHT_BYTES;
-    i16::from_le_bytes([raw[offset], raw[offset + 1]])
-}
-
 fn sample_lola_ldem_m(
     raw: &[u8],
     columns: usize,
@@ -798,6 +848,7 @@ fn round_height_m(height_m: f64) -> Result<i16, DemError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::terrain_source::SurfaceClass;
 
     fn face_heights(resolution: u32) -> Vec<i16> {
         CubeFace::ALL
@@ -945,6 +996,77 @@ mod tests {
             ((90.0 - south_east.0) / 180.0 * (ETOPO1_ROWS - 1) as f64),
             (ETOPO1_ROWS - 1) as f64
         );
+    }
+
+    #[test]
+    fn geoid_moves_the_sea_level_classification() {
+        let dem_raw = [0u8; 16];
+        let dem_spec = GlobalRasterSpec {
+            columns: 4,
+            rows: 2,
+            longitude_origin_deg: -135.0,
+            longitude_step_deg: 90.0,
+            longitude_period_columns: 4,
+            latitude_origin_deg: 45.0,
+            latitude_step_deg: 90.0,
+            height_scale_m: 1.0,
+        };
+        let dem = CubeSphereDem::from_global_raster_raw(&dem_raw, dem_spec, 2).unwrap();
+        let geoid_spec = GlobalRasterSpec {
+            height_scale_m: 0.01,
+            ..dem_spec
+        };
+        let low = GeoidModel::from_raw(
+            [-100i16, -100, -100, -100, -100, -100, -100, -100]
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect(),
+            geoid_spec,
+        )
+        .unwrap();
+        let high = GeoidModel::from_raw(
+            [100i16, 100, 100, 100, 100, 100, 100, 100]
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect(),
+            geoid_spec,
+        )
+        .unwrap();
+        let at_sea_level = DemTerrainSource::from_dem_with_geoid(dem.clone(), Arc::new(low));
+        let below_sea_level = DemTerrainSource::from_dem_with_geoid(dem, Arc::new(high));
+        assert_eq!(at_sea_level.surface_class(0.0, 0.0), SurfaceClass::Land);
+        assert_eq!(below_sea_level.surface_class(0.0, 0.0), SurfaceClass::Ocean);
+    }
+
+    #[test]
+    fn global_raster_conversion_reuses_the_shared_sampler() {
+        let raw = [
+            1, 0, 2, 0, 3, 0, 4, 0, // north
+            10, 0, 20, 0, 30, 0, 40, 0, // south
+        ];
+        let spec = GlobalRasterSpec {
+            columns: 4,
+            rows: 2,
+            longitude_origin_deg: -135.0,
+            longitude_step_deg: 90.0,
+            longitude_period_columns: 4,
+            latitude_origin_deg: 45.0,
+            latitude_step_deg: 90.0,
+            height_scale_m: 1.0,
+        };
+        let dem = CubeSphereDem::from_global_raster_raw(&raw, spec, 2).unwrap();
+
+        assert_eq!(dem.heights_m.len(), 24);
+        assert!(dem.heights_m.iter().all(|height| (1..=40).contains(height)));
+        assert!(
+            dem.heights_m.iter().copied().max().unwrap()
+                - dem.heights_m.iter().copied().min().unwrap()
+                > 10
+        );
+        assert!(matches!(
+            CubeSphereDem::from_global_raster_raw(&raw[..8], spec, 2),
+            Err(DemError::InvalidFormat(_))
+        ));
     }
 
     #[test]

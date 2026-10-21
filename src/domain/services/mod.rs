@@ -12,6 +12,8 @@ pub mod elevation_pyramid;
 pub mod entry_physics;
 pub mod ephemeris;
 pub mod erosion;
+pub mod geoid;
+pub mod global_raster;
 pub mod gravity;
 pub mod guidance;
 pub mod imagery_package;

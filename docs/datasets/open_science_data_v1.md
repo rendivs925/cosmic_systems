@@ -1,8 +1,8 @@
 # Open Science Terrain Data v1
 
-Status: Phase 1 registry, validated.
+Status: Phase 2 ETOPO 2022 authority, validated.
 
-Date: 2026-10-20.
+Date: 2026-10-21.
 
 This is the inventory and provenance policy for open terrain and Earth-science
 data. It complements `docs/plans/open-science-data-and-terrain-realism.md` and
@@ -17,7 +17,8 @@ the machine-readable registry at
   fallback is explicitly configured.
 - Every dataset records exact source URL, version, resolution, bounds, license,
   attribution, horizontal and vertical datum, source SHA-256, runtime asset,
-  runtime SHA-256, converter, and status.
+  runtime SHA-256, any auxiliary runtime assets (for example a geoid grid),
+  converter, and status.
 - `status: Ready` is the only accepted state. `Pending`, `Missing`, and
   `Retired` entries are rejected by `TerrainDatasetRegistry::validate`.
 - Planned layers are documented here and are added to the registry only after a
@@ -37,8 +38,8 @@ cargo run --features dem --bin preprocess -- --layer dem --check
 cargo run --features dem --bin preprocess -- --region papua_coastal_lowland --check
 ```
 
-`--check` re-hashes each runtime asset and validates any referenced per-layer
-manifest. For a file, the checksum is the SHA-256 of that file. For a tile
+`--check` re-hashes each runtime asset and auxiliary asset, and validates any
+referenced per-layer manifest. For a file, the checksum is the SHA-256 of that file. For a tile
 directory it is the SHA-256 of the sorted `<file-sha256>  <relative-path>\n`
 listing, matching the existing imagery manifest convention. `--report-size`
 prints per-dataset and total resident bytes; combined with `--check` it reports
@@ -51,14 +52,25 @@ checksum but are not required at runtime.
 
 | Id | Layer | Coverage | Resolution | License | Converter |
 | --- | --- | --- | --- | --- | --- |
+| `earth_etopo2022_30s_ice_surface` | Dem | global | 30 arc-second (~927 m) | Public domain (NOAA/NCEI) | `etopo2022_convert` |
 | `earth_etopo1_ice_surface` | Dem | global | 1 arc-minute (~1.85 km) | Public domain (NOAA/NCEI) | `etopo1_convert` |
 | `earth_imagery_blue_marble_global` | Imagery | global | 2 km source, 8192x4096 runtime | Public domain (NASA) | `imagery_convert` |
 | `earth_imagery_sentinel2_papua` | Imagery | 139.0..140.0E, 8.6..7.4S | 10 m | Copernicus Sentinel Data (attribution) | `imagery_convert` |
 
 Details:
 
-- ETOPO1 Ice Surface: 1 arc-minute grid-registered signed i16 LE, mean sea level
-  (EPSG:5715), runtime CSDEM at 2048 faces per side. Source SHA-256
+- ETOPO 2022 30 arc-second Ice Surface: the active global authority, WGS 84
+  ellipsoid heights normalized from EGM2008 with the published geoid tile.
+  Source SHA-256
+  `3d76cea4fca0a056b6d8c4bcf7f4073465b975489849235309e65d44ed4ed404`;
+  runtime SHA-256
+  `2e30bb5498ce9ec8a12020cefde669208f0dba09d5a6b66861fa6e9ee11d33b6`.
+  Sea level is supplied by the generated 0.5 degree EGM2008 geoid grid
+  (`earth_egm2008_geoid_0p5deg_i16cm.raw`, SHA-256
+  `f4ea75f9721eee1d0a3fea97a05d9dda6c166bed8300e73f8e7163d1cf59ffea`). See
+  `docs/datasets/earth_etopo2022_30s_v1.md`.
+- ETOPO1 Ice Surface (retained rollback): 1 arc-minute grid-registered signed i16 LE, mean sea level
+  (EPSG:5773), runtime CSDEM at 2048 faces per side. Source SHA-256
   `877cbe01350b009583fd3b9c5ea4231e269484fbdaeb513b17b3a1bfdccce1ce`;
   runtime SHA-256
   `5402d634be8c4ac3897eab53c3f60ee213000752f26bb426ba9c22fdafe60c83`.
@@ -76,7 +88,6 @@ same provenance and checksum gate before use.
 
 | Dataset | Layer | Role | Resolution | License / attribution | Phase |
 | --- | --- | --- | --- | --- | --- |
-| ETOPO 2022 30 arc-second | Dem | global relief replacement | ~900 m | NOAA/NCEI, public domain | 2 |
 | NASADEM / SRTM | Dem | regional bare earth | 30 m | NASA/USGS, public domain | 3 |
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
@@ -94,8 +105,9 @@ Wallops, Kourou, Baikonur, Mahia.
 - Earth heights normalize to the WGS 84 ellipsoid through EGM2008 where the
   source is a geoid or mean-sea-level model, unless a dataset documents a
   different reviewed transformation.
-- ETOPO1 currently uses mean sea level (EPSG:5715); its runtime package is the
-  accepted baseline until the ETOPO 2022 normalization is reviewed.
+- ETOPO 2022 30 arc-second is the active authority, normalized from EGM2008
+  orthometric heights to WGS 84 ellipsoidal heights. The ETOPO1 package
+  (EPSG:5773) remains the reviewed rollback baseline.
 - KSC 3DEP is NAVD88. A valid NAVD88 to WGS 84 control at the launch site is
   still unresolved. Until it exists, 3DEP supplies relative relief anchored to
   the global EGM2008/WGS 84 height; the offshore VDatum offset must not be
@@ -104,17 +116,18 @@ Wallops, Kourou, Baikonur, Mahia.
 
 ## Ingestion commands
 
-Phase 1:
+Registry check:
 
 ```sh
 cargo run --features dem --bin preprocess -- --check
 ```
 
-Phase 2 (planned):
+Phase 2 (implemented):
 
 ```sh
 python3 scripts/ingest_etopo2022.py --check
 cargo run --release --features dem --bin etopo2022_convert -- <normalized.raw> <output.csdem> 2048
+python3 scripts/ingest_egm2008_geoid.py
 cargo run --features dem --bin preprocess -- --layer dem --check
 ```
 

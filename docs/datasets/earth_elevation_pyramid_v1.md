@@ -7,9 +7,9 @@ representation of the simulator's **one** terrain authority. It is not a second
 authority and does not replace the resident base.
 
 Earth's measured authority remains the resident
-`assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem`
-(ETOPO1 Ice Surface, ~4.9 km effective ground sample distance; see
-`earth_etopo1_ice_surface_v1.md`). The pyramid adds high-resolution regional
+`assets/large_files/terrain/earth_etopo2022_30s_ice_surface_cs2048_v3.csdem`
+(ETOPO 2022 30 arc-second Ice Surface, WGS 84 ellipsoid; see
+`earth_etopo2022_30s_v1.md`). The pyramid adds high-resolution regional
 tiles that are decoded by worker tasks and installed into a bounded resident set
 behind the existing `TerrainSource` boundary. Runtime sampling always composes:
 
@@ -54,7 +54,7 @@ All values are validated by `ElevationPyramidManifest::validate` before use.
 | `format_version` | `u32` | Payload format version; must equal `1` (`ELEVATION_PYRAMID_FORMAT_VERSION`). |
 | `body` | string | Body identifier, e.g. `Earth`. Must be non-empty. |
 | `coordinate_frame` | string | Body-fixed frame in which tile addresses resolve. Must be non-empty. |
-| `vertical_datum` | string | Vertical datum of the metre elevations, e.g. `mean sea level / EPSG:5715`. Must be non-empty. |
+| `vertical_datum` | string | Vertical datum of the metre elevations, e.g. `EGM96 height / EPSG:5773`. Must be non-empty. |
 | `source` | string | Source dataset identifier/version the package was resampled from. Must be non-empty. |
 | `license` | string | License of the source data. Must be non-empty. |
 | `source_sha256` | string | SHA-256 of the reviewed source input, 64 lowercase/uppercase hex characters. |

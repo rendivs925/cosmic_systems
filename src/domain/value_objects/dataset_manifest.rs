@@ -94,6 +94,16 @@ impl DatasetBounds {
     }
 }
 
+/// Additional runtime file that belongs to a dataset but is not its primary
+/// height or imagery asset, such as a sea-level geoid grid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuxiliaryAsset {
+    pub path: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub role: String,
+}
+
 /// Provenance and runtime artifact for one terrain dataset layer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DatasetEntry {
@@ -116,6 +126,9 @@ pub struct DatasetEntry {
     pub runtime_asset: String,
     /// File SHA-256, or the aggregate checksum for a tile directory.
     pub runtime_sha256: String,
+    /// Extra runtime files required for correct interpretation, such as a geoid.
+    #[serde(default)]
+    pub auxiliary_assets: Vec<AuxiliaryAsset>,
     pub converter: String,
     pub status: DatasetStatus,
     /// Optional existing per-layer manifest that owns deeper validation.
@@ -229,6 +242,28 @@ impl DatasetEntry {
         }
         validate_sha256(&self.id, "source", &self.source_sha256)?;
         validate_sha256(&self.id, "runtime", &self.runtime_sha256)?;
+        let mut auxiliary_paths = std::collections::HashSet::new();
+        for auxiliary in &self.auxiliary_assets {
+            if !is_repo_relative(&auxiliary.path) {
+                return Err(format!(
+                    "dataset {} auxiliary asset must be repository-relative",
+                    self.id
+                ));
+            }
+            if auxiliary.path == self.runtime_asset {
+                return Err(format!(
+                    "dataset {} auxiliary asset duplicates the runtime asset",
+                    self.id
+                ));
+            }
+            if !auxiliary_paths.insert(auxiliary.path.as_str()) {
+                return Err(format!(
+                    "dataset {} has duplicate auxiliary asset {}",
+                    self.id, auxiliary.path
+                ));
+            }
+            validate_sha256(&self.id, "auxiliary", &auxiliary.sha256)?;
+        }
         if self.status != DatasetStatus::Ready {
             return Err(format!(
                 "dataset {} is {:?}; only Ready datasets are accepted",
@@ -312,11 +347,34 @@ mod tests {
             dem.runtime_asset,
             "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem"
         );
+        let etopo2022 = registry
+            .entry("earth_etopo2022_30s_ice_surface")
+            .expect("ETOPO 2022 entry");
+        assert_eq!(etopo2022.auxiliary_assets.len(), 1);
+        assert_eq!(
+            etopo2022.auxiliary_assets[0].path,
+            "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw"
+        );
         let imagery = registry
             .entry("earth_imagery_sentinel2_papua")
             .expect("Sentinel-2 entry");
         assert!(matches!(imagery.bounds, DatasetBounds::Region { .. }));
         assert_eq!(imagery.region.as_deref(), Some("papua_coastal_lowland"));
+    }
+
+    #[test]
+    fn auxiliary_checksums_are_validated() {
+        let mut registry = registry();
+        let entry = registry
+            .datasets
+            .iter_mut()
+            .find(|entry| entry.id == "earth_etopo2022_30s_ice_surface")
+            .expect("ETOPO 2022 entry");
+        entry.auxiliary_assets[0].sha256 = "pending".into();
+        let error = registry
+            .validate()
+            .expect_err("pending auxiliary checksums must be rejected");
+        assert!(error.contains("auxiliary"), "unexpected error: {error}");
     }
 
     #[test]
@@ -370,10 +428,16 @@ mod tests {
     }
 
     #[test]
-    fn layer_and_region_filters_select_one_entry() {
+    fn layer_and_region_filters_select_ready_entries() {
         let registry = registry();
         let dems: Vec<_> = registry.selected(Some(DatasetLayer::Dem), None).collect();
-        assert_eq!(dems.len(), 1);
+        assert_eq!(dems.len(), 2);
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_etopo1_ice_surface"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_etopo2022_30s_ice_surface"));
         let papua: Vec<_> = registry
             .selected(None, Some("papua_coastal_lowland"))
             .collect();

@@ -1,0 +1,40 @@
+(
+    body: "earth",
+    grid_width: 1440,
+    grid_height: 720,
+    channel_threshold_cells: 32.0,
+    sample_count: 1036800,
+    hypsometry: (
+        min_m: -10303.7373046875,
+        max_m: 6767.6162109375,
+        land_fraction: 0.2909357829094969,
+        ocean_fraction: 0.709064217090503,
+        land_mean_m: 789.5827088250516,
+        land_p50_m: 416.3795166015625,
+        land_p95_m: 3001.287841796875,
+    ),
+    slope: (
+        land_p50_deg: 0.147071568970883,
+        land_p95_deg: 1.2902828075655055,
+        max_deg: 15.439925789819364,
+        fraction_above_35_deg: 0.0,
+    ),
+    hydrology: (
+        channel_cells: 24096,
+        channel_length_km: 320534.18272237637,
+        land_area_km2: 148396416.41634712,
+        drainage_density_km_per_km2: 0.002159986005477871,
+        hack_exponent: Some(0.7469144535826027),
+        concavity_theta: Some(0.1393744799746409),
+        max_strahler_order: 4,
+        median_sinuosity: Some(1.1455948664593327),
+    ),
+    coastline: (
+        length_km: 593818.0862102392,
+        fractal_dimension: Some(1.1864804616734848),
+    ),
+    roughness: (
+        variogram_slope: Some(0.8120751836623241),
+        psd_beta: Some(2.812075183662324),
+    ),
+)

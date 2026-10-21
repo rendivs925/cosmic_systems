@@ -3,7 +3,7 @@
     source_url: "https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO1/data/ice_surface/grid_registered/binary/etopo1_ice_g_i2.zip",
     source_file: "etopo1_ice_g_i2.bin",
     horizontal_datum: "WGS 84 / EPSG:4326",
-    vertical_datum: "mean sea level / EPSG:5715",
+    vertical_datum: "EGM96 height / EPSG:5773",
     source_resolution_arcmin: 1,
     cube_sphere_resolution: 2048,
     runtime_asset: "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem",

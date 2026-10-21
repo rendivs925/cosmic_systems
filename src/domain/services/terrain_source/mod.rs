@@ -3,9 +3,12 @@
 //! `TerrainSource` is the single terrain-data boundary. Render meshes and
 //! collision queries consume the same authoritative source.
 //!
-//! Heights are in meters above the planet's mean radius (geocentric). The
-//! source is planet-scoped: the planet is bound when the source is attached to
-//! a celestial body, so the interface takes latitude/longitude only.
+//! Heights are in meters above the planet's mean radius (geocentric). Earth
+//! measured terrain uses WGS 84 ellipsoidal heights, so sea level is the local
+//! EGM2008 geoid undulation rather than zero; `sea_level_height_m` is the one
+//! authority for that offset. The source is planet-scoped: the planet is bound
+//! when the source is attached to a celestial body, so the interface takes
+//! latitude/longitude only.
 //!
 //! Procedural generation is deterministic: it uses seeded value noise with no
 //! runtime state, so identical inputs always produce identical output
@@ -33,8 +36,9 @@ pub use catalog::EarthTerrainSource;
 pub use catalog::{
     earth_eroded_base, earth_erosion_config, erosion_store, EarthTerrainDataError,
     MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
-    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EROSION_CACHE_MAX_BYTES, DEFAULT_MARS_DEM_PATH,
-    DEFAULT_MOON_DEM_PATH, EARTH_EROSION_NAMESPACE,
+    DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EARTH_GEOID_PATH,
+    DEFAULT_EROSION_CACHE_MAX_BYTES, DEFAULT_MARS_DEM_PATH, DEFAULT_MOON_DEM_PATH,
+    EARTH_EROSION_NAMESPACE,
 };
 pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
 pub use noise::ValueNoise;
@@ -55,9 +59,9 @@ pub enum SurfaceClass {
     /// The source has no physical land-cover classification.
     #[default]
     Unknown,
-    /// Surface lies at or below the source's zero-elevation sea-level datum.
+    /// Surface lies at or below the source's sea-level datum.
     Ocean,
-    /// Surface lies above the source's zero-elevation sea-level datum.
+    /// Surface lies above the source's sea-level datum.
     Land,
 }
 
@@ -131,9 +135,18 @@ pub trait TerrainSource: Send + Sync + Debug {
         }
     }
 
+    /// Height of the source's sea-level datum in the same ellipsoidal frame as
+    /// [`Self::height_m`]. Zero for bodies without a geoid model; Earth terrain
+    /// returns the local EGM2008 undulation.
+    fn sea_level_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+        0.0
+    }
+
     /// Compatibility classification for sources that only expose elevation.
     fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
-        if self.height_m(latitude_deg, longitude_deg) <= 0.0 {
+        if self.height_m(latitude_deg, longitude_deg)
+            <= self.sea_level_height_m(latitude_deg, longitude_deg)
+        {
             SurfaceClass::Ocean
         } else {
             SurfaceClass::Land
@@ -455,7 +468,7 @@ mod tests {
     fn default_earth_source_adds_bounded_detail_over_the_eroded_dem_package() {
         let default_source = EarthTerrainSource::new();
         let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
-            .expect("resident Earth ETOPO1 terrain package must load");
+            .expect("resident Earth terrain package must load");
         // Erosion is part of Earth's base authority, so the bounded detail is
         // the difference from the eroded base, not the un-eroded package.
         let eroded_package = earth_eroded_base(Arc::new(package_source));
@@ -477,7 +490,7 @@ mod tests {
     fn default_earth_source_grades_launch_pads_level() {
         let source = EarthTerrainSource::new();
         let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
-            .expect("resident Earth ETOPO1 terrain package must load");
+            .expect("resident Earth terrain package must load");
         let eroded_source = earth_eroded_base(Arc::new(package_source));
         let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).expect("Earth exists");
 

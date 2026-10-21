@@ -3,15 +3,17 @@
 //! Usage:
 //!   terrain_metrics [--body earth|moon|mars] [--quick|--full] [--grid WxH]
 //!                   [--channel-threshold N] [--variogram-max-lag N]
-//!                   [--source PATH] [--write] [--assert] [--baseline PATH]
+//!                   [--source PATH] [--no-geoid] [--write] [--assert]
+//!                   [--baseline PATH]
 
 use cosmic_systems_wasm::domain::services::dem_terrain_source::DemTerrainSource;
+use cosmic_systems_wasm::domain::services::global_raster::GlobalRasterSpec;
 use cosmic_systems_wasm::domain::services::terrain_metrics::{
     compare_reports, load_report, measure_terrain_metrics, save_report, TerrainMetricsConfig,
     DEFAULT_BASELINE_PATH,
 };
 use cosmic_systems_wasm::domain::services::terrain_source::{
-    DEFAULT_EARTH_DEM_PATH, DEFAULT_MARS_DEM_PATH, DEFAULT_MOON_DEM_PATH,
+    DEFAULT_EARTH_DEM_PATH, DEFAULT_EARTH_GEOID_PATH, DEFAULT_MARS_DEM_PATH, DEFAULT_MOON_DEM_PATH,
 };
 use std::error::Error;
 use std::path::PathBuf;
@@ -25,6 +27,7 @@ const MARS_RADIUS_M: f64 = 3_389_500.0;
 struct Options {
     body: String,
     source: Option<PathBuf>,
+    geoid: bool,
     config: TerrainMetricsConfig,
     baseline: PathBuf,
     write: bool,
@@ -56,8 +59,16 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         other => return Err(format!("unsupported body {other}").into()),
     };
     let path = options.source.unwrap_or_else(|| PathBuf::from(source_path));
-    let source = DemTerrainSource::from_path(&path)
-        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let source = if options.body == "earth" && options.geoid {
+        DemTerrainSource::from_path_with_geoid(
+            &path,
+            DEFAULT_EARTH_GEOID_PATH,
+            GlobalRasterSpec::egm2008_geoid_0p5deg(),
+        )
+    } else {
+        DemTerrainSource::from_path(&path)
+    }
+    .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
 
     let started = Instant::now();
     let report = measure_terrain_metrics(&source, &options.config, &options.body, radius_m)?;
@@ -124,6 +135,7 @@ fn parse_options() -> Result<Options, String> {
     let mut options = Options {
         body: "earth".into(),
         source: None,
+        geoid: true,
         config: TerrainMetricsConfig::quick(),
         baseline: PathBuf::from(DEFAULT_BASELINE_PATH),
         write: false,
@@ -149,6 +161,7 @@ fn parse_options() -> Result<Options, String> {
                     .parse()
                     .map_err(|_| "--grid height must be a positive integer")?;
             }
+            "--no-geoid" => options.geoid = false,
             "--channel-threshold" => {
                 options.config.channel_threshold_cells = arguments
                     .next()

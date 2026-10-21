@@ -1,8 +1,9 @@
 # Earth ETOPO1 Ice Surface v1
 
-The Earth terrain authority is NOAA/NCEI ETOPO1 Ice Surface, grid-registered,
-one arc-minute global relief. The source raster uses WGS 84 geographic
-coordinates (EPSG:4326) and mean sea-level heights (EPSG:5715).
+ETOPO1 Ice Surface, grid-registered, one arc-minute global relief, is the
+retained rollback authority. ETOPO 2022 30 arc-second is the active authority;
+see `earth_etopo2022_30s_v1.md`. The source raster uses WGS 84 geographic
+coordinates (EPSG:4326) and EGM96 mean-sea-level heights (EPSG:5773).
 
 Source archive: `etopo1_ice_g_i2.zip`
 
@@ -24,11 +25,21 @@ a missing or invalid package is a native startup configuration error.
 
 Generated runtime SHA-256: `5402d634be8c4ac3897eab53c3f60ee213000752f26bb426ba9c22fdafe60c83`
 
-Rocket Mode's non-authoritative body-fixed overview is generated offline from
-this package and the shared terrain appearance law:
+Rocket Mode's non-authoritative body-fixed overview is generated from the active
+ETOPO 2022 authority, not from this rollback package:
 
 ```sh
 cargo run --features dem --bin terrain_overview_bake -- earth assets/large_files/terrain/earth_terrain_overview_v1.png
 ```
 
-Generated overview SHA-256: `7152bc0e46aa8e1df85cef48c2ccb546cabce6b6f27813bab005809d206dea1f`
+Current overview SHA-256:
+`c273aaac082b23782f5471f1457d613bc047ece810eb7d6764681dd34d326bd6`
+
+The retained ETOPO1 metrics baseline is reproduced without a geoid, because this
+package stores mean-sea-level heights:
+
+```sh
+cargo run --release --features dem --bin terrain_metrics -- --body earth \
+    --source assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem \
+    --no-geoid --full --assert --baseline tests/baselines/terrain-metrics-earth-etopo1.ron
+```

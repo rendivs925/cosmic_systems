@@ -627,6 +627,10 @@ impl TerrainSource for TileElevationSource {
             .unwrap_or_else(|| self.base.height_m(latitude_deg, longitude_deg))
     }
 
+    fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base.sea_level_height_m(latitude_deg, longitude_deg)
+    }
+
     fn elevation_bounds_m(&self) -> ElevationBounds {
         let base = self.base.elevation_bounds_m();
         let payload = self.manifest.global_bounds();

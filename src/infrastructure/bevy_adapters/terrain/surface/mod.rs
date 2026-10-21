@@ -669,8 +669,9 @@ pub(crate) fn prepare_patch_surface(
     } else {
         0.0
     };
+    let elevation_m = height_m - source.sea_level_height_m(lat, lon);
     let appearance = with_river_appearance(
-        surface_appearance(height_m, moisture, source.zone_lat(lat), slope_deg),
+        surface_appearance(elevation_m, moisture, source.zone_lat(lat), slope_deg),
         river_strength,
     );
     let local_surfaces = supports_local_surfaces(patch.level)

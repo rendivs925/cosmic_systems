@@ -20,7 +20,7 @@ use std::path::Path;
 pub use hydrology::HydrologyStats;
 
 /// Baseline location used by the CLI and regression checks.
-pub const DEFAULT_BASELINE_PATH: &str = "tests/baselines/terrain-metrics-earth-etopo1.ron";
+pub const DEFAULT_BASELINE_PATH: &str = "tests/baselines/terrain-metrics-earth-etopo2022.ron";
 
 /// Measurement grid and channel-network settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -379,7 +379,7 @@ impl SampleGrid {
                     });
                 }
                 heights.push(height_m as f32);
-                land.push(height_m > 0.0);
+                land.push(height_m > source.sea_level_height_m(latitude, longitude));
             }
         }
 

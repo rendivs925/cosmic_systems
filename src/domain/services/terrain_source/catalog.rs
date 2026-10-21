@@ -19,6 +19,8 @@ use crate::domain::services::elevation_pyramid::{
 #[cfg(feature = "dem")]
 use crate::domain::services::erosion::{ErodedTerrainSource, ErosionConfig, ErosionTileStore};
 #[cfg(feature = "dem")]
+use crate::domain::services::global_raster::GlobalRasterSpec;
+#[cfg(feature = "dem")]
 use crate::domain::services::planet_factory::PlanetFactory;
 #[cfg(feature = "dem")]
 use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
@@ -35,7 +37,12 @@ use std::sync::Arc;
 /// Default measured Earth height package path.
 #[cfg(feature = "dem")]
 pub const DEFAULT_EARTH_DEM_PATH: &str =
-    "assets/large_files/terrain/earth_etopo1_ice_surface_cs2048_v2.csdem";
+    "assets/large_files/terrain/earth_etopo2022_30s_ice_surface_cs2048_v3.csdem";
+/// EGM2008 geoid undulation grid used to convert Earth's ellipsoidal terrain
+/// heights back to sea-level-relative values for classification and water.
+#[cfg(feature = "dem")]
+pub const DEFAULT_EARTH_GEOID_PATH: &str =
+    "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw";
 /// Default optional high-resolution elevation payload package root. A missing
 /// package is not an error: Earth falls back to the resident measured CSDEM.
 #[cfg(feature = "dem")]
@@ -155,7 +162,7 @@ pub fn earth_eroded_base(base: Arc<dyn TerrainSource>) -> Arc<dyn TerrainSource>
 /// Compose Earth's measured base terrain with the bounded procedural detail
 /// contribution. Rendering, collision, radar altitude, and biome metadata all
 /// sample this one surface; the detail is deterministic and never changes with
-/// camera movement or frame rate. The measured ETOPO1 package stays the base
+/// camera movement or frame rate. The measured ETOPO 2022 package stays the base
 /// elevation authority, erosion is applied to that base, and the detail is
 /// documented presentation-scale relief.
 #[cfg(feature = "dem")]
@@ -205,7 +212,7 @@ fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
 }
 
 /// Earth's one authoritative terrain composition. Native builds require the
-/// resident measured ETOPO1 height package as the base surface and add a
+/// resident measured ETOPO 2022 height package as the base surface and add a
 /// deterministic bounded procedural detail layer; rendering and collision use
 /// the same source with no runtime download.
 ///
@@ -228,20 +235,20 @@ impl EarthTerrainSource {
             // a missing or invalid package silently falls back to the current
             // base+detail composition so no mode depends on the new data.
             let measured: Arc<dyn TerrainSource> = Arc::new(
-                DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH).unwrap_or_else(|error| {
+                DemTerrainSource::from_path_with_geoid(
+                    DEFAULT_EARTH_DEM_PATH,
+                    DEFAULT_EARTH_GEOID_PATH,
+                    GlobalRasterSpec::egm2008_geoid_0p5deg(),
+                )
+                .unwrap_or_else(|error| {
                     panic!("Earth measured terrain authority is unavailable or invalid: {error}")
                 }),
             );
+            let fallback = Arc::clone(&measured);
             let root = Path::new(DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT);
-            Self::assemble(measured, Some(root)).unwrap_or_else(|_| {
-                let measured: Arc<dyn TerrainSource> = Arc::new(
-                    DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
-                        .expect("resident Earth DEM was validated above"),
-                );
-                Self {
-                    source: Arc::new(earth_layered_terrain(measured)),
-                    tiles: None,
-                }
+            Self::assemble(measured, Some(root)).unwrap_or_else(|_| Self {
+                source: Arc::new(earth_layered_terrain(fallback)),
+                tiles: None,
             })
         }
         #[cfg(not(feature = "dem"))]
@@ -259,6 +266,24 @@ impl EarthTerrainSource {
     #[cfg(feature = "dem")]
     pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
         let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path(path)?);
+        Ok(Self {
+            source: Arc::new(earth_layered_terrain(base)),
+            tiles: None,
+        })
+    }
+
+    /// Construct Earth terrain from a validated CSDEM and the geoid grid that
+    /// defines sea level for its ellipsoidal heights.
+    #[cfg(feature = "dem")]
+    pub fn with_dem_path_and_geoid(
+        path: impl AsRef<Path>,
+        geoid_path: impl AsRef<Path>,
+    ) -> Result<Self, DemError> {
+        let base: Arc<dyn TerrainSource> = Arc::new(DemTerrainSource::from_path_with_geoid(
+            path,
+            geoid_path,
+            GlobalRasterSpec::egm2008_geoid_0p5deg(),
+        )?);
         Ok(Self {
             source: Arc::new(earth_layered_terrain(base)),
             tiles: None,
@@ -423,6 +448,10 @@ impl TerrainSource for EarthTerrainSource {
 
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.source.height_m(latitude_deg, longitude_deg)
+    }
+
+    fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.source.sea_level_height_m(latitude_deg, longitude_deg)
     }
 
     fn elevation_bounds_m(&self) -> ElevationBounds {

@@ -112,7 +112,16 @@ fn run(mut options: Options) -> Result<(), String> {
                 }
             }
         } else {
-            match runtime_size(Path::new(&entry.runtime_asset)) {
+            let result = runtime_size(Path::new(&entry.runtime_asset)).and_then(|runtime| {
+                entry
+                    .auxiliary_assets
+                    .iter()
+                    .try_fold(runtime, |total, auxiliary| {
+                        runtime_size(Path::new(&auxiliary.path))
+                            .map(|size| total.saturating_add(size))
+                    })
+            });
+            match result {
                 Ok(size) => size,
                 Err(error) => {
                     failures.push(format!("{}: {error}", entry.id));
@@ -165,10 +174,23 @@ fn check_entry(entry: &DatasetEntry) -> Result<u64, String> {
             entry.runtime_sha256
         ));
     }
+    let mut total = bytes;
+    for auxiliary in &entry.auxiliary_assets {
+        let path = Path::new(&auxiliary.path);
+        let (auxiliary_digest, auxiliary_bytes) = runtime_digest(path)
+            .map_err(|error| format!("auxiliary asset {}: {error}", auxiliary.path))?;
+        if !auxiliary_digest.eq_ignore_ascii_case(&auxiliary.sha256) {
+            return Err(format!(
+                "auxiliary asset is stale: expected {}, found {auxiliary_digest}",
+                auxiliary.sha256
+            ));
+        }
+        total = total.saturating_add(auxiliary_bytes);
+    }
     if let Some(manifest_path) = &entry.manifest_path {
         verify_manifest(entry, Path::new(manifest_path))?;
     }
-    Ok(bytes)
+    Ok(total)
 }
 
 fn verify_manifest(entry: &DatasetEntry, path: &Path) -> Result<(), String> {

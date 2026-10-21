@@ -67,6 +67,11 @@ path = "src/bin/etopo1_convert.rs"
 required-features = ["dem"]
 
 [[bin]]
+name = "etopo2022_convert"
+path = "src/bin/etopo2022_convert.rs"
+required-features = ["dem"]
+
+[[bin]]
 name = "csdem_upgrade"
 path = "src/bin/csdem_upgrade.rs"
 required-features = ["dem"]
@@ -79,6 +84,11 @@ required-features = ["dem"]
 [[bin]]
 name = "terrain_overview_bake"
 path = "src/bin/terrain_overview_bake.rs"
+required-features = ["dem"]
+
+[[bin]]
+name = "terrain_site_delta"
+path = "src/bin/terrain_site_delta.rs"
 required-features = ["dem"]
 
 [[bin]]

@@ -200,6 +200,12 @@ impl TerrainSource for LayeredTerrainSource {
         }
     }
 
+    fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.base
+            .source
+            .sea_level_height_m(latitude_deg, longitude_deg)
+    }
+
     fn overview_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let mut height_m = self
             .base
