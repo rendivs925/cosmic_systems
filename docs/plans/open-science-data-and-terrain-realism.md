@@ -186,9 +186,9 @@ site-specific mission profiles remain future work.
 
 ## Phase 4 - Imagery, albedo, land cover, soil
 
-Status: in progress. ESA WorldCover packages cover all eight priority regions,
-compose deterministically at runtime, and refine close-range materials; global
-land cover, soil, and measured baked albedo remain open.
+Status: in progress. ESA WorldCover now supplies a global 5 arc-minute fallback
+plus eight 1 arc-second regional packages that compose deterministically and
+refine close-range materials; soil and measured baked albedo remain open.
 
 ### Deliverables
 

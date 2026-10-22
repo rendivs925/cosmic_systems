@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages validated; Phase 4 regional land cover implemented for all eight priority regions.
+Status: Phase 3 priority regional packages validated; Phase 4 land cover implemented globally and for all eight priority regions.
 
 Date: 2026-10-22.
 
@@ -57,6 +57,7 @@ checksum but are not required at runtime.
 | `earth_imagery_blue_marble_global` | Imagery | global | 2 km source, 8192x4096 runtime | Public domain (NASA) | `imagery_convert` |
 | `earth_regional_dem_papua` | Dem | 139.0..140.0E, 8.6..7.4S | 30 m | Public domain (NASA/NASADEM) | `regional_dem_bake` |
 | `earth_imagery_sentinel2_papua` | Imagery | 139.0..140.0E, 8.6..7.4S | 10 m | Copernicus Sentinel Data (attribution) | `imagery_convert` |
+| `earth_landcover_worldcover_global` | LandCover | global 180W..180E, 60S..84N | 600 m overview, 5 arc-minute package | CC BY 4.0 (ESA) | `land_cover_bake` |
 | `earth_landcover_worldcover_papua` | LandCover | 139.0..140.0E, 8.54..7.35S | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
 | `earth_landcover_worldcover_ksc` | LandCover | 80.85..80.45W, 28.24..28.59N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
 | `earth_landcover_worldcover_starbase` | LandCover | 97.30..97.05W, 25.70..25.95N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
@@ -91,6 +92,10 @@ Details:
   aggregate runtime SHA-256
   `74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784`.
   See `docs/datasets/earth_regional_papua_v1.md`.
+- Global land cover fallback: 2,651 ESA WorldCover COG overviews mosaicked at
+  5 arc-minutes over `180W..180E`, `60S..84N`. Runtime SHA-256
+  `719e0e6c67ce898489858304bab969535b484eaadf01a118578d7d7aa861ec5c`.
+  See `docs/datasets/earth_landcover_global_v1.md`.
 - Regional land cover: ESA WorldCover 2021 v200 tiles nearest-neighbour
   resampled to 1 arc-second terrain-radial grids for presentation-only
   vegetation and close-range material tinting. Eight packages cover the Phase 3

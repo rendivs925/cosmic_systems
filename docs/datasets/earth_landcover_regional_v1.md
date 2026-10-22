@@ -105,9 +105,10 @@ Dominant measured classes:
 | Mahia | water 90.1%, grass 5.7%, tree 4.0% |
 
 The runtime loads every `.clcvr` file in `landcover_v1` in file-name order.
-Later packages override overlapping coverage, so a regional package can refine a
-future global package without changing the binary format. Outside all packages,
-vegetation placement falls back to the source's climate-derived density.
+The `00_global_landcover_5arcmin.clcvr` fallback loads first, then these regional
+packages override overlapping coverage. Outside all packages, vegetation
+placement falls back to the source's climate-derived density. See
+`docs/datasets/earth_landcover_global_v1.md`.
 
 ## Presentation materials
 
