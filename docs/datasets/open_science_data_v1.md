@@ -93,7 +93,8 @@ Details:
   See `docs/datasets/earth_regional_papua_v1.md`.
 - Regional land cover: ESA WorldCover 2021 v200 tiles nearest-neighbour
   resampled to 1 arc-second terrain-radial grids for presentation-only
-  vegetation. Eight packages cover the Phase 3 priority regions, total 24.5 MiB.
+  vegetation and close-range material tinting. Eight packages cover the Phase 3
+  priority regions, total 24.5 MiB.
   Source and runtime SHA-256 values are recorded in the registry and in
   `docs/datasets/earth_landcover_regional_v1.md`. Required attribution:
   `ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data

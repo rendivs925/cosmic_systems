@@ -4,6 +4,7 @@
 use super::super::mips::{mip_chain_rgba8, MipFilter};
 use super::{direction_to_lat_lon, face_uv_to_direction};
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
+use crate::domain::services::land_cover::{LandCoverClass, LandCoverLookup};
 use crate::domain::services::terrain_source::{
     surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -77,6 +78,7 @@ pub fn build_patch_surfaces(
     patch: &TerrainPatch,
     geometry: &PatchGeometry,
     radius_m: f64,
+    land_cover: Option<&dyn LandCoverLookup>,
 ) -> (Image, Image) {
     let res = SURFACE_TEX_RES as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
@@ -129,10 +131,16 @@ pub fn build_patch_surfaces(
 
             let profile = papua_tropical_profile(la, lo, elevation_m, moisture, source_slope_deg);
             let [r, g, b, _] = terrain_albedo(appearance, profile);
+            let (material, roughness) = match land_cover
+                .and_then(|cover| cover.sample_class(la, lo))
+            {
+                Some(class) => apply_land_cover_material([r, g, b], appearance.roughness, class),
+                None => ([r, g, b], appearance.roughness),
+            };
             albedo.extend_from_slice(&[
-                (r * 255.0) as u8,
-                (g * 255.0) as u8,
-                (b * 255.0) as u8,
+                (material[0] * 255.0) as u8,
+                (material[1] * 255.0) as u8,
+                (material[2] * 255.0) as u8,
                 255,
             ]);
 
@@ -155,7 +163,7 @@ pub fn build_patch_surfaces(
                 ((local_normal.x * 0.5 + 0.5) * 255.0).round() as u8,
                 ((local_normal.y * 0.5 + 0.5) * 255.0).round() as u8,
                 ((local_normal.z * 0.5 + 0.5) * 255.0).round() as u8,
-                (appearance.roughness.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (roughness.clamp(0.0, 1.0) * 255.0).round() as u8,
             ]);
         }
     }
@@ -198,6 +206,41 @@ pub fn build_patch_surfaces(
     albedo_img.sampler = sampler.clone();
     normal_img.sampler = sampler;
     (albedo_img, normal_img)
+}
+
+/// Measured land cover refines close-range presentation materials without
+/// changing the authoritative biome albedo or any physical state. The target
+/// colors are canonical class tints, not measured reflectance; they keep the
+/// source's elevation, slope, river, and snow shading intact.
+pub(super) fn apply_land_cover_material(
+    albedo: [f32; 3],
+    roughness: f32,
+    class: LandCoverClass,
+) -> ([f32; 3], f32) {
+    const MEASURED_WEIGHT: f32 = 0.40;
+    let (target, target_roughness) = match class {
+        LandCoverClass::TreeCover => ([0.045, 0.105, 0.035], 0.95),
+        LandCoverClass::Shrubland => ([0.105, 0.130, 0.055], 0.92),
+        LandCoverClass::Grassland => ([0.155, 0.215, 0.070], 0.90),
+        LandCoverClass::Cropland => ([0.190, 0.205, 0.085], 0.88),
+        LandCoverClass::BuiltUp => ([0.280, 0.280, 0.270], 0.76),
+        LandCoverClass::BareSparse => ([0.310, 0.270, 0.190], 0.86),
+        LandCoverClass::SnowIce => ([0.800, 0.830, 0.860], 0.60),
+        LandCoverClass::PermanentWater => ([0.018, 0.045, 0.070], 0.25),
+        LandCoverClass::HerbaceousWetland => ([0.080, 0.120, 0.050], 0.88),
+        LandCoverClass::Mangroves => ([0.035, 0.085, 0.035], 0.92),
+        LandCoverClass::MossLichen => ([0.150, 0.170, 0.100], 0.86),
+    };
+    let mut blended = [0.0; 3];
+    for channel in 0..3 {
+        blended[channel] =
+            albedo[channel] * (1.0 - MEASURED_WEIGHT) + target[channel] * MEASURED_WEIGHT;
+        blended[channel] = blended[channel].clamp(0.0, 1.0);
+    }
+    (
+        blended,
+        roughness * (1.0 - MEASURED_WEIGHT) + target_roughness * MEASURED_WEIGHT,
+    )
 }
 
 /// Convert the authoritative biome appearance into unpremultiplied linear color
@@ -279,4 +322,27 @@ pub(super) fn mesh_surface_frame(
     let mesh_normal = (normal(i, j) * (1.0 - fu) + normal(i + 1, j) * fu) * (1.0 - fv)
         + (normal(i, j + 1) * (1.0 - fu) + normal(i + 1, j + 1) * fu) * fv;
     (tangent_u, tangent_v, outward_normal(mesh_normal, position))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measured_land_cover_tints_are_bounded_and_class_specific() {
+        let (forest, forest_roughness) =
+            apply_land_cover_material([0.5, 0.5, 0.5], 0.5, LandCoverClass::TreeCover);
+        let (water, water_roughness) =
+            apply_land_cover_material([0.5, 0.5, 0.5], 0.5, LandCoverClass::PermanentWater);
+        let (snow, snow_roughness) =
+            apply_land_cover_material([0.5, 0.5, 0.5], 0.5, LandCoverClass::SnowIce);
+        for channel in forest.into_iter().chain(water).chain(snow) {
+            assert!((0.0..=1.0).contains(&channel));
+        }
+        assert!(forest[1] > forest[0] && forest[1] > forest[2]);
+        assert!(water.iter().sum::<f32>() < forest.iter().sum::<f32>());
+        assert!(snow.iter().sum::<f32>() > forest.iter().sum::<f32>());
+        assert!(forest_roughness > water_roughness);
+        assert!(snow_roughness < forest_roughness);
+    }
 }

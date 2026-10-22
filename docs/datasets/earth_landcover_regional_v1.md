@@ -109,6 +109,15 @@ Later packages override overlapping coverage, so a regional package can refine a
 future global package without changing the binary format. Outside all packages,
 vegetation placement falls back to the source's climate-derived density.
 
+## Presentation materials
+
+At close patch LOD, measured classes also bias the locally baked albedo and
+roughness toward canonical class tints. The authoritative biome/elevation/slope
+appearance remains the base, and measured cover is blended at a restrained
+weight. This is a presentation refinement, not measured reflectance: the
+source-derived albedo path still owns the unmeasured regions, and the packages
+never feed geometry, collision, or physics.
+
 ## Validation
 
 - The normalized rasters are compared with the pinned source tiles by
