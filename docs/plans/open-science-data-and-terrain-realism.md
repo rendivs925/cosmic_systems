@@ -220,17 +220,28 @@ packages that modestly refine dry ground materials.
 
 ## Phase 5 - Hydrology, canopy, scatter
 
+Status: in progress. JRC water occurrence and Hansen tree cover are implemented
+as combined two-channel `.cssfld` packages for the eight priority regions and
+feed the existing deterministic scatter and wet-ground material paths.
+DEM-derived drainage and the river ribbon remain the hydrology geometry
+authority. A measured canopy-height source (GEDI) and a baked scatter binary
+remain open.
+
 ### Deliverables
 
-- `scripts/ingest_water.py`: JRC Global Surface Water at 30 m; reuse
-  `flow_accumulation` for DEM-derived rivers and lakes.
-- `scripts/ingest_canopy.py`: Hansen Global Forest Change at 30 m;
-  GEDI/ICESat-2 samples for validation only.
-- `src/bin/scatter_bake.rs`: reuse `surface/scatter.rs` deterministic placement;
-  bake full instances regionally; coarse outside.
-- Outputs: water masks, river and lake channels, canopy height and density
-  fields, scatter binary (`position`, `species_id`, `yaw`, `scale`,
-  `sway_phase`, `site_level`).
+- `scripts/ingest_water_canopy.py`: JRC Global Surface Water occurrence and
+  Hansen `treecover2000` at 30 m, cropped from 10-degree source tiles and
+  resampled to planetocentric terrain-radial grids.
+- `src/domain/services/surface_fields.rs` and `surface_fields_bake`: versioned
+  two-channel packages with bilinear sampling and later-region precedence.
+- Runtime consumers: measured tree cover multiplies tree-site density, measured
+  water occurrence clears vegetation and tints persistently wet close-range
+  ground. The existing `surface/scatter.rs` deterministic placement is reused;
+  no separate per-region instancing path is introduced.
+- Outputs: water-occurrence and tree-cover masks plus measured constraints on
+  the existing scatter mesh. River and lake geometry remains DEM-derived; canopy
+  height remains species-profile-derived until a measured height source is
+  ingested.
 
 ### Acceptance
 

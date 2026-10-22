@@ -39,6 +39,7 @@ pub mod simulation_epoch;
 pub mod simulation_run;
 pub mod simulation_time;
 pub mod soil;
+pub mod surface_fields;
 pub mod terrain_collision;
 pub mod terrain_metrics;
 pub mod terrain_overview;

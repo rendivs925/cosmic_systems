@@ -12,6 +12,7 @@ use super::{
 };
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::LandCoverLookup;
+use crate::domain::services::surface_fields::SurfaceFieldsLookup;
 use crate::domain::services::terrain_collision::surface_normal;
 use crate::domain::services::terrain_source::{slope_deg_at, TerrainSource};
 use crate::domain::services::vegetation::{
@@ -950,6 +951,7 @@ pub fn build_vegetation_mesh_with_land_cover(
         mesh_origin_body_fixed,
         land_cover,
         None,
+        None,
     )
 }
 
@@ -959,6 +961,7 @@ pub(super) fn build_grounded_vegetation_mesh(
     radius_m: f64,
     mesh_origin_body_fixed: &DVec3,
     land_cover: Option<&dyn LandCoverLookup>,
+    fields: Option<&dyn SurfaceFieldsLookup>,
     geometry: Option<&PatchGeometry>,
 ) -> Option<Mesh> {
     let ground_radius = |dir: DVec3, height_m: f64| {
@@ -966,12 +969,28 @@ pub(super) fn build_grounded_vegetation_mesh(
             .and_then(|geometry| super::grounding::surface_radius(patch, geometry, dir))
             .unwrap_or(radius_m + height_m)
     };
-    let density_at = |lat: f64, lon: f64| {
+    let base_density = |lat: f64, lon: f64| {
         combined_cover_density(
             source.vegetation_density(lat, lon),
             land_cover.and_then(|package| package.vegetation_density(lat, lon)),
         )
     };
+    let measured = |lat: f64, lon: f64| fields.and_then(|fields| fields.sample_fields(lat, lon));
+    // Persistently wet sites lose ground cover as well as trees. Measured tree
+    // cover scales tree placement only, so open grassland keeps its grass while
+    // closed forest reaches the measured density.
+    let water_clearance = |lat: f64, lon: f64| {
+        measured(lat, lon)
+            .map(|sample| 1.0 - f64::from(sample.water_occurrence()))
+            .unwrap_or(1.0)
+    };
+    let tree_density_at = |lat: f64, lon: f64| {
+        let cover = measured(lat, lon)
+            .map(|sample| f64::from(sample.tree_cover()))
+            .unwrap_or(1.0);
+        base_density(lat, lon) * water_clearance(lat, lon) * cover
+    };
+    let ground_density_at = |lat: f64, lon: f64| base_density(lat, lon) * water_clearance(lat, lon);
     let mut accum = MeshAccum::new();
 
     // Trees come from a shared world-direction lattice, so a coarse patch and
@@ -986,7 +1005,7 @@ pub(super) fn build_grounded_vegetation_mesh(
     let impostor_only = vegetation_is_impostor_only(patch.level);
     let tree_side = tree_side_for_level(patch.level);
     let tree_sites = tree_site_candidates(patch, tree_side, TREE_CANDIDATE_SALT, |u, v| {
-        tree_site_gate(source, patch, &density_at, u, v)
+        tree_site_gate(source, patch, &tree_density_at, u, v)
     });
     let tree_sites = if place_ground_cover {
         tree_sites
@@ -1004,7 +1023,7 @@ pub(super) fn build_grounded_vegetation_mesh(
         // Clumping already gates placement. It describes spatial clearings,
         // not a different climate; applying it to species selection again
         // downgrades humid forest to tiny shrubs or grass.
-        let density = density_at(lat, lon);
+        let density = tree_density_at(lat, lon);
         let land_cover_class = land_cover.and_then(|package| package.sample_class(lat, lon));
         let Some(species) = select_species(
             lat,
@@ -1174,7 +1193,7 @@ pub(super) fn build_grounded_vegetation_mesh(
             if slope > 30.0 {
                 return false;
             }
-            density_at(lat, lon) * clump_mask(lat, lon) >= GRASS_MIN_DENSITY
+            ground_density_at(lat, lon) * clump_mask(lat, lon) >= GRASS_MIN_DENSITY
         })
     } else {
         Vec::new()

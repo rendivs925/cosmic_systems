@@ -136,3 +136,8 @@ required-features = ["native"]
 name = "soil_bake"
 path = "src/bin/soil_bake.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "surface_fields_bake"
+path = "src/bin/surface_fields_bake.rs"
+required-features = ["native"]

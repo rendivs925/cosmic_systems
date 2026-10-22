@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions.
+Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions; Phase 5 measured water occurrence and canopy cover implemented for the priority regions.
 
 Date: 2026-10-22.
 
@@ -75,6 +75,22 @@ checksum but are not required at runtime.
 | `earth_soil_soilgrids_kourou` | Soil | 52.95..52.45W, 4.97..5.31N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
 | `earth_soil_soilgrids_baikonur` | Soil | 63.05..63.55E, 45.56..45.91N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
 | `earth_soil_soilgrids_mahia` | Soil | 177.70..178.00E, 39.21..38.96S | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_water_jrc_papua` | Water | 139.0..140.0E, 8.54..7.35S | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_papua` | Canopy | 139.0..140.0E, 8.54..7.35S | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_ksc` | Water | 80.85..80.45W, 28.24..28.59N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_ksc` | Canopy | 80.85..80.45W, 28.24..28.59N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_starbase` | Water | 97.30..97.05W, 25.70..25.95N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_starbase` | Canopy | 97.30..97.05W, 25.70..25.95N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_vandenberg` | Water | 120.75..120.45W, 34.42..34.67N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_vandenberg` | Canopy | 120.75..120.45W, 34.42..34.67N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_wallops` | Water | 75.70..75.35W, 37.61..37.86N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_wallops` | Canopy | 75.70..75.35W, 37.61..37.86N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_kourou` | Water | 52.95..52.45W, 4.97..5.31N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_kourou` | Canopy | 52.95..52.45W, 4.97..5.31N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_baikonur` | Water | 63.05..63.55E, 45.56..45.91N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_baikonur` | Canopy | 63.05..63.55E, 45.56..45.91N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_water_jrc_mahia` | Water | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
+| `earth_canopy_hansen_mahia` | Canopy | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
 
 Details:
 
@@ -121,6 +137,14 @@ Details:
   regional hashes are recorded in the registry and in
   `docs/datasets/earth_soil_v1.md`. Required attribution:
   `ISRIC - World Soil Information (SoilGrids 2.0)`.
+- Measured surface fields: JRC Global Surface Water 2021 v1.4 occurrence and
+  Hansen Global Forest Change 2023 v1.11 `treecover2000`, both 30 m, packaged as
+  two-channel `.cssfld` grids for the eight priority regions. They constrain
+  vegetation density and wet-ground tint only. Canopy height remains
+  species-profile-derived; a measured GEDI height layer is future work.
+  Required attribution: `European Commission, Joint Research Centre (JRC)
+  Global Surface Water; Hansen/UMD/Google/USGS/NASA Global Forest Change`. See
+  `docs/datasets/earth_surface_fields_v1.md`.
 - KSC regional NASADEM: interim 1 arc-second bare-earth over `80.85..80.45W`,
   `28.40..28.75N`, EGM96 heights corrected with the runtime EGM2008 geoid.
   Source SHA-256
@@ -193,8 +217,6 @@ same provenance and checksum gate before use.
 | SRTM GL1 (remaining regions) | Dem | regional bare earth | 30 m | NASA/USGS, public domain | 3 |
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
-| JRC Global Surface Water | Water | lakes and surface-water occurrence | 30 m monthly | EC JRC, attribution required | 3 |
-| Global canopy height | Canopy | canopy height and density | 30 m | NASA GEDI / partner products, verify per product | 4 |
 | ERA5 reanalysis | Climate | climate and atmospheric context | ~31 km | Copernicus CDS, attribution required | later |
 
 Regional DEM priority: KSC/Florida, Papua, Starbase/Boca Chica, Vandenberg,
@@ -256,6 +278,16 @@ python3 scripts/ingest_soil.py --region all --global
 cargo run --release --features native --bin soil_bake -- <normalized.png> \
   assets/large_files/terrain/soil_v1/<region>.cssoil ...
 cargo run --features dem --bin preprocess -- --layer soil --check
+```
+
+Phase 5 measured water and canopy fields (implemented for the eight regions):
+
+```sh
+python3 scripts/ingest_water_canopy.py --region all
+cargo run --release --features native --bin surface_fields_bake -- <water.png> \
+  <tree_cover.png> assets/large_files/terrain/surface_fields_v1/<region>.cssfld ...
+cargo run --features dem --bin preprocess -- --layer water --check
+cargo run --features dem --bin preprocess -- --layer canopy --check
 ```
 
 ## Acceptance

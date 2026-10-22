@@ -24,6 +24,9 @@ use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
 };
 use crate::domain::services::soil::{SoilPackage, SoilSet, DEFAULT_SOIL_DIR};
+use crate::domain::services::surface_fields::{
+    SurfaceFieldsPackage, SurfaceFieldsSet, DEFAULT_SURFACE_FIELDS_DIR,
+};
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use crate::domain::services::vegetation::VegetationConfig;
@@ -156,6 +159,9 @@ pub struct TerrainStreamingResource {
     /// Optional presentation-only measured soil-texture packages. Later
     /// packages override overlapping regional coverage; never feeds collision.
     soil: Option<Arc<SoilSet>>,
+    /// Optional presentation-only measured water/canopy fields. Later packages
+    /// override overlapping regional coverage; never feeds collision.
+    surface_fields: Option<Arc<SurfaceFieldsSet>>,
     /// Payload tiles currently being decoded off the main thread.
     elevation_inflight: BTreeMap<TerrainPatch, InflightElevationTile>,
     /// Payload tiles requested but not yet admitted to a worker task.
@@ -182,6 +188,7 @@ impl Default for TerrainStreamingResource {
             elevation_source: None,
             land_cover: None,
             soil: None,
+            surface_fields: None,
             elevation_inflight: BTreeMap::new(),
             elevation_pending: BTreeSet::new(),
             elevation_covered_patches: 0,
@@ -285,6 +292,12 @@ impl TerrainStreamingResource {
     /// geometry, collision, altitude, or flight physics.
     pub fn set_soil(&mut self, soil: Option<Arc<SoilSet>>) {
         self.soil = soil;
+    }
+
+    /// Install presentation-only measured water and canopy fields. They never
+    /// affect geometry, collision, altitude, or flight physics.
+    pub fn set_surface_fields(&mut self, surface_fields: Option<Arc<SurfaceFieldsSet>>) {
+        self.surface_fields = surface_fields;
     }
 
     fn begin_elevation_load(
@@ -431,6 +444,7 @@ struct TerrainPatchBakeRequest {
     stitched_edges: Vec<PatchEdge>,
     land_cover: Option<Arc<LandCoverSet>>,
     soil: Option<Arc<SoilSet>>,
+    surface_fields: Option<Arc<SurfaceFieldsSet>>,
     /// Present when volumetric geology applies to this patch.
     volumetric: Option<VolumetricBakeRequest>,
 }
@@ -470,6 +484,9 @@ impl TerrainPatchBakeRequest {
                 self.soil
                     .as_deref()
                     .map(|soil| soil as &dyn crate::domain::services::soil::SoilLookup),
+                self.surface_fields.as_deref().map(|fields| {
+                    fields as &dyn crate::domain::services::surface_fields::SurfaceFieldsLookup
+                }),
             );
             let volumetric = self.volumetric.and_then(|request| {
                 build_rock_shell(
@@ -982,6 +999,7 @@ pub(crate) fn stream_terrain_patches(
     let tasks_started = batch.len();
     let land_cover = streaming.land_cover.clone();
     let soil = streaming.soil.clone();
+    let surface_fields = streaming.surface_fields.clone();
     for patch in batch {
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
         streaming.begin_bake(
@@ -994,6 +1012,7 @@ pub(crate) fn stream_terrain_patches(
                 stitched_edges: stitch_edges,
                 land_cover: land_cover.clone(),
                 soil: soil.clone(),
+                surface_fields: surface_fields.clone(),
                 volumetric: volumetric_bake_for(patch, radius_m, &volumetric_settings),
             },
             task_pool,
@@ -1493,6 +1512,44 @@ pub(crate) fn load_default_soil(mut streaming: ResMut<TerrainStreamingResource>)
             DEFAULT_SOIL_DIR
         );
         streaming.set_soil(Some(Arc::new(SoilSet::new(packages))));
+    }
+}
+
+/// Load the optional measured water/canopy packages at startup (native only).
+#[cfg(feature = "dem")]
+pub(crate) fn load_default_surface_fields(mut streaming: ResMut<TerrainStreamingResource>) {
+    let directory = std::path::Path::new(DEFAULT_SURFACE_FIELDS_DIR);
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        streaming.set_surface_fields(None);
+        return;
+    };
+    let mut paths = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "cssfld")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut packages = Vec::new();
+    for path in paths {
+        match SurfaceFieldsPackage::from_path(&path) {
+            Ok(package) => packages.push(package),
+            Err(error) => warn!(
+                "surface-field package {:?} unavailable ({error:?}); skipping",
+                path
+            ),
+        }
+    }
+    if packages.is_empty() {
+        streaming.set_surface_fields(None);
+    } else {
+        info!(
+            "surface-field packages loaded: {} from {}",
+            packages.len(),
+            DEFAULT_SURFACE_FIELDS_DIR
+        );
+        streaming.set_surface_fields(Some(Arc::new(SurfaceFieldsSet::new(packages))));
     }
 }
 

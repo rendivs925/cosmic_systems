@@ -6,6 +6,7 @@ use super::{direction_to_lat_lon, face_uv_to_direction};
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::{LandCoverClass, LandCoverLookup};
 use crate::domain::services::soil::{SoilLookup, SoilTexture};
+use crate::domain::services::surface_fields::SurfaceFieldsLookup;
 use crate::domain::services::terrain_source::{
     surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -81,6 +82,7 @@ pub fn build_patch_surfaces(
     radius_m: f64,
     land_cover: Option<&dyn LandCoverLookup>,
     soil: Option<&dyn SoilLookup>,
+    fields: Option<&dyn SurfaceFieldsLookup>,
 ) -> (Image, Image) {
     let res = SURFACE_TEX_RES as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
@@ -141,6 +143,10 @@ pub fn build_patch_surfaces(
             if let Some(texture) = soil.and_then(|soil| soil.sample_texture(la, lo)) {
                 let weight = soil_material_weight(class, elevation_m, moisture);
                 (material, roughness) = apply_soil_material(material, roughness, texture, weight);
+            }
+            if let Some(sample) = fields.and_then(|fields| fields.sample_fields(la, lo)) {
+                (material, roughness) =
+                    apply_water_occurrence_material(material, roughness, sample.water_occurrence());
             }
             albedo.extend_from_slice(&[
                 (material[0] * 255.0) as u8,
@@ -310,6 +316,27 @@ pub(super) fn apply_soil_material(
     )
 }
 
+/// Measured water occurrence darkens persistently wet ground toward a shallow
+/// water tint. This is a presentation cue for lakes, reservoirs, and wide river
+/// margins; it never creates geometry or changes any authoritative height.
+pub(super) fn apply_water_occurrence_material(
+    albedo: [f32; 3],
+    roughness: f32,
+    water_occurrence: f32,
+) -> ([f32; 3], f32) {
+    let weight = ((water_occurrence.clamp(0.0, 1.0) - 0.15) / 0.85).clamp(0.0, 1.0) * 0.55;
+    if weight <= 0.0 {
+        return (albedo, roughness);
+    }
+    let target = [0.020, 0.050, 0.080];
+    let mut blended = [0.0; 3];
+    for channel in 0..3 {
+        blended[channel] =
+            (albedo[channel] * (1.0 - weight) + target[channel] * weight).clamp(0.0, 1.0);
+    }
+    (blended, roughness * (1.0 - weight) + 0.18 * weight)
+}
+
 /// Convert the authoritative biome appearance into unpremultiplied linear color
 /// for the terrain's complete source-derived albedo map.
 pub(super) fn terrain_albedo(
@@ -442,5 +469,20 @@ mod tests {
         assert!(sandy_roughness > clayey_roughness);
         // The effect stays modest relative to the untouched base material.
         assert!((sandy[0] - 0.4).abs() < 0.16);
+    }
+
+    #[test]
+    fn measured_water_occurrence_darkens_only_persistently_wet_ground() {
+        let dry = apply_water_occurrence_material([0.4, 0.35, 0.25], 0.8, 0.0);
+        assert_eq!(dry.0, [0.4, 0.35, 0.25]);
+        let damp = apply_water_occurrence_material([0.4, 0.35, 0.25], 0.8, 0.4);
+        let wet = apply_water_occurrence_material([0.4, 0.35, 0.25], 0.8, 1.0);
+        assert!(wet.0.iter().sum::<f32>() < damp.0.iter().sum::<f32>());
+        assert!(damp.0.iter().sum::<f32>() < dry.0.iter().sum::<f32>());
+        assert!(wet.0[2] / wet.0[0] > dry.0[2] / dry.0[0]);
+        assert!(wet.1 < dry.1);
+        for channel in wet.0.into_iter().chain(damp.0) {
+            assert!((0.0..=1.0).contains(&channel));
+        }
     }
 }

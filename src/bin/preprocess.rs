@@ -94,6 +94,9 @@ fn run(mut options: Options) -> Result<(), String> {
     let selected_count = selected.len();
     let mut failures = Vec::new();
     let mut total_bytes = 0u64;
+    // The same runtime package may serve more than one semantic layer (for
+    // example measured water and canopy fields). Count it once in the total.
+    let mut counted_assets = std::collections::HashSet::new();
     for entry in selected {
         let size = if options.check {
             match check_entry(entry) {
@@ -129,7 +132,9 @@ fn run(mut options: Options) -> Result<(), String> {
                 }
             }
         };
-        total_bytes = total_bytes.saturating_add(size);
+        if counted_assets.insert(entry.runtime_asset.clone()) {
+            total_bytes = total_bytes.saturating_add(size);
+        }
         if options.report_size {
             println!(
                 "  size {} [{}] {} bytes ({:.1} MiB) {}",
@@ -144,7 +149,7 @@ fn run(mut options: Options) -> Result<(), String> {
 
     if options.report_size {
         println!(
-            "  total {:.1} MiB across {} datasets",
+            "  total {:.1} MiB across {} datasets (unique runtime assets)",
             total_bytes as f64 / (1024.0 * 1024.0),
             selected_count
         );
