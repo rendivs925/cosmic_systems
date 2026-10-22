@@ -186,9 +186,9 @@ site-specific mission profiles remain future work.
 
 ## Phase 4 - Imagery, albedo, land cover, soil
 
-Status: started. Papua ESA WorldCover and multi-package runtime land-cover
-composition are implemented; global land cover, soil, and baked albedo remain
-open.
+Status: in progress. ESA WorldCover packages now cover all eight priority
+regions and multi-package runtime composition is implemented; global land
+cover, soil, and baked albedo remain open.
 
 ### Deliverables
 

@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages validated; Phase 4 surface-data ingestion started with Papua land cover.
+Status: Phase 3 priority regional packages validated; Phase 4 regional land cover implemented for all eight priority regions.
 
 Date: 2026-10-22.
 
@@ -57,7 +57,14 @@ checksum but are not required at runtime.
 | `earth_imagery_blue_marble_global` | Imagery | global | 2 km source, 8192x4096 runtime | Public domain (NASA) | `imagery_convert` |
 | `earth_regional_dem_papua` | Dem | 139.0..140.0E, 8.6..7.4S | 30 m | Public domain (NASA/NASADEM) | `regional_dem_bake` |
 | `earth_imagery_sentinel2_papua` | Imagery | 139.0..140.0E, 8.6..7.4S | 10 m | Copernicus Sentinel Data (attribution) | `imagery_convert` |
-| `earth_landcover_worldcover_papua` | LandCover | 139.0..140.0E, 8.54..7.35S terrain-radial | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_papua` | LandCover | 139.0..140.0E, 8.54..7.35S | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_ksc` | LandCover | 80.85..80.45W, 28.24..28.59N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_starbase` | LandCover | 97.30..97.05W, 25.70..25.95N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_vandenberg` | LandCover | 120.75..120.45W, 34.42..34.67N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_wallops` | LandCover | 75.70..75.35W, 37.61..37.86N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_kourou` | LandCover | 52.95..52.45W, 4.97..5.31N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_baikonur` | LandCover | 63.05..63.55E, 45.56..45.91N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_landcover_worldcover_mahia` | LandCover | 177.70..178.00E, 39.21..38.96S | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
 
 Details:
 
@@ -84,15 +91,13 @@ Details:
   aggregate runtime SHA-256
   `74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784`.
   See `docs/datasets/earth_regional_papua_v1.md`.
-- Papua land cover: ESA WorldCover 2021 v200 tile S09E138, nearest-neighbour
-  resampled to a 1 arc-second terrain-radial grid for presentation-only
-  vegetation. Source SHA-256
-  `884c7ddcd6175d4711305f6a7e706ac2fa381867b51400e883bbacc8a001abb0`;
-  runtime SHA-256
-  `c0552a1d314e07fcac8f39305e5c3eb25f4ae875663a2283b8f7e3ad390f99ab`.
-  Required attribution: `ESA WorldCover project 2021 / Contains modified
-  Copernicus Sentinel data (2021) processed by ESA`. See
-  `docs/datasets/earth_landcover_papua_v1.md`.
+- Regional land cover: ESA WorldCover 2021 v200 tiles nearest-neighbour
+  resampled to 1 arc-second terrain-radial grids for presentation-only
+  vegetation. Eight packages cover the Phase 3 priority regions, total 24.5 MiB.
+  Source and runtime SHA-256 values are recorded in the registry and in
+  `docs/datasets/earth_landcover_regional_v1.md`. Required attribution:
+  `ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data
+  (2021) processed by ESA`.
 - KSC regional NASADEM: interim 1 arc-second bare-earth over `80.85..80.45W`,
   `28.40..28.75N`, EGM96 heights corrected with the runtime EGM2008 geoid.
   Source SHA-256
@@ -213,12 +218,12 @@ cargo run --release --features dem --bin regional_dem_bake -- --region papua_coa
 cargo run --features dem --bin preprocess -- --region papua_coastal_lowland --check
 ```
 
-Phase 4 Papua land cover (implemented):
+Phase 4 regional land cover (implemented for all eight priority regions):
 
 ```sh
-python3 scripts/ingest_landcover.py --region papua_coastal_lowland ...
+python3 scripts/ingest_landcover.py --region <region> ...
 cargo run --release --features native --bin land_cover_bake -- <normalized.png> \
-  assets/large_files/terrain/landcover_v1/papua_coastal_lowland.clcvr ...
+  assets/large_files/terrain/landcover_v1/<region>.clcvr ...
 cargo run --features dem --bin preprocess -- --layer landcover --check
 ```
 

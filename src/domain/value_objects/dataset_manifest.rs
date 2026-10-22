@@ -479,34 +479,67 @@ mod tests {
             .iter()
             .any(|entry| entry.id == "earth_regional_dem_papua"));
         let ksc: Vec<_> = registry.selected(None, Some("ksc_florida")).collect();
-        assert_eq!(ksc.len(), 1);
-        assert_eq!(ksc[0].id, "earth_regional_dem_ksc");
+        assert_eq!(ksc.len(), 2);
+        assert!(ksc.iter().any(|entry| entry.id == "earth_regional_dem_ksc"));
+        assert!(ksc
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_ksc"));
         let starbase: Vec<_> = registry
             .selected(None, Some("starbase_boca_chica"))
             .collect();
-        assert_eq!(starbase.len(), 1);
-        assert_eq!(starbase[0].id, "earth_regional_dem_starbase");
+        assert_eq!(starbase.len(), 2);
+        assert!(starbase
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_starbase"));
+        assert!(starbase
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_starbase"));
         let vandenberg: Vec<_> = registry
             .selected(None, Some("vandenberg_california"))
             .collect();
-        assert_eq!(vandenberg.len(), 1);
-        assert_eq!(vandenberg[0].id, "earth_regional_dem_vandenberg");
+        assert_eq!(vandenberg.len(), 2);
+        assert!(vandenberg
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_vandenberg"));
+        assert!(vandenberg
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_vandenberg"));
         let wallops: Vec<_> = registry.selected(None, Some("wallops_virginia")).collect();
-        assert_eq!(wallops.len(), 1);
-        assert_eq!(wallops[0].id, "earth_regional_dem_wallops");
+        assert_eq!(wallops.len(), 2);
+        assert!(wallops
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_wallops"));
+        assert!(wallops
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_wallops"));
         let kourou: Vec<_> = registry
             .selected(None, Some("kourou_french_guiana"))
             .collect();
-        assert_eq!(kourou.len(), 1);
-        assert_eq!(kourou[0].id, "earth_regional_dem_kourou");
+        assert_eq!(kourou.len(), 2);
+        assert!(kourou
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_kourou"));
+        assert!(kourou
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_kourou"));
         let baikonur: Vec<_> = registry
             .selected(None, Some("baikonur_kazakhstan"))
             .collect();
-        assert_eq!(baikonur.len(), 1);
-        assert_eq!(baikonur[0].id, "earth_regional_dem_baikonur");
+        assert_eq!(baikonur.len(), 2);
+        assert!(baikonur
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_baikonur"));
+        assert!(baikonur
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_baikonur"));
         let mahia: Vec<_> = registry.selected(None, Some("mahia_new_zealand")).collect();
-        assert_eq!(mahia.len(), 1);
-        assert_eq!(mahia[0].id, "earth_regional_dem_mahia");
+        assert_eq!(mahia.len(), 2);
+        assert!(mahia
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_mahia"));
+        assert!(mahia
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_mahia"));
         let ksc_3dep: Vec<_> = registry.selected(None, Some("ksc_3dep_launch")).collect();
         assert_eq!(ksc_3dep.len(), 1);
         assert_eq!(ksc_3dep[0].id, "earth_regional_dem_ksc_3dep");
