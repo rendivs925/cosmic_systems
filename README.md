@@ -48,6 +48,9 @@ cargo run -- rocket
 
 # Rocket-flight mode with a configured vehicle
 cargo run -- rocket --vehicle falcon9
+
+# Launch from a curated regional site
+cargo run -- rocket --site ksc
 ```
 
 | Command | Description |
@@ -55,9 +58,13 @@ cargo run -- rocket --vehicle falcon9
 | `cargo run` | Starts the solar-system simulation. |
 | `cargo run -- craft` | Starts craft mode in the shared solar-system world. |
 | `cargo run -- rocket` | Starts rocket-flight mode. |
+| `cargo run -- rocket --site ksc` | Launches from a curated regional site. |
 
-`--vehicle <key>` is available only in rocket mode. Unknown vehicle keys are
-reported before the application opens a window.
+`--vehicle <key>` and `--site <id>` are available only in rocket mode. Site IDs
+are `papua`, `ksc` (LC-39A), `starbase`, `vandenberg`, `wallops`, `kourou`,
+`baikonur`, and `mahia`; `lc39a` and the full artifact IDs are also accepted.
+`ksc-reference` selects the legacy KSC point used by physics baselines. Unknown keys are reported
+before the application opens a window.
 
 The equivalent Make targets are `make run`, `make run-craft`, and
 `make run-rocket`.

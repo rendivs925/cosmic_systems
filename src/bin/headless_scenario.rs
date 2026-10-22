@@ -5,6 +5,7 @@ use cosmic_systems_wasm::application::headless_scenario::{
 };
 use cosmic_systems_wasm::domain::services::simulation_analysis::analyze_simulation_artifact;
 use cosmic_systems_wasm::domain::services::simulation_artifact::SimulationArtifact;
+use cosmic_systems_wasm::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 
 fn main() {
     let mut raw_arguments = std::env::args().skip(1).collect::<Vec<_>>().into_iter();
@@ -41,6 +42,7 @@ fn main() {
     }
     let mut scenario = HeadlessScenario::default();
     let mut output = None;
+    let mut scenario_id_explicit = false;
     let mut arguments = first.into_iter().chain(raw_arguments);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -58,10 +60,22 @@ fn main() {
                     .parse()
                     .unwrap_or_else(|_| panic!("--steps requires an unsigned integer"));
             }
+            "--site" => {
+                let value = arguments
+                    .next()
+                    .unwrap_or_else(|| panic!("--site requires a launch-site id"));
+                let site = PredefinedLaunchSite::parse(&value)
+                    .unwrap_or_else(|| panic!("unknown launch site '{value}'"));
+                scenario.launch_site = site;
+                if !scenario_id_explicit {
+                    scenario.scenario_id = format!("{}-ascent", site.id());
+                }
+            }
             "--scenario" => {
                 scenario.scenario_id = arguments
                     .next()
                     .unwrap_or_else(|| panic!("--scenario requires an identifier"));
+                scenario_id_explicit = true;
             }
             "--output" => {
                 output = Some(

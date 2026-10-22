@@ -58,6 +58,18 @@ REGIONS = {
             "NASADEM_HGT_n05w053.tif": "f2709cb4365681f45695153775512033cc394440b1da5545f5c4083c5f7842e0",
         },
     },
+    "baikonur_kazakhstan": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_n45e063.tif": "a7d7e46b325b579c4e764026173774b9ac939f90bf31c77cb612f6c201ba0274",
+        },
+    },
+    "mahia_new_zealand": {
+        "destination": "assets/large_files/terrain/raw/nasadem",
+        "tiles": {
+            "NASADEM_HGT_s40e177.tif": "318ba7635087d7ff585c0b53ee7f183d08d63e147697fa5284522afb0ee37772",
+        },
+    },
 }
 
 

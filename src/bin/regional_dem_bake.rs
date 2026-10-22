@@ -27,7 +27,8 @@ use cosmic_systems_wasm::domain::services::geoid::{GeoidError, GeoidModel};
 use cosmic_systems_wasm::domain::services::global_raster::GlobalRasterSpec;
 use cosmic_systems_wasm::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
 use cosmic_systems_wasm::domain::services::regional_dem::{
-    RegionDefinition, RegionalDem, RegionalDemConfig, RegionalDemError,
+    geodetic_to_terrain_latitude_deg, RegionDefinition, RegionalDem, RegionalDemConfig,
+    RegionalDemError, SourceVerticalDatum,
 };
 use cosmic_systems_wasm::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use sha2::{Digest, Sha256};
@@ -171,7 +172,15 @@ fn run(options: Options) -> Result<(), BakeError> {
         body: region.body.clone(),
         coordinate_frame: "cube-sphere-face-uv".into(),
         vertical_datum: region.vertical_datum.clone(),
-        source: format!("{} (geoid-corrected)", region.source_name),
+        source: if region
+            .sources
+            .iter()
+            .all(|source| source.vertical_datum == SourceVerticalDatum::Wgs84Ellipsoid)
+        {
+            region.source_name.clone()
+        } else {
+            format!("{} (geoid-corrected)", region.source_name)
+        },
         license: region.license.clone(),
         source_sha256: dem.source_sha256().to_string(),
         resolution_m: region.resolution_m,
@@ -326,13 +335,14 @@ fn verify_package(
 fn probe_package(root: &std::path::Path, latitude: f64, longitude: f64) -> Result<f64, BakeError> {
     let manifest = ElevationPyramidManifest::from_path(root.join("manifest.ron"))?;
     let source = TileElevationSource::new(Arc::new(ZeroTerrain), manifest, 8)?;
-    let direction = terrain_lat_lon_to_body_fixed(latitude, longitude);
+    let terrain_latitude = geodetic_to_terrain_latitude_deg(latitude);
+    let direction = terrain_lat_lon_to_body_fixed(terrain_latitude, longitude);
     let metadata = source
         .covering_tile_for_direction(direction)
         .ok_or_else(|| BakeError::Arguments("probe is outside the payload coverage".into()))?;
     let bytes = fs::read(root.join(&metadata.payload_path))?;
     source.install_tile(ElevationTile::from_bytes(&bytes)?);
-    Ok(source.height_m(latitude, longitude))
+    Ok(source.height_m(terrain_latitude, longitude))
 }
 
 #[derive(Debug)]

@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 Papua, interim KSC, Starbase, Vandenberg, Wallops, and Kourou regional packages, validated.
+Status: Phase 3 priority regional packages (Papua, KSC, Starbase, Vandenberg, Wallops, Kourou, Baikonur, Mahia) validated.
 
 Date: 2026-10-21.
 
@@ -89,8 +89,14 @@ Details:
   `62c3819f9ace4c785add8bbea485e3b031644087b62eaf5e951e3147c4573c09`;
   aggregate runtime SHA-256
   `88e30df9357131c1ee626542b82e251f4e3da3d98d61fc0095919582fa13ba0d`.
-  See `docs/datasets/earth_regional_ksc_v1.md`. The 1 m 3DEP source remains
-  planned until the launch-site NAVD88-to-WGS 84 control is resolved.
+  See `docs/datasets/earth_regional_ksc_v1.md`.
+- KSC 3DEP local refinement: 1 m USGS bare earth over `80.68..80.59W`,
+  `28.567..28.620N`, normalized to 1 arc-second WGS 84 ellipsoid through a
+  local NOAA VDatum NAVD88 transformation. Source SHA-256
+  `66ccf1c4473b75cfa2f21cc682b3ccaf5dc391eb3b26df1555c57777c16b95d7`;
+  aggregate runtime SHA-256
+  `54d71e45d8f957f575b5959f08a945d77e25030e94985c96363bab2e7530b095`.
+  See `docs/datasets/earth_regional_ksc_3dep_v1.md`.
 - Starbase/Boca Chica regional NASADEM: 1 arc-second bare-earth over
   `97.30..97.05W`, `25.85..26.10N`, EGM96 heights corrected with the runtime
   EGM2008 geoid. Source SHA-256
@@ -119,6 +125,20 @@ Details:
   aggregate runtime SHA-256
   `dfd264e18e95f0f6fe5e5690cd83a65dac6cd8e725d6e2e0986e67e3b2c63634`.
   See `docs/datasets/earth_regional_kourou_v1.md`.
+- Baikonur regional NASADEM: 1 arc-second bare-earth over `63.05..63.55E`,
+  `45.75..46.10N`, EGM96 heights corrected with the runtime EGM2008 geoid.
+  Source SHA-256
+  `a7d7e46b325b579c4e764026173774b9ac939f90bf31c77cb612f6c201ba0274`;
+  aggregate runtime SHA-256
+  `cb5b5dd1721e1ec3a78f122a6cbe5f81a5e2cea74f5293fa7f0ee600b64a3742`.
+  See `docs/datasets/earth_regional_baikonur_v1.md`.
+- Mahia regional NASADEM: 1 arc-second bare-earth over `177.70..178.00E`,
+  `39.40..39.15S`, EGM96 heights corrected with the runtime EGM2008 geoid.
+  Source SHA-256
+  `318ba7635087d7ff585c0b53ee7f183d08d63e147697fa5284522afb0ee37772`;
+  aggregate runtime SHA-256
+  `0c601507d2566fae58f49cd8a2d849015c967f450baf495b6af3439113d04bb4`.
+  See `docs/datasets/earth_regional_mahia_v1.md`.
 - Blue Marble: August 2004 global composite with topography and bathymetry,
   WGS 84 geographic, presentation albedo only.
 - Sentinel-2 L2A TCI: 2026-08-22, MGRS 54LTR/54LUR/54MTS/54MUS, reprojected
@@ -152,10 +172,11 @@ Wallops, Kourou, Baikonur, Mahia.
 - ETOPO 2022 30 arc-second is the active authority, normalized from EGM2008
   orthometric heights to WGS 84 ellipsoidal heights. The ETOPO1 package
   (EPSG:5773) remains the reviewed rollback baseline.
-- KSC 3DEP is NAVD88. A valid NAVD88 to WGS 84 control at the launch site is
-  still unresolved. Until it exists, 3DEP supplies relative relief anchored to
-  the global EGM2008/WGS 84 height; the offshore VDatum offset must not be
-  applied as a constant correction.
+- KSC 3DEP is NAVD88. NOAA VDatum now supplies a launch-area NAVD88-to-WGS 84
+  ellipsoid transformation; the offline normalizer fits a local plane to nine
+  VDatum samples (residual under 1 cm, 0.06 m VDatum uncertainty). The
+  normalized 1 arc-second source is baked as `ksc_3dep_launch` and composed
+  after the KSC NASADEM root.
 - Presentation imagery has no vertical datum and never contributes to height.
 
 ## Ingestion commands

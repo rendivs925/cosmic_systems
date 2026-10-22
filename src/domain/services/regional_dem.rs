@@ -30,6 +30,16 @@ pub struct RegionBounds {
     pub north_deg: f64,
 }
 
+/// Vertical reference of a normalized regional source raster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub enum SourceVerticalDatum {
+    /// Orthometric height whose sea level is the runtime EGM2008 geoid.
+    #[default]
+    Egm96Orthometric,
+    /// Height already expressed on the WGS 84 ellipsoid.
+    Wgs84Ellipsoid,
+}
+
 /// One source raster tile. NASADEM is north-up WGS 84 geographic; `north_deg`
 /// and `west_deg` locate the upper-left pixel corner.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -39,6 +49,8 @@ pub struct RegionalSource {
     pub west_deg: f64,
     pub north_deg: f64,
     pub pixel_deg: f64,
+    #[serde(default)]
+    pub vertical_datum: SourceVerticalDatum,
 }
 
 /// A reviewed regional package definition.
@@ -230,6 +242,24 @@ impl RegionBounds {
     }
 }
 
+/// WGS 84 first eccentricity squared. Regional Earth sources are geodetic
+/// rasters while cube-sphere terrain coordinates are planetocentric.
+const WGS84_E2: f64 = 0.006_694_379_990_141_316_5;
+
+/// Convert a planetocentric terrain latitude to the WGS 84 geodetic latitude
+/// used by regional source rasters and the geoid model.
+pub fn terrain_to_geodetic_latitude_deg(latitude_deg: f64) -> f64 {
+    let latitude_rad = latitude_deg.to_radians();
+    (latitude_rad.tan() / (1.0 - WGS84_E2)).atan().to_degrees()
+}
+
+/// Convert a WGS 84 geodetic latitude to the planetocentric latitude used by
+/// cube-sphere terrain coordinates.
+pub fn geodetic_to_terrain_latitude_deg(latitude_deg: f64) -> f64 {
+    let latitude_rad = latitude_deg.to_radians();
+    ((1.0 - WGS84_E2) * latitude_rad.tan()).atan().to_degrees()
+}
+
 /// Loaded regional sources plus the shared sea-level geoid.
 pub struct RegionalDem {
     tiles: Vec<LoadedTile>,
@@ -243,7 +273,8 @@ struct LoadedTile {
     pixel_deg: f64,
     width: u32,
     height: u32,
-    heights_m: Vec<i16>,
+    heights_m: Vec<f32>,
+    vertical_datum: SourceVerticalDatum,
 }
 
 impl RegionalDem {
@@ -281,12 +312,22 @@ impl RegionalDem {
     /// Ellipsoidal height at a geographic position, or `None` outside all source
     /// tiles. NASADEM stores EGM96 orthometric heights; adding the local EGM2008
     /// undulation expresses them in the runtime's WGS 84 ellipsoid frame.
-    pub fn height_ellipsoid_m(&self, latitude_deg: f64, longitude_deg: f64) -> Option<f64> {
-        let orthometric_m = self
-            .tiles
-            .iter()
-            .find_map(|tile| tile.sample_m(latitude_deg, longitude_deg))?;
-        Some(orthometric_m + self.geoid.undulation_m(latitude_deg, longitude_deg))
+    /// Sample at a planetocentric terrain latitude. Regional rasters and the
+    /// geoid use WGS 84 geodetic latitude, so the conversion happens here once
+    /// for both the source sample and the sea-level correction.
+    pub fn height_ellipsoid_m(&self, terrain_latitude_deg: f64, longitude_deg: f64) -> Option<f64> {
+        let geodetic_latitude_deg = terrain_to_geodetic_latitude_deg(terrain_latitude_deg);
+        let (height_m, vertical_datum) = self.tiles.iter().find_map(|tile| {
+            tile.sample_m(geodetic_latitude_deg, longitude_deg)
+                .map(|height_m| (height_m, tile.vertical_datum))
+        })?;
+        let sea_level_m = match vertical_datum {
+            SourceVerticalDatum::Egm96Orthometric => self
+                .geoid
+                .undulation_m(geodetic_latitude_deg, longitude_deg),
+            SourceVerticalDatum::Wgs84Ellipsoid => 0.0,
+        };
+        Some(height_m + sea_level_m)
     }
 }
 
@@ -306,10 +347,11 @@ impl LoadedTile {
             .read_image()
             .map_err(|error| RegionalDemError::Image(error.to_string()))?
         {
-            DecodingResult::I16(samples) => samples,
+            DecodingResult::I16(samples) => samples.into_iter().map(f32::from).collect::<Vec<_>>(),
+            DecodingResult::F32(samples) => samples,
             _ => {
                 return Err(RegionalDemError::Image(
-                    "expected signed 16-bit integer samples".into(),
+                    "expected 16-bit integer or 32-bit float samples".into(),
                 ))
             }
         };
@@ -325,6 +367,7 @@ impl LoadedTile {
             width,
             height,
             heights_m,
+            vertical_datum: source.vertical_datum,
         })
     }
 
@@ -386,14 +429,14 @@ mod tests {
             .region("papua_coastal_lowland")
             .expect("Papua region");
         assert_eq!(region.bounds.west_deg, 139.0);
-        assert_eq!(region.bounds.south_deg, -8.6);
+        assert_eq!(region.bounds.south_deg, -8.543280680);
         assert_eq!(region.sources.len(), 2);
         assert_eq!(region.min_level, 9);
         assert_eq!(region.max_level, 12);
 
         let ksc = config.region("ksc_florida").expect("KSC region");
         assert_eq!(ksc.bounds.west_deg, -80.85);
-        assert_eq!(ksc.bounds.south_deg, 28.40);
+        assert_eq!(ksc.bounds.south_deg, 28.239282489);
         assert_eq!(ksc.sources.len(), 1);
         assert_eq!(ksc.sources[0].north_deg, 29.0);
 
@@ -418,6 +461,38 @@ mod tests {
             .expect("Kourou region");
         assert_eq!(kourou.bounds.west_deg, -52.95);
         assert_eq!(kourou.sources[0].north_deg, 6.0);
+
+        let baikonur = config
+            .region("baikonur_kazakhstan")
+            .expect("Baikonur region");
+        assert_eq!(baikonur.bounds.west_deg, 63.05);
+        assert_eq!(baikonur.sources[0].north_deg, 46.0);
+
+        let mahia = config.region("mahia_new_zealand").expect("Mahia region");
+        assert_eq!(mahia.bounds.south_deg, -39.211364478);
+        assert_eq!(mahia.sources[0].north_deg, -39.0);
+
+        let ksc_3dep = config.region("ksc_3dep_launch").expect("KSC 3DEP region");
+        assert_eq!(ksc_3dep.bounds.west_deg, -80.68);
+        assert_eq!(ksc_3dep.bounds.south_deg, 28.405669502);
+        assert_eq!(ksc_3dep.max_level, 13);
+        assert_eq!(
+            ksc_3dep.sources[0].vertical_datum,
+            SourceVerticalDatum::Wgs84Ellipsoid
+        );
+    }
+
+    #[test]
+    fn geodetic_and_planetocentric_latitudes_round_trip() {
+        for geodetic_deg in [-39.26, -8.0, 5.159, 28.6084, 45.965] {
+            let terrain = geodetic_to_terrain_latitude_deg(geodetic_deg);
+            let back = terrain_to_geodetic_latitude_deg(terrain);
+            assert!(
+                (back - geodetic_deg).abs() < 1e-9,
+                "{geodetic_deg} -> {terrain} -> {back}"
+            );
+        }
+        assert!((geodetic_to_terrain_latitude_deg(28.5721) - 28.410_750_867).abs() < 1e-9);
     }
 
     #[test]
@@ -428,7 +503,8 @@ mod tests {
             pixel_deg: 1.0,
             width: 3,
             height: 3,
-            heights_m: vec![0, 10, 20, 30, 40, 50, 60, 70, 80],
+            heights_m: vec![0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0],
+            vertical_datum: SourceVerticalDatum::Egm96Orthometric,
         };
         assert_eq!(tile.sample_m(0.5, 0.5), Some(0.0));
         assert_eq!(tile.sample_m(1.0, 1.0), Some(5.0));

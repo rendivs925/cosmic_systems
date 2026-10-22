@@ -750,6 +750,32 @@ impl TileElevationSource {
             .contains_key(&patch)
     }
 
+    /// Synchronously load the finest declared tile covering a geographic
+    /// point. Launch setup uses this once so the pad altitude comes from its
+    /// regional payload instead of the coarser global fallback.
+    pub fn ensure_covering_tile_loaded(
+        &self,
+        latitude_deg: f64,
+        longitude_deg: f64,
+    ) -> Result<bool, ElevationPyramidError> {
+        let Some(direction) = terrain_direction(latitude_deg, longitude_deg) else {
+            return Ok(false);
+        };
+        let Some(metadata) = self.covering_tile_for_direction(direction) else {
+            return Ok(false);
+        };
+        if self.is_resident(metadata.patch) {
+            return Ok(true);
+        }
+        let Some(path) = self.resolved_payload_path(&metadata.patch) else {
+            return Ok(false);
+        };
+        let bytes = std::fs::read(&path)?;
+        let tile = ElevationTile::from_bytes(&bytes)?;
+        self.install_tile(tile);
+        Ok(true)
+    }
+
     /// Install a decoded tile into the bounded resident set. Presentation and
     /// streaming call this from worker tasks; it never blocks a terrain query.
     pub fn install_tile(&self, tile: ElevationTile) {

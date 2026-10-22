@@ -52,16 +52,16 @@ Payload tiles are sparse and organized by region:
 
 - Levels: 9 through 12
 - Tile resolution: 64 x 64 face-UV samples with shared edges
-- Tiles: 5,295
-- Payload size: 90,161,146 bytes (86.0 MiB)
+- Tiles: 5,257
+- Payload size: 89,513,989 bytes (85.4 MiB)
 - Aggregate runtime SHA-256
   (sorted `<file-sha256>  <relative-path>` listing):
-  `74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784`
-- Height range: 10.1 m to 130.4 m ellipsoidal
+  `c61f777af9c761b0199f57ff22bcdca32efea3c560f55943a0725221c3498bb7`
+- Height range: 13.3 m to 131.0 m ellipsoidal
 
-The existing runtime composes one elevation payload root over the resident
-ETOPO 2022 package. Adding another region requires extending the runtime to
-compose multiple per-region manifests; until then this package owns the root.
+The runtime composes this root with the other regional packages over the
+resident ETOPO 2022 authority. Later roots refine identical patches, and the
+finest declared tile covering a patch wins.
 
 ## Bake
 
@@ -78,18 +78,17 @@ cargo run --release --features dem --bin regional_dem_bake -- \
 The baker verifies each source checksum, adds the geoid, discovers every
 cube-sphere patch intersecting the region, samples 64 x 64 shared-edge grids,
 and writes a deterministic manifest. `--verify` re-reads the manifest, checks
-coverage across the reviewed bounds, and compares 12,000 independent points
-against the source. Papua acceptance is RMSE 0.109 m and max absolute error
-0.866 m, below the 1.0 m / 5.0 m gates. `--bench-load` measures manifest and
-tile decode latency; the current 128-tile run is 19.9 ms for the manifest and
-p95 0.020 ms per tile, below the 50 ms gate. `--probe` decodes the covering tile
+coverage across the reviewed bounds, and compares 11,900 independent points
+against the source. Papua acceptance is RMSE 0.163 m and max absolute error
+2.457 m, below the 1.0 m / 5.0 m gates. `--bench-load` measures manifest and
+tile decode latency; the current 128-tile run is 111.3 ms for the manifest and
+p95 0.102 ms per tile, below the 50 ms gate. `--probe` decodes the covering tile
 and prints its composed height; the presentation site (`-8.0, 139.5`) returns
-71.963 m.
+71.978 m.
 
-Rocket-mode metrics with the package active (`COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`)
-reach 93 resident payload tiles, zero fallback for requested coverage, and
-111.5 MiB resident geometry against the 160 MiB budget. Decoding runs on worker
-tasks; terrain queries sample resident data only.
+Decoding runs on worker tasks; terrain queries sample resident data only. The
+launch site's covering payload tile is loaded synchronously once at spawn so pad
+altitude comes from the regional package rather than the global fallback.
 
 Runtime composition accepts several package roots through
 `EarthTerrainSource::with_dem_and_elevation_manifest_roots` and
@@ -97,8 +96,10 @@ Runtime composition accepts several package roots through
 level wins, and a later root wins at an identical patch address. Decoded tiles
 share one bounded LRU. The default root list composes
 `earth_elevation_pyramid`, `earth_elevation_pyramid_ksc`,
-`earth_elevation_pyramid_starbase`, `earth_elevation_pyramid_vandenberg`,
-`earth_elevation_pyramid_wallops`, and `earth_elevation_pyramid_kourou`. Source rasters and the baked package remain
+`earth_elevation_pyramid_ksc_3dep`, `earth_elevation_pyramid_starbase`,
+`earth_elevation_pyramid_vandenberg`, `earth_elevation_pyramid_wallops`,
+`earth_elevation_pyramid_kourou`, `earth_elevation_pyramid_baikonur`, and
+`earth_elevation_pyramid_mahia`. Source rasters and the baked package remain
 under gitignored `assets/large_files/`.
 
 ## Validation

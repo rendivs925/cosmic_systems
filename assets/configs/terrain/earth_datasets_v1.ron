@@ -75,7 +75,7 @@
             attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
             source_sha256: "1d353269f0710334541f4404eafc4c3d7531f242bcd45873bef9fd7779455625",
             runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid",
-            runtime_sha256: "74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784",
+            runtime_sha256: "c61f777af9c761b0199f57ff22bcdca32efea3c560f55943a0725221c3498bb7",
             auxiliary_assets: [
                 (
                     path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
@@ -107,7 +107,7 @@
             attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
             source_sha256: "62c3819f9ace4c785add8bbea485e3b031644087b62eaf5e951e3147c4573c09",
             runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_ksc",
-            runtime_sha256: "88e30df9357131c1ee626542b82e251f4e3da3d98d61fc0095919582fa13ba0d",
+            runtime_sha256: "7c0aba71a6e844535cfa557d6a3132e4f7f3f8314e7ff4d292e40954a62ff157",
             auxiliary_assets: [
                 (
                     path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
@@ -118,6 +118,31 @@
             converter: "regional_dem_bake",
             status: Ready,
             manifest_path: Some("assets/large_files/terrain/earth_elevation_pyramid_ksc/manifest.ron"),
+        ),
+        (
+            id: "earth_regional_dem_ksc_3dep",
+            layer: Dem,
+            region: Some("ksc_3dep_launch"),
+            dataset: "KSC 3DEP 1 m normalized",
+            source_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/FL_Peninsular_FDEM_2018_D19_DRRA/TIFF/USGS_1M_17_x53y317_FL_Peninsular_FDEM_2018_D19_DRRA.tif",
+            source_version: "USGS 3DEP FL_Peninsular_FDEM_2018_D19_DRRA, 1 m NAVD88, normalized 1 arc-second WGS 84 ellipsoid",
+            resolution_m: 30.0,
+            bounds: Region(
+                west_deg: -80.68,
+                south_deg: 28.567,
+                east_deg: -80.59,
+                north_deg: 28.62,
+            ),
+            horizontal_datum: "WGS 84 / EPSG:4326",
+            vertical_datum: "WGS 84 ellipsoid / EPSG:4979",
+            license: "Public domain (USGS 3DEP)",
+            attribution: "USGS 3DEP; NOAA VDatum NAVD88-to-WGS84 control",
+            source_sha256: "66ccf1c4473b75cfa2f21cc682b3ccaf5dc391eb3b26df1555c57777c16b95d7",
+            runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_ksc_3dep",
+            runtime_sha256: "54d71e45d8f957f575b5959f08a945d77e25030e94985c96363bab2e7530b095",
+            converter: "regional_dem_bake",
+            status: Ready,
+            manifest_path: Some("assets/large_files/terrain/earth_elevation_pyramid_ksc_3dep/manifest.ron"),
         ),
         (
             id: "earth_regional_dem_starbase",
@@ -139,7 +164,7 @@
             attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
             source_sha256: "2b0d248e76634623e77add69b577898f3ed1ff6d3aa922b4a60b2179199de3c4",
             runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_starbase",
-            runtime_sha256: "1d3d022088d11441ac882a2060d55aa32a53d9f099385af5742f4dfeb52ae7e3",
+            runtime_sha256: "e43bbebc700860541101216b4d835af9d2bdef87915263a139abbc69cc3c95da",
             auxiliary_assets: [
                 (
                     path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
@@ -171,7 +196,7 @@
             attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
             source_sha256: "be9c3388c9ed196c23f6fcf473cf5ec7c978da569f79b60046590ee640e79e7e",
             runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_vandenberg",
-            runtime_sha256: "ce6f44f28d53f9286f7767668e2e70ed40842ffaf02de5f623c512f5bc4ee6ff",
+            runtime_sha256: "0c38088b229ece21dd06c298584138c54ac9a0520cac4047a9898124e757659c",
             auxiliary_assets: [
                 (
                     path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
@@ -203,7 +228,7 @@
             attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
             source_sha256: "9c4c90cf4c47bfb8f07e2a28279a501b90f952f5dcaa99891117d3a5a59a0cb5",
             runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_wallops",
-            runtime_sha256: "a39fb4363042654719f57b06a00e1d97d55750f7d29035c92118fe3882581f69",
+            runtime_sha256: "26bf28e26b617ec80be5ab1be570905c628276d88b74e34259528aa86fa5a71a",
             auxiliary_assets: [
                 (
                     path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
@@ -235,7 +260,7 @@
             attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
             source_sha256: "f2709cb4365681f45695153775512033cc394440b1da5545f5c4083c5f7842e0",
             runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_kourou",
-            runtime_sha256: "dfd264e18e95f0f6fe5e5690cd83a65dac6cd8e725d6e2e0986e67e3b2c63634",
+            runtime_sha256: "50da7f64dcb15bf8e8ccd845446fd20a1e2c70181b80c5f8c4ed17785ab51bcc",
             auxiliary_assets: [
                 (
                     path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
@@ -246,6 +271,70 @@
             converter: "regional_dem_bake",
             status: Ready,
             manifest_path: Some("assets/large_files/terrain/earth_elevation_pyramid_kourou/manifest.ron"),
+        ),
+        (
+            id: "earth_regional_dem_baikonur",
+            layer: Dem,
+            region: Some("baikonur_kazakhstan"),
+            dataset: "Baikonur Kazakhstan NASADEM",
+            source_url: "https://opentopography.s3.sdsc.edu/raster/NASADEM/NASADEM_be/",
+            source_version: "NASADEM_HGT v001, N45E063, 1 arc-second bare-earth, EGM2008 geoid correction",
+            resolution_m: 30.0,
+            bounds: Region(
+                west_deg: 63.05,
+                south_deg: 45.75,
+                east_deg: 63.55,
+                north_deg: 46.10,
+            ),
+            horizontal_datum: "WGS 84 / EPSG:4326",
+            vertical_datum: "WGS 84 ellipsoid / EPSG:4979",
+            license: "Public domain (NASA/NASADEM)",
+            attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
+            source_sha256: "a7d7e46b325b579c4e764026173774b9ac939f90bf31c77cb612f6c201ba0274",
+            runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_baikonur",
+            runtime_sha256: "66cbc54c90371cf4f29af2b5479e70a164c8c438dc79ff904d3ae7284864b933",
+            auxiliary_assets: [
+                (
+                    path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
+                    sha256: "f4ea75f9721eee1d0a3fea97a05d9dda6c166bed8300e73f8e7163d1cf59ffea",
+                    role: "EGM2008 0.5 degree sea-level geoid",
+                ),
+            ],
+            converter: "regional_dem_bake",
+            status: Ready,
+            manifest_path: Some("assets/large_files/terrain/earth_elevation_pyramid_baikonur/manifest.ron"),
+        ),
+        (
+            id: "earth_regional_dem_mahia",
+            layer: Dem,
+            region: Some("mahia_new_zealand"),
+            dataset: "Mahia New Zealand NASADEM",
+            source_url: "https://opentopography.s3.sdsc.edu/raster/NASADEM/NASADEM_be/",
+            source_version: "NASADEM_HGT v001, S40E177, 1 arc-second bare-earth, EGM2008 geoid correction",
+            resolution_m: 30.0,
+            bounds: Region(
+                west_deg: 177.70,
+                south_deg: -39.40,
+                east_deg: 178.00,
+                north_deg: -39.15,
+            ),
+            horizontal_datum: "WGS 84 / EPSG:4326",
+            vertical_datum: "WGS 84 ellipsoid / EPSG:4979",
+            license: "Public domain (NASA/NASADEM)",
+            attribution: "NASA MEaSUREs NASADEM; OpenTopography public mirror",
+            source_sha256: "318ba7635087d7ff585c0b53ee7f183d08d63e147697fa5284522afb0ee37772",
+            runtime_asset: "assets/large_files/terrain/earth_elevation_pyramid_mahia",
+            runtime_sha256: "6199e03b1cae1a5c58a97d6f10329f32c3cfad36aa495c2e4aa54db2cc9b2acf",
+            auxiliary_assets: [
+                (
+                    path: "assets/large_files/terrain/earth_egm2008_geoid_0p5deg_i16cm.raw",
+                    sha256: "f4ea75f9721eee1d0a3fea97a05d9dda6c166bed8300e73f8e7163d1cf59ffea",
+                    role: "EGM2008 0.5 degree sea-level geoid",
+                ),
+            ],
+            converter: "regional_dem_bake",
+            status: Ready,
+            manifest_path: Some("assets/large_files/terrain/earth_elevation_pyramid_mahia/manifest.ron"),
         ),
         (
             id: "earth_imagery_blue_marble_global",

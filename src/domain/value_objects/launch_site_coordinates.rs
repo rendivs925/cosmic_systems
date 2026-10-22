@@ -68,9 +68,9 @@ impl Default for LaunchSiteCoordinates {
     fn default() -> Self {
         Self {
             planet_id: CelestialBodyId::earth(),
-            latitude_deg: 28.5721,   // Kennedy Space Center latitude
-            longitude_deg: -80.6480, // Kennedy Space Center longitude
-            altitude_m: 0.0,         // Sea level
+            latitude_deg: 28.5721, // Legacy KSC reference used by physics baselines
+            longitude_deg: -80.6480, // Legacy KSC reference longitude
+            altitude_m: 3.0,       // Reference altitude above sea level
         }
     }
 }
@@ -111,6 +111,23 @@ mod tests {
     }
 
     #[test]
+    fn predefined_site_ids_parse_and_round_trip() {
+        for site in PredefinedLaunchSite::ALL {
+            assert_eq!(PredefinedLaunchSite::parse(site.id()), Some(site));
+            assert_eq!(site.coordinates().planet_id, CelestialBodyId::earth());
+        }
+        assert_eq!(
+            PredefinedLaunchSite::parse("ksc"),
+            Some(PredefinedLaunchSite::KennedyLc39a)
+        );
+        assert_eq!(
+            PredefinedLaunchSite::parse("ksc-reference"),
+            Some(PredefinedLaunchSite::KennedyReference)
+        );
+        assert_eq!(PredefinedLaunchSite::parse("unknown"), None);
+    }
+
+    #[test]
     fn papua_coastal_lowland_presentation_site_has_stable_coordinates() {
         let site = predefined_sites::papua_indonesia_coastal_lowland();
 
@@ -121,18 +138,132 @@ mod tests {
     }
 }
 
+/// Launch sites with curated coordinates and terrain coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PredefinedLaunchSite {
+    #[default]
+    Papua,
+    KennedyReference,
+    KennedyLc39a,
+    Starbase,
+    Vandenberg,
+    Wallops,
+    Kourou,
+    Baikonur,
+    Mahia,
+}
+
+impl PredefinedLaunchSite {
+    pub const ALL: [Self; 9] = [
+        Self::Papua,
+        Self::KennedyReference,
+        Self::KennedyLc39a,
+        Self::Starbase,
+        Self::Vandenberg,
+        Self::Wallops,
+        Self::Kourou,
+        Self::Baikonur,
+        Self::Mahia,
+    ];
+
+    /// Stable identity used by run artifacts and telemetry.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Papua => "papua-indonesia-coastal-lowland",
+            Self::KennedyReference => "ksc-reference",
+            Self::KennedyLc39a => "ksc-florida",
+            Self::Starbase => "starbase-boca-chica",
+            Self::Vandenberg => "vandenberg-california",
+            Self::Wallops => "wallops-virginia",
+            Self::Kourou => "kourou-french-guiana",
+            Self::Baikonur => "baikonur-kazakhstan",
+            Self::Mahia => "mahia-new-zealand",
+        }
+    }
+
+    /// Human-readable name for logs and errors.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Papua => "Papua coastal lowland",
+            Self::KennedyReference => "KSC legacy reference",
+            Self::KennedyLc39a => "Kennedy Space Center LC-39A",
+            Self::Starbase => "Starbase Boca Chica",
+            Self::Vandenberg => "Vandenberg",
+            Self::Wallops => "Wallops",
+            Self::Kourou => "Kourou",
+            Self::Baikonur => "Baikonur",
+            Self::Mahia => "Mahia",
+        }
+    }
+
+    /// Parse a stable ID or short CLI alias case-insensitively.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "papua" | "papua-indonesia-coastal-lowland" => Some(Self::Papua),
+            "ksc" | "ksc-florida" | "lc39a" | "ksc-lc39a" => Some(Self::KennedyLc39a),
+            "ksc-reference" => Some(Self::KennedyReference),
+            "starbase" | "starbase-boca-chica" => Some(Self::Starbase),
+            "vandenberg" | "vandenberg-california" => Some(Self::Vandenberg),
+            "wallops" | "wallops-virginia" => Some(Self::Wallops),
+            "kourou" | "kourou-french-guiana" => Some(Self::Kourou),
+            "baikonur" | "baikonur-kazakhstan" => Some(Self::Baikonur),
+            "mahia" | "mahia-new-zealand" => Some(Self::Mahia),
+            _ => None,
+        }
+    }
+
+    pub fn coordinates(self) -> LaunchSiteCoordinates {
+        match self {
+            Self::Papua => predefined_sites::papua_indonesia_coastal_lowland(),
+            Self::KennedyReference => predefined_sites::kennedy_space_center(),
+            Self::KennedyLc39a => predefined_sites::kennedy_lc39a(),
+            Self::Starbase => predefined_sites::starbase_boca_chica(),
+            Self::Vandenberg => predefined_sites::vandenberg_california(),
+            Self::Wallops => predefined_sites::wallops_virginia(),
+            Self::Kourou => predefined_sites::kourou_french_guiana(),
+            Self::Baikonur => predefined_sites::baikonur_kazakhstan(),
+            Self::Mahia => predefined_sites::mahia_new_zealand(),
+        }
+    }
+}
+
 /// Predefined launch-site coordinate presets.
 pub mod predefined_sites {
     use super::LaunchSiteCoordinates;
     use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 
+    /// Legacy KSC coastal reference used by deterministic physics baselines.
     pub fn kennedy_space_center() -> LaunchSiteCoordinates {
-        LaunchSiteCoordinates::new(
-            CelestialBodyId::earth(),
-            28.5721,  // Latitude
-            -80.6480, // Longitude
-            3.0,      // Altitude above sea level (meters)
-        )
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 28.5721, -80.6480, 3.0)
+    }
+
+    /// Kennedy Space Center LC-39A pad reference.
+    pub fn kennedy_lc39a() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 28.6084, -80.6043, 14.0)
+    }
+
+    pub fn starbase_boca_chica() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 25.9971, -97.1553, 3.0)
+    }
+
+    pub fn vandenberg_california() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 34.742, -120.572, 100.0)
+    }
+
+    pub fn wallops_virginia() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 37.9402, -75.4665, 3.0)
+    }
+
+    pub fn kourou_french_guiana() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 5.159, -52.649, 3.0)
+    }
+
+    pub fn baikonur_kazakhstan() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 45.965, 63.305, 80.0)
+    }
+
+    pub fn mahia_new_zealand() -> LaunchSiteCoordinates {
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), -39.26, 177.864, 58.0)
     }
 
     /// Remote South Papua coastal-lowland presentation site, not a real spaceport.

@@ -431,7 +431,7 @@ mod tests {
     fn layer_and_region_filters_select_ready_entries() {
         let registry = registry();
         let dems: Vec<_> = registry.selected(Some(DatasetLayer::Dem), None).collect();
-        assert_eq!(dems.len(), 8);
+        assert_eq!(dems.len(), 11);
         assert!(dems
             .iter()
             .any(|entry| entry.id == "earth_etopo1_ice_surface"));
@@ -456,6 +456,15 @@ mod tests {
         assert!(dems
             .iter()
             .any(|entry| entry.id == "earth_regional_dem_kourou"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_baikonur"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_mahia"));
+        assert!(dems
+            .iter()
+            .any(|entry| entry.id == "earth_regional_dem_ksc_3dep"));
         let papua: Vec<_> = registry
             .selected(None, Some("papua_coastal_lowland"))
             .collect();
@@ -487,6 +496,17 @@ mod tests {
             .collect();
         assert_eq!(kourou.len(), 1);
         assert_eq!(kourou[0].id, "earth_regional_dem_kourou");
+        let baikonur: Vec<_> = registry
+            .selected(None, Some("baikonur_kazakhstan"))
+            .collect();
+        assert_eq!(baikonur.len(), 1);
+        assert_eq!(baikonur[0].id, "earth_regional_dem_baikonur");
+        let mahia: Vec<_> = registry.selected(None, Some("mahia_new_zealand")).collect();
+        assert_eq!(mahia.len(), 1);
+        assert_eq!(mahia[0].id, "earth_regional_dem_mahia");
+        let ksc_3dep: Vec<_> = registry.selected(None, Some("ksc_3dep_launch")).collect();
+        assert_eq!(ksc_3dep.len(), 1);
+        assert_eq!(ksc_3dep[0].id, "earth_regional_dem_ksc_3dep");
     }
 
     #[test]

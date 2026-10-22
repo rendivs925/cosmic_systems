@@ -1,9 +1,9 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan; Phases 0-2 implemented; Phase 3 Papua, interim KSC, and
-Starbase, Vandenberg, Wallops, and Kourou NASADEM packages, multi-root
-composition, coverage telemetry, and acceptance metrics validated. KSC 3DEP/vertical datum and the remaining priority
-regions are pending.
+Status: approved plan; Phases 0-2 implemented; Phase 3 regional packages for
+Papua, interim KSC, Starbase, Vandenberg, Wallops, Kourou, Baikonur, and Mahia,
+multi-root composition, coverage telemetry, acceptance metrics, launch-site
+selection, and KSC 3DEP/NAVD88-to-WGS84 normalization validated.
 
 Date: 2026-10-20.
 
@@ -130,20 +130,23 @@ runtime: validate -> stream/read baked assets only
 ## Phase 3 - Regional DEM packages
 
 Status: the Papua coastal lowland, interim KSC/Florida, Starbase/Boca Chica,
-Vandenberg, Wallops, and Kourou NASADEM packages are implemented and registered
-in `earth_datasets_v1.ron`. Papua acceptance is
-source RMSE 0.109 m, max error 0.866 m, tile-load p95 0.020 ms, zero
-requested-coverage fallback at steady state, and 111.5 MiB peak resident
-geometry. KSC acceptance is RMSE 0.147 m, max error 1.442 m, and tile-load p95
-0.040 ms; Starbase is RMSE 0.166 m, max error 1.333 m, tile-load p95
-0.014 ms; Vandenberg is RMSE 0.149 m, max error 1.361 m, and tile-load p95
-0.122 ms; Wallops is RMSE 0.240 m, max error 2.264 m, tile-load p95
-0.020 ms; Kourou is RMSE 0.169 m, max error 1.144 m, and tile-load p95
-0.057 ms. Runtime composition accepts multiple roots and telemetry reports
-packages and region IDs. KSC still needs a valid NAVD88-to-WGS 84 control and
-the adjacent 3DEP coverage reviewed together; interactive rocket mode still
-launches at Papua and needs KSC site/scenario selection. The remaining priority
-regions are pending.
+Vandenberg, Wallops, Kourou, Baikonur, and Mahia NASADEM packages are
+implemented and registered in `earth_datasets_v1.ron`. Papua acceptance is
+source RMSE 0.163 m, max error 2.457 m, tile-load p95 0.102 ms. KSC NASADEM is
+RMSE 0.194 m, max error 1.529 m, p95 0.022 ms; Starbase is RMSE 0.220 m, max
+error 1.399 m, p95 0.015 ms; Vandenberg is RMSE 0.225 m, max error 2.550 m,
+p95 0.015 ms; Wallops is RMSE 0.268 m, max error 1.747 m, p95 0.012 ms; Kourou
+is RMSE 0.245 m, max error 2.139 m, p95 0.015 ms; Baikonur is RMSE 0.129 m, max
+error 0.706 m, p95 0.014 ms; Mahia is RMSE 0.185 m, max error 1.834 m, p95
+0.011 ms; KSC 3DEP is RMSE 0.025 m, max error 0.099 m, p95 0.013 ms. Regional
+sources convert planetocentric terrain latitude to WGS 84 geodetic latitude
+before sampling, so packages align with their reviewed geography. Runtime
+composition accepts multiple roots and telemetry reports packages and region
+IDs. Rocket mode selects any regional site with
+`cargo run -- rocket --site <id>`; headless scenarios accept the same `--site`
+option and load the pad's covering payload synchronously. Adjacent KSC 3DEP
+tiles remain future work. All listed priority regions are implemented;
+site-specific mission profiles remain future work.
 
 ### Deliverables
 
@@ -156,21 +159,28 @@ regions are pending.
 - Region payloads under
   `assets/large_files/terrain/earth_elevation_pyramid/regions/<id>/tiles/`,
   indexed by the root `manifest.ron`; imagery links stay in
-  `earth_imagery_v1.ron`. Runtime composition now accepts several package roots
+  `earth_imagery_v1.ron`. Runtime composition accepts several package roots
   (`from_manifest_roots` / `with_dem_and_elevation_manifest_roots`); the
-  default list still contains one root and later roots win at identical patch
-  addresses.
-- KSC absolute-datum task: resolve NAVD88 to WGS 84 using valid NOAA/NGS
-  control or surveyed benchmarks. Until resolved, 3DEP supplies relative relief
-  only, anchored to the global EGM2008/WGS 84 height; never apply the invalid
-  offshore correction.
+  default list composes all reviewed regional packages and later roots win at
+  identical patch addresses.
+- KSC absolute-datum task: NOAA VDatum now supplies the NAVD88-to-WGS 84
+  ellipsoid control used by `scripts/normalize_ksc_3dep.py`. The normalized
+  3DEP source is baked as `ksc_3dep_launch` and composed after KSC NASADEM.
+- Regional sources are geodetic rasters while cube-sphere terrain coordinates
+  are planetocentric. The baker and runtime convert terrain latitude to WGS 84
+  geodetic latitude before sampling, so packages align with their reviewed
+  geography.
 
 ### Acceptance
 
 - Source-versus-baked elevation RMSE within resampling tolerance; seam
   continuity at region edges.
-- First-tile load p95 at most 50 ms; resident geometry at most 160 MiB; no
-  runtime I/O blocking.
+- First-tile load p95 at most 50 ms; resident geometry at most 160 MiB.
+  Streaming never blocks terrain queries; launch setup performs one deliberate
+  synchronous load of the pad's covering payload tile so the initial altitude
+  is authoritative.
+- Regional package probes and launch sites match their reviewed geodetic
+  coordinates after planetocentric conversion.
 - Coverage telemetry lists installed regions and layers; missing package falls
   back explicitly.
 
@@ -316,7 +326,7 @@ COSMIC_SYSTEMS_PERFORMANCE_METRICS=1 cargo run --release -- rocket
 
 | Risk | Mitigation |
 | --- | --- |
-| KSC NAVD88 to WGS 84 unresolved | Use relative 3DEP relief anchored to global height; obtain NGS/KSC control; never apply the invalid offshore correction |
+| KSC NAVD88 control changes | NOAA VDatum plane fit is pinned with sub-centimetre residual and 0.06 m uncertainty; re-verify control when updating the source tile |
 | Copernicus is a DSM | Use only for visual and validation; height authority is NASADEM/SRTM/3DEP |
 | License and attribution | Per-manifest license and attribution; reject NC, ND, registration-gated; verify at ingestion |
 | Vertical datum mixing | Mandatory EGM2008/WGS 84 normalization; record source and target datum |

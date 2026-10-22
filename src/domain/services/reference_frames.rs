@@ -466,14 +466,13 @@ mod tests {
     use super::*;
     use crate::domain::services::ephemeris::SpiceEphemeris;
     use crate::domain::services::planet_factory::PlanetFactory;
-    use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
 
     fn earth() -> Planet {
         PlanetFactory::create_by_name("Earth").unwrap()
     }
 
     fn ksc() -> LaunchSiteCoordinates {
-        predefined_sites::kennedy_space_center()
+        LaunchSiteCoordinates::default()
     }
 
     fn test_orientation() -> BodyOrientation {
@@ -770,7 +769,7 @@ mod tests {
 
     #[test]
     fn enu_basis_is_orthonormal() {
-        let (east, north, up) = enu_basis(28.5721, -80.6480);
+        let (east, north, up) = enu_basis(28.6084, -80.6043);
         assert!(east.dot(north).abs() < 1e-12);
         assert!(east.dot(up).abs() < 1e-12);
         assert!(north.dot(up).abs() < 1e-12);

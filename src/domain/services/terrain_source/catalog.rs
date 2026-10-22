@@ -56,10 +56,13 @@ pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT: &str =
 pub const DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS: &[&str] = &[
     DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT,
     "assets/large_files/terrain/earth_elevation_pyramid_ksc",
+    "assets/large_files/terrain/earth_elevation_pyramid_ksc_3dep",
     "assets/large_files/terrain/earth_elevation_pyramid_starbase",
     "assets/large_files/terrain/earth_elevation_pyramid_vandenberg",
     "assets/large_files/terrain/earth_elevation_pyramid_wallops",
     "assets/large_files/terrain/earth_elevation_pyramid_kourou",
+    "assets/large_files/terrain/earth_elevation_pyramid_baikonur",
+    "assets/large_files/terrain/earth_elevation_pyramid_mahia",
 ];
 #[cfg(feature = "dem")]
 pub const DEFAULT_MOON_DEM_PATH: &str =
@@ -208,6 +211,7 @@ fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
     let radius_m = earth.radius_km as f64 * 1_000.0;
     [
         predefined_sites::kennedy_space_center(),
+        predefined_sites::kennedy_lc39a(),
         predefined_sites::papua_indonesia_coastal_lowland(),
     ]
     .into_iter()

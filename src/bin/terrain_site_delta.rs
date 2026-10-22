@@ -18,7 +18,7 @@ use std::process::ExitCode;
 /// match the runtime predefined sites; the rest are approximate pad centers
 /// used only to review a relief upgrade.
 const SITES: &[(&str, f64, f64)] = &[
-    ("Kennedy Space Center", 28.5721, -80.6480),
+    ("Kennedy Space Center LC-39A", 28.6084, -80.6043),
     ("Starbase / Boca Chica", 25.9967, -97.1560),
     ("Vandenberg SLC-4E", 34.6321, -120.6108),
     ("Wallops Pad 0A", 37.8340, -75.4870),

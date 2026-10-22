@@ -58,6 +58,7 @@ fn main() {
     } else {
         None
     };
+    let launch_site = options.site.unwrap_or_default();
 
     if let Some(selection) = &vehicle_selection {
         validate_vehicle_selection(selection);
@@ -120,6 +121,7 @@ fn main() {
         }
         Mode::Rocket => {
             app.insert_resource(vehicle_selection.expect("rocket mode has a vehicle selection"));
+            app.insert_resource(launch_site);
             // Rocket mode owns its camera, HUD, and input context.
             app.add_plugins((SharedSimulationPlugin, RocketModePlugin));
         }

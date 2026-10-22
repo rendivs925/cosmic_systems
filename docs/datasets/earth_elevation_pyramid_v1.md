@@ -48,11 +48,14 @@ A package is a directory containing a manifest and its tile payloads:
   `assets/large_files/terrain/earth_elevation_pyramid`. Its first sparse
   regional package is the Papua coastal lowland NASADEM payload described in
   `earth_regional_papua_v1.md`; the KSC interim package uses
-  `earth_elevation_pyramid_ksc` (`earth_regional_ksc_v1.md`) and
-  `earth_elevation_pyramid_starbase` (`earth_regional_starbase_v1.md`), and
-  `earth_elevation_pyramid_vandenberg` (`earth_regional_vandenberg_v1.md`), and
-  `earth_elevation_pyramid_wallops` (`earth_regional_wallops_v1.md`), and
-  `earth_elevation_pyramid_kourou` (`earth_regional_kourou_v1.md`).
+  `earth_elevation_pyramid_ksc` (`earth_regional_ksc_v1.md`),
+  `earth_elevation_pyramid_ksc_3dep` (`earth_regional_ksc_3dep_v1.md`),
+  `earth_elevation_pyramid_starbase` (`earth_regional_starbase_v1.md`),
+  `earth_elevation_pyramid_vandenberg` (`earth_regional_vandenberg_v1.md`),
+  `earth_elevation_pyramid_wallops` (`earth_regional_wallops_v1.md`),
+  `earth_elevation_pyramid_kourou` (`earth_regional_kourou_v1.md`),
+  `earth_elevation_pyramid_baikonur` (`earth_regional_baikonur_v1.md`), and
+  `earth_elevation_pyramid_mahia` (`earth_regional_mahia_v1.md`).
   Additional roots can be composed at runtime; later roots win at identical
   patch addresses.
 

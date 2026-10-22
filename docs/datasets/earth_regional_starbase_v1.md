@@ -23,10 +23,10 @@ authority and does not replace the global source.
 - Levels: `9..12`; tile resolution: `64 x 64` shared-edge samples.
 - Runtime root:
   `assets/large_files/terrain/earth_elevation_pyramid_starbase`.
-- Payload: 232 tiles plus `manifest.ron`, 3,951,244 bytes (3.8 MiB).
+- Payload: 226 tiles plus `manifest.ron`, 3,849,082 bytes (3.7 MiB).
 - Aggregate runtime SHA-256:
-  `1d3d022088d11441ac882a2060d55aa32a53d9f099385af5742f4dfeb52ae7e3`.
-- Site probe `25.9971,-97.1553`: `-22.475 m` ellipsoidal, approximately `3 m`
+  `e43bbebc700860541101216b4d835af9d2bdef87915263a139abbc69cc3c95da`.
+- Site probe `25.9971,-97.1553`: `-22.485 m` ellipsoidal, approximately `3 m`
   above the EGM2008 sea surface at Boca Chica.
 
 ## Ingest and bake
@@ -43,10 +43,11 @@ cargo run --release --features dem --bin regional_dem_bake -- \
 ```
 
 The package is deterministic. On 2026-10-21 the bake verified full coverage,
-source RMSE `0.166 m`, maximum absolute error `1.333 m`, manifest load `0.677 ms`,
-and tile-load p95 `0.014 ms`. These are below the regional acceptance gates of
+source RMSE `0.220 m`, maximum absolute error `1.399 m`, manifest load `0.774 ms`,
+and tile-load p95 `0.015 ms`. These are below the regional acceptance gates of
 `1.0 m` RMSE, `5.0 m` max error, and `50 ms` p95 load.
 
-The runtime composes this root with the Papua and KSC roots through
-`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Interactive rocket mode still launches
-at Papua; a Starbase launch-site/scenario selection is future work.
+The runtime composes this root with the other regional roots through
+`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Rocket mode selects this site with
+`cargo run -- rocket --site starbase`; site-specific mission profiles are future
+work.

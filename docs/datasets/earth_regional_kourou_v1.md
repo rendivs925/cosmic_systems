@@ -23,9 +23,9 @@ ETOPO 2022 authority and does not replace the global source.
 - Levels: `9..12`; tile resolution: `64 x 64` shared-edge samples.
 - Runtime root:
   `assets/large_files/terrain/earth_elevation_pyramid_kourou`.
-- Payload: 812 tiles plus `manifest.ron`, 13,828,428 bytes (13.2 MiB).
+- Payload: 801 tiles plus `manifest.ron`, 13,641,094 bytes (13.0 MiB).
 - Aggregate runtime SHA-256:
-  `dfd264e18e95f0f6fe5e5690cd83a65dac6cd8e725d6e2e0986e67e3b2c63634`.
+  `50da7f64dcb15bf8e8ccd845446fd20a1e2c70181b80c5f8c4ed17785ab51bcc`.
 - Site probe `5.1590,-52.6490`: `-38.213 m` ellipsoidal, approximately `3 m`
   above the EGM2008 sea surface at Kourou.
 
@@ -43,11 +43,11 @@ cargo run --release --features dem --bin regional_dem_bake -- \
 ```
 
 The package is deterministic. On 2026-10-21 the bake verified full coverage,
-source RMSE `0.169 m`, maximum absolute error `1.144 m`, manifest load
-`15.682 ms`, and tile-load p95 `0.057 ms`. These are below the regional
+source RMSE `0.245 m`, maximum absolute error `2.139 m`, manifest load
+`2.160 ms`, and tile-load p95 `0.015 ms`. These are below the regional
 acceptance gates of `1.0 m` RMSE, `5.0 m` max error, and `50 ms` p95 load.
 
-The runtime composes this root with the Papua, KSC, Starbase, Vandenberg, and
-Wallops roots through `DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Interactive
-rocket mode still launches at Papua; a Kourou launch-site/scenario selection is
-future work.
+The runtime composes this root with the other regional roots through
+`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Rocket mode selects this site with
+`cargo run -- rocket --site kourou`; site-specific mission profiles are future
+work.

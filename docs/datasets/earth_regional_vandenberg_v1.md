@@ -23,10 +23,10 @@ ETOPO 2022 authority and does not replace the global source.
 - Levels: `9..12`; tile resolution: `64 x 64` shared-edge samples.
 - Runtime root:
   `assets/large_files/terrain/earth_elevation_pyramid_vandenberg`.
-- Payload: 455 tiles plus `manifest.ron`, 7,748,198 bytes (7.4 MiB).
+- Payload: 452 tiles plus `manifest.ron`, 7,697,147 bytes (7.3 MiB).
 - Aggregate runtime SHA-256:
-  `ce6f44f28d53f9286f7767668e2e70ed40842ffaf02de5f623c512f5bc4ee6ff`.
-- Site probe `34.7420,-120.5720`: `68.138 m` ellipsoidal.
+  `0c38088b229ece21dd06c298584138c54ac9a0520cac4047a9898124e757659c`.
+- Site probe `34.7420,-120.5720`: `68.098 m` ellipsoidal.
 
 ## Ingest and bake
 
@@ -42,10 +42,11 @@ cargo run --release --features dem --bin regional_dem_bake -- \
 ```
 
 The package is deterministic. On 2026-10-21 the bake verified full coverage,
-source RMSE `0.149 m`, maximum absolute error `1.361 m`, manifest load
-`11.898 ms`, and tile-load p95 `0.122 ms`. These are below the regional
+source RMSE `0.225 m`, maximum absolute error `2.550 m`, manifest load
+`1.385 ms`, and tile-load p95 `0.015 ms`. These are below the regional
 acceptance gates of `1.0 m` RMSE, `5.0 m` max error, and `50 ms` p95 load.
 
-The runtime composes this root with the Papua, KSC, and Starbase roots through
-`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Interactive rocket mode still launches
-at Papua; a Vandenberg launch-site/scenario selection is future work.
+The runtime composes this root with the other regional roots through
+`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Rocket mode selects this site with
+`cargo run -- rocket --site vandenberg`; site-specific mission profiles are future
+work.

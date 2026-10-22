@@ -18,3 +18,11 @@ REGRESSION_TEST_FILTER=determinism_regression_tests::<test-name> \
 ```
 
 Review the fixture audit metadata, state samples, and hash chain before commit.
+
+## 2026-10-21 terrain-alignment update
+
+The three flight baselines were re-recorded after regional DEMs were aligned to
+WGS 84 geodetic latitude. The legacy KSC reference surface moved by about 11.3 m
+because the previous regional package was displaced by the planetocentric /
+geodetic latitude mismatch. The launch-site delta and the re-recorded fixtures
+were reviewed together; no guidance, propulsion, or integration equation changed.

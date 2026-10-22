@@ -13,9 +13,9 @@ use crate::application::craft_startup::spawn_craft;
 use crate::application::craft_startup::spawn_craft_model;
 use crate::application::craft_startup::spawn_craft_ui;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::application::rocket_spawning::spawn_rockets;
 use crate::application::rocket_spawning::sync_launch_pad_presentation;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::application::rocket_spawning::{spawn_rockets, LaunchConfiguration};
 use crate::application::solar_system_startup::setup_space;
 #[cfg(target_arch = "wasm32")]
 use crate::application::solar_system_startup::spawn_bodies_progressively;
@@ -25,6 +25,7 @@ use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::simulation_time::SimulationTime;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
+use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 use crate::infrastructure::bevy_adapters::camera_systems::{
     apply_camera_transform, auto_inspect_selected_planet, update_camera_controller,
     update_starfield_position,
@@ -409,12 +410,14 @@ impl Plugin for CraftModePlugin {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 fn spawn_rockets_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     catalog: Res<RocketCatalog>,
     selection: Res<VehicleSelection>,
+    launch_site: Res<PredefinedLaunchSite>,
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     terrain_query: Query<(&PlanetComponent, &PlanetTerrain)>,
 ) {
@@ -428,12 +431,16 @@ fn spawn_rockets_system(
     let Some(earth_orientation) = ephemeris_snapshot.orientation(NaifBodyId::EARTH) else {
         panic!("Rocket launch requires the shared Earth IAU orientation snapshot");
     };
+    let configuration = LaunchConfiguration {
+        catalog: &catalog,
+        vehicle: &selection,
+        site: *launch_site,
+    };
     spawn_rockets(
         &mut commands,
         &mut meshes,
         &mut materials,
-        &catalog,
-        &selection,
+        &configuration,
         terrain.source.as_ref(),
         earth_orientation,
     );
@@ -592,6 +599,7 @@ impl Plugin for RocketModePlugin {
         #[cfg(target_arch = "wasm32")]
         app.init_resource::<RocketCatalog>();
         app.init_resource::<VehicleSelection>();
+        app.init_resource::<PredefinedLaunchSite>();
 
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(

@@ -25,7 +25,7 @@ cargo run --features dem --bin terrain_site_delta -- \
 
 | Site | Latitude | Longitude | ETOPO1 m | ETOPO 2022 m | Delta m |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Kennedy Space Center | 28.5721 | -80.6480 | 2.8 | -28.9 | -31.8 |
+| Kennedy Space Center LC-39A | 28.6084 | -80.6043 | -5.1 | -33.3 | -28.2 |
 | Starbase / Boca Chica | 25.9967 | -97.1560 | -0.1 | -22.0 | -21.9 |
 | Vandenberg SLC-4E | 34.6321 | -120.6108 | 112.8 | 85.1 | -27.6 |
 | Wallops Pad 0A | 37.8340 | -75.4870 | -3.3 | -40.7 | -37.4 |

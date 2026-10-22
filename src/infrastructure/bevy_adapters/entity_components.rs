@@ -9,7 +9,9 @@ use crate::domain::services::terrain_source::{EarthTerrainSource, TerrainSource}
 #[cfg(feature = "dem")]
 use crate::domain::services::terrain_source::{MarsTerrainSource, MoonTerrainSource};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
+use crate::domain::value_objects::launch_site_coordinates::{
+    LaunchSiteCoordinates, PredefinedLaunchSite,
+};
 use bevy::ecs::component::{Component, Mutable, StorageType};
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -23,6 +25,8 @@ impl Component for LaunchSiteCoordinates {
     const STORAGE_TYPE: StorageType = StorageType::Table;
     type Mutability = Mutable;
 }
+
+impl Resource for PredefinedLaunchSite {}
 
 // Component for planet entities
 #[derive(Component)]

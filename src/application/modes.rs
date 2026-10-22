@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FormatterResult};
 
+use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
+
 /// Application run modes selectable from the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -16,6 +18,8 @@ pub struct LaunchOptions {
     pub mode: Mode,
     /// `--vehicle <key>` selection; only meaningful in rocket mode.
     pub vehicle: Option<String>,
+    /// `--site <id>` selection; only meaningful in rocket mode.
+    pub site: Option<PredefinedLaunchSite>,
 }
 
 /// Invalid command-line input. Launch selection is explicit; unknown arguments
@@ -23,6 +27,8 @@ pub struct LaunchOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchOptionError {
     MissingVehicleValue,
+    MissingSiteValue,
+    UnknownSite(String),
     UnknownArgument(String),
 }
 
@@ -30,6 +36,8 @@ impl Display for LaunchOptionError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> FormatterResult {
         match self {
             Self::MissingVehicleValue => formatter.write_str("--vehicle requires a vehicle key"),
+            Self::MissingSiteValue => formatter.write_str("--site requires a launch-site id"),
+            Self::UnknownSite(site) => write!(formatter, "unknown launch site '{site}'"),
             Self::UnknownArgument(argument) => {
                 write!(formatter, "unknown launch argument '{argument}'")
             }
@@ -72,23 +80,37 @@ where
     let mut options = LaunchOptions {
         mode: Mode::Solar,
         vehicle: None,
+        site: None,
     };
     let mut expect_vehicle_value = false;
+    let mut expect_site_value = false;
     for arg in args {
         if expect_vehicle_value {
             options.vehicle = Some(arg);
             expect_vehicle_value = false;
             continue;
         }
+        if expect_site_value {
+            let Some(site) = PredefinedLaunchSite::parse(&arg) else {
+                return Err(LaunchOptionError::UnknownSite(arg));
+            };
+            options.site = Some(site);
+            expect_site_value = false;
+            continue;
+        }
         match arg.as_str() {
             "rocket" => options.mode = Mode::Rocket,
             "craft" => options.mode = Mode::Craft,
             "--vehicle" => expect_vehicle_value = true,
+            "--site" => expect_site_value = true,
             _ => return Err(LaunchOptionError::UnknownArgument(arg)),
         }
     }
     if expect_vehicle_value {
         return Err(LaunchOptionError::MissingVehicleValue);
+    }
+    if expect_site_value {
+        return Err(LaunchOptionError::MissingSiteValue);
     }
     Ok(options)
 }
@@ -96,6 +118,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{parse_launch_options, LaunchOptionError, LaunchOptions, Mode};
+    use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 
     fn parse(args: &[&str]) -> Mode {
         Mode::from_args(args.iter().map(|s| s.to_string())).expect("valid launch options")
@@ -163,6 +186,31 @@ mod tests {
         let parsed = options(&["rocket"]);
         assert_eq!(parsed.mode, Mode::Rocket);
         assert!(parsed.vehicle.is_none());
+        assert!(parsed.site.is_none());
+    }
+
+    #[test]
+    fn site_is_parsed_independently_of_vehicle() {
+        let parsed = options(&["rocket", "--site", "ksc", "--vehicle", "starship"]);
+        assert_eq!(parsed.mode, Mode::Rocket);
+        assert_eq!(parsed.site, Some(PredefinedLaunchSite::KennedyLc39a));
+        assert_eq!(parsed.vehicle.as_deref(), Some("starship"));
+    }
+
+    #[test]
+    fn invalid_site_and_dangling_site_are_rejected() {
+        assert_eq!(
+            parse_launch_options(["rocket".to_string(), "--site".to_string()]),
+            Err(LaunchOptionError::MissingSiteValue)
+        );
+        assert_eq!(
+            parse_launch_options([
+                "rocket".to_string(),
+                "--site".to_string(),
+                "moon".to_string()
+            ]),
+            Err(LaunchOptionError::UnknownSite("moon".to_string()))
+        );
     }
 
     #[test]

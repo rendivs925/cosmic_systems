@@ -23,10 +23,10 @@ ETOPO 2022 authority and does not replace the global source.
 - Levels: `9..12`; tile resolution: `64 x 64` shared-edge samples.
 - Runtime root:
   `assets/large_files/terrain/earth_elevation_pyramid_wallops`.
-- Payload: 417 tiles plus `manifest.ron`, 7,100,160 bytes (6.8 MiB).
+- Payload: 413 tiles plus `manifest.ron`, 7,032,109 bytes (6.7 MiB).
 - Aggregate runtime SHA-256:
-  `a39fb4363042654719f57b06a00e1d97d55750f7d29035c92118fe3882581f69`.
-- Site probe `37.9402,-75.4665`: `-24.482 m` ellipsoidal, approximately `3 m`
+  `26bf28e26b617ec80be5ab1be570905c628276d88b74e34259528aa86fa5a71a`.
+- Site probe `37.9402,-75.4665`: `-24.436 m` ellipsoidal, approximately `3 m`
   above the EGM2008 sea surface at Wallops.
 
 ## Ingest and bake
@@ -43,11 +43,11 @@ cargo run --release --features dem --bin regional_dem_bake -- \
 ```
 
 The package is deterministic. On 2026-10-21 the bake verified full coverage,
-source RMSE `0.240 m`, maximum absolute error `2.264 m`, manifest load
-`1.731 ms`, and tile-load p95 `0.020 ms`. These are below the regional
+source RMSE `0.268 m`, maximum absolute error `1.747 m`, manifest load
+`1.047 ms`, and tile-load p95 `0.012 ms`. These are below the regional
 acceptance gates of `1.0 m` RMSE, `5.0 m` max error, and `50 ms` p95 load.
 
-The runtime composes this root with the Papua, KSC, Starbase, and Vandenberg
-roots through `DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Interactive rocket mode
-still launches at Papua; a Wallops launch-site/scenario selection is future
+The runtime composes this root with the other regional roots through
+`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. Rocket mode selects this site with
+`cargo run -- rocket --site wallops`; site-specific mission profiles are future
 work.

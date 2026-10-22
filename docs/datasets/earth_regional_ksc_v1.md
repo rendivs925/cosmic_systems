@@ -28,11 +28,12 @@ control exists.
 - Levels: `9..12`; tile resolution: `64 x 64` shared-edge samples.
 - Runtime root:
   `assets/large_files/terrain/earth_elevation_pyramid_ksc`.
-- Payload: 457 tiles plus `manifest.ron`, 7,779,270 bytes (7.4 MiB).
+- Payload: 455 tiles plus `manifest.ron`, 7,745,233 bytes (7.4 MiB).
 - Aggregate runtime SHA-256:
-  `88e30df9357131c1ee626542b82e251f4e3da3d98d61fc0095919582fa13ba0d`.
-- Launch-site probe `28.5721,-80.6480`: `-26.975 m` ellipsoidal, approximately
-  `3 m` above the EGM2008 sea surface at KSC.
+  `7c0aba71a6e844535cfa557d6a3132e4f7f3f8314e7ff4d292e40954a62ff157`.
+- Coastal probe `28.5721,-80.6480`: `-26.672 m` ellipsoidal, approximately
+  `3 m` above the EGM2008 sea surface.
+- LC-39A probe `28.6084,-80.6043`: `-22.565 m` ellipsoidal.
 
 ## Ingest and bake
 
@@ -48,12 +49,12 @@ cargo run --release --features dem --bin regional_dem_bake -- \
 ```
 
 The package is deterministic. On 2026-10-21 the bake verified full coverage,
-source RMSE `0.147 m`, maximum absolute error `1.442 m`, manifest load `4.054 ms`,
-and tile-load p95 `0.040 ms`. These are below the regional acceptance gates of
+source RMSE `0.194 m`, maximum absolute error `1.529 m`, manifest load `2.295 ms`,
+and tile-load p95 `0.022 ms`. These are below the regional acceptance gates of
 `1.0 m` RMSE, `5.0 m` max error, and `50 ms` p95 load.
 
-The runtime composes this root with the Papua root through
-`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. The global ETOPO 2022 CSDEM remains
-authoritative wherever no regional tile is resident. Interactive rocket mode
-still launches at the Papua site; a KSC launch-site/scenario selection is future
-work.
+The runtime composes this root with the other regional roots through
+`DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS`. The KSC 3DEP root is composed
+immediately after it and replaces this package inside the 3DEP land rectangle.
+Rocket mode selects this site with `cargo run -- rocket --site ksc`;
+site-specific mission profiles are future work.

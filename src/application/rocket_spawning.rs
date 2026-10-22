@@ -19,8 +19,9 @@ use crate::domain::services::rocket_propulsion::{
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
-use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
-use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
+use crate::domain::value_objects::launch_site_coordinates::{
+    LaunchSiteCoordinates, PredefinedLaunchSite,
+};
 use crate::infrastructure::bevy_adapters::entity_components::Selectable;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
@@ -54,18 +55,25 @@ struct LaunchSetup {
     pad_north_body_fixed: DVec3,
 }
 
+/// Catalog, vehicle, and site inputs shared by interactive and headless spawns.
+#[derive(Clone, Copy)]
+pub struct LaunchConfiguration<'a> {
+    pub catalog: &'a RocketCatalog,
+    pub vehicle: &'a VehicleSelection,
+    pub site: PredefinedLaunchSite,
+}
+
 /// Resolve the selected vehicle and derive its authoritative prelaunch state in
 /// the one planet-centered inertial frame. Presentation-only values (mesh,
 /// material, pad geometry) are derived by the caller from this result.
 fn build_launch_setup(
-    catalog: &RocketCatalog,
-    selection: &VehicleSelection,
+    configuration: &LaunchConfiguration<'_>,
     terrain_source: &dyn TerrainSource,
     earth_orientation: &BodyOrientation,
 ) -> LaunchSetup {
-    let requested_key = selection.selected_key();
-    let Some((_, vehicle)) = catalog.resolve(selection) else {
-        let available = catalog.keys().collect::<Vec<_>>().join(", ");
+    let requested_key = configuration.vehicle.selected_key();
+    let Some((_, vehicle)) = configuration.catalog.resolve(configuration.vehicle) else {
+        let available = configuration.catalog.keys().collect::<Vec<_>>().join(", ");
         panic!("Unknown vehicle '{requested_key}'. Available vehicles: {available}");
     };
     let rocket = vehicle.rocket.clone();
@@ -85,10 +93,20 @@ fn build_launch_setup(
     // The launch site is defined in Earth body-fixed geodetic coordinates, then
     // converted once into the authoritative planet-centered inertial frame.
     // Collision and terrain convert back through the same reference-frame API.
-    let papua = predefined_sites::papua_indonesia_coastal_lowland();
-    let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
+    let site = configuration.site.coordinates();
+    let earth = PlanetFactory::create_by_id(&site.planet_id).unwrap();
     let earth_radius_m = earth.radius_km as f64 * 1000.0;
-    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&papua, &earth);
+    let (terrain_latitude_deg, terrain_longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
+    if let Some(tiles) = terrain_source.elevation_tile_source() {
+        if let Err(error) =
+            tiles.ensure_covering_tile_loaded(terrain_latitude_deg, terrain_longitude_deg)
+        {
+            panic!(
+                "{} launch elevation payload failed to load: {error:?}",
+                configuration.site.label()
+            );
+        }
+    }
     let terrain_sample = sample_surface(
         terrain_source,
         terrain_latitude_deg,
@@ -96,9 +114,9 @@ fn build_launch_setup(
         earth_radius_m,
     );
     let launch_site = LaunchSiteCoordinates::new(
-        papua.planet_id.clone(),
-        papua.latitude_deg,
-        papua.longitude_deg,
+        site.planet_id.clone(),
+        site.latitude_deg,
+        site.longitude_deg,
         terrain_sample.height_m as f32,
     );
     // Terrain elevations are radial offsets from the catalog mean radius. Use
@@ -111,10 +129,10 @@ fn build_launch_setup(
     // northward heading. This is the held physical prelaunch attitude, not a
     // presentation rotation.
     let launch_up = body_to_inertial * terrain_sample.normal;
-    let (_, pad_north_body_fixed, _) = enu_basis(papua.latitude_deg, papua.longitude_deg);
+    let (_, pad_north_body_fixed, _) = enu_basis(site.latitude_deg, site.longitude_deg);
     let launch_attitude =
         orientation_from_up_and_heading(launch_up, body_to_inertial * pad_north_body_fixed)
-            .expect("Papua coastal-lowland launch heading is finite");
+            .unwrap_or_else(|| panic!("{} launch heading is finite", configuration.site.label()));
     let geometry = RocketGeometry {
         radius_m: rocket.diameter_m / 2.0,
         height_m: rocket.height_m,
@@ -234,12 +252,11 @@ fn spawn_rocket_core(commands: &mut Commands, setup: &LaunchSetup) -> Entity {
 /// so headless execution does not have a second physical spawn model.
 pub fn spawn_rocket_physics(
     commands: &mut Commands,
-    catalog: &RocketCatalog,
-    selection: &VehicleSelection,
+    configuration: &LaunchConfiguration<'_>,
     terrain_source: &dyn TerrainSource,
     earth_orientation: &BodyOrientation,
 ) -> Entity {
-    let setup = build_launch_setup(catalog, selection, terrain_source, earth_orientation);
+    let setup = build_launch_setup(configuration, terrain_source, earth_orientation);
     spawn_rocket_core(commands, &setup)
 }
 
@@ -247,12 +264,11 @@ pub(crate) fn spawn_rockets(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    catalog: &RocketCatalog,
-    selection: &VehicleSelection,
+    configuration: &LaunchConfiguration<'_>,
     terrain_source: &dyn TerrainSource,
     earth_orientation: &BodyOrientation,
 ) {
-    let setup = build_launch_setup(catalog, selection, terrain_source, earth_orientation);
+    let setup = build_launch_setup(configuration, terrain_source, earth_orientation);
     let entity = spawn_rocket_core(commands, &setup);
 
     // Create a proper multi-part rocket mesh from the vehicle configuration.
@@ -1146,7 +1162,7 @@ mod tests {
         );
 
         // Independently reproduce the authoritative surface sample at the site.
-        let papua = predefined_sites::papua_indonesia_coastal_lowland();
+        let papua = PredefinedLaunchSite::Papua.coordinates();
         let earth = PlanetFactory::create_by_id(&papua.planet_id).unwrap();
         let earth_radius_m = earth.radius_km as f64 * 1000.0;
         let (terrain_latitude_deg, terrain_longitude_deg) =
@@ -1158,7 +1174,12 @@ mod tests {
             earth_radius_m,
         );
 
-        let setup = build_launch_setup(&catalog, &selection, &terrain_source, &orientation);
+        let configuration = LaunchConfiguration {
+            catalog: &catalog,
+            vehicle: &selection,
+            site: PredefinedLaunchSite::Papua,
+        };
+        let setup = build_launch_setup(&configuration, &terrain_source, &orientation);
 
         // The stack centre is raised half its height above the resting base
         // along the launch up axis (+Y body).
@@ -1177,6 +1198,61 @@ mod tests {
             up.dot(expected_up) > 0.999,
             "vehicle up {} must follow the terrain normal {expected_up}",
             up
+        );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
+    fn ksc_launch_reads_the_composed_3dep_payload() {
+        use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
+        use crate::domain::services::terrain_source::EarthTerrainSource;
+        use bevy::math::DQuat;
+
+        if !std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_ksc_3dep")
+            .exists()
+        {
+            return;
+        }
+        let catalog = RocketCatalog::from_dir()
+            .expect("the shipped vehicle catalog must load for the launch regression");
+        let selection = VehicleSelection::Default;
+        let terrain_source = EarthTerrainSource::new();
+        let orientation = BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "test-orientation".to_string(),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        );
+        let configuration = LaunchConfiguration {
+            catalog: &catalog,
+            vehicle: &selection,
+            site: PredefinedLaunchSite::KennedyLc39a,
+        };
+        let setup = build_launch_setup(&configuration, &terrain_source, &orientation);
+
+        let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).unwrap();
+        let (terrain_latitude_deg, terrain_longitude_deg) =
+            geodetic_to_terrain_lat_lon(&setup.launch_site, &earth);
+        let direction = crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(
+            terrain_latitude_deg,
+            terrain_longitude_deg,
+        );
+        let tiles = terrain_source
+            .elevation_tile_source()
+            .expect("Earth source exposes composed elevation packages");
+        let metadata = tiles
+            .covering_tile_for_direction(direction)
+            .expect("KSC launch site is covered");
+        assert_eq!(
+            metadata.patch.level, 13,
+            "KSC launch site must resolve to the 3DEP package, not NASADEM"
+        );
+        let expected_m = terrain_source.height_m(terrain_latitude_deg, terrain_longitude_deg);
+        assert!(
+            (f64::from(setup.launch_site.altitude_m) - expected_m).abs() < 0.01,
+            "KSC launch altitude {} must match the 3DEP surface {expected_m}",
+            setup.launch_site.altitude_m
         );
     }
 }

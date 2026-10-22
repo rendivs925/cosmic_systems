@@ -2,7 +2,7 @@
 
 use crate::application::plugins::RocketFixedSimulationPlugin;
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
-use crate::application::rocket_spawning::spawn_rocket_physics;
+use crate::application::rocket_spawning::{spawn_rocket_physics, LaunchConfiguration};
 use crate::domain::services::simulation_analysis::{
     analyze_simulation_artifact, EngineeringConstraint, SimulationAnalysisResult,
 };
@@ -14,6 +14,7 @@ use crate::domain::services::simulation_run::{
 use crate::domain::services::simulation_time::{SimulationTime, DEFAULT_FIXED_TIMESTEP_S};
 #[cfg(feature = "dem")]
 use crate::domain::services::terrain_source::DEFAULT_EARTH_DEM_PATH;
+use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 use crate::infrastructure::bevy_adapters::entity_components::{
     PlanetAtmosphere, PlanetComponent, PlanetTerrain,
 };
@@ -51,6 +52,7 @@ fn terrain_source_identity() -> Result<String, String> {
 pub struct HeadlessScenario {
     pub scenario_id: String,
     pub vehicle_key: Option<String>,
+    pub launch_site: PredefinedLaunchSite,
     pub fixed_steps: u64,
 }
 
@@ -59,6 +61,7 @@ impl Default for HeadlessScenario {
         Self {
             scenario_id: "papua-ascent".to_string(),
             vehicle_key: None,
+            launch_site: PredefinedLaunchSite::Papua,
             fixed_steps: 64 * 60,
         }
     }
@@ -151,6 +154,7 @@ fn spawn_headless_scenario(
     mut commands: Commands,
     catalog: Res<RocketCatalog>,
     selection: Res<VehicleSelection>,
+    launch_site: Res<PredefinedLaunchSite>,
     snapshot: Res<EphemerisSnapshot>,
 ) {
     let earth_orientation = snapshot
@@ -170,10 +174,14 @@ fn spawn_headless_scenario(
         terrain.clone(),
         PlanetAtmosphere::default_for("Earth"),
     ));
+    let configuration = LaunchConfiguration {
+        catalog: &catalog,
+        vehicle: &selection,
+        site: *launch_site,
+    };
     let rocket = spawn_rocket_physics(
         &mut commands,
-        &catalog,
-        &selection,
+        &configuration,
         terrain.source.as_ref(),
         earth_orientation,
     );
@@ -216,6 +224,7 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
     app.insert_resource(SimulationTime::new(DEFAULT_FIXED_TIMESTEP_S));
     app.insert_resource(catalog);
     app.insert_resource(selection);
+    app.insert_resource(scenario.launch_site);
     app.add_plugins((EphemerisPlugin, RocketFixedSimulationPlugin));
     // Frame capture is consumed only by the artifact, so the headless
     // composition registers it instead of the interactive mode.
@@ -235,7 +244,7 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
         scenario_id: scenario.scenario_id.clone(),
         vehicle_model_id,
         vehicle_configuration_sha256: Some(vehicle_configuration_sha256),
-        launch_site_id: "papua-indonesia-coastal-lowland".to_string(),
+        launch_site_id: scenario.launch_site.id().to_string(),
         environment_model_id: "earth-standard-atmosphere-v1".to_string(),
         terrain_source_id,
         ephemeris_authority_id: ephemeris.0.provenance().run_identity(),
@@ -337,17 +346,32 @@ mod tests {
     }
 
     #[test]
+    fn every_predefined_launch_site_starts_its_own_terrain_scenario() {
+        for site in PredefinedLaunchSite::ALL {
+            let artifact = run_headless_scenario_artifact(HeadlessScenario {
+                launch_site: site,
+                fixed_steps: 1,
+                ..default()
+            })
+            .unwrap_or_else(|error| panic!("{} headless run failed: {error}", site.label()));
+
+            assert_eq!(artifact.run_identity.launch_site_id, site.id());
+            assert_eq!(artifact.telemetry.len(), 2);
+        }
+    }
+
+    #[test]
     fn batch_runs_are_isolated_and_report_their_scenarios() {
         let runs = run_headless_batch([
             HeadlessScenario {
                 scenario_id: "one".into(),
                 fixed_steps: 1,
-                vehicle_key: None,
+                ..default()
             },
             HeadlessScenario {
                 scenario_id: "two".into(),
                 fixed_steps: 1,
-                vehicle_key: None,
+                ..default()
             },
         ]);
         assert_eq!(runs.len(), 2);
