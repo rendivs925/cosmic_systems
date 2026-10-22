@@ -19,7 +19,7 @@ use crate::domain::services::cube_sphere::{
 use crate::domain::services::elevation_pyramid::{
     ElevationPyramidError, ElevationTile, TileElevationSource,
 };
-use crate::domain::services::land_cover::LandCoverPackage;
+use crate::domain::services::land_cover::{LandCoverPackage, LandCoverSet};
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
 };
@@ -149,9 +149,9 @@ pub struct TerrainStreamingResource {
     /// same authority collision and rendering sample; streaming only installs
     /// decoded tiles into it and never owns a second copy.
     elevation_source: Option<Arc<TileElevationSource>>,
-    /// Optional presentation-only measured land-cover package. It refines
-    /// vegetation placement and never feeds collision or physics.
-    land_cover: Option<Arc<LandCoverPackage>>,
+    /// Optional presentation-only measured land-cover packages. Later packages
+    /// override overlapping regional coverage; this never feeds collision.
+    land_cover: Option<Arc<LandCoverSet>>,
     /// Payload tiles currently being decoded off the main thread.
     elevation_inflight: BTreeMap<TerrainPatch, InflightElevationTile>,
     /// Payload tiles requested but not yet admitted to a worker task.
@@ -272,7 +272,7 @@ impl TerrainStreamingResource {
 
     /// Set the optional presentation-only measured land-cover package used to
     /// refine vegetation placement. It never feeds collision or physics.
-    pub fn set_land_cover(&mut self, land_cover: Option<Arc<LandCoverPackage>>) {
+    pub fn set_land_cover(&mut self, land_cover: Option<Arc<LandCoverSet>>) {
         self.land_cover = land_cover;
     }
 
@@ -418,7 +418,7 @@ struct TerrainPatchBakeRequest {
     resolution: u32,
     skirt_depth_m: f64,
     stitched_edges: Vec<PatchEdge>,
-    land_cover: Option<Arc<LandCoverPackage>>,
+    land_cover: Option<Arc<LandCoverSet>>,
     /// Present when volumetric geology applies to this patch.
     volumetric: Option<VolumetricBakeRequest>,
 }
@@ -452,7 +452,9 @@ impl TerrainPatchBakeRequest {
                 &patch,
                 &geometry,
                 self.radius_m,
-                self.land_cover.as_deref(),
+                self.land_cover.as_deref().map(|land_cover| {
+                    land_cover as &dyn crate::domain::services::land_cover::LandCoverLookup
+                }),
             );
             let volumetric = self.volumetric.and_then(|request| {
                 build_rock_shell(
@@ -1396,26 +1398,48 @@ pub(crate) fn share_elevation_tile_source(
     streaming.adopt_elevation_source(source);
 }
 
-/// Default native measured land-cover package. It is optional: when the file is
-/// absent or invalid, vegetation placement deterministically falls back to the
-/// source's climate density.
-pub const DEFAULT_LAND_COVER_PATH: &str = VegetationConfig::DEFAULT.land_cover_path;
+/// Default native measured land-cover directory. Every `.clcvr` package is
+/// loaded in file-name order so overlapping regional coverage is deterministic.
+/// When no package is present, vegetation placement falls back to the source's
+/// climate-derived density.
+pub const DEFAULT_LAND_COVER_DIR: &str = VegetationConfig::DEFAULT.land_cover_dir;
 
-/// Load the optional measured land-cover package at startup (native only).
+/// Load the optional measured land-cover packages at startup (native only).
 /// Browser builds keep the climate-density fallback path.
 #[cfg(feature = "dem")]
 pub(crate) fn load_default_land_cover(mut streaming: ResMut<TerrainStreamingResource>) {
-    let path = std::path::Path::new(DEFAULT_LAND_COVER_PATH);
-    if !path.exists() {
+    let directory = std::path::Path::new(DEFAULT_LAND_COVER_DIR);
+    let Ok(entries) = std::fs::read_dir(directory) else {
         streaming.set_land_cover(None);
         return;
-    }
-    match LandCoverPackage::from_path(path) {
-        Ok(package) => streaming.set_land_cover(Some(Arc::new(package))),
-        Err(error) => {
-            warn!("land-cover package unavailable ({error:?}); using climate density");
-            streaming.set_land_cover(None);
+    };
+    let mut paths = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "clcvr")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut packages = Vec::new();
+    for path in paths {
+        match LandCoverPackage::from_path(&path) {
+            Ok(package) => packages.push(package),
+            Err(error) => warn!(
+                "land-cover package {:?} unavailable ({error:?}); skipping",
+                path
+            ),
         }
+    }
+    if packages.is_empty() {
+        streaming.set_land_cover(None);
+    } else {
+        info!(
+            "land-cover packages loaded: {} from {}",
+            packages.len(),
+            DEFAULT_LAND_COVER_DIR
+        );
+        streaming.set_land_cover(Some(Arc::new(LandCoverSet::new(packages))));
     }
 }
 

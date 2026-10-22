@@ -186,6 +186,10 @@ site-specific mission profiles remain future work.
 
 ## Phase 4 - Imagery, albedo, land cover, soil
 
+Status: started. Papua ESA WorldCover and multi-package runtime land-cover
+composition are implemented; global land cover, soil, and baked albedo remain
+open.
+
 ### Deliverables
 
 - `scripts/ingest_imagery.py`: Landsat 8/9 Collection 2 at 30 m, Sentinel-2 L2A

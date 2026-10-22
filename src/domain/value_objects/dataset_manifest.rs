@@ -468,10 +468,13 @@ mod tests {
         let papua: Vec<_> = registry
             .selected(None, Some("papua_coastal_lowland"))
             .collect();
-        assert_eq!(papua.len(), 2);
+        assert_eq!(papua.len(), 3);
         assert!(papua
             .iter()
             .any(|entry| entry.id == "earth_imagery_sentinel2_papua"));
+        assert!(papua
+            .iter()
+            .any(|entry| entry.id == "earth_landcover_worldcover_papua"));
         assert!(papua
             .iter()
             .any(|entry| entry.id == "earth_regional_dem_papua"));

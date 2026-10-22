@@ -36,7 +36,7 @@ use super::mips::{mip_chain_rgba8, MipFilter};
 use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
-use crate::domain::services::land_cover::LandCoverPackage;
+use crate::domain::services::land_cover::LandCoverLookup;
 use crate::domain::services::terrain_source::{
     slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -644,7 +644,7 @@ pub(crate) fn prepare_patch_surface(
     patch: &TerrainPatch,
     geometry: &PatchGeometry,
     radius_m: f64,
-    land_cover: Option<&LandCoverPackage>,
+    land_cover: Option<&dyn LandCoverLookup>,
 ) -> PreparedPatchSurface {
     // Global Earth albedo supplies broad geography. Source-derived local maps
     // are generated only once their detail is visible at close range.

@@ -1,8 +1,8 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages (Papua, KSC, Starbase, Vandenberg, Wallops, Kourou, Baikonur, Mahia) validated.
+Status: Phase 3 priority regional packages validated; Phase 4 surface-data ingestion started with Papua land cover.
 
-Date: 2026-10-21.
+Date: 2026-10-22.
 
 This is the inventory and provenance policy for open terrain and Earth-science
 data. It complements `docs/plans/open-science-data-and-terrain-realism.md` and
@@ -57,6 +57,7 @@ checksum but are not required at runtime.
 | `earth_imagery_blue_marble_global` | Imagery | global | 2 km source, 8192x4096 runtime | Public domain (NASA) | `imagery_convert` |
 | `earth_regional_dem_papua` | Dem | 139.0..140.0E, 8.6..7.4S | 30 m | Public domain (NASA/NASADEM) | `regional_dem_bake` |
 | `earth_imagery_sentinel2_papua` | Imagery | 139.0..140.0E, 8.6..7.4S | 10 m | Copernicus Sentinel Data (attribution) | `imagery_convert` |
+| `earth_landcover_worldcover_papua` | LandCover | 139.0..140.0E, 8.54..7.35S terrain-radial | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
 
 Details:
 
@@ -83,6 +84,15 @@ Details:
   aggregate runtime SHA-256
   `74c3c99a09ebd4c74f53a2b984f8552a2dbd7501f7adbbf34743e18ebd0aa784`.
   See `docs/datasets/earth_regional_papua_v1.md`.
+- Papua land cover: ESA WorldCover 2021 v200 tile S09E138, nearest-neighbour
+  resampled to a 1 arc-second terrain-radial grid for presentation-only
+  vegetation. Source SHA-256
+  `884c7ddcd6175d4711305f6a7e706ac2fa381867b51400e883bbacc8a001abb0`;
+  runtime SHA-256
+  `c0552a1d314e07fcac8f39305e5c3eb25f4ae875663a2283b8f7e3ad390f99ab`.
+  Required attribution: `ESA WorldCover project 2021 / Contains modified
+  Copernicus Sentinel data (2021) processed by ESA`. See
+  `docs/datasets/earth_landcover_papua_v1.md`.
 - KSC regional NASADEM: interim 1 arc-second bare-earth over `80.85..80.45W`,
   `28.40..28.75N`, EGM96 heights corrected with the runtime EGM2008 geoid.
   Source SHA-256
@@ -156,7 +166,6 @@ same provenance and checksum gate before use.
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
 | JRC Global Surface Water | Water | lakes and surface-water occurrence | 30 m monthly | EC JRC, attribution required | 3 |
-| ESA WorldCover | LandCover | land-cover classes | 10 m | ESA, CC BY 4.0 | 3 |
 | SoilGrids | Soil | soil texture and properties | 250 m | ISRIC, CC BY 4.0 | 3 |
 | Global canopy height | Canopy | canopy height and density | 30 m | NASA GEDI / partner products, verify per product | 4 |
 | ERA5 reanalysis | Climate | climate and atmospheric context | ~31 km | Copernicus CDS, attribution required | later |
@@ -202,6 +211,15 @@ Phase 3 Papua (implemented):
 python3 scripts/ingest_regional_dem.py --region papua_coastal_lowland
 cargo run --release --features dem --bin regional_dem_bake -- --region papua_coastal_lowland
 cargo run --features dem --bin preprocess -- --region papua_coastal_lowland --check
+```
+
+Phase 4 Papua land cover (implemented):
+
+```sh
+python3 scripts/ingest_landcover.py --region papua_coastal_lowland ...
+cargo run --release --features native --bin land_cover_bake -- <normalized.png> \
+  assets/large_files/terrain/landcover_v1/papua_coastal_lowland.clcvr ...
+cargo run --features dem --bin preprocess -- --layer landcover --check
 ```
 
 ## Acceptance

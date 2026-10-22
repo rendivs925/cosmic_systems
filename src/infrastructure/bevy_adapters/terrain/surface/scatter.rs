@@ -11,7 +11,7 @@ use super::{
     VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
 };
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
-use crate::domain::services::land_cover::LandCoverPackage;
+use crate::domain::services::land_cover::LandCoverLookup;
 use crate::domain::services::terrain_collision::surface_normal;
 use crate::domain::services::terrain_source::{slope_deg_at, TerrainSource};
 use crate::domain::services::vegetation::{
@@ -941,7 +941,7 @@ pub fn build_vegetation_mesh_with_land_cover(
     patch: &TerrainPatch,
     radius_m: f64,
     mesh_origin_body_fixed: &DVec3,
-    land_cover: Option<&LandCoverPackage>,
+    land_cover: Option<&dyn LandCoverLookup>,
 ) -> Option<Mesh> {
     build_grounded_vegetation_mesh(
         source,
@@ -958,7 +958,7 @@ pub(super) fn build_grounded_vegetation_mesh(
     patch: &TerrainPatch,
     radius_m: f64,
     mesh_origin_body_fixed: &DVec3,
-    land_cover: Option<&LandCoverPackage>,
+    land_cover: Option<&dyn LandCoverLookup>,
     geometry: Option<&PatchGeometry>,
 ) -> Option<Mesh> {
     let ground_radius = |dir: DVec3, height_m: f64| {

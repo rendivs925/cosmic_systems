@@ -126,3 +126,8 @@ required-features = ["dem"]
 name = "imagery_convert"
 path = "src/bin/imagery_convert.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "land_cover_bake"
+path = "src/bin/land_cover_bake.rs"
+required-features = ["native"]

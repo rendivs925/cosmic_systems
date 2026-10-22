@@ -100,6 +100,17 @@ impl LandCoverClass {
     }
 }
 
+/// Read-only land-cover query shared by a single package and a composed set.
+/// Classes are categorical, so implementations use nearest-neighbour lookup.
+pub trait LandCoverLookup {
+    fn sample_class(&self, latitude_deg: f64, longitude_deg: f64) -> Option<LandCoverClass>;
+
+    fn vegetation_density(&self, latitude_deg: f64, longitude_deg: f64) -> Option<f64> {
+        self.sample_class(latitude_deg, longitude_deg)
+            .map(LandCoverClass::vegetation_density)
+    }
+}
+
 /// Provenance required for an accepted land-cover package.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LandCoverMetadata {
@@ -125,6 +136,12 @@ pub struct LandCoverPackage {
     north_deg: f64,
     metadata: LandCoverMetadata,
     classes: Vec<u8>,
+}
+
+impl LandCoverLookup for LandCoverPackage {
+    fn sample_class(&self, latitude_deg: f64, longitude_deg: f64) -> Option<LandCoverClass> {
+        LandCoverPackage::sample_class(self, latitude_deg, longitude_deg)
+    }
 }
 
 impl LandCoverPackage {
@@ -308,6 +325,52 @@ impl LandCoverPackage {
     }
 }
 
+/// Ordered set of land-cover packages. Later packages win where coverage
+/// overlaps, which lets a regional 10 m package refine a coarser global one
+/// without changing the binary package format.
+#[derive(Debug, Clone, Default)]
+pub struct LandCoverSet {
+    packages: Vec<LandCoverPackage>,
+}
+
+impl LandCoverSet {
+    pub fn new(packages: Vec<LandCoverPackage>) -> Self {
+        Self { packages }
+    }
+
+    pub fn from_paths(
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> Result<Self, LandCoverError> {
+        let packages = paths
+            .into_iter()
+            .map(|path| LandCoverPackage::from_path(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        if packages.is_empty() {
+            return Err(LandCoverError::InvalidFormat(
+                "land-cover set requires at least one package".into(),
+            ));
+        }
+        Ok(Self::new(packages))
+    }
+
+    pub fn packages(&self) -> &[LandCoverPackage] {
+        &self.packages
+    }
+
+    pub fn package_count(&self) -> usize {
+        self.packages.len()
+    }
+}
+
+impl LandCoverLookup for LandCoverSet {
+    fn sample_class(&self, latitude_deg: f64, longitude_deg: f64) -> Option<LandCoverClass> {
+        self.packages
+            .iter()
+            .rev()
+            .find_map(|package| package.sample_class(latitude_deg, longitude_deg))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +481,37 @@ mod tests {
         let package = package();
         assert_eq!(package.vegetation_density(0.9, 0.1), Some(1.0));
         assert_eq!(package.vegetation_density(9.0, 9.0), None);
+    }
+    #[test]
+    fn later_packages_override_overlapping_coverage() {
+        let coarse = LandCoverPackage::from_samples(
+            2,
+            2,
+            0.0,
+            0.0,
+            4.0,
+            4.0,
+            metadata(),
+            vec![LandCoverClass::Grassland.code(); 4],
+        )
+        .expect("valid package");
+        let mut regional_metadata = metadata();
+        regional_metadata.source = "regional test package".into();
+        let regional = LandCoverPackage::from_samples(
+            2,
+            2,
+            1.0,
+            1.0,
+            3.0,
+            3.0,
+            regional_metadata,
+            vec![LandCoverClass::Mangroves.code(); 4],
+        )
+        .expect("valid package");
+        let set = LandCoverSet::new(vec![coarse, regional]);
+        assert_eq!(set.package_count(), 2);
+        assert_eq!(set.sample_class(2.0, 2.0), Some(LandCoverClass::Mangroves));
+        assert_eq!(set.sample_class(0.5, 0.5), Some(LandCoverClass::Grassland));
+        assert_eq!(set.sample_class(8.0, 8.0), None);
     }
 }

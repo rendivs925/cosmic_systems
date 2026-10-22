@@ -57,8 +57,8 @@ pub struct VegetationConfig {
     pub clump_seed: u64,
     /// Minimum value of the clumping mask, so clearings never fully vanish.
     pub clump_min: f64,
-    /// Committed land-cover package consumed by the scatter pass.
-    pub land_cover_path: &'static str,
+    /// Committed directory of land-cover packages consumed by the scatter pass.
+    pub land_cover_dir: &'static str,
 }
 
 impl VegetationConfig {
@@ -72,7 +72,7 @@ impl VegetationConfig {
         cell_jitter: 0.7,
         clump_seed: 0x00A1_C0FF_EE01_2345,
         clump_min: 0.35,
-        land_cover_path: "assets/large_files/terrain/earth_landcover_v1.clcvr",
+        land_cover_dir: "assets/large_files/terrain/landcover_v1",
     };
 
     /// Whether the configuration is internally consistent. Invalid values fail
@@ -86,7 +86,7 @@ impl VegetationConfig {
             && self.candidate_oversample >= 1.0
             && (0.0..=1.0).contains(&self.cell_jitter)
             && (0.0..=1.0).contains(&self.clump_min)
-            && !self.land_cover_path.is_empty()
+            && !self.land_cover_dir.is_empty()
     }
 }
 
@@ -567,7 +567,7 @@ mod tests {
         }
         .is_valid());
         assert!(!VegetationConfig {
-            land_cover_path: "",
+            land_cover_dir: "",
             ..config
         }
         .is_valid());
