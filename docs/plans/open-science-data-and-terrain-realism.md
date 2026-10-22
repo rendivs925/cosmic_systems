@@ -186,9 +186,11 @@ site-specific mission profiles remain future work.
 
 ## Phase 4 - Imagery, albedo, land cover, soil
 
-Status: in progress. ESA WorldCover now supplies a global 5 arc-minute fallback
-plus eight 1 arc-second regional packages that compose deterministically and
-refine close-range materials; soil and measured baked albedo remain open.
+Status: complete. ESA WorldCover supplies a global 5 arc-minute fallback plus
+eight 1 arc-second regional packages that compose deterministically; measured
+imagery albedo is active where Sentinel-2/Blue Marble tiles verify; SoilGrids
+supplies a global 5 arc-minute texture fallback plus eight regional 250 m
+packages that modestly refine dry ground materials.
 
 ### Deliverables
 
@@ -196,11 +198,16 @@ refine close-range materials; soil and measured baked albedo remain open.
   at 10 m (regional); MODIS MCD43 at 500 m (global).
 - `scripts/ingest_landcover.py`: ESA WorldCover at 10 m (regional), MODIS
   MCD12Q1 at 500 m (global).
-- `scripts/ingest_soil.py`: SoilGrids at 250 m (regional), aggregated global
-  soil.
-- `src/bin/surface_bake.rs`: reuse `build_patch_surfaces` and
-  `surface/layers.rs`; bake albedo RGBA8, normal/roughness, land-cover R8, soil
-  R8.
+- `scripts/ingest_soil.py`: SoilGrids 2.0 clay/sand/silt 0-5 cm mean at 250 m
+  (regional) plus a WCS-scaled global 5 arc-minute fallback; writes a
+  normalized RGB8 PNG and provenance.
+- `src/bin/soil_bake.rs`: versioned `.cssoil` package with per-sample integer
+  clay/sand/silt percentages and provenance metadata.
+- `src/domain/services/soil.rs`: bilinear `SoilPackage` / `SoilSet` sampling;
+  later regional packages override the global fallback.
+- `build_patch_surfaces` consumes the composed soil set at close LOD and blends
+  restrained dry-ground tints; the effect is suppressed by moisture, water,
+  snow, and non-bare land-cover classes.
 - Extend region packages and global fallback textures.
 
 ### Acceptance

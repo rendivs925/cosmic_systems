@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages validated; Phase 4 land cover implemented globally and for all eight priority regions.
+Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions.
 
 Date: 2026-10-22.
 
@@ -66,6 +66,15 @@ checksum but are not required at runtime.
 | `earth_landcover_worldcover_kourou` | LandCover | 52.95..52.45W, 4.97..5.31N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
 | `earth_landcover_worldcover_baikonur` | LandCover | 63.05..63.55E, 45.56..45.91N | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
 | `earth_landcover_worldcover_mahia` | LandCover | 177.70..178.00E, 39.21..38.96S | 10 m source, 1 arc-second package | CC BY 4.0 (ESA) | `land_cover_bake` |
+| `earth_soil_soilgrids_global` | Soil | 179.998W..179.994E, 55.80S..82.67N | 250 m source, 5 arc-minute package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_papua` | Soil | 139.0..140.0E, 8.54..7.35S | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_ksc` | Soil | 80.85..80.45W, 28.24..28.59N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_starbase` | Soil | 97.30..97.05W, 25.70..25.95N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_vandenberg` | Soil | 120.75..120.45W, 34.42..34.67N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_wallops` | Soil | 75.70..75.35W, 37.61..37.86N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_kourou` | Soil | 52.95..52.45W, 4.97..5.31N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_baikonur` | Soil | 63.05..63.55E, 45.56..45.91N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
+| `earth_soil_soilgrids_mahia` | Soil | 177.70..178.00E, 39.21..38.96S | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
 
 Details:
 
@@ -104,6 +113,14 @@ Details:
   `docs/datasets/earth_landcover_regional_v1.md`. Required attribution:
   `ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data
   (2021) processed by ESA`.
+- Soil texture: ISRIC SoilGrids 2.0 0-5 cm mean clay, sand, and silt at 250 m,
+  normalized to integer percentages on planetocentric terrain-radial grids.
+  One 5 arc-minute global fallback plus eight regional packages; presentation
+  only, with no vertical datum. Global runtime SHA-256
+  `07b078e51a429f27f255c81e1743164ded4e3ed3238c007d93b17c1fdb55d1be`;
+  regional hashes are recorded in the registry and in
+  `docs/datasets/earth_soil_v1.md`. Required attribution:
+  `ISRIC - World Soil Information (SoilGrids 2.0)`.
 - KSC regional NASADEM: interim 1 arc-second bare-earth over `80.85..80.45W`,
   `28.40..28.75N`, EGM96 heights corrected with the runtime EGM2008 geoid.
   Source SHA-256
@@ -177,7 +194,6 @@ same provenance and checksum gate before use.
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
 | JRC Global Surface Water | Water | lakes and surface-water occurrence | 30 m monthly | EC JRC, attribution required | 3 |
-| SoilGrids | Soil | soil texture and properties | 250 m | ISRIC, CC BY 4.0 | 3 |
 | Global canopy height | Canopy | canopy height and density | 30 m | NASA GEDI / partner products, verify per product | 4 |
 | ERA5 reanalysis | Climate | climate and atmospheric context | ~31 km | Copernicus CDS, attribution required | later |
 
@@ -231,6 +247,15 @@ python3 scripts/ingest_landcover.py --region <region> ...
 cargo run --release --features native --bin land_cover_bake -- <normalized.png> \
   assets/large_files/terrain/landcover_v1/<region>.clcvr ...
 cargo run --features dem --bin preprocess -- --layer landcover --check
+```
+
+Phase 4 soil texture (implemented global plus all eight regions):
+
+```sh
+python3 scripts/ingest_soil.py --region all --global
+cargo run --release --features native --bin soil_bake -- <normalized.png> \
+  assets/large_files/terrain/soil_v1/<region>.cssoil ...
+cargo run --features dem --bin preprocess -- --layer soil --check
 ```
 
 ## Acceptance

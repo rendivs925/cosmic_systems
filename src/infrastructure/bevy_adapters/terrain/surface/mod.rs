@@ -37,6 +37,7 @@ use crate::domain::services::cube_sphere::{
     direction_to_lat_lon, face_uv_to_direction, PatchGeometry, TerrainPatch,
 };
 use crate::domain::services::land_cover::LandCoverLookup;
+use crate::domain::services::soil::SoilLookup;
 use crate::domain::services::terrain_source::{
     slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -645,6 +646,7 @@ pub(crate) fn prepare_patch_surface(
     geometry: &PatchGeometry,
     radius_m: f64,
     land_cover: Option<&dyn LandCoverLookup>,
+    soil: Option<&dyn SoilLookup>,
 ) -> PreparedPatchSurface {
     // Global Earth albedo supplies broad geography. Source-derived local maps
     // are generated only once their detail is visible at close range.
@@ -675,7 +677,7 @@ pub(crate) fn prepare_patch_surface(
         river_strength,
     );
     let local_surfaces = supports_local_surfaces(patch.level)
-        .then(|| build_patch_surfaces(source, patch, geometry, radius_m, land_cover));
+        .then(|| build_patch_surfaces(source, patch, geometry, radius_m, land_cover, soil));
     // The layered material is selected at runtime from build capability. Browser
     // / no-`dem` builds keep the single-layer surface appearance path unchanged.
     let layer_weights = (LAYERED_MATERIAL_SUPPORTED && supports_local_surfaces(patch.level))
@@ -1014,7 +1016,7 @@ mod tests {
             *point = (position + position.normalize() * 30.0).to_array();
         }
         let anchor = patch.center_direction() * radius_m;
-        let surface = prepare_patch_surface(&source, &patch, &geometry, radius_m, None);
+        let surface = prepare_patch_surface(&source, &patch, &geometry, radius_m, None, None);
         let (mesh, mesh_anchor) = surface.vegetation.expect("vegetated patch has scatter");
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
@@ -1127,7 +1129,8 @@ mod tests {
         let src = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 2);
         let geometry = build_patch_geometry(&patch, &src, 6_371_000.0, 33, 5.0);
-        let (albedo, normal) = build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0, None);
+        let (albedo, normal) =
+            build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0, None, None);
         assert_eq!(albedo.width(), SURFACE_TEX_RES);
         assert_eq!(albedo.height(), SURFACE_TEX_RES);
         assert_eq!(normal.width(), SURFACE_TEX_RES);
@@ -1161,7 +1164,7 @@ mod tests {
         }
 
         let (repeat_albedo, repeat_normal) =
-            build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0, None);
+            build_patch_surfaces(&src, &patch, &geometry, 6_371_000.0, None, None);
         assert_eq!(albedo.data, repeat_albedo.data);
         assert_eq!(normal.data, repeat_normal.data);
     }
@@ -1200,7 +1203,8 @@ mod tests {
         let source = RiverTerrain;
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
         let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
-        let (albedo, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0, None);
+        let (albedo, normal) =
+            build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0, None, None);
         let center = ((SURFACE_TEX_RES as usize / 2) * SURFACE_TEX_RES as usize
             + SURFACE_TEX_RES as usize / 2)
             * 4;
@@ -1219,7 +1223,7 @@ mod tests {
         let source = ProceduralTerrainSource::new(0, 0.0, 0.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
         let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
-        let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0, None);
+        let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0, None, None);
         let data = normal.data.as_ref().unwrap();
         let center = ((SURFACE_TEX_RES as usize / 2) * SURFACE_TEX_RES as usize
             + SURFACE_TEX_RES as usize / 2)
@@ -1235,7 +1239,7 @@ mod tests {
         let source = ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0);
         let patch = TerrainPatch::for_direction(DVec3::new(0.3, 0.4, 1.0).normalize(), 12);
         let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 33, 5.0);
-        let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0, None);
+        let (_, normal) = build_patch_surfaces(&source, &patch, &geometry, 6_371_000.0, None, None);
         let data = normal.data.as_ref().unwrap();
         let (texels, _) = data.as_chunks::<4>();
 
@@ -1291,8 +1295,9 @@ mod tests {
         let coarse_geometry = build_patch_geometry(&coarse, &source, 6_371_000.0, 5, 5.0);
         let fine_geometry = build_patch_geometry(&fine, &source, 6_371_000.0, 5, 5.0);
         let coarse_surface =
-            prepare_patch_surface(&source, &coarse, &coarse_geometry, 6_371_000.0, None);
-        let fine_surface = prepare_patch_surface(&source, &fine, &fine_geometry, 6_371_000.0, None);
+            prepare_patch_surface(&source, &coarse, &coarse_geometry, 6_371_000.0, None, None);
+        let fine_surface =
+            prepare_patch_surface(&source, &fine, &fine_geometry, 6_371_000.0, None, None);
 
         for fine_j in [0, 2, 4] {
             let coarse_j = fine_j / 2;
@@ -1689,7 +1694,7 @@ mod tests {
             crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed(lat, lon);
         let patch = TerrainPatch::for_direction(direction, 14);
         let geometry = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
-        let surface = prepare_patch_surface(&source, &patch, &geometry, radius_m, None);
+        let surface = prepare_patch_surface(&source, &patch, &geometry, radius_m, None, None);
         let (mesh, anchor) = surface
             .vegetation
             .expect("launch-site vegetation must be generated");

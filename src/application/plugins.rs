@@ -171,6 +171,7 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
 };
 #[cfg(feature = "dem")]
 use crate::infrastructure::bevy_adapters::terrain::streaming::load_default_land_cover;
+use crate::infrastructure::bevy_adapters::terrain::streaming::load_default_soil;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     share_elevation_tile_source, TerrainStreamingResource,
 };
@@ -659,6 +660,11 @@ impl Plugin for RocketModePlugin {
         app.add_systems(
             Startup,
             load_default_land_cover.after(share_elevation_tile_source),
+        );
+        #[cfg(feature = "dem")]
+        app.add_systems(
+            Startup,
+            load_default_soil.after(share_elevation_tile_source),
         );
 
         // Terrain rendering plugin (spawns meshes from streaming patches).

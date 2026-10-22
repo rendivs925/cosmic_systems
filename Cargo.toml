@@ -131,3 +131,8 @@ required-features = ["native"]
 name = "land_cover_bake"
 path = "src/bin/land_cover_bake.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "soil_bake"
+path = "src/bin/soil_bake.rs"
+required-features = ["native"]

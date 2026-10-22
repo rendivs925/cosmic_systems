@@ -3399,12 +3399,14 @@ mod tests {
             &geometry,
             6_371_000.0,
             None,
+            None,
         );
         let fine = crate::infrastructure::bevy_adapters::terrain::surface::prepare_patch_surface(
             &source,
             &TerrainPatch::for_direction(DVec3::Z, 12),
             &geometry,
             6_371_000.0,
+            None,
             None,
         );
 

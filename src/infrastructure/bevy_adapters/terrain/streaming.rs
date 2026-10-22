@@ -23,6 +23,7 @@ use crate::domain::services::land_cover::{LandCoverPackage, LandCoverSet};
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
 };
+use crate::domain::services::soil::{SoilPackage, SoilSet, DEFAULT_SOIL_DIR};
 use crate::domain::services::terrain_patch_manager::{PatchState, TerrainPatchManager};
 use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
 use crate::domain::services::vegetation::VegetationConfig;
@@ -152,6 +153,9 @@ pub struct TerrainStreamingResource {
     /// Optional presentation-only measured land-cover packages. Later packages
     /// override overlapping regional coverage; this never feeds collision.
     land_cover: Option<Arc<LandCoverSet>>,
+    /// Optional presentation-only measured soil-texture packages. Later
+    /// packages override overlapping regional coverage; never feeds collision.
+    soil: Option<Arc<SoilSet>>,
     /// Payload tiles currently being decoded off the main thread.
     elevation_inflight: BTreeMap<TerrainPatch, InflightElevationTile>,
     /// Payload tiles requested but not yet admitted to a worker task.
@@ -177,6 +181,7 @@ impl Default for TerrainStreamingResource {
             active_planet: None,
             elevation_source: None,
             land_cover: None,
+            soil: None,
             elevation_inflight: BTreeMap::new(),
             elevation_pending: BTreeSet::new(),
             elevation_covered_patches: 0,
@@ -274,6 +279,12 @@ impl TerrainStreamingResource {
     /// refine vegetation placement. It never feeds collision or physics.
     pub fn set_land_cover(&mut self, land_cover: Option<Arc<LandCoverSet>>) {
         self.land_cover = land_cover;
+    }
+
+    /// Install presentation-only measured soil texture. It never affects
+    /// geometry, collision, altitude, or flight physics.
+    pub fn set_soil(&mut self, soil: Option<Arc<SoilSet>>) {
+        self.soil = soil;
     }
 
     fn begin_elevation_load(
@@ -419,6 +430,7 @@ struct TerrainPatchBakeRequest {
     skirt_depth_m: f64,
     stitched_edges: Vec<PatchEdge>,
     land_cover: Option<Arc<LandCoverSet>>,
+    soil: Option<Arc<SoilSet>>,
     /// Present when volumetric geology applies to this patch.
     volumetric: Option<VolumetricBakeRequest>,
 }
@@ -455,6 +467,9 @@ impl TerrainPatchBakeRequest {
                 self.land_cover.as_deref().map(|land_cover| {
                     land_cover as &dyn crate::domain::services::land_cover::LandCoverLookup
                 }),
+                self.soil
+                    .as_deref()
+                    .map(|soil| soil as &dyn crate::domain::services::soil::SoilLookup),
             );
             let volumetric = self.volumetric.and_then(|request| {
                 build_rock_shell(
@@ -966,6 +981,7 @@ pub(crate) fn stream_terrain_patches(
     );
     let tasks_started = batch.len();
     let land_cover = streaming.land_cover.clone();
+    let soil = streaming.soil.clone();
     for patch in batch {
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
         streaming.begin_bake(
@@ -977,6 +993,7 @@ pub(crate) fn stream_terrain_patches(
                 skirt_depth_m: config.skirt_depth_m,
                 stitched_edges: stitch_edges,
                 land_cover: land_cover.clone(),
+                soil: soil.clone(),
                 volumetric: volumetric_bake_for(patch, radius_m, &volumetric_settings),
             },
             task_pool,
@@ -1440,6 +1457,42 @@ pub(crate) fn load_default_land_cover(mut streaming: ResMut<TerrainStreamingReso
             DEFAULT_LAND_COVER_DIR
         );
         streaming.set_land_cover(Some(Arc::new(LandCoverSet::new(packages))));
+    }
+}
+
+/// Load the optional measured soil-texture packages at startup (native only).
+/// Browser builds keep the source-derived material path unchanged.
+#[cfg(feature = "dem")]
+pub(crate) fn load_default_soil(mut streaming: ResMut<TerrainStreamingResource>) {
+    let directory = std::path::Path::new(DEFAULT_SOIL_DIR);
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        streaming.set_soil(None);
+        return;
+    };
+    let mut paths = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "cssoil")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut packages = Vec::new();
+    for path in paths {
+        match SoilPackage::from_path(&path) {
+            Ok(package) => packages.push(package),
+            Err(error) => warn!("soil package {:?} unavailable ({error:?}); skipping", path),
+        }
+    }
+    if packages.is_empty() {
+        streaming.set_soil(None);
+    } else {
+        info!(
+            "soil packages loaded: {} from {}",
+            packages.len(),
+            DEFAULT_SOIL_DIR
+        );
+        streaming.set_soil(Some(Arc::new(SoilSet::new(packages))));
     }
 }
 

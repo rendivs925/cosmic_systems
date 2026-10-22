@@ -5,6 +5,7 @@ use super::super::mips::{mip_chain_rgba8, MipFilter};
 use super::{direction_to_lat_lon, face_uv_to_direction};
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
 use crate::domain::services::land_cover::{LandCoverClass, LandCoverLookup};
+use crate::domain::services::soil::{SoilLookup, SoilTexture};
 use crate::domain::services::terrain_source::{
     surface_appearance, with_river_appearance, TerrainSource,
 };
@@ -79,6 +80,7 @@ pub fn build_patch_surfaces(
     geometry: &PatchGeometry,
     radius_m: f64,
     land_cover: Option<&dyn LandCoverLookup>,
+    soil: Option<&dyn SoilLookup>,
 ) -> (Image, Image) {
     let res = SURFACE_TEX_RES as usize;
     let (u0, v0, u1, v1) = patch.uv_bounds();
@@ -131,12 +133,15 @@ pub fn build_patch_surfaces(
 
             let profile = papua_tropical_profile(la, lo, elevation_m, moisture, source_slope_deg);
             let [r, g, b, _] = terrain_albedo(appearance, profile);
-            let (material, roughness) = match land_cover
-                .and_then(|cover| cover.sample_class(la, lo))
-            {
+            let class = land_cover.and_then(|cover| cover.sample_class(la, lo));
+            let (mut material, mut roughness) = match class {
                 Some(class) => apply_land_cover_material([r, g, b], appearance.roughness, class),
                 None => ([r, g, b], appearance.roughness),
             };
+            if let Some(texture) = soil.and_then(|soil| soil.sample_texture(la, lo)) {
+                let weight = soil_material_weight(class, elevation_m, moisture);
+                (material, roughness) = apply_soil_material(material, roughness, texture, weight);
+            }
             albedo.extend_from_slice(&[
                 (material[0] * 255.0) as u8,
                 (material[1] * 255.0) as u8,
@@ -243,6 +248,68 @@ pub(super) fn apply_land_cover_material(
     )
 }
 
+/// Measured soil texture modestly refines dry, bare, or sparsely vegetated
+/// ground. The weight is presentation-only and deliberately small: soil
+/// texture is a broad 250 m property, not a close-range reflectance map.
+pub(super) fn soil_material_weight(
+    class: Option<LandCoverClass>,
+    elevation_m: f64,
+    moisture_unit: f64,
+) -> f32 {
+    const MAX_WEIGHT: f32 = 0.28;
+    // Presentation guard: never tint open water or below-sea-level surfaces
+    // when no measured land-cover class is available.
+    if elevation_m <= 0.0 {
+        return 0.0;
+    }
+    let class_weight = match class {
+        Some(LandCoverClass::BareSparse) => 1.0,
+        Some(LandCoverClass::Cropland) => 0.35,
+        Some(LandCoverClass::Grassland) => 0.30,
+        Some(LandCoverClass::Shrubland) => 0.25,
+        Some(LandCoverClass::MossLichen) => 0.25,
+        Some(LandCoverClass::TreeCover) => 0.12,
+        Some(LandCoverClass::BuiltUp) => 0.05,
+        Some(LandCoverClass::HerbaceousWetland) => 0.05,
+        Some(LandCoverClass::Mangroves) => 0.02,
+        Some(LandCoverClass::SnowIce | LandCoverClass::PermanentWater) => 0.0,
+        None => 0.8,
+    };
+    let dryness = (1.0 - moisture_unit.clamp(0.0, 1.0) * 0.75) as f32;
+    MAX_WEIGHT * class_weight * dryness
+}
+
+/// Blend measured clay/sand/silt toward restrained canonical soil tints. Sand
+/// is the palest and warmest, clay is darker and redder, and silt sits between
+/// them. The authoritative biome, elevation, slope, and river shading remains
+/// the base material.
+pub(super) fn apply_soil_material(
+    albedo: [f32; 3],
+    roughness: f32,
+    texture: SoilTexture,
+    weight: f32,
+) -> ([f32; 3], f32) {
+    let clay = texture.clay();
+    let sand = texture.sand();
+    let silt = texture.silt();
+    let target = [
+        sand * 0.400 + clay * 0.290 + silt * 0.370,
+        sand * 0.330 + clay * 0.180 + silt * 0.330,
+        sand * 0.210 + clay * 0.120 + silt * 0.260,
+    ];
+    let target_roughness = sand * 0.92 + clay * 0.86 + silt * 0.90;
+    let weight = weight.clamp(0.0, 0.30);
+    let mut blended = [0.0; 3];
+    for channel in 0..3 {
+        blended[channel] =
+            (albedo[channel] * (1.0 - weight) + target[channel] * weight).clamp(0.0, 1.0);
+    }
+    (
+        blended,
+        (roughness * (1.0 - weight) + target_roughness * weight).clamp(0.0, 1.0),
+    )
+}
+
 /// Convert the authoritative biome appearance into unpremultiplied linear color
 /// for the terrain's complete source-derived albedo map.
 pub(super) fn terrain_albedo(
@@ -344,5 +411,36 @@ mod tests {
         assert!(snow.iter().sum::<f32>() > forest.iter().sum::<f32>());
         assert!(forest_roughness > water_roughness);
         assert!(snow_roughness < forest_roughness);
+    }
+
+    #[test]
+    fn measured_soil_texture_tints_dry_ground_within_a_restrained_budget() {
+        let sand = SoilTexture::from_percentages(5.0, 85.0, 10.0);
+        let clay = SoilTexture::from_percentages(70.0, 10.0, 20.0);
+        let dry_weight = soil_material_weight(Some(LandCoverClass::BareSparse), 120.0, 0.1);
+        let wet_weight = soil_material_weight(Some(LandCoverClass::BareSparse), 120.0, 0.9);
+        assert!(dry_weight > wet_weight);
+        assert!(dry_weight <= 0.30);
+        assert_eq!(
+            soil_material_weight(Some(LandCoverClass::PermanentWater), -20.0, 0.0),
+            0.0
+        );
+        assert_eq!(
+            soil_material_weight(Some(LandCoverClass::SnowIce), 1_000.0, 0.0),
+            0.0
+        );
+        assert_eq!(soil_material_weight(None, -5.0, 0.0), 0.0);
+
+        let (sandy, sandy_roughness) = apply_soil_material([0.4, 0.4, 0.4], 0.5, sand, dry_weight);
+        let (clayey, clayey_roughness) =
+            apply_soil_material([0.4, 0.4, 0.4], 0.5, clay, dry_weight);
+        for channel in sandy.into_iter().chain(clayey) {
+            assert!((0.0..=1.0).contains(&channel));
+        }
+        assert!(sandy[0] > clayey[0]);
+        assert!(sandy[1] > clayey[1]);
+        assert!(sandy_roughness > clayey_roughness);
+        // The effect stays modest relative to the untouched base material.
+        assert!((sandy[0] - 0.4).abs() < 0.16);
     }
 }
