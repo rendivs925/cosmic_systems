@@ -1,4 +1,5 @@
 pub mod camera_systems;
+pub mod climate;
 pub mod craft;
 pub mod education_systems;
 pub mod entity_components;

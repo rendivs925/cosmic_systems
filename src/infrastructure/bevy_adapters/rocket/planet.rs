@@ -9,6 +9,7 @@
 //! The existing display-scale conversion remains only for the current
 //! parent-relative moon approximation.
 
+use super::climate::climate_at_position;
 use super::components::{PrimaryVehicle, RocketPhysicsState, RocketPlanetBinding};
 use super::environment::{bound_planet_sun, solar_illuminance_lux};
 use crate::application::solar_system_startup::solar_surface_luminance_nits;
@@ -21,6 +22,7 @@ use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_source::ElevationBounds;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
+use crate::infrastructure::bevy_adapters::climate::MeasuredClimate;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
@@ -579,6 +581,9 @@ pub fn update_rocket_clouds(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
     time: Res<Time>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
+    measured_climate: Option<Res<MeasuredClimate>>,
+    simulation_time: Res<SimulationTime>,
     camera_query: Query<
         (&Camera, &Transform, &Projection),
         (With<Camera3d>, Without<RocketBoundPlanetCloud>),
@@ -615,6 +620,15 @@ pub fn update_rocket_clouds(
     if !elapsed_s.is_finite() {
         return;
     }
+    let measured = measured_climate.as_ref().and_then(|climate| {
+        let rocket = rocket_query.iter().next()?;
+        climate_at_position(
+            climate,
+            rocket.dynamics.position_m,
+            orientation,
+            &simulation_time,
+        )
+    });
 
     let dome_radius = match projection {
         Projection::Perspective(perspective) => {
@@ -632,8 +646,35 @@ pub fn update_rocket_clouds(
             material.params.sun_direction = sun_direction;
             material.params.sun_irradiance = sun_irradiance;
             material.params.time_s = elapsed_s;
+            if let Some((latitude_deg, longitude_deg, sample)) = measured {
+                apply_measured_cloud_climate(
+                    &mut material.params,
+                    sample,
+                    latitude_deg,
+                    longitude_deg,
+                );
+            }
         }
     }
+}
+
+/// Map a measured climatology sample onto the cloud presentation uniforms.
+///
+/// Cloud amount is used directly as the deck coverage multiplier; the shader's
+/// procedural weather map supplies the spatial texture. Wind is the measured
+/// 2 m vector projected into the body-fixed x/z plane, scaled toward the
+/// mid-tropospheric advection speed rather than the surface value. No value
+/// here enters flight dynamics.
+fn apply_measured_cloud_climate(
+    params: &mut CloudParams,
+    sample: crate::domain::services::climate::ClimateSample,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) {
+    params.coverage = (sample.cloud_fraction as f32).clamp(0.02, 0.95);
+    params.wind_speed = (sample.wind_speed_mps() as f32 * 2.5).clamp(2.0, 60.0);
+    let (x, z) = sample.wind_direction_xz(latitude_deg, longitude_deg);
+    params.wind_direction = Vec2::new(x, z);
 }
 
 #[cfg(test)]
@@ -666,6 +707,24 @@ mod tests {
         assert!(deck.primary_steps >= 1.0 && deck.light_steps >= 1.0);
         assert!(deck.multi_scatter_octaves >= 1.0);
         assert_eq!(deck.time_s, 0.0);
+    }
+
+    #[test]
+    fn measured_climate_sets_bounded_cloud_coverage_and_wind() {
+        let mut params = CloudParams::deck();
+        let sample = crate::domain::services::climate::ClimateSample {
+            temperature_k: 288.15,
+            pressure_pa: 101_325.0,
+            relative_humidity: 0.8,
+            wind_east_mps: 8.0,
+            wind_north_mps: 0.0,
+            cloud_fraction: 0.72,
+        };
+        apply_measured_cloud_climate(&mut params, sample, 0.0, 0.0);
+        assert!((params.coverage - 0.72).abs() < 1e-6);
+        assert!((params.wind_speed - 20.0).abs() < 1e-6);
+        assert!((params.wind_direction.x - 0.0).abs() < 1e-6);
+        assert!((params.wind_direction.y - 1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -6,9 +6,14 @@
 //! driven by the same ephemeris Sun and atmospheric optics as the rest of the
 //! presentation. Nothing here is simulation authority.
 
+use super::climate::climate_at_position;
+use super::components::{PrimaryVehicle, RocketPhysicsState};
 use super::environment::{bound_planet_sun, solar_illuminance_lux};
 use super::planet::RocketBoundPlanet;
+use crate::domain::services::atmosphere::SEA_LEVEL_PRESSURE_PA;
+use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
+use crate::infrastructure::bevy_adapters::climate::MeasuredClimate;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
@@ -169,6 +174,9 @@ pub fn update_rocket_sky(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
     planet_query: Query<&PlanetComponent>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
+    measured_climate: Option<Res<MeasuredClimate>>,
+    simulation_time: Res<SimulationTime>,
     camera_query: Query<
         (&Camera, &Transform, &Projection),
         (With<Camera3d>, Without<RocketSkyDome>),
@@ -201,7 +209,21 @@ pub fn update_rocket_sky(
     let sun_color = LinearRgba::from(Color::srgb(1.0, 1.0, 0.98));
     let sun_irradiance = Vec3::new(sun_color.red, sun_color.green, sun_color.blue)
         * solar_illuminance_lux(sun.distance_m);
-    let params = SkyParams::for_optics(optics, planet_center, sun_direction, sun_irradiance);
+    let mut params = SkyParams::for_optics(optics, planet_center, sun_direction, sun_irradiance);
+    if let (Some(climate), Some(rocket)) = (measured_climate.as_ref(), rocket_query.iter().next()) {
+        if let Some(orientation) =
+            ephemeris_snapshot.orientation_for_catalog_body(bound_planet_id.as_str())
+        {
+            if let Some((_, _, sample)) = climate_at_position(
+                climate,
+                rocket.dynamics.position_m,
+                orientation,
+                &simulation_time,
+            ) {
+                apply_measured_surface_pressure(&mut params, sample.pressure_pa);
+            }
+        }
+    }
 
     let dome_radius = match projection {
         Projection::Perspective(perspective) => (perspective.far * SKY_DOME_FAR_FRACTION).max(1.0),
@@ -215,6 +237,20 @@ pub fn update_rocket_sky(
             material.params = params;
         }
     }
+}
+
+/// Scale the sea-level molecular scattering coefficients by the measured
+/// surface-pressure ratio. Presentation only: this changes the optical depth of
+/// the sky dome, not the flight atmosphere. The clamp keeps pathological data
+/// from producing a black or over-bright sky.
+fn apply_measured_surface_pressure(params: &mut SkyParams, pressure_pa: f64) {
+    if !pressure_pa.is_finite() || pressure_pa <= 0.0 {
+        return;
+    }
+    let ratio = (pressure_pa / SEA_LEVEL_PRESSURE_PA).clamp(0.5, 1.1) as f32;
+    params.rayleigh_scattering *= ratio;
+    params.mie_scattering *= ratio;
+    params.mie_absorption *= ratio;
 }
 
 /// Register the sky material pipeline. Called from rocket-mode composition.
@@ -249,5 +285,20 @@ mod tests {
         assert_eq!(params.top_radius, optics.top_radius_m);
         assert!(params.rayleigh_scattering.z > params.rayleigh_scattering.x);
         assert_eq!(params.sky_strength, SKY_RADIANCE_SCALE);
+    }
+
+    #[test]
+    fn measured_surface_pressure_scales_only_scattering() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let mut params =
+            SkyParams::for_optics(Some(optics), Vec3::ZERO, Vec3::X, Vec3::splat(127_000.0));
+        let rayleigh = params.rayleigh_scattering;
+        let ground = params.ground_albedo;
+        apply_measured_surface_pressure(&mut params, 80_000.0);
+        let ratio = 80_000.0 / SEA_LEVEL_PRESSURE_PA;
+        assert!((params.rayleigh_scattering.x - rayleigh.x * ratio as f32).abs() < 1e-3);
+        assert_eq!(params.ground_albedo, ground);
+        apply_measured_surface_pressure(&mut params, f64::NAN);
+        assert!((params.rayleigh_scattering.x - rayleigh.x * ratio as f32).abs() < 1e-3);
     }
 }

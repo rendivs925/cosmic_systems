@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions; Phase 5 measured water occurrence and canopy cover implemented for the priority regions.
+Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions; Phase 5 measured water occurrence and canopy cover implemented for the priority regions; Phase 6 global monthly climatology implemented from NASA POWER as a presentation-only layer.
 
 Date: 2026-10-22.
 
@@ -91,6 +91,7 @@ checksum but are not required at runtime.
 | `earth_canopy_hansen_baikonur` | Canopy | 63.05..63.55E, 45.56..45.91N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
 | `earth_water_jrc_mahia` | Water | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
 | `earth_canopy_hansen_mahia` | Canopy | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_climate_merra2_climatology` | Climate | global | 0.5 x 0.625 degree source, 576x361x12 package | CC BY 4.0 (NASA POWER) | `climate_bake` |
 
 Details:
 
@@ -145,6 +146,14 @@ Details:
   Required attribution: `European Commission, Joint Research Centre (JRC)
   Global Surface Water; Hansen/UMD/Google/USGS/NASA Global Forest Change`. See
   `docs/datasets/earth_surface_fields_v1.md`.
+- Monthly climatology: NASA POWER v10 2001-2020 monthly means from MERRA-2
+  (temperature, pressure, relative humidity, wind) and CERES SYN1deg (cloud
+  amount), regridded to a 576x361x12 `.csclim` package. It is a presentation
+  input for sky and cloud parameters only; the 1976 standard atmosphere remains
+  the flight-physics authority. Runtime SHA-256
+  `07e7808345dc980925d6c0214af0059c163a11c3bead75f49356d9d4a7ed8db1`.
+  Required attribution: `NASA Prediction of Worldwide Energy Resources
+  (POWER); MERRA-2; CERES SYN1deg`. See `docs/datasets/earth_climate_v1.md`.
 - KSC regional NASADEM: interim 1 arc-second bare-earth over `80.85..80.45W`,
   `28.40..28.75N`, EGM96 heights corrected with the runtime EGM2008 geoid.
   Source SHA-256
@@ -217,7 +226,7 @@ same provenance and checksum gate before use.
 | SRTM GL1 (remaining regions) | Dem | regional bare earth | 30 m | NASA/USGS, public domain | 3 |
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
-| ERA5 reanalysis | Climate | climate and atmospheric context | ~31 km | Copernicus CDS, attribution required | later |
+| ERA5 reanalysis | Climate | future measured atmosphere if CDS access is provisioned | 0.25 degree | Copernicus CDS, attribution required | later |
 
 Regional DEM priority: KSC/Florida, Papua, Starbase/Boca Chica, Vandenberg,
 Wallops, Kourou, Baikonur, Mahia.
@@ -288,6 +297,17 @@ cargo run --release --features native --bin surface_fields_bake -- <water.png> \
   <tree_cover.png> assets/large_files/terrain/surface_fields_v1/<region>.cssfld ...
 cargo run --features dem --bin preprocess -- --layer water --check
 cargo run --features dem --bin preprocess -- --layer canopy --check
+```
+
+Phase 6 monthly climatology (implemented globally):
+
+```sh
+python3 scripts/ingest_climate.py
+python3 scripts/ingest_climate.py --verify
+cargo run --release --features native --bin climate_bake -- \
+  assets/large_files/terrain/raw/climate/earth_merra2_climatology_v1.raw \
+  assets/large_files/terrain/climate_v1/earth_merra2_climatology_v1.csclim ...
+cargo run --features dem --bin preprocess -- --layer climate --check
 ```
 
 ## Acceptance

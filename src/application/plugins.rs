@@ -30,6 +30,9 @@ use crate::infrastructure::bevy_adapters::camera_systems::{
     apply_camera_transform, auto_inspect_selected_planet, update_camera_controller,
     update_starfield_position,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::infrastructure::bevy_adapters::climate::load_default_climate;
+use crate::infrastructure::bevy_adapters::climate::MeasuredClimate;
 use crate::infrastructure::bevy_adapters::craft::components::{
     CraftCameraState, CraftControlState, CraftEffectsEnabled, CraftTravelTarget,
 };
@@ -645,6 +648,8 @@ impl Plugin for RocketModePlugin {
         app.init_resource::<RocketMode>();
         // Rocket planet system resource.
         app.init_resource::<RocketBoundPlanet>();
+        // Optional measured climatology for presentation-only sky and clouds.
+        app.init_resource::<MeasuredClimate>();
         app.add_plugins(bevy::pbr::MaterialPlugin::<
             crate::infrastructure::bevy_adapters::rendering::materials::CloudMaterial,
         >::default());
@@ -671,6 +676,11 @@ impl Plugin for RocketModePlugin {
         app.add_systems(
             Startup,
             load_default_surface_fields.after(share_elevation_tile_source),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            Startup,
+            load_default_climate.after(share_elevation_tile_source),
         );
 
         // Terrain rendering plugin (spawns meshes from streaming patches).

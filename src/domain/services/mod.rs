@@ -2,6 +2,7 @@ pub mod actuation;
 pub mod aerodynamics;
 pub mod atmosphere;
 pub mod body_orientation;
+pub mod climate;
 pub mod cloud_noise;
 pub mod control;
 pub mod craft_physics;

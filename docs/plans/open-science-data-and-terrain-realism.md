@@ -254,6 +254,14 @@ remain open.
 
 ## Phase 6 - Atmosphere climatology
 
+Status: implemented as a presentation-only global monthly climatology. ERA5 was
+unavailable without CDS credentials, so the layer uses NASA POWER v10
+(2001-2020) MERRA-2 meteorology and CERES SYN1deg cloud amount. The runtime
+package is `.csclim`; the existing standard atmosphere remains the flight-physics
+authority. Measured pressure scales sky optical depth and measured cloud/wind
+drive the cloud presentation. Vertical profiles and physics integration remain
+future work. See `docs/datasets/earth_climate_v1.md`.
+
 ### Deliverables
 
 - `scripts/ingest_era5.py`: monthly climatology of temperature, pressure, wind,
