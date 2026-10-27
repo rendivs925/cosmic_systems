@@ -33,6 +33,9 @@ pub const ETOPO1_ROWS: usize = 10_801;
 /// LOLA LDEM_16's global pixel-registered grid dimensions.
 pub const LOLA_LDEM16_COLUMNS: usize = 5_760;
 pub const LOLA_LDEM16_ROWS: usize = 2_880;
+/// LOLA LDEM_128's global pixel-registered grid dimensions.
+pub const LOLA_LDEM128_COLUMNS: usize = 46_080;
+pub const LOLA_LDEM128_ROWS: usize = 23_040;
 /// MOLA MEGR's global pixel-registered mean-radius grid dimensions.
 pub const MOLA_MEGR32_COLUMNS: usize = 11_520;
 pub const MOLA_MEGR32_ROWS: usize = 5_760;
@@ -499,13 +502,43 @@ impl CubeSphereDem {
     /// 1,737,400-meter ME/PA reference sphere, with north-to-south rows and
     /// east-positive longitudes from zero through 360 degrees.
     pub fn from_lola_ldem_16_raw(raw: &[u8], resolution: u32) -> Result<Self, DemError> {
-        let expected_bytes = LOLA_LDEM16_COLUMNS
-            .checked_mul(LOLA_LDEM16_ROWS)
+        Self::from_lola_ldem_raw(
+            raw,
+            LOLA_LDEM16_COLUMNS,
+            LOLA_LDEM16_ROWS,
+            "LDEM_16",
+            resolution,
+        )
+    }
+
+    /// Convert a PDS LOLA LDEM_128 signed-`i16` little-endian height map (128
+    /// pixels per degree, 236.9 m samples) into the cube-sphere format. The
+    /// product shares LDEM_16's 0-360 degree east-positive, north-to-south
+    /// pixel registration and 0.5 m height scaling, so the same sampler applies.
+    pub fn from_lola_ldem_128_raw(raw: &[u8], resolution: u32) -> Result<Self, DemError> {
+        Self::from_lola_ldem_raw(
+            raw,
+            LOLA_LDEM128_COLUMNS,
+            LOLA_LDEM128_ROWS,
+            "LDEM_128",
+            resolution,
+        )
+    }
+
+    fn from_lola_ldem_raw(
+        raw: &[u8],
+        columns: usize,
+        rows: usize,
+        product: &str,
+        resolution: u32,
+    ) -> Result<Self, DemError> {
+        let expected_bytes = columns
+            .checked_mul(rows)
             .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
-            .expect("LOLA LDEM_16 raw byte count fits usize on supported targets");
+            .ok_or_else(|| DemError::InvalidFormat("LOLA LDEM dimensions overflow".into()))?;
         if raw.len() != expected_bytes {
             return Err(DemError::InvalidFormat(format!(
-                "LOLA LDEM_16 raw input must be {expected_bytes} bytes for {LOLA_LDEM16_COLUMNS}x{LOLA_LDEM16_ROWS} signed i16 LE samples, found {}",
+                "LOLA {product} raw input must be {expected_bytes} bytes for {columns}x{rows} signed i16 LE samples, found {}",
                 raw.len()
             )));
         }
@@ -520,14 +553,8 @@ impl CubeSphereDem {
                     let direction = face_uv_to_direction(face, u, v);
                     let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
                     heights_m.push(
-                        sample_lola_ldem_m(
-                            raw,
-                            LOLA_LDEM16_COLUMNS,
-                            LOLA_LDEM16_ROWS,
-                            latitude_deg,
-                            longitude_deg,
-                        )
-                        .round() as i16,
+                        sample_lola_ldem_m(raw, columns, rows, latitude_deg, longitude_deg).round()
+                            as i16,
                     );
                 }
             }
@@ -685,15 +712,36 @@ pub fn convert_etopo2022_raw(
     CubeSphereDem::from_etopo2022_raw(&raw, resolution)?.write_path(output_path)
 }
 
-/// Convert the PDS LOLA LDEM_16 raw radius map into the versioned cube-sphere
-/// format. This is an offline tool; the simulator never reads source rasters.
-pub fn convert_lola_ldem_16_raw(
+/// Convert a PDS LOLA LDEM_16 or LDEM_128 raw height map into the versioned
+/// cube-sphere format. The product is inferred from the exact raster size, so
+/// a truncated or mislabelled download is rejected instead of baked. This is an
+/// offline tool; the simulator never reads source rasters.
+pub fn convert_lola_ldem_raw(
     input_path: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
     resolution: u32,
 ) -> Result<(), DemError> {
     let raw = fs::read(input_path)?;
-    CubeSphereDem::from_lola_ldem_16_raw(&raw, resolution)?.write_path(output_path)
+    let ldem16_bytes = LOLA_LDEM16_COLUMNS
+        .checked_mul(LOLA_LDEM16_ROWS)
+        .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
+        .expect("LDEM_16 byte count fits usize");
+    let ldem128_bytes = LOLA_LDEM128_COLUMNS
+        .checked_mul(LOLA_LDEM128_ROWS)
+        .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
+        .expect("LDEM_128 byte count fits usize");
+    let dem = match raw.len() {
+        length if length == ldem16_bytes => CubeSphereDem::from_lola_ldem_16_raw(&raw, resolution)?,
+        length if length == ldem128_bytes => {
+            CubeSphereDem::from_lola_ldem_128_raw(&raw, resolution)?
+        }
+        length => {
+            return Err(DemError::InvalidFormat(format!(
+                "LOLA raw input is {length} bytes; expected {ldem16_bytes} (LDEM_16) or {ldem128_bytes} (LDEM_128)"
+            )))
+        }
+    };
+    dem.write_path(output_path)
 }
 
 /// Convert a PDS MOLA MEGR 32 raw radius map into the versioned cube-sphere
@@ -1115,5 +1163,17 @@ mod tests {
             round_height_m(f64::from(i16::MAX) + 1.0),
             Err(DemError::InvalidFormat(_))
         ));
+    }
+
+    #[test]
+    fn lola_product_converters_require_the_exact_raster_size() {
+        // A truncated or mislabelled download must fail before any sampling, so
+        // the 128 pixel-per-degree product cannot be confused with LDEM_16.
+        for error in [
+            CubeSphereDem::from_lola_ldem_16_raw(&[], 8),
+            CubeSphereDem::from_lola_ldem_128_raw(&[], 8),
+        ] {
+            assert!(matches!(error, Err(DemError::InvalidFormat(_))));
+        }
     }
 }

@@ -202,11 +202,12 @@ validated on `main`.
   maps plus merged vegetation and scatter are generated in worker tasks only
   for level-12-or-finer patches, then applied as presentation-only detail over
   global Earth imagery.
-- Moon loads the NASA PDS LOLA LDEM_16 global shape map from an ignored,
+- Moon loads the NASA PDS LOLA LDEM_128 global shape map from an ignored,
   offline-generated CSDEM. Its DE421 mean-Earth/polar-axis frame matches the
   active `pck00011.tpc` Moon orientation approximation, and an unavailable or
   invalid local CSDEM leaves the Moon non-landable rather than substituting
-  procedural terrain.
+  procedural terrain. The previous LDEM_16 package is retained only as a
+  rollback authority.
 - Mars loads the NASA PDS MOLA MEGR90N000FB global mean-radius map from an
   ignored, offline-generated CSDEM. It uses the reviewed
   `mars_iau2000_v1.tpc` orientation override after `pck00011.tpc` so the
@@ -330,7 +331,7 @@ is insufficient.**
 **Status: implemented for the reviewed LOLA package, frame/datum contract, and
 shared terrain path. Native-display visual acceptance remains pending.**
 
-- The LOLA LDEM_16 manifest, provenance, offline converter, and optional local
+- The LOLA LDEM_128 manifest, provenance, offline converter, and optional local
   CSDEM use the existing terrain contract.
 - The DE421 mean-Earth/polar-axis datum is validated against the active Moon
   orientation authority, and render/collision both consume `TerrainSource`.

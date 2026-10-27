@@ -1,10 +1,11 @@
-//! Offline PDS LOLA LDEM_16 converter. Requires `--features dem`.
+//! Offline PDS LOLA LDEM converter (LDEM_16 or LDEM_128). Requires
+//! `--features dem`.
 
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use cosmic_systems_wasm::domain::services::dem_terrain_source::convert_lola_ldem_16_raw;
+use cosmic_systems_wasm::domain::services::dem_terrain_source::convert_lola_ldem_raw;
 
 fn main() -> ExitCode {
     let mut arguments = env::args_os().skip(1);
@@ -25,10 +26,10 @@ fn main() -> ExitCode {
         return usage();
     }
 
-    match convert_lola_ldem_16_raw(PathBuf::from(input), PathBuf::from(output), resolution) {
+    match convert_lola_ldem_raw(PathBuf::from(input), PathBuf::from(output), resolution) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("LOLA LDEM_16 conversion failed: {error}");
+            eprintln!("LOLA LDEM conversion failed: {error}");
             ExitCode::FAILURE
         }
     }
@@ -36,7 +37,7 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cargo run --features dem --bin lola_ldem_convert -- <input.img> <output.csdem> [face-resolution]"
+        "usage: cargo run --features dem --bin lola_ldem_convert -- <ldem_16.img|ldem_128.img> <output.csdem> [face-resolution]"
     );
     ExitCode::FAILURE
 }

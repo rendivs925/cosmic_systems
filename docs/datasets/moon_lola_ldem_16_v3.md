@@ -1,5 +1,10 @@
 # Moon LOLA LDEM 16 v3
 
+Status: superseded as the runtime authority by
+[`moon_lola_ldem_128_v3.md`](moon_lola_ldem_128_v3.md). Kept as a rollback
+package; the conversion and provenance below still describe the retained
+LDEM_16 CSDEM.
+
 The Moon terrain authority is NASA PDS's LOLA LDEM_16 global gridded data
 product. It is a 16-pixels-per-degree, pixel-registered lunar shape map from
 the Lunar Reconnaissance Orbiter's Lunar Orbiter Laser Altimeter (LOLA).
@@ -51,7 +56,9 @@ Rocket Mode's non-authoritative body-fixed overview is generated offline with:
 cargo run --features dem --bin terrain_overview_bake -- moon assets/large_files/terrain/moon_terrain_overview_v1.png
 ```
 
-Generated overview SHA-256: `106aebd619c368cebd205b2165542b7571dec40755e994852854938fe8362f86`
+The overview PNG has since been regenerated from the LDEM_128 authority; its
+current SHA-256 is recorded in
+[`moon_lola_ldem_128_v3.md`](moon_lola_ldem_128_v3.md).
 
 No simulator path downloads terrain data. If the local CSDEM is absent, the
 Moon receives no `PlanetTerrain` component and remains non-landable; it never
