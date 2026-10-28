@@ -90,7 +90,7 @@ checksum but are not required at runtime.
 | `earth_water_jrc_baikonur` | Water | 63.05..63.55E, 45.56..45.91N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
 | `earth_canopy_hansen_baikonur` | Canopy | 63.05..63.55E, 45.56..45.91N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_mahia` | Water | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_mahia` | Canopy | 177.70..178.00E, 39.21..38.96S | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI tile pending) | `surface_fields_bake` |
+| `earth_canopy_hansen_mahia` | Canopy | 177.70..178.00E, 39.21..38.96S | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_climate_merra2_climatology` | Climate | global | 0.5 x 0.625 degree source, 576x361x12 package | CC BY 4.0 (NASA POWER) | `climate_bake` |
 
 Details:

@@ -226,12 +226,12 @@ packages that modestly refine dry ground materials.
 Status: complete for the measured layers. JRC water occurrence, Hansen tree
 cover, and Meta/WRI average canopy height are combined into three-channel
 `.cssfld` packages for the eight priority regions and feed the existing
-deterministic scatter and wet-ground material paths. KSC, Starbase, Vandenberg, Wallops, and
+deterministic scatter and wet-ground material paths. KSC, Starbase, Vandenberg, Wallops, Mahia, and
 Baikonur carry measured Meta/WRI canopy height. Papua has no published
-downsampled canopy tile, and the Kourou and Mahia source tiles were not
-provisioned in the current environment, so those two fall back to zero canopy
-and the reviewed species profile. Re-running the offline ingest upgrades them
-without a format change. DEM-derived drainage and the river ribbon remain
+downsampled canopy tile, and the Kourou source tile was not provisioned in the
+current environment, so those two fall back to zero canopy and the reviewed
+species profile. Re-running the offline ingest upgrades Kourou without a format
+change. DEM-derived drainage and the river ribbon remain
 the hydrology geometry authority. A baked scatter binary remains optional future
 work.
 

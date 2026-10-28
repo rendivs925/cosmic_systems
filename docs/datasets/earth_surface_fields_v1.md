@@ -126,14 +126,14 @@ grids. Package metadata and payload checksums are validated at startup.
 | Wallops | 1261x900 | 3,406,023 | `f9416f5cd780e87f3d83203a2b915a783c2b548b36c89b23e10fedf073978f21` | Meta/WRI |
 | Kourou | 1801x1253 | 6,771,245 | `4d053a517e94f84680a7f42c2a1c81c6af9cf340fb612cfc6bf6adce61b7b665` | none (tile not provisioned) |
 | Baikonur | 1801x1261 | 6,814,505 | `305756b146334d611a9819cb82a5de0a6ecc70b563693fa4dbc5ad026f825129` | Meta/WRI |
-| Mahia | 1081x900 | 2,919,987 | `fdd5eeb4f53d9e5ca0d813279e71b0dcac11f41cbb2542a52b5782a22f688ac7` | none (tile not provisioned) |
+| Mahia | 1081x900 | 2,920,025 | `6e9f2fc73a83e2fca84d000d1958f06c9f5155ea1dcc4389c42b4fc1a6ec8272` | Meta/WRI |
 
-KSC, Starbase, Vandenberg, Wallops, and Baikonur carry measured Meta/WRI canopy height.
-Papua has no published downsampled tile. Kourou and Mahia have published
-Meta/WRI tiles, but their 1.5 GB and 0.2 GB source tiles were not provisioned in
-the current environment; their canopy channel is zero and the reviewed species
-profile remains the fallback. Re-running the offline ingest for those regions
-upgrades them without changing the package format or runtime code.
+KSC, Starbase, Vandenberg, Wallops, Mahia, and Baikonur carry measured Meta/WRI canopy height.
+Papua has no published downsampled tile. Kourou has a published Meta/WRI tile,
+but its 1.5 GB source tile was not provisioned in the current environment; its
+canopy channel is zero and the reviewed species profile remains the fallback.
+Re-running the offline ingest for Kourou upgrades it without changing the
+package format or runtime code.
 
 The registry declares each package once for the `Water` layer and once for the
 `Canopy` layer because the same file carries all three measured fields.
