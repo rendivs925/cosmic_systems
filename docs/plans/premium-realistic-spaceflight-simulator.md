@@ -189,6 +189,10 @@ validated on `main`.
 
 ### Earth, Moon, and Mars Data
 
+- The Earth planet material uses the reviewed 8192x4096 Blue Marble global
+  overview documented in `docs/datasets/earth_albedo_v1.md`; it is a
+  byte-identical tracked copy of the terrain imagery overview so a fresh
+  checkout does not require the ignored large-file tree.
 - Earth loads a validated ETOPO1 CSDEM source when its local dataset is present.
   Deterministic procedural terrain is retained only as the explicit
   missing-file fallback. The dataset contract, manifest, provenance, datum, and

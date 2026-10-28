@@ -287,15 +287,17 @@ pixels-per-degree MOLA MEGR map (926 m samples), also baked at 4096. The
 starfield now uses the 9,110-star Yale Bright Star Catalogue with an
 IAU-aligned galactic band. Earth gravity harmonics are implemented as an opt-in
 EGM2008 degree-360 force-model tier. The Moon albedo is upgraded to an
-8192x4096 LROC color mosaic; measured solar irradiance and further planetary
+8192x4096 LROC color mosaic, and the Earth planet albedo now uses the reviewed
+8192x4096 Blue Marble overview; measured solar irradiance and further planetary
 imagery remain open.
 See `docs/datasets/moon_lola_ldem_128_v3.md`,
 `docs/datasets/mars_mola_megr_64_v2.md`, `docs/datasets/yale_bsc5_v1.md`,
-`docs/datasets/earth_gravity_egm2008_v1.md`, and
-`docs/datasets/moon_albedo_v1.md`.
+`docs/datasets/earth_gravity_egm2008_v1.md`, `docs/datasets/moon_albedo_v1.md`,
+and `docs/datasets/earth_albedo_v1.md`.
 
-- Lunar albedo is upgraded to the 8192 LROC mosaic; higher-resolution Martian
-  imagery and other body textures remain future work.
+- Lunar albedo is upgraded to the 8192 LROC mosaic and the Earth planet albedo
+  to the reviewed 8192 Blue Marble overview; higher-resolution Martian imagery
+  and other body textures remain future work.
 - EGM2008 Earth harmonics are implemented as the opt-in `earth-harmonics`
   tier; GMM-3 (Mars) and GRGM (Moon) remain future work.
 - TSIS-1 solar irradiance; a fainter Gaia DR3 subset remains optional.
