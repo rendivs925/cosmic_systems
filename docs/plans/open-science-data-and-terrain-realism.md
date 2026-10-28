@@ -281,8 +281,11 @@ future work. See `docs/datasets/earth_climate_v1.md`.
 
 Status: in progress. The Moon height authority is upgraded to the 128
 pixels-per-degree LOLA LDEM_128 product (236.9 m samples), baked at a
-4096-sample cube face. Mars relief, gravity harmonics, and the star catalog
-remain open. See `docs/datasets/moon_lola_ldem_128_v3.md`.
+4096-sample cube face. The Mars authority is upgraded to the stitched 64
+pixels-per-degree MOLA MEGR map (926 m samples), also baked at 4096. Gravity
+harmonics and the star catalog remain open. See
+`docs/datasets/moon_lola_ldem_128_v3.md` and
+`docs/datasets/mars_mola_megr_64_v2.md`.
 
 - Higher-resolution LOLA/MOLA and lunar/Martian imagery.
 - EGM2008 harmonics, GMM-3 (Mars), GRGM (Moon).

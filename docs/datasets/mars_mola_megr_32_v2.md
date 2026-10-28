@@ -2,6 +2,11 @@
 
 ## Status
 
+Superseded as the runtime authority by
+[`mars_mola_megr_64_v2.md`](mars_mola_megr_64_v2.md). The 32 ppd source and
+CSDEM remain on disk as the rollback package; the contract below still describes
+that retained package.
+
 This document records the accepted source contract and implemented offline
 converter for Mars terrain. The catalog selects the Mars terrain authority only
 when the `dem` feature is enabled, but no full local CSDEM is available in this
@@ -92,7 +97,9 @@ Rocket Mode's non-authoritative body-fixed overview is generated offline with:
 cargo run --features dem --bin terrain_overview_bake -- mars assets/large_files/terrain/mars_terrain_overview_v1.png
 ```
 
-Generated overview SHA-256: `48379be94e681c18022bedc491e01478bd9fa4b124cd14390f333515e8ee608f`
+The overview PNG has since been regenerated from the MEGR 64 authority; its
+current SHA-256 is recorded in
+[`mars_mola_megr_64_v2.md`](mars_mola_megr_64_v2.md).
 
 The source raster and generated CSDEM are ignored local assets. A present but
 invalid CSDEM is a startup configuration error; an absent CSDEM leaves Mars

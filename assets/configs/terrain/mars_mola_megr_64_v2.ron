@@ -1,0 +1,12 @@
+(
+    dataset: "MOLA MEGR 64",
+    source_url: "https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg064/",
+    source_file: "mars_mola_megr_64_v2.img (stitched from megr90n000gb, megr90n180gb, megr00n000gb, megr00n180gb)",
+    horizontal_datum: "IAU2000_MARS; planetocentric simple cylindrical; east-positive longitude; pixel edges at 0/360 degrees and +/-90 degrees",
+    vertical_datum: "mean planetary radius from Mars center: signed 16-bit big-endian sample plus 3,396,000 meters",
+    source_resolution_m: 926.0,
+    cube_sphere_resolution: 4096,
+    runtime_asset: "assets/large_files/terrain/mars_mola_megr_64_cs4096_v1.csdem",
+    conversion: "signed i16 BE MEGR samples plus 3,396,000 meters, minus the catalog Mars radius of 3,389,500 meters, bilinearly resampled from pixel centers onto CubeFace::ALL; CSDEM v2 persists its patch metadata pyramid",
+    orientation_kernel_requirement: "mars_iau2000_v1.tpc must load after pck00011.tpc before this terrain authority is enabled",
+)

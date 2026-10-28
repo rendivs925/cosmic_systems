@@ -69,7 +69,7 @@ pub const DEFAULT_MOON_DEM_PATH: &str =
     "assets/large_files/terrain/moon_lola_ldem_128_cs4096_v1.csdem";
 #[cfg(feature = "dem")]
 pub const DEFAULT_MARS_DEM_PATH: &str =
-    "assets/large_files/terrain/mars_mola_megr_32_cs2048_v2.csdem";
+    "assets/large_files/terrain/mars_mola_megr_64_cs4096_v1.csdem";
 
 /// Deterministic seed for Earth's procedural detail contribution.
 #[cfg(feature = "dem")]

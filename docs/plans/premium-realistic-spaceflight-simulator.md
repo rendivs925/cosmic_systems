@@ -208,11 +208,12 @@ validated on `main`.
   invalid local CSDEM leaves the Moon non-landable rather than substituting
   procedural terrain. The previous LDEM_16 package is retained only as a
   rollback authority.
-- Mars loads the NASA PDS MOLA MEGR90N000FB global mean-radius map from an
-  ignored, offline-generated CSDEM. It uses the reviewed
-  `mars_iau2000_v1.tpc` orientation override after `pck00011.tpc` so the
-  `IAU2000_MARS` terrain source remains aligned with the body-fixed frame. An
-  unavailable or invalid local CSDEM likewise leaves Mars non-landable.
+- Mars loads the NASA PDS MOLA MEGR 64 global mean-radius map, stitched from
+  four 64-pixel-per-degree tiles, from an ignored, offline-generated CSDEM. It
+  uses the reviewed `mars_iau2000_v1.tpc` orientation override after
+  `pck00011.tpc` so the `IAU2000_MARS` terrain source remains aligned with the
+  body-fixed frame. An unavailable or invalid local CSDEM likewise leaves Mars
+  non-landable.
 
 ### Streaming and Telemetry
 
@@ -342,7 +343,7 @@ shared terrain path. Native-display visual acceptance remains pending.**
 
 **Status: Mars implemented; other bodies not started.**
 
-- Mars uses the MOLA MEGR90N000FB mean-radius dataset, a reviewed IAU 2000
+- Mars uses the stitched MOLA MEGR 64 mean-radius dataset, a reviewed IAU 2000
   orientation override, and the same local-CSDEM terrain authority as Earth and
   Moon.
 - Add other solid bodies through data manifests and configuration.

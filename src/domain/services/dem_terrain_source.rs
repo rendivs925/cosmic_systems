@@ -36,9 +36,14 @@ pub const LOLA_LDEM16_ROWS: usize = 2_880;
 /// LOLA LDEM_128's global pixel-registered grid dimensions.
 pub const LOLA_LDEM128_COLUMNS: usize = 46_080;
 pub const LOLA_LDEM128_ROWS: usize = 23_040;
-/// MOLA MEGR's global pixel-registered mean-radius grid dimensions.
+/// MOLA MEGR's global pixel-registered mean-radius grid dimensions at 32
+/// pixels per degree.
 pub const MOLA_MEGR32_COLUMNS: usize = 11_520;
 pub const MOLA_MEGR32_ROWS: usize = 5_760;
+/// MOLA MEGR's global pixel-registered mean-radius grid dimensions at 64
+/// pixels per degree.
+pub const MOLA_MEGR64_COLUMNS: usize = 23_040;
+pub const MOLA_MEGR64_ROWS: usize = 11_520;
 
 const MOLA_MEGR32_RADIUS_OFFSET_M: f64 = 3_396_000.0;
 
@@ -570,18 +575,55 @@ impl CubeSphereDem {
         resolution: u32,
         reference_radius_m: f64,
     ) -> Result<Self, DemError> {
+        Self::from_mola_megr_raw(
+            raw,
+            MOLA_MEGR32_COLUMNS,
+            MOLA_MEGR32_ROWS,
+            resolution,
+            reference_radius_m,
+            "MEGR 32",
+        )
+    }
+
+    /// Convert the PDS MOLA MEGR 64 signed-`i16` big-endian global
+    /// mean-radius map. The four 180 x 90 degree source tiles must be stitched
+    /// into one north-to-south, east-positive raster first; the sample
+    /// convention is otherwise identical to MEGR 32.
+    pub fn from_mola_megr_64_raw(
+        raw: &[u8],
+        resolution: u32,
+        reference_radius_m: f64,
+    ) -> Result<Self, DemError> {
+        Self::from_mola_megr_raw(
+            raw,
+            MOLA_MEGR64_COLUMNS,
+            MOLA_MEGR64_ROWS,
+            resolution,
+            reference_radius_m,
+            "MEGR 64",
+        )
+    }
+
+    fn from_mola_megr_raw(
+        raw: &[u8],
+        columns: usize,
+        rows: usize,
+        resolution: u32,
+        reference_radius_m: f64,
+        product: &str,
+    ) -> Result<Self, DemError> {
         if !reference_radius_m.is_finite() || reference_radius_m <= 0.0 {
             return Err(DemError::InvalidFormat(
                 "Mars reference radius must be finite and positive".into(),
             ));
         }
-        let expected_bytes = MOLA_MEGR32_COLUMNS
-            .checked_mul(MOLA_MEGR32_ROWS)
+        let expected_bytes = columns
+            .checked_mul(rows)
             .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
-            .expect("MOLA MEGR 32 raw byte count fits usize on supported targets");
+            .ok_or_else(|| DemError::InvalidFormat("MOLA MEGR dimensions overflow".into()))?;
         if raw.len() != expected_bytes {
             return Err(DemError::InvalidFormat(format!(
-                "MOLA MEGR 32 raw input must be {expected_bytes} bytes for {MOLA_MEGR32_COLUMNS}x{MOLA_MEGR32_ROWS} signed i16 BE samples, found {}",
+                "MOLA {product} raw input must be {expected_bytes} bytes for {columns}x{rows} signed i16 BE samples, found {}",
                 raw.len()
             )));
         }
@@ -595,13 +637,9 @@ impl CubeSphereDem {
                     let u = column as f64 / (resolution - 1) as f64;
                     let direction = face_uv_to_direction(face, u, v);
                     let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
-                    let height_m = sample_mola_megr_radius_m(
-                        raw,
-                        MOLA_MEGR32_COLUMNS,
-                        MOLA_MEGR32_ROWS,
-                        latitude_deg,
-                        longitude_deg,
-                    ) - reference_radius_m;
+                    let height_m =
+                        sample_mola_megr_radius_m(raw, columns, rows, latitude_deg, longitude_deg)
+                            - reference_radius_m;
                     heights_m.push(round_height_m(height_m)?);
                 }
             }
@@ -744,17 +782,39 @@ pub fn convert_lola_ldem_raw(
     dem.write_path(output_path)
 }
 
-/// Convert a PDS MOLA MEGR 32 raw radius map into the versioned cube-sphere
-/// format. This is an offline tool; the simulator never reads source rasters.
-pub fn convert_mola_megr_32_raw(
+/// Convert a PDS MOLA MEGR 32 or MEGR 64 raw radius map into the versioned
+/// cube-sphere format. The product is inferred from the exact raster size so a
+/// truncated or mislabelled download is rejected instead of baked. This is an
+/// offline tool; the simulator never reads source rasters.
+pub fn convert_mola_megr_raw(
     input_path: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
     resolution: u32,
     reference_radius_m: f64,
 ) -> Result<(), DemError> {
     let raw = fs::read(input_path)?;
-    CubeSphereDem::from_mola_megr_32_raw(&raw, resolution, reference_radius_m)?
-        .write_path(output_path)
+    let meg32_bytes = MOLA_MEGR32_COLUMNS
+        .checked_mul(MOLA_MEGR32_ROWS)
+        .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
+        .expect("MEGR 32 byte count fits usize");
+    let meg64_bytes = MOLA_MEGR64_COLUMNS
+        .checked_mul(MOLA_MEGR64_ROWS)
+        .and_then(|samples| samples.checked_mul(HEIGHT_BYTES))
+        .expect("MEGR 64 byte count fits usize");
+    let dem = match raw.len() {
+        length if length == meg32_bytes => {
+            CubeSphereDem::from_mola_megr_32_raw(&raw, resolution, reference_radius_m)?
+        }
+        length if length == meg64_bytes => {
+            CubeSphereDem::from_mola_megr_64_raw(&raw, resolution, reference_radius_m)?
+        }
+        length => {
+            return Err(DemError::InvalidFormat(format!(
+                "MOLA MEGR raw input is {length} bytes; expected {meg32_bytes} (MEGR 32) or {meg64_bytes} (MEGR 64)"
+            )))
+        }
+    };
+    dem.write_path(output_path)
 }
 
 fn expected_samples(resolution: u32) -> Result<usize, DemError> {
@@ -1172,6 +1232,16 @@ mod tests {
         for error in [
             CubeSphereDem::from_lola_ldem_16_raw(&[], 8),
             CubeSphereDem::from_lola_ldem_128_raw(&[], 8),
+        ] {
+            assert!(matches!(error, Err(DemError::InvalidFormat(_))));
+        }
+    }
+
+    #[test]
+    fn mola_product_converters_require_the_exact_raster_size() {
+        for error in [
+            CubeSphereDem::from_mola_megr_32_raw(&[], 8, 3_389_500.0),
+            CubeSphereDem::from_mola_megr_64_raw(&[], 8, 3_389_500.0),
         ] {
             assert!(matches!(error, Err(DemError::InvalidFormat(_))));
         }
