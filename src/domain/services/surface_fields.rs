@@ -1,11 +1,12 @@
-//! Versioned offline measured surface fields for presentation-only hydrology
-//! and canopy constraints.
+//! Versioned offline measured surface fields for presentation-only hydrology,
+//! canopy cover, and canopy height constraints.
 //!
-//! A package stores measured water occurrence and tree-cover percentages on a
-//! regular terrain-radial latitude/longitude grid. It is intentionally separate
-//! from the categorical land-cover packages and from the authoritative terrain
-//! source: the values refine vegetation placement and close-range materials, and
-//! they never feed height, collision, altitude, or any physics value.
+//! A package stores measured water occurrence, tree-cover percentage, and mean
+//! canopy height on a regular terrain-radial latitude/longitude grid. It is
+//! intentionally separate from the categorical land-cover packages and from the
+//! authoritative terrain source: the values refine vegetation placement, tree
+//! height, and close-range materials, and they never feed height, collision,
+//! altitude, or any physics value.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,12 +14,14 @@ use std::fs;
 use std::path::Path;
 
 const MAGIC: [u8; 8] = *b"CSSFLD\0\0";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_BYTES: usize = 88;
-/// Stored channels per sample: water occurrence percent, tree-cover percent.
-const COMPONENTS: usize = 2;
+/// Stored channels per sample: water occurrence percent, tree-cover percent, and
+/// mean canopy height in whole metres. Zero height means no measurement.
+const COMPONENTS: usize = 3;
 /// Canonical channel order and semantics recorded in every package.
-pub const SURFACE_FIELD_NAMES: [&str; COMPONENTS] = ["water_occurrence_pct", "tree_cover_pct"];
+pub const SURFACE_FIELD_NAMES: [&str; COMPONENTS] =
+    ["water_occurrence_pct", "tree_cover_pct", "canopy_height_m"];
 /// Default native directory holding `.cssfld` packages.
 pub const DEFAULT_SURFACE_FIELDS_DIR: &str = "assets/large_files/terrain/surface_fields_v1";
 
@@ -35,18 +38,21 @@ impl From<std::io::Error> for SurfaceFieldsError {
     }
 }
 
-/// Bilinearly sampled measured fields. Percentages are in `[0, 100]`.
+/// Bilinearly sampled measured fields. Percentages are in `[0, 100]`; canopy
+/// height is in whole metres and zero means no measured height.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurfaceFieldsSample {
     water_occurrence_pct: f32,
     tree_cover_pct: f32,
+    canopy_height_m: f32,
 }
 
 impl SurfaceFieldsSample {
-    pub fn new(water_occurrence_pct: f32, tree_cover_pct: f32) -> Self {
+    pub fn new(water_occurrence_pct: f32, tree_cover_pct: f32, canopy_height_m: f32) -> Self {
         Self {
             water_occurrence_pct: water_occurrence_pct.clamp(0.0, 100.0),
             tree_cover_pct: tree_cover_pct.clamp(0.0, 100.0),
+            canopy_height_m: canopy_height_m.clamp(0.0, 255.0),
         }
     }
 
@@ -56,6 +62,10 @@ impl SurfaceFieldsSample {
 
     pub fn tree_cover_pct(&self) -> f32 {
         self.tree_cover_pct
+    }
+
+    pub fn canopy_height_m(&self) -> f32 {
+        self.canopy_height_m
     }
 
     /// Fraction of the year a site was observed as water.
@@ -92,8 +102,8 @@ pub struct SurfaceFieldsMetadata {
     pub conversion_version: u32,
 }
 
-/// A regular terrain-radial grid of measured water-occurrence and tree-cover
-/// integer percentages.
+/// A regular terrain-radial grid of measured water occurrence, tree cover, and
+/// mean canopy height.
 #[derive(Debug, Clone)]
 pub struct SurfaceFieldsPackage {
     width: u32,
@@ -164,7 +174,11 @@ impl SurfaceFieldsPackage {
                 .source_sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
-            || values.iter().any(|value| *value > 100)
+            || values
+                .as_chunks::<COMPONENTS>()
+                .0
+                .iter()
+                .any(|sample| sample[0] > 100 || sample[1] > 100)
         {
             return Err(SurfaceFieldsError::InvalidFormat(
                 "invalid surface-field package".into(),
@@ -310,7 +324,7 @@ impl SurfaceFieldsPackage {
             let bottom = component(channel, x0, y1) * (1.0 - tx) + component(channel, x1, y1) * tx;
             top * (1.0 - ty) + bottom * ty
         };
-        Some(SurfaceFieldsSample::new(sample(0), sample(1)))
+        Some(SurfaceFieldsSample::new(sample(0), sample(1), sample(2)))
     }
 }
 
@@ -369,19 +383,22 @@ mod tests {
             coordinate_frame: "terrain-radial-degrees".into(),
             horizontal_datum:
                 "WGS 84 / EPSG:4326 source; planetocentric terrain-radial output grid".into(),
-            vertical_datum: "not applicable (surface water and canopy cover)".into(),
-            source: "JRC Global Surface Water + Hansen Global Forest Change".into(),
+            vertical_datum: "not applicable (surface water, canopy cover, canopy height)".into(),
+            source: "JRC Global Surface Water + Hansen Global Forest Change + Meta/WRI Canopy Height Maps".into(),
             source_urls: vec!["https://example.invalid/source.tif".into()],
             field_names: SURFACE_FIELD_NAMES
                 .iter()
                 .map(|name| name.to_string())
                 .collect(),
             source_resolution_m: 30.0,
-            nodata_policy: "nodata falls back to zero water occurrence and zero tree cover".into(),
+            nodata_policy:
+                "nodata falls back to zero water occurrence, zero tree cover, and zero measured canopy height"
+                    .into(),
             source_sha256: "0".repeat(64),
             license: "CC BY 4.0".into(),
-            attribution: "European Commission JRC; Hansen/UMD/Google/USGS/NASA".into(),
-            conversion_version: 1,
+            attribution: "European Commission JRC; Hansen/UMD/Google/USGS/NASA; Meta/WRI Canopy Height Maps"
+                .into(),
+            conversion_version: 2,
         }
     }
 
@@ -394,7 +411,7 @@ mod tests {
             1.0,
             1.0,
             metadata(),
-            vec![10, 80, 20, 60, 30, 40, 0, 0],
+            vec![10, 80, 25, 20, 60, 15, 30, 40, 5, 0, 0, 0],
         )
         .expect("valid package")
     }
@@ -408,6 +425,7 @@ mod tests {
         let fields = decoded.sample_fields(1.0, 0.0).expect("covered");
         assert!((fields.water_occurrence_pct() - 10.0).abs() < 1e-6);
         assert!((fields.tree_cover_pct() - 80.0).abs() < 1e-6);
+        assert!((fields.canopy_height_m() - 25.0).abs() < 1e-6);
 
         let mut corrupted = bytes.clone();
         let last = corrupted.len() - 1;
@@ -427,12 +445,13 @@ mod tests {
         let center = package.sample_fields(0.5, 0.5).expect("covered");
         assert!((center.water_occurrence_pct() - 15.0).abs() < 1e-6);
         assert!((center.tree_cover_pct() - 45.0).abs() < 1e-6);
+        assert!((center.canopy_height_m() - 11.25).abs() < 1e-6);
         assert_eq!(package.sample_fields(2.0, 0.5), None);
     }
 
     #[test]
     fn invalid_values_or_field_names_are_rejected() {
-        let mut bad_value = vec![0u8; 8];
+        let mut bad_value = vec![0u8; 12];
         bad_value[0] = 120;
         assert!(SurfaceFieldsPackage::from_samples(
             2,
@@ -455,7 +474,7 @@ mod tests {
             1.0,
             1.0,
             bad_metadata,
-            vec![0u8; 8]
+            vec![0u8; 12]
         )
         .is_err());
     }
@@ -470,7 +489,7 @@ mod tests {
             4.0,
             4.0,
             metadata(),
-            vec![50, 20, 50, 20, 50, 20, 50, 20],
+            vec![50, 20, 10, 50, 20, 10, 50, 20, 10, 50, 20, 10],
         )
         .expect("valid package");
         let regional = SurfaceFieldsPackage::from_samples(
@@ -481,7 +500,7 @@ mod tests {
             3.0,
             3.0,
             metadata(),
-            vec![0, 90, 0, 90, 0, 90, 0, 90],
+            vec![0, 90, 30, 0, 90, 30, 0, 90, 30, 0, 90, 30],
         )
         .expect("valid package");
         let set = SurfaceFieldsSet::new(vec![coarse, regional]);

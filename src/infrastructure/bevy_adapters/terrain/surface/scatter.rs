@@ -1049,7 +1049,18 @@ pub(super) fn build_grounded_vegetation_mesh(
         // normal rather than the radial.
         let embed_m = embed_depth_m(profile);
         let base = flight - up * embed_m;
-        let scale = 0.7 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.7;
+        // Measured mean canopy height refines the reviewed species profile.
+        // Values below 3 m are treated as unmeasured/sparse cover, which keeps
+        // the profile as the fallback. The factor is bounded because a ~28 m
+        // pixel average includes gaps and is not an individual-tree height.
+        let measured_canopy_m = measured(lat, lon)
+            .map(|sample| f64::from(sample.canopy_height_m()))
+            .unwrap_or(0.0);
+        let mut scale = 0.7 + hash01(k as u64, patch.tile_x as u64, patch.tile_y as u64) * 0.7;
+        let profile_total_m = profile.trunk_height_m + profile.canopy_height_m;
+        if measured_canopy_m >= 3.0 && profile_total_m > 0.0 {
+            scale *= (measured_canopy_m / profile_total_m).clamp(0.6, 1.6);
+        }
         let trunk_h = profile.trunk_height_m * scale;
         let trunk_r = profile.trunk_radius_m * scale;
         let canopy_h = profile.canopy_height_m * scale;

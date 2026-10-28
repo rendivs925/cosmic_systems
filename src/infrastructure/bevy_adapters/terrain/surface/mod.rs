@@ -1417,13 +1417,21 @@ mod tests {
             source_sha256: "0".repeat(64),
             license: "test".into(),
             attribution: "test".into(),
-            conversion_version: 1,
+            conversion_version: 2,
         }
     }
 
     fn surface_fields(
         water: u8,
         tree: u8,
+    ) -> crate::domain::services::surface_fields::SurfaceFieldsPackage {
+        surface_fields_with_canopy(water, tree, 0)
+    }
+
+    fn surface_fields_with_canopy(
+        water: u8,
+        tree: u8,
+        canopy_height_m: u8,
     ) -> crate::domain::services::surface_fields::SurfaceFieldsPackage {
         crate::domain::services::surface_fields::SurfaceFieldsPackage::from_samples(
             2,
@@ -1433,7 +1441,20 @@ mod tests {
             180.0,
             90.0,
             surface_fields_metadata(),
-            vec![water, tree, water, tree, water, tree, water, tree],
+            vec![
+                water,
+                tree,
+                canopy_height_m,
+                water,
+                tree,
+                canopy_height_m,
+                water,
+                tree,
+                canopy_height_m,
+                water,
+                tree,
+                canopy_height_m,
+            ],
         )
         .expect("valid surface-field package")
     }
@@ -1579,6 +1600,39 @@ mod tests {
         assert!(
             forest_mesh.count_vertices() > open_mesh.count_vertices(),
             "measured tree cover must add trees"
+        );
+    }
+
+    #[test]
+    fn measured_canopy_height_scales_tree_profiles() {
+        let source = DenseFlatTerrain;
+        let patch = TerrainPatch::for_direction(DVec3::new(0.2, 0.3, 1.0).normalize(), 14);
+        let short_fields = surface_fields_with_canopy(0, 100, 10);
+        let tall_fields = surface_fields_with_canopy(0, 100, 40);
+        let build = |fields: &dyn SurfaceFieldsLookup| {
+            scatter::build_grounded_vegetation_mesh(
+                &source,
+                &patch,
+                6_371_000.0,
+                &DVec3::ZERO,
+                None,
+                Some(fields),
+                None,
+            )
+            .expect("closed forest must grow trees")
+        };
+        let short = build(&short_fields);
+        let tall = build(&tall_fields);
+        let max_radius = |mesh: &Mesh| match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(values)) => values
+                .iter()
+                .map(|position| bevy::math::Vec3::from_array(*position).length())
+                .fold(f32::MIN, f32::max),
+            _ => panic!("scatter mesh must carry positions"),
+        };
+        assert!(
+            max_radius(&tall) > max_radius(&short) + 1.0,
+            "measured canopy height must scale tree profiles"
         );
     }
 

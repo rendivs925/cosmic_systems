@@ -1,11 +1,11 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: Phases 0-7 implemented for the locked data layers, except measured canopy
-height (Phase 5), which remains open pending an accessible source. TSIS-1 solar
-irradiance is explicitly deferred. Regional DEM packages for Papua, interim KSC,
-Starbase, Vandenberg, Wallops, Kourou, Baikonur, and Mahia, multi-root
-composition, coverage telemetry, acceptance metrics, launch-site selection, and
-KSC 3DEP/NAVD88-to-WGS84 normalization validated.
+Status: Phases 0-7 implemented for the locked data layers. Regional DEM packages
+for Papua, interim KSC, Starbase, Vandenberg, Wallops, Kourou, Baikonur, and
+Mahia, multi-root composition, coverage telemetry, acceptance metrics,
+launch-site selection, and KSC 3DEP/NAVD88-to-WGS84 normalization validated.
+Measured water, tree cover, and canopy height feed presentation-only surface
+fields; TSIS-1 solar irradiance is explicitly deferred.
 
 Date: 2026-10-20.
 
@@ -223,12 +223,17 @@ packages that modestly refine dry ground materials.
 
 ## Phase 5 - Hydrology, canopy, scatter
 
-Status: in progress. JRC water occurrence and Hansen tree cover are implemented
-as combined two-channel `.cssfld` packages for the eight priority regions and
-feed the existing deterministic scatter and wet-ground material paths.
-DEM-derived drainage and the river ribbon remain the hydrology geometry
-authority. A measured canopy-height source (GEDI) and a baked scatter binary
-remain open.
+Status: complete for the measured layers. JRC water occurrence, Hansen tree
+cover, and Meta/WRI average canopy height are combined into three-channel
+`.cssfld` packages for the eight priority regions and feed the existing
+deterministic scatter and wet-ground material paths. KSC, Starbase, Wallops, and
+Baikonur carry measured Meta/WRI canopy height. Papua has no published
+downsampled canopy tile, and the Vandenberg, Kourou, and Mahia source tiles were
+not provisioned in the current environment, so those three fall back to zero
+canopy and the reviewed species profile. Re-running the offline ingest upgrades
+them without a format change. DEM-derived drainage and the river ribbon remain
+the hydrology geometry authority. A baked scatter binary remains optional future
+work.
 
 ### Deliverables
 
@@ -236,15 +241,15 @@ remain open.
   Hansen `treecover2000` at 30 m, cropped from 10-degree source tiles and
   resampled to planetocentric terrain-radial grids.
 - `src/domain/services/surface_fields.rs` and `surface_fields_bake`: versioned
-  two-channel packages with bilinear sampling and later-region precedence.
+  three-channel packages with bilinear sampling and later-region precedence.
 - Runtime consumers: measured tree cover multiplies tree-site density, measured
   water occurrence clears vegetation and tints persistently wet close-range
-  ground. The existing `surface/scatter.rs` deterministic placement is reused;
-  no separate per-region instancing path is introduced.
-- Outputs: water-occurrence and tree-cover masks plus measured constraints on
-  the existing scatter mesh. River and lake geometry remains DEM-derived; canopy
-  height remains species-profile-derived until a measured height source is
-  ingested.
+  ground, and measured mean canopy height scales the reviewed tree profile
+  within a bounded factor. The existing `surface/scatter.rs` deterministic
+  placement is reused; no separate per-region instancing path is introduced.
+- Outputs: water-occurrence, tree-cover, and canopy-height grids plus measured
+  constraints on the existing scatter mesh. River and lake geometry remains
+  DEM-derived; a zero canopy-height sample keeps the reviewed species profile.
 
 ### Acceptance
 

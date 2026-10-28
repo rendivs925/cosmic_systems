@@ -1,6 +1,6 @@
 # Open Science Terrain Data v1
 
-Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions; Phase 5 measured water occurrence and canopy cover implemented for the priority regions; Phase 6 global monthly climatology implemented from NASA POWER as a presentation-only layer.
+Status: Phase 3 priority regional packages validated; Phase 4 land cover and soil texture implemented globally and for all eight priority regions; Phase 5 measured water occurrence, canopy cover, and canopy height implemented for the priority regions; Phase 6 global monthly climatology implemented from NASA POWER as a presentation-only layer.
 
 Date: 2026-10-22.
 
@@ -76,21 +76,21 @@ checksum but are not required at runtime.
 | `earth_soil_soilgrids_baikonur` | Soil | 63.05..63.55E, 45.56..45.91N | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
 | `earth_soil_soilgrids_mahia` | Soil | 177.70..178.00E, 39.21..38.96S | 250 m source, 0.0025 degree package | CC BY 4.0 (ISRIC) | `soil_bake` |
 | `earth_water_jrc_papua` | Water | 139.0..140.0E, 8.54..7.35S | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_papua` | Canopy | 139.0..140.0E, 8.54..7.35S | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_papua` | Canopy | 139.0..140.0E, 8.54..7.35S | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI; no downsampled tile) | `surface_fields_bake` |
 | `earth_water_jrc_ksc` | Water | 80.85..80.45W, 28.24..28.59N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_ksc` | Canopy | 80.85..80.45W, 28.24..28.59N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_ksc` | Canopy | 80.85..80.45W, 28.24..28.59N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_starbase` | Water | 97.30..97.05W, 25.70..25.95N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_starbase` | Canopy | 97.30..97.05W, 25.70..25.95N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_starbase` | Canopy | 97.30..97.05W, 25.70..25.95N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_vandenberg` | Water | 120.75..120.45W, 34.42..34.67N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_vandenberg` | Canopy | 120.75..120.45W, 34.42..34.67N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_vandenberg` | Canopy | 120.75..120.45W, 34.42..34.67N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI tile pending) | `surface_fields_bake` |
 | `earth_water_jrc_wallops` | Water | 75.70..75.35W, 37.61..37.86N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_wallops` | Canopy | 75.70..75.35W, 37.61..37.86N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_wallops` | Canopy | 75.70..75.35W, 37.61..37.86N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_kourou` | Water | 52.95..52.45W, 4.97..5.31N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_kourou` | Canopy | 52.95..52.45W, 4.97..5.31N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_kourou` | Canopy | 52.95..52.45W, 4.97..5.31N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI tile pending) | `surface_fields_bake` |
 | `earth_water_jrc_baikonur` | Water | 63.05..63.55E, 45.56..45.91N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_baikonur` | Canopy | 63.05..63.55E, 45.56..45.91N | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_baikonur` | Canopy | 63.05..63.55E, 45.56..45.91N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_mahia` | Water | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_mahia` | Canopy | 177.70..178.00E, 39.21..38.96S | 30 m source, 1 arc-second package | CC BY 4.0 (Hansen) | `surface_fields_bake` |
+| `earth_canopy_hansen_mahia` | Canopy | 177.70..178.00E, 39.21..38.96S | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI tile pending) | `surface_fields_bake` |
 | `earth_climate_merra2_climatology` | Climate | global | 0.5 x 0.625 degree source, 576x361x12 package | CC BY 4.0 (NASA POWER) | `climate_bake` |
 
 Details:
@@ -138,14 +138,16 @@ Details:
   regional hashes are recorded in the registry and in
   `docs/datasets/earth_soil_v1.md`. Required attribution:
   `ISRIC - World Soil Information (SoilGrids 2.0)`.
-- Measured surface fields: JRC Global Surface Water 2021 v1.4 occurrence and
-  Hansen Global Forest Change 2023 v1.11 `treecover2000`, both 30 m, packaged as
-  two-channel `.cssfld` grids for the eight priority regions. They constrain
-  vegetation density and wet-ground tint only. Canopy height remains
-  species-profile-derived; a measured GEDI height layer is future work.
-  Required attribution: `European Commission, Joint Research Centre (JRC)
-  Global Surface Water; Hansen/UMD/Google/USGS/NASA Global Forest Change`. See
-  `docs/datasets/earth_surface_fields_v1.md`.
+- Measured surface fields: JRC Global Surface Water 2021 v1.4 occurrence,
+  Hansen Global Forest Change 2023 v1.11 `treecover2000` at 30 m, and Meta/WRI
+  Canopy Height Maps average height at 1/4000 degree (about 28 m), packaged as
+  three-channel `.cssfld` grids for the eight priority regions. They constrain
+  vegetation density, tree height, and wet-ground tint only. Papua has no
+  published Meta/WRI downsampled canopy tile, so its canopy channel is zero and
+  the reviewed species profile remains the fallback. Required attribution:
+  `European Commission, Joint Research Centre (JRC) Global Surface Water;
+  Hansen/UMD/Google/USGS/NASA Global Forest Change; Meta/WRI Canopy Height Maps
+  (Tolan et al., 2024)`. See `docs/datasets/earth_surface_fields_v1.md`.
 - Monthly climatology: NASA POWER v10 2001-2020 monthly means from MERRA-2
   (temperature, pressure, relative humidity, wind) and CERES SYN1deg (cloud
   amount), regridded to a 576x361x12 `.csclim` package. It is a presentation
@@ -299,7 +301,8 @@ Phase 5 measured water and canopy fields (implemented for the eight regions):
 ```sh
 python3 scripts/ingest_water_canopy.py --region all
 cargo run --release --features native --bin surface_fields_bake -- <water.png> \
-  <tree_cover.png> assets/large_files/terrain/surface_fields_v1/<region>.cssfld ...
+  <tree_cover.png> <canopy_height.png> \
+  assets/large_files/terrain/surface_fields_v1/<region>.cssfld ...
 cargo run --features dem --bin preprocess -- --layer water --check
 cargo run --features dem --bin preprocess -- --layer canopy --check
 ```
