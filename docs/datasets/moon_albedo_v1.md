@@ -52,7 +52,9 @@ python3 scripts/ingest_moon_albedo.py
 
 - Source dimensions and SHA-256 match the recorded contract.
 - Zero-shift correlation against the superseded texture and known-feature
-  placement confirm longitude/latitude alignment.
+  placement confirm longitude/latitude alignment. At the recorded coordinates,
+  Mare Crisium (17N, 59E) averages luminance 0.272 against 0.539 in the nearby
+  highland, and Tycho (43S, 11W) averages 0.845 against 0.740 nearby.
 - Output luminance mean/std match the display target (0.5800/0.1353).
 - No physics baseline was regenerated; the texture is not read by terrain,
   collision, or flight dynamics.
