@@ -194,11 +194,13 @@ fn sample_density(body_pos: vec3<f32>) -> f32 {
     return saturate(final_density * clouds.density_scale);
 }
 
-// Sun visibility: march toward the Sun, then fold in multi-scatter octaves and
-// the powder (dark-edge) term (spec sections 4.3-4.4).
+// Sun visibility: march toward the Sun across the whole cloud slab, then fold
+// in multi-scatter octaves and the powder (dark-edge) term (spec sections
+// 4.3-4.4). A photon leaving a sample must cross the remaining cloud to the top,
+// so a fixed small fraction of the layer would under-estimate optical depth.
 fn march_to_sun(body_pos: vec3<f32>, cos_theta: f32) -> f32 {
     let layer = clouds.top_radius - clouds.bottom_radius;
-    let light_step = clouds.sun_direction * (layer / max(clouds.light_steps, 1.0) * 0.12);
+    let light_step = clouds.sun_direction * (layer / max(clouds.light_steps, 1.0));
     var total_density = 0.0;
     var p = body_pos;
     for (var i: u32 = 0u; i < MAX_LIGHT_STEPS; i = i + 1u) {

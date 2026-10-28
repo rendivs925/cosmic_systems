@@ -355,6 +355,15 @@ The already-agreed cloud model is unchanged and follows Phase 6:
 - Multi-layer clouds; cloud shadows on terrain; validation against Phase 6
   climatology.
 
+Status: the current shader already implements Beer-Lambert extinction, physical
+powder, multi-scatter octaves, a height-graded ambient term, and measured
+coverage/type/wind from the climatology layer. The sun march now traverses the
+full cloud slab with 8 steps instead of a fixed 12% slice, so cloud interiors
+and bases receive the optical depth the model intends. Native-display visual
+acceptance is still pending; multi-layer clouds, terrain cloud shadows, and the
+remaining `strength`/`direct_boost`/`aerial_haze` parameter cleanup are future
+work.
+
 ## Validation and commit protocol
 
 Per phase:

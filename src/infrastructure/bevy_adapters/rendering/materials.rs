@@ -106,6 +106,9 @@ pub fn create_cloud_material(
     }
 }
 
+/// Maximum sun-march steps; must match `MAX_LIGHT_STEPS` in `clouds.wgsl`.
+pub const MAX_CLOUD_LIGHT_STEPS: f32 = 8.0;
+
 /// Uniform parameters for the volumetric cloud shader. Field order and types
 /// must match the `CloudParams` WGSL struct exactly.
 ///
@@ -158,7 +161,7 @@ pub struct CloudParams {
     pub aerial_haze: f32,
     /// Primary ray-march step count.
     pub primary_steps: f32,
-    /// Sun-march step count.
+    /// Sun-march step count across the full cloud slab.
     pub light_steps: f32,
     /// Number of multi-scatter octaves.
     pub multi_scatter_octaves: f32,
@@ -199,7 +202,7 @@ impl CloudParams {
             wind_direction: Vec2::new(1.0, 0.2),
             aerial_haze: 0.35,
             primary_steps: 96.0,
-            light_steps: 6.0,
+            light_steps: MAX_CLOUD_LIGHT_STEPS,
             multi_scatter_octaves: 3.0,
             strength: 0.08,
             sky_color: Vec3::new(0.5, 0.7, 1.0),

@@ -691,6 +691,7 @@ mod tests {
     use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
     use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
     use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
+    use crate::infrastructure::bevy_adapters::rendering::materials::MAX_CLOUD_LIGHT_STEPS;
     use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::math::{DMat3, DQuat, DVec3};
 
@@ -706,6 +707,7 @@ mod tests {
         assert!(deck.detail_scale >= 1.0);
         assert!(deck.wind_speed.is_finite() && deck.wind_speed > 0.0);
         assert!(deck.primary_steps >= 1.0 && deck.light_steps >= 1.0);
+        assert!(deck.light_steps <= MAX_CLOUD_LIGHT_STEPS);
         assert!(deck.multi_scatter_octaves >= 1.0);
         assert_eq!(deck.time_s, 0.0);
     }
