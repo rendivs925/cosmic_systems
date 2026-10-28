@@ -1,3 +1,5 @@
+use std::f32::consts::{PI, TAU};
+
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -7,10 +9,12 @@ use bevy_mesh::{Indices, PrimitiveTopology};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::domain::services::star_catalog::{galactic_frame_solar_inertial, StarCatalog};
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::entity_components::{FlightStarfield, Starfield};
 
 const STAR_SEED: u64 = 0xC05F_1C5A;
+/// Procedural fallback layers, used only when the catalog cannot be decoded.
 const NEAR_STAR_COUNT: usize = 2_000;
 const FAR_STAR_COUNT: usize = 8_000;
 const MILKY_WAY_COUNT: usize = 3_000;
@@ -18,6 +22,12 @@ const MILKY_WAY_GLOW_COUNT: usize = 80;
 const STARFIELD_NEAR_RADIUS_AU: f32 = 65.0;
 const STARFIELD_FAR_RADIUS_AU: f32 = 110.0;
 const BRIGHT_STAR_GLOW_THRESHOLD: f32 = 0.93;
+/// Apparent magnitude below which a cataloged star receives a soft halo.
+const CATALOG_GLOW_MAG: f32 = 1.5;
+/// Brightest and faintest magnitudes spanned by the brightness ramp. The
+/// faintest cataloged star (V = 7.96) is invisible; V = 7.2 is the sky limit.
+const FAINTEST_VISIBLE_MAG: f32 = 7.2;
+const BRIGHTEST_MAG_RANGE: f32 = 8.7;
 /// Rendering star sprites as masked geometry keeps them in the depth-writing
 /// opaque pass, so planets reliably occlude stars behind their discs.
 const STAR_ALPHA_CUTOFF: f32 = 0.01;
@@ -69,7 +79,21 @@ pub fn spawn_starfield(
 ) {
     let near_radius = solar_params.au_to_units(STARFIELD_NEAR_RADIUS_AU);
     let far_radius = solar_params.au_to_units(STARFIELD_FAR_RADIUS_AU);
-    let mesh = meshes.add(create_starfield_mesh(near_radius, far_radius));
+    let catalog = match StarCatalog::embedded_yale_bsc5() {
+        Ok(catalog) => {
+            info!("starfield: {} measured stars from Yale BSC5", catalog.len());
+            Some(catalog)
+        }
+        Err(error) => {
+            warn!("star catalog unavailable ({error:?}); using procedural stars");
+            None
+        }
+    };
+    let mesh = meshes.add(create_starfield_mesh(
+        near_radius,
+        far_radius,
+        catalog.as_ref(),
+    ));
     let star_texture = images.add(create_gaussian_star_texture());
     let material = materials.add(starfield_material(star_texture));
 
@@ -81,7 +105,11 @@ pub fn spawn_starfield(
         NotShadowCaster,
         NotShadowReceiver,
         Starfield,
-        Name::new("Procedural Starfield"),
+        Name::new(if catalog.is_some() {
+            "Yale BSC5 Starfield"
+        } else {
+            "Procedural Starfield"
+        }),
     ));
 }
 
@@ -98,7 +126,7 @@ fn starfield_material(star_texture: Handle<Image>) -> StandardMaterial {
     }
 }
 
-fn create_starfield_mesh(near_radius: f32, far_radius: f32) -> Mesh {
+fn create_starfield_mesh(near_radius: f32, far_radius: f32, catalog: Option<&StarCatalog>) -> Mesh {
     let total = NEAR_STAR_COUNT + FAR_STAR_COUNT + MILKY_WAY_COUNT + MILKY_WAY_GLOW_COUNT;
     let mut positions = Vec::with_capacity(total * 4);
     let mut normals = Vec::with_capacity(total * 4);
@@ -107,34 +135,46 @@ fn create_starfield_mesh(near_radius: f32, far_radius: f32) -> Mesh {
     let mut indices = Vec::with_capacity(total * 6);
     let mut rng = StdRng::seed_from_u64(STAR_SEED);
 
-    for _ in 0..NEAR_STAR_COUNT {
-        let profile = star_profile(&mut rng, 1.0);
-        push_star_with_optional_glow(
-            random_unit_vector(&mut rng),
-            near_radius,
-            5_000.0 + profile.magnitude * 11_000.0,
-            profile,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut colors,
-            &mut indices,
-        );
-    }
-
-    for _ in 0..FAR_STAR_COUNT {
-        let profile = star_profile(&mut rng, 0.62);
-        push_star_with_optional_glow(
-            random_unit_vector(&mut rng),
+    if let Some(catalog) = catalog {
+        push_cataloged_stars(
+            catalog,
             far_radius,
-            3_000.0 + profile.magnitude * 8_500.0,
-            profile,
             &mut positions,
             &mut normals,
             &mut uvs,
             &mut colors,
             &mut indices,
         );
+    } else {
+        for _ in 0..NEAR_STAR_COUNT {
+            let profile = star_profile(&mut rng, 1.0);
+            push_star_with_optional_glow(
+                random_unit_vector(&mut rng),
+                near_radius,
+                5_000.0 + profile.magnitude * 11_000.0,
+                profile,
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut colors,
+                &mut indices,
+            );
+        }
+
+        for _ in 0..FAR_STAR_COUNT {
+            let profile = star_profile(&mut rng, 0.62);
+            push_star_with_optional_glow(
+                random_unit_vector(&mut rng),
+                far_radius,
+                3_000.0 + profile.magnitude * 8_500.0,
+                profile,
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut colors,
+                &mut indices,
+            );
+        }
     }
 
     for _ in 0..MILKY_WAY_COUNT {
@@ -242,14 +282,18 @@ enum SpectralClass {
 
 fn random_unit_vector(rng: &mut StdRng) -> Vec3 {
     let z = rng.gen_range(-1.0..1.0);
-    let theta = rng.gen_range(0.0..std::f32::consts::TAU);
+    let theta = rng.gen_range(0.0..TAU);
     let radius = (1.0_f32 - z * z).sqrt();
     Vec3::new(radius * theta.cos(), z, radius * theta.sin())
 }
 
 fn milky_way_direction(rng: &mut StdRng) -> Option<(Vec3, f32)> {
-    let longitude: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
-    let core_bias = (longitude - 0.35).cos().max(0.0).powf(2.0);
+    // The band is generated in IAU galactic coordinates so it passes through
+    // the real Cygnus/Sagittarius star clouds and agrees with the measured
+    // star positions. Longitude zero is the galactic centre.
+    let frame = galactic_frame_solar_inertial();
+    let longitude: f32 = rng.gen_range(-PI..PI);
+    let core_bias = longitude.cos().max(0.0).powf(2.0);
     let band_width = 0.105 + core_bias * 0.045;
     let latitude: f32 = rng.gen_range(-band_width..band_width) + rng.gen_range(-0.025..0.025);
 
@@ -257,9 +301,10 @@ fn milky_way_direction(rng: &mut StdRng) -> Option<(Vec3, f32)> {
         return None;
     }
 
-    let flat = Vec3::new(longitude.cos(), latitude.sin(), longitude.sin()).normalize();
     Some((
-        Quat::from_euler(EulerRot::XYZ, 0.42, 0.15, -0.24) * flat,
+        frame
+            .direction(f64::from(longitude), f64::from(latitude))
+            .as_vec3(),
         core_bias,
     ))
 }
@@ -278,12 +323,14 @@ fn is_dust_lane(longitude: f32, latitude: f32, rng: &mut StdRng) -> bool {
 }
 
 fn milky_way_glow_direction(rng: &mut StdRng) -> (Vec3, f32) {
-    let longitude: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
-    let core_bias = (longitude - 0.35).cos().max(0.0).powf(2.0);
+    let frame = galactic_frame_solar_inertial();
+    let longitude: f32 = rng.gen_range(-PI..PI);
+    let core_bias = longitude.cos().max(0.0).powf(2.0);
     let latitude: f32 = rng.gen_range(-0.16..0.16) + rng.gen_range(-0.04..0.04);
-    let flat = Vec3::new(longitude.cos(), latitude.sin(), longitude.sin()).normalize();
     (
-        Quat::from_euler(EulerRot::XYZ, 0.42, 0.15, -0.24) * flat,
+        frame
+            .direction(f64::from(longitude), f64::from(latitude))
+            .as_vec3(),
         core_bias,
     )
 }
@@ -365,6 +412,92 @@ fn spectral_visibility(class: SpectralClass) -> f32 {
         SpectralClass::G => 0.78,
         SpectralClass::K => 0.58,
         SpectralClass::M => 0.36,
+    }
+}
+
+/// Convert apparent V magnitude into a normalized visual weight. The ramp is
+/// anchored at the naked-eye limit so a real bright star always outshines any
+/// procedural density filler.
+fn apparent_brightness(v_mag: f32) -> f32 {
+    ((FAINTEST_VISIBLE_MAG - v_mag) / BRIGHTEST_MAG_RANGE).clamp(0.0, 1.0)
+}
+
+/// Approximate an sRGB star colour from the B-V colour index.
+///
+/// Effective temperature follows the Ballesteros (2012) B-V relation; the
+/// temperature-to-sRGB fit is the commonly used Tanner Helland approximation.
+/// Both are presentation approximations, not calibrated photometry. The source
+/// catalog publishes spectral types rather than measured B-V, so the ingest
+/// step already documents that approximation.
+fn bv_to_color(bv: f32, alpha: f32) -> [f32; 4] {
+    let bv = f64::from(bv.clamp(-0.4, 2.2));
+    let temperature_k = 4600.0 * (1.0 / (0.92 * bv + 1.70) + 1.0 / (0.92 * bv + 0.62));
+    let t = (temperature_k / 100.0).clamp(10.0, 400.0);
+    let red = if t <= 66.0 {
+        255.0
+    } else {
+        329.698_727_446 * (t - 60.0).powf(-0.133_204_759_2)
+    };
+    let green = if t <= 66.0 {
+        99.470_802_586_1 * t.ln() - 161.119_568_166_1
+    } else {
+        288.122_169_528_3 * (t - 60.0).powf(-0.075_514_849_2)
+    };
+    let blue = if t >= 66.0 {
+        255.0
+    } else if t <= 19.0 {
+        0.0
+    } else {
+        138.517_731_223_1 * (t - 10.0).ln() - 305.044_792_730_7
+    };
+    let linear: LinearRgba = Color::srgb(
+        (red / 255.0).clamp(0.0, 1.0) as f32,
+        (green / 255.0).clamp(0.0, 1.0) as f32,
+        (blue / 255.0).clamp(0.0, 1.0) as f32,
+    )
+    .into();
+    [linear.red, linear.green, linear.blue, alpha]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_cataloged_stars(
+    catalog: &StarCatalog,
+    radius: f32,
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+) {
+    for star in catalog.stars() {
+        let brightness = apparent_brightness(star.v_mag);
+        if brightness <= 0.0 {
+            continue;
+        }
+        let direction = star.solar_inertial_direction().as_vec3();
+        if direction.length_squared() < 0.5 {
+            continue;
+        }
+        let alpha = (0.055 + 0.88 * brightness.powf(1.9)).clamp(0.05, 0.95);
+        let color = bv_to_color(star.bv_color, alpha);
+        let size = 2_400.0 + brightness.powf(1.5) * 13_000.0;
+        push_star_quad(
+            direction, radius, size, color, positions, normals, uvs, colors, indices,
+        );
+        if star.v_mag <= CATALOG_GLOW_MAG {
+            let glow_alpha = (((CATALOG_GLOW_MAG - star.v_mag) / 3.0) * 0.10).clamp(0.0, 0.10);
+            push_star_quad(
+                direction,
+                radius,
+                size * 3.4,
+                [color[0], color[1], color[2], glow_alpha],
+                positions,
+                normals,
+                uvs,
+                colors,
+                indices,
+            );
+        }
     }
 }
 
@@ -459,6 +592,7 @@ fn push_star_quad(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::mesh::VertexAttributeValues;
 
     #[test]
     fn starfield_material_writes_depth_for_planetary_occlusion() {
@@ -466,5 +600,42 @@ mod tests {
             starfield_material(Handle::default()).alpha_mode,
             AlphaMode::Mask(cutoff) if cutoff == STAR_ALPHA_CUTOFF
         ));
+    }
+
+    #[test]
+    fn apparent_brightness_is_monotonic_and_saturates_like_the_eye() {
+        assert!(apparent_brightness(-1.46) > apparent_brightness(0.0));
+        assert!(apparent_brightness(0.0) > apparent_brightness(4.0));
+        assert!(apparent_brightness(4.0) > apparent_brightness(6.5));
+        assert_eq!(apparent_brightness(7.96), 0.0);
+        assert_eq!(apparent_brightness(-2.0), 1.0);
+    }
+
+    #[test]
+    fn bluer_colour_indices_produce_bluer_stars() {
+        let blue = bv_to_color(0.0, 1.0);
+        let red = bv_to_color(1.8, 1.0);
+        assert!(blue[2] / blue[0] > red[2] / red[0]);
+        for channel in bv_to_color(0.65, 1.0) {
+            assert!(channel.is_finite());
+        }
+    }
+
+    #[test]
+    fn cataloged_mesh_contains_a_quad_per_visible_star() {
+        let catalog = StarCatalog::embedded_yale_bsc5().unwrap();
+        let mesh = create_starfield_mesh(6_500.0, 11_000.0, Some(&catalog));
+        assert!(mesh.count_vertices() >= catalog.len() * 4);
+        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap();
+        let VertexAttributeValues::Float32x3(values) = positions else {
+            panic!("star positions must be f32x3");
+        };
+        assert!(values.iter().flatten().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn procedural_fallback_survives_a_missing_catalog() {
+        let mesh = create_starfield_mesh(6_500.0, 11_000.0, None);
+        assert!(mesh.count_vertices() > 0);
     }
 }

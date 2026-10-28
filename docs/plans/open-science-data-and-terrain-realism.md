@@ -282,14 +282,15 @@ future work. See `docs/datasets/earth_climate_v1.md`.
 Status: in progress. The Moon height authority is upgraded to the 128
 pixels-per-degree LOLA LDEM_128 product (236.9 m samples), baked at a
 4096-sample cube face. The Mars authority is upgraded to the stitched 64
-pixels-per-degree MOLA MEGR map (926 m samples), also baked at 4096. Gravity
-harmonics and the star catalog remain open. See
-`docs/datasets/moon_lola_ldem_128_v3.md` and
-`docs/datasets/mars_mola_megr_64_v2.md`.
+pixels-per-degree MOLA MEGR map (926 m samples), also baked at 4096. The
+starfield now uses the 9,110-star Yale Bright Star Catalogue with an
+IAU-aligned galactic band. Gravity harmonics and measured solar irradiance
+remain open. See `docs/datasets/moon_lola_ldem_128_v3.md`,
+`docs/datasets/mars_mola_megr_64_v2.md`, and `docs/datasets/yale_bsc5_v1.md`.
 
 - Higher-resolution LOLA/MOLA and lunar/Martian imagery.
 - EGM2008 harmonics, GMM-3 (Mars), GRGM (Moon).
-- Gaia DR3 or Hipparcos subset for starfield; TSIS-1 solar irradiance.
+- TSIS-1 solar irradiance; a fainter Gaia DR3 subset remains optional.
 - Not part of the first execution.
 
 ## Data sources for the first execution

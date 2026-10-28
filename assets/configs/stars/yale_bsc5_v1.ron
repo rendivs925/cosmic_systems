@@ -1,0 +1,15 @@
+(
+    dataset: "Yale Bright Star Catalogue 5",
+    source_url: "http://tdc-www.harvard.edu/catalogs/BSC5",
+    source_format: "SAO TDC binary catalog, J2000 coordinates",
+    source_sha256: "e471d02eaf4eecb61c12f879a1cb6432ba9d7b68a9a8c5654a1eb42a0c8cc340",
+    package: "assets/data/stars/yale_bsc5_v1.csstar",
+    package_sha256: "99d6edb998fa38edd43213c20b93dfb358a2905ce7064587854e5f0c4e09ca63",
+    record_count: 9110,
+    magnitude_band: "V -1.46..7.96; complete to about V 7",
+    coordinate_frame: "ICRS/J2000 equatorial; converted at load with icrf_j2000_to_solar_inertial",
+    colour_source: "B-V derived from the two-character spectral type by scripts/ingest_bsc5.py",
+    runtime_effect: "presentation-only starfield and IAU-aligned galactic band; no physics consumer",
+    license: "No explicit license file; public astronomical catalog. Cite Hoffleit & Warren 1991.",
+    attribution: "Hoffleit, D. & Warren, W. H. Jr., The Bright Star Catalogue, 5th Revised Ed. (1991); SAO Telescope Data Center binary distribution",
+)
