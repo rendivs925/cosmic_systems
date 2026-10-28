@@ -203,7 +203,9 @@ validated on `main`.
   for level-12-or-finer patches, then applied as presentation-only detail over
   global Earth imagery.
 - Moon loads the NASA PDS LOLA LDEM_128 global shape map from an ignored,
-  offline-generated CSDEM. Its DE421 mean-Earth/polar-axis frame matches the
+  offline-generated CSDEM. Its albedo uses the 8192x4096 NASA SVS LROC color
+  mosaic documented in `docs/datasets/moon_albedo_v1.md`, replacing the
+  superseded 2048 texture without changing the terrain or orientation authority. Its DE421 mean-Earth/polar-axis frame matches the
   active `pck00011.tpc` Moon orientation approximation, and an unavailable or
   invalid local CSDEM leaves the Moon non-landable rather than substituting
   procedural terrain. The previous LDEM_16 package is retained only as a
