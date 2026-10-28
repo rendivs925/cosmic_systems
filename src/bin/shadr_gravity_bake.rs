@@ -1,10 +1,11 @@
-//! Offline GMM-3 Mars gravity converter. Requires `--features native`.
+//! Offline SHADR gravity converter for Mars GMM-3 and lunar GRGM660PRIM.
+//! Requires `--features native`.
 //!
-//! Reads the NASA PDS SHADR comma-separated table
-//! (`MRO-M-RSS-5-SDP-V1.0`, degree 120, normalized coefficients) and writes the
-//! same versioned `.csgravc` package used by the Earth harmonics tier. The
-//! package is data readiness for future Mars flight; no current force model
-//! selects it and the simulator never reads the source table at runtime.
+//! Reads the NASA PDS comma-separated SHADR table (header row plus
+//! `degree, order, C, S, sigmaC, sigmaS` rows) and writes the same versioned
+//! `.csgravc` package used by the Earth harmonics tier. Both packages are data
+//! readiness for future planetary flight; no current force model selects them,
+//! and the simulator never reads the source table at runtime.
 
 use std::env;
 use std::fs;
@@ -16,8 +17,40 @@ use cosmic_systems_wasm::domain::services::gravity_harmonics::{
 };
 use sha2::{Digest, Sha256};
 
-const SOURCE_URL: &str = "https://pds-geosciences.wustl.edu/mro/mro-m-rss-5-sdp-v1/mrors_1xxx/data/shadr/gmm3_120_sha.tab";
-const DEFAULT_DEGREE: u32 = 120;
+struct Preset {
+    key: &'static str,
+    model_id: &'static str,
+    body: &'static str,
+    source_url: &'static str,
+    source_description: &'static str,
+    attribution: &'static str,
+    default_degree: u32,
+}
+
+const PRESETS: [Preset; 2] = [
+    Preset {
+        key: "gmm3",
+        model_id: "GMM-3",
+        body: "Mars",
+        source_url: "https://pds-geosciences.wustl.edu/mro/mro-m-rss-5-sdp-v1/mrors_1xxx/data/shadr/gmm3_120_sha.tab",
+        source_description: "NASA PDS MRO-M-RSS-5-SDP-V1.0 SHADR static field",
+        attribution: "Genova et al. (2016), Icarus 272, 228-235; NASA/GSFC. Frame: Konopliv et al. (2006), Icarus 182, 23-50; not IAU.",
+        default_degree: 120,
+    },
+    Preset {
+        key: "grgm660",
+        model_id: "GRGM660PRIM",
+        body: "Moon",
+        source_url: "https://pds-geosciences.wustl.edu/grail/grail-l-lgrs-5-rdr-v1/grail_1001/shadr/gggrx_0660pm_sha.tab",
+        source_description: "NASA PDS GRAIL SHADR GRGM660PRIM static field",
+        attribution: "Lemoine et al. (2013), High-degree gravity models from GRAIL primary mission data, JGR Planets 118, 1676-1698, doi:10.1002/jgre.20118; NASA/GSFC GRAIL. Frame: DE421 principal axes; not IAU/pck.",
+        default_degree: 660,
+    },
+];
+
+fn preset(key: &str) -> Option<&'static Preset> {
+    PRESETS.iter().find(|preset| preset.key == key)
+}
 
 fn main() -> ExitCode {
     let mut arguments = env::args().skip(1);
@@ -27,21 +60,27 @@ fn main() -> ExitCode {
     let Some(output) = arguments.next() else {
         return usage();
     };
+    let Some(preset_key) = arguments.next() else {
+        return usage();
+    };
+    let Some(preset) = preset(&preset_key) else {
+        return usage();
+    };
     let degree = match arguments.next() {
         Some(value) => match value.parse::<u32>() {
             Ok(value) => value,
             Err(_) => return usage(),
         },
-        None => DEFAULT_DEGREE,
+        None => preset.default_degree,
     };
     if arguments.next().is_some() {
         return usage();
     }
 
-    match bake(PathBuf::from(input), PathBuf::from(output), degree) {
+    match bake(PathBuf::from(input), PathBuf::from(output), preset, degree) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("GMM-3 conversion failed: {error}");
+            eprintln!("SHADR conversion failed: {error}");
             ExitCode::FAILURE
         }
     }
@@ -51,7 +90,7 @@ fn fields(line: &str) -> Vec<&str> {
     line.split(',').map(str::trim).collect()
 }
 
-fn bake(input: PathBuf, output: PathBuf, degree: u32) -> Result<(), String> {
+fn bake(input: PathBuf, output: PathBuf, preset: &Preset, degree: u32) -> Result<(), String> {
     let text = fs::read_to_string(&input).map_err(|error| error.to_string())?;
     let source_sha256 = format!("{:x}", Sha256::digest(text.as_bytes()));
     let mut lines = text.lines().filter(|line| !line.trim().is_empty());
@@ -71,10 +110,10 @@ fn bake(input: PathBuf, output: PathBuf, degree: u32) -> Result<(), String> {
                 .parse::<u32>()
                 .map_err(|_| "invalid normalization")?;
             if normalization != 1 {
-                return Err("GMM-3 source is not normalized".into());
+                return Err("source is not normalized".into());
             }
             if degree != order {
-                return Err("GMM-3 source is not a square degree/order field".into());
+                return Err("source is not a square degree/order field".into());
             }
             Ok((radius_km, gm_km3_s2, degree))
         })?;
@@ -132,17 +171,15 @@ fn bake(input: PathBuf, output: PathBuf, degree: u32) -> Result<(), String> {
     let c20 = coefficients[0];
     let j2 = -(5.0_f64).sqrt() * c20;
     let metadata = GravityHarmonicsMetadata {
-        model_id: "GMM-3".into(),
-        body: "Mars".into(),
-        source: format!(
-            "NASA PDS MRO-M-RSS-5-SDP-V1.0 SHADR static field, degree {degree}"
-        ),
-        source_url: SOURCE_URL.into(),
+        model_id: preset.model_id.into(),
+        body: preset.body.into(),
+        source: format!("{} degree {degree}", preset.source_description),
+        source_url: preset.source_url.into(),
         source_sha256,
         normalization: "fully-normalized-4pi".into(),
         tide_system: "not specified by the PDS label; static field as published".into(),
         license: "Public domain (NASA)".into(),
-        attribution: "Genova et al. (2016), A global, high-resolution gravity field of Mars from MGS, Mars Odyssey, and MRO radio tracking data, Icarus 272, 228-235; NASA/GSFC.".into(),
+        attribution: preset.attribution.into(),
         conversion_version: 1,
     };
     let model = SphericalHarmonicGravityModel::from_parts(
@@ -157,9 +194,11 @@ fn bake(input: PathBuf, output: PathBuf, degree: u32) -> Result<(), String> {
         .map_err(|error| format!("{error:?}"))?;
     let bytes = fs::read(&output).map_err(|error| error.to_string())?;
     println!(
-        "wrote {} ({} bytes, degree {}, {} coefficient pairs)",
+        "wrote {} ({} bytes, {} {} degree {}, {} coefficient pairs)",
         output.display(),
         bytes.len(),
+        preset.body,
+        preset.model_id,
         degree,
         coefficient_pair_count(degree)
     );
@@ -174,7 +213,7 @@ fn bake(input: PathBuf, output: PathBuf, degree: u32) -> Result<(), String> {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cargo run --features native --bin gmm3_bake -- <gmm3_120_sha.tab> <output.csgravc> [max-degree]"
+        "usage: cargo run --features native --bin shadr_gravity_bake -- <input.tab> <output.csgravc> <gmm3|grgm660> [max-degree]"
     );
     ExitCode::FAILURE
 }

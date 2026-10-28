@@ -20,6 +20,10 @@ baseline changes.
 - Header: reference radius `3,396.0 km`, GM `42,828.372854 km3/s2`, degree and
   order `120`, normalization state `1` (normalized), reference longitude and
   latitude zero.
+- Frame: the PDS label states that the reference system is Konopliv et al.
+  (2006), explicitly **not** the IAU Mars system. The package records that
+  caveat in its provenance; it must not be rotated with `pck00011.tpc` until a
+  reviewed Mars gravity-frame conversion exists.
 - Licence: public domain (NASA).
 - Attribution: Genova et al. (2016), *A global, high-resolution gravity field
   of Mars from MGS, Mars Odyssey, and MRO radio tracking data*, Icarus 272,
@@ -35,17 +39,17 @@ claiming tide-free or zero-tide.
 
 - Path: `assets/large_files/gravity/gmm3_cs120_v1.csgravc`.
 - Degree/order 120, 7,378 `(C̄, S̄)` pairs.
-- 118,732 bytes: 64-byte header, 620-byte RON provenance, 118,048-byte payload.
+- 118,689 bytes: 64-byte header, 577-byte RON provenance, 118,048-byte payload.
 - SHA-256:
-  `d771d827ee6f16573c2f8215d7bd1f08e25b0afeb5d2cac0b6383470b14b2062`.
+  `1471af565e989c96fdd8615bfbdab9ef2785b890ac07fef0acc1cd26892e17f7`.
 - Payload SHA-256 is validated by the shared `.csgravc` loader.
 - The package payload equals the source rows for degrees 2 through 120 exactly.
 
 ```sh
 python3 scripts/ingest_gmm3.py
-cargo run --release --features native --bin gmm3_bake -- \
+cargo run --release --features native --bin shadr_gravity_bake -- \
   assets/large_files/gravity/raw/gmm3/gmm3_120_sha.tab \
-  assets/large_files/gravity/gmm3_cs120_v1.csgravc 120
+  assets/large_files/gravity/gmm3_cs120_v1.csgravc gmm3 120
 ```
 
 The model reference radius is the gravity field's `3,396 km`, not the
@@ -64,6 +68,8 @@ authority.
 - The shared synthesizer already has degree-two/J2 and independent SciPy
   gradient tests; this package exercises its data path without introducing a
   new gravity implementation.
+- The package is static: the source's seasonal C20/C30/C40/C50 variations are
+  not stored.
 
 No physics baseline was regenerated. No runtime system loads this package yet.
 
@@ -71,8 +77,8 @@ No physics baseline was regenerated. No runtime system loads this package yet.
 
 `MeasuredGravityHarmonics` currently loads only the Earth package, and
 `ForceModelTier::EarthHarmonics` is Earth-specific. Mars harmonics will be wired
-when a Mars flight or propagation mode exists; until then this package is a
-reviewed data asset, not a hidden runtime input.
+when a Mars flight or propagation mode and a reviewed frame conversion exist;
+until then this package is a reviewed data asset, not a hidden runtime input.
 
 ## Rollback
 

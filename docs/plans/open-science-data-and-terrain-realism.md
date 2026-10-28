@@ -288,20 +288,23 @@ starfield now uses the 9,110-star Yale Bright Star Catalogue with an
 IAU-aligned galactic band. Earth gravity harmonics are implemented as an opt-in
 EGM2008 degree-360 force-model tier. The Moon albedo is upgraded to an
 8192x4096 LROC color mosaic, and the Earth planet albedo now uses the reviewed
-8192x4096 Blue Marble overview. A GMM-3 degree-120 Mars gravity package is
-baked and validated as data readiness for future Mars flight. GRGM (Moon),
-measured solar irradiance, and further planetary imagery remain open.
+8192x4096 Blue Marble overview. GMM-3 (Mars, degree 120) and
+GRGM660PRIM (Moon, degree 660) gravity packages are baked and validated as data
+readiness for future planetary flight. Measured solar irradiance and further
+planetary imagery remain open.
 See `docs/datasets/moon_lola_ldem_128_v3.md`,
 `docs/datasets/mars_mola_megr_64_v2.md`, `docs/datasets/yale_bsc5_v1.md`,
 `docs/datasets/earth_gravity_egm2008_v1.md`, `docs/datasets/mars_gmm3_v1.md`,
-`docs/datasets/moon_albedo_v1.md`, and `docs/datasets/earth_albedo_v1.md`.
+`docs/datasets/moon_grgm660_v1.md`, `docs/datasets/moon_albedo_v1.md`, and
+`docs/datasets/earth_albedo_v1.md`.
 
 - Lunar albedo is upgraded to the 8192 LROC mosaic and the Earth planet albedo
   to the reviewed 8192 Blue Marble overview; higher-resolution Martian imagery
   and other body textures remain future work.
 - EGM2008 Earth harmonics are implemented as the opt-in `earth-harmonics`
-  tier; GMM-3 (Mars) is baked as a validated data package. GRGM (Moon) and a
-  Mars/Moon runtime consumer remain future work.
+  tier; GMM-3 (Mars) and GRGM660PRIM (Moon) are baked as validated data
+  packages. Mars/Moon runtime consumers and their non-IAU frame conversions
+  remain future work.
 - TSIS-1 solar irradiance; a fainter Gaia DR3 subset remains optional.
 - Not part of the first execution.
 

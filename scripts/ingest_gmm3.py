@@ -43,8 +43,8 @@ def main() -> None:
     print(f"source {SOURCE_URL}")
     print(f"sha256 {digest}  {len(data)} bytes")
     print(
-        "bake: cargo run --release --features native --bin gmm3_bake -- "
-        f"{DESTINATION} assets/large_files/gravity/gmm3_cs120_v1.csgravc 120"
+        "bake: cargo run --release --features native --bin shadr_gravity_bake -- "
+        f"{DESTINATION} assets/large_files/gravity/gmm3_cs120_v1.csgravc gmm3 120"
     )
 
 
