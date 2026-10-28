@@ -122,18 +122,18 @@ grids. Package metadata and payload checksums are validated at startup.
 | Papua | 3601x4293 | 46,378,559 | `dc9290bebe82bcb80a3737e2bf0ffa0f4c905d6613efb312dba86e22b0cddc9e` | none (no published downsampled tile) |
 | KSC | 1441x1256 | 5,431,011 | `d92dc1d0abf0a8f7311eb1dbb69d70cda02fda4afaa9bdc81b88082a524e58a3` | Meta/WRI |
 | Starbase | 901x897 | 2,425,916 | `fdfa7dca1adecd186b1272eee947cac58c0fd210b9b645f9350859352ce3d680` | Meta/WRI |
-| Vandenberg | 1081x899 | 2,916,744 | `3901fb36f56ff99c76676df807c7b0d35f3fbf13ab681f904eb1d7f47e7f07bb` | none (tile not provisioned) |
+| Vandenberg | 1081x899 | 2,916,782 | `514a98559aeefe6a222ec0d3b6f4c269c8ed0a0a7ef8b646edf334fe116b3952` | Meta/WRI |
 | Wallops | 1261x900 | 3,406,023 | `f9416f5cd780e87f3d83203a2b915a783c2b548b36c89b23e10fedf073978f21` | Meta/WRI |
 | Kourou | 1801x1253 | 6,771,245 | `4d053a517e94f84680a7f42c2a1c81c6af9cf340fb612cfc6bf6adce61b7b665` | none (tile not provisioned) |
 | Baikonur | 1801x1261 | 6,814,505 | `305756b146334d611a9819cb82a5de0a6ecc70b563693fa4dbc5ad026f825129` | Meta/WRI |
 | Mahia | 1081x900 | 2,919,987 | `fdd5eeb4f53d9e5ca0d813279e71b0dcac11f41cbb2542a52b5782a22f688ac7` | none (tile not provisioned) |
 
-KSC, Starbase, Wallops, and Baikonur carry measured Meta/WRI canopy height.
-Papua has no published downsampled tile. Vandenberg, Kourou, and Mahia have
-published Meta/WRI tiles, but their 0.25-1.5 GB source tiles were not provisioned
-in the current environment; their canopy channel is zero and the reviewed
-species profile remains the fallback. Re-running the offline ingest for those
-regions upgrades them without changing the package format or runtime code.
+KSC, Starbase, Vandenberg, Wallops, and Baikonur carry measured Meta/WRI canopy height.
+Papua has no published downsampled tile. Kourou and Mahia have published
+Meta/WRI tiles, but their 1.5 GB and 0.2 GB source tiles were not provisioned in
+the current environment; their canopy channel is zero and the reviewed species
+profile remains the fallback. Re-running the offline ingest for those regions
+upgrades them without changing the package format or runtime code.
 
 The registry declares each package once for the `Water` layer and once for the
 `Canopy` layer because the same file carries all three measured fields.

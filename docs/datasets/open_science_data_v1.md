@@ -82,7 +82,7 @@ checksum but are not required at runtime.
 | `earth_water_jrc_starbase` | Water | 97.30..97.05W, 25.70..25.95N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
 | `earth_canopy_hansen_starbase` | Canopy | 97.30..97.05W, 25.70..25.95N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_vandenberg` | Water | 120.75..120.45W, 34.42..34.67N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
-| `earth_canopy_hansen_vandenberg` | Canopy | 120.75..120.45W, 34.42..34.67N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI tile pending) | `surface_fields_bake` |
+| `earth_canopy_hansen_vandenberg` | Canopy | 120.75..120.45W, 34.42..34.67N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_wallops` | Water | 75.70..75.35W, 37.61..37.86N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
 | `earth_canopy_hansen_wallops` | Canopy | 75.70..75.35W, 37.61..37.86N | 28-30 m sources, 1 arc-second package | CC BY 4.0 (Hansen; Meta/WRI) | `surface_fields_bake` |
 | `earth_water_jrc_kourou` | Water | 52.95..52.45W, 4.97..5.31N | 30 m source, 1 arc-second package | CC BY 4.0 (JRC) | `surface_fields_bake` |
