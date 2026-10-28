@@ -39,7 +39,7 @@ pub fn climate_at_position(
 /// seasonal presentation does not jump at midnight on the first.
 pub fn simulation_month_fraction(time: &SimulationTime) -> Option<f64> {
     let epoch = time.scientific_epoch().ok()?;
-    Some(month_fraction_from_julian_date(epoch.utc_julian_date())?)
+    month_fraction_from_julian_date(epoch.utc_julian_date())
 }
 
 fn month_fraction_from_julian_date(julian_date: f64) -> Option<f64> {

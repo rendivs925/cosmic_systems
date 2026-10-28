@@ -181,7 +181,9 @@ impl SoilPackage {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
             || components
-                .chunks_exact(COMPONENTS)
+                .as_chunks::<COMPONENTS>()
+                .0
+                .iter()
                 .any(|sample| sample.iter().any(|value| *value > 100) || sample_sum(sample) != 100)
         {
             return Err(SoilError::InvalidFormat("invalid soil package".into()));

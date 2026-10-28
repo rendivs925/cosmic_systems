@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const CHANNELS: usize = 6;
+const SAMPLE_BYTES: usize = 4 * CHANNELS;
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -81,7 +82,7 @@ fn main() {
 
     let mut cells = Vec::with_capacity(expected_bytes / 4 * 2);
     let mut ranges = [[f32::INFINITY, f32::NEG_INFINITY]; CHANNELS];
-    for chunk in raw.chunks_exact(4 * CHANNELS) {
+    for chunk in raw.as_chunks::<SAMPLE_BYTES>().0 {
         let mut values = [0.0f32; CHANNELS];
         for (channel, value) in values.iter_mut().enumerate() {
             let offset = channel * 4;

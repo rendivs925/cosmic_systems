@@ -167,7 +167,8 @@ pub fn spawn_rocket_sky_dome(
 /// from the single domain source for the bound body.
 #[expect(
     clippy::type_complexity,
-    reason = "The query selects the active camera projection and the disjoint sky dome."
+    clippy::too_many_arguments,
+    reason = "The query selects the active camera projection and the disjoint sky dome; the remaining parameters are independent ECS resources."
 )]
 pub fn update_rocket_sky(
     render_origin: Res<RenderOrigin>,

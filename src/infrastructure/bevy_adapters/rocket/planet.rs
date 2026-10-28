@@ -574,7 +574,8 @@ fn rocket_sun_disc_radius_m(planet_sun_distance_m: f64) -> f64 {
 /// regenerated, and nothing here touches simulation state.
 #[expect(
     clippy::type_complexity,
-    reason = "The query selects the active camera projection and the disjoint cloud dome."
+    clippy::too_many_arguments,
+    reason = "The query selects the active camera projection and the disjoint cloud dome; the remaining parameters are independent ECS resources."
 )]
 pub fn update_rocket_clouds(
     render_origin: Res<RenderOrigin>,

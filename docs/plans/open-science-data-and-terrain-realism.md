@@ -1,9 +1,11 @@
 # Open Science Data and Terrain Realism Foundation
 
-Status: approved plan; Phases 0-2 implemented; Phase 3 regional packages for
-Papua, interim KSC, Starbase, Vandenberg, Wallops, Kourou, Baikonur, and Mahia,
-multi-root composition, coverage telemetry, acceptance metrics, launch-site
-selection, and KSC 3DEP/NAVD88-to-WGS84 normalization validated.
+Status: Phases 0-7 implemented for the locked data layers, except measured canopy
+height (Phase 5), which remains open pending an accessible source. TSIS-1 solar
+irradiance is explicitly deferred. Regional DEM packages for Papua, interim KSC,
+Starbase, Vandenberg, Wallops, Kourou, Baikonur, and Mahia, multi-root
+composition, coverage telemetry, acceptance metrics, launch-site selection, and
+KSC 3DEP/NAVD88-to-WGS84 normalization validated.
 
 Date: 2026-10-20.
 
