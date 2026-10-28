@@ -219,7 +219,9 @@ validated on `main`.
   uses the reviewed `mars_iau2000_v1.tpc` orientation override after
   `pck00011.tpc` so the `IAU2000_MARS` terrain source remains aligned with the
   body-fixed frame. An unavailable or invalid local CSDEM likewise leaves Mars
-  non-landable.
+  non-landable. A validated GMM-3 degree-120 gravity package is available as
+  data readiness in `docs/datasets/mars_gmm3_v1.md`; no current force-model tier
+  selects it because Mars flight is not implemented.
 
 ### Streaming and Telemetry
 

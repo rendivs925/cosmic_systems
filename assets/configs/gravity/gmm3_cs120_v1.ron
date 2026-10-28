@@ -1,0 +1,18 @@
+(
+    dataset: "GMM-3 Mars static gravity field",
+    source_url: "https://pds-geosciences.wustl.edu/mro/mro-m-rss-5-sdp-v1/mrors_1xxx/data/shadr/gmm3_120_sha.tab",
+    source_product: "MRO-M-RSS-5-SDP-V1.0 GMM3_120_SHA.TAB, release 2016-01-21",
+    source_sha256: "eb4913b1afb6682406e6a9dad5be7918a162fa8462473c9a2e7aae258d4c2c9c",
+    package: "assets/large_files/gravity/gmm3_cs120_v1.csgravc",
+    package_sha256: "d771d827ee6f16573c2f8215d7bd1f08e25b0afeb5d2cac0b6383470b14b2062",
+    body: "Mars",
+    degree: 120,
+    coefficient_pairs: 7378,
+    reference_radius_m: 3396000.0,
+    normalization: "fully-normalized-4pi",
+    tide_system: "not specified by the PDS label; static field as published",
+    runtime_status: "data only; no Mars force-model tier or loader selects it yet",
+    license: "Public domain (NASA)",
+    attribution: "Genova et al. (2016), Icarus 272, 228-235; NASA/GSFC",
+    converter: "gmm3_bake",
+)

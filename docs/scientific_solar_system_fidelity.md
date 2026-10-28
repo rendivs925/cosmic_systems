@@ -99,7 +99,9 @@ it does not label deterministic agreement as scientific validation.
 
 Known approximations: no provisioned EOP data, no full-degree gravity field by
 default (EGM2008 degree 360 is opt-in and tide-free), no tides, SRP,
-atmospheric climatology, live tracking, or online runtime data.
+atmospheric climatology, live tracking, or online runtime data. A reviewed
+GMM-3 degree-120 Mars package exists under `assets/large_files/gravity/`, but no
+runtime tier loads it until a Mars flight or propagation mode exists.
 Kernel-backed accuracy is bounded by the stated manifest coverage and each
 recorded external case's published residual budget.
 

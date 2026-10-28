@@ -151,3 +151,8 @@ required-features = ["native"]
 name = "gravity_harmonics_bake"
 path = "src/bin/gravity_harmonics_bake.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "gmm3_bake"
+path = "src/bin/gmm3_bake.rs"
+required-features = ["native"]
