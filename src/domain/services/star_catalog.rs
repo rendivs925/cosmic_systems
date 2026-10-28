@@ -117,7 +117,9 @@ impl StarCatalog {
         }
 
         let mut stars = Vec::with_capacity(count);
-        for record in bytes[HEADER_BYTES..].chunks_exact(RECORD_BYTES) {
+        let (records, remainder) = bytes[HEADER_BYTES..].as_chunks::<RECORD_BYTES>();
+        debug_assert!(remainder.is_empty());
+        for record in records {
             let f32_at =
                 |offset: usize| f32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
             let star = StarRecord {
