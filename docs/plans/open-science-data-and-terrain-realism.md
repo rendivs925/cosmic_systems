@@ -27,8 +27,8 @@ the physical cloud overhaul. Decisions below are locked.
 - Hydrology: DEM-derived rivers and lakes plus JRC Global Surface Water. Do not
   ingest HydroSHEDS unless its license is confirmed permissive.
 - Moon/Mars higher-resolution data, gravity harmonics, and the star catalog
-  were deferred to Phase 7 and are implemented there; measured solar irradiance
-  remains open.
+  were deferred to Phase 7 and are implemented there. Measured solar irradiance
+  is explicitly deferred; see `docs/datasets/solar_irradiance_tsis1_deferred.md`.
 
 ## Target architecture
 
@@ -280,7 +280,8 @@ future work. See `docs/datasets/earth_climate_v1.md`.
 
 ## Phase 7 - Later: Moon/Mars, gravity, astronomy
 
-Status: in progress. The Moon height authority is upgraded to the 128
+Status: complete for the named data upgrades; measured solar irradiance is
+explicitly deferred. The Moon height authority is upgraded to the 128
 pixels-per-degree LOLA LDEM_128 product (236.9 m samples), baked at a
 4096-sample cube face. The Mars authority is upgraded to the stitched 64
 pixels-per-degree MOLA MEGR map (926 m samples), also baked at 4096. The
@@ -290,13 +291,14 @@ EGM2008 degree-360 force-model tier. The Moon albedo is upgraded to an
 8192x4096 LROC color mosaic, and the Earth planet albedo now uses the reviewed
 8192x4096 Blue Marble overview. GMM-3 (Mars, degree 120) and
 GRGM660PRIM (Moon, degree 660) gravity packages are baked and validated as data
-readiness for future planetary flight. Measured solar irradiance and further
-planetary imagery remain open.
+readiness for future planetary flight. Measured solar irradiance is explicitly
+deferred with quantified rationale; further planetary imagery remains open.
 See `docs/datasets/moon_lola_ldem_128_v3.md`,
 `docs/datasets/mars_mola_megr_64_v2.md`, `docs/datasets/yale_bsc5_v1.md`,
 `docs/datasets/earth_gravity_egm2008_v1.md`, `docs/datasets/mars_gmm3_v1.md`,
-`docs/datasets/moon_grgm660_v1.md`, `docs/datasets/moon_albedo_v1.md`, and
-`docs/datasets/earth_albedo_v1.md`.
+`docs/datasets/moon_grgm660_v1.md`, `docs/datasets/moon_albedo_v1.md`,
+`docs/datasets/earth_albedo_v1.md`, and
+`docs/datasets/solar_irradiance_tsis1_deferred.md`.
 
 - Lunar albedo is upgraded to the 8192 LROC mosaic and the Earth planet albedo
   to the reviewed 8192 Blue Marble overview; higher-resolution Martian imagery
@@ -305,7 +307,10 @@ See `docs/datasets/moon_lola_ldem_128_v3.md`,
   tier; GMM-3 (Mars) and GRGM660PRIM (Moon) are baked as validated data
   packages. Mars/Moon runtime consumers and their non-IAU frame conversions
   remain future work.
-- TSIS-1 solar irradiance; a fainter Gaia DR3 subset remains optional.
+- TSIS-1 solar irradiance is deferred: the measured record starts after the
+  default 2000 epoch and varies by only 0.25% peak to peak, below one 8-bit
+  render step. See `docs/datasets/solar_irradiance_tsis1_deferred.md`. A fainter
+  Gaia DR3 subset remains optional.
 - Not part of the first execution.
 
 ## Data sources for the first execution

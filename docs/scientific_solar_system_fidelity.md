@@ -104,7 +104,9 @@ GMM-3 (Mars, degree 120) and GRGM660PRIM (Moon, degree 660) packages exist under
 `assets/large_files/gravity/`, but no runtime tier loads them: Mars flight does
 not exist, and their source frames are the Konopliv et al. (2006) Mars frame and
 the DE421 lunar principal-axes frame, not the IAU/pck frames used by the
-simulator.
+simulator. Solar irradiance remains the nominal 1361 W/m2 constant: the TSIS-1
+record postdates the default 2000 epoch and varies by only 0.25% peak to peak,
+so it is deferred (`docs/datasets/solar_irradiance_tsis1_deferred.md`).
 Kernel-backed accuracy is bounded by the stated manifest coverage and each
 recorded external case's published residual budget.
 

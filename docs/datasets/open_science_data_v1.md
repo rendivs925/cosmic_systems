@@ -227,6 +227,11 @@ same provenance and checksum gate before use.
 | USGS 3DEP | Dem | US regional bare earth | 1 m | USGS, public domain | 3 |
 | Copernicus GLO-30 | Dem | visual and validation only | 30 m | Copernicus DEM, attribution required | 3 |
 | ERA5 reanalysis | Climate | future measured atmosphere if CDS access is provisioned | 0.25 degree | Copernicus CDS, attribution required | later |
+| TSIS-1 TSI | Solar irradiance | presentation-only sunlight scale; no physics consumer | daily | NASA/LASP, attribution | deferred |
+
+TSIS-1 is deferred, not merely unprovisioned: see
+`docs/datasets/solar_irradiance_tsis1_deferred.md` for the measured variability,
+the epoch-coverage mismatch, and the conditions that would reopen it.
 
 Regional DEM priority: KSC/Florida, Papua, Starbase/Boca Chica, Vandenberg,
 Wallops, Kourou, Baikonur, Mahia.
