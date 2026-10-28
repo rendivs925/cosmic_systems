@@ -50,6 +50,9 @@ use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisPlugin, EphemerisSet,
 };
+use crate::infrastructure::bevy_adapters::gravity_harmonics::{
+    load_default_gravity_harmonics, MeasuredGravityHarmonics,
+};
 use crate::infrastructure::bevy_adapters::input_systems::{
     handle_mouse_planet_selection, handle_planet_selection, handle_solar_system_input,
 };
@@ -650,6 +653,8 @@ impl Plugin for RocketModePlugin {
         app.init_resource::<RocketBoundPlanet>();
         // Optional measured climatology for presentation-only sky and clouds.
         app.init_resource::<MeasuredClimate>();
+        // Optional measured gravity field; only the opt-in harmonics tier reads it.
+        app.init_resource::<MeasuredGravityHarmonics>();
         app.add_plugins(bevy::pbr::MaterialPlugin::<
             crate::infrastructure::bevy_adapters::rendering::materials::CloudMaterial,
         >::default());
@@ -680,7 +685,10 @@ impl Plugin for RocketModePlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(
             Startup,
-            load_default_climate.after(share_elevation_tile_source),
+            (
+                load_default_climate.after(share_elevation_tile_source),
+                load_default_gravity_harmonics.after(share_elevation_tile_source),
+            ),
         );
 
         // Terrain rendering plugin (spawns meshes from streaming patches).

@@ -26,8 +26,9 @@ the physical cloud overhaul. Decisions below are locked.
   scatter phase.
 - Hydrology: DEM-derived rivers and lakes plus JRC Global Surface Water. Do not
   ingest HydroSHEDS unless its license is confirmed permissive.
-- Moon/Mars higher-resolution data, gravity harmonics, and star catalog are a
-  later phase.
+- Moon/Mars higher-resolution data, gravity harmonics, and the star catalog
+  were deferred to Phase 7 and are implemented there; measured solar irradiance
+  remains open.
 
 ## Target architecture
 
@@ -284,12 +285,15 @@ pixels-per-degree LOLA LDEM_128 product (236.9 m samples), baked at a
 4096-sample cube face. The Mars authority is upgraded to the stitched 64
 pixels-per-degree MOLA MEGR map (926 m samples), also baked at 4096. The
 starfield now uses the 9,110-star Yale Bright Star Catalogue with an
-IAU-aligned galactic band. Gravity harmonics and measured solar irradiance
-remain open. See `docs/datasets/moon_lola_ldem_128_v3.md`,
-`docs/datasets/mars_mola_megr_64_v2.md`, and `docs/datasets/yale_bsc5_v1.md`.
+IAU-aligned galactic band. Earth gravity harmonics are implemented as an opt-in
+EGM2008 degree-360 force-model tier; measured solar irradiance remains open.
+See `docs/datasets/moon_lola_ldem_128_v3.md`,
+`docs/datasets/mars_mola_megr_64_v2.md`, `docs/datasets/yale_bsc5_v1.md`, and
+`docs/datasets/earth_gravity_egm2008_v1.md`.
 
 - Higher-resolution LOLA/MOLA and lunar/Martian imagery.
-- EGM2008 harmonics, GMM-3 (Mars), GRGM (Moon).
+- EGM2008 Earth harmonics are implemented as the opt-in `earth-harmonics`
+  tier; GMM-3 (Mars) and GRGM (Moon) remain future work.
 - TSIS-1 solar irradiance; a fainter Gaia DR3 subset remains optional.
 - Not part of the first execution.
 

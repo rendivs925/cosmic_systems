@@ -43,6 +43,9 @@ impl EarthJ2GravityModel {
 pub enum ForceModelTerm {
     BoundBodyPointMass,
     EarthJ2,
+    /// Measured fully normalized Earth coefficients from the loaded
+    /// `.csgravc` package; opt-in and never part of the default tier.
+    EarthSphericalHarmonics,
     LunarThirdBody,
     SolarThirdBody,
 }
@@ -56,17 +59,48 @@ pub enum ForceModelTerm {
 pub enum ForceModelTier {
     TwoBody,
     EarthJ2,
+    /// Point mass plus the measured Earth spherical-harmonic field. Requires
+    /// an installed package and is deliberately not the default.
+    EarthHarmonics,
     EarthMoonSun,
     #[default]
     PlanetSun,
 }
 
 impl ForceModelTier {
+    /// Stable CLI and telemetry key.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::TwoBody => "two-body",
+            Self::EarthJ2 => "earth-j2",
+            Self::EarthHarmonics => "earth-harmonics",
+            Self::EarthMoonSun => "earth-moon-sun",
+            Self::PlanetSun => "planet-sun",
+        }
+    }
+
+    /// Parse a stable tier key; unknown keys are rejected rather than silently
+    /// selecting a different force model.
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "two-body" => Some(Self::TwoBody),
+            "earth-j2" => Some(Self::EarthJ2),
+            "earth-harmonics" => Some(Self::EarthHarmonics),
+            "earth-moon-sun" => Some(Self::EarthMoonSun),
+            "planet-sun" => Some(Self::PlanetSun),
+            _ => None,
+        }
+    }
+
     /// Terms selected by this tier, in stable reporting order.
     pub const fn active_terms(self) -> &'static [ForceModelTerm] {
         match self {
             Self::TwoBody => &[ForceModelTerm::BoundBodyPointMass],
             Self::EarthJ2 => &[ForceModelTerm::BoundBodyPointMass, ForceModelTerm::EarthJ2],
+            Self::EarthHarmonics => &[
+                ForceModelTerm::BoundBodyPointMass,
+                ForceModelTerm::EarthSphericalHarmonics,
+            ],
             Self::EarthMoonSun => &[
                 ForceModelTerm::BoundBodyPointMass,
                 ForceModelTerm::LunarThirdBody,
@@ -256,6 +290,23 @@ mod tests {
 
     const EARTH_MASS_KG: f64 = 5.97237e24;
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+    #[test]
+    fn force_model_keys_round_trip() {
+        for tier in [
+            ForceModelTier::TwoBody,
+            ForceModelTier::EarthJ2,
+            ForceModelTier::EarthHarmonics,
+            ForceModelTier::EarthMoonSun,
+            ForceModelTier::PlanetSun,
+        ] {
+            assert_eq!(ForceModelTier::from_key(tier.key()), Some(tier));
+        }
+        assert_eq!(ForceModelTier::from_key("unknown"), None);
+        assert!(ForceModelTier::EarthHarmonics
+            .active_terms()
+            .contains(&ForceModelTerm::EarthSphericalHarmonics));
+    }
 
     #[test]
     fn earth_surface_acceleration_is_about_9_8() {

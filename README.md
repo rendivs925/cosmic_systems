@@ -51,6 +51,9 @@ cargo run -- rocket --vehicle falcon9
 
 # Launch from a curated regional site
 cargo run -- rocket --site ksc
+
+# Select an opt-in gravity force model
+cargo run -- rocket --site ksc --force-model earth-harmonics
 ```
 
 | Command | Description |
@@ -59,8 +62,14 @@ cargo run -- rocket --site ksc
 | `cargo run -- craft` | Starts craft mode in the shared solar-system world. |
 | `cargo run -- rocket` | Starts rocket-flight mode. |
 | `cargo run -- rocket --site ksc` | Launches from a curated regional site. |
+| `cargo run -- rocket --force-model earth-harmonics` | Uses the opt-in EGM2008 degree-360 Earth gravity field. |
 
-`--vehicle <key>` and `--site <id>` are available only in rocket mode. Site IDs
+`--vehicle <key>`, `--site <id>`, and `--force-model <tier>` are used only in
+rocket mode. Force-model keys are `planet-sun` (default), `two-body`,
+`earth-j2`, `earth-harmonics`, and `earth-moon-sun`; the harmonics tier requires
+the local EGM2008 package described in
+[`docs/datasets/earth_gravity_egm2008_v1.md`](docs/datasets/earth_gravity_egm2008_v1.md).
+Site IDs
 are `papua`, `ksc` (LC-39A), `starbase`, `vandenberg`, `wallops`, `kourou`,
 `baikonur`, and `mahia`; `lc39a` and the full artifact IDs are also accepted.
 `ksc-reference` selects the legacy KSC point used by physics baselines. Unknown keys are reported

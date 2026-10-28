@@ -146,3 +146,8 @@ required-features = ["native"]
 name = "climate_bake"
 path = "src/bin/climate_bake.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "gravity_harmonics_bake"
+path = "src/bin/gravity_harmonics_bake.rs"
+required-features = ["native"]

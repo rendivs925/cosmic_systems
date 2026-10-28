@@ -12,6 +12,8 @@ use cosmic_systems_wasm::application::plugins::{
 };
 use cosmic_systems_wasm::application::rocket_config::{RocketCatalog, VehicleSelection};
 use cosmic_systems_wasm::application::solar_system_startup::SolarCameraEnabled;
+use cosmic_systems_wasm::domain::services::gravity::ForceModelConfig;
+use cosmic_systems_wasm::infrastructure::bevy_adapters::rocket::gravity_orbit::ActiveForceModel;
 
 /// Reject an unknown requested vehicle before creating the window or renderer.
 fn validate_vehicle_selection(selection: &VehicleSelection) {
@@ -59,6 +61,7 @@ fn main() {
         None
     };
     let launch_site = options.site.unwrap_or_default();
+    let force_model = options.force_model;
 
     if let Some(selection) = &vehicle_selection {
         validate_vehicle_selection(selection);
@@ -122,6 +125,9 @@ fn main() {
         Mode::Rocket => {
             app.insert_resource(vehicle_selection.expect("rocket mode has a vehicle selection"));
             app.insert_resource(launch_site);
+            if let Some(tier) = force_model {
+                app.insert_resource(ActiveForceModel(ForceModelConfig::new(tier)));
+            }
             // Rocket mode owns its camera, HUD, and input context.
             app.add_plugins((SharedSimulationPlugin, RocketModePlugin));
         }

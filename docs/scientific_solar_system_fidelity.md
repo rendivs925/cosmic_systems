@@ -16,6 +16,7 @@ manifest. Its current identifier is `naif-de440-egm2008-primary-v1`.
 | Mars orientation override | NAIF `mars_iau2000_v1.tpc` | ICRF/J2000 to `IAU2000_MARS`, TDB | Manifest range above; used only for Mars MOLA compatibility |
 | GM | NAIF `gm_de440.tpc` | m3/s2 | No epoch range declared |
 | Earth J2 | `egm2008_earth_j2.ron` EGM2008 extract | Planet-centered inertial force calculation | Static model parameters |
+| Earth harmonics | `egm2008_cs360_v1.csgravc` (opt-in local package) | IAU body-fixed coefficients through the orientation snapshot | Static degree-360/tide-free parameters; not part of the kernel manifest |
 | Leap seconds | NAIF `naif0012.tls` | UTC conversion source | JD 2441317.5 through 2457754.5 |
 | Earth orientation | No provisioned dataset | UT1 and polar motion unavailable | No reference-grade result |
 
@@ -54,12 +55,16 @@ evaluated by the shared gravity authority, not from render transforms.
 | --- | --- | --- |
 | `TwoBody` | Bound-body point mass | Short, central-body orbital analyses; no J2 or third-body effects |
 | `EarthJ2` | Bound-body point mass, Earth J2 | Earth orbital precession studies; no lunar or solar perturbation |
+| `EarthHarmonics` | Bound-body point mass, measured Earth spherical harmonics | Opt-in degree-360 field; requires the loaded package; no lunar or solar perturbation |
 | `EarthMoonSun` | Bound-body point mass, lunar and solar differential third body | Earth-to-lunar/solar-perturbed coast; no higher harmonics, tides, SRP, or drag climatology |
 | `PlanetSun` | Bound-body point mass, solar differential third body | Existing powered-flight compatibility default; not a full Earth-orbit model |
 
 Earth J2 uses the EGM2008 reference radius and normalized coefficient supplied
-by the manifest. Lunar and solar terms are same-epoch differential accelerations
-relative to the accelerating bound-planet origin.
+by the manifest. `EarthHarmonics` reads the optional degree-360 EGM2008 package,
+evaluates fully normalized coefficients in IAU body-fixed axes, and rotates the
+result through the shared orientation snapshot; the runtime keeps the DE440 μ
+rather than the source-file GM. Lunar and solar terms are same-epoch
+differential accelerations relative to the accelerating bound-planet origin.
 
 ## Long-Arc Numerical Budgets
 
@@ -92,8 +97,9 @@ and runs the external-reference test independently of replay tests. If
 provisioning is unavailable, it emits an `UNVERIFIED` warning and job summary;
 it does not label deterministic agreement as scientific validation.
 
-Known approximations: no provisioned EOP data, no full-degree gravity field,
-no tides, SRP, atmospheric climatology, live tracking, or online runtime data.
+Known approximations: no provisioned EOP data, no full-degree gravity field by
+default (EGM2008 degree 360 is opt-in and tide-free), no tides, SRP,
+atmospheric climatology, live tracking, or online runtime data.
 Kernel-backed accuracy is bounded by the stated manifest coverage and each
 recorded external case's published residual budget.
 

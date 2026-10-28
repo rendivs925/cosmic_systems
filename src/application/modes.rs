@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FormatterResult};
 
+use crate::domain::services::gravity::ForceModelTier;
 use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 
 /// Application run modes selectable from the CLI.
@@ -20,6 +21,8 @@ pub struct LaunchOptions {
     pub vehicle: Option<String>,
     /// `--site <id>` selection; only meaningful in rocket mode.
     pub site: Option<PredefinedLaunchSite>,
+    /// `--force-model <tier>` selection; only meaningful in rocket mode.
+    pub force_model: Option<ForceModelTier>,
 }
 
 /// Invalid command-line input. Launch selection is explicit; unknown arguments
@@ -28,7 +31,9 @@ pub struct LaunchOptions {
 pub enum LaunchOptionError {
     MissingVehicleValue,
     MissingSiteValue,
+    MissingForceModelValue,
     UnknownSite(String),
+    UnknownForceModel(String),
     UnknownArgument(String),
 }
 
@@ -37,7 +42,11 @@ impl Display for LaunchOptionError {
         match self {
             Self::MissingVehicleValue => formatter.write_str("--vehicle requires a vehicle key"),
             Self::MissingSiteValue => formatter.write_str("--site requires a launch-site id"),
+            Self::MissingForceModelValue => {
+                formatter.write_str("--force-model requires a force-model key")
+            }
             Self::UnknownSite(site) => write!(formatter, "unknown launch site '{site}'"),
+            Self::UnknownForceModel(tier) => write!(formatter, "unknown force model '{tier}'"),
             Self::UnknownArgument(argument) => {
                 write!(formatter, "unknown launch argument '{argument}'")
             }
@@ -81,9 +90,11 @@ where
         mode: Mode::Solar,
         vehicle: None,
         site: None,
+        force_model: None,
     };
     let mut expect_vehicle_value = false;
     let mut expect_site_value = false;
+    let mut expect_force_model_value = false;
     for arg in args {
         if expect_vehicle_value {
             options.vehicle = Some(arg);
@@ -98,11 +109,20 @@ where
             expect_site_value = false;
             continue;
         }
+        if expect_force_model_value {
+            let Some(tier) = ForceModelTier::from_key(&arg) else {
+                return Err(LaunchOptionError::UnknownForceModel(arg));
+            };
+            options.force_model = Some(tier);
+            expect_force_model_value = false;
+            continue;
+        }
         match arg.as_str() {
             "rocket" => options.mode = Mode::Rocket,
             "craft" => options.mode = Mode::Craft,
             "--vehicle" => expect_vehicle_value = true,
             "--site" => expect_site_value = true,
+            "--force-model" => expect_force_model_value = true,
             _ => return Err(LaunchOptionError::UnknownArgument(arg)),
         }
     }
@@ -112,12 +132,16 @@ where
     if expect_site_value {
         return Err(LaunchOptionError::MissingSiteValue);
     }
+    if expect_force_model_value {
+        return Err(LaunchOptionError::MissingForceModelValue);
+    }
     Ok(options)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{parse_launch_options, LaunchOptionError, LaunchOptions, Mode};
+    use crate::domain::services::gravity::ForceModelTier;
     use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 
     fn parse(args: &[&str]) -> Mode {
@@ -218,6 +242,35 @@ mod tests {
         assert_eq!(
             parse_launch_options(["rocket".to_string(), "--vehicle".to_string()]),
             Err(LaunchOptionError::MissingVehicleValue)
+        );
+    }
+
+    #[test]
+    fn parses_explicit_force_model_selection() {
+        assert_eq!(
+            options(&["rocket", "--force-model", "earth-harmonics"]).force_model,
+            Some(ForceModelTier::EarthHarmonics)
+        );
+        assert_eq!(options(&["rocket"]).force_model, None);
+        assert_eq!(
+            ForceModelTier::from_key("planet-sun"),
+            Some(ForceModelTier::PlanetSun)
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_or_dangling_force_model_flags() {
+        assert_eq!(
+            parse_launch_options(["rocket".to_string(), "--force-model".to_string()]),
+            Err(LaunchOptionError::MissingForceModelValue)
+        );
+        assert_eq!(
+            parse_launch_options([
+                "rocket".to_string(),
+                "--force-model".to_string(),
+                "warp".to_string()
+            ]),
+            Err(LaunchOptionError::UnknownForceModel("warp".to_string()))
         );
     }
 }

@@ -4,6 +4,7 @@ pub mod craft;
 pub mod education_systems;
 pub mod entity_components;
 pub mod ephemeris;
+pub mod gravity_harmonics;
 pub mod input_systems;
 pub mod material_components;
 pub mod material_systems;

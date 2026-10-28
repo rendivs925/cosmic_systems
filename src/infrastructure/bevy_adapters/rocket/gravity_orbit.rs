@@ -9,12 +9,17 @@ use crate::domain::services::gravity::{
     differential_gravitational_acceleration_from_mu, earth_j2_acceleration,
     gravitational_acceleration_from_mu, ForceModelConfig, ForceModelTerm,
 };
+use crate::domain::services::gravity_harmonics::{
+    spherical_harmonic_acceleration, SphericalHarmonicGravityModel,
+};
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
-    planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+    icrf_j2000_to_solar_inertial, planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+    solar_inertial_to_icrf_j2000,
 };
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::gravity_harmonics::MeasuredGravityHarmonics;
 use bevy::math::DVec3;
 use bevy::prelude::{Query, Res, Resource};
 
@@ -29,6 +34,7 @@ pub struct ActiveForceModel(pub ForceModelConfig);
 pub fn update_rocket_gravity(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     force_model: Res<ActiveForceModel>,
+    harmonics: Option<Res<MeasuredGravityHarmonics>>,
     planet_query: Query<&PlanetComponent>,
     mut rocket_query: Query<(
         &RocketPlanetBinding,
@@ -79,6 +85,25 @@ pub fn update_rocket_gravity(
             }
         }
 
+        if bound_body == NaifBodyId::EARTH
+            && force_model
+                .0
+                .active_terms()
+                .contains(&ForceModelTerm::EarthSphericalHarmonics)
+        {
+            if let (Some(orientation), Some(model)) = (
+                ephemeris_snapshot.orientation(NaifBodyId::EARTH),
+                harmonics.as_ref().and_then(|harmonics| harmonics.model()),
+            ) {
+                acceleration += earth_spherical_harmonic_acceleration(
+                    bound_mu_m3_s2,
+                    rocket.dynamics.position_m,
+                    orientation,
+                    model,
+                );
+            }
+        }
+
         // The rocket state is planet-centered inertial, so every perturbing
         // body contributes only its acceleration relative to the bound planet.
         // Adding its full barycentric acceleration would double-count the
@@ -108,6 +133,27 @@ pub fn update_rocket_gravity(
 
         gravity.value = acceleration;
     }
+}
+
+/// Evaluate measured Earth harmonics through the shared orientation snapshot.
+///
+/// EGM2008 coefficients use IAU body-fixed axes (+Z spin, +X prime meridian),
+/// so the position is rotated through the same kernel-backed orientation as the
+/// terrain and orbital-element adapters. The potential is axisymmetric only for
+/// the zonal subset; tesseral terms therefore require this full body-fixed
+/// rotation rather than just the spin axis that the J2 filter consumes.
+fn earth_spherical_harmonic_acceleration(
+    mu_m3_s2: f64,
+    position_planet_inertial_m: DVec3,
+    orientation: &crate::domain::services::body_orientation::BodyOrientation,
+    model: &SphericalHarmonicGravityModel,
+) -> DVec3 {
+    let position_icrf = solar_inertial_to_icrf_j2000(position_planet_inertial_m);
+    let position_body_fixed = orientation.inertial_to_body_fixed * position_icrf;
+    let acceleration_body_fixed =
+        spherical_harmonic_acceleration(mu_m3_s2, position_body_fixed, model);
+    let acceleration_icrf = orientation.body_fixed_to_inertial * acceleration_body_fixed;
+    icrf_j2000_to_solar_inertial(acceleration_icrf)
 }
 
 /// Compute post-integration orbital elements for telemetry and next-tick
@@ -168,9 +214,14 @@ pub fn update_orbital_elements(
 mod tests {
     use super::*;
     use crate::domain::services::ephemeris::{BodyState, TdbEpoch};
+    use std::sync::Arc;
+
     use crate::domain::services::gravity::{
         differential_gravitational_acceleration, earth_j2_acceleration, gravitational_acceleration,
         gravitational_parameter, EarthJ2GravityModel, ForceModelTier,
+    };
+    use crate::domain::services::gravity_harmonics::{
+        GravityHarmonicsMetadata, SphericalHarmonicGravityModel,
     };
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
@@ -506,5 +557,131 @@ mod tests {
             .unwrap()
             .value;
         assert_eq!(actual, expected);
+    }
+
+    fn degree_two_harmonics(j2: f64) -> SphericalHarmonicGravityModel {
+        SphericalHarmonicGravityModel::from_parts(
+            2,
+            6_378_136.3,
+            GravityHarmonicsMetadata {
+                model_id: "EGM2008".into(),
+                body: "Earth".into(),
+                source: "unit test".into(),
+                source_url: "https://example.invalid/egm2008".into(),
+                source_sha256: "0".repeat(64),
+                normalization: "fully-normalized-4pi".into(),
+                tide_system: "tide-free".into(),
+                license: "test".into(),
+                attribution: "test".into(),
+                conversion_version: 1,
+            },
+            vec![-j2 / 5.0_f64.sqrt(), 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap()
+    }
+
+    fn harmonics_test_app(
+        model: Option<SphericalHarmonicGravityModel>,
+    ) -> (App, bevy::prelude::Entity, f64, f64, DQuat) {
+        let earth = PlanetFactory::create_by_name("Earth").unwrap();
+        let radius_m = earth.radius_km as f64 * 1_000.0 + 400_000.0;
+        let orientation = crate::domain::services::body_orientation::BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::j2000(),
+            "test-orientation".to_string(),
+            DQuat::IDENTITY,
+            DVec3::Z,
+        );
+        let mut app = App::new();
+        app.insert_resource(
+            EphemerisSnapshot::from_states_orientations_and_gravitational_parameters(
+                Vec::new(),
+                vec![orientation.clone()],
+                vec![(NaifBodyId::EARTH, gravitational_parameter(earth.mass_kg))],
+            ),
+        );
+        app.insert_resource(MeasuredGravityHarmonics(model.map(Arc::new)));
+        app.insert_resource(ActiveForceModel(ForceModelConfig::new(
+            ForceModelTier::EarthHarmonics,
+        )));
+        app.world_mut().spawn(planet_component("Earth"));
+        let rocket = app
+            .world_mut()
+            .spawn((
+                RocketPlanetBinding {
+                    planet_name: CelestialBodyId::earth(),
+                },
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        DVec3::X * radius_m,
+                        DVec3::ZERO,
+                        DQuat::IDENTITY,
+                        1_000.0,
+                        DMat3::IDENTITY,
+                        DVec3::ZERO,
+                    ),
+                },
+                GravityAcceleration::default(),
+            ))
+            .id();
+        app.add_systems(Update, update_rocket_gravity);
+        (
+            app,
+            rocket,
+            radius_m,
+            gravitational_parameter(earth.mass_kg),
+            DQuat::IDENTITY,
+        )
+    }
+
+    #[test]
+    fn earth_harmonics_tier_without_a_package_uses_point_mass() {
+        let (mut app, rocket, radius_m, mu_m3_s2, _) = harmonics_test_app(None);
+        app.update();
+        let actual = app
+            .world()
+            .get::<GravityAcceleration>(rocket)
+            .unwrap()
+            .value;
+        let expected =
+            gravitational_acceleration_from_mu(mu_m3_s2, DVec3::X * radius_m, DVec3::ZERO);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn earth_harmonics_tier_rotates_the_measured_field_through_the_snapshot() {
+        let j2 = 1.082_626_173_852_222_7e-3;
+        let j2_model = EarthJ2GravityModel {
+            model_id: "EGM2008".into(),
+            reference_radius_m: 6_378_136.3,
+            j2,
+        };
+        let (mut app, rocket, radius_m, mu_m3_s2, _) =
+            harmonics_test_app(Some(degree_two_harmonics(j2)));
+        app.update();
+        let actual = app
+            .world()
+            .get::<GravityAcceleration>(rocket)
+            .unwrap()
+            .value;
+
+        let orientation = app
+            .world()
+            .resource::<EphemerisSnapshot>()
+            .orientation(NaifBodyId::EARTH)
+            .unwrap()
+            .clone();
+        let position = DVec3::X * radius_m;
+        let expected = gravitational_acceleration_from_mu(mu_m3_s2, position, DVec3::ZERO)
+            + earth_j2_acceleration(
+                mu_m3_s2,
+                position,
+                planet_inertial_spin_axis(&orientation),
+                &j2_model,
+            );
+        assert!(
+            (actual - expected).length() < expected.length() * 1.0e-12,
+            "rotated degree-two field disagrees with the J2 authority: {actual} vs {expected}"
+        );
     }
 }

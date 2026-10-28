@@ -16,6 +16,7 @@ pub mod erosion;
 pub mod geoid;
 pub mod global_raster;
 pub mod gravity;
+pub mod gravity_harmonics;
 pub mod guidance;
 pub mod imagery_package;
 pub mod imagery_tiles;
