@@ -441,6 +441,13 @@ of the water deck's sample budget. Its visual effect is a subtle milky layer
 rather than a distinct sheet, so native-display acceptance of the two-deck
 look is still pending.
 
+The direct term is also gated by the solar terminator. The sun march previously
+reported a clear path for a Sun below the cloud's local horizon, so the night
+side received the full solar irradiance: at a night epoch the prelaunch sky band
+measured sRGB 96 against a black ground. With the gate it measures 0.8, and the
+daylight term is unchanged because the gate is exactly 1 for any Sun more than
+about one degree above the horizon.
+
 Terrain cloud shadows, atmosphere-attenuated sun, and distance-adaptive steps
 remain future work.
 

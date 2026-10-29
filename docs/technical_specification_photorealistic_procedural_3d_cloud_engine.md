@@ -195,7 +195,29 @@ Two consequences matter:
   specification used the *sun-path* density for it, which darkened exactly the
   sunlit tops. That term has been removed.
 
-### 4.3.1 Diffuse Multiple Scattering
+### 4.3.1 Solar Terminator Gate
+
+Direct sunlight reaches a cloud sample only while the Sun is above that sample's
+local horizon. The geometric horizon at cloud altitude sits slightly below the
+tangent plane,
+
+$$
+\cos\theta_{\text{horizon}} = -\sqrt{1 - \left(\frac{R}{R + h}\right)^2},
+$$
+
+about `-0.03` for a 3 km cloud, so the gate opens a little below zero and fades
+through civil twilight:
+
+$$
+G = \operatorname{smoothstep}(-0.05, 0.02, \hat{n} \cdot \hat{L}).
+$$
+
+The direct term is multiplied by `G`; the diffuse term uses
+`max(0, n·L)` so it also vanishes at night. Without the gate the sun march
+reports a clear path for a below-horizon Sun and lights the night-side deck with
+the full solar irradiance.
+
+### 4.3.2 Diffuse Multiple Scattering
 
 Cloud droplets are nearly conservative scatterers, so an optically thick deck
 reflects most of the sunlight it intercepts as a near-Lambertian layer. Rather

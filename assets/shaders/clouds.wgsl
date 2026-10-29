@@ -324,8 +324,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             let height_fraction = saturate(
                 (length(sample_pos) - clouds.bottom_radius) / layer,
             );
-            let direct = clouds.sun_irradiance * sun_visibility * phase;
-            let sun_cos = saturate(dot(normalize(sample_pos), clouds.sun_direction));
+            // Direct sunlight only reaches a sample while the Sun is above its
+            // local horizon. At cloud altitude the geometric horizon sits
+            // slightly below the tangent plane (`acos(sqrt(1 - (R/(R+h))^2))`
+            // is about 1.8 degrees at 3 km), so the gate opens a little below
+            // zero and fades through civil twilight. Without this the sun
+            // march reports a clear path for a below-horizon Sun and lights the
+            // night-side deck with the full solar irradiance.
+            let sun_elevation = dot(normalize(sample_pos), clouds.sun_direction);
+            let terminator = smoothstep(-0.05, 0.02, sun_elevation);
+            let direct = clouds.sun_irradiance * sun_visibility * phase * terminator;
+            let sun_cos = saturate(sun_elevation);
             // Droplet scattering is spectrally neutral, so the diffuse light
             // is white at the sunlit top and takes the ground bounce colour at
             // the base.
