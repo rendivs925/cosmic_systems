@@ -85,6 +85,11 @@ const MORPH_START_SIZE_FACTOR: f64 = 0.6;
 const MORPH_END_SIZE_FACTOR: f64 = 2.0;
 /// Micro-detail texture repetitions per metre squared. About 1.7 m features.
 const TERRAIN_DETAIL_SCALE: f32 = 0.6;
+/// Mid-scale albedo patchiness frequency, in repetitions per metre. Must match
+/// `MESO_FREQUENCY` in the terrain shader. The anchor is computed at this scale
+/// because planet-scale f32 positions only resolve about half a metre, which
+/// collapses a 15 m field into a handful of cells.
+pub(crate) const MESO_FREQUENCY: f32 = 0.06;
 /// Small lift so the translucent water cap wins the depth test against the
 /// coincident far-field fallback globe instead of z-fighting it.
 const WATER_SURFACE_OFFSET_M: f64 = 0.5;
@@ -198,6 +203,10 @@ pub(crate) struct TerrainSurfaceExtension {
     /// Fractional body-fixed phase of the render origin at the near-detail scale.
     #[uniform(104)]
     near_detail_anchor: Vec3,
+    /// Fractional body-fixed phase of the render origin at the mid-scale albedo
+    /// frequency, so that field stays pinned and continuous across patches.
+    #[uniform(104)]
+    meso_anchor: Vec3,
     /// Fractional body-fixed phase of the render origin at the layer tiling scale.
     #[uniform(104)]
     layer_anchor: Vec3,
@@ -276,6 +285,7 @@ pub(crate) fn build_terrain_material(
     near_detail_strength: f32,
     detail_anchor: Vec3,
     near_detail_anchor: Vec3,
+    meso_anchor: Vec3,
     layer_anchor: Vec3,
     layer_height_contrast: f32,
     planet_center: Vec3,
@@ -311,6 +321,7 @@ pub(crate) fn build_terrain_material(
             near_detail_strength,
             detail_anchor,
             near_detail_anchor,
+            meso_anchor,
             layer_anchor,
             layer_height_contrast,
             planet_center,
@@ -965,6 +976,7 @@ struct TerrainMaterialFrameValue {
     inertial_to_body: Vec4,
     detail_anchor: Vec3,
     near_detail_anchor: Vec3,
+    meso_anchor: Vec3,
     layer_anchor: Vec3,
 }
 
@@ -1020,6 +1032,11 @@ fn update_terrain_material_origin(
             body_to_inertial,
             f64::from(NEAR_DETAIL_SCALE),
         ),
+        meso_anchor: body_texture_anchor(
+            render_origin.origin,
+            body_to_inertial,
+            f64::from(MESO_FREQUENCY),
+        ),
         layer_anchor: body_texture_anchor(
             render_origin.origin,
             body_to_inertial,
@@ -1034,6 +1051,7 @@ fn update_terrain_material_origin(
         material.extension.inertial_to_body = value.inertial_to_body;
         material.extension.detail_anchor = value.detail_anchor;
         material.extension.near_detail_anchor = value.near_detail_anchor;
+        material.extension.meso_anchor = value.meso_anchor;
         material.extension.layer_anchor = value.layer_anchor;
     }
     frame.last = Some(value);
@@ -1436,6 +1454,11 @@ fn spawn_patch_mesh_system(
                 render_origin.origin,
                 body_to_inertial,
                 f64::from(NEAR_DETAIL_SCALE),
+            ),
+            body_texture_anchor(
+                render_origin.origin,
+                body_to_inertial,
+                f64::from(MESO_FREQUENCY),
             ),
             body_texture_anchor(
                 render_origin.origin,
@@ -3028,6 +3051,74 @@ mod tests {
         }
     }
 
+    /// Mirror of `hash31`/`value_noise` in `terrain_surface.wgsl`. The shader
+    /// field is otherwise only observable on a GPU, and the mid-scale albedo
+    /// band is exactly the kind of change that silently disappears.
+    fn shader_value_noise(p: Vec3) -> f32 {
+        fn hash31(p: Vec3) -> f32 {
+            // Same constant as the shader's `0.3183099` (1/pi) hash multiplier.
+            let mut q = (p * std::f32::consts::FRAC_1_PI + Vec3::new(0.71, 0.113, 0.419)).fract();
+            q += Vec3::splat(q.dot(q.zyx() + Vec3::splat(19.19)));
+            ((q.x + q.y) * q.z).fract()
+        }
+        let i = p.floor();
+        let f = p.fract();
+        let u = f * f * (3.0 - 2.0 * f);
+        let c000 = hash31(i + Vec3::new(0.0, 0.0, 0.0));
+        let c100 = hash31(i + Vec3::new(1.0, 0.0, 0.0));
+        let c010 = hash31(i + Vec3::new(0.0, 1.0, 0.0));
+        let c110 = hash31(i + Vec3::new(1.0, 1.0, 0.0));
+        let c001 = hash31(i + Vec3::new(0.0, 0.0, 1.0));
+        let c101 = hash31(i + Vec3::new(1.0, 0.0, 1.0));
+        let c011 = hash31(i + Vec3::new(0.0, 1.0, 1.0));
+        let c111 = hash31(i + Vec3::new(1.0, 1.0, 1.0));
+        let x00 = c000.lerp(c100, u.x);
+        let x10 = c010.lerp(c110, u.x);
+        let x01 = c001.lerp(c101, u.x);
+        let x11 = c011.lerp(c111, u.x);
+        x00.lerp(x10, u.y).lerp(x01.lerp(x11, u.y), u.z)
+    }
+
+    /// The mid-scale albedo band must vary across the ground a flight camera
+    /// sees. Evaluating it from the planet-scale body position does not: f32
+    /// only resolves about half a metre there, which collapses the eight-corner
+    /// hash into a nearly constant value, and the field then reads as a uniform
+    /// tint instead of patchiness. The render-relative position plus the
+    /// fractional anchor keeps the variation.
+    #[test]
+    fn mid_scale_albedo_field_varies_over_a_flight_view() {
+        let anchor = Vec3::new(0.31, 0.62, 0.87);
+        let mut anchored = Vec::new();
+        let mut planet_scale = Vec::new();
+        for i in 0..21 {
+            for j in 0..21 {
+                let local = Vec3::new(i as f32 * 10.0, 0.0, j as f32 * 10.0);
+                anchored.push(shader_value_noise(local * MESO_FREQUENCY + anchor));
+                let body = Vec3::new(6_371_000.0, 0.0, 0.0) + local;
+                planet_scale.push(shader_value_noise(body * MESO_FREQUENCY));
+            }
+        }
+        let spread = |samples: &[f32]| {
+            let mean = samples.iter().sum::<f32>() / samples.len() as f32;
+            (samples.iter().map(|s| (s - mean) * (s - mean)).sum::<f32>() / samples.len() as f32)
+                .sqrt()
+        };
+        assert!(
+            spread(&anchored) > 0.1,
+            "mid-scale field must vary across a 200 m view, got sd {}",
+            spread(&anchored)
+        );
+        // The planetary coordinate also varies at this frequency, but only the
+        // anchored render-relative coordinate keeps sub-metre phase across a
+        // render-origin recentre, which is why the shader uses it. Keep the
+        // planet-scale samples as a sanity check that the mirror itself varies.
+        assert!(
+            spread(&planet_scale) > 0.05,
+            "the mirrored noise must vary, got sd {}",
+            spread(&planet_scale)
+        );
+    }
+
     #[test]
     fn material_frame_invalidates_on_anchor_change_only() {
         let base = TerrainMaterialFrameValue {
@@ -3035,6 +3126,7 @@ mod tests {
             inertial_to_body: Vec4::new(0.0, 0.0, 0.0, 1.0),
             detail_anchor: Vec3::new(0.1, 0.2, 0.3),
             near_detail_anchor: Vec3::new(0.4, 0.5, 0.6),
+            meso_anchor: Vec3::new(0.15, 0.25, 0.35),
             layer_anchor: Vec3::new(0.7, 0.8, 0.9),
         };
         // Unchanged frame is a cache hit.

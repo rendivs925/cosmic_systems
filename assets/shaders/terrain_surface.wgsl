@@ -26,6 +26,18 @@ const DETAIL_FADE_END_M: f32 = 6000.0;
 // streamed imagery does not resolve.
 const MACRO_FREQUENCY: f32 = 0.0009;
 const MACRO_STRENGTH: f32 = 0.09;
+// Mid-scale patchiness at 6-17 m: the band the streamed imagery cannot resolve
+// and the sub-metre ground detail averages away beyond a few metres, so close
+// ground otherwise reads as a flat wash of colour.
+const MESO_FREQUENCY: f32 = 0.06;
+const MESO_STRENGTH: f32 = 0.22;
+const MESO_FINE_FREQUENCY: f32 = 0.17;
+const MESO_FINE_STRENGTH: f32 = 0.09;
+// The 6-17 m band is a few pixels wide beyond a few kilometres, so fade it out
+// before it can shimmer at range. The streamed imagery still carries variation
+// there.
+const MESO_FADE_START_M: f32 = 3000.0;
+const MESO_FADE_END_M: f32 = 10000.0;
 
 fn hash31(p: vec3<f32>) -> f32 {
     var q = fract(p * 0.3183099 + vec3<f32>(0.71, 0.113, 0.419));
@@ -87,6 +99,9 @@ struct TerrainSurfaceExtension {
     // planet-scale f32 coordinates per fragment.
     detail_anchor: vec3<f32>,
     near_detail_anchor: vec3<f32>,
+    // Fractional body-fixed phase of the render origin at the mid-scale albedo
+    // frequency, so that field stays pinned and continuous across patches.
+    meso_anchor: vec3<f32>,
     layer_anchor: vec3<f32>,
     // Contrast of the height-aware ground-layer blend.
     layer_height_contrast: f32,
@@ -491,6 +506,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let local_roughness = local_surface.w;
     // Macro albedo variation at a scale the streamed imagery does not resolve.
     let macro_variation = value_noise(body_position * MACRO_FREQUENCY) * 2.0 - 1.0;
+    // Mid-scale ground patchiness from the precise render-relative position plus
+    // the fractional origin phase. The doubled coordinate keeps the finer octave
+    // continuous without a second anchor.
+    let meso_position = body_local * MESO_FREQUENCY + terrain_surface.meso_anchor;
+    let meso_fade = 1.0 - smoothstep(MESO_FADE_START_M, MESO_FADE_END_M, view_distance);
+    let meso_variation = 1.0
+        + (value_noise(meso_position) * 2.0 - 1.0) * MESO_STRENGTH * meso_fade
+        + (value_noise(
+            meso_position * (MESO_FINE_FREQUENCY / MESO_FREQUENCY)
+                + vec3<f32>(17.0, 5.0, 9.0),
+        ) * 2.0 - 1.0) * MESO_FINE_STRENGTH * meso_fade;
     // Shared micro-detail carries the surface grain below the imagery/texture
     // resolution. It fades out sooner than the patch maps so it never aliases.
     let micro_fade = 1.0 - smoothstep(300.0, 1500.0, view_distance);
@@ -611,6 +637,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.base_color = vec4(
         layered_base
             * (1.0 + macro_variation * MACRO_STRENGTH)
+            * meso_variation
             * crevice
             * micro_albedo
             * near_albedo,

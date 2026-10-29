@@ -294,7 +294,7 @@ pub(crate) fn apply_terrain_imagery(
                     snapshot.orientation_for_catalog_body(&planet.domain_planet.name)
                 })
         });
-        let (inertial_to_body, detail_anchor, near_detail_anchor, layer_anchor) =
+        let (inertial_to_body, detail_anchor, near_detail_anchor, meso_anchor, layer_anchor) =
             if let Some(orientation) = orientation {
                 let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
                 (
@@ -312,11 +312,16 @@ pub(crate) fn apply_terrain_imagery(
                     body_texture_anchor(
                         render_origin.origin,
                         body_to_inertial,
+                        f64::from(super::render::MESO_FREQUENCY),
+                    ),
+                    body_texture_anchor(
+                        render_origin.origin,
+                        body_to_inertial,
                         f64::from(state.layer.tiling_scale),
                     ),
                 )
             } else {
-                (Vec4::W, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO)
+                (Vec4::W, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO)
             };
         let material = build_terrain_material(
             state.base_material.clone(),
@@ -345,6 +350,7 @@ pub(crate) fn apply_terrain_imagery(
             state.layer.near_detail_strength,
             detail_anchor,
             near_detail_anchor,
+            meso_anchor,
             layer_anchor,
             LAYER_HEIGHT_CONTRAST,
             (-render_origin.origin).as_vec3(),

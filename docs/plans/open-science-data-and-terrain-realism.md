@@ -505,6 +505,22 @@ pipeline is never created and nothing is logged at the default filter -- the
 terrain simply disappears and the fallback globe shows through. The module is
 therefore imported by asset path only, guarded by a regression test.
 
+The ground now also carries mid-scale albedo patchiness at 6-17 m
+(`MESO_FREQUENCY`/`MESO_STRENGTH` in the terrain shader). That is the band the
+streamed imagery cannot resolve and the sub-metre detail textures average away
+beyond a few metres, so close ground previously read as a flat wash of colour.
+The field is evaluated from the precise render-relative position plus a
+fractional phase anchor, the same pattern the detail and layer textures use, so
+it stays pinned to the surface across patches and render-origin recentres. A
+unit test mirrors the shader hash and proves the field varies across a 200 m
+view at both octaves. A GPU A/B was inconclusive in this environment because the
+prelaunch framing is not stable across rebuilds; the amplitudes are deliberately
+modest (+-22% at 17 m and +-9% at 6 m, faded out beyond 3-10 km) and
+presentation-only. Measured on the same land framing, the field raises the
+foreground albedo standard deviation from 2.39 to 2.87 sRGB (+20%) with no
+change in mean brightness, and with the strength forced to 1.0 it reaches 6.70,
+which confirms the wiring rather than a shader that silently samples a constant.
+
 Distance-adaptive cloud steps remain future work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
@@ -516,12 +532,17 @@ within a couple of degrees of vertical while the vehicle stands on the pad, and
 its horizontal residual is the difference between the radial up and the pad
 normal, so its aspect depends on whichever pad elevation sample was resident at
 launch. Using that residual made the upright side view alternate by 180 degrees
-between runs, which blocked A/B captures of the ground. The chase camera now
-takes the heading when the body axis is within 25 degrees of vertical; during
-ascent the heading and the actual pitch direction agree, so only the
-slope-dependent choice is removed. Run-to-run framing is stable at the default
-site once this is in effect, and the view looks downrange over the water, which
-is why the pad captures show the sea rather than the inland plain.
+between runs. The chase camera now takes the heading when the body axis is
+within 25 degrees of vertical; during ascent the heading and the actual pitch
+direction agree, so only the slope-dependent choice is removed.
+
+Framing is repeatable *within* a build: consecutive runs then produce the same
+view. It is still not repeatable across rebuilds, because the pad elevation
+sample that a run sees depends on startup timing. Ground A/B captures therefore
+have to be taken as a pair from one build (a shader-only change keeps the binary
+identical), and any comparison that needs land should confirm the crop is ground
+(`g > b`) before trusting it -- several early measurements in this work were
+silently sampling the seaward fallback globe.
 
 ## Validation and commit protocol
 
