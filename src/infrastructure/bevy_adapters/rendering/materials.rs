@@ -223,6 +223,9 @@ pub struct CloudMaterial {
     #[texture(5)]
     #[sampler(6)]
     pub weather_map: Handle<Image>,
+    /// Transparent-pass sort bias. Smaller values draw first, so a high cloud
+    /// layer must be more negative than the deck below it.
+    pub depth_bias: f32,
 }
 
 impl Default for CloudMaterial {
@@ -232,6 +235,7 @@ impl Default for CloudMaterial {
             base_noise: Handle::default(),
             detail_noise: Handle::default(),
             weather_map: Handle::default(),
+            depth_bias: 0.0,
         }
     }
 }
@@ -245,6 +249,12 @@ impl Material for CloudMaterial {
         // Premultiplied blending yields `cloud_radiance + background * transmittance`,
         // so terrain and sky behind the cloud layer are correctly extinguished.
         AlphaMode::Premultiplied
+    }
+
+    fn depth_bias(&self) -> f32 {
+        // Overlapping decks are all camera-centred, so only this bias decides
+        // their transparent draw order.
+        self.depth_bias
     }
 
     fn specialize(

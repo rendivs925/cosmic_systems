@@ -428,8 +428,21 @@ bytes. On the deck-from-above sample the standard deviation falls from 3.03 to
 2.80 with the mean unchanged (180.1 to 180.5), which is the expected smoothing
 of sub-pixel detail.
 
-Multi-layer decks, terrain cloud shadows, atmosphere-attenuated sun, and
-distance-adaptive steps remain future work.
+Earth now draws two decks from the same shader: the boundary-layer/mid-
+troposphere water deck (1.5-6 km) and a thin cirrus veil (8.0-9.6 km) with a
+stratus-like profile, larger features, upper-tropospheric wind, and lower
+extinction per unit density. The veil exists only where a measured climatology
+drives it (Earth); the surface cloud fraction scales its coverage between 0.3
+and 0.8. Both domes are camera-centred, so view distance cannot order them: the
+update system sets the transparent sort bias each frame from the camera's
+planet-centric radius, drawing the farther deck first (cirrus from the ground,
+water deck from orbit). The veil uses 40 view steps and 3 sun steps, about 15%
+of the water deck's sample budget. Its visual effect is a subtle milky layer
+rather than a distinct sheet, so native-display acceptance of the two-deck
+look is still pending.
+
+Terrain cloud shadows, atmosphere-attenuated sun, and distance-adaptive steps
+remain future work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then

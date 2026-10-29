@@ -74,6 +74,35 @@ pub struct RocketBoundPlanetSurface {
 #[derive(Component, Debug)]
 pub struct RocketBoundPlanetCloud;
 
+/// Which vertical layer a cloud dome represents. Both layers share one shader
+/// and material type; only their slab, density, and transparent draw order
+/// differ.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RocketCloudLayer {
+    /// Water cloud between the boundary layer and the mid-troposphere.
+    Low,
+    /// Thin high ice-cloud veil above the water deck.
+    Cirrus,
+}
+
+impl RocketCloudLayer {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Cirrus => "Cirrus",
+        }
+    }
+}
+
+/// Cirrus slab altitude above the reference surface, in metres.
+const CIRRUS_BOTTOM_ALTITUDE_M: f32 = 8_000.0;
+const CIRRUS_TOP_ALTITUDE_M: f32 = 9_600.0;
+/// Transparent-pass sort biases, added to the view distance. Smaller values
+/// draw first, so the deck farther from the camera uses the "far" bias. Both
+/// domes are camera-centred, so these are the only ordering signal.
+const CLOUD_SORT_BIAS_NEAR: f32 = -1.0;
+const CLOUD_SORT_BIAS_FAR: f32 = -2.0;
+
 /// Component marking a moon entity managed by the rocket planet system.
 #[derive(Component, Debug, Clone)]
 pub struct RocketMoon {
@@ -254,26 +283,96 @@ fn spawn_rocket_cloud_deck(
         return;
     }
     let surface_radius_m = planet.radius_km * 1_000.0;
-    let top_radius = surface_radius_m + flight_cloud_altitude_m(&planet.name);
-    let bottom_radius = surface_radius_m + flight_cloud_bottom_altitude_m(&planet.name);
+    spawn_cloud_dome(
+        commands,
+        meshes,
+        cloud_materials,
+        cloud_noise,
+        &planet.name,
+        low_cloud_params(surface_radius_m, &planet.name),
+        CLOUD_SORT_BIAS_NEAR,
+        RocketCloudLayer::Low,
+    );
+    // Only Earth has a measured climatology and a reviewed upper-air slab. The
+    // other bodies keep their single measured-texture cloud layer.
+    if planet.name == "Earth" {
+        spawn_cloud_dome(
+            commands,
+            meshes,
+            cloud_materials,
+            cloud_noise,
+            &planet.name,
+            cirrus_cloud_params(surface_radius_m),
+            CLOUD_SORT_BIAS_FAR,
+            RocketCloudLayer::Cirrus,
+        );
+    }
+}
+
+/// Parameters for the boundary-layer/mid-troposphere water-cloud deck.
+fn low_cloud_params(surface_radius_m: f32, body: &str) -> CloudParams {
     let mut params = CloudParams::deck();
-    params.bottom_radius = bottom_radius;
-    params.top_radius = top_radius;
+    params.bottom_radius = surface_radius_m + flight_cloud_bottom_altitude_m(body);
+    params.top_radius = surface_radius_m + flight_cloud_altitude_m(body);
+    params
+}
+
+/// Parameters for the thin high cirrus veil. Ice cloud is much less dense and
+/// optically thinner than the water deck, forms in a shallow layer, and is
+/// advected by the upper-tropospheric wind rather than the surface wind.
+fn cirrus_cloud_params(surface_radius_m: f32) -> CloudParams {
+    let mut params = CloudParams::deck();
+    params.bottom_radius = surface_radius_m + CIRRUS_BOTTOM_ALTITUDE_M;
+    params.top_radius = surface_radius_m + CIRRUS_TOP_ALTITUDE_M;
+    params.density_scale = 0.6;
+    params.absorption = 0.008;
+    params.coverage = 0.5;
+    // Stratus-like vertical profile: a flat, shallow sheet.
+    params.cloud_type = 0.15;
+    params.erosion_scale = 0.7;
+    params.detail_scale = 1.6;
+    params.noise_scale = 1.0 / 12_000.0;
+    params.wind_speed = 45.0;
+    // A thin veil converges quickly; 40 view steps and 3 sun steps keep the
+    // extra pass near 15% of the water deck's sample count.
+    params.primary_steps = 40.0;
+    params.light_steps = 3.0;
+    params.multi_scatter_octaves = 2.0;
+    params
+}
+
+/// Spawn one camera-anchored cloud dome and its material.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each argument is an independent render asset or layer descriptor for one spawn."
+)]
+fn spawn_cloud_dome(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    cloud_materials: &mut Assets<CloudMaterial>,
+    cloud_noise: &CloudNoiseAssets,
+    body_name: &str,
+    params: CloudParams,
+    sort_bias: f32,
+    layer: RocketCloudLayer,
+) {
     let cloud_material = cloud_materials.add(CloudMaterial {
         params,
         base_noise: cloud_noise.base_noise.clone(),
         detail_noise: cloud_noise.detail_noise.clone(),
         weather_map: cloud_noise.weather_map.clone(),
+        depth_bias: sort_bias,
     });
     commands.spawn((
         Mesh3d(meshes.add(Sphere::new(1.0))),
         MeshMaterial3d(cloud_material),
         Transform::default(),
         RocketBoundPlanetCloud,
+        layer,
         NoFrustumCulling,
         NotShadowCaster,
         NotShadowReceiver,
-        Name::new(format!("RocketFarField{}Clouds", planet.name)),
+        Name::new(format!("RocketFarField{body_name}{}Clouds", layer.label())),
     ));
 }
 
@@ -585,12 +684,17 @@ pub fn update_rocket_clouds(
     rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
     measured_climate: Option<Res<MeasuredClimate>>,
     simulation_time: Res<SimulationTime>,
+    planet_query: Query<&PlanetComponent>,
     camera_query: Query<
         (&Camera, &Transform, &Projection),
         (With<Camera3d>, Without<RocketBoundPlanetCloud>),
     >,
     mut clouds: Query<
-        (&mut Transform, &MeshMaterial3d<CloudMaterial>),
+        (
+            &mut Transform,
+            &MeshMaterial3d<CloudMaterial>,
+            &RocketCloudLayer,
+        ),
         With<RocketBoundPlanetCloud>,
     >,
     mut materials: ResMut<Assets<CloudMaterial>>,
@@ -613,6 +717,16 @@ pub fn update_rocket_clouds(
     let planet_rotation =
         Mat3::from_quat(body_fixed_to_planet_inertial_rotation(orientation).as_quat());
     let planet_center = (-render_origin.origin).as_vec3();
+    // Draw the deck farther from the camera first. From the ground the cirrus
+    // veil is behind the water deck, from orbit it is in front, and a fixed
+    // bias would composite them backwards in one of those views.
+    let surface_radius_m = planet_query
+        .iter()
+        .find(|planet| planet.matches_body(bound_id))
+        .map(|planet| planet.domain_planet.radius_km * 1_000.0)
+        .unwrap_or(0.0);
+    let camera_radius = (camera_transform.translation - planet_center).length();
+    let cirrus_draws_first = camera_radius < surface_radius_m + CIRRUS_BOTTOM_ALTITUDE_M;
     let sun_direction = sun.direction.as_vec3();
     let sun_color = LinearRgba::from(Color::srgb(1.0, 1.0, 0.98));
     let sun_irradiance = Vec3::new(sun_color.red, sun_color.green, sun_color.blue)
@@ -638,7 +752,7 @@ pub fn update_rocket_clouds(
         _ => 1.0,
     };
 
-    for (mut transform, handle) in &mut clouds {
+    for (mut transform, handle, layer) in &mut clouds {
         transform.translation = camera_transform.translation;
         transform.scale = Vec3::splat(dome_radius);
         if let Some(material) = materials.get_mut(&handle.0) {
@@ -647,13 +761,30 @@ pub fn update_rocket_clouds(
             material.params.sun_direction = sun_direction;
             material.params.sun_irradiance = sun_irradiance;
             material.params.time_s = elapsed_s;
+            let draws_first = match layer {
+                RocketCloudLayer::Cirrus => cirrus_draws_first,
+                RocketCloudLayer::Low => !cirrus_draws_first,
+            };
+            material.depth_bias = if draws_first {
+                CLOUD_SORT_BIAS_FAR
+            } else {
+                CLOUD_SORT_BIAS_NEAR
+            };
             if let Some((latitude_deg, longitude_deg, sample)) = measured {
-                apply_measured_cloud_climate(
-                    &mut material.params,
-                    sample,
-                    latitude_deg,
-                    longitude_deg,
-                );
+                match layer {
+                    RocketCloudLayer::Low => apply_measured_cloud_climate(
+                        &mut material.params,
+                        sample,
+                        latitude_deg,
+                        longitude_deg,
+                    ),
+                    RocketCloudLayer::Cirrus => apply_measured_cirrus_climate(
+                        &mut material.params,
+                        sample,
+                        latitude_deg,
+                        longitude_deg,
+                    ),
+                }
             }
         }
     }
@@ -674,6 +805,22 @@ fn apply_measured_cloud_climate(
 ) {
     params.coverage = (sample.cloud_fraction as f32).clamp(0.02, 0.95);
     params.wind_speed = (sample.wind_speed_mps() as f32 * 2.5).clamp(2.0, 60.0);
+    let (x, z) = sample.wind_direction_xz(latitude_deg, longitude_deg);
+    params.wind_direction = Vec2::new(x, z);
+}
+
+/// Map a measured climatology sample onto the high cirrus veil. Upper-air cloud
+/// amount is not measured, so the surface cloud fraction only scales a thin
+/// veil, and the wind uses an upper-tropospheric speed rather than the surface
+/// value. Presentation only.
+fn apply_measured_cirrus_climate(
+    params: &mut CloudParams,
+    sample: crate::domain::services::climate::ClimateSample,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) {
+    params.coverage = (sample.cloud_fraction as f32).clamp(0.3, 0.8);
+    params.wind_speed = (sample.wind_speed_mps() as f32 * 6.0).clamp(15.0, 90.0);
     let (x, z) = sample.wind_direction_xz(latitude_deg, longitude_deg);
     params.wind_direction = Vec2::new(x, z);
 }
@@ -814,15 +961,71 @@ mod tests {
             "the enclosing far-field globe must not cast or receive shadows"
         );
 
-        let mut cloud = world.query_filtered::<
-            (Has<NotShadowCaster>, Has<NotShadowReceiver>),
-            With<RocketBoundPlanetCloud>,
-        >();
+        let mut cloud = world.query_filtered::<(
+            Has<NotShadowCaster>,
+            Has<NotShadowReceiver>,
+            &RocketCloudLayer,
+        ), With<RocketBoundPlanetCloud>>();
+        let decks: Vec<_> = cloud.iter(world).collect();
         assert_eq!(
-            cloud.single(world).unwrap(),
-            (true, true),
-            "the enclosing cloud shell must not cast or receive shadows"
+            decks.len(),
+            2,
+            "Earth has one water deck and one cirrus veil"
         );
+        for flags in decks {
+            assert_eq!(
+                (flags.0, flags.1),
+                (true, true),
+                "the enclosing cloud shells must not cast or receive shadows"
+            );
+        }
+    }
+
+    #[test]
+    fn cirrus_veil_sits_above_the_water_deck_and_is_thinner() {
+        let surface_radius_m = 6_371_000.0;
+        let low = low_cloud_params(surface_radius_m, "Earth");
+        let cirrus = cirrus_cloud_params(surface_radius_m);
+
+        assert!(cirrus.bottom_radius > low.top_radius);
+        assert!(cirrus.top_radius > cirrus.bottom_radius);
+        // Extinction per unit density is what makes the veil optically thin.
+        assert!(
+            cirrus.density_scale * cirrus.absorption < low.density_scale * low.absorption,
+            "cirrus must be optically thinner than the water deck"
+        );
+        assert!(cirrus.absorption < low.absorption);
+        assert!(cirrus.cloud_type < low.cloud_type);
+        assert!(cirrus.primary_steps < low.primary_steps);
+        assert!(cirrus.light_steps <= MAX_CLOUD_LIGHT_STEPS);
+        // The veil contains about a third of the layer thickness of the deck.
+        let low_thickness = low.top_radius - low.bottom_radius;
+        let cirrus_thickness = cirrus.top_radius - cirrus.bottom_radius;
+        assert!(cirrus_thickness < low_thickness * 0.5);
+    }
+
+    #[test]
+    fn measured_cirrus_climate_stays_a_thin_veil() {
+        let mut params = cirrus_cloud_params(6_371_000.0);
+        let overcast = crate::domain::services::climate::ClimateSample {
+            temperature_k: 288.15,
+            pressure_pa: 101_325.0,
+            relative_humidity: 0.9,
+            wind_east_mps: 8.0,
+            wind_north_mps: 0.0,
+            cloud_fraction: 1.0,
+        };
+        apply_measured_cirrus_climate(&mut params, overcast, 0.0, 0.0);
+        assert!(params.coverage <= 0.8);
+        assert!(params.coverage >= 0.3);
+        assert!(params.wind_speed <= 90.0);
+
+        let clear = crate::domain::services::climate::ClimateSample {
+            cloud_fraction: 0.0,
+            ..overcast
+        };
+        apply_measured_cirrus_climate(&mut params, clear, 0.0, 0.0);
+        assert!((params.coverage - 0.3).abs() < 1e-6);
     }
 
     #[test]
