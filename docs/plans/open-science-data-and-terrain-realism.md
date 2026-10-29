@@ -511,6 +511,18 @@ Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then
 `xdotool windowfocus <id> key space` and `import -window root frame.png`.
 
+The prelaunch chase view follows the commanded launch heading. The body axis is
+within a couple of degrees of vertical while the vehicle stands on the pad, and
+its horizontal residual is the difference between the radial up and the pad
+normal, so its aspect depends on whichever pad elevation sample was resident at
+launch. Using that residual made the upright side view alternate by 180 degrees
+between runs, which blocked A/B captures of the ground. The chase camera now
+takes the heading when the body axis is within 25 degrees of vertical; during
+ascent the heading and the actual pitch direction agree, so only the
+slope-dependent choice is removed. Run-to-run framing is stable at the default
+site once this is in effect, and the view looks downrange over the water, which
+is why the pad captures show the sea rather than the inland plain.
+
 ## Validation and commit protocol
 
 Per phase:

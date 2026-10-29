@@ -495,6 +495,19 @@ fn safe_look_rotation(eye: Vec3, target: Vec3, candidates: &[Vec3; 3]) -> Quat {
         .rotation
 }
 
+/// Horizontal body-axis magnitude, as `sin^2`, below which the chase view uses
+/// the commanded launch heading instead of the body axis's own horizontal
+/// component. About 25 degrees of pitch.
+///
+/// Under that angle the horizontal part of the body axis is dominated by the
+/// difference between the radial up and the pad normal: its aspect follows
+/// whichever pad elevation sample was resident at launch, which made the
+/// prelaunch side view flip by 180 degrees between runs. During ascent the
+/// commanded heading and the actual pitch direction coincide, so substituting
+/// it changes nothing except that the upright view stops depending on the pad
+/// slope sample.
+const CHASE_VERTICAL_SIN2: f32 = 1.8e-1;
+
 /// Chase camera: positioned behind and above the rocket, framing the whole
 /// vehicle.
 ///
@@ -517,11 +530,20 @@ fn compute_chase_camera(
     }
 
     // Horizontal component of the body axis (the direction the vehicle is
-    // pitched toward). While vertical this is near-zero, so fall back to a
-    // stable horizontal reference perpendicular to up.
+    // pitched toward). While upright the residual is not a heading: it is the
+    // difference between the radial up and the pad normal (the local slope),
+    // whose aspect changes with whichever pad sample was resident at launch.
+    // Using it made the prelaunch side view flip by 180 degrees between runs.
+    // The body's +Z is the commanded launch heading and stays horizontal while
+    // the vehicle is upright, so it gives a stable view that is also continuous
+    // with the eventual pitch-over direction.
     let mut horiz = body_fwd - body_fwd.dot(up) * up;
-    if horiz.length_squared() < 1.0e-4 {
-        horiz = if up.z.abs() < 0.9 {
+    if horiz.length_squared() < CHASE_VERTICAL_SIN2 {
+        let heading = rocket_rot * Vec3::Z;
+        let horizontal_heading = heading - heading.dot(up) * up;
+        horiz = if horizontal_heading.length_squared() > 1.0e-6 {
+            horizontal_heading
+        } else if up.z.abs() < 0.9 {
             up.cross(Vec3::Z)
         } else {
             up.cross(Vec3::X)
@@ -942,6 +964,46 @@ mod tests {
             assert!(position.is_finite());
             assert!(rotation.is_finite());
         }
+    }
+
+    /// Regression: the upright chase view used the horizontal residual of the
+    /// body axis, which is the difference between the radial up and the pad
+    /// normal. That residual's direction depends on the pad slope sample, so
+    /// two otherwise identical upright attitudes tilted in opposite directions
+    /// produced side views 180 degrees apart, and the prelaunch framing changed
+    /// between runs. The commanded heading must decide the view instead.
+    #[test]
+    fn near_vertical_chase_view_uses_the_commanded_heading() {
+        let geometry = RocketGeometry {
+            radius_m: 2.0,
+            height_m: 70.0,
+            lower_extent_y_m: -35.0,
+        };
+        let up = Vec3::Y;
+        // Upright with the body +Z (the commanded heading) pointing along +X.
+        let upright = Quat::from_rotation_arc(Vec3::Y, up)
+            * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let config = RocketCameraConfig::default();
+
+        let (tilt_a, _) = compute_chase_camera(
+            Vec3::ZERO,
+            upright * Quat::from_rotation_x(0.01),
+            up,
+            &geometry,
+            &config,
+        );
+        let (tilt_b, _) = compute_chase_camera(
+            Vec3::ZERO,
+            upright * Quat::from_rotation_x(-0.01),
+            up,
+            &geometry,
+            &config,
+        );
+
+        assert!(
+            tilt_a.distance(tilt_b) < 1.0e-3,
+            "opposite pad-slope residuals must not move the upright chase view: {tilt_a:?} vs {tilt_b:?}"
+        );
     }
 
     #[test]
