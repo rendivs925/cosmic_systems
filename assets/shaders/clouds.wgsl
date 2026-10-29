@@ -5,7 +5,11 @@
 // Perlin-Worley density field (co-rotating with the planet), carving it with the
 // weather map and high-frequency Worley erosion, then integrating
 // sun-scattering with a triple-lobe Henyey-Greenstein phase, a powder
-// (dark-edge) term, and multi-scatter octaves. Output is premultiplied: rgb is
+// (dark-edge) term, and multi-scatter octaves. The scattering integral is the
+// physical single-scatter form: the source radiance is multiplied by the
+// analytic optical-depth integral `(1 - exp(-sigma_e * ds))` and the droplet
+// single-scattering albedo, with no presentation fudge factors. Output is
+// premultiplied: rgb is
 // the scattered radiance in the same radiometric scale as the PBR directional
 // light (colour * illuminance), and alpha is 1 - transmittance, so the blend
 // over terrain and sky is `cloud_radiance + background * transmittance`.
@@ -37,15 +41,12 @@ struct CloudParams {
     erosion_scale: f32,
     wind_speed: f32,
     wind_direction: vec2<f32>,
-    aerial_haze: f32,
     primary_steps: f32,
     light_steps: f32,
     multi_scatter_octaves: f32,
-    strength: f32,
     sky_color: vec3<f32>,
     ground_color: vec3<f32>,
     ambient_fraction: f32,
-    direct_boost: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> clouds: CloudParams;
@@ -77,6 +78,10 @@ const PI: f32 = 3.141592653589793;
 const MAX_PRIMARY_STEPS: u32 = 128u;
 const MAX_LIGHT_STEPS: u32 = 8u;
 const MAX_MULTI_OCTAVES: u32 = 4u;
+// Single-scattering albedo of cloud droplets at visible wavelengths. Water
+// absorbs almost nothing, so droplets scatter conservatively (spec section 4:
+// 0.99-1.0). Must match `CLOUD_SINGLE_SCATTER_ALBEDO` in rendering/materials.rs.
+const CLOUD_ALBEDO: f32 = 0.99;
 
 fn saturate(x: f32) -> f32 {
     return clamp(x, 0.0, 1.0);
@@ -289,14 +294,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             let step_optical_depth = sigma_e * step_size;
             let step_transmittance = exp(-step_optical_depth);
             let sun_visibility = march_to_sun(sample_pos, cos_theta);
-            // Direct single-scatter (silver lining emphasised by direct_boost)
+            // Direct single scattering from the triple-lobe phase function,
             // plus a height-graded ambient term standing in for the sky and
-            // ground light that multiple scattering would deliver (spec 4.2-4.4).
+            // ground light that multiple scattering would deliver (spec
+            // 4.2-4.4).
             let height_fraction = saturate(
                 (length(sample_pos) - clouds.bottom_radius) / layer,
             );
-            let direct = clouds.sun_irradiance * sun_visibility * phase
-                * clouds.direct_boost;
+            let direct = clouds.sun_irradiance * sun_visibility * phase;
             let ambient_color = mix(
                 clouds.ground_color * 0.35,
                 clouds.sky_color * 0.85,
@@ -304,11 +309,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             );
             let ambient = clouds.sun_irradiance * clouds.ambient_fraction
                 * ambient_color;
-            let scattering = (direct + ambient) * density;
-            // The analytic step integral is exact for constant density across
-            // the step: integral of scattering * exp(-sigma_e * s) ds.
-            let inscatter = scattering * (1.0 - step_transmittance)
-                / max(sigma_e, 1e-6);
+            // Radiance scattered toward the camera from this step. `sigma_e *
+            // ds` is the step's optical depth, so `1 - step_transmittance` is
+            // its analytic integral; the source radiance is per unit optical
+            // depth, not per unit extinction, so no division by `sigma_e` is
+            // needed and the result is independent of how the optical depth is
+            // split between density and the absorption coefficient.
+            let source = (direct + ambient) * CLOUD_ALBEDO;
+            let inscatter = source * (1.0 - step_transmittance);
             in_scatter += transmittance * inscatter;
             transmittance *= step_transmittance;
             t += step_size;
@@ -318,7 +326,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
         }
     }
 
-    let radiance = in_scatter * clouds.strength * view.exposure;
+    let radiance = in_scatter * view.exposure;
     let opacity = saturate(1.0 - transmittance);
     out.color = vec4<f32>(radiance, opacity);
     return out;

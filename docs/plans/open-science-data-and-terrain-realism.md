@@ -359,10 +359,35 @@ Status: the current shader already implements Beer-Lambert extinction, physical
 powder, multi-scatter octaves, a height-graded ambient term, and measured
 coverage/type/wind from the climatology layer. The sun march now traverses the
 full cloud slab with 8 steps instead of a fixed 12% slice, so cloud interiors
-and bases receive the optical depth the model intends. Native-display visual
-acceptance is still pending; multi-layer clouds, terrain cloud shadows, and the
-remaining `strength`/`direct_boost`/`aerial_haze` parameter cleanup are future
-work.
+and bases receive the optical depth the model intends.
+
+The single-scatter step integral is now the physical form: the incoming direct
+and ambient radiance is multiplied by the droplet single-scattering albedo
+(0.99) and the analytic optical-depth integral `1 - exp(-sigma_e * ds)`. The
+`strength`, `direct_boost`, and unused `aerial_haze` uniforms are gone. The old
+code multiplied by density and divided by `sigma_e`, which made the radiance
+depend on `1 / absorption`; an 8x presentation scale (times a 1.6x
+`direct_boost`) had been compensating for it, so removing the fudge factors also
+removes that 12.8x over-brightness.
+
+This item is visually accepted on a native Vulkan capture (NVIDIA RTX 5070,
+Xvfb `:99`, rocket mode, `xdotool` launch, `import`):
+
+- Inside the deck at t+20 s the old build clipped the whole frame to sRGB mean
+  234 (HUD unreadable, no horizon); the physical build gives sRGB mean 137 with
+  the horizon curvature, rocket contrast, and HUD all readable. The statistic is
+  stable across frames (233-234 before, 137-138 after) over a clean 400x200
+  sample of the deck.
+- The in-cloud level now equals the modelled ambient term (~12% of solar
+  irradiance), which is the physically expected whiteout brightness rather than
+  a display-clipped white.
+
+Remaining future work: multi-layer clouds, terrain cloud shadows,
+atmosphere-attenuated sun, and distance-adaptive steps.
+
+Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
+`DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then
+`xdotool windowfocus <id> key space` and `import -window root frame.png`.
 
 ## Validation and commit protocol
 

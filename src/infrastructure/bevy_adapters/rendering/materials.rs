@@ -109,6 +109,13 @@ pub fn create_cloud_material(
 /// Maximum sun-march steps; must match `MAX_LIGHT_STEPS` in `clouds.wgsl`.
 pub const MAX_CLOUD_LIGHT_STEPS: f32 = 8.0;
 
+/// Single-scattering albedo of cloud droplets, unitless. Must match
+/// `CLOUD_ALBEDO` in `clouds.wgsl`. Water absorbs almost nothing at visible
+/// wavelengths, so droplet scattering is nearly conservative; this is a
+/// physical constant, not a brightness knob. No presentation scale factor is
+/// applied to the single-scatter integral.
+pub const CLOUD_SINGLE_SCATTER_ALBEDO: f32 = 0.99;
+
 /// Uniform parameters for the volumetric cloud shader. Field order and types
 /// must match the `CloudParams` WGSL struct exactly.
 ///
@@ -117,7 +124,9 @@ pub const MAX_CLOUD_LIGHT_STEPS: f32 = 8.0;
 /// Perlin-Worley field (co-rotating with the planet via `planet_rotation`),
 /// carves it with the weather map and detail erosion, and integrates
 /// sun-scattering with a triple-lobe Henyey-Greenstein phase, powder term, and
-/// multi-scatter octaves.
+/// multi-scatter octaves. The step integral is the physical single-scatter
+/// form, `albedo * (1 - exp(-sigma_e ds))` in the incoming radiance scale, so
+/// every uniform above has a physical meaning.
 #[derive(Clone, Copy, Debug, Default, ShaderType, Reflect)]
 pub struct CloudParams {
     /// Planet centre in the camera-relative render frame.
@@ -157,24 +166,18 @@ pub struct CloudParams {
     pub wind_speed: f32,
     /// Horizontal wind direction in the body-fixed x/z plane.
     pub wind_direction: Vec2,
-    /// Aerial-haze blend toward the cloud base.
-    pub aerial_haze: f32,
     /// Primary ray-march step count.
     pub primary_steps: f32,
     /// Sun-march step count across the full cloud slab.
     pub light_steps: f32,
     /// Number of multi-scatter octaves.
     pub multi_scatter_octaves: f32,
-    /// Overall scattering-radiance scale.
-    pub strength: f32,
     /// Ambient sky colour used to light cloud interiors (top of the deck).
     pub sky_color: Vec3,
     /// Ambient ground colour used to light cloud bases (bottom of the deck).
     pub ground_color: Vec3,
     /// Ambient irradiance as a fraction of the direct solar irradiance.
     pub ambient_fraction: f32,
-    /// Direct-scattering boost (spec section 4.2 silver-lining emphasis).
-    pub direct_boost: f32,
 }
 
 impl CloudParams {
@@ -200,15 +203,12 @@ impl CloudParams {
             erosion_scale: 0.5,
             wind_speed: 18.0,
             wind_direction: Vec2::new(1.0, 0.2),
-            aerial_haze: 0.35,
             primary_steps: 96.0,
             light_steps: MAX_CLOUD_LIGHT_STEPS,
             multi_scatter_octaves: 3.0,
-            strength: 0.08,
             sky_color: Vec3::new(0.5, 0.7, 1.0),
             ground_color: Vec3::new(0.35, 0.32, 0.28),
             ambient_fraction: 0.12,
-            direct_boost: 1.6,
         }
     }
 }
