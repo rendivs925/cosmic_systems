@@ -14,7 +14,7 @@ The goal is to move past naive volumetric solutions—such as flat billboard par
 | ----- | ----- | ----- | 
 | **Geometry & Volume** | Standard 2D billboards, intersecting planes, or static bounding meshes. | Dynamic atmosphere shell bounded ray marching over 3D noise volume functions ($100\,\text{km}$ planar or spherical planetary shell). | 
 | **Density Noise** | Single-octave Perlin noise or uncompressed 2D heightmaps. | Composite **Perlin-Worley 3D Noise** combined with high-frequency 3D Worley erosion and curl-noise turbulence. | 
-| **Light Transport** | Single Lambertian or Blinn-Phong directional shading applied to density. | **Beer-Lambert Extinction** + **Dual-Lobe Henyey-Greenstein Phase Function** + **Powder Effect** + **Multiple Scattering Approximation**. | 
+| **Light Transport** | Single Lambertian or Blinn-Phong directional shading applied to density. | **Beer-Lambert Extinction** + **Triple-Lobe Henyey-Greenstein Phase Function** + **Diffuse Multiple Scattering** + **Multiple Scattering Approximation**. | 
 | **Volumetric Sampling** | Fixed-step ray marching with severe aliasing and slice artifacts. | Adaptive step-size ray marching with screen-space stochastic jittering, distance attenuation, and temporal reprojection (quarter-res rendering). | 
 | **Cloud Morphometry** | Static cloud density profiles without vertical variation. | Altitude-dependent density curves driven by a dynamic 2D **Weather Map** (Coverage, Precipitation, Cloud Height Type). | 
 
@@ -81,6 +81,40 @@ $$
 
 Where $\vec{\Psi}$ is a 3D potential field composed of simplex noise, guaranteeing mass-conserving, divergence-free incompressible flow ($\nabla \cdot \vec{v} = 0$).
 
+Curl-noise advection is not implemented in the production renderer: advection is
+a uniform translation along the measured wind vector. That is adequate at the
+current feature sizes and presentation clock, but it is a known divergence from
+this specification.
+
+### 3.5 Weather-Map Tiling and Advection
+
+The weather map is a periodic 2D field in body-fixed equirectangular
+coordinates. Sampling it once across the sphere puts every feature at synoptic
+scale (thousands of kilometres), so a flight view sees a single coverage value.
+The renderer samples it at an integer tiling factor of 48, which adds regional
+structure while keeping the longitude and pole seams closed; the generator's
+cell period equals its per-octave frequency so the map wraps exactly.
+
+Coverage and the 3D density field must advect at the same measured wind speed.
+For a body-fixed map, one UV unit spans the planet's circumference, so the drift
+in UV per second is
+
+$$
+\Delta u = \frac{V_{\text{wind}}}{2 \pi R}.
+$$
+
+The earlier fixed `1.0e-6` coefficient ignored the wind speed and drifted at
+about 40 m/s, which sheared the coverage pattern away from the cloud shapes over
+time.
+
+### 3.6 Layered Decks
+
+The production renderer draws two spherical slabs from the same shader: a
+boundary-layer water deck and a thin high cirrus veil. Both are camera-centred
+proxies, so their transparent draw order cannot come from view distance; the
+renderer sets each material's sort bias every frame from the camera's
+planet-centric radius and draws the farther slab first.
+
 ---
 
 ## 4. Atmospheric Light Transport & Scattering Physics
@@ -133,24 +167,59 @@ $$
 * **Recommended Parameters:** $g_{\text{forward}} \approx 0.82$, $g_{\text{backward}} \approx -0.35$, $g_{\text{side}} \approx 0.10$, blending weights $w_1 = 0.25$, $w_2 = 0.15$.
 * $\theta$ is the angle between the sun direction vector $\vec{L}$ and the view ray direction vector $\vec{V}$ ($\cos\theta = \vec{L} \cdot \vec{V}$).
 
-### 4.3 Powder Sugar Effect (Dark Edge Inversion)
+### 4.3 Single-Scatter Step Integral
 
-Thick cumulus cloud tops viewed toward the light source exhibit high internal reflection. However, deep inside clouds, light depletes rapidly. To prevent deep interior clouds from shading into pure flat black, apply the **Sugar/Powder Effect**:
+The radiance scattered toward the camera from one step is the incoming radiance
+times the droplet single-scattering albedo and the analytic optical-depth
+integral over that step. With `sigma_e = rho * absorption` and step length
+`Delta s`:
 
 $$
-E_{\text{powder}}(\rho, \Delta s) = 1.0 - \exp\left( -2.0 \cdot \rho \cdot \Delta s \right)
+L_i = \omega_0 \cdot L_{\text{in}} \cdot \left(1 - \exp(-\sigma_e \cdot \Delta s)\right)
 $$
 
 $$
-T_{\text{phase}}(\theta, \rho, \Delta s) = 2.0 \cdot P_{\text{triple}}(\theta) \cdot E_{\text{powder}}(\rho, \Delta s)
+L_{\text{in}} = L_{\text{sun}} \cdot T_{\text{multi}} \cdot P_{\text{triple}}(\theta) + L_{\text{diffuse}}
 $$
+
+with `omega_0 = 0.99` for water droplets. The accumulated in-scatter is
+`L += T_i * L_i`, and the transmittance is updated with the same step.
+
+Two consequences matter:
+
+* The source radiance is per unit *optical depth*, so there is no division by
+  `sigma_e` and the result cannot depend on how the optical depth is split
+  between density and the extinction coefficient.
+* Optically thin cloud is dimmed automatically by `1 - exp(-tau)`. A separate
+  artistic "powder" multiplier is not needed, and the earlier version of this
+  specification used the *sun-path* density for it, which darkened exactly the
+  sunlit tops. That term has been removed.
+
+### 4.3.1 Diffuse Multiple Scattering
+
+Cloud droplets are nearly conservative scatterers, so an optically thick deck
+reflects most of the sunlight it intercepts as a near-Lambertian layer. Rather
+than only attenuating the direct term, add the diffuse radiance implied by the
+layer reflectance:
+
+$$
+L_{\text{diffuse}} = \omega_0 \cdot \frac{E_{\text{sun}}}{\pi} \cdot \cos\theta_{\text{sun}} \cdot c(h)
+$$
+
+where `cos(theta_sun)` is the cosine between the local vertical and the sun
+direction, and `c(h)` is a height tint: white at the sunlit top of the deck and
+the ground-bounce colour at its base. Because the step integral weights this
+source by `1 - exp(-sigma_e ds)`, a thin wisp reflects proportionally less, and
+the term vanishes at night and across the terminator. This replaced the fixed
+`ambient_fraction` scalar.
 
 ### 4.4 Multiple Scattering Approximation (Octave-Based Attenuation Decay)
 
 Single-scattering models render cloud centers too dark. To simulate multiple internal bounces without expensive unbiased path tracing, accumulate scattering across $K$ attenuation octaves with decreasing density scale and increasing forward scattering anisotropy:
 
 $$
-T_{\text{multi}}(\rho, d_{\text{sun}}) = \sum_{k=0}^{K-1} \frac{c_k}{2^k} \cdot \exp\left( -d_{\text{sun}} \cdot \sigma_e \cdot a^k \cdot \rho \right)
+T_{\text{multi}}(\tau_{\text{sun}}) = \sum_{k=0}^{K-1} c_k \cdot \exp\left( -\tau_{\text{sun}} \cdot a^k \right),
+\qquad \tau_{\text{sun}} = \int_{\text{path}} \rho \, \sigma_e \, ds
 $$
 
 * **Constants:** $a = 0.5$ (extinction reduction factor per bounce), $c_k = 0.5^k$ (energy conservation attenuation factor per octave).
@@ -192,7 +261,19 @@ To eliminate slice-aligned banding artifacts during ray marching:
 
 ## 6. Complete Production GLSL Shader Implementation
 
-The following complete fragment shader implements volumetric ray marching, 3D Perlin-Worley density evaluation, multi-octave light transport, phase functions, and atmospheric fog blending.
+The following complete fragment shader implements volumetric ray marching, 3D
+Perlin-Worley density evaluation, multi-octave light transport, phase functions,
+and atmospheric fog blending.
+
+> **Implementation note.** The production renderer is
+> `assets/shaders/clouds.wgsl`, bound to `CloudParams` in
+> `src/infrastructure/bevy_adapters/rendering/materials.rs`. It follows sections
+> 4.1-4.4 and 5 but has since diverged from this appendix in four ways: it emits
+> premultiplied HDR radiance instead of tone mapping, uses interleaved-gradient
+> noise instead of a blue-noise texture, has no aerial-haze blend (the shared
+> atmospheric fog handles aerial perspective), and draws two decks (a water deck
+> and a high cirrus veil). Treat this appendix as the algorithmic reference, not
+> a literal listing.
 
 ```glsl
 precision highp float;
@@ -216,10 +297,12 @@ uniform float uDensityScale;
 uniform float uErosionScale;
 uniform float uAbsorption;
 uniform float uForwardG;
-uniform float uPowderStrength;
 uniform float uWindSpeed;
-uniform float uAerialHaze;
+uniform float uWindDirectionX;
+uniform float uWindDirectionZ;
 uniform float uMultiScatteringOctaves;
+uniform float uBottomRadius;
+uniform float uTopRadius;
 
 uniform int uPrimarySteps;
 uniform int uLightSteps;
@@ -227,7 +310,6 @@ uniform int uLightSteps;
 uniform sampler3D uBaseNoise;
 uniform sampler3D uDetailNoise;
 uniform sampler2D uWeatherMap;
-uniform sampler2D uBlueNoise;
 
 uniform vec3 uBoxMin;
 uniform vec3 uBoxMax;
@@ -320,39 +402,48 @@ float sampleDensity(vec3 p) {
     return clamp(finalDensity * uDensityScale, 0.0, 1.0);
 }
 
-// Light Raymarching with Multi-Scattering
-float marchToSun(vec3 pos, float cosTheta) {
-    vec3 lightStep = uSunDir * ((uBoxMax.y - uBoxMin.y) / float(uLightSteps) * 0.12);
-    float totalDensity = 0.0;
+// Light raymarching with multi-scattering. The step length is part of the
+// optical depth; omitting it under-estimates sunlight extinction by the step
+// length in metres.
+float marchToSun(vec3 pos) {
+    float stepLength = (uTopRadius - uBottomRadius) / max(uLightSteps, 1.0);
+    vec3 lightStep = uSunDir * stepLength;
+    float densityLength = 0.0;
     vec3 currPos = pos;
 
-    for (int i = 0; i < 6; i++) {
+    for (uint i = 0u; i < MAX_LIGHT_STEPS; i++) {
+        if (float(i) >= uLightSteps) break;
         currPos += lightStep;
-        totalDensity += sampleDensity(currPos);
+        densityLength += sampleDensity(currPos) * stepLength;
     }
 
-    // Multi-scattering octaves
     float multiScatteringTransmittance = 0.0;
     float a = 0.5;
     float b = 0.5;
 
-    for (float oct = 0.0; oct < 4.0; oct += 1.0) {
-        if (oct >= uMultiScatteringOctaves) break;
-        
-        float powA = pow(a, oct);
-        float powB = pow(b, oct);
-
-        float opticalDepth = totalDensity * uAbsorption * powA;
-        float stepTransmittance = exp(-opticalDepth);
-        
-        multiScatteringTransmittance += stepTransmittance * powB;
+    for (uint oct = 0u; oct < MAX_MULTI_OCTAVES; oct++) {
+        if (float(oct) >= uMultiScatteringOctaves) break;
+        float powA = pow(a, float(oct));
+        float powB = pow(b, float(oct));
+        float opticalDepth = densityLength * uAbsorption * powA;
+        multiScatteringTransmittance += exp(-opticalDepth) * powB;
     }
 
-    // Powder sugar edge darkener
-    float powder = 1.0 - exp(-totalDensity * uAbsorption * 2.5 * uPowderStrength);
-    float powderBlend = mix(1.0, powder, clamp(cosTheta * 0.5 + 0.5, 0.0, 1.0));
+    return multiScatteringTransmittance;
+}
 
-    return multiScatteringTransmittance * powderBlend;
+// Per-step in-scatter (see 4.3). `stepTransmittance` is exp(-sigma_e * ds).
+vec3 inscatter(vec3 samplePos, float density, float stepTransmittance) {
+    float sigma_e = density * uAbsorption;
+    float stepOpticalDepth = sigma_e * ds;
+    float sunVisibility = marchToSun(samplePos);
+    float phase = tripleLobePhase(cosTheta, uForwardG);
+    float sunCos = saturate(dot(normalize(samplePos), uSunDir));
+    float heightT = saturate((length(samplePos) - uBottomRadius) / layer);
+
+    vec3 source = uSunColor * sunVisibility * phase
+        + uSunColor * (0.99 / PI) * sunCos * mix(uGroundColor, vec3(1.0), heightT);
+    return source * 0.99 * (1.0 - stepTransmittance);
 }
 
 // Atmospheric Background Calculation
@@ -429,10 +520,10 @@ void main() {
         }
     }
 
-    float distanceFog = clamp((tNear / 180.0) * uAerialHaze, 0.0, 0.85);
-    vec3 cloudResult = mix(accumulatedColor, backgroundSky * (1.0 - accumulatedTransmittance), distanceFog);
-
-    vec3 finalColor = mix(backgroundSky, cloudResult, 1.0 - accumulatedTransmittance);
+    // Premultiplied composite; aerial perspective is applied by the shared
+    // atmospheric fog, so no haze blend lives in this shader.
+    vec3 finalColor = accumulatedColor
+        + backgroundSky * (1.0 - accumulatedTransmittance);
     
     // ACES Filmic Tone Mapping
     finalColor = clamp((finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14), 0.0, 1.0);

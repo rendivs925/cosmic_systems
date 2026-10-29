@@ -160,12 +160,20 @@ fn sample_density(body_pos: vec3<f32>) -> f32 {
     // structure; integer multiples keep the longitude and pole seams closed,
     // and scaling the whole UV (drift included) preserves the wind's physical
     // speed. WEATHER_TILE * 3 fBm cells keeps the largest features near 300 km.
+    // Coverage and the density field must advect at the same measured wind
+    // speed. The weather map is a body-fixed equirectangular field, so one UV
+    // unit spans the equatorial circumference; dividing by it converts metres
+    // per second into UV per second (latitude foreshortening is ignored, which
+    // is a presentation approximation). The previous fixed `1.0e-6` coefficient
+    // ignored `wind_speed` and drifted at ~40 m/s, so the coverage pattern
+    // sheared away from the cloud shapes over time.
     let body_dir = normalize(body_pos);
-    let drift = clouds.wind_direction * clouds.time_s * 1.0e-6;
+    let weather_drift = clouds.wind_direction * clouds.wind_speed * clouds.time_s
+        / (2.0 * PI * max(clouds.bottom_radius, 1.0));
     let weather = textureSample(
         weather_map,
         weather_map_sampler,
-        (weather_uv(body_dir) + drift) * WEATHER_TILE,
+        (weather_uv(body_dir) + weather_drift) * WEATHER_TILE,
     );
     let coverage = saturate(clouds.coverage * weather.r * 1.4);
     if coverage < 0.01 {
