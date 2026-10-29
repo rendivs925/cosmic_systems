@@ -350,40 +350,59 @@ The already-agreed cloud model is unchanged and follows Phase 6:
   single-scattering albedo about 0.99-1.0.
 - Beer-Lambert extinction; full-slab sun march with delta-s and 8-12 steps;
   remove `strength`, `direct_boost`, and dead `aerial_haze`.
-- Atmosphere-attenuated sun, sky-derived ambient, multi-scatter, physical
-  powder, distance-adaptive steps.
+- Atmosphere-attenuated sun, sky-derived ambient, multi-scatter,
+  distance-adaptive steps.
 - Multi-layer clouds; cloud shadows on terrain; validation against Phase 6
   climatology.
 
-Status: the current shader already implements Beer-Lambert extinction, physical
-powder, multi-scatter octaves, a height-graded ambient term, and measured
-coverage/type/wind from the climatology layer. The sun march now traverses the
-full cloud slab with 8 steps instead of a fixed 12% slice, so cloud interiors
-and bases receive the optical depth the model intends.
+Status: the current shader implements Beer-Lambert extinction, multi-scatter
+octaves, a physically scaled diffuse multiple-scattering term, and measured
+coverage/type/wind from the climatology layer. The sun march traverses the full
+cloud slab with 8 steps instead of a fixed 12% slice.
 
-The single-scatter step integral is now the physical form: the incoming direct
-and ambient radiance is multiplied by the droplet single-scattering albedo
-(0.99) and the analytic optical-depth integral `1 - exp(-sigma_e * ds)`. The
+The single-scatter step integral is the physical form: the incoming direct and
+ambient radiance is multiplied by the droplet single-scattering albedo (0.99)
+and the analytic optical-depth integral `1 - exp(-sigma_e * ds)`. The
 `strength`, `direct_boost`, and unused `aerial_haze` uniforms are gone. The old
 code multiplied by density and divided by `sigma_e`, which made the radiance
 depend on `1 / absorption`; an 8x presentation scale (times a 1.6x
 `direct_boost`) had been compensating for it, so removing the fudge factors also
 removes that 12.8x over-brightness.
 
-This item is visually accepted on a native Vulkan capture (NVIDIA RTX 5070,
-Xvfb `:99`, rocket mode, `xdotool` launch, `import`):
+The sun march now includes the physical step length in its optical depth. It
+previously summed dimensionless density and multiplied by `absorption`, giving
+optical depths of about 0.02 instead of about 9, so sunlight was effectively
+unattenuated inside the deck. The separate `powder_strength` term then
+multiplied that near-zero optical depth by 2.5 and collapsed the direct term to
+about 4% of its value, and because it was largest where the sun path is clear it
+darkened exactly the sunlit cloud tops. The powder term is removed: optically
+thin cloud is already dimmed by the single-scatter integral, and the triple-lobe
+phase function keeps the silver lining.
 
-- Inside the deck at t+20 s the old build clipped the whole frame to sRGB mean
-  234 (HUD unreadable, no horizon); the physical build gives sRGB mean 137 with
-  the horizon curvature, rocket contrast, and HUD all readable. The statistic is
-  stable across frames (233-234 before, 137-138 after) over a clean 400x200
-  sample of the deck.
-- The in-cloud level now equals the modelled ambient term (~12% of solar
-  irradiance), which is the physically expected whiteout brightness rather than
-  a display-clipped white.
+The fixed `ambient_fraction` and `sky_color` uniforms are also gone. Diffuse
+multiple scattering is now `albedo * E * cos(sun zenith) / PI`, the near-
+Lambertian reflectance of a nearly conservative water-cloud layer, tinted white
+at the sunlit top and by the ground bounce at the base. Because the step
+integral weights it by the local scattering fraction, thin wisps reflect
+proportionally less, and the deck now darkens physically at night and across the
+terminator instead of glowing from the fixed 12% term.
 
-Remaining future work: multi-layer clouds, terrain cloud shadows,
-atmosphere-attenuated sun, and distance-adaptive steps.
+Native Vulkan capture (NVIDIA RTX 5070, Xvfb `:99`, rocket mode, `xdotool`
+launch, `import`), same flight, 500x300 deck sample:
+
+| build | deck from above, t+105 s | in-deck, t+20 s |
+| --- | --- | --- |
+| unattenuated sun + powder | sRGB 159, sd 1.4 | sRGB 137, sd 7.3 |
+| step-length optical depth | sRGB 149, sd 1.9 | sRGB 142, sd 7.2 |
+| + physical diffuse term | sRGB 197, sd 0.8 | sRGB 193, sd 14.8 |
+
+The surface camera at t+132 s now shows a white sunlit deck over blue ocean with
+a visible layer edge. Earlier captures either clipped the deck to a flat white
+sheet (pre-`b52ed82`) or left it ambient-only gray. The deck still lacks
+macro-scale billows: the weather map varies at synoptic scale and the density
+tiling is 4.5 km, so from 50 km the integrated deck is smooth. That, multi-layer
+decks, terrain cloud shadows, atmosphere-attenuated sun, and distance-adaptive
+steps remain future work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then

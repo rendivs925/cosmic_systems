@@ -123,10 +123,10 @@ pub const CLOUD_SINGLE_SCATTER_ALBEDO: f32 = 0.99;
 /// cloud shell between `bottom_radius` and `top_radius`, samples the 3D
 /// Perlin-Worley field (co-rotating with the planet via `planet_rotation`),
 /// carves it with the weather map and detail erosion, and integrates
-/// sun-scattering with a triple-lobe Henyey-Greenstein phase, powder term, and
-/// multi-scatter octaves. The step integral is the physical single-scatter
-/// form, `albedo * (1 - exp(-sigma_e ds))` in the incoming radiance scale, so
-/// every uniform above has a physical meaning.
+/// sun-scattering with a triple-lobe Henyey-Greenstein phase and multi-scatter
+/// octaves. The step integral is the physical single-scatter form,
+/// `albedo * (1 - exp(-sigma_e ds))` in the incoming radiance scale, so every
+/// uniform above has a physical meaning.
 #[derive(Clone, Copy, Debug, Default, ShaderType, Reflect)]
 pub struct CloudParams {
     /// Planet centre in the camera-relative render frame.
@@ -154,8 +154,6 @@ pub struct CloudParams {
     pub absorption: f32,
     /// Forward Henyey-Greenstein lobe asymmetry.
     pub forward_g: f32,
-    /// Powder (dark-edge inversion) strength.
-    pub powder_strength: f32,
     /// Base noise frequency, in volume tiles per metre.
     pub noise_scale: f32,
     /// Detail noise frequency relative to the base.
@@ -172,12 +170,8 @@ pub struct CloudParams {
     pub light_steps: f32,
     /// Number of multi-scatter octaves.
     pub multi_scatter_octaves: f32,
-    /// Ambient sky colour used to light cloud interiors (top of the deck).
-    pub sky_color: Vec3,
     /// Ambient ground colour used to light cloud bases (bottom of the deck).
     pub ground_color: Vec3,
-    /// Ambient irradiance as a fraction of the direct solar irradiance.
-    pub ambient_fraction: f32,
 }
 
 impl CloudParams {
@@ -197,7 +191,6 @@ impl CloudParams {
             density_scale: 0.6,
             absorption: 0.01,
             forward_g: 0.82,
-            powder_strength: 1.0,
             noise_scale: 1.0 / 4500.0,
             detail_scale: 2.5,
             erosion_scale: 0.5,
@@ -206,9 +199,7 @@ impl CloudParams {
             primary_steps: 96.0,
             light_steps: MAX_CLOUD_LIGHT_STEPS,
             multi_scatter_octaves: 3.0,
-            sky_color: Vec3::new(0.5, 0.7, 1.0),
             ground_color: Vec3::new(0.35, 0.32, 0.28),
-            ambient_fraction: 0.12,
         }
     }
 }

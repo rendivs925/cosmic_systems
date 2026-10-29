@@ -4,15 +4,14 @@
 // Each fragment marches the view ray through the slab, sampling a 3D
 // Perlin-Worley density field (co-rotating with the planet), carving it with the
 // weather map and high-frequency Worley erosion, then integrating
-// sun-scattering with a triple-lobe Henyey-Greenstein phase, a powder
-// (dark-edge) term, and multi-scatter octaves. The scattering integral is the
-// physical single-scatter form: the source radiance is multiplied by the
-// analytic optical-depth integral `(1 - exp(-sigma_e * ds))` and the droplet
-// single-scattering albedo, with no presentation fudge factors. Output is
-// premultiplied: rgb is
-// the scattered radiance in the same radiometric scale as the PBR directional
-// light (colour * illuminance), and alpha is 1 - transmittance, so the blend
-// over terrain and sky is `cloud_radiance + background * transmittance`.
+// sun-scattering with a triple-lobe Henyey-Greenstein phase and multi-scatter
+// octaves. The scattering integral is the physical single-scatter form: the
+// source radiance is multiplied by the analytic optical-depth integral
+// `(1 - exp(-sigma_e * ds))` and the droplet single-scattering albedo, with no
+// presentation fudge factors. Output is premultiplied: rgb is the scattered
+// radiance in the same radiometric scale as the PBR directional light
+// (colour * illuminance), and alpha is 1 - transmittance, so the blend over
+// terrain and sky is `cloud_radiance + background * transmittance`.
 //
 // Presentation only: nothing here feeds collision or any simulation state.
 
@@ -35,7 +34,6 @@ struct CloudParams {
     density_scale: f32,
     absorption: f32,
     forward_g: f32,
-    powder_strength: f32,
     noise_scale: f32,
     detail_scale: f32,
     erosion_scale: f32,
@@ -44,9 +42,7 @@ struct CloudParams {
     primary_steps: f32,
     light_steps: f32,
     multi_scatter_octaves: f32,
-    sky_color: vec3<f32>,
     ground_color: vec3<f32>,
-    ambient_fraction: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> clouds: CloudParams;
@@ -199,21 +195,30 @@ fn sample_density(body_pos: vec3<f32>) -> f32 {
     return saturate(final_density * clouds.density_scale);
 }
 
-// Sun visibility: march toward the Sun across the whole cloud slab, then fold
-// in multi-scatter octaves and the powder (dark-edge) term (spec sections
-// 4.3-4.4). A photon leaving a sample must cross the remaining cloud to the top,
-// so a fixed small fraction of the layer would under-estimate optical depth.
-fn march_to_sun(body_pos: vec3<f32>, cos_theta: f32) -> f32 {
+// Sun visibility: march toward the Sun across the whole cloud slab and sum the
+// density-length a photon must cross to reach the top (spec section 4.3).
+// `step_length` is a real path length in metres, so the summed density times
+// the extinction coefficient is the optical depth. Multi-scatter octaves then
+// add the energy that higher scattering orders return along the same direction
+// (spec section 4.4).
+//
+// There is deliberately no separate powder term: the previous one multiplied
+// this visibility by `1 - exp(-density_length * absorption * 2.5)`, which is
+// largest where the Sun path is clear. That made sunlit cloud tops the darkest
+// part of the deck and left the whole layer at ambient level. Optically thin
+// cloud is already dimmed by the single-scatter step integral below.
+fn march_to_sun(body_pos: vec3<f32>) -> f32 {
     let layer = clouds.top_radius - clouds.bottom_radius;
-    let light_step = clouds.sun_direction * (layer / max(clouds.light_steps, 1.0));
-    var total_density = 0.0;
+    let step_length = layer / max(clouds.light_steps, 1.0);
+    let light_step = clouds.sun_direction * step_length;
+    var density_length = 0.0;
     var p = body_pos;
     for (var i: u32 = 0u; i < MAX_LIGHT_STEPS; i = i + 1u) {
         if f32(i) >= clouds.light_steps {
             break;
         }
         p += light_step;
-        total_density += sample_density(p);
+        density_length += sample_density(p) * step_length;
     }
 
     var multi = 0.0;
@@ -221,13 +226,10 @@ fn march_to_sun(body_pos: vec3<f32>, cos_theta: f32) -> f32 {
         if f32(octave) >= clouds.multi_scatter_octaves {
             break;
         }
-        let optical_depth = total_density * clouds.absorption * pow(0.5, f32(octave));
+        let optical_depth = density_length * clouds.absorption * pow(0.5, f32(octave));
         multi += exp(-optical_depth) * pow(0.5, f32(octave));
     }
-
-    let powder = 1.0 - exp(-total_density * clouds.absorption * 2.5 * clouds.powder_strength);
-    let powder_blend = mix(1.0, powder, saturate(cos_theta * 0.5 + 0.5));
-    return multi * powder_blend;
+    return multi;
 }
 
 @fragment
@@ -293,21 +295,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             let sigma_e = density * clouds.absorption;
             let step_optical_depth = sigma_e * step_size;
             let step_transmittance = exp(-step_optical_depth);
-            let sun_visibility = march_to_sun(sample_pos, cos_theta);
+            let sun_visibility = march_to_sun(sample_pos);
             // Direct single scattering from the triple-lobe phase function,
-            // plus a height-graded ambient term standing in for the sky and
-            // ground light that multiple scattering would deliver (spec
-            // 4.2-4.4).
+            // plus diffuse multiple scattering. Cloud droplets are nearly
+            // conservative scatterers, so an optically thick deck reflects most
+            // of the sunlight it intercepts as a near-Lambertian layer: the
+            // diffuse radiance is `albedo * E * cos(sun zenith) / PI`, tinted
+            // by the sky above and the ground below (spec 4.2-4.4). Because the
+            // step integral weights this source by the local scattering
+            // fraction, an optically thin wisp reflects proportionally less.
             let height_fraction = saturate(
                 (length(sample_pos) - clouds.bottom_radius) / layer,
             );
             let direct = clouds.sun_irradiance * sun_visibility * phase;
-            let ambient_color = mix(
-                clouds.ground_color * 0.35,
-                clouds.sky_color * 0.85,
-                height_fraction,
-            );
-            let ambient = clouds.sun_irradiance * clouds.ambient_fraction
+            let sun_cos = saturate(dot(normalize(sample_pos), clouds.sun_direction));
+            // Droplet scattering is spectrally neutral, so the diffuse light
+            // is white at the sunlit top and takes the ground bounce colour at
+            // the base.
+            let ambient_color = mix(clouds.ground_color, vec3(1.0), height_fraction);
+            let ambient = clouds.sun_irradiance * (CLOUD_ALBEDO / PI) * sun_cos
                 * ambient_color;
             // Radiance scattered toward the camera from this step. `sigma_e *
             // ds` is the step's optical depth, so `1 - step_transmittance` is
