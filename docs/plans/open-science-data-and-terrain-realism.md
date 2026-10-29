@@ -417,9 +417,19 @@ checks both seams at several seeds.
 Effect on the same flight: the deck-from-above sample gains real cellular
 structure, with sRGB standard deviation rising from 0.8 to 3.7 while the mean
 moves from 197 to 177 as coverage holes open. At 3x zoom the deck shows cloud
-cells rather than a featureless gradient. Multi-layer decks, terrain cloud
-shadows, atmosphere-attenuated sun, and distance-adaptive steps remain future
-work.
+cells rather than a featureless gradient.
+
+The two noise volumes and the weather map now also carry full box-filtered mip
+chains, built with seam-wrapped 2x2x2 (3D) and 2x2 (2D) filtering. The samplers
+already asked for linear mip filtering but the textures had a single level, so a
+minified deck aliased and shimmered as the camera moved. The chains preserve the
+field mean to within one 8-bit step (tested) and add 14% (3D) and 33% (2D)
+bytes. On the deck-from-above sample the standard deviation falls from 3.03 to
+2.80 with the mean unchanged (180.1 to 180.5), which is the expected smoothing
+of sub-pixel detail.
+
+Multi-layer decks, terrain cloud shadows, atmosphere-attenuated sun, and
+distance-adaptive steps remain future work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then
