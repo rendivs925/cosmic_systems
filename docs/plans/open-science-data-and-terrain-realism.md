@@ -448,8 +448,21 @@ measured sRGB 96 against a black ground. With the gate it measures 0.8, and the
 daylight term is unchanged because the gate is exactly 1 for any Sun more than
 about one degree above the horizon.
 
-Terrain cloud shadows, atmosphere-attenuated sun, and distance-adaptive steps
-remain future work.
+Direct sunlight now also carries the atmosphere's beam transmittance.
+`AtmosphericOptics::sun_transmittance` integrates the shared extinction profile
+over the whole column above an altitude (64-step midpoint integral, so Rayleigh,
+Mie, and the ozone band keep their own scale heights) and applies the
+plane-parallel airmass `1 / cos(zenith)`, clamped so a Sun on the horizon stays
+finite. The directional light keeps the top-of-atmosphere illuminance scaled by
+the brightest channel and takes the per-channel ratio as its colour; the cloud
+decks evaluate the same function at their own altitude, so the cirrus stays
+brighter than the water deck at a low Sun. The sky dome still receives the
+top-of-atmosphere irradiance, which is the correct source for its scattering
+integral. At the pad with the Sun 58 degrees above the horizon the frame darkens
+2.3% in red, 5.5% in green, and 10.6% in blue, which is the expected Rayleigh
+removal of blue from the direct beam.
+
+Terrain cloud shadows and distance-adaptive steps remain future work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then

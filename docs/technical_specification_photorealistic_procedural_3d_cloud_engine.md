@@ -179,8 +179,13 @@ L_i = \omega_0 \cdot L_{\text{in}} \cdot \left(1 - \exp(-\sigma_e \cdot \Delta s
 $$
 
 $$
-L_{\text{in}} = L_{\text{sun}} \cdot T_{\text{multi}} \cdot P_{\text{triple}}(\theta) + L_{\text{diffuse}}
+L_{\text{in}} = L_{\text{sun}} \cdot T_{\text{beam}} \cdot T_{\text{multi}} \cdot P_{\text{triple}}(\theta) + L_{\text{diffuse}}
 $$
+
+`T_beam` is the atmosphere's per-channel transmittance of the direct beam at the
+deck altitude (`AtmosphericOptics::sun_transmittance`), which reddens and dims
+the sunlight as the Sun approaches the horizon. The diffuse term keeps the
+unattenuated irradiance because it is sky light rather than the beam.
 
 with `omega_0 = 0.99` for water droplets. The accumulated in-scatter is
 `L += T_i * L_i`, and the transmittance is updated with the same step.

@@ -105,7 +105,7 @@ use crate::infrastructure::bevy_adapters::rocket::entry::{
 };
 use crate::infrastructure::bevy_adapters::rocket::environment::{
     setup_rocket_sky_color, setup_rocket_sun_light, update_rocket_sky_ambient_light,
-    update_rocket_sky_color, update_sun_day_night_cycle,
+    update_rocket_sky_color, update_rocket_sun_attenuation, update_sun_day_night_cycle,
 };
 use crate::infrastructure::bevy_adapters::rocket::events::{
     CommsBlackoutEvent, CrashEvent, EngineCutoffEvent, EngineIgnitionEvent, FairingSeparatedEvent,
@@ -886,7 +886,12 @@ impl Plugin for RocketModePlugin {
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(
             Update,
-            (update_sun_day_night_cycle, update_rocket_sky_ambient_light).chain(),
+            (
+                update_sun_day_night_cycle,
+                update_rocket_sun_attenuation,
+                update_rocket_sky_ambient_light,
+            )
+                .chain(),
         );
     }
 }

@@ -121,6 +121,46 @@ impl AtmosphericOptics {
         ]
     }
 
+    /// Zenith optical depth of the whole atmosphere above `altitude_m`, per
+    /// RGB channel. Integrates the shared extinction profile, so it covers
+    /// Rayleigh, Mie, and the ozone band with their different scale heights.
+    pub fn overhead_optical_depth(&self, altitude_m: f32) -> [f32; 3] {
+        let top_m = self.thickness_m();
+        let start_m = altitude_m.clamp(0.0, top_m);
+        // A 64-step midpoint integration is exact enough for an exponential
+        // profile and cheap enough to run per frame.
+        const STEPS: u32 = 64;
+        let step_m = (top_m - start_m) / STEPS as f32;
+        let mut tau = [0.0f32; 3];
+        if step_m <= 0.0 {
+            return tau;
+        }
+        for step in 0..STEPS {
+            let sample_m = start_m + (step as f32 + 0.5) * step_m;
+            let extinction = self.extinction_per_m(sample_m);
+            for channel in 0..3 {
+                tau[channel] += extinction[channel] * step_m;
+            }
+        }
+        tau
+    }
+
+    /// Transmittance of the direct solar beam reaching `altitude_m`, per RGB
+    /// channel, when the Sun's cosine with the local vertical is `sun_cos`.
+    ///
+    /// The slant path is treated as plane-parallel with the standard airmass
+    /// `1 / cos(zenith)`, clamped to 50 so a Sun on the horizon cannot produce a
+    /// non-finite result. Callers gate the beam at the horizon themselves.
+    pub fn sun_transmittance(&self, altitude_m: f32, sun_cos: f32) -> [f32; 3] {
+        let airmass = 1.0 / sun_cos.clamp(1.0 / 50.0, 1.0);
+        let tau = self.overhead_optical_depth(altitude_m);
+        [
+            (-tau[0] * airmass).exp(),
+            (-tau[1] * airmass).exp(),
+            (-tau[2] * airmass).exp(),
+        ]
+    }
+
     /// Per-channel scattering coefficient at an altitude, in `1/m`. This drives
     /// the airlight added to distant surfaces.
     pub fn scattering_per_m(&self, altitude_m: f32) -> [f32; 3] {
@@ -166,6 +206,46 @@ mod tests {
                 <= optics.thickness_m()
         );
         assert!(optics.ozone_layer_altitude_m > 0.0);
+    }
+
+    #[test]
+    fn sun_transmittance_is_unity_above_the_atmosphere() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let top = optics.thickness_m();
+        for sun_cos in [1.0, 0.3, 0.05] {
+            let t = optics.sun_transmittance(top, sun_cos);
+            for channel in t {
+                assert!((channel - 1.0).abs() < 1e-6, "vacuum T={channel}");
+            }
+        }
+    }
+
+    #[test]
+    fn sun_transmittance_reddens_and_dims_toward_the_horizon() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let zenith = optics.sun_transmittance(0.0, 1.0);
+        let low = optics.sun_transmittance(0.0, 0.1);
+
+        // Blue is scattered out of the direct beam most strongly at zenith.
+        assert!(zenith[0] > zenith[1] && zenith[1] > zenith[2]);
+        assert!(zenith[2] > 0.5 && zenith[2] < 1.0);
+        // A low Sun travels through far more air in every channel.
+        for channel in 0..3 {
+            assert!(low[channel] < zenith[channel]);
+            assert!((0.0..=1.0).contains(&low[channel]));
+        }
+    }
+
+    #[test]
+    fn sun_transmittance_rises_with_altitude() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let sea = optics.sun_transmittance(0.0, 0.8);
+        let cloud = optics.sun_transmittance(3_000.0, 0.8);
+        let cirrus = optics.sun_transmittance(9_000.0, 0.8);
+        for channel in 0..3 {
+            assert!(cloud[channel] > sea[channel]);
+            assert!(cirrus[channel] > cloud[channel]);
+        }
     }
 
     #[test]

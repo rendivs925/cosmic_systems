@@ -20,6 +20,7 @@ use crate::domain::services::planet_factory::PlanetFactory;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_source::ElevationBounds;
+use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
 use crate::infrastructure::bevy_adapters::climate::MeasuredClimate;
@@ -735,6 +736,23 @@ pub fn update_rocket_clouds(
     if !elapsed_s.is_finite() {
         return;
     }
+    // Direct sunlight reaching each deck is attenuated by the atmosphere above
+    // it. Both decks sit above the ground, so their beams are less reddened
+    // than the observer's, and the high cirrus is brighter than the water deck
+    // at a low Sun.
+    let optics = AtmosphericOptics::for_body(bound_id.as_str(), surface_radius_m);
+    let cloud_sun_cos = rocket_query
+        .iter()
+        .next()
+        .map(|rocket| {
+            rocket
+                .dynamics
+                .position_m
+                .normalize_or_zero()
+                .dot(sun.direction)
+                .clamp(0.0, 1.0) as f32
+        })
+        .unwrap_or(1.0);
     let measured = measured_climate.as_ref().and_then(|climate| {
         let rocket = rocket_query.iter().next()?;
         climate_at_position(
@@ -760,6 +778,13 @@ pub fn update_rocket_clouds(
             material.params.planet_rotation = planet_rotation;
             material.params.sun_direction = sun_direction;
             material.params.sun_irradiance = sun_irradiance;
+            let deck_altitude_m = (0.5
+                * (material.params.bottom_radius + material.params.top_radius)
+                - surface_radius_m)
+                .max(0.0);
+            material.params.sun_transmittance = optics
+                .map(|optics| Vec3::from(optics.sun_transmittance(deck_altitude_m, cloud_sun_cos)))
+                .unwrap_or(Vec3::ONE);
             material.params.time_s = elapsed_s;
             let draws_first = match layer {
                 RocketCloudLayer::Cirrus => cirrus_draws_first,
@@ -859,6 +884,7 @@ mod tests {
         assert!(deck.light_steps <= MAX_CLOUD_LIGHT_STEPS);
         assert!(deck.multi_scatter_octaves >= 1.0);
         assert!((0.99..=1.0).contains(&CLOUD_SINGLE_SCATTER_ALBEDO));
+        assert_eq!(deck.sun_transmittance, Vec3::ONE);
         assert_eq!(deck.time_s, 0.0);
     }
 

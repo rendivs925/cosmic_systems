@@ -110,6 +110,86 @@ pub fn update_rocket_sky_ambient_light(
 #[derive(Component, Debug)]
 pub struct SunLight;
 
+/// Linear RGB of the reference sunlight colour before atmospheric attenuation.
+const SUN_LIGHT_LINEAR: [f32; 3] = [1.0, 1.0, 0.956];
+
+/// Attenuate the directional sunlight by the atmosphere between the Sun and the
+/// observer.
+///
+/// `solar_illuminance_lux` is the top-of-atmosphere value, which is the correct
+/// source for the sky's scattering integral, but the direct beam that reaches
+/// the ground is extinguished by the slant optical depth. Without this the
+/// scene stays full-bright and neutral at a low Sun. Presentation only: the
+/// flight atmosphere keeps its own authoritative density and pressure.
+pub fn update_rocket_sun_attenuation(
+    ephemeris_snapshot: Res<EphemerisSnapshot>,
+    bound_planet: Res<RocketBoundPlanet>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
+    planet_query: Query<&PlanetComponent>,
+    mut lights: Query<&mut DirectionalLight, With<SunLight>>,
+) {
+    let Some(bound_id) = bound_planet.0.as_ref() else {
+        return;
+    };
+    let Some(sun) = bound_planet_sun(&ephemeris_snapshot, bound_id) else {
+        return;
+    };
+    let Some(rocket) = rocket_query.iter().next() else {
+        return;
+    };
+    let Some(planet) = planet_query
+        .iter()
+        .find(|planet| planet.matches_body(bound_id))
+    else {
+        return;
+    };
+    let surface_radius_m = planet.domain_planet.radius_km * 1_000.0;
+    let optics = AtmosphericOptics::for_body(bound_id.as_str(), surface_radius_m);
+    let top_of_atmosphere_lux = solar_illuminance_lux(sun.distance_m);
+
+    let (illuminance, color) = match optics {
+        Some(optics) => {
+            let sun_cos = rocket
+                .dynamics
+                .position_m
+                .normalize_or_zero()
+                .dot(sun.direction)
+                .clamp(0.0, 1.0) as f32;
+            let altitude_m =
+                (rocket.dynamics.position_m.length() - f64::from(surface_radius_m)).max(0.0) as f32;
+            attenuated_sunlight(
+                top_of_atmosphere_lux,
+                optics.sun_transmittance(altitude_m, sun_cos),
+            )
+        }
+        // Airless bodies have no atmosphere to remove.
+        None => attenuated_sunlight(top_of_atmosphere_lux, [1.0, 1.0, 1.0]),
+    };
+
+    for mut light in &mut lights {
+        light.illuminance = illuminance;
+        light.color = color;
+    }
+}
+
+/// Split a top-of-atmosphere illuminance and a per-channel beam transmittance
+/// into the directional light's scalar illuminance and linear colour.
+///
+/// The brightest channel carries the illuminance, so the light keeps the
+/// atmosphere's chromaticity without exposing per-channel intensity.
+fn attenuated_sunlight(top_of_atmosphere_lux: f32, transmittance: [f32; 3]) -> (f32, Color) {
+    let peak = transmittance[0]
+        .max(transmittance[1])
+        .max(transmittance[2])
+        .max(1.0e-3);
+    let color = Color::linear_rgb(
+        SUN_LIGHT_LINEAR[0] * transmittance[0] / peak,
+        SUN_LIGHT_LINEAR[1] * transmittance[1] / peak,
+        SUN_LIGHT_LINEAR[2] * transmittance[2] / peak,
+    );
+    (top_of_atmosphere_lux * peak, color)
+}
+
 /// Initialize rocket rendering with space-black until the first atmosphere
 /// update evaluates the rocket's authoritative altitude and solar geometry.
 pub fn setup_rocket_sky_color(mut clear_color: ResMut<ClearColor>) {
@@ -316,6 +396,40 @@ pub(super) fn bound_planet_sun(
         direction: position_m / distance_m,
         distance_m,
     })
+}
+
+#[cfg(test)]
+mod attenuation_tests {
+    use super::*;
+
+    #[test]
+    fn vacuum_leaves_the_light_unchanged() {
+        let (illuminance, color) = attenuated_sunlight(127_000.0, [1.0, 1.0, 1.0]);
+        assert!((illuminance - 127_000.0).abs() < 1e-3);
+        let linear = LinearRgba::from(color);
+        assert!((linear.red - SUN_LIGHT_LINEAR[0]).abs() < 1e-4);
+        assert!((linear.blue - SUN_LIGHT_LINEAR[2]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn attenuation_scales_by_the_brightest_channel_and_keeps_chromaticity() {
+        let transmittance = [0.94, 0.88, 0.72];
+        let (illuminance, color) = attenuated_sunlight(127_000.0, transmittance);
+        assert!((illuminance - 127_000.0 * 0.94).abs() < 1.0);
+        let linear = LinearRgba::from(color);
+        // Red carries the peak, green and blue are proportionally warmer.
+        assert!((linear.red - SUN_LIGHT_LINEAR[0]).abs() < 1e-4);
+        assert!((linear.blue - SUN_LIGHT_LINEAR[2] * 0.72 / 0.94).abs() < 1e-4);
+        assert!(linear.blue < linear.green && linear.green < linear.red);
+    }
+
+    #[test]
+    fn a_dark_beam_never_divides_by_zero() {
+        let (illuminance, color) = attenuated_sunlight(127_000.0, [0.0, 0.0, 0.0]);
+        assert!(illuminance.is_finite());
+        let linear = LinearRgba::from(color);
+        assert!(linear.red.is_finite() && linear.green.is_finite() && linear.blue.is_finite());
+    }
 }
 
 #[cfg(test)]

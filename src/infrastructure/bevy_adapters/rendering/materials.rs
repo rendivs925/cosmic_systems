@@ -142,6 +142,10 @@ pub struct CloudParams {
     pub sun_direction: Vec3,
     /// Directional-light colour premultiplied by its illuminance.
     pub sun_irradiance: Vec3,
+    /// Per-channel transmittance of the direct solar beam at the deck
+    /// altitude, from the shared atmospheric optics. The diffuse term keeps the
+    /// unattenuated irradiance because it is sky light rather than the beam.
+    pub sun_transmittance: Vec3,
     /// Presentation clock in seconds; advects the wind only.
     pub time_s: f32,
     /// Global cloud-coverage multiplier.
@@ -185,6 +189,7 @@ impl CloudParams {
             planet_rotation: Mat3::IDENTITY,
             sun_direction: Vec3::Y,
             sun_irradiance: Vec3::ONE,
+            sun_transmittance: Vec3::ONE,
             time_s: 0.0,
             coverage: 0.3,
             cloud_type: 0.68,

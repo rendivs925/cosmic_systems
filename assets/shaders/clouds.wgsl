@@ -28,6 +28,7 @@ struct CloudParams {
     planet_rotation: mat3x3<f32>,
     sun_direction: vec3<f32>,
     sun_irradiance: vec3<f32>,
+    sun_transmittance: vec3<f32>,
     time_s: f32,
     coverage: f32,
     cloud_type: f32,
@@ -333,7 +334,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             // night-side deck with the full solar irradiance.
             let sun_elevation = dot(normalize(sample_pos), clouds.sun_direction);
             let terminator = smoothstep(-0.05, 0.02, sun_elevation);
-            let direct = clouds.sun_irradiance * sun_visibility * phase * terminator;
+            // The atmosphere between the Sun and the deck removes part of the
+            // beam, mostly blue, so a low Sun reddens the cloud before the
+            // terminator gate closes it.
+            let direct = clouds.sun_irradiance * clouds.sun_transmittance
+                * sun_visibility * phase * terminator;
             let sun_cos = saturate(sun_elevation);
             // Droplet scattering is spectrally neutral, so the diffuse light
             // is white at the sunlit top and takes the ground bounce colour at
