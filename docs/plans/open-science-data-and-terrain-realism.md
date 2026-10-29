@@ -462,7 +462,40 @@ integral. At the pad with the Sun 58 degrees above the horizon the frame darkens
 2.3% in red, 5.5% in green, and 10.6% in blue, which is the expected Rayleigh
 removal of blue from the direct beam.
 
-Terrain cloud shadows and distance-adaptive steps remain future work.
+Terrain cloud shadows are now cast from the same density field. The terrain
+material binds the deck's base and detail volumes and weather map, and its
+fragment stage marches the ground-to-Sun ray through the deck slab at six
+samples. The optical depth uses the deck's own extinction coefficient, so a
+shadow is as opaque as the cloud above it, and a `select` guard keeps the pass
+inactive until the cloud system has reported a field (bottom radius zero). The
+shared field lives in `assets/shaders/cloud_density.wgsl`, which both the cloud
+shader and the terrain shader import so the two can never drift apart.
+
+Two details are worth recording. First, the slab geometry: a ground fragment is
+inside both the base and top spheres, so the slab segment runs from the *far*
+root of the base sphere to the *far* root of the top sphere, a few kilometres
+apart. Using the near root of the top sphere inverts the segment and silently
+returns full sunlight. Second, the diffuse floor: a fully overcast deck is
+optically thick enough to remove the direct beam entirely, but a real overcast
+day still delivers roughly a fifth of the clear-sky irradiance as diffuse
+skylight. The renderer does not inject the deck's hemisphere radiance into the
+scene ambient, so `CLOUD_DIFFUSE_TRANSMITTANCE = 0.2` keeps that fraction
+(`mix(0.2, 1, T)`) and is documented as a presentation approximation. At the
+pad under an overcast deck this leaves the ground at 53% of its sunlit
+brightness instead of 27%, and the clear-sky case is unchanged because the mix
+is exactly one at `T = 1`.
+
+The ocean does not receive cloud shadows yet; its material needs the same
+binding and march, which is the next bounded slice.
+
+One diagnostic pitfall: an imported shader module that declares
+`#define_import_path` is registered under that custom name only, so an
+asset-path `#import "shaders/..."` silently fails. When it does, the material
+pipeline is never created and nothing is logged at the default filter -- the
+terrain simply disappears and the fallback globe shows through. The module is
+therefore imported by asset path only, guarded by a regression test.
+
+Distance-adaptive cloud steps remain future work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then

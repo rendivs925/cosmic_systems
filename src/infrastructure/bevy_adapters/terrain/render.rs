@@ -22,6 +22,8 @@ use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsSet;
+use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseAssets;
+use crate::infrastructure::bevy_adapters::rendering::materials::{CloudField, CloudShadowState};
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
 };
@@ -29,6 +31,7 @@ use crate::infrastructure::bevy_adapters::rocket::camera::update_rocket_camera_p
 use crate::infrastructure::bevy_adapters::rocket::components::{
     PrimaryVehicle, RocketPhysicsState, RocketPlanetBinding,
 };
+use crate::infrastructure::bevy_adapters::rocket::planet::update_rocket_clouds;
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     apply_terrain_imagery, load_earth_imagery_package, stream_terrain_imagery,
     TerrainImageryConfig, TerrainImageryResource,
@@ -207,6 +210,27 @@ pub(crate) struct TerrainSurfaceExtension {
     /// they are continuous across patches and pinned to the rotating surface.
     #[uniform(104)]
     inertial_to_body: Vec4,
+    /// Sun direction in the current inertial render frame, for the cloud-shadow
+    /// march. Rotated into the body frame with `inertial_to_body` per fragment.
+    #[uniform(104)]
+    cloud_sun_direction: Vec3,
+    /// Shared cloud noise volumes and weather map, bound so the shadow pass
+    /// evaluates the exact field the volumetric deck is drawn from. One-texel
+    /// neutral placeholders until the cloud assets exist.
+    #[texture(121, dimension = "3d")]
+    #[sampler(122)]
+    cloud_base_noise: Handle<Image>,
+    #[texture(123, dimension = "3d")]
+    #[sampler(124)]
+    cloud_detail_noise: Handle<Image>,
+    #[texture(125)]
+    #[sampler(126)]
+    cloud_weather_map: Handle<Image>,
+    /// Density field of the low cloud deck, for cloud shadows on the ground.
+    /// All zeros (bottom radius 0) until the rocket cloud deck reports one, and
+    /// permanently zero in modes without clouds.
+    #[uniform(104)]
+    cloud_shadow: CloudField,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -258,6 +282,8 @@ pub(crate) fn build_terrain_material(
     layer_height_contrast: f32,
     planet_center: Vec3,
     inertial_to_body: Vec4,
+    cloud_noise: &TerrainCloudNoise,
+    cloud_shadow: CloudShadowState,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -291,6 +317,11 @@ pub(crate) fn build_terrain_material(
             layer_height_contrast,
             planet_center,
             inertial_to_body,
+            cloud_base_noise: cloud_noise.base_noise.clone(),
+            cloud_detail_noise: cloud_noise.detail_noise.clone(),
+            cloud_weather_map: cloud_noise.weather_map.clone(),
+            cloud_sun_direction: cloud_shadow.sun_direction,
+            cloud_shadow: cloud_shadow.field,
         },
     }
 }
@@ -413,6 +444,22 @@ pub struct TerrainPatchRenderState {
     pub(crate) occlusion_field: Option<PatchHeightField>,
     /// Sun direction in the terrain's body-fixed frame at the last shadow bake.
     pub(crate) baked_sun_body: DVec3,
+}
+
+/// Cloud noise textures bound into every terrain material for the cloud-shadow
+/// pass.
+///
+/// The shadow must sample the same field the volumetric deck is drawn from, so
+/// the terrain binds the cloud assets rather than generating a second noise
+/// set. One-texel neutral placeholders keep every material valid before the
+/// rocket cloud field exists, and `bound` records whether the real volumes have
+/// replaced them.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct TerrainCloudNoise {
+    base_noise: Handle<Image>,
+    detail_noise: Handle<Image>,
+    weather_map: Handle<Image>,
+    bound: bool,
 }
 
 /// Reusable render assets whose appearance is identical for every terrain
@@ -689,6 +736,8 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainOcclusionConfig>()
             .init_resource::<WaterQualityConfig>()
             .init_resource::<TerrainMaterialFrame>()
+            .init_resource::<TerrainCloudNoise>()
+            .init_resource::<CloudShadowState>()
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_plugins(MaterialPlugin::<VegetationMaterial>::default())
@@ -708,6 +757,8 @@ impl Plugin for TerrainRenderPlugin {
                     update_water_material,
                     update_vegetation_material,
                     update_terrain_material_origin.after(recenter_render_origin),
+                    update_terrain_cloud_shadow.after(update_rocket_clouds),
+                    bind_terrain_cloud_noise.before(stream_terrain_patches),
                 ),
             )
             // Streaming owns the authoritative terrain mesh lifecycle. It must
@@ -790,6 +841,7 @@ fn prepare_terrain_render_assets(
     asset_server: Res<AssetServer>,
     imagery: Res<TerrainImageryResource>,
     mut render_assets: ResMut<TerrainRenderAssets>,
+    mut cloud_noise: ResMut<TerrainCloudNoise>,
     mut images: ResMut<Assets<Image>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut vegetation_materials: ResMut<Assets<VegetationMaterial>>,
@@ -807,6 +859,7 @@ fn prepare_terrain_render_assets(
     render_assets.layer_normal = Some(images.add(layer_set.normal));
     render_assets.layer_height = Some(images.add(layer_set.height));
     ensure_neutral_layer_weights(&mut render_assets, &mut images);
+    *cloud_noise = neutral_cloud_noise(&mut images);
     // One alpha-masked foliage material is shared by every patch. It is created
     // once here so no patch spawn path needs the image assets.
     let vegetation_atlas = images.add(vegetation_atlas());
@@ -1022,6 +1075,97 @@ fn ensure_neutral_layer_weights(
         .clone()
 }
 
+/// Neutral cloud noise textures: a transparent one-texel volume and map, so a
+/// terrain material is always renderable even before the rocket cloud assets
+/// exist. A zero volume yields zero density, and therefore no shadow.
+fn neutral_cloud_noise(images: &mut Assets<Image>) -> TerrainCloudNoise {
+    let volume = images.add(neutral_cloud_volume_image());
+    TerrainCloudNoise {
+        base_noise: volume.clone(),
+        detail_noise: volume,
+        weather_map: images.add(neutral_cloud_map_image()),
+        bound: false,
+    }
+}
+
+fn neutral_cloud_volume_image() -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D3,
+        vec![0, 0, 0, 0],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn neutral_cloud_map_image() -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![0, 0, 0, 0],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// Rebind every terrain material to the real cloud noise volumes once the
+/// cloud renderer has generated them.
+///
+/// Plugin startup order between the shared terrain startup and the rocket-only
+/// cloud asset generation is not guaranteed, so terrain starts on neutral
+/// placeholders and upgrades here. This runs before streaming, which creates
+/// every patch material, so no visible patch is ever built on a placeholder.
+fn bind_terrain_cloud_noise(
+    cloud_assets: Option<Res<CloudNoiseAssets>>,
+    mut cloud_noise: ResMut<TerrainCloudNoise>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+) {
+    let Some(cloud_assets) = cloud_assets else {
+        return;
+    };
+    if cloud_noise.bound {
+        return;
+    }
+    *cloud_noise = TerrainCloudNoise {
+        base_noise: cloud_assets.base_noise.clone(),
+        detail_noise: cloud_assets.detail_noise.clone(),
+        weather_map: cloud_assets.weather_map.clone(),
+        bound: true,
+    };
+    let noise = &*cloud_noise;
+    for (_, material) in materials.iter_mut() {
+        material.extension.cloud_base_noise = noise.base_noise.clone();
+        material.extension.cloud_detail_noise = noise.detail_noise.clone();
+        material.extension.cloud_weather_map = noise.weather_map.clone();
+    }
+}
+
+/// Keep every terrain material's shared cloud-shadow field current.
+///
+/// The deck's sun path changes with ephemeris time and measured wind, so this
+/// cannot be part of the anchor cache. Presentation only: the shadow scales the
+/// direct-sun term of the ground shading and never touches height, collision,
+/// altitude, or any simulation state.
+fn update_terrain_cloud_shadow(
+    cloud: Res<CloudShadowState>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+) {
+    for (_, material) in materials.iter_mut() {
+        material.extension.cloud_sun_direction = cloud.sun_direction;
+        if material.extension.cloud_shadow != cloud.field {
+            material.extension.cloud_shadow = cloud.field;
+        }
+    }
+}
+
 /// Resolve the layered-material inputs for one patch. A produced per-patch
 /// weight map selects the layered path; otherwise the shared neutral weight map
 /// and the single-layer fallback are used.
@@ -1092,15 +1236,19 @@ fn neutral_layer_weight_image() -> Image {
 
 /// System that spawns Bevy mesh/material entities when a terrain patch
 /// becomes ready in the streaming lifecycle.
-/// Bundled terrain asset stores for the patch spawn system. Grouping them keeps
-/// the system within the ECS parameter limit while preserving separate mutable
-/// access to each asset store.
+/// Bundled asset stores and shared render inputs for the patch spawn system.
+/// Grouping them keeps the system within the ECS parameter limit while
+/// preserving separate mutable access to each asset store.
 #[derive(bevy::ecs::system::SystemParam)]
-struct TerrainSpawnAssets<'w> {
+struct TerrainSpawnInputs<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<TerrainMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
+    /// Cloud noise volumes every material binds for the shadow pass.
+    cloud_noise: Res<'w, TerrainCloudNoise>,
+    /// Current cloud deck density field and Sun, shared by every patch material.
+    cloud_shadow: Res<'w, CloudShadowState>,
 }
 
 #[expect(
@@ -1112,7 +1260,7 @@ fn spawn_patch_mesh_system(
     mut events: MessageReader<TerrainPatchReady>,
     mut pending_uploads: ResMut<PendingTerrainPatchUploads>,
     mut render_index: ResMut<TerrainPatchRenderIndex>,
-    assets: TerrainSpawnAssets,
+    assets: TerrainSpawnInputs,
     mut render_assets: ResMut<TerrainRenderAssets>,
     mut streaming: ResMut<TerrainStreamingResource>,
     asset_server: Res<AssetServer>,
@@ -1125,11 +1273,13 @@ fn spawn_patch_mesh_system(
     mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
     patch_visibility: Query<&Visibility, With<TerrainPatchRenderState>>,
 ) {
-    let TerrainSpawnAssets {
+    let TerrainSpawnInputs {
         mut meshes,
         mut materials,
         mut water_materials,
         mut images,
+        cloud_noise,
+        cloud_shadow,
     } = assets;
     let instrumentation_enabled = performance_config.instrumentation_enabled();
     let occlusion_config = render_assets.occlusion.clone();
@@ -1342,6 +1492,8 @@ fn spawn_patch_mesh_system(
             LAYER_HEIGHT_CONTRAST,
             (-render_origin.origin).as_vec3(),
             Vec4::from_array(body_to_inertial.inverse().as_quat().to_array()),
+            &cloud_noise,
+            *cloud_shadow,
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -2793,6 +2945,58 @@ mod tests {
     };
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
+
+    /// Regression: the cloud-density module is imported by asset path. A
+    /// `#define_import_path` in an importable module makes naga_oil register it
+    /// under the custom name only, so the asset-path import silently fails and
+    /// the terrain pipeline never draws. Nothing is logged at the default
+    /// filter, so this test is the guard.
+    #[test]
+    fn cloud_density_module_is_importable_by_asset_path() {
+        let module = include_str!("../../../../assets/shaders/cloud_density.wgsl");
+        assert!(
+            !module.contains("#define_import_path"),
+            "an imported shader module must not declare a custom import path"
+        );
+        for shader in [
+            include_str!("../../../../assets/shaders/clouds.wgsl"),
+            include_str!("../../../../assets/shaders/terrain_surface.wgsl"),
+        ] {
+            assert!(
+                shader.contains("#import \"shaders/cloud_density.wgsl\"::sample_density"),
+                "both cloud shaders must sample the shared density field"
+            );
+        }
+    }
+
+    /// The terrain binds the deck's own noise volumes, so a cast shadow is
+    /// always evaluated from the same field the cloud is drawn from.
+    #[test]
+    fn terrain_material_binds_the_shared_cloud_field() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        for binding in [
+            "@binding(121) var terrain_cloud_base_noise",
+            "@binding(123) var terrain_cloud_detail_noise",
+            "@binding(125) var terrain_cloud_weather_map",
+        ] {
+            assert!(shader.contains(binding), "missing {binding}");
+        }
+        assert!(shader.contains("fn cloud_shadow_visibility("));
+        assert!(shader.contains("cloud_shadow: CloudField,"));
+    }
+
+    #[test]
+    fn neutral_cloud_placeholders_are_transparent() {
+        let mut images = Assets::<Image>::default();
+        let noise = neutral_cloud_noise(&mut images);
+        assert!(!noise.bound);
+        let volume = images.get(&noise.base_noise).expect("volume placeholder");
+        assert_eq!(volume.texture_descriptor.dimension, TextureDimension::D3);
+        assert_eq!(volume.data.as_deref(), Some([0u8, 0, 0, 0].as_slice()));
+        let map = images.get(&noise.weather_map).expect("map placeholder");
+        assert_eq!(map.texture_descriptor.dimension, TextureDimension::D2);
+        assert_eq!(map.data.as_deref(), Some([0u8, 0, 0, 0].as_slice()));
+    }
 
     #[test]
     fn rock_shell_mesh_has_matching_attributes() {

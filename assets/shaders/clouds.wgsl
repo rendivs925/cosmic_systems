@@ -19,6 +19,13 @@
 
 #import bevy_pbr::mesh_view_bindings::view
 #import bevy_pbr::forward_io::VertexOutput
+// Shared density field: the terrain cloud-shadow pass evaluates the same
+// function, so the shadow always lines up with the cloud above it.
+#import "shaders/cloud_density.wgsl"::CloudField
+#import "shaders/cloud_density.wgsl"::PI
+#import "shaders/cloud_density.wgsl"::ray_sphere
+#import "shaders/cloud_density.wgsl"::saturate
+#import "shaders/cloud_density.wgsl"::sample_density
 
 // Field order and types must match `CloudParams` in rendering/materials.rs.
 struct CloudParams {
@@ -69,7 +76,6 @@ fn clip_depth(world_point: vec3<f32>) -> f32 {
     return clip.z / clip.w;
 }
 
-const PI: f32 = 3.141592653589793;
 // Hard upper bounds keep the loop trip counts statically bounded; the actual
 // counts come from the quality uniform and may be lower.
 const MAX_PRIMARY_STEPS: u32 = 128u;
@@ -79,16 +85,6 @@ const MAX_MULTI_OCTAVES: u32 = 4u;
 // absorbs almost nothing, so droplets scatter conservatively (spec section 4:
 // 0.99-1.0). Must match `CLOUD_SINGLE_SCATTER_ALBEDO` in rendering/materials.rs.
 const CLOUD_ALBEDO: f32 = 0.99;
-// Regional tiling of the periodic weather map; see `sample_density`.
-const WEATHER_TILE: f32 = 48.0;
-
-fn saturate(x: f32) -> f32 {
-    return clamp(x, 0.0, 1.0);
-}
-
-fn remap(v: f32, l1: f32, h1: f32, l2: f32, h2: f32) -> f32 {
-    return l2 + (v - l1) / max(h1 - l1, 1e-6) * (h2 - l2);
-}
 
 // Interleaved gradient noise (Jimenez): a cheap, well-distributed per-pixel
 // dither. Far less grainy than a white-noise hash at these step counts, so it
@@ -97,26 +93,24 @@ fn interleaved_gradient_noise(p: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
 }
 
-// Positive near/far intersection distances, or a negative pair on a miss.
-fn ray_sphere(origin: vec3<f32>, dir: vec3<f32>, radius: f32) -> vec2<f32> {
-    let b = dot(origin, dir);
-    let c = dot(origin, origin) - radius * radius;
-    let discriminant = b * b - c;
-    if discriminant < 0.0 {
-        return vec2(-1.0, -1.0);
-    }
-    let root = sqrt(discriminant);
-    return vec2(-b - root, -b + root);
-}
-
-// Lifted-condensation-level vertical profile: stratus is a thin flat layer,
-// cumulus has a flat base and billowing middle (spec section 3.3).
-fn height_profile(height_fraction: f32, cloud_type: f32) -> f32 {
-    let stratus = saturate(remap(height_fraction, 0.0, 0.1, 0.0, 1.0))
-        * saturate(remap(height_fraction, 0.15, 0.35, 1.0, 0.0));
-    let cumulus = saturate(remap(height_fraction, 0.0, 0.15, 0.0, 1.0))
-        * saturate(remap(height_fraction, 0.45, 0.9, 1.0, 0.0));
-    return mix(stratus, cumulus, cloud_type);
+// Density-relevant subset of the cloud material uniform, in the shared field's
+// layout. Rebuilt per call; the compiler folds the copies into the uniform
+// register reads either way.
+fn cloud_field() -> CloudField {
+    var field: CloudField;
+    field.bottom_radius = clouds.bottom_radius;
+    field.top_radius = clouds.top_radius;
+    field.absorption = clouds.absorption;
+    field.time_s = clouds.time_s;
+    field.coverage = clouds.coverage;
+    field.cloud_type = clouds.cloud_type;
+    field.density_scale = clouds.density_scale;
+    field.noise_scale = clouds.noise_scale;
+    field.detail_scale = clouds.detail_scale;
+    field.erosion_scale = clouds.erosion_scale;
+    field.wind_speed = clouds.wind_speed;
+    field.wind_direction = clouds.wind_direction;
+    return field;
 }
 
 fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
@@ -131,86 +125,6 @@ fn triple_lobe_phase(cos_theta: f32, g_forward: f32) -> f32 {
     let backward_lobe = henyey_greenstein(cos_theta, -0.35);
     let side_lobe = henyey_greenstein(cos_theta, 0.1);
     return mix(mix(forward_lobe, backward_lobe, 0.25), side_lobe, 0.15);
-}
-
-fn weather_uv(body_dir: vec3<f32>) -> vec2<f32> {
-    let u = atan2(body_dir.z, body_dir.x) / (2.0 * PI) + 0.5;
-    let v = asin(clamp(body_dir.y, -1.0, 1.0)) / PI + 0.5;
-    return vec2(u, v);
-}
-
-// Cloud density at a planet-relative position, in [0, 1].
-fn sample_density(body_pos: vec3<f32>) -> f32 {
-    let altitude = length(body_pos) - clouds.bottom_radius;
-    let layer = max(clouds.top_radius - clouds.bottom_radius, 1.0);
-    let height_fraction = saturate(altitude / layer);
-    if altitude < 0.0 || altitude > layer {
-        return 0.0;
-    }
-
-    // Co-rotating body-fixed position: undo the planet rotation so the noise
-    // field stays pinned to the ground instead of sliding in inertial space.
-    let body_fixed = transpose(clouds.planet_rotation) * body_pos;
-    let wind_offset = vec3<f32>(clouds.wind_direction.x, 0.0, clouds.wind_direction.y)
-        * (clouds.time_s * clouds.wind_speed * clouds.noise_scale);
-
-    // Weather map: coverage carves clear air, cloud type morphs the profile.
-    // The map's fBm spans the whole sphere, so one tile puts every feature at
-    // synoptic scale (thousands of km) and a flight view sees a constant value.
-    // Sampling the periodic map at an integer tiling factor adds regional
-    // structure; integer multiples keep the longitude and pole seams closed,
-    // and scaling the whole UV (drift included) preserves the wind's physical
-    // speed. WEATHER_TILE * 3 fBm cells keeps the largest features near 300 km.
-    // Coverage and the density field must advect at the same measured wind
-    // speed. The weather map is a body-fixed equirectangular field, so one UV
-    // unit spans the equatorial circumference; dividing by it converts metres
-    // per second into UV per second (latitude foreshortening is ignored, which
-    // is a presentation approximation). The previous fixed `1.0e-6` coefficient
-    // ignored `wind_speed` and drifted at ~40 m/s, so the coverage pattern
-    // sheared away from the cloud shapes over time.
-    let body_dir = normalize(body_pos);
-    let weather_drift = clouds.wind_direction * clouds.wind_speed * clouds.time_s
-        / (2.0 * PI * max(clouds.bottom_radius, 1.0));
-    let weather = textureSample(
-        weather_map,
-        weather_map_sampler,
-        (weather_uv(body_dir) + weather_drift) * WEATHER_TILE,
-    );
-    let coverage = saturate(clouds.coverage * weather.r * 1.4);
-    if coverage < 0.01 {
-        return 0.0;
-    }
-    let cloud_type = saturate(mix(clouds.cloud_type, weather.b, 0.5));
-    let gradient = height_profile(height_fraction, cloud_type);
-    if gradient <= 0.001 {
-        return 0.0;
-    }
-
-    let sample_pos = body_fixed * clouds.noise_scale + wind_offset;
-    let base = textureSample(base_noise, base_noise_sampler, sample_pos);
-    let low_fbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
-    var base_density = remap(base.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
-    base_density = base_density * gradient;
-    let density_with_coverage = saturate(remap(base_density, 1.0 - coverage, 1.0, 0.0, 1.0));
-    if density_with_coverage <= 0.001 {
-        return 0.0;
-    }
-
-    let detail = textureSample(
-        detail_noise,
-        detail_noise_sampler,
-        sample_pos * clouds.detail_scale + wind_offset * 1.5,
-    );
-    let high_fbm = detail.r * 0.625 + detail.g * 0.25 + detail.b * 0.125;
-    let erosion = mix(high_fbm, 1.0 - high_fbm, saturate(height_fraction * 2.0));
-    let final_density = saturate(remap(
-        density_with_coverage,
-        erosion * clouds.erosion_scale * 0.55,
-        1.0,
-        0.0,
-        1.0,
-    ));
-    return saturate(final_density * clouds.density_scale);
 }
 
 // Sun visibility: march toward the Sun across the whole cloud slab and sum the
@@ -229,6 +143,8 @@ fn march_to_sun(body_pos: vec3<f32>) -> f32 {
     let layer = clouds.top_radius - clouds.bottom_radius;
     let step_length = layer / max(clouds.light_steps, 1.0);
     let light_step = clouds.sun_direction * step_length;
+    let field = cloud_field();
+    let inertial_to_body = transpose(clouds.planet_rotation);
     var density_length = 0.0;
     var p = body_pos;
     for (var i: u32 = 0u; i < MAX_LIGHT_STEPS; i = i + 1u) {
@@ -236,7 +152,16 @@ fn march_to_sun(body_pos: vec3<f32>) -> f32 {
             break;
         }
         p += light_step;
-        density_length += sample_density(p) * step_length;
+        density_length += sample_density(
+            field,
+            base_noise,
+            base_noise_sampler,
+            detail_noise,
+            detail_noise_sampler,
+            weather_map,
+            weather_map_sampler,
+            inertial_to_body * p,
+        ) * step_length;
     }
 
     var multi = 0.0;
@@ -259,6 +184,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
     let ray_dir = normalize(in.world_position.xyz - camera_world);
     let cam_pos = camera_world - clouds.planet_center;
     let cam_radius = length(cam_pos);
+    let field = cloud_field();
+    let inertial_to_body = transpose(clouds.planet_rotation);
 
     // The dome is camera-centred, so only its far hemisphere (back faces) is
     // ever visible; keeping exactly one face avoids double-blending.
@@ -308,7 +235,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             break;
         }
         let sample_pos = cam_pos + ray_dir * t;
-        let density = sample_density(sample_pos);
+        let density = sample_density(
+            field,
+            base_noise,
+            base_noise_sampler,
+            detail_noise,
+            detail_noise_sampler,
+            weather_map,
+            weather_map_sampler,
+            inertial_to_body * sample_pos,
+        );
         if density > 0.001 {
             let sigma_e = density * clouds.absorption;
             let step_optical_depth = sigma_e * step_size;

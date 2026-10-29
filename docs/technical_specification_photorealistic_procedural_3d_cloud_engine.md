@@ -240,6 +240,47 @@ source by `1 - exp(-sigma_e ds)`, a thin wisp reflects proportionally less, and
 the term vanishes at night and across the terminator. This replaced the fixed
 `ambient_fraction` scalar.
 
+### 4.3.3 Terrain Cloud Shadows
+
+The ground receives the deck's shadow from the same density field, not a
+separate proxy. Both shaders import `shaders/cloud_density.wgsl`, which owns
+`CloudField`, the weather-map projection, the height profile, and the density
+sampler; the cloud material builds a `CloudField` from its larger uniform and
+the terrain material carries the field plus the inertial Sun direction in its
+own uniform.
+
+For a ground fragment inside both deck spheres the Sun ray crosses the slab
+between the far root of the base sphere and the far root of the top sphere:
+
+$$
+t_{\text{in}} = -b + \sqrt{b^2 - c_{\text{base}}}, \qquad
+t_{\text{out}} = -b + \sqrt{b^2 - c_{\text{top}}},
+$$
+
+with $b = \hat{p} \cdot \hat{L}$ and $c_r = |p|^2 - r^2$, both evaluated in the
+body-fixed frame. Marching $N = 6$ midpoint samples across
+$[t_{\text{in}}, t_{\text{out}}]$ gives the beam optical depth
+
+$$
+\tau = \sum_{i=1}^{N} \sigma_e(p_i) \, \Delta s, \qquad
+\sigma_e = \rho \, \kappa,
+$$
+
+using the deck's own extinction $\kappa$, so the shadow transmittance
+$T = e^{-\tau}$ matches the opacity of the cloud above it. Only the direct-sun
+term is scaled; ambient sky fill is preserved.
+
+An optically thick deck drives $T \to 0$, but an overcast day still delivers
+about a fifth of the clear-sky irradiance as diffuse skylight. The ground term
+therefore applies
+
+$$
+V = \operatorname{mix}(0.2, 1, T),
+$$
+
+a documented presentation approximation that stands in for the deck's
+hemisphere radiance, which is not injected into the scene ambient.
+
 ### 4.4 Multiple Scattering Approximation (Octave-Based Attenuation Decay)
 
 Single-scattering models render cloud centers too dark. To simulate multiple internal bounces without expensive unbiased path tracing, accumulate scattering across $K$ attenuation octaves with decreasing density scale and increasing forward scattering anisotropy:

@@ -15,10 +15,11 @@ use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rot
 use crate::domain::value_objects::imagery_manifest::EarthImageryManifest;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadowState;
 use crate::infrastructure::bevy_adapters::terrain::mips::{mip_chain_rgba8, MipFilter};
 use crate::infrastructure::bevy_adapters::terrain::render::{
-    body_texture_anchor, build_terrain_material, TerrainMaterial, TerrainOcclusionConfig,
-    TerrainPatchRenderState,
+    body_texture_anchor, build_terrain_material, TerrainCloudNoise, TerrainMaterial,
+    TerrainOcclusionConfig, TerrainPatchRenderState,
 };
 use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
 use crate::infrastructure::bevy_adapters::terrain::surface::LAYER_HEIGHT_CONTRAST;
@@ -264,6 +265,8 @@ pub(crate) fn apply_terrain_imagery(
     ephemeris_snapshot: Option<Res<EphemerisSnapshot>>,
     render_origin: Res<super::render::RenderOrigin>,
     planet_query: Query<&PlanetComponent>,
+    cloud_noise: Res<TerrainCloudNoise>,
+    cloud_shadow: Res<CloudShadowState>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut query: Query<(Entity, &mut TerrainPatchRenderState)>,
     mut commands: Commands,
@@ -345,6 +348,8 @@ pub(crate) fn apply_terrain_imagery(
             LAYER_HEIGHT_CONTRAST,
             (-render_origin.origin).as_vec3(),
             inertial_to_body,
+            &cloud_noise,
+            *cloud_shadow,
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing
@@ -485,6 +490,8 @@ mod tests {
         app.insert_resource(resource)
             .init_resource::<super::super::render::RenderOrigin>()
             .insert_resource(TerrainOcclusionConfig::default())
+            .init_resource::<TerrainCloudNoise>()
+            .init_resource::<CloudShadowState>()
             .insert_resource(Assets::<TerrainMaterial>::default())
             .add_systems(Update, apply_terrain_imagery);
 

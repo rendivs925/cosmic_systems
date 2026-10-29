@@ -209,6 +209,78 @@ impl CloudParams {
     }
 }
 
+/// Density-relevant subset of [`CloudParams`], shared with the terrain
+/// material's cloud-shadow uniform.
+///
+/// Mirrors `CloudField` in `assets/shaders/cloud_density.wgsl` field for field,
+/// so the terrain shadows and the volumetric deck evaluate the same density
+/// field and a shadow always lines up with the cloud that casts it. The terrain
+/// pass only needs the density inputs, not the scattering or dome parameters.
+/// Presentation only: nothing here feeds collision or flight dynamics.
+#[derive(Resource, ShaderType, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+pub struct CloudField {
+    /// Cloud-base sphere radius, in metres from the planet centre.
+    pub bottom_radius: f32,
+    /// Cloud-top sphere radius, in metres from the planet centre.
+    pub top_radius: f32,
+    /// Extinction coefficient per unit density, in 1/m. The shadow uses it
+    /// directly, so its optical depth matches the deck's own opacity.
+    pub absorption: f32,
+    /// Presentation clock in seconds; advects the wind only.
+    pub time_s: f32,
+    /// Global cloud-coverage multiplier.
+    pub coverage: f32,
+    /// Cloud-type morph: 0 stratus, 0.5 stratocumulus, 1 cumulus.
+    pub cloud_type: f32,
+    /// Density-scale multiplier.
+    pub density_scale: f32,
+    /// Base noise frequency, in volume tiles per metre.
+    pub noise_scale: f32,
+    /// Detail noise frequency relative to the base.
+    pub detail_scale: f32,
+    /// Edge-erosion strength.
+    pub erosion_scale: f32,
+    /// Wind advection speed along `wind_direction`, in metres per second.
+    pub wind_speed: f32,
+    /// Horizontal wind direction in the body-fixed x/z plane.
+    pub wind_direction: Vec2,
+}
+
+impl CloudField {
+    /// The density inputs of one deck, taken after any climate mapping so the
+    /// shadow follows the same coverage the deck is drawn with.
+    pub fn from_cloud_params(params: &CloudParams) -> Self {
+        Self {
+            bottom_radius: params.bottom_radius,
+            top_radius: params.top_radius,
+            absorption: params.absorption,
+            time_s: params.time_s,
+            coverage: params.coverage,
+            cloud_type: params.cloud_type,
+            density_scale: params.density_scale,
+            noise_scale: params.noise_scale,
+            detail_scale: params.detail_scale,
+            erosion_scale: params.erosion_scale,
+            wind_speed: params.wind_speed,
+            wind_direction: params.wind_direction,
+        }
+    }
+}
+
+/// Per-frame presentation state the terrain needs to cast the low deck's cloud
+/// shadows.
+///
+/// The density field and the Sun direction are produced together by the cloud
+/// system, so the terrain shadow is evaluated against exactly the deck that was
+/// drawn. Presentation only: nothing here feeds collision or flight dynamics.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct CloudShadowState {
+    /// Density inputs of the low deck.
+    pub field: CloudField,
+    /// Unit direction from the planet toward the Sun in the inertial frame.
+    pub sun_direction: Vec3,
+}
+
 /// Volumetric ray-marched cloud material. Custom rather than an extension of
 /// `StandardMaterial` because the fragment stage computes its own light
 /// transport instead of using Bevy's PBR lighting.
@@ -305,4 +377,47 @@ pub fn orbit_emissive(color: Color, intensity: f32) -> LinearRgba {
         linear.blue * intensity,
         1.0,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloud_field_copies_every_density_input() {
+        let mut params = CloudParams::deck();
+        params.bottom_radius = 6_372_500.0;
+        params.top_radius = 6_377_000.0;
+        params.coverage = 0.42;
+        params.cloud_type = 0.3;
+        params.density_scale = 0.7;
+        params.noise_scale = 1.0 / 4_500.0;
+        params.detail_scale = 2.25;
+        params.erosion_scale = 0.45;
+        params.wind_speed = 12.5;
+        params.wind_direction = Vec2::new(0.6, -0.8);
+        params.absorption = 0.012;
+        params.time_s = 123.5;
+
+        let field = CloudField::from_cloud_params(&params);
+        assert_eq!(field.bottom_radius, params.bottom_radius);
+        assert_eq!(field.top_radius, params.top_radius);
+        assert_eq!(field.absorption, params.absorption);
+        assert_eq!(field.time_s, params.time_s);
+        assert_eq!(field.coverage, params.coverage);
+        assert_eq!(field.cloud_type, params.cloud_type);
+        assert_eq!(field.density_scale, params.density_scale);
+        assert_eq!(field.noise_scale, params.noise_scale);
+        assert_eq!(field.detail_scale, params.detail_scale);
+        assert_eq!(field.erosion_scale, params.erosion_scale);
+        assert_eq!(field.wind_speed, params.wind_speed);
+        assert_eq!(field.wind_direction, params.wind_direction);
+    }
+
+    #[test]
+    fn shadow_state_defaults_to_no_deck() {
+        let state = CloudShadowState::default();
+        assert_eq!(state.field.bottom_radius, 0.0);
+        assert_eq!(state.sun_direction, Vec3::ZERO);
+    }
 }
