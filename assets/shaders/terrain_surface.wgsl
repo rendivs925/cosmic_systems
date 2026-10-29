@@ -13,9 +13,9 @@
 #import "shaders/landscape_lighting.wgsl"::direct_sun_self_shadow_correction
 // The ground evaluates the volumetric deck's own density field for cloud
 // shadows, so a shadow always lines up with the cloud casting it.
-#import "shaders/cloud_density.wgsl"::CloudField
-#import "shaders/cloud_density.wgsl"::ray_sphere
-#import "shaders/cloud_density.wgsl"::sample_density
+#import "shaders/cloud_density.wgsl"::CloudShadow
+#import "shaders/cloud_density.wgsl"::cloud_shadow_visibility
+#import "shaders/cloud_density.wgsl"::rotate_by_quat
 
 // Source-derived detail fades out with camera distance. Evaluating the fade per
 // pixel (not per patch) keeps shared patch edges continuous, so neighbouring
@@ -96,74 +96,9 @@ struct TerrainSurfaceExtension {
     // coordinates so they neither slide with planetary rotation nor break phase
     // at patch and cube-face boundaries.
     inertial_to_body: vec4<f32>,
-    // Sun direction in the inertial render frame, for the cloud-shadow march.
-    cloud_sun_direction: vec3<f32>,
-    // Density field of the low cloud deck. Bottom radius zero means no deck.
-    cloud_shadow: CloudField,
-}
-
-/// Rotate `v` by the unit quaternion `q` (xyz = axis*sin, w = cos).
-fn rotate_by_quat(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
-    let t = 2.0 * cross(q.xyz, v);
-    return v + q.w * t + cross(q.xyz, t);
-}
-
-// Steps along the Sun ray through the deck. The deck is a few kilometres thick
-// and the noise field's features are sub-kilometre, so this is a coarse
-// estimate of the beam's optical depth: enough to place a shadow under each
-// cloud mass, not enough to resolve individual cell edges.
-const CLOUD_SHADOW_STEPS: u32 = 6u;
-// A real overcast deck still delivers about a fifth of the clear-sky irradiance
-// as diffuse skylight. The renderer does not inject the deck's hemisphere
-// radiance into the scene ambient, so this keeps that fraction of the blocked
-// beam rather than leaving the ground lit by the clear-sky ambient alone, which
-// is far darker than an overcast day. Presentation approximation only; see the
-// open-science plan for the derivation.
-const CLOUD_DIFFUSE_TRANSMITTANCE: f32 = 0.2;
-
-/// Fraction of direct sunlight that survives the cloud deck between a ground
-/// fragment and the Sun, in [0, 1].
-///
-/// This marches the same density field the volumetric deck is drawn from and
-/// applies the same extinction coefficient, so the shadow's opacity matches the
-/// cloud above it. Positions are body-fixed and planet-relative. Presentation
-/// only: the result scales the direct-sun term and never touches terrain
-/// height, collision, altitude, or any simulation state.
-fn cloud_shadow_visibility(body_pos: vec3<f32>, sun_body: vec3<f32>) -> f32 {
-    let field = terrain_surface.cloud_shadow;
-    // A deck below the fragment cannot shadow it, and a zero bottom radius
-    // means no deck has been reported (before the cloud system's first frame).
-    if length(body_pos) >= field.bottom_radius {
-        return 1.0;
-    }
-    let bottom = ray_sphere(body_pos, sun_body, field.bottom_radius);
-    let top = ray_sphere(body_pos, sun_body, field.top_radius);
-    // The fragment sits inside both spheres, so the ray leaves the clear air
-    // below the base at the far root of the base sphere and leaves the deck at
-    // the far root of the top sphere. Both roots are the near-side solutions
-    // for a camera inside the sphere, a few kilometres apart at deck altitude.
-    let enter = bottom.y;
-    let exit = top.y;
-    if enter <= 0.0 || exit <= enter {
-        return 1.0;
-    }
-    let steps = f32(CLOUD_SHADOW_STEPS);
-    let step_length = (exit - enter) / steps;
-    var density_length = 0.0;
-    for (var i: u32 = 0u; i < CLOUD_SHADOW_STEPS; i = i + 1u) {
-        let sample_pos = body_pos + sun_body * (enter + (f32(i) + 0.5) * step_length);
-        density_length += sample_density(
-            field,
-            terrain_cloud_base_noise,
-            terrain_cloud_base_noise_sampler,
-            terrain_cloud_detail_noise,
-            terrain_cloud_detail_noise_sampler,
-            terrain_cloud_weather_map,
-            terrain_cloud_weather_map_sampler,
-            sample_pos,
-        ) * step_length;
-    }
-    return exp(-density_length * field.absorption);
+    // Low cloud deck's density field, Sun, and body rotation, for the
+    // cloud-shadow march. A zero bottom radius means no deck.
+    cloud: CloudShadow,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -738,18 +673,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // self-shadow term scales only the direct-sun contribution below. Cloud
     // shadows ride on the same direct term, so a shaded patch keeps its ambient
     // sky fill.
-    let sun_body = rotate_by_quat(
-        terrain_surface.inertial_to_body,
-        terrain_surface.cloud_sun_direction,
-    );
-    let cloud_shadow = select(
-        1.0,
-        mix(
-            CLOUD_DIFFUSE_TRANSMITTANCE,
-            1.0,
-            cloud_shadow_visibility(body_position, normalize(sun_body)),
-        ),
-        dot(sun_body, sun_body) > 1e-6,
+    let cloud_shadow = cloud_shadow_visibility(
+        terrain_surface.cloud,
+        in.world_position.xyz - terrain_surface.planet_center,
+        terrain_cloud_base_noise,
+        terrain_cloud_base_noise_sampler,
+        terrain_cloud_detail_noise,
+        terrain_cloud_detail_noise_sampler,
+        terrain_cloud_weather_map,
+        terrain_cloud_weather_map_sampler,
     );
     let self_shadow_term = mix(
         1.0,

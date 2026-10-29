@@ -190,6 +190,76 @@ fn map_image(data: Vec<u8>) -> Image {
     image
 }
 
+/// Cloud noise textures bound into non-cloud materials (terrain ground and
+/// water) for their cloud-shadow passes.
+///
+/// The shadow must sample the same field the volumetric deck is drawn from, so
+/// these materials bind the cloud assets rather than generating a second noise
+/// set. One-texel transparent placeholders keep every material valid before the
+/// rocket cloud field exists, and `bound` records whether the real volumes have
+/// replaced them.
+#[derive(Resource, Clone, Default)]
+pub struct CloudNoiseBinding {
+    pub base_noise: Handle<Image>,
+    pub detail_noise: Handle<Image>,
+    pub weather_map: Handle<Image>,
+    /// True once the real cloud volumes have replaced the placeholders.
+    pub bound: bool,
+}
+
+impl CloudNoiseBinding {
+    /// Transparent one-texel volume and map: a zero volume yields zero density,
+    /// and therefore no shadow, without leaving an invalid handle in a bind
+    /// group.
+    pub fn neutral(images: &mut Assets<Image>) -> Self {
+        let volume = images.add(neutral_volume_image());
+        Self {
+            base_noise: volume.clone(),
+            detail_noise: volume,
+            weather_map: images.add(neutral_map_image()),
+            bound: false,
+        }
+    }
+
+    /// Bind the generated cloud volumes.
+    pub fn from_assets(assets: &CloudNoiseAssets) -> Self {
+        Self {
+            base_noise: assets.base_noise.clone(),
+            detail_noise: assets.detail_noise.clone(),
+            weather_map: assets.weather_map.clone(),
+            bound: true,
+        }
+    }
+}
+
+fn neutral_volume_image() -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D3,
+        vec![0, 0, 0, 0],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn neutral_map_image() -> Image {
+    Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![0, 0, 0, 0],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
 /// Generate the cloud noise textures once and expose them as a resource.
 pub fn setup_cloud_noise_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(CloudNoiseAssets::generate(&mut images, CLOUD_NOISE_SEED));

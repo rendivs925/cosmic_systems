@@ -6,6 +6,8 @@
 //! is shared by every patch, and its single uniform carries the presentation
 //! clock and colour/opacity ramp.
 
+use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseBinding;
+use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
@@ -228,15 +230,40 @@ pub struct WaterExtension {
     #[texture(101)]
     #[sampler(102)]
     pub terrain_occlusion: Handle<Image>,
+    /// The volumetric deck's own noise volumes, so the sea evaluates the same
+    /// cloud-shadow optical depth the terrain ground does.
+    #[texture(103, dimension = "3d")]
+    #[sampler(104)]
+    pub cloud_base_noise: Handle<Image>,
+    #[texture(105, dimension = "3d")]
+    #[sampler(106)]
+    pub cloud_detail_noise: Handle<Image>,
+    #[texture(107)]
+    #[sampler(108)]
+    pub cloud_weather_map: Handle<Image>,
+    /// Low cloud deck density field, Sun, and body rotation, shared with the
+    /// terrain material. No deck (bottom radius zero) leaves the sea unshadowed.
+    #[uniform(109)]
+    pub cloud: CloudShadow,
 }
 
 impl WaterExtension {
-    /// Build an extension over the given occlusion map. Callers pass a shared
-    /// neutral map when no patch-level bake is available.
-    pub fn new(params: WaterParams, terrain_occlusion: Handle<Image>) -> Self {
+    /// Build an extension over the given occlusion map and cloud noise volumes.
+    /// Callers pass a shared neutral map and the neutral cloud binding when no
+    /// patch-level bake or cloud field is available.
+    pub fn new(
+        params: WaterParams,
+        terrain_occlusion: Handle<Image>,
+        cloud_noise: &CloudNoiseBinding,
+        cloud: CloudShadow,
+    ) -> Self {
         Self {
             params,
             terrain_occlusion,
+            cloud_base_noise: cloud_noise.base_noise.clone(),
+            cloud_detail_noise: cloud_noise.detail_noise.clone(),
+            cloud_weather_map: cloud_noise.weather_map.clone(),
+            cloud,
         }
     }
 }

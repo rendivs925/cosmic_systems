@@ -485,8 +485,18 @@ pad under an overcast deck this leaves the ground at 53% of its sunlit
 brightness instead of 27%, and the clear-sky case is unchanged because the mix
 is exactly one at `T = 1`.
 
-The ocean does not receive cloud shadows yet; its material needs the same
-binding and march, which is the next bounded slice.
+The ocean carries the same shadow. The water material binds the same three cloud
+volumes and a `CloudShadow` uniform (field, Sun, inertial-to-body rotation), and
+`water.wgsl` multiplies the terrain-occlusion landscape term by the shared
+`cloud_shadow_visibility` march. With coverage forced to 0.95 for the test, the
+sea measured 75 against a sunlit 75 with the shadow disabled and 40 with it
+enabled, so land and water now darken under the same deck instead of the sea
+staying sunlit. The march, the diffuse floor, and the field definition live in
+`cloud_density.wgsl`, so the three consumers cannot drift apart.
+
+The sea still has no sky-reflection term, so under a thick deck its body colour
+falls back to ambient and reads darker than a real grey overcast sea; that is a
+pre-existing limitation of the water lighting model, not of the shadow.
 
 One diagnostic pitfall: an imported shader module that declares
 `#define_import_path` is registered under that custom name only, so an

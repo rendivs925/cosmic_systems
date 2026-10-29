@@ -34,6 +34,29 @@ struct CloudField {
     wind_direction: vec2<f32>,
 }
 
+// Cloud-shadow state shared by the ground materials (terrain and water).
+// Field order and types must match `CloudShadow` in
+// `infrastructure/bevy_adapters/rendering/materials.rs`.
+struct CloudShadow {
+    field: CloudField,
+    // Unit direction from the planet toward the Sun, inertial frame.
+    sun_direction: vec3<f32>,
+    // Inertial-to-body rotation as an xyzw quaternion.
+    inertial_to_body: vec4<f32>,
+}
+
+// Steps along the Sun ray through the deck. The deck is a few kilometres thick
+// and the noise field's features are sub-kilometre, so this is a coarse
+// estimate of the beam's optical depth: enough to place a shadow under each
+// cloud mass, not enough to resolve individual cell edges.
+const CLOUD_SHADOW_STEPS: u32 = 6u;
+// A real overcast deck still delivers about a fifth of the clear-sky irradiance
+// as diffuse skylight. Neither ground material injects the deck's hemisphere
+// radiance into the scene ambient, so keeping that fraction of the blocked beam
+// stands in for it; without this an overcast day is far darker than reality.
+// Presentation approximation only.
+const CLOUD_SHADOW_DIFFUSE_FLOOR: f32 = 0.2;
+
 fn saturate(x: f32) -> f32 {
     return clamp(x, 0.0, 1.0);
 }
@@ -146,4 +169,73 @@ fn sample_density(
         1.0,
     ));
     return saturate(final_density * field.density_scale);
+}
+
+/// Rotate `v` by the unit quaternion `q` (xyz = axis*sin, w = cos).
+fn rotate_by_quat(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+/// Fraction of direct sunlight that survives the cloud deck between a ground
+/// point and the Sun, in [0, 1].
+///
+/// `planet_relative_pos` is the ground position in the inertial render frame,
+/// relative to the planet centre; the function rotates it and the Sun into the
+/// body-fixed frame the density field lives in. The march uses the same field
+/// and the same extinction coefficient the volumetric deck is drawn with, so a
+/// shadow is exactly as opaque as the cloud above it. The result includes the
+/// documented diffuse floor. Presentation only: it scales the direct-sun term
+/// and never touches terrain height, collision, altitude, or simulation state.
+fn cloud_shadow_visibility(
+    shadow: CloudShadow,
+    planet_relative_pos: vec3<f32>,
+    base_noise: texture_3d<f32>,
+    base_noise_sampler: sampler,
+    detail_noise: texture_3d<f32>,
+    detail_noise_sampler: sampler,
+    weather_map: texture_2d<f32>,
+    weather_map_sampler: sampler,
+) -> f32 {
+    // No deck reported yet, or a degenerate Sun direction.
+    if shadow.field.bottom_radius <= 0.0
+        || dot(shadow.sun_direction, shadow.sun_direction) < 1e-6 {
+        return 1.0;
+    }
+    let body_pos = rotate_by_quat(shadow.inertial_to_body, planet_relative_pos);
+    let sun_body = normalize(rotate_by_quat(shadow.inertial_to_body, shadow.sun_direction));
+    let field = shadow.field;
+    // A deck below the fragment cannot shadow it.
+    if length(body_pos) >= field.bottom_radius {
+        return 1.0;
+    }
+    let bottom = ray_sphere(body_pos, sun_body, field.bottom_radius);
+    let top = ray_sphere(body_pos, sun_body, field.top_radius);
+    // The fragment sits inside both spheres, so the ray leaves the clear air
+    // below the base at the far root of the base sphere and leaves the deck at
+    // the far root of the top sphere. Both roots are the near-side solutions
+    // for a point inside the sphere, a few kilometres apart at deck altitude.
+    let enter = bottom.y;
+    let exit = top.y;
+    if enter <= 0.0 || exit <= enter {
+        return 1.0;
+    }
+    let steps = f32(CLOUD_SHADOW_STEPS);
+    let step_length = (exit - enter) / steps;
+    var density_length = 0.0;
+    for (var i: u32 = 0u; i < CLOUD_SHADOW_STEPS; i = i + 1u) {
+        let sample_pos = body_pos + sun_body * (enter + (f32(i) + 0.5) * step_length);
+        density_length += sample_density(
+            field,
+            base_noise,
+            base_noise_sampler,
+            detail_noise,
+            detail_noise_sampler,
+            weather_map,
+            weather_map_sampler,
+            sample_pos,
+        ) * step_length;
+    }
+    let transmittance = exp(-density_length * field.absorption);
+    return mix(CLOUD_SHADOW_DIFFUSE_FLOOR, 1.0, transmittance);
 }

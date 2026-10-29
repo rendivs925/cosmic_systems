@@ -20,6 +20,10 @@
     view_transformations,
 }
 #import "shaders/landscape_lighting.wgsl"::direct_sun_self_shadow_correction
+// The sea evaluates the volumetric deck's own density field for cloud shadows,
+// so a shadow always lines up with the cloud casting it.
+#import "shaders/cloud_density.wgsl"::CloudShadow
+#import "shaders/cloud_density.wgsl"::cloud_shadow_visibility
 
 struct WaterParams {
     /// Presentation clock in seconds; advances the wave phase only.
@@ -70,6 +74,15 @@ struct WaterParams {
 // self-shadow visibility toward the sun. Neutral (1, 1) when unbound.
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var terrain_occlusion: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var terrain_occlusion_sampler: sampler;
+// The volumetric cloud deck's own noise volumes, bound so the sea's cloud
+// shadow uses the same field as the deck and the land.
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var cloud_base_noise: texture_3d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var cloud_base_noise_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(105) var cloud_detail_noise: texture_3d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(106) var cloud_detail_noise_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var cloud_weather_map: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var cloud_weather_map_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var<uniform> cloud_shadow: CloudShadow;
 
 const GRAVITY: f32 = 9.81;
 const TAU: f32 = 6.283185307;
@@ -234,6 +247,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     .r;
     landscape_visibility = mix(1.0, landscape, water.landscape_shadow_strength);
 #endif
+    // Cloud shadow: the same density field, extinction, and diffuse floor the
+    // terrain ground uses, so a deck darkens the sea and the land together.
+    landscape_visibility = landscape_visibility * cloud_shadow_visibility(
+        cloud_shadow,
+        body_position,
+        cloud_base_noise,
+        cloud_base_noise_sampler,
+        cloud_detail_noise,
+        cloud_detail_noise_sampler,
+        cloud_weather_map,
+        cloud_weather_map_sampler,
+    );
 
     // Shoreline foam: strongest exactly at the waterline and modulated by a
     // slow travelling pattern so the edge reads as moving surf, not a hard line.

@@ -31,7 +31,7 @@ use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseAssets;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
     create_planet_material, flight_cloud_altitude_m, flight_cloud_bottom_altitude_m, CloudField,
-    CloudMaterial, CloudParams, CloudShadowState, PlanetMaterialConfig,
+    CloudMaterial, CloudParams, CloudShadow, PlanetMaterialConfig,
 };
 use crate::infrastructure::bevy_adapters::rendering::meshes::create_flight_globe_mesh;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
@@ -699,7 +699,7 @@ pub fn update_rocket_clouds(
         With<RocketBoundPlanetCloud>,
     >,
     mut materials: ResMut<Assets<CloudMaterial>>,
-    mut cloud_shadow: ResMut<CloudShadowState>,
+    mut cloud_shadow: ResMut<CloudShadow>,
 ) {
     let Some((_, camera_transform, projection)) =
         camera_query.iter().find(|(camera, _, _)| camera.is_active)
@@ -716,8 +716,11 @@ pub fn update_rocket_clouds(
     else {
         return;
     };
-    let planet_rotation =
-        Mat3::from_quat(body_fixed_to_planet_inertial_rotation(orientation).as_quat());
+    let body_to_inertial = body_fixed_to_planet_inertial_rotation(orientation);
+    let planet_rotation = Mat3::from_quat(body_to_inertial.as_quat());
+    // Both ground materials rotate their fragment and the Sun into the
+    // body-fixed frame the density field lives in.
+    let inertial_to_body = Vec4::from_array(body_to_inertial.inverse().as_quat().to_array());
     let planet_center = (-render_origin.origin).as_vec3();
     // Draw the deck farther from the camera first. From the ground the cirrus
     // veil is behind the water deck, from orbit it is in front, and a fixed
@@ -818,6 +821,7 @@ pub fn update_rocket_clouds(
             if *layer == RocketCloudLayer::Low {
                 cloud_shadow.field = CloudField::from_cloud_params(&material.params);
                 cloud_shadow.sun_direction = sun_direction;
+                cloud_shadow.inertial_to_body = inertial_to_body;
             }
         }
     }

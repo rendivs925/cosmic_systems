@@ -267,18 +267,23 @@ impl CloudField {
     }
 }
 
-/// Per-frame presentation state the terrain needs to cast the low deck's cloud
-/// shadows.
+/// Cloud-shadow uniform shared by the terrain and water materials.
 ///
-/// The density field and the Sun direction are produced together by the cloud
-/// system, so the terrain shadow is evaluated against exactly the deck that was
-/// drawn. Presentation only: nothing here feeds collision or flight dynamics.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
-pub struct CloudShadowState {
+/// The density field, the Sun direction, and the inertial-to-body rotation are
+/// produced together by the cloud system, so every ground surface evaluates its
+/// shadow against exactly the deck that was drawn. Mirrors `CloudShadow` in
+/// `assets/shaders/cloud_density.wgsl`. Presentation only: nothing here feeds
+/// collision or flight dynamics.
+#[derive(Resource, ShaderType, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+pub struct CloudShadow {
     /// Density inputs of the low deck.
     pub field: CloudField,
     /// Unit direction from the planet toward the Sun in the inertial frame.
     pub sun_direction: Vec3,
+    /// Rotation from the inertial render frame into the body-fixed frame, as an
+    /// `xyzw` quaternion. The density field is body-fixed, so both consumers
+    /// rotate their fragment position and the Sun with it.
+    pub inertial_to_body: Vec4,
 }
 
 /// Volumetric ray-marched cloud material. Custom rather than an extension of
@@ -416,8 +421,9 @@ mod tests {
 
     #[test]
     fn shadow_state_defaults_to_no_deck() {
-        let state = CloudShadowState::default();
+        let state = CloudShadow::default();
         assert_eq!(state.field.bottom_radius, 0.0);
         assert_eq!(state.sun_direction, Vec3::ZERO);
+        assert_eq!(state.inertial_to_body, Vec4::ZERO);
     }
 }

@@ -268,7 +268,10 @@ $$
 
 using the deck's own extinction $\kappa$, so the shadow transmittance
 $T = e^{-\tau}$ matches the opacity of the cloud above it. Only the direct-sun
-term is scaled; ambient sky fill is preserved.
+term is scaled; ambient sky fill is preserved. The terrain ground material and
+the water material share this march, its `CloudShadow` uniform (field, Sun, and
+inertial-to-body rotation), and the density module, so land and sea are shaded
+by the same deck.
 
 An optically thick deck drives $T \to 0$, but an overcast day still delivers
 about a fifth of the clear-sky irradiance as diffuse skylight. The ground term
