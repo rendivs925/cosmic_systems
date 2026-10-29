@@ -258,7 +258,11 @@ fn fbm2(seed: u64, u: f64, v: f64, octaves: u32, frequency: f64) -> f64 {
     let mut freq = frequency;
     let mut norm = 0.0;
     for octave in 0..octaves {
-        let period = freq.round() as i64 * 4;
+        // The map samples `u * freq` over `u` in [0, 1], so the cell period must
+        // equal the frequency for the field to wrap at the antimeridian. A
+        // larger period leaves a hard seam there, which becomes a repeated
+        // stripe once the renderer tiles the map.
+        let period = freq.round() as i64;
         sum += amp
             * value_noise2(
                 seed.wrapping_add(octave as u64 * 0x9E37_79B9),
@@ -364,6 +368,25 @@ mod tests {
             let min = *values.iter().min().unwrap();
             let max = *values.iter().max().unwrap();
             assert!(max - min > 20, "weather channel {channel} is nearly flat");
+        }
+    }
+
+    #[test]
+    fn fbm2_is_periodic_over_the_unit_square() {
+        // The renderer tiles the weather map, so the field must wrap exactly at
+        // both seams. A non-wrapping period leaves a hard stripe that repeats
+        // once per tile.
+        for seed in [1u64, 7, 0x5EED_C10D] {
+            for u in [0.0, 0.17, 0.5, 0.83] {
+                let a = fbm2(seed, u, 0.0, 4, 3.0);
+                let b = fbm2(seed, u, 1.0, 4, 3.0);
+                assert!((a - b).abs() < 1e-9, "v seam off by {}", (a - b).abs());
+            }
+            for v in [0.0, 0.31, 0.5, 0.72] {
+                let a = fbm2(seed, 0.0, v, 4, 3.0);
+                let b = fbm2(seed, 1.0, v, 4, 3.0);
+                assert!((a - b).abs() < 1e-9, "u seam off by {}", (a - b).abs());
+            }
         }
     }
 

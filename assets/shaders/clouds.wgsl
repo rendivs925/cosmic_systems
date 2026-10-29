@@ -78,6 +78,8 @@ const MAX_MULTI_OCTAVES: u32 = 4u;
 // absorbs almost nothing, so droplets scatter conservatively (spec section 4:
 // 0.99-1.0). Must match `CLOUD_SINGLE_SCATTER_ALBEDO` in rendering/materials.rs.
 const CLOUD_ALBEDO: f32 = 0.99;
+// Regional tiling of the periodic weather map; see `sample_density`.
+const WEATHER_TILE: f32 = 48.0;
 
 fn saturate(x: f32) -> f32 {
     return clamp(x, 0.0, 1.0);
@@ -152,11 +154,18 @@ fn sample_density(body_pos: vec3<f32>) -> f32 {
         * (clouds.time_s * clouds.wind_speed * clouds.noise_scale);
 
     // Weather map: coverage carves clear air, cloud type morphs the profile.
+    // The map's fBm spans the whole sphere, so one tile puts every feature at
+    // synoptic scale (thousands of km) and a flight view sees a constant value.
+    // Sampling the periodic map at an integer tiling factor adds regional
+    // structure; integer multiples keep the longitude and pole seams closed,
+    // and scaling the whole UV (drift included) preserves the wind's physical
+    // speed. WEATHER_TILE * 3 fBm cells keeps the largest features near 300 km.
     let body_dir = normalize(body_pos);
+    let drift = clouds.wind_direction * clouds.time_s * 1.0e-6;
     let weather = textureSample(
         weather_map,
         weather_map_sampler,
-        weather_uv(body_dir) + clouds.wind_direction * clouds.time_s * 1.0e-6,
+        (weather_uv(body_dir) + drift) * WEATHER_TILE,
     );
     let coverage = saturate(clouds.coverage * weather.r * 1.4);
     if coverage < 0.01 {

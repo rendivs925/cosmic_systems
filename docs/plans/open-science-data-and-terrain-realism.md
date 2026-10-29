@@ -399,10 +399,27 @@ launch, `import`), same flight, 500x300 deck sample:
 The surface camera at t+132 s now shows a white sunlit deck over blue ocean with
 a visible layer edge. Earlier captures either clipped the deck to a flat white
 sheet (pre-`b52ed82`) or left it ambient-only gray. The deck still lacks
-macro-scale billows: the weather map varies at synoptic scale and the density
+large-scale billows: the weather map varies at synoptic scale and the density
 tiling is 4.5 km, so from 50 km the integrated deck is smooth. That, multi-layer
 decks, terrain cloud shadows, atmosphere-attenuated sun, and distance-adaptive
 steps remain future work.
+
+The 2D weather map was also sampled only once across the sphere, so its fBm
+features spanned thousands of kilometres and any flight view saw a single
+coverage value. It is now sampled at an integer tiling factor of 48 (largest
+features about 300 km), with the wind drift scaled by the same factor so the
+advection speed is unchanged. Tiling only stays seam-free if the map itself
+wraps: `fbm2` used a cell period four times its frequency, which left a hard
+discontinuity at the antimeridian that tiling would have repeated 48 times. The
+generator now uses the per-octave frequency as its cell period, and a unit test
+checks both seams at several seeds.
+
+Effect on the same flight: the deck-from-above sample gains real cellular
+structure, with sRGB standard deviation rising from 0.8 to 3.7 while the mean
+moves from 197 to 177 as coverage holes open. At 3x zoom the deck shows cloud
+cells rather than a featureless gradient. Multi-layer decks, terrain cloud
+shadows, atmosphere-attenuated sun, and distance-adaptive steps remain future
+work.
 
 Reproducible capture (no window manager): `Xvfb :99 -screen 0 1600x900x24`,
 `DISPLAY=:99 i3 -c /dev/null`, run the rocket binary, then
