@@ -26,6 +26,7 @@ use crate::infrastructure::bevy_adapters::rendering::cloud_assets::{
     CloudNoiseAssets, CloudNoiseBinding,
 };
 use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
+use crate::infrastructure::bevy_adapters::rendering::sky::SkyPresentation;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
 };
@@ -34,6 +35,7 @@ use crate::infrastructure::bevy_adapters::rocket::components::{
     PrimaryVehicle, RocketPhysicsState, RocketPlanetBinding,
 };
 use crate::infrastructure::bevy_adapters::rocket::planet::update_rocket_clouds;
+use crate::infrastructure::bevy_adapters::rocket::sky::update_rocket_sky;
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     apply_terrain_imagery, load_earth_imagery_package, stream_terrain_imagery,
     TerrainImageryConfig, TerrainImageryResource,
@@ -749,7 +751,9 @@ impl Plugin for TerrainRenderPlugin {
                     update_vegetation_material,
                     update_terrain_material_origin.after(recenter_render_origin),
                     update_terrain_cloud_shadow.after(update_rocket_clouds),
-                    update_water_material.after(update_rocket_clouds),
+                    update_water_material
+                        .after(update_rocket_clouds)
+                        .after(update_rocket_sky),
                     bind_cloud_noise_to_ground_materials.before(stream_terrain_patches),
                 ),
             )
@@ -930,6 +934,7 @@ fn update_water_material(
     time: Res<Time>,
     render_origin: Res<RenderOrigin>,
     cloud: Res<CloudShadow>,
+    sky: Option<Res<SkyPresentation>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let elapsed_s = time.elapsed_secs();
@@ -943,6 +948,12 @@ fn update_water_material(
         material.extension.params.planet_center = planet_center;
         if material.extension.cloud != *cloud {
             material.extension.cloud = *cloud;
+        }
+        // The sea reflects the same atmosphere the dome is drawn with. The dome
+        // publishes it every frame before this system runs, and every field can
+        // change with the measured surface pressure, so copy the whole block.
+        if let Some(sky) = sky.as_ref() {
+            material.extension.sky = sky.0;
         }
     }
 }
@@ -2974,6 +2985,57 @@ mod tests {
             assert!(shader.contains(binding), "missing {binding}");
         }
         assert!(shader.contains("cloud_shadow_visibility("));
+    }
+
+    /// The sea reflects either the sky or the deck in its mirror direction. Both
+    /// radiances come from shared modules, so a reflected sky is the sky the
+    /// dome is drawing and a reflected cloud is the cloud above the water. A
+    /// local re-derivation would silently drift from both.
+    #[test]
+    fn sea_reflection_reuses_the_shared_sky_and_deck_radiance() {
+        let shader = include_str!("../../../../assets/shaders/water.wgsl");
+        for required in [
+            "@binding(110) var<uniform> sky: SkyParams",
+            "#import \"shaders/sky_radiance.wgsl\"::SkyParams",
+            "#import \"shaders/sky_radiance.wgsl\"::sky_radiance_direction",
+            "#import \"shaders/cloud_density.wgsl\"::cloud_deck_density_length",
+            "#import \"shaders/cloud_density.wgsl\"::cloud_deck_diffuse_radiance",
+        ] {
+            assert!(shader.contains(required), "missing {required}");
+        }
+        assert!(shader.contains("sky_radiance_direction("));
+        assert!(shader.contains("cloud_deck_diffuse_radiance("));
+        assert!(
+            shader.contains("reflect(-pbr.V, pbr.N)"),
+            "the reflection must use the mirror of the view about the wave normal"
+        );
+    }
+
+    /// The sky-radiance module is imported by asset path from both the dome and
+    /// the sea, so it must not declare a custom import path: naga_oil would
+    /// then register it under that name only and the asset-path import would
+    /// fail silently (the same trap as `cloud_density.wgsl`).
+    #[test]
+    fn sky_radiance_module_is_importable_by_asset_path() {
+        let module = include_str!("../../../../assets/shaders/sky_radiance.wgsl");
+        // Comments may name the directive; only a real one is a trap.
+        let declares = module.lines().any(|line| {
+            let line = line.trim_start();
+            !line.starts_with("//") && line.starts_with("#define_import_path")
+        });
+        assert!(
+            !declares,
+            "an imported shader module must not declare a custom import path"
+        );
+        assert!(module.contains("fn sky_radiance_direction("));
+        for shader in [
+            include_str!("../../../../assets/shaders/sky.wgsl"),
+            include_str!("../../../../assets/shaders/water.wgsl"),
+        ] {
+            assert!(
+                shader.contains("#import \"shaders/sky_radiance.wgsl\"::sky_radiance_direction")
+            );
+        }
     }
 
     /// The terrain binds the deck's own noise volumes, so a cast shadow is

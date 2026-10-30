@@ -8,6 +8,7 @@
 
 use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseBinding;
 use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
+use crate::infrastructure::bevy_adapters::rendering::sky::SkyParams;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
@@ -245,6 +246,12 @@ pub struct WaterExtension {
     /// terrain material. No deck (bottom radius zero) leaves the sea unshadowed.
     #[uniform(109)]
     pub cloud: CloudShadow,
+    /// The atmosphere the sky dome is drawn with. The sea evaluates the same
+    /// single-scatter model along its mirror direction, so the reflected sky is
+    /// the colour of the sky above it instead of the uniform ambient fill. A
+    /// vacuum (no optics) leaves the reflection off.
+    #[uniform(110)]
+    pub sky: SkyParams,
 }
 
 impl WaterExtension {
@@ -264,6 +271,8 @@ impl WaterExtension {
             cloud_detail_noise: cloud_noise.detail_noise.clone(),
             cloud_weather_map: cloud_noise.weather_map.clone(),
             cloud,
+            // No atmosphere until the sky system publishes one.
+            sky: SkyParams::default(),
         }
     }
 }

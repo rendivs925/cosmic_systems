@@ -284,6 +284,39 @@ $$
 a documented presentation approximation that stands in for the deck's
 hemisphere radiance, which is not injected into the scene ambient.
 
+### 4.3.4 Sea Mirror Reflection
+
+A water surface is a dielectric mirror, so a grazing sea returns a growing share
+of whatever is above it. The sea evaluates the same $[t_{\text{in}},
+t_{\text{out}}]$ march along the view's mirror direction $\hat{R} =
+\operatorname{reflect}(-\hat{V}, \hat{N})$ to obtain the deck's opacity on that
+ray, then reflects
+
+$$
+L_{\text{refl}} =
+\operatorname{mix}\left(L_{\text{deck}},\; L_{\text{sky}}(\hat{R}),\; T_R\right),
+\qquad
+L_{\text{deck}} = \omega_0 \frac{E_\odot}{\pi} T_\odot \cos\theta_\odot,
+$$
+
+where $E_\odot$ is the top-of-atmosphere solar irradiance, $T_\odot$ the
+atmospheric beam transmittance above the deck, and $\cos\theta_\odot$ is gated
+on the Sun's local horizon. The forward-scattering lobe is omitted because a
+water cloud's diffuse transmission dominates its directed lobe when viewed from
+below. $L_{\text{sky}}$ is the single-scatter integral in
+`sky_radiance.wgsl`, imported by both the dome and the sea so the reflected sky
+is the sky being drawn.
+
+The reflected term is weighted by the dielectric Fresnel reflectance
+
+$$
+F(\theta) = F_0 + (1 - F_0)\left(1 - \cos\theta\right)^5,
+\qquad F_0 = \left(\frac{n - 1}{n + 1}\right)^2 = 0.02,
+$$
+
+for $n = 1.33$, and added as the difference over the uniform ambient specular
+the PBR path already reflects, so the surface never gains energy twice.
+
 ### 4.4 Multiple Scattering Approximation (Octave-Based Attenuation Decay)
 
 Single-scattering models render cloud centers too dark. To simulate multiple internal bounces without expensive unbiased path tracing, accumulate scattering across $K$ attenuation octaves with decreasing density scale and increasing forward scattering anisotropy:

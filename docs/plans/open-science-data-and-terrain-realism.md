@@ -494,9 +494,44 @@ enabled, so land and water now darken under the same deck instead of the sea
 staying sunlit. The march, the diffuse floor, and the field definition live in
 `cloud_density.wgsl`, so the three consumers cannot drift apart.
 
-The sea still has no sky-reflection term, so under a thick deck its body colour
-falls back to ambient and reads darker than a real grey overcast sea; that is a
-pre-existing limitation of the water lighting model, not of the shadow.
+The sea now reflects what is above it. A dielectric mirror reflects a growing
+share of its surroundings as the view grazes the surface, so the water evaluates
+two radiances along the mirrored view direction and blends them by the deck's
+own opacity on that ray:
+
+- the clear sky, from `sky_radiance.wgsl` -- the single-scatter integral the sky
+  dome draws with, extracted into one module and imported by both shaders so the
+  reflected sky cannot drift away from the sky above it;
+- the deck, from `cloud_density.wgsl` -- the near-Lambertian radiance a thick,
+  conservatively scattering layer returns downward (`albedo * E * cos(sun
+  zenith) / PI`, gated on the Sun's local horizon and extinguished by the same
+  beam transmittance the drawn deck uses).
+
+The deck's share comes from the same density march that casts the ground
+shadow, so a reflected cloud is exactly the cloud overhead. The term replaces
+the uniform ambient specular the PBR path already reflected by adding only the
+difference, which keeps a clear sky's horizon gradient and gives an overcast sea
+the grey of the deck instead of a blue that is not there.
+
+Measured at the Mahia coast (one binary, shader-only toggle, water pixels
+selected by an opaque marker pass):
+
+| condition | water, reflection off | water, reflection on | adjacent sky |
+| --- | --- | --- | --- |
+| clear | 62, 84, 90 | 143, 145, 139 | 141, 143, 146 |
+| forced 0.95 deck | 50, 69, 80 | 142, 141, 135 | -- |
+
+At grazing the sea now matches the sky it reflects to within a few sRGB units
+instead of falling back to a dark teal. Under the forced deck the mirror ray's
+transmittance (rendered as a false-colour overlay of `deck_transmittance`) is
+down to a few percent over the whole bay, so the reflection there is the deck's
+grey rather than a hidden blue sky.
+
+One presentation limit remains: the sky model has no clouds, so a reflection of
+a *partly* cloudy sky is a blend of clear airlight and the deck's mean radiance
+rather than a picture of individual clouds. The mirror direction is also a
+single sample of the wave-perturbed normal, so an unresolved sea reflects a
+smooth field rather than a blurred one.
 
 One diagnostic pitfall: an imported shader module that declares
 `#define_import_path` is registered under that custom name only, so an

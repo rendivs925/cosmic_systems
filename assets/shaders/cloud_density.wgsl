@@ -41,15 +41,22 @@ struct CloudShadow {
     field: CloudField,
     // Unit direction from the planet toward the Sun, inertial frame.
     sun_direction: vec3<f32>,
+    // Beam transmittance of the atmosphere above the deck.
+    sun_transmittance: vec3<f32>,
     // Inertial-to-body rotation as an xyzw quaternion.
     inertial_to_body: vec4<f32>,
 }
 
-// Steps along the Sun ray through the deck. The deck is a few kilometres thick
-// and the noise field's features are sub-kilometre, so this is a coarse
+// Steps along a ray through the deck, used both for the Sun path that decides a
+// shadow and for the mirror path the sea reflects. The deck is a few kilometres
+// thick and the noise field's features are sub-kilometre, so this is a coarse
 // estimate of the beam's optical depth: enough to place a shadow under each
 // cloud mass, not enough to resolve individual cell edges.
-const CLOUD_SHADOW_STEPS: u32 = 6u;
+const CLOUD_DECK_MARCH_STEPS: u32 = 6u;
+// Single-scattering albedo of cloud droplets at visible wavelengths. Water
+// absorbs almost nothing, so droplets scatter conservatively (spec section 4:
+// 0.99-1.0). Must match `CLOUD_SINGLE_SCATTER_ALBEDO` in rendering/materials.rs.
+const CLOUD_ALBEDO: f32 = 0.99;
 // A real overcast deck still delivers about a fifth of the clear-sky irradiance
 // as diffuse skylight. Neither ground material injects the deck's hemisphere
 // radiance into the scene ambient, so keeping that fraction of the blocked beam
@@ -177,6 +184,99 @@ fn rotate_by_quat(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + q.w * t + cross(q.xyz, t);
 }
 
+/// Gate on how far the Sun is above a sample's local horizon: direct sunlight
+/// only reaches a sample while the Sun is up. At cloud altitude the geometric
+/// horizon sits slightly below the tangent plane (`acos(sqrt(1 - (R/(R+h))^2))`
+/// is about 1.8 degrees at 3 km), so the gate opens a little below zero and
+/// fades through civil twilight. Without it the sun march reports a clear path
+/// for a below-horizon Sun and lights the night-side deck with the full solar
+/// irradiance.
+fn cloud_sun_gate(cos_elevation: f32) -> f32 {
+    return smoothstep(-0.05, 0.02, cos_elevation);
+}
+
+/// Density-length (density times path length, in the field's units) along
+/// `dir_body` from a point below the deck out through its top. Zero when the
+/// point is not under the deck or the ray misses it.
+///
+/// This is the one march both the ground shadow (along the Sun) and the sea's
+/// mirror path (along the reflected view) use, so a reflected deck has exactly
+/// the opacity of the deck drawn above it.
+fn cloud_deck_density_length(
+    field: CloudField,
+    body_pos: vec3<f32>,
+    dir_body: vec3<f32>,
+    base_noise: texture_3d<f32>,
+    base_noise_sampler: sampler,
+    detail_noise: texture_3d<f32>,
+    detail_noise_sampler: sampler,
+    weather_map: texture_2d<f32>,
+    weather_map_sampler: sampler,
+) -> f32 {
+    if field.bottom_radius <= 0.0 || dot(dir_body, dir_body) < 1e-6 {
+        return 0.0;
+    }
+    // A deck below the fragment cannot shadow it, and a ray that starts inside
+    // the shell is not the geometry either caller asks about.
+    if length(body_pos) >= field.bottom_radius {
+        return 0.0;
+    }
+    let dir = normalize(dir_body);
+    let bottom = ray_sphere(body_pos, dir, field.bottom_radius);
+    let top = ray_sphere(body_pos, dir, field.top_radius);
+    // The fragment sits inside both spheres, so the ray leaves the clear air
+    // below the base at the far root of the base sphere and leaves the deck at
+    // the far root of the top sphere. Both roots are the near-side solutions
+    // for a point inside the sphere, a few kilometres apart at deck altitude.
+    let enter = bottom.y;
+    let exit = top.y;
+    if enter <= 0.0 || exit <= enter {
+        return 0.0;
+    }
+    let steps = f32(CLOUD_DECK_MARCH_STEPS);
+    let step_length = (exit - enter) / steps;
+    var density_length = 0.0;
+    for (var i: u32 = 0u; i < CLOUD_DECK_MARCH_STEPS; i = i + 1u) {
+        let sample_pos = body_pos + dir * (enter + (f32(i) + 0.5) * step_length);
+        density_length += sample_density(
+            field,
+            base_noise,
+            base_noise_sampler,
+            detail_noise,
+            detail_noise_sampler,
+            weather_map,
+            weather_map_sampler,
+            sample_pos,
+        ) * step_length;
+    }
+    return density_length;
+}
+
+/// Radiance an optically thick deck returns downward toward a surface below it.
+///
+/// Cloud droplets are nearly conservative scatterers, so a thick deck reflects
+/// most of the sunlight it intercepts as a near-Lambertian layer:
+/// `albedo * E * cos(sun zenith) / PI`, tinted white at the sunlit top. The sea
+/// uses this as the radiance in its mirror direction whenever the deck is in
+/// the way, which is what stops an overcast sea from reflecting a blue sky that
+/// is not there. The forward-scattering lobe is deliberately omitted: from
+/// below, a water cloud's diffuse transmission dominates its directed lobe.
+fn cloud_deck_diffuse_radiance(
+    field: CloudField,
+    sun_direction_body: vec3<f32>,
+    sun_irradiance: vec3<f32>,
+    sun_transmittance: vec3<f32>,
+    surface_position_body: vec3<f32>,
+) -> vec3<f32> {
+    if field.bottom_radius <= 0.0 {
+        return vec3(0.0);
+    }
+    let sun_elevation = dot(normalize(surface_position_body), sun_direction_body);
+    let sun_cos = saturate(sun_elevation);
+    return sun_irradiance * sun_transmittance * (CLOUD_ALBEDO / PI) * sun_cos
+        * cloud_sun_gate(sun_elevation);
+}
+
 /// Fraction of direct sunlight that survives the cloud deck between a ground
 /// point and the Sun, in [0, 1].
 ///
@@ -209,33 +309,17 @@ fn cloud_shadow_visibility(
     if length(body_pos) >= field.bottom_radius {
         return 1.0;
     }
-    let bottom = ray_sphere(body_pos, sun_body, field.bottom_radius);
-    let top = ray_sphere(body_pos, sun_body, field.top_radius);
-    // The fragment sits inside both spheres, so the ray leaves the clear air
-    // below the base at the far root of the base sphere and leaves the deck at
-    // the far root of the top sphere. Both roots are the near-side solutions
-    // for a point inside the sphere, a few kilometres apart at deck altitude.
-    let enter = bottom.y;
-    let exit = top.y;
-    if enter <= 0.0 || exit <= enter {
-        return 1.0;
-    }
-    let steps = f32(CLOUD_SHADOW_STEPS);
-    let step_length = (exit - enter) / steps;
-    var density_length = 0.0;
-    for (var i: u32 = 0u; i < CLOUD_SHADOW_STEPS; i = i + 1u) {
-        let sample_pos = body_pos + sun_body * (enter + (f32(i) + 0.5) * step_length);
-        density_length += sample_density(
-            field,
-            base_noise,
-            base_noise_sampler,
-            detail_noise,
-            detail_noise_sampler,
-            weather_map,
-            weather_map_sampler,
-            sample_pos,
-        ) * step_length;
-    }
+    let density_length = cloud_deck_density_length(
+        field,
+        body_pos,
+        sun_body,
+        base_noise,
+        base_noise_sampler,
+        detail_noise,
+        detail_noise_sampler,
+        weather_map,
+        weather_map_sampler,
+    );
     let transmittance = exp(-density_length * field.absorption);
     return mix(CLOUD_SHADOW_DIFFUSE_FLOOR, 1.0, transmittance);
 }

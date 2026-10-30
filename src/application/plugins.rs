@@ -73,6 +73,7 @@ use crate::infrastructure::bevy_adapters::planet_systems::{
     update_planet_positions, update_planet_rotations,
 };
 use crate::infrastructure::bevy_adapters::rendering::cloud_assets::setup_cloud_noise_assets;
+use crate::infrastructure::bevy_adapters::rendering::sky::SkyPresentation;
 use crate::infrastructure::bevy_adapters::rocket::atmospheric_effects::{
     update_rocket_atmospheric_effects, RocketAtmosphericEffectAssets,
 };
@@ -694,8 +695,10 @@ impl Plugin for RocketModePlugin {
         // Terrain rendering plugin (spawns meshes from streaming patches).
         app.add_plugins(TerrainRenderPlugin);
 
-        // Physically based sky material (single scattering).
+        // Physically based sky material (single scattering). The dome publishes
+        // its parameter block so the sea reflects the sky it is drawn with.
         app.add_plugins(sky_material_plugin());
+        app.init_resource::<SkyPresentation>();
 
         // The shared star mesh is authored in solar display units. Re-scale it
         // into the camera-relative flight frame instead of expanding the

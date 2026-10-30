@@ -21,8 +21,10 @@
 #import bevy_pbr::forward_io::VertexOutput
 // Shared density field: the terrain cloud-shadow pass evaluates the same
 // function, so the shadow always lines up with the cloud above it.
+#import "shaders/cloud_density.wgsl"::CLOUD_ALBEDO
 #import "shaders/cloud_density.wgsl"::CloudField
 #import "shaders/cloud_density.wgsl"::PI
+#import "shaders/cloud_density.wgsl"::cloud_sun_gate
 #import "shaders/cloud_density.wgsl"::ray_sphere
 #import "shaders/cloud_density.wgsl"::saturate
 #import "shaders/cloud_density.wgsl"::sample_density
@@ -81,10 +83,6 @@ fn clip_depth(world_point: vec3<f32>) -> f32 {
 const MAX_PRIMARY_STEPS: u32 = 128u;
 const MAX_LIGHT_STEPS: u32 = 8u;
 const MAX_MULTI_OCTAVES: u32 = 4u;
-// Single-scattering albedo of cloud droplets at visible wavelengths. Water
-// absorbs almost nothing, so droplets scatter conservatively (spec section 4:
-// 0.99-1.0). Must match `CLOUD_SINGLE_SCATTER_ALBEDO` in rendering/materials.rs.
-const CLOUD_ALBEDO: f32 = 0.99;
 
 // Interleaved gradient noise (Jimenez): a cheap, well-distributed per-pixel
 // dither. Far less grainy than a white-noise hash at these step counts, so it
@@ -262,14 +260,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
                 (length(sample_pos) - clouds.bottom_radius) / layer,
             );
             // Direct sunlight only reaches a sample while the Sun is above its
-            // local horizon. At cloud altitude the geometric horizon sits
-            // slightly below the tangent plane (`acos(sqrt(1 - (R/(R+h))^2))`
-            // is about 1.8 degrees at 3 km), so the gate opens a little below
-            // zero and fades through civil twilight. Without this the sun
-            // march reports a clear path for a below-horizon Sun and lights the
-            // night-side deck with the full solar irradiance.
+            // local horizon; the shared gate owns that curve.
             let sun_elevation = dot(normalize(sample_pos), clouds.sun_direction);
-            let terminator = smoothstep(-0.05, 0.02, sun_elevation);
+            let terminator = cloud_sun_gate(sun_elevation);
             // The atmosphere between the Sun and the deck removes part of the
             // beam, mostly blue, so a low Sun reddens the cloud before the
             // terminator gate closes it.

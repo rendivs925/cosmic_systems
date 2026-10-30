@@ -280,10 +280,28 @@ pub struct CloudShadow {
     pub field: CloudField,
     /// Unit direction from the planet toward the Sun in the inertial frame.
     pub sun_direction: Vec3,
+    /// Beam transmittance of the atmosphere above the deck. The sea's mirror
+    /// reflection needs it so a reflected deck reddens and dims with the same
+    /// low-Sun extinction the drawn deck has.
+    pub sun_transmittance: Vec3,
     /// Rotation from the inertial render frame into the body-fixed frame, as an
     /// `xyzw` quaternion. The density field is body-fixed, so both consumers
     /// rotate their fragment position and the Sun with it.
     pub inertial_to_body: Vec4,
+}
+
+impl CloudShadow {
+    /// The shadow state of one drawn deck. The ground evaluates its shadow and
+    /// its reflection against exactly the deck that was drawn, so every input is
+    /// copied from the material the deck rendered with rather than recomputed.
+    pub fn for_deck(params: &CloudParams, sun_direction: Vec3, inertial_to_body: Vec4) -> Self {
+        Self {
+            field: CloudField::from_cloud_params(params),
+            sun_direction,
+            sun_transmittance: params.sun_transmittance,
+            inertial_to_body,
+        }
+    }
 }
 
 /// Volumetric ray-marched cloud material. Custom rather than an extension of
@@ -387,6 +405,24 @@ pub fn orbit_emissive(color: Color, intensity: f32) -> LinearRgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reflected deck must dim and redden with the same atmospheric beam
+    /// extinction the drawn deck has, so the shadow state has to carry the
+    /// material's Sun transmittance, not a default.
+    #[test]
+    fn cloud_shadow_copies_the_deck_sun_transmittance() {
+        let mut params = CloudParams::deck();
+        params.sun_transmittance = Vec3::new(0.94, 0.71, 0.52);
+        let sun = Vec3::new(0.0, 0.0, 1.0);
+        let rotation = Vec4::new(0.0, 0.0, 0.0, 1.0);
+
+        let shadow = CloudShadow::for_deck(&params, sun, rotation);
+        assert_eq!(shadow.sun_transmittance, params.sun_transmittance);
+        assert_eq!(shadow.sun_direction, sun);
+        assert_eq!(shadow.inertial_to_body, rotation);
+        assert_eq!(shadow.field.bottom_radius, params.bottom_radius);
+        assert_eq!(shadow.field.absorption, params.absorption);
+    }
 
     #[test]
     fn cloud_field_copies_every_density_input() {

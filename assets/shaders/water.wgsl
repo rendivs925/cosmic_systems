@@ -14,6 +14,7 @@
 #import bevy_pbr::{
     forward_io::{Vertex, VertexOutput, FragmentOutput},
     mesh_functions,
+    mesh_view_bindings::{lights, view},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
@@ -21,9 +22,16 @@
 }
 #import "shaders/landscape_lighting.wgsl"::direct_sun_self_shadow_correction
 // The sea evaluates the volumetric deck's own density field for cloud shadows,
-// so a shadow always lines up with the cloud casting it.
+// so a shadow always lines up with the cloud casting it -- and for the deck's
+// radiance in the mirror direction, so a reflected cloud is that same cloud.
 #import "shaders/cloud_density.wgsl"::CloudShadow
+#import "shaders/cloud_density.wgsl"::cloud_deck_density_length
+#import "shaders/cloud_density.wgsl"::cloud_deck_diffuse_radiance
 #import "shaders/cloud_density.wgsl"::cloud_shadow_visibility
+#import "shaders/cloud_density.wgsl"::rotate_by_quat
+// The reflected sky is the sky the dome is drawing: one shared integral.
+#import "shaders/sky_radiance.wgsl"::SkyParams
+#import "shaders/sky_radiance.wgsl"::sky_radiance_direction
 
 struct WaterParams {
     /// Presentation clock in seconds; advances the wave phase only.
@@ -83,9 +91,18 @@ struct WaterParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var cloud_weather_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var cloud_weather_map_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var<uniform> cloud_shadow: CloudShadow;
+// The atmosphere the sky dome is drawn with, so the sea can reflect it.
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var<uniform> sky: SkyParams;
 
 const GRAVITY: f32 = 9.81;
 const TAU: f32 = 6.283185307;
+// Fresnel reflectance of water at normal incidence, ((1.33 - 1) / (1.33 + 1))^2.
+const WATER_F0: f32 = 0.02;
+// The reflection is a low-frequency mirror image, so it does not need the
+// dome's full-resolution integral. These counts are the resolution the sea can
+// afford per pixel and still keep the horizon's brightness gradient.
+const REFLECTION_SKY_VIEW_SAMPLES: u32 = 8u;
+const REFLECTION_SKY_SUN_SAMPLES: u32 = 4u;
 
 /// One wave component's contribution in the local tangent plane:
 /// `(height_m, d(height)/d(tangent_x), d(height)/d(tangent_y))`.
@@ -278,9 +295,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     water_color = mix(water_color, water.foam_color, foam);
 
     // Grazing angles reflect more and transmit less, so the surface becomes
-    // near-opaque at the horizon and stays clear looking straight down.
-    let fresnel = pow(1.0 - clamp(dot(pbr.V, pbr.N), 0.0, 1.0), 5.0);
-    opacity = mix(opacity, 1.0, fresnel * 0.75);
+    // near-opaque at the horizon and stays clear looking straight down. The
+    // same grazing factor drives the physical Fresnel term below.
+    let n_dot_v = clamp(dot(pbr.V, pbr.N), 0.0, 1.0);
+    let grazing = pow(1.0 - n_dot_v, 5.0);
+    opacity = mix(opacity, 1.0, grazing * 0.75);
     opacity = mix(opacity, 1.0, foam);
 
     pbr.material.base_color = vec4<f32>(water_color.rgb, water_color.a * opacity);
@@ -295,10 +314,68 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var out: FragmentOutput;
     if (pbr.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         let lit_color = apply_pbr_lighting(pbr);
-        out.color = vec4<f32>(
-            lit_color.rgb + direct_sun_self_shadow_correction(pbr, landscape_visibility),
-            lit_color.a,
-        );
+        var color = lit_color.rgb
+            + direct_sun_self_shadow_correction(pbr, landscape_visibility);
+        // A dielectric mirror reflects a growing share of the sky as the view
+        // grazes the surface. The PBR path already reflects the uniform ambient
+        // fill through its specular ambient term; that fill is a shadow-fill
+        // value, not the radiance of the sky in this direction. Replace it by
+        // adding the difference, so a clear sky gives the sea its horizon
+        // gradient and an overcast deck gives it the grey of the deck instead
+        // of a blue that is not there.
+        //
+        // The deck term is the radiance a nearly conservative, thick scattering
+        // layer returns downward, weighted by the deck's opacity along the
+        // mirror ray from the same field that casts the sea's shadow.
+        let reflected_dir = reflect(-pbr.V, pbr.N);
+        if sky.top_radius > sky.bottom_radius && sky.sky_strength > 0.0 {
+            var reflected = sky_radiance_direction(
+                sky,
+                body_position,
+                reflected_dir,
+                REFLECTION_SKY_VIEW_SAMPLES,
+                REFLECTION_SKY_SUN_SAMPLES,
+            ).radiance;
+            if cloud_shadow.field.bottom_radius > 0.0 {
+                let body_pos = rotate_by_quat(
+                    cloud_shadow.inertial_to_body,
+                    body_position,
+                );
+                let mirror_body = rotate_by_quat(
+                    cloud_shadow.inertial_to_body,
+                    reflected_dir,
+                );
+                let deck_length = cloud_deck_density_length(
+                    cloud_shadow.field,
+                    body_pos,
+                    mirror_body,
+                    cloud_base_noise,
+                    cloud_base_noise_sampler,
+                    cloud_detail_noise,
+                    cloud_detail_noise_sampler,
+                    cloud_weather_map,
+                    cloud_weather_map_sampler,
+                );
+                let deck_transmittance = exp(
+                    -deck_length * cloud_shadow.field.absorption,
+                );
+                let deck_radiance = cloud_deck_diffuse_radiance(
+                    cloud_shadow.field,
+                    normalize(rotate_by_quat(
+                        cloud_shadow.inertial_to_body,
+                        cloud_shadow.sun_direction,
+                    )),
+                    sky.sun_irradiance,
+                    cloud_shadow.sun_transmittance,
+                    body_pos,
+                );
+                reflected = mix(deck_radiance, reflected, deck_transmittance);
+            }
+            let mirror_fresnel = WATER_F0 + (1.0 - WATER_F0) * grazing;
+            color += view.exposure * mirror_fresnel
+                * max(reflected - lights.ambient_color.rgb, vec3(0.0));
+        }
+        out.color = vec4<f32>(color, lit_color.a);
     } else {
         out.color = pbr.material.base_color;
     }

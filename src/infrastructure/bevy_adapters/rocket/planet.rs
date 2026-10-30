@@ -30,8 +30,8 @@ use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::planet_appearance::color_for_body;
 use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseAssets;
 use crate::infrastructure::bevy_adapters::rendering::materials::{
-    create_planet_material, flight_cloud_altitude_m, flight_cloud_bottom_altitude_m, CloudField,
-    CloudMaterial, CloudParams, CloudShadow, PlanetMaterialConfig,
+    create_planet_material, flight_cloud_altitude_m, flight_cloud_bottom_altitude_m, CloudMaterial,
+    CloudParams, CloudShadow, PlanetMaterialConfig,
 };
 use crate::infrastructure::bevy_adapters::rendering::meshes::create_flight_globe_mesh;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
@@ -819,9 +819,8 @@ pub fn update_rocket_clouds(
             // the low deck casts a ground shadow worth marching: the cirrus
             // veil is optically thin and 8-10 km up.
             if *layer == RocketCloudLayer::Low {
-                cloud_shadow.field = CloudField::from_cloud_params(&material.params);
-                cloud_shadow.sun_direction = sun_direction;
-                cloud_shadow.inertial_to_body = inertial_to_body;
+                *cloud_shadow =
+                    CloudShadow::for_deck(&material.params, sun_direction, inertial_to_body);
             }
         }
     }

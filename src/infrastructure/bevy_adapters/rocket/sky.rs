@@ -10,12 +10,12 @@ use super::climate::climate_at_position;
 use super::components::{PrimaryVehicle, RocketPhysicsState};
 use super::environment::{bound_planet_sun, solar_illuminance_lux};
 use super::planet::RocketBoundPlanet;
-use crate::domain::services::atmosphere::SEA_LEVEL_PRESSURE_PA;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
 use crate::infrastructure::bevy_adapters::climate::MeasuredClimate;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::rendering::sky::{SkyParams, SkyPresentation};
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -24,7 +24,7 @@ use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin}
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
 use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
 use bevy::shader::ShaderRef;
 
@@ -36,78 +36,10 @@ const SKY_DOME_FAR_FRACTION: f32 = 0.9;
 /// dome is centred on the camera, so it must be biased far behind every other
 /// transparent surface to be drawn first as the background.
 const SKY_SORT_DEPTH_BIAS: f32 = -1.0e6;
-/// Global scale for the sky radiance. The single-scattering integral is
-/// already linear in the same solar irradiance that drives the PBR directional
-/// light, so the physical value is `1.0`: the integral alone yields a clear
-/// daytime sky (zenith ~1.2e3, horizon ~1.7e4) against a sunlit white surface
-/// of ~4.0e4 in the same units. It is kept as a named calibration so an
-/// artistic adjustment stays in one place; reducing it darkens the sky without
-/// changing the Rayleigh/Mie colour balance.
-const SKY_RADIANCE_SCALE: f32 = 1.0;
-
-/// Uniform parameters for the sky shader. Field order and types must match the
-/// `SkyParams` WGSL struct exactly.
-#[derive(Clone, Copy, Debug, Default, ShaderType, Reflect)]
-pub struct SkyParams {
-    pub planet_center: Vec3,
-    pub bottom_radius: f32,
-    pub top_radius: f32,
-    pub rayleigh_scale_height: f32,
-    pub mie_scale_height: f32,
-    pub mie_asymmetry: f32,
-    pub rayleigh_scattering: Vec3,
-    pub mie_scattering: f32,
-    pub mie_absorption: f32,
-    pub ozone_layer_altitude: f32,
-    pub ozone_layer_width: f32,
-    pub ozone_absorption: Vec3,
-    pub sun_direction: Vec3,
-    pub sun_irradiance: Vec3,
-    pub ground_albedo: Vec3,
-    pub sky_strength: f32,
-}
-
-impl SkyParams {
-    /// Build the shader parameters for a body, or a transparent vacuum sky when
-    /// the body has no modelled atmosphere.
-    fn for_optics(
-        optics: Option<AtmosphericOptics>,
-        planet_center: Vec3,
-        sun_direction: Vec3,
-        sun_irradiance: Vec3,
-    ) -> Self {
-        let Some(optics) = optics else {
-            return Self {
-                planet_center,
-                sun_direction,
-                sun_irradiance,
-                ..default()
-            };
-        };
-        Self {
-            planet_center,
-            bottom_radius: optics.bottom_radius_m,
-            top_radius: optics.top_radius_m,
-            rayleigh_scale_height: optics.rayleigh_scale_height_m,
-            mie_scale_height: optics.mie_scale_height_m,
-            mie_asymmetry: optics.mie_asymmetry,
-            rayleigh_scattering: Vec3::from(optics.rayleigh_scattering_per_m),
-            mie_scattering: optics.mie_scattering_per_m,
-            mie_absorption: optics.mie_absorption_per_m,
-            ozone_layer_altitude: optics.ozone_layer_altitude_m,
-            ozone_layer_width: optics.ozone_layer_width_m,
-            ozone_absorption: Vec3::from(optics.ozone_absorption_per_m),
-            sun_direction,
-            sun_irradiance,
-            ground_albedo: Vec3::from(optics.ground_albedo),
-            sky_strength: SKY_RADIANCE_SCALE,
-        }
-    }
-}
-
 /// Physically based single-scattering sky material.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 pub struct SkyMaterial {
+    /// Shared with the sea's reflection, so both see one atmosphere.
     #[uniform(0)]
     pub params: SkyParams,
 }
@@ -184,6 +116,7 @@ pub fn update_rocket_sky(
     >,
     mut dome_query: Query<(&mut Transform, &MeshMaterial3d<SkyMaterial>), With<RocketSkyDome>>,
     mut sky_materials: ResMut<Assets<SkyMaterial>>,
+    mut sky_presentation: ResMut<SkyPresentation>,
 ) {
     let Some((_, camera_transform, projection)) =
         camera_query.iter().find(|(camera, _, _)| camera.is_active)
@@ -221,10 +154,14 @@ pub fn update_rocket_sky(
                 orientation,
                 &simulation_time,
             ) {
-                apply_measured_surface_pressure(&mut params, sample.pressure_pa);
+                params.apply_measured_surface_pressure(sample.pressure_pa);
             }
         }
     }
+
+    // The sea reflects this exact atmosphere; publish before the material write
+    // so a missing dome still leaves a coherent reflection.
+    sky_presentation.0 = params;
 
     let dome_radius = match projection {
         Projection::Perspective(perspective) => (perspective.far * SKY_DOME_FAR_FRACTION).max(1.0),
@@ -240,20 +177,6 @@ pub fn update_rocket_sky(
     }
 }
 
-/// Scale the sea-level molecular scattering coefficients by the measured
-/// surface-pressure ratio. Presentation only: this changes the optical depth of
-/// the sky dome, not the flight atmosphere. The clamp keeps pathological data
-/// from producing a black or over-bright sky.
-fn apply_measured_surface_pressure(params: &mut SkyParams, pressure_pa: f64) {
-    if !pressure_pa.is_finite() || pressure_pa <= 0.0 {
-        return;
-    }
-    let ratio = (pressure_pa / SEA_LEVEL_PRESSURE_PA).clamp(0.5, 1.1) as f32;
-    params.rayleigh_scattering *= ratio;
-    params.mie_scattering *= ratio;
-    params.mie_absorption *= ratio;
-}
-
 /// Register the sky material pipeline. Called from rocket-mode composition.
 pub fn sky_material_plugin() -> MaterialPlugin<SkyMaterial> {
     MaterialPlugin::<SkyMaterial>::default()
@@ -263,43 +186,24 @@ pub fn sky_material_plugin() -> MaterialPlugin<SkyMaterial> {
 mod tests {
     use super::*;
 
+    /// The sky dome and the sea's reflection must be given the same parameter
+    /// block, or the reflected sky drifts away from the sky above it.
     #[test]
-    fn vacuum_bodies_produce_a_transparent_sky() {
-        let params = SkyParams::for_optics(None, Vec3::ZERO, Vec3::X, Vec3::splat(127_000.0));
-
-        assert_eq!(params.top_radius, 0.0);
-        assert_eq!(params.sky_strength, 0.0);
-        assert_eq!(params.rayleigh_scattering, Vec3::ZERO);
-    }
-
-    #[test]
-    fn earth_optics_flow_into_the_uniform() {
+    fn the_published_presentation_is_the_dome_uniform() {
         let optics = AtmosphericOptics::earth(6_371_000.0);
-        let params = SkyParams::for_optics(
+        let mut params = SkyParams::for_optics(
             Some(optics),
             Vec3::new(0.0, -6_371_000.0, 0.0),
             Vec3::X,
             Vec3::splat(127_000.0),
         );
+        params.apply_measured_surface_pressure(80_000.0);
 
-        assert_eq!(params.bottom_radius, optics.bottom_radius_m);
-        assert_eq!(params.top_radius, optics.top_radius_m);
-        assert!(params.rayleigh_scattering.z > params.rayleigh_scattering.x);
-        assert_eq!(params.sky_strength, SKY_RADIANCE_SCALE);
-    }
-
-    #[test]
-    fn measured_surface_pressure_scales_only_scattering() {
-        let optics = AtmosphericOptics::earth(6_371_000.0);
-        let mut params =
-            SkyParams::for_optics(Some(optics), Vec3::ZERO, Vec3::X, Vec3::splat(127_000.0));
-        let rayleigh = params.rayleigh_scattering;
-        let ground = params.ground_albedo;
-        apply_measured_surface_pressure(&mut params, 80_000.0);
-        let ratio = 80_000.0 / SEA_LEVEL_PRESSURE_PA;
-        assert!((params.rayleigh_scattering.x - rayleigh.x * ratio as f32).abs() < 1e-3);
-        assert_eq!(params.ground_albedo, ground);
-        apply_measured_surface_pressure(&mut params, f64::NAN);
-        assert!((params.rayleigh_scattering.x - rayleigh.x * ratio as f32).abs() < 1e-3);
+        let mut presentation = SkyPresentation::default();
+        assert!(!presentation.0.has_atmosphere());
+        presentation.0 = params;
+        assert!(presentation.0.has_atmosphere());
+        assert_eq!(presentation.0.top_radius, optics.top_radius_m);
+        assert!(presentation.0.rayleigh_scattering.z > presentation.0.rayleigh_scattering.x);
     }
 }
