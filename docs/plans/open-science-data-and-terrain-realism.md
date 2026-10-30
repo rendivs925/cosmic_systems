@@ -504,6 +504,28 @@ than in the deck.
 
 See `docs/measurement/cloud_capture_v1.md` for usage and limits.
 
+The first use of the capture view was the density sharpness question, and the
+answer reorders the remaining cloud work. The coverage threshold used to spread
+density over the whole coverage band, so every cloud boundary was a ramp
+hundreds of metres wide; thresholding over a fraction of the band (0.25 and 0.55
+tested) leaves the *share* of sky above the threshold unchanged and only changes
+how fast density rises above it.
+
+Measured: at 1,200 km the edge energy on cloud pixels rises 19% (0.0263 ->
+0.0312) at ramp 0.25, and the wide view reads as distinct cloud masses instead of
+a soft mass with holes. At the 40 km chase view the same change gains 5% edge
+energy but raises the bright-cloud share from 0.394 to 0.512: the narrow ramp
+saturates density sooner, the deck loses its translucent edges, and with no
+shading the harder boundaries read as flat white paper cut-outs. At ramp 0.55 the
+close view keeps the extra coverage and gains no edge energy at all.
+
+Rejected for now, with the coupling made explicit: sharpening is the correct
+change at planet scale and the wrong one on its own at close range, because a
+sharp edge next to a flat, unshaded top looks like cut paper. It should land
+together with the top-height field (cloud relief), not before it. Relief is
+therefore the next cloud slice, and the sharpening is a two-line change waiting
+behind it.
+
 Cloud morph is now regional rather than a constant per deck. The weather map's
 type and convective-vigour channels were raw fBm, and the deck mixed the type
 channel 50/50 with a fixed `cloud_type` of 0.68, which confined every cloud on
