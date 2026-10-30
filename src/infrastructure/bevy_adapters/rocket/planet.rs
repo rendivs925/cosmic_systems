@@ -752,7 +752,12 @@ pub fn update_rocket_clouds(
     let sun_color = LinearRgba::from(Color::srgb(1.0, 1.0, 0.98));
     let sun_irradiance = Vec3::new(sun_color.red, sun_color.green, sun_color.blue)
         * solar_illuminance_lux(sun.distance_m);
-    let elapsed_s = time.elapsed_secs();
+    // The presentation clock drives cloud drift only. It can be pinned for a
+    // deterministic capture; see `presentation_clock`.
+    let elapsed_s =
+        crate::infrastructure::bevy_adapters::rendering::presentation_clock::presentation_time_s(
+            time.elapsed_secs(),
+        );
     if !elapsed_s.is_finite() {
         return;
     }
@@ -773,14 +778,16 @@ pub fn update_rocket_clouds(
                 .clamp(0.0, 1.0) as f32
         })
         .unwrap_or(1.0);
+    // A capture view fixes the observer over one site, so the measured climate
+    // that sets this deck's coverage is sampled there rather than under the
+    // vehicle. Without this the deck would keep changing as the vehicle flies
+    // out of the site, and two captures of the same site would differ.
+    let capture_position_m =
+        super::capture_view::capture_pose().map(|pose| pose.body_position(surface_radius_m as f64));
     let measured = measured_climate.as_ref().and_then(|climate| {
         let rocket = rocket_query.iter().next()?;
-        climate_at_position(
-            climate,
-            rocket.dynamics.position_m,
-            orientation,
-            &simulation_time,
-        )
+        let position_m = capture_position_m.unwrap_or(rocket.dynamics.position_m);
+        climate_at_position(climate, position_m, orientation, &simulation_time)
     });
 
     let dome_radius = match projection {

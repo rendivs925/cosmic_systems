@@ -85,6 +85,7 @@ use crate::infrastructure::bevy_adapters::rocket::camera::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
 };
+use crate::infrastructure::bevy_adapters::rocket::capture_view::apply_capture_pose;
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketCameraConfig, RocketCameraMode, RocketMode, RocketPresentationQuality, RocketTelemetry,
 };
@@ -740,14 +741,15 @@ impl Plugin for RocketModePlugin {
                     .before(PerformanceMetricsSet::Report),
                 update_rocket_camera,
                 update_rocket_camera_projection,
-                update_launch_site_structure_visibility.after(update_rocket_camera_projection),
+                // Measurement-only: a fixed planet-scale view, when requested
+                // through the environment. Owns the final pose before anything
+                // that reads the camera to place the sky, stars or clouds.
+                apply_capture_pose,
+                update_launch_site_structure_visibility.after(apply_capture_pose),
             )
                 .chain(),
         );
-        app.add_systems(
-            Update,
-            update_flight_starfield.after(update_rocket_camera_projection),
-        );
+        app.add_systems(Update, update_flight_starfield.after(apply_capture_pose));
 
         // Rocket HUD UI (runs in Update). Options/visibility are presentation
         // only and are applied before the cadence-limited value writer.
@@ -872,20 +874,11 @@ impl Plugin for RocketModePlugin {
         app.add_systems(Update, update_rocket_planets.after(recenter_render_origin));
         // Volumetric cloud deck follows the active camera's far plane; one small
         // uniform update per frame.
-        app.add_systems(
-            Update,
-            update_rocket_clouds.after(update_rocket_camera_projection),
-        );
-        app.add_systems(
-            Update,
-            update_rocket_sun_disc.after(update_rocket_camera_projection),
-        );
+        app.add_systems(Update, update_rocket_clouds.after(apply_capture_pose));
+        app.add_systems(Update, update_rocket_sun_disc.after(apply_capture_pose));
         // Physically based sky follows the active camera's far plane and the
         // shared render origin.
-        app.add_systems(
-            Update,
-            update_rocket_sky.after(update_rocket_camera_projection),
-        );
+        app.add_systems(Update, update_rocket_sky.after(apply_capture_pose));
         // Day/night cycle: rotates the sun around the planet as simulation time advances.
         app.add_systems(
             Update,

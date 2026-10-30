@@ -1,6 +1,7 @@
 pub mod atmospheric_effects;
 pub mod audio;
 pub mod camera;
+pub mod capture_view;
 pub mod climate;
 pub mod components;
 pub mod contact;

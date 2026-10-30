@@ -479,6 +479,31 @@ mean brightness at 0.40 (from 0.42), so the change reorganizes the deck without
 changing its coverage. At 95 s (~200 km) the cells group into systems with clear
 ocean between them.
 
+A deterministic planet-scale capture view now exists, because the cloud work had
+run out of ways to be measured. Every flight camera frames the vehicle, and the
+widest is a free camera 40 km out: about 100 km of deck, one mesoscale regime. On
+top of that, every animated shader advances with `Time::elapsed_secs()`, so two
+runs of the same build render different moments of the same animation and no
+honest before/after was possible.
+
+`COSMIC_SYSTEMS_CAPTURE_POSE="lat,lon,altitude_m"` places the active flight
+camera on a fixed body-fixed direction looking at the planet centre (derived from
+the site, the planet and the ephemeris, never from the vehicle), and
+`COSMIC_SYSTEMS_CAPTURE_TIME=<s>` pins the presentation clock. While a pose is
+active the deck's measured climate is sampled at that site, so coverage does not
+drift as the vehicle leaves it. Both are opt-in and presentation-only.
+
+Measured from 1,200 km over Papua: frame cloud share 0.258; local cloud fraction
+over a 6x8 grid p10/p50/p90 = 0.00/0.23/0.70; blob area p10/p50/p90 =
+265/1008/28549 px. Clear cells and near-overcast cells in one frame, and blob
+areas spanning two orders of magnitude - the diversity the regional morph was
+introduced for, finally visible. Repeat runs with identical environment: 89.8% of
+pixels bit-identical, 0.27% differing by more than 8/255, mean absolute
+difference 0.20, with the residual in terrain streaming and the sun disc rather
+than in the deck.
+
+See `docs/measurement/cloud_capture_v1.md` for usage and limits.
+
 Cloud morph is now regional rather than a constant per deck. The weather map's
 type and convective-vigour channels were raw fBm, and the deck mixed the type
 channel 50/50 with a fixed `cloud_type` of 0.68, which confined every cloud on

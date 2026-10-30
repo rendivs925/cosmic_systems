@@ -26,6 +26,7 @@ use crate::infrastructure::bevy_adapters::rendering::cloud_assets::{
     CloudNoiseAssets, CloudNoiseBinding,
 };
 use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
+use crate::infrastructure::bevy_adapters::rendering::presentation_clock;
 use crate::infrastructure::bevy_adapters::rendering::sky::SkyPresentation;
 use crate::infrastructure::bevy_adapters::rendering::textures::{
     get_planet_textures, load_texture,
@@ -937,7 +938,7 @@ fn update_water_material(
     sky: Option<Res<SkyPresentation>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let elapsed_s = time.elapsed_secs();
+    let elapsed_s = presentation_clock::presentation_time_s(time.elapsed_secs());
     let planet_center = (-render_origin.origin).as_vec3();
     // Every water material (shared and per-patch) advances the same presentation
     // clock, so a shared wave field stays coherent across all caps. The cloud
@@ -968,7 +969,7 @@ fn update_vegetation_material(
     render_origin: Res<RenderOrigin>,
     mut vegetation_materials: ResMut<Assets<VegetationMaterial>>,
 ) {
-    let elapsed_s = time.elapsed_secs();
+    let elapsed_s = presentation_clock::presentation_time_s(time.elapsed_secs());
     let planet_center = (-render_origin.origin).as_vec3();
     for (_, material) in vegetation_materials.iter_mut() {
         material.extension.params.time_s = elapsed_s;
