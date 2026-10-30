@@ -315,6 +315,14 @@ fn low_cloud_params(surface_radius_m: f32, body: &str) -> CloudParams {
     let mut params = CloudParams::deck();
     params.bottom_radius = surface_radius_m + flight_cloud_bottom_altitude_m(body);
     params.top_radius = surface_radius_m + flight_cloud_altitude_m(body);
+    // Boundary-layer convection sets its own length scale: cumulus cells are
+    // roughly the depth of the layer, not a fixed number of metres. The base
+    // volume holds six cells per tile, so a tile that spans six layer depths
+    // puts one cell at the physical cell diameter. This matters more than it
+    // sounds: at the old fixed 4.5 km tile the cells were 750 m across, which
+    // from altitude read as uniform popcorn rather than as cumulus.
+    let depth = (params.top_radius - params.bottom_radius).max(1.0);
+    params.noise_scale = 1.0 / (depth * 6.0);
     params
 }
 
@@ -1023,6 +1031,33 @@ mod tests {
                 "the enclosing cloud shells must not cast or receive shadows"
             );
         }
+    }
+
+    /// Boundary-layer convection sets its own length scale: cumulus cells are
+    /// about as wide as the layer is deep. The deck's noise frequency is
+    /// therefore derived from the slab instead of being a fixed number of
+    /// metres. At the old fixed 4.5 km tile the cells were 750 m across, and
+    /// from altitude the deck read as uniform popcorn rather than as cumulus.
+    #[test]
+    fn deck_cells_scale_with_the_layer_depth() {
+        let surface_radius_m = 6_371_000.0;
+        for body in ["Earth", "Venus", "Titan"] {
+            let params = low_cloud_params(surface_radius_m, body);
+            let depth = params.top_radius - params.bottom_radius;
+            // The base volume holds six cells per tile, so one cell is
+            // `1 / (noise_scale * 6)` metres across.
+            let cell_m = 1.0 / (params.noise_scale * 6.0);
+            assert!(
+                (cell_m - depth).abs() < depth * 1e-3,
+                "{body}: cloud cell {cell_m} m does not follow the {depth} m layer"
+            );
+        }
+        let earth = low_cloud_params(surface_radius_m, "Earth");
+        let cell_m = 1.0 / (earth.noise_scale * 6.0);
+        assert!(
+            cell_m >= 3_000.0,
+            "Earth cloud cell is still {cell_m} m, too small to read as a cloud"
+        );
     }
 
     #[test]

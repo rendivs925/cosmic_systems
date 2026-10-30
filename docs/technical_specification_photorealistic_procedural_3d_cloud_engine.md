@@ -86,6 +86,34 @@ a uniform translation along the measured wind vector. That is adequate at the
 current feature sizes and presentation clock, but it is a known divergence from
 this specification.
 
+### 3.4.1 Cell Scale and Street Alignment
+
+Two properties of a boundary-layer deck come from the geometry of the layer
+rather than from the noise, and both were missing from the first renderer.
+
+**Cell diameter follows the layer depth.** Convective cells in a layer of depth
+$H$ have an aspect ratio of order one, so a deck's cell size is not a free
+constant. With a base volume that holds six cells per tile, the noise frequency
+is $f = 1 / (6 H)$: the tile spans six layer depths and one cell is one layer
+deep. The previous fixed 4.5 km tile put Earth's cells at 750 m across, and from
+altitude that read as uniform popcorn. Sizing cells from the slab also fixes a
+second problem: coverage thresholds the *density*, so a low-coverage region
+survives only where the noise peaks, and peaks of an undersized field are
+undersized clouds.
+
+**Cells and streets align with the wind.** Convection organizes into rolls
+aligned with the boundary-layer wind, whose spacing is a few layer depths. The
+density field is sampled through a coordinate compressed by a factor
+$s \approx 2.4$ along the wind, which stretches every feature by $s$ along it.
+As a linear map of the sample coordinate this keeps the volume seamless: its
+period simply grows by $s$ along the wind. The compression is horizontal in
+body-fixed Cartesian coordinates, i.e. in the equatorial plane, which is the
+same global-wind approximation the uniform advection already makes; it does not
+turn with latitude.
+
+Both changes live in the shared density module, so the deck, the ground shadow,
+and the sea's reflected deck still sample one field.
+
 ### 3.5 Weather-Map Tiling and Advection
 
 The weather map is a periodic 2D field in body-fixed equirectangular

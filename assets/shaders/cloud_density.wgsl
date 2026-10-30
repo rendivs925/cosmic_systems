@@ -111,6 +111,36 @@ fn weather_coverage(field: CloudField, weather_rank: f32) -> f32 {
     return saturate((weather_rank - clear_below) / max(fraction, 0.02));
 }
 
+// How far the density field is stretched along the wind. Convection in the
+// boundary layer organizes into streets and rolls aligned with the wind, and an
+// isotropic field reads as uniform popcorn no matter how correct its coverage
+// is. This is a presentation approximation: the wind uniform is one measured
+// site value, not a varying field, so the street axis does not turn with
+// latitude.
+const CLOUD_STREAK_STRETCH: f32 = 2.4;
+
+/// Compress the horizontal part of a sample coordinate along `wind`, so the
+/// features in a field sampled at the result are `stretch` times longer along
+/// the wind than across it. The vertical coordinate is untouched.
+///
+/// This is a linear map of the sample coordinate, so the noise volume stays
+/// seamless: its period simply grows by the same factor along the wind. The
+/// caller's coordinate is body-fixed Cartesian, whose y axis is the spin axis,
+/// so "horizontal" here is the equatorial plane; near the poles that plane is
+/// not the local horizon, which is accepted as part of the same global-wind
+/// approximation.
+fn stretch_along_wind(p: vec3<f32>, wind: vec2<f32>, stretch: f32) -> vec3<f32> {
+    let wind_length = length(wind);
+    if wind_length < 1e-4 {
+        return p;
+    }
+    let dir = wind / wind_length;
+    let horizontal = p.xz;
+    let along = dot(horizontal, dir);
+    let stretched = horizontal - dir * along + dir * (along / max(stretch, 1.0));
+    return vec3<f32>(stretched.x, p.y, stretched.y);
+}
+
 fn weather_uv(body_dir: vec3<f32>) -> vec2<f32> {
     let u = atan2(body_dir.z, body_dir.x) / (2.0 * PI) + 0.5;
     let v = asin(clamp(body_dir.y, -1.0, 1.0)) / PI + 0.5;
@@ -169,7 +199,11 @@ fn sample_density(
     }
 
     let sample_pos = body_pos * field.noise_scale + wind_offset;
-    let base = textureSample(base_noise, base_noise_sampler, sample_pos);
+    let base = textureSample(
+        base_noise,
+        base_noise_sampler,
+        stretch_along_wind(sample_pos, field.wind_direction, CLOUD_STREAK_STRETCH),
+    );
     let low_fbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
     var base_density = remap(base.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
     base_density = base_density * gradient;
@@ -178,10 +212,16 @@ fn sample_density(
         return 0.0;
     }
 
+    // The erosion follows the same street axis, so cell edges are fibrous
+    // along the wind instead of randomly ragged.
     let detail = textureSample(
         detail_noise,
         detail_noise_sampler,
-        sample_pos * field.detail_scale + wind_offset * 1.5,
+        stretch_along_wind(
+            sample_pos * field.detail_scale + wind_offset * 1.5,
+            field.wind_direction,
+            CLOUD_STREAK_STRETCH,
+        ),
     );
     let high_fbm = detail.r * 0.625 + detail.g * 0.25 + detail.b * 0.125;
     let erosion = mix(high_fbm, 1.0 - high_fbm, saturate(height_fraction * 2.0));

@@ -2971,6 +2971,36 @@ mod tests {
         }
     }
 
+    /// Convective cells are stretched along the wind, and the deck and its
+    /// shadows must use that same axis. The helper and the factor both live in
+    /// the shared module so no consumer can re-derive either.
+    #[test]
+    fn cloud_density_stretches_along_the_measured_wind() {
+        let module = include_str!("../../../../assets/shaders/cloud_density.wgsl");
+        assert!(
+            module.contains("fn stretch_along_wind("),
+            "the density field no longer aligns its cells with the wind"
+        );
+        assert!(
+            module.contains("field.wind_direction"),
+            "the stretch must use the same wind the deck advects with"
+        );
+        let factor = module
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("const CLOUD_STREAK_STRETCH: f32 =")
+                    .and_then(|rest| rest.trim_end_matches(';').trim().parse::<f32>().ok())
+            })
+            .expect("CLOUD_STREAK_STRETCH is missing or not a literal");
+        // A modest factor: real streets are a few times longer than they are
+        // wide, and a large one would read as motion blur in a still frame.
+        assert!(
+            (1.5..=3.5).contains(&factor),
+            "cloud street stretch {factor} is outside the plausible range"
+        );
+    }
+
     /// The ground and the sea must sample the same field and use the same
     /// march, or a shadow on land stops at the shoreline.
     #[test]

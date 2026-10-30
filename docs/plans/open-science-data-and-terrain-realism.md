@@ -458,6 +458,27 @@ turning the cirrus off under the new parameters changes the fraction by 0.005,
 so the veil no longer dominates. At 95 s (about 200 km) the view shows a large
 cloud system with clear ocean between it and the next one.
 
+Cloud cells now have the size the layer implies, and they align with the wind.
+Two causes behind the popcorn look at altitude. First, the deck's noise
+frequency was a fixed 4.5 km tile, which put Earth's cells at 750 m across no
+matter how deep the layer was; convective cells are about as wide as the layer
+is deep, so the frequency is now derived from the slab (six base-volume cells
+per tile, one tile per six layer depths: a 4.5 km cell). Second, the density
+field was isotropic, while boundary-layer convection organizes into rolls along
+the wind. The shared density module now samples the volume through a coordinate
+compressed 2.4x along the measured wind, which stretches every feature along the
+wind and keeps the volume seamless, since the map stays linear and its period
+simply grows by the same factor. Both changes are in `cloud_density.wgsl`, so
+the deck, the ground shadow, and the sea's reflected deck still read one field.
+
+Measured on the same 42 s chase view (~40 km): the median connected cloud blob
+grows from 108 px to 657 px, i.e. about 2.5x in diameter, and the deck reads as
+a field of cells with clear water between them instead of an even speckle. The
+view's bright low-saturation cloud fraction stays at 0.43 (from 0.46) and the
+mean brightness at 0.40 (from 0.42), so the change reorganizes the deck without
+changing its coverage. At 95 s (~200 km) the cells group into systems with clear
+ocean between them.
+
 The direct term is also gated by the solar terminator. The sun march previously
 reported a clear path for a Sun below the cloud's local horizon, so the night
 side received the full solar irradiance: at a night epoch the prelaunch sky band
