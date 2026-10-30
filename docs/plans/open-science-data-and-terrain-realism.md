@@ -479,6 +479,26 @@ mean brightness at 0.40 (from 0.42), so the change reorganizes the deck without
 changing its coverage. At 95 s (~200 km) the cells group into systems with clear
 ocean between them.
 
+Cloud shading was investigated and left unchanged, because every cheaper shape
+term measured as a no-op. The diffuse term is the radiance of an infinite flat
+deck, so a cell's orientation never enters the image; the deck's visible surface
+is where the view transmittance first falls, and above it the deck is optically
+thin, so the Sun march reports clear sky at every visible top. A density-gradient
+normal is within ten degrees of "up" because the vertical taper of the height
+profile dominates the horizontal noise gradient. Each of these was rendered and
+measured: cloud luminance percentiles moved by less than one 8-bit step. The
+specification records the two rejected terms and why, so the next attempt starts
+from the top-height field or a real multiple-scattering integral rather than
+repeating them.
+
+One incidental finding is worth recording because it blocks a plausible-looking
+feature: cloud shadows are only visible from *below* the deck. From altitude the
+camera sees the ground only through cloud-free gaps, and those gaps are exactly
+the places the deck does not shadow. A shadow on the far-field shell was
+implemented, measured, and reverted for that reason: it is invisible by
+construction, and the shell is hidden by the streamed terrain wherever the
+ground is close enough for a shadow to show.
+
 The direct term is also gated by the solar terminator. The sun march previously
 reported a clear path for a Sun below the cloud's local horizon, so the night
 side received the full solar irradiance: at a night epoch the prelaunch sky band

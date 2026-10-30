@@ -294,6 +294,34 @@ source by `1 - exp(-sigma_e ds)`, a thin wisp reflects proportionally less, and
 the term vanishes at night and across the terminator. This replaced the fixed
 `ambient_fraction` scalar.
 
+`c(h)` is a tint, not a shape term. The expression is the radiance of an
+*infinite flat* deck, so every dome receives the same diffuse light no matter
+which way it faces, and a deck drawn with it alone reads flat from above: the
+cloud tops sit at one brightness and only the phase function and the silhouette
+separate one cell from the next.
+
+Two cheaper shape terms were measured against the rendered deck and rejected.
+
+- **Density-gradient surface normals.** The outward normal of the iso-density
+  surface is `-normalize(grad rho)`, but at the visible surface the vertical
+  taper of the height profile dominates the horizontal noise gradient, so the
+  normal is within about ten degrees of "up" everywhere and the Lambert ratio
+  `n . sun / cos(sun zenith)` is 1.0 to render precision. Cell tops really are
+  flat iso-density surfaces here: the profile, not the noise, decides where the
+  deck ends.
+- **Diffuse self-shadowing from the Sun march.** A point on the visible surface
+  is where the view transmittance first falls, and above it the deck is
+  optically thin, so the Sun march returns its full clear-sky value there. The
+  march does see 50-300 density-metres from *deeper* samples, but those are
+  behind the visible surface and contribute almost nothing to the image. Using
+  the deeper value would make the cloud's brightness follow the view depth, the
+  same view-dependent artifact that the old powder term was removed for.
+
+Both failures point at one thing: relief needs the *top height field* of the
+deck, either by marching the column above each sample down to a transmittance
+threshold and differentiating it horizontally, or by replacing the slab term
+with a multiple-scattering integral that actually transports between cells.
+
 ### 4.3.3 Terrain Cloud Shadows
 
 The ground receives the deck's shadow from the same density field, not a
