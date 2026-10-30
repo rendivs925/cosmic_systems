@@ -479,6 +479,26 @@ mean brightness at 0.40 (from 0.42), so the change reorganizes the deck without
 changing its coverage. At 95 s (~200 km) the cells group into systems with clear
 ocean between them.
 
+The density field is now sampled at an explicit mip level derived from the march
+step (`log2(step / cell)`, one cell being `1 / (6 * noise_scale)` metres). A step
+kilometres long cannot resolve a four-kilometre cell, and `textureSample`'s
+implicit derivatives are undefined inside the march's divergent loop, so the
+level a distant step picked was neither well defined nor resolvable. The 40 km
+chase frame is unchanged to one 8-bit step, because there the steps are tens of
+metres; the change is correctness hygiene for the limb and for any future
+distance-based filtering.
+
+Aerial perspective on the deck was attempted and reverted. Multiplying the
+deck's radiance by `exp(-sigma * distance)` with the shared atmospheric
+extinction turns the far deck sand-coloured: Rayleigh removes blue first and
+nothing puts it back, because a distant cloud is not a dimmer cloud but one
+whose light has been replaced by the airlight in front of it. Attenuating the
+coverage as well only mixes that sand into the ground behind. The correct form
+needs the sky's radiance along the view direction, which means binding
+`SkyParams` into the cloud material and calling the shared
+`sky_radiance_direction` integral once per pixel; the specification records the
+failed variants so the follow-up starts from the right shape.
+
 Cloud shading was investigated and left unchanged, because every cheaper shape
 term measured as a no-op. The diffuse term is the radiance of an infinite flat
 deck, so a cell's orientation never enters the image; the deck's visible surface

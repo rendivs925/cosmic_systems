@@ -141,6 +141,19 @@ fn stretch_along_wind(p: vec3<f32>, wind: vec2<f32>, stretch: f32) -> vec3<f32> 
     return vec3<f32>(stretched.x, p.y, stretched.y);
 }
 
+/// Mip level a march step of `step_m` can resolve.
+///
+/// The base volume holds six cells per tile, so one cell is
+/// `1 / (noise_scale * 6)` metres across. A step shorter than a cell resolves
+/// level zero; a step twice a cell resolves only the first mip, and so on. The
+/// level is not clamped from above: past the last mip the sampler returns the
+/// mean, which is exactly the right answer for a deck that no longer has
+/// resolvable structure.
+fn density_lod(field: CloudField, step_m: f32) -> f32 {
+    let cell_m = 1.0 / max(field.noise_scale * 6.0, 1e-9);
+    return max(log2(max(step_m / cell_m, 1.0)), 0.0);
+}
+
 fn weather_uv(body_dir: vec3<f32>) -> vec2<f32> {
     let u = atan2(body_dir.z, body_dir.x) / (2.0 * PI) + 0.5;
     let v = asin(clamp(body_dir.y, -1.0, 1.0)) / PI + 0.5;
@@ -148,6 +161,13 @@ fn weather_uv(body_dir: vec3<f32>) -> vec2<f32> {
 }
 
 // Cloud density at a body-fixed, planet-relative position, in [0, 1].
+//
+// `lod` picks the noise volume's mip level. A ray march through a distant deck
+// takes steps kilometres long, and a step that long cannot resolve a 4 km cell:
+// sampling the finest mip there aliases the field into blocky silhouettes, most
+// visibly along the limb where one step spans the whole cell. Callers pass the
+// level their step length can actually resolve, so the far deck is drawn from
+// the same field at the scale it is being seen.
 fn sample_density(
     field: CloudField,
     base_noise: texture_3d<f32>,
@@ -157,6 +177,7 @@ fn sample_density(
     weather_map: texture_2d<f32>,
     weather_map_sampler: sampler,
     body_pos: vec3<f32>,
+    lod: f32,
 ) -> f32 {
     let altitude = length(body_pos) - field.bottom_radius;
     let layer = max(field.top_radius - field.bottom_radius, 1.0);
@@ -183,10 +204,13 @@ fn sample_density(
     let body_dir = normalize(body_pos);
     let weather_drift = field.wind_direction * field.wind_speed * field.time_s
         / (2.0 * PI * max(field.bottom_radius, 1.0));
-    let weather = textureSample(
+    // The weather map's features are synoptic (tens to hundreds of kilometres),
+    // so even a kilometre-long march step resolves it and it keeps level zero.
+    let weather = textureSampleLevel(
         weather_map,
         weather_map_sampler,
         (weather_uv(body_dir) + weather_drift) * WEATHER_TILE,
+        0.0,
     );
     let coverage = weather_coverage(field, weather.r);
     if coverage < 0.01 {
@@ -199,10 +223,11 @@ fn sample_density(
     }
 
     let sample_pos = body_pos * field.noise_scale + wind_offset;
-    let base = textureSample(
+    let base = textureSampleLevel(
         base_noise,
         base_noise_sampler,
         stretch_along_wind(sample_pos, field.wind_direction, CLOUD_STREAK_STRETCH),
+        lod,
     );
     let low_fbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
     var base_density = remap(base.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
@@ -214,7 +239,7 @@ fn sample_density(
 
     // The erosion follows the same street axis, so cell edges are fibrous
     // along the wind instead of randomly ragged.
-    let detail = textureSample(
+    let detail = textureSampleLevel(
         detail_noise,
         detail_noise_sampler,
         stretch_along_wind(
@@ -222,6 +247,7 @@ fn sample_density(
             field.wind_direction,
             CLOUD_STREAK_STRETCH,
         ),
+        lod,
     );
     let high_fbm = detail.r * 0.625 + detail.g * 0.25 + detail.b * 0.125;
     let erosion = mix(high_fbm, 1.0 - high_fbm, saturate(height_fraction * 2.0));
@@ -292,6 +318,7 @@ fn cloud_deck_density_length(
     }
     let steps = f32(CLOUD_DECK_MARCH_STEPS);
     let step_length = (exit - enter) / steps;
+    let lod = density_lod(field, step_length);
     var density_length = 0.0;
     for (var i: u32 = 0u; i < CLOUD_DECK_MARCH_STEPS; i = i + 1u) {
         let sample_pos = body_pos + dir * (enter + (f32(i) + 0.5) * step_length);
@@ -304,6 +331,7 @@ fn cloud_deck_density_length(
             weather_map,
             weather_map_sampler,
             sample_pos,
+            lod,
         ) * step_length;
     }
     return density_length;

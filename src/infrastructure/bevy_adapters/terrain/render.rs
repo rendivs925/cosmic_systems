@@ -2971,6 +2971,38 @@ mod tests {
         }
     }
 
+    /// The deck's march runs inside a divergent loop, where an
+    /// implicit-derivative `textureSample` has no defined mip level, and a step
+    /// kilometres long cannot resolve a four-kilometre cell anyway. The density
+    /// field is therefore sampled at an explicit level derived from the step,
+    /// and every consumer of the shared field passes one.
+    #[test]
+    fn cloud_density_samples_a_level_its_step_can_resolve() {
+        let module = include_str!("../../../../assets/shaders/cloud_density.wgsl");
+        assert!(module.contains("fn density_lod("));
+        assert!(module.contains("lod: f32,"));
+        assert!(
+            !module.contains("textureSample("),
+            "the shared density field must not rely on implicit derivatives inside a divergent march"
+        );
+        assert_eq!(
+            module.matches("textureSampleLevel(").count(),
+            3,
+            "base volume, detail volume, and weather map each need an explicit level"
+        );
+        // Mirror of `density_lod`: one level per doubling of the step beyond a
+        // single base cell (the volume holds six cells per tile).
+        fn density_lod(noise_scale: f32, step_m: f32) -> f32 {
+            let cell_m = 1.0 / (noise_scale * 6.0).max(1e-9);
+            (step_m / cell_m).max(1.0).log2().max(0.0)
+        }
+        let earth_deck = 1.0 / (4_500.0 * 6.0);
+        assert_eq!(density_lod(earth_deck, 400.0), 0.0);
+        assert!((density_lod(earth_deck, 4_500.0) - 0.0).abs() < 1e-6);
+        assert!((density_lod(earth_deck, 9_000.0) - 1.0).abs() < 1e-6);
+        assert!((density_lod(earth_deck, 18_000.0) - 2.0).abs() < 1e-6);
+    }
+
     /// Convective cells are stretched along the wind, and the deck and its
     /// shadows must use that same axis. The helper and the factor both live in
     /// the shared module so no consumer can re-derive either.

@@ -28,6 +28,7 @@
 #import "shaders/cloud_density.wgsl"::ray_sphere
 #import "shaders/cloud_density.wgsl"::saturate
 #import "shaders/cloud_density.wgsl"::sample_density
+#import "shaders/cloud_density.wgsl"::density_lod
 
 // Field order and types must match `CloudParams` in rendering/materials.rs.
 struct CloudParams {
@@ -142,6 +143,7 @@ fn march_to_sun(body_pos: vec3<f32>) -> f32 {
     let step_length = layer / max(clouds.light_steps, 1.0);
     let light_step = clouds.sun_direction * step_length;
     let field = cloud_field();
+    let lod = density_lod(field, step_length);
     let inertial_to_body = transpose(clouds.planet_rotation);
     var density_length = 0.0;
     var p = body_pos;
@@ -159,6 +161,7 @@ fn march_to_sun(body_pos: vec3<f32>) -> f32 {
             weather_map,
             weather_map_sampler,
             inertial_to_body * p,
+            lod,
         ) * step_length;
     }
 
@@ -179,6 +182,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
     out.depth = 1.0;
 
     let camera_world = view.world_position;
+
     let ray_dir = normalize(in.world_position.xyz - camera_world);
     let cam_pos = camera_world - clouds.planet_center;
     let cam_radius = length(cam_pos);
@@ -213,13 +217,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
         return out;
     }
     // Place the cloud at its true shell-entry depth for the depth test.
-    out.depth = clip_depth(camera_world + ray_dir * segment_start);
+    // The shell entry can sit at or beyond the far plane, where the depth value
+    // saturates to 1.0 and ties with the far-field globe's own saturated depth.
+    // A tie is resolved per pixel by draw order, which cuts the limb into
+    // rectangular blocks; keeping the deck just inside the far plane means a
+    // cloud that reaches the horizon is still drawn in front of the planet.
+    out.depth = min(clip_depth(camera_world + ray_dir * segment_start), 0.9999);
 
     let cos_theta = dot(ray_dir, clouds.sun_direction);
     let phase = triple_lobe_phase(cos_theta, clouds.forward_g);
 
     let steps = max(clouds.primary_steps, 1.0);
     let step_size = (segment_end - segment_start) / steps;
+    // A step through a distant deck spans kilometres, so the volume is sampled
+    // at the level that step resolves. Without this the limb aliases into
+    // blocky white silhouettes, because consecutive steps jump whole cells.
+    let lod = density_lod(field, step_size);
     // Mild per-pixel dither (amplitude < a full step) breaks banding without
     // the static that full white-noise jitter produces at these step counts.
     let jitter = interleaved_gradient_noise(in.position.xy);
@@ -242,6 +255,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
             weather_map,
             weather_map_sampler,
             inertial_to_body * sample_pos,
+            lod,
         );
         if density > 0.001 {
             let sigma_e = density * clouds.absorption;

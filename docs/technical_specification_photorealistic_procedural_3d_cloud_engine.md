@@ -86,6 +86,28 @@ a uniform translation along the measured wind vector. That is adequate at the
 current feature sizes and presentation clock, but it is a known divergence from
 this specification.
 
+### 3.4.2 Sampling Level of the Density Field
+
+The density volume is sampled at an explicit mip level derived from the march
+step, `l = max(0, log2(step / cell))`, where `cell = 1 / (6 * noise_scale)` is
+one base cell. Two reasons.
+
+- A step kilometres long cannot resolve a four-kilometre cell. Sampling the
+  finest level there aliases the field, which is what a ray that reaches the
+  limb takes: the segment through the deck is hundreds of kilometres long and
+  the 96 primary steps are kilometres apart.
+- `textureSample` uses screen-space derivatives, and the march loop is
+  divergent. Derivative-based sampling inside non-uniform control flow is
+  undefined in WGSL, so the level a step picked was not well defined even in
+  principle.
+
+The weather map keeps level zero: its features are tens to hundreds of
+kilometres, so even a kilometre step resolves it.
+
+This is a correctness and future-proofing change, not a visible one: at a 40 km
+chase view the deck's steps are tens of metres and the level is zero, so the
+frame is unchanged to one 8-bit step.
+
 ### 3.4.1 Cell Scale and Street Alignment
 
 Two properties of a boundary-layer deck come from the geometry of the layer
@@ -321,6 +343,30 @@ Both failures point at one thing: relief needs the *top height field* of the
 deck, either by marching the column above each sample down to a transmittance
 threshold and differentiating it horizontally, or by replacing the slab term
 with a multiple-scattering integral that actually transports between cells.
+
+### 4.3.2.1 Aerial Perspective of the Deck
+
+The deck is drawn without any extinction between it and the camera, so a cloud
+on the limb is as bright as one overhead and the deck reads as a cut-out against
+a hazy sky. The fix is a view transmittance `T(d) = exp(-sigma_view * d)` with
+`sigma_view` the mean extinction of the column between the camera and the deck,
+taken from the shared `AtmosphericOptics`.
+
+Applying it to the radiance alone, or to radiance and coverage together, is
+**wrong** and was rendered: without the in-scattered airlight the blue-heavy
+extinction turns a white cloud sand-coloured, because the cloud loses its blue
+much faster than its red and nothing puts the blue back. A distant cloud is not
+a dimmer cloud, it is a cloud whose light has been *replaced* by the airlight in
+front of it:
+
+$$
+L = T \cdot L_{\text{cloud}} + (1 - T) \cdot L_{\text{haze}},
+$$
+
+so the term needs the sky's radiance in the view direction, i.e. the shared
+`sky_radiance_direction` integral and therefore a `SkyParams` binding in the
+cloud material. That is the shape of the follow-up; a version without it is
+worse than no aerial perspective at all.
 
 ### 4.3.3 Terrain Cloud Shadows
 
