@@ -340,8 +340,12 @@ fn cirrus_cloud_params(surface_radius_m: f32) -> CloudParams {
     // where it reads as the thin ice veil it is meant to be.
     params.absorption = 0.0012;
     params.coverage = 0.35;
-    // Stratus-like vertical profile: a flat, shallow sheet.
+    // Stratus-like vertical profile: a flat, shallow sheet. The veil is ice at
+    // one altitude, so it keeps that single morph instead of inheriting the
+    // boundary-layer regime that varies this deck's water clouds region by
+    // region.
     params.cloud_type = 0.15;
+    params.morph_variation = 0.0;
     params.erosion_scale = 0.7;
     params.detail_scale = 1.6;
     params.noise_scale = 1.0 / 12_000.0;
@@ -1058,6 +1062,22 @@ mod tests {
             cell_m >= 3_000.0,
             "Earth cloud cell is still {cell_m} m, too small to read as a cloud"
         );
+    }
+
+    /// A deck that holds one morph everywhere is one cloud type, and the whole
+    /// planet looks the same. The water deck takes the regional type rank
+    /// outright; the cirrus veil is ice at one altitude and keeps its single
+    /// shape.
+    #[test]
+    fn water_deck_varies_its_morph_and_the_veil_does_not() {
+        let low = low_cloud_params(6_371_000.0, "Earth");
+        assert_eq!(low.morph_variation, 1.0);
+        let cirrus = cirrus_cloud_params(6_371_000.0);
+        assert_eq!(cirrus.morph_variation, 0.0);
+        // The shadow uniform must carry the same morph, or the shadow would be
+        // cast by a differently shaped cloud.
+        let field = crate::infrastructure::bevy_adapters::rendering::materials::CloudField::from_cloud_params(&low);
+        assert_eq!(field.morph_variation, low.morph_variation);
     }
 
     #[test]

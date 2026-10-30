@@ -3003,6 +3003,42 @@ mod tests {
         assert!((density_lod(earth_deck, 18_000.0) - 2.0).abs() < 1e-6);
     }
 
+    /// `cloud_field()` copies the density inputs out of the material uniform
+    /// one field at a time. A field added to `CloudField` but not to that copy
+    /// is silently zero in the shader, and because zero is a legal value the
+    /// renderer just draws something slightly wrong. That happened: the
+    /// regional cloud-morph control was added to both structs and not to the
+    /// copy, so every deck took the same morph and the change measured as a
+    /// no-op.
+    #[test]
+    fn every_cloud_density_field_is_copied_into_the_deck_uniform() {
+        let shared = include_str!("../../../../assets/shaders/cloud_density.wgsl");
+        let deck = include_str!("../../../../assets/shaders/clouds.wgsl");
+        let start = shared.find("struct CloudField {").expect("CloudField");
+        let body = &shared[start..];
+        let body = &body[..body.find('}').expect("struct end")];
+        let mut fields = Vec::new();
+        for line in body.lines().skip(1) {
+            let line = line.trim();
+            if line.starts_with("//") || line.is_empty() {
+                continue;
+            }
+            if let Some(name) = line.split(':').next() {
+                fields.push(name.trim().to_string());
+            }
+        }
+        assert!(fields.len() >= 12, "parsed only {fields:?}");
+        let copy_start = deck.find("fn cloud_field()").expect("cloud_field");
+        let copy = &deck[copy_start..];
+        let copy = &copy[..copy.find("\n}").expect("cloud_field end")];
+        for field in &fields {
+            assert!(
+                copy.contains(&format!("field.{field} =")),
+                "cloud_field() does not copy `{field}`, so the deck would sample a zero"
+            );
+        }
+    }
+
     /// Convective cells are stretched along the wind, and the deck and its
     /// shadows must use that same axis. The helper and the factor both live in
     /// the shared module so no consumer can re-derive either.

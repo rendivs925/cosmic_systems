@@ -71,6 +71,40 @@ $$
 \text{Density}(\vec{p}) = \rho_{\text{eroded}}(\vec{p}) \cdot HG(z, T) \cdot W_{\text{coverage}}(\vec{p}_{xz})
 $$
 
+### 3.3.1 Regional Cloud Morph
+
+A deck with one morph everywhere is one cloud type: the whole planet is drawn
+with the same sheet, or the same cell field, and a flight view looks identical
+wherever it is. Morph is therefore a field, not a constant.
+
+Two weather-map channels drive it, and both are histogram-equalised to a rank
+(section 3.5.1), so a threshold selects a *share* of the deck rather than a
+slice of one narrow band:
+
+- **Type rank (blue).** `0` is a flat stratus sheet, `1` a convective cell
+  field. The deck interpolates its own `cloud_type` towards the rank by
+  `morph_variation`, which is `1` for the water deck and `0` for the cirrus
+  veil, because ice at one altitude has one shape. Features span tens to a few
+  hundred kilometres: a cloud regime is mesoscale, so a single 100 km view
+  normally holds one regime and a wide view holds several.
+- **Convective-vigour rank (green).** The top tenth of the map is deep
+  convection and the third above `0.55` is broken cumulus. There the vertical
+  profile is forced to its fullest, so towers rise out of the deck where the
+  weather is actually converting.
+
+Both are baked as ranks because a raw fBm concentrates almost every texel near
+its mean: a morph threshold against it moves between "all sheet" and "all
+cells" over a few percent of the range.
+
+**Rejected: a spatially varying cell frequency.** Scaling the noise coordinate
+by a per-sample factor (bigger cells in sheets, smaller in cells) is the obvious
+way to widen the shape range, and it is visually wrong: a spatially varying
+frequency shears the field, and the deck develops visible swirl and marbling
+along the regime boundaries. Any per-sample change to the *sample coordinate* is
+therefore off the table; the remaining avatar of shape diversity is content, not
+geometry — a sharper, multi-scale density field (section 3.2) and the top-height
+field (section 4.3.2.1).
+
 ### 3.4 Wind Dynamics & Curl-Noise Advection
 
 Advect cloud structures over time $t$ along wind vector $\vec{V}_{\text{wind}}$ with a continuous 3D velocity field derived from **Curl Noise** to prevent uniform sliding:

@@ -479,6 +479,44 @@ mean brightness at 0.40 (from 0.42), so the change reorganizes the deck without
 changing its coverage. At 95 s (~200 km) the cells group into systems with clear
 ocean between them.
 
+Cloud morph is now regional rather than a constant per deck. The weather map's
+type and convective-vigour channels were raw fBm, and the deck mixed the type
+channel 50/50 with a fixed `cloud_type` of 0.68, which confined every cloud on
+the planet to the same narrow morph range: type varied only between 0.44 and
+0.74, never reaching a flat stratus sheet. Both channels are now baked as
+histogram-equalised ranks like coverage, so a type threshold selects a share of
+the deck, and the deck takes the rank outright (`morph_variation = 1`). The
+convection rank forces the fullest vertical profile in the top tenth of the map,
+so deep towers appear where the weather is converting. The cirrus veil opts out
+(`morph_variation = 0`), because ice at one altitude has one shape.
+
+Measured at the 40 km chase view: bright-cloud share 0.437 before and 0.434
+after, so the coverage invariant still holds, and the blob distribution is
+unchanged (26 blobs, median 272 px). That is expected rather than disappointing:
+a type probe over the frame shows 0.74-0.77 across 90% of it, i.e. the view
+sits inside a single mesoscale regime, and a regime is 100-400 km across. The
+second regime is visible only at the far limb (probe value 0.24). Diversity in
+this deck is therefore a planet-scale property that a 100 km camera cannot show
+all at once; within one regime the shape range still comes from the noise, and
+widening *that* is the open item.
+
+Two rejected attempts are recorded because they look attractive and are wrong:
+
+- **Scaling the noise coordinate per regime** (bigger cells in sheets, smaller in
+  convective regions) shears the field along regime boundaries. The render fills
+  with visible swirls and marbling that read as a texture bug, not as weather.
+- **Thinning the field per regime at the same time** (coverage multiplied by a
+  type-dependent factor) broke the coverage invariant: the measured 0.437 share
+  fell to 0.390, so the deck no longer covered the share of sky the measured
+  climatology says it should.
+
+A latent bug surfaced while doing this: `cloud_field()` copies the density
+inputs out of the material uniform one field at a time, and a field added to
+`CloudField` without being added to that copy is silently zero in the shader.
+The new morph control was exactly such a field, so the first build took the same
+morph everywhere and measured as a no-op. A parity test now parses the
+`CloudField` declaration and asserts that `cloud_field()` assigns every member.
+
 The density field is now sampled at an explicit mip level derived from the march
 step (`log2(step / cell)`, one cell being `1 / (6 * noise_scale)` metres). A step
 kilometres long cannot resolve a four-kilometre cell, and `textureSample`'s

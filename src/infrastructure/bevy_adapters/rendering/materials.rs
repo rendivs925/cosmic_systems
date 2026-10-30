@@ -152,8 +152,15 @@ pub struct CloudParams {
     /// coverage channel is a rank, so this fraction selects that share of the
     /// sky; below it the air is clear.
     pub coverage: f32,
-    /// Cloud-type morph: 0 stratus, 0.5 stratocumulus, 1 cumulus.
+    /// Cloud-type morph: 0 stratus, 0.5 stratocumulus, 1 cumulus. This is the
+    /// deck's base morph; how far the regional weather may move it away from
+    /// that value is set by `morph_variation`.
     pub cloud_type: f32,
+    /// How far the regional cloud-type rank may move this deck's morph from
+    /// `cloud_type`, in [0, 1]. One means the deck takes the weather map's
+    /// type outright, so it holds sheets, broken cells and towers at once; zero
+    /// keeps one morph everywhere, which is what the thin cirrus veil wants.
+    pub morph_variation: f32,
     /// Density-scale multiplier.
     pub density_scale: f32,
     /// Extinction coefficient per unit density, in 1/m.
@@ -195,6 +202,7 @@ impl CloudParams {
             time_s: 0.0,
             coverage: 0.3,
             cloud_type: 0.68,
+            morph_variation: 1.0,
             density_scale: 0.6,
             absorption: 0.01,
             forward_g: 0.82,
@@ -234,6 +242,10 @@ pub struct CloudField {
     pub coverage: f32,
     /// Cloud-type morph: 0 stratus, 0.5 stratocumulus, 1 cumulus.
     pub cloud_type: f32,
+    /// How far the regional cloud-type rank may move this deck's morph from
+    /// `cloud_type`, in [0, 1]. Must match the drawn deck, or its shadow would
+    /// be cast by a differently shaped cloud.
+    pub morph_variation: f32,
     /// Density-scale multiplier.
     pub density_scale: f32,
     /// Base noise frequency, in volume tiles per metre.
@@ -259,6 +271,7 @@ impl CloudField {
             time_s: params.time_s,
             coverage: params.coverage,
             cloud_type: params.cloud_type,
+            morph_variation: params.morph_variation,
             density_scale: params.density_scale,
             noise_scale: params.noise_scale,
             detail_scale: params.detail_scale,

@@ -28,6 +28,9 @@ struct CloudField {
     // rank channel by `weather_coverage`.
     coverage: f32,
     cloud_type: f32,
+    // How far the weather map's type rank may move this deck's morph from
+    // `cloud_type`; see `sample_density`.
+    morph_variation: f32,
     density_scale: f32,
     noise_scale: f32,
     detail_scale: f32,
@@ -216,7 +219,18 @@ fn sample_density(
     if coverage < 0.01 {
         return 0.0;
     }
-    let cloud_type = saturate(mix(field.cloud_type, weather.b, 0.5));
+    // Morphology is regional, not global. Blue is the cloud-type rank: because
+    // it is a rank, a threshold on it selects a share of the deck rather than a
+    // slice of one narrow band, so one deck holds flat sheets, broken cells and
+    // towering cumulus in different places instead of one shape everywhere.
+    // Green is the convective-vigour rank: the top tenth of the map converts
+    // actively, and the third above 0.55 is broken cumulus. Where convection is
+    // deep the vertical profile is forced to its fullest, so towers rise out of
+    // the deck at the weather that is actually raining.
+    let region_type = mix(field.cloud_type, weather.b, field.morph_variation);
+    let convection =
+        saturate(remap(weather.g, 0.55, 0.9, 0.0, 1.0)) * field.morph_variation;
+    let cloud_type = saturate(region_type + 0.4 * convection);
     let gradient = height_profile(height_fraction, cloud_type);
     if gradient <= 0.001 {
         return 0.0;

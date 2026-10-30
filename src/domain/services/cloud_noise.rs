@@ -69,50 +69,68 @@ pub fn detail_noise_volume(seed: u64) -> Vec<u8> {
 
 /// 2D weather map as `WEATHER_MAP_RES^2` RGBA8 texels (spec section 8).
 ///
-/// Channels: red is cloud coverage **as a rank**, green is the synoptic humidity
-/// regime (precipitation potential), blue is the cloud-type altitude morph, and
-/// alpha is a wind-drift mask. Each channel is an independent seeded fBm so the
-/// fields are spatially related but not identical.
+/// Channels: red is cloud coverage, green is convective vigour (precipitation
+/// potential), blue is the cloud-type altitude morph, and alpha is a wind-drift
+/// mask. Each channel is an independent seeded fBm so the fields are spatially
+/// related but not identical.
 ///
-/// The red channel is histogram-equalised, not the raw fBm. fBm concentrates
-/// almost every texel near its mean, so thresholds against it only ever move
-/// between "all cloudy" and "all clear": a measured regional cloud fraction
-/// could not be turned into a share of the sky. As a rank the channel is
-/// uniform, so `coverage` selects exactly that fraction of the map and the rest
-/// is genuinely clear air. Ranks are a monotone function of the periodic field,
-/// so the tile still wraps at both seams.
+/// Red, green and blue are histogram-equalised to a rank, not left as the raw
+/// fBm. fBm concentrates almost every texel near its mean, so a threshold
+/// against it only ever moves between "all" and "none": a measured regional
+/// cloud fraction could not become a share of the sky, and a cloud-type
+/// threshold could not split the deck between sheets and towers. As ranks the
+/// channels are uniform, so `coverage` selects exactly that fraction of the map
+/// and a type threshold selects exactly that share of the deck. A rank is a
+/// monotone function of the periodic field, so the tile still wraps at both
+/// seams.
+///
+/// The alpha mask stays a raw fBm: it is a smooth drift field, not a selector.
 pub fn weather_map(seed: u64) -> Vec<u8> {
     let res = WEATHER_MAP_RES;
     let mut data = vec![0u8; res * res * 4];
     let mut coverage = vec![0.0f64; res * res];
+    let mut convection = vec![0.0f64; res * res];
+    let mut cloud_type = vec![0.0f64; res * res];
     for y in 0..res {
         for x in 0..res {
             let u = x as f64 / res as f64;
             let v = y as f64 / res as f64;
-            coverage[y * res + x] = fbm2(seed ^ WEATHER_COVERAGE_SALT, u, v, 4, 3.0);
-            let precipitation = fbm2(seed ^ WEATHER_PRECIP_SALT, u, v, 3, 5.0);
-            let cloud_type = fbm2(seed ^ WEATHER_TYPE_SALT, u, v, 3, 2.0);
-            let wind = fbm2(seed ^ WEATHER_WIND_SALT, u, v, 2, 1.5);
-            let index = (y * res + x) * 4;
-            data[index + 1] = to_u8(precipitation);
-            data[index + 2] = to_u8(cloud_type);
-            data[index + 3] = to_u8(wind);
+            let index = y * res + x;
+            coverage[index] = fbm2(seed ^ WEATHER_COVERAGE_SALT, u, v, 4, 3.0);
+            // The morph and convection fields are mesoscale, not synoptic: a
+            // deck changes between open cells, closed sheets and towers over
+            // tens to a couple of hundred kilometres, so a single low-altitude
+            // view can span more than one regime. One weather tile spans the
+            // equatorial circumference / `WEATHER_TILE`, so a base frequency of
+            // five puts the largest morph feature near 170 km and eight puts
+            // convective cells near 100 km.
+            convection[index] = fbm2(seed ^ WEATHER_PRECIP_SALT, u, v, 3, 8.0);
+            cloud_type[index] = fbm2(seed ^ WEATHER_TYPE_SALT, u, v, 3, 8.0);
+            data[index * 4 + 3] = to_u8(fbm2(seed ^ WEATHER_WIND_SALT, u, v, 2, 1.5));
         }
     }
-    // Rank every texel. Ties break on the texel index, so the result is a pure
-    // function of the seed rather than of the sort's internal order.
-    let mut order: Vec<usize> = (0..res * res).collect();
+    write_rank(&coverage, 0, &mut data);
+    write_rank(&convection, 1, &mut data);
+    write_rank(&cloud_type, 2, &mut data);
+    data
+}
+
+/// Replace channel `channel` with the rank of `values`, uniform over `[0, 1]`.
+///
+/// Ties break on the texel index, so the result is a pure function of the seed
+/// rather than of the sort's internal order.
+fn write_rank(values: &[f64], channel: usize, data: &mut [u8]) {
+    let mut order: Vec<usize> = (0..values.len()).collect();
     order.sort_by(|&a, &b| {
-        coverage[a]
-            .partial_cmp(&coverage[b])
+        values[a]
+            .partial_cmp(&values[b])
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.cmp(&b))
     });
-    let last = (res * res - 1).max(1) as f64;
+    let last = (values.len() - 1).max(1) as f64;
     for (rank, &texel) in order.iter().enumerate() {
-        data[texel * 4] = to_u8(rank as f64 / last);
+        data[texel * 4 + channel] = to_u8(rank as f64 / last);
     }
-    data
 }
 
 // Number of Perlin/Worley cells across the base volume. Low enough that a single
@@ -407,6 +425,51 @@ mod tests {
             let above = values.iter().filter(|&&v| v >= 128).count() as f64;
             assert!((above / total - 0.5).abs() < 0.02);
         }
+    }
+
+    /// The cloud-type and convective-vigour channels are ranks for the same
+    /// reason coverage is: the renderer turns them into a *share* of the deck
+    /// (this much stratus, this much cumulus, this much active convection), and
+    /// a raw fBm would concentrate every region near one morph instead.
+    #[test]
+    fn weather_type_and_convection_are_rank_uniform() {
+        for seed in [1u64, 11, 0x5EED_C10D] {
+            let data = weather_map(seed);
+            for (channel, name) in [(1usize, "convection"), (2usize, "type")] {
+                let values: Vec<u8> = data.chunks(4).map(|texel| texel[channel]).collect();
+                let total = values.len() as f64;
+                for decile in 0..10u32 {
+                    let count = values
+                        .iter()
+                        .filter(|&&v| (v as u32 * 10 / 256) == decile)
+                        .count() as f64;
+                    let share = count / total;
+                    assert!(
+                        (share - 0.1).abs() < 0.02,
+                        "{name} decile {decile} holds {share:.3} of the map, not a tenth"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The type rank has to reach both ends of the morph, or a deck can never
+    /// hold a flat sheet and a convective cell field at the same time.
+    #[test]
+    fn weather_type_rank_reaches_both_ends_of_the_morph() {
+        let data = weather_map(7);
+        let mut values: Vec<u8> = data.chunks(4).map(|texel| texel[2]).collect();
+        values.sort_unstable();
+        let at = |q: f64| values[((values.len() - 1) as f64 * q) as usize];
+        assert!(at(0.02) < 16, "the morph never reaches a stratus sheet");
+        assert!(
+            at(0.98) > 240,
+            "the morph never reaches a convective cell field"
+        );
+        // A third of the map on each side of the sheet/cell split, so a run of
+        // frames passes through more than one regime rather than sitting on one.
+        let sheets = values.iter().filter(|&&v| v < 85).count() as f64 / values.len() as f64;
+        assert!((sheets - 1.0 / 3.0).abs() < 0.02, "sheet share is {sheets}");
     }
 
     /// Mirror of `weather_coverage` in `cloud_density.wgsl`: the measured cloud

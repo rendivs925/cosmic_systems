@@ -42,6 +42,7 @@ struct CloudParams {
     time_s: f32,
     coverage: f32,
     cloud_type: f32,
+    morph_variation: f32,
     density_scale: f32,
     absorption: f32,
     forward_g: f32,
@@ -103,6 +104,7 @@ fn cloud_field() -> CloudField {
     field.time_s = clouds.time_s;
     field.coverage = clouds.coverage;
     field.cloud_type = clouds.cloud_type;
+    field.morph_variation = clouds.morph_variation;
     field.density_scale = clouds.density_scale;
     field.noise_scale = clouds.noise_scale;
     field.detail_scale = clouds.detail_scale;
