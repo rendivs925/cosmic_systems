@@ -380,27 +380,49 @@ with a multiple-scattering integral that actually transports between cells.
 
 ### 4.3.2.1 Aerial Perspective of the Deck
 
-The deck is drawn without any extinction between it and the camera, so a cloud
-on the limb is as bright as one overhead and the deck reads as a cut-out against
-a hazy sky. The fix is a view transmittance `T(d) = exp(-sigma_view * d)` with
-`sigma_view` the mean extinction of the column between the camera and the deck,
-taken from the shared `AtmosphericOptics`.
-
-Applying it to the radiance alone, or to radiance and coverage together, is
-**wrong** and was rendered: without the in-scattered airlight the blue-heavy
-extinction turns a white cloud sand-coloured, because the cloud loses its blue
-much faster than its red and nothing puts the blue back. A distant cloud is not
-a dimmer cloud, it is a cloud whose light has been *replaced* by the airlight in
-front of it:
+Without extinction between the deck and the camera, a cloud on the limb is as
+bright as one overhead and the deck reads as a cut-out pasted on the sky. The
+correct composition is not a dimming: the air in front *replaces* the cloud's
+light with its own,
 
 $$
 L = T \cdot L_{\text{cloud}} + (1 - T) \cdot L_{\text{haze}},
+\qquad T = e^{-\tau},
 $$
 
-so the term needs the sky's radiance in the view direction, i.e. the shared
-`sky_radiance_direction` integral and therefore a `SkyParams` binding in the
-cloud material. That is the shape of the follow-up; a version without it is
-worse than no aerial perspective at all.
+with `\tau` the optical depth of the air between the camera and the cloud and
+`L_haze` the sky radiance the deck is seen against. Because the output is
+premultiplied, the term the shader adds is `(1 - T) * opacity * L_haze`: where
+the cloud is transparent the background sky already carries the haze.
+
+**Optical depth, not distance times extinction.** The vertical optical depth of
+the air between the camera and the deck comes from the shared `AtmosphericOptics`
+(`overhead_optical_depth(camera) - overhead_optical_depth(deck)`); the shader
+divides it by the cosine of the view zenith angle to get the path's air mass,
+capped at 12.5 near the tangent. A mean extinction coefficient multiplied by the
+slant range is not equivalent: the slant path leaves the dense layer, so a long
+path is not simply a longer version of the vertical one.
+
+**The haze is the sky, not the downward airlight.** `L_haze` is
+`sky_radiance_direction` evaluated along the *mirrored* view direction — the sky
+the deck is seen against, lit by the same sun. Using the downward path's own
+in-scatter instead gives the air below the deck, which at a low sun is reddened
+and does not converge on the sky at the seam: the band stays warm while the sky
+above it is pale, so the cut-out is dimmed but not removed.
+
+Measured at the 40 km chase view, comparing the original and the two haze
+variants over the deck/sky seam (mean of the largest adjacent-row jumps along 32
+columns):
+
+| Variant | Luminance jump | Colour jump |
+| --- | --- | --- |
+| no aerial perspective | 0.412 | 0.682 |
+| distance x mean extinction, downward airlight | 0.308 | 0.546 |
+| air-mass optical depth, mirrored sky | **0.258** | **0.475** |
+
+The near deck is almost unchanged (red +3%, blue -5%) because its air mass is
+about one; the far deck loses about a tenth of its luminance and takes the sky's
+colour. That is the depth cue the deck was missing.
 
 ### 4.3.3 Terrain Cloud Shadows
 

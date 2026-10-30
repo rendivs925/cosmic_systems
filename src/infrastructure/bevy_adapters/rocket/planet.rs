@@ -378,6 +378,7 @@ fn spawn_cloud_dome(
         base_noise: cloud_noise.base_noise.clone(),
         detail_noise: cloud_noise.detail_noise.clone(),
         weather_map: cloud_noise.weather_map.clone(),
+        sky: Default::default(),
         depth_bias: sort_bias,
     });
     commands.spawn((
@@ -715,6 +716,9 @@ pub fn update_rocket_clouds(
         With<RocketBoundPlanetCloud>,
     >,
     mut materials: ResMut<Assets<CloudMaterial>>,
+    sky_presentation: Option<
+        Res<crate::infrastructure::bevy_adapters::rendering::sky::SkyPresentation>,
+    >,
     mut cloud_shadow: ResMut<CloudShadow>,
 ) {
     let Some((_, camera_transform, projection)) =
@@ -812,6 +816,26 @@ pub fn update_rocket_clouds(
             material.params.sun_transmittance = optics
                 .map(|optics| Vec3::from(optics.sun_transmittance(deck_altitude_m, cloud_sun_cos)))
                 .unwrap_or(Vec3::ONE);
+            // Aerial perspective of the view path: the vertical optical depth
+            // of the air between the camera and this deck, from the same model
+            // the sky and the Sun beam use. The shader divides it by the cosine
+            // of the view zenith angle, so a cloud on the limb is seen through
+            // more air and fades into the sky the way the ground already does.
+            let camera_altitude_m = (camera_radius - surface_radius_m).max(0.0);
+            material.params.view_optical_depth = optics
+                .map(|optics| {
+                    let deck_tau = optics.overhead_optical_depth(deck_altitude_m);
+                    let camera_tau = optics.overhead_optical_depth(camera_altitude_m);
+                    Vec3::new(
+                        (deck_tau[0] - camera_tau[0]).abs(),
+                        (deck_tau[1] - camera_tau[1]).abs(),
+                        (deck_tau[2] - camera_tau[2]).abs(),
+                    )
+                })
+                .unwrap_or(Vec3::ZERO);
+            if let Some(sky) = sky_presentation.as_ref() {
+                material.sky = sky.0;
+            }
             material.params.time_s = elapsed_s;
             let draws_first = match layer {
                 RocketCloudLayer::Cirrus => cirrus_draws_first,

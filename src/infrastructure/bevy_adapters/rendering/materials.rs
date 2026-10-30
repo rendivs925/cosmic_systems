@@ -146,6 +146,13 @@ pub struct CloudParams {
     /// altitude, from the shared atmospheric optics. The diffuse term keeps the
     /// unattenuated irradiance because it is sky light rather than the beam.
     pub sun_transmittance: Vec3,
+    /// Vertical optical depth of the air between the camera and the deck, per
+    /// channel, from the shared atmospheric optics. The shader divides it by
+    /// the cosine of the view zenith angle to get the optical depth along the
+    /// ray, so a cloud seen at the limb is seen through more air than one
+    /// overhead and its light is partly replaced by the sky's. Zero where the
+    /// body has no atmosphere.
+    pub view_optical_depth: Vec3,
     /// Presentation clock in seconds; advects the wind only.
     pub time_s: f32,
     /// Share of the sky the deck covers here, in [0, 1]. The weather map's
@@ -199,6 +206,7 @@ impl CloudParams {
             sun_direction: Vec3::Y,
             sun_irradiance: Vec3::ONE,
             sun_transmittance: Vec3::ONE,
+            view_optical_depth: Vec3::ZERO,
             time_s: 0.0,
             coverage: 0.3,
             cloud_type: 0.68,
@@ -338,6 +346,10 @@ pub struct CloudMaterial {
     #[texture(5)]
     #[sampler(6)]
     pub weather_map: Handle<Image>,
+    /// The atmosphere the sky dome is drawn with, so the deck can fade into the
+    /// air in front of it instead of staying full-brightness to the horizon.
+    #[uniform(7)]
+    pub sky: crate::infrastructure::bevy_adapters::rendering::sky::SkyParams,
     /// Transparent-pass sort bias. Smaller values draw first, so a high cloud
     /// layer must be more negative than the deck below it.
     pub depth_bias: f32,
@@ -350,6 +362,7 @@ impl Default for CloudMaterial {
             base_noise: Handle::default(),
             detail_noise: Handle::default(),
             weather_map: Handle::default(),
+            sky: Default::default(),
             depth_bias: 0.0,
         }
     }

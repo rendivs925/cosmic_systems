@@ -504,6 +504,25 @@ than in the deck.
 
 See `docs/measurement/cloud_capture_v1.md` for usage and limits.
 
+The cloud deck now has aerial perspective, which was the defect the earlier
+attempt failed on. The composite is `T * L_cloud + (1 - T) * opacity * L_haze`
+with `T = exp(-tau)` from the shared atmospheric optics, and `L_haze` taken from
+`sky_radiance_direction` along the mirrored view direction - the sky the deck is
+seen against. Two details made it work where the previous attempt did not. The
+optical depth is the *vertical* one between camera and deck divided by the view
+cosine (capped at 12.5), not a mean extinction times slant range: the slant path
+leaves the dense layer, so it is not a longer version of the vertical column.
+And the haze is the sky, not the downward path's in-scatter, which is reddened by
+the same low sun and does not converge on the sky at the seam.
+
+Measured over the deck/sky seam at the 40 km chase view (mean largest adjacent-
+row jump across 32 columns): luminance 0.412 -> 0.258 and colour 0.682 -> 0.475,
+i.e. the hard band at the limb loses about a third of its step in both. The near
+deck is almost unchanged (red +3%, blue -5%) because its air mass is one; the far
+deck takes the sky's colour, which is the depth cue that was missing. At the
+1,200 km nadir view the effect is negligible by construction (cloud luminance
+0.684 -> 0.677).
+
 The first use of the capture view was the density sharpness question, and the
 answer reorders the remaining cloud work. The coverage threshold used to spread
 density over the whole coverage band, so every cloud boundary was a ramp

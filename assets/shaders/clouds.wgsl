@@ -29,6 +29,8 @@
 #import "shaders/cloud_density.wgsl"::saturate
 #import "shaders/cloud_density.wgsl"::sample_density
 #import "shaders/cloud_density.wgsl"::density_lod
+#import "shaders/sky_radiance.wgsl"::SkyParams
+#import "shaders/sky_radiance.wgsl"::sky_radiance_direction
 
 // Field order and types must match `CloudParams` in rendering/materials.rs.
 struct CloudParams {
@@ -39,6 +41,10 @@ struct CloudParams {
     sun_direction: vec3<f32>,
     sun_irradiance: vec3<f32>,
     sun_transmittance: vec3<f32>,
+    // Vertical optical depth of the air between the camera and the deck. The
+    // shader scales it by the view airmass. Zero for a body without an
+    // atmosphere.
+    view_optical_depth: vec3<f32>,
     time_s: f32,
     coverage: f32,
     cloud_type: f32,
@@ -64,6 +70,9 @@ struct CloudParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var detail_noise_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var weather_map: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var weather_map_sampler: sampler;
+// The atmosphere the sky dome is drawn with; the deck composites the air in
+// front of it from the same integral.
+@group(#{MATERIAL_BIND_GROUP}) @binding(7) var<uniform> sky: SkyParams;
 
 // The cloud dome is a camera-anchored proxy at a fixed radius, but the clouds
 // themselves sit on a planet-centred shell whose distance varies from a few km
@@ -82,6 +91,11 @@ fn clip_depth(world_point: vec3<f32>) -> f32 {
 
 // Hard upper bounds keep the loop trip counts statically bounded; the actual
 // counts come from the quality uniform and may be lower.
+// Sky samples for the aerial-perspective haze. The term is a smooth, low-
+// frequency fill, so it does not need the dome's full sample count.
+const CLOUD_HAZE_VIEW_SAMPLES: u32 = 6u;
+const CLOUD_HAZE_SUN_SAMPLES: u32 = 3u;
+
 const MAX_PRIMARY_STEPS: u32 = 128u;
 const MAX_LIGHT_STEPS: u32 = 8u;
 const MAX_MULTI_OCTAVES: u32 = 4u;
@@ -310,6 +324,40 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
 
     let radiance = in_scatter * view.exposure;
     let opacity = saturate(1.0 - transmittance);
-    out.color = vec4<f32>(radiance, opacity);
+
+    // Aerial perspective. Without it a cloud on the limb is exactly as bright as
+    // one overhead, so the deck reads as a cut-out pasted on the sky. The air
+    // between the camera and the cloud does not merely dim the cloud, it
+    // *replaces* its light: at transmittance T the pixel carries
+    // `T * L_cloud + (1 - T) * L_haze`, with the haze taken from the same sky
+    // integral the dome draws. Attenuating the radiance alone reddens the limb
+    // to sand, because Rayleigh removes blue and nothing puts it back.
+    var color = radiance;
+    if sky.sky_strength > 0.0 && sky.top_radius > sky.bottom_radius && opacity > 0.001 {
+        // Airmass of the view path. Looking straight down the air column is the
+        // vertical one; toward the limb it grows, and the cap keeps the grazing
+        // path finite instead of diverging with the tangent.
+        let airmass = 1.0 / max(abs(dot(ray_dir, normalize(cam_pos))), 0.08);
+        let tau = clouds.view_optical_depth * airmass;
+        if max(tau.x, max(tau.y, tau.z)) > 1.0e-3 {
+            let view_transmittance = exp(-tau);
+            // The air in front of the deck is lit by the sky above it, so the
+            // haze is the sky the deck is seen against, not the light of the
+            // downward path that stops at the cloud. That is also what makes a
+            // vanishing deck converge on the sky behind it instead of on its
+            // own (reddened) airlight.
+            let sky_dir = reflect(ray_dir, normalize(cam_pos));
+            let haze = sky_radiance_direction(
+                sky,
+                cam_pos,
+                sky_dir,
+                CLOUD_HAZE_VIEW_SAMPLES,
+                CLOUD_HAZE_SUN_SAMPLES,
+            ).radiance * view.exposure;
+            color = view_transmittance * radiance
+                + (1.0 - view_transmittance) * opacity * haze;
+        }
+    }
+    out.color = vec4<f32>(color, opacity);
     return out;
 }

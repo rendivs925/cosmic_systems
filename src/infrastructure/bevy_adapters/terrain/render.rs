@@ -3040,6 +3040,33 @@ mod tests {
         }
     }
 
+    /// Aerial perspective is not "dim the cloud with distance": the air in front
+    /// of the deck *replaces* its light, so the shader has to composite the sky
+    /// integral, weighted by the cloud's own opacity. Attenuating radiance alone
+    /// reddens the limb to sand and was rendered and reverted once already.
+    #[test]
+    fn cloud_shader_composites_the_shared_sky_into_the_deck() {
+        let clouds = include_str!("../../../../assets/shaders/clouds.wgsl");
+        assert!(clouds.contains("#import \"shaders/sky_radiance.wgsl\"::SkyParams"));
+        assert!(clouds.contains("sky_radiance_direction("));
+        assert!(
+            clouds.contains("var<uniform> sky: SkyParams"),
+            "the deck must bind the same sky the dome draws"
+        );
+        assert!(
+            clouds.contains("view_optical_depth"),
+            "aerial perspective is keyed to the atmosphere's optical depth"
+        );
+        assert!(
+            clouds.contains("(1.0 - view_transmittance) * opacity"),
+            "the haze is weighted by the cloud's opacity, not by the image's"
+        );
+        assert!(
+            clouds.contains("airmass") && clouds.contains("0.08"),
+            "the grazing air mass must be bounded or the tangent path diverges"
+        );
+    }
+
     /// Convective cells are stretched along the wind, and the deck and its
     /// shadows must use that same axis. The helper and the factor both live in
     /// the shared module so no consumer can re-derive either.
