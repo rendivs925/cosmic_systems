@@ -326,8 +326,12 @@ fn cirrus_cloud_params(surface_radius_m: f32) -> CloudParams {
     params.bottom_radius = surface_radius_m + CIRRUS_BOTTOM_ALTITUDE_M;
     params.top_radius = surface_radius_m + CIRRUS_TOP_ALTITUDE_M;
     params.density_scale = 0.6;
-    params.absorption = 0.008;
-    params.coverage = 0.5;
+    // Cirrus optical depth is 0.1-1.5 in nature. At the water deck's 0.008 the
+    // 1.6 km veil integrates to tau ~ 7.7 and renders as an opaque white sheet
+    // that blankets the whole planet from above; 0.0012 puts it near tau ~ 1,
+    // where it reads as the thin ice veil it is meant to be.
+    params.absorption = 0.0012;
+    params.coverage = 0.35;
     // Stratus-like vertical profile: a flat, shallow sheet.
     params.cloud_type = 0.15;
     params.erosion_scale = 0.7;
@@ -855,7 +859,10 @@ fn apply_measured_cirrus_climate(
     latitude_deg: f64,
     longitude_deg: f64,
 ) {
-    params.coverage = (sample.cloud_fraction as f32).clamp(0.3, 0.8);
+    // Upper-air cloud amount is not measured, and a veil that covers most of
+    // the sky reads as haze even when it is thin, so the surface cloud fraction
+    // only scales a sparse veil.
+    params.coverage = ((sample.cloud_fraction as f32) * 0.55).clamp(0.05, 0.45);
     params.wind_speed = (sample.wind_speed_mps() as f32 * 6.0).clamp(15.0, 90.0);
     let (x, z) = sample.wind_direction_xz(latitude_deg, longitude_deg);
     params.wind_direction = Vec2::new(x, z);
@@ -1053,16 +1060,25 @@ mod tests {
             cloud_fraction: 1.0,
         };
         apply_measured_cirrus_climate(&mut params, overcast, 0.0, 0.0);
-        assert!(params.coverage <= 0.8);
-        assert!(params.coverage >= 0.3);
+        // 0.55 x a fully cloudy sky, capped by the sparse-veil clamp.
+        assert!((params.coverage - 0.45).abs() < 1e-6);
         assert!(params.wind_speed <= 90.0);
+        // Optical depth across the veil stays near one. At the water deck's
+        // extinction the same layer integrates to tau ~ 7.7 and renders as an
+        // opaque sheet that blankets the planet from above.
+        let thickness = params.top_radius - params.bottom_radius;
+        let tau = params.density_scale * params.absorption * thickness;
+        assert!(
+            (0.5..=1.5).contains(&tau),
+            "cirrus optical depth {tau} is not a thin veil"
+        );
 
         let clear = crate::domain::services::climate::ClimateSample {
             cloud_fraction: 0.0,
             ..overcast
         };
         apply_measured_cirrus_climate(&mut params, clear, 0.0, 0.0);
-        assert!((params.coverage - 0.3).abs() < 1e-6);
+        assert!((params.coverage - 0.05).abs() < 1e-6);
     }
 
     #[test]

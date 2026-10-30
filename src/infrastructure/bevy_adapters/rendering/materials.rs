@@ -148,7 +148,9 @@ pub struct CloudParams {
     pub sun_transmittance: Vec3,
     /// Presentation clock in seconds; advects the wind only.
     pub time_s: f32,
-    /// Global cloud-coverage multiplier.
+    /// Share of the sky the deck covers here, in [0, 1]. The weather map's
+    /// coverage channel is a rank, so this fraction selects that share of the
+    /// sky; below it the air is clear.
     pub coverage: f32,
     /// Cloud-type morph: 0 stratus, 0.5 stratocumulus, 1 cumulus.
     pub cloud_type: f32,

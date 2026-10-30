@@ -432,14 +432,31 @@ Earth now draws two decks from the same shader: the boundary-layer/mid-
 troposphere water deck (1.5-6 km) and a thin cirrus veil (8.0-9.6 km) with a
 stratus-like profile, larger features, upper-tropospheric wind, and lower
 extinction per unit density. The veil exists only where a measured climatology
-drives it (Earth); the surface cloud fraction scales its coverage between 0.3
-and 0.8. Both domes are camera-centred, so view distance cannot order them: the
-update system sets the transparent sort bias each frame from the camera's
-planet-centric radius, drawing the farther deck first (cirrus from the ground,
-water deck from orbit). The veil uses 40 view steps and 3 sun steps, about 15%
-of the water deck's sample budget. Its visual effect is a subtle milky layer
-rather than a distinct sheet, so native-display acceptance of the two-deck
-look is still pending.
+drives it (Earth). Both domes are camera-centred, so view distance cannot order
+them: the update system sets the transparent sort bias each frame from the
+camera's planet-centric radius, drawing the farther deck first (cirrus from the
+ground, water deck from orbit). The veil uses 40 view steps and 3 sun steps,
+about 15% of the water deck's sample budget.
+
+Coverage is a share of the sky, not a multiplier on the density. The measured
+climatology gives a regional cloud fraction, and the weather map's red channel
+is now baked as a **rank** (histogram-equalised at generation, still periodic at
+both seams), so the fraction is used as a threshold on that rank: below
+`1 - fraction` the air is genuinely clear and the band above ramps from a wispy
+edge to the dense core of a system. The previous form (`coverage * weather *
+1.4`) could not do this, because an fBm concentrates almost every texel near its
+mean and the product saturated over most of the map. The cirrus also used the
+water deck's extinction, which integrated to `tau ~ 7.7` across its 1.6 km and
+rendered as an opaque sheet; it now uses `0.0012` (`tau ~ 1`) and a sparser veil
+(0.55x the surface fraction, clamped to 0.05-0.45).
+
+Measured from the chase camera 42 s after liftoff (about 40 km, looking down at
+the deck), the fraction of the view that is bright low-saturation cloud fell
+from 0.99 to 0.46, with the mean brightness down from 0.66 to 0.42. The frame
+now shows a broken cumulus field over open water instead of a white carpet, and
+turning the cirrus off under the new parameters changes the fraction by 0.005,
+so the veil no longer dominates. At 95 s (about 200 km) the view shows a large
+cloud system with clear ocean between it and the next one.
 
 The direct term is also gated by the solar terminator. The sun march previously
 reported a clear path for a Sun below the cloud's local horizon, so the night

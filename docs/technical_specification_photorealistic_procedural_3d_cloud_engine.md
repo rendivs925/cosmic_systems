@@ -107,6 +107,32 @@ The earlier fixed `1.0e-6` coefficient ignored the wind speed and drifted at
 about 40 m/s, which sheared the coverage pattern away from the cloud shapes over
 time.
 
+### 3.5.1 Coverage as a Sky Fraction
+
+$W_{\text{coverage}}$ must select a *share of the sky*, not scale the density.
+A measured regional cloud fraction $c$ (monthly mean, from the climate package)
+is turned into the local coverage by thresholding the weather map's rank field
+$r$:
+
+$$
+W_{\text{coverage}} = \operatorname{saturate}\!\left(
+\frac{r - (1 - c)}{\max(c, 0.02)}\right).
+$$
+
+Below $1 - c$ the air is genuinely clear; above it the band ramps from a wispy
+edge to the dense core of a system. This requires $r$ to be **uniform**, so the
+generator histogram-equalises the coverage channel at bake time. Scaling
+instead (`c \cdot r \cdot 1.4`, the previous form) fails because an fBm
+concentrates almost every texel near its mean: the product saturates over most
+of the map and the deck becomes a planet-wide blanket, which is exactly what a
+rank threshold fixes.
+
+The cirrus veil uses the same threshold against a much smaller fraction
+(0.55 $\times$ the surface cloud fraction, clamped to $[0.05, 0.45]$) and a
+cirrus optical depth of $\tau \approx 1$: at a water-deck extinction of
+$0.008\ \mathrm{m^{-1}}$ the 1.6 km veil integrated to $\tau \approx 7.7$ and
+rendered as an opaque sheet.
+
 ### 3.6 Layered Decks
 
 The production renderer draws two spherical slabs from the same shader: a

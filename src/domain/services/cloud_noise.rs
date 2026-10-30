@@ -69,27 +69,48 @@ pub fn detail_noise_volume(seed: u64) -> Vec<u8> {
 
 /// 2D weather map as `WEATHER_MAP_RES^2` RGBA8 texels (spec section 8).
 ///
-/// Channels: red is cloud coverage, green is precipitation / density scale,
-/// blue is the cloud-type altitude morph, and alpha is a wind-drift mask. Each
-/// channel is an independent seeded fBm so the fields are spatially related but
-/// not identical.
+/// Channels: red is cloud coverage **as a rank**, green is the synoptic humidity
+/// regime (precipitation potential), blue is the cloud-type altitude morph, and
+/// alpha is a wind-drift mask. Each channel is an independent seeded fBm so the
+/// fields are spatially related but not identical.
+///
+/// The red channel is histogram-equalised, not the raw fBm. fBm concentrates
+/// almost every texel near its mean, so thresholds against it only ever move
+/// between "all cloudy" and "all clear": a measured regional cloud fraction
+/// could not be turned into a share of the sky. As a rank the channel is
+/// uniform, so `coverage` selects exactly that fraction of the map and the rest
+/// is genuinely clear air. Ranks are a monotone function of the periodic field,
+/// so the tile still wraps at both seams.
 pub fn weather_map(seed: u64) -> Vec<u8> {
     let res = WEATHER_MAP_RES;
     let mut data = vec![0u8; res * res * 4];
+    let mut coverage = vec![0.0f64; res * res];
     for y in 0..res {
         for x in 0..res {
             let u = x as f64 / res as f64;
             let v = y as f64 / res as f64;
-            let coverage = fbm2(seed ^ WEATHER_COVERAGE_SALT, u, v, 4, 3.0);
+            coverage[y * res + x] = fbm2(seed ^ WEATHER_COVERAGE_SALT, u, v, 4, 3.0);
             let precipitation = fbm2(seed ^ WEATHER_PRECIP_SALT, u, v, 3, 5.0);
             let cloud_type = fbm2(seed ^ WEATHER_TYPE_SALT, u, v, 3, 2.0);
             let wind = fbm2(seed ^ WEATHER_WIND_SALT, u, v, 2, 1.5);
             let index = (y * res + x) * 4;
-            data[index] = to_u8(coverage);
             data[index + 1] = to_u8(precipitation);
             data[index + 2] = to_u8(cloud_type);
             data[index + 3] = to_u8(wind);
         }
+    }
+    // Rank every texel. Ties break on the texel index, so the result is a pure
+    // function of the seed rather than of the sort's internal order.
+    let mut order: Vec<usize> = (0..res * res).collect();
+    order.sort_by(|&a, &b| {
+        coverage[a]
+            .partial_cmp(&coverage[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let last = (res * res - 1).max(1) as f64;
+    for (rank, &texel) in order.iter().enumerate() {
+        data[texel * 4] = to_u8(rank as f64 / last);
     }
     data
 }
@@ -358,6 +379,64 @@ mod tests {
             let max = *values.iter().max().unwrap();
             assert!(max - min > 40, "channel {channel} is nearly flat");
         }
+    }
+
+    /// The renderer turns a measured regional cloud fraction into a threshold
+    /// on the coverage channel, so that channel has to be uniform: a raw fBm
+    /// piles almost every texel near its mean and a threshold would jump from
+    /// "all cloud" to "no cloud" over a few percent of the range.
+    #[test]
+    fn weather_coverage_is_rank_uniform() {
+        for seed in [1u64, 11, 0x5EED_C10D] {
+            let data = weather_map(seed);
+            let values: Vec<u8> = data.chunks(4).map(|texel| texel[0]).collect();
+            let total = values.len() as f64;
+            for decile in 0..10u32 {
+                let count = values
+                    .iter()
+                    .filter(|&&v| (v as u32 * 10 / 256) == decile)
+                    .count() as f64;
+                let share = count / total;
+                assert!(
+                    (share - 0.1).abs() < 0.02,
+                    "coverage decile {decile} holds {share:.3} of the map, not a tenth"
+                );
+            }
+            // Half the map is above the median, which is what makes
+            // `coverage = 0.5` mean "half the sky".
+            let above = values.iter().filter(|&&v| v >= 128).count() as f64;
+            assert!((above / total - 0.5).abs() < 0.02);
+        }
+    }
+
+    /// Mirror of `weather_coverage` in `cloud_density.wgsl`: the measured cloud
+    /// fraction thresholds the rank field, so the fraction *is* the share of the
+    /// sky that carries cloud. The previous `fraction * rank * 1.4` product
+    /// turned a mid-latitude fraction into near-total cover because the rank
+    /// distribution then clustered around its mean.
+    #[test]
+    fn coverage_selects_the_measured_share_of_the_sky() {
+        fn weather_coverage(fraction: f32, rank: f32) -> f32 {
+            let fraction = fraction.clamp(0.0, 1.0);
+            let clear_below = 1.0 - fraction;
+            ((rank - clear_below) / fraction.max(0.02)).clamp(0.0, 1.0)
+        }
+        for fraction in [0.05, 0.2, 0.5, 0.72, 0.95] {
+            let samples = 1000u32;
+            let covered = (0..samples)
+                .filter(|i| weather_coverage(fraction, *i as f32 / samples as f32) > 0.0)
+                .count();
+            let share = covered as f32 / samples as f32;
+            assert!(
+                (share - fraction).abs() < 0.02,
+                "fraction {fraction} covered {share} of the sky"
+            );
+        }
+        // A clear fraction clears the sky, and an overcast one leaves almost
+        // nothing below the threshold.
+        assert_eq!(weather_coverage(0.0, 1.0), 0.0);
+        assert_eq!(weather_coverage(1.0, 1.0), 1.0);
+        assert_eq!(weather_coverage(1.0, 0.0), 0.0);
     }
 
     #[test]

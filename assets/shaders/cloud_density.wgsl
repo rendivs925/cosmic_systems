@@ -24,6 +24,8 @@ struct CloudField {
     top_radius: f32,
     absorption: f32,
     time_s: f32,
+    // Share of the sky the deck covers, thresholded against the weather map's
+    // rank channel by `weather_coverage`.
     coverage: f32,
     cloud_type: f32,
     density_scale: f32,
@@ -94,6 +96,21 @@ fn height_profile(height_fraction: f32, cloud_type: f32) -> f32 {
     return mix(stratus, cumulus, cloud_type);
 }
 
+/// Local fraction of the sky the deck covers, in [0, 1].
+///
+/// The measured regional cloud fraction is a share of the sky, and the coverage
+/// channel of the weather map is baked as a rank (uniform over the tile), so the
+/// fraction is used as a threshold on that rank: everything below
+/// `1 - fraction` is genuinely clear air, and the band above it ramps from a
+/// thin edge to the dense core of a system. Scaling the field instead (`coverage
+/// * weather * 1.4`) left almost no clear sky, because an fBm concentrates its
+/// values near the mean and the product therefore saturates everywhere.
+fn weather_coverage(field: CloudField, weather_rank: f32) -> f32 {
+    let fraction = saturate(field.coverage);
+    let clear_below = 1.0 - fraction;
+    return saturate((weather_rank - clear_below) / max(fraction, 0.02));
+}
+
 fn weather_uv(body_dir: vec3<f32>) -> vec2<f32> {
     let u = atan2(body_dir.z, body_dir.x) / (2.0 * PI) + 0.5;
     let v = asin(clamp(body_dir.y, -1.0, 1.0)) / PI + 0.5;
@@ -141,7 +158,7 @@ fn sample_density(
         weather_map_sampler,
         (weather_uv(body_dir) + weather_drift) * WEATHER_TILE,
     );
-    let coverage = saturate(field.coverage * weather.r * 1.4);
+    let coverage = weather_coverage(field, weather.r);
     if coverage < 0.01 {
         return 0.0;
     }
