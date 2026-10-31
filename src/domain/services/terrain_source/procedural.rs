@@ -325,8 +325,17 @@ impl PadFlatZone {
         }
     }
 
+    /// Terrain-radial latitude/longitude of the zone centre, so a caller that
+    /// needs the site's own composed height can sample it.
+    pub(crate) fn terrain_lat_lon(&self) -> (f64, f64) {
+        (
+            self.direction.y.clamp(-1.0, 1.0).asin().to_degrees(),
+            self.direction.z.atan2(self.direction.x).to_degrees(),
+        )
+    }
+
     /// `0` inside the graded pad, `1` beyond the blend, smooth in between.
-    fn attenuation(&self, direction: DVec3) -> f64 {
+    pub(crate) fn attenuation(&self, direction: DVec3) -> f64 {
         let cos = direction.dot(self.direction).clamp(-1.0, 1.0);
         if cos >= self.flat_cos {
             return 0.0;

@@ -179,7 +179,9 @@ use crate::infrastructure::bevy_adapters::terrain::render::{
 };
 #[cfg(feature = "dem")]
 use crate::infrastructure::bevy_adapters::terrain::streaming::load_default_land_cover;
+#[cfg(feature = "dem")]
 use crate::infrastructure::bevy_adapters::terrain::streaming::load_default_soil;
+#[cfg(feature = "dem")]
 use crate::infrastructure::bevy_adapters::terrain::streaming::load_default_surface_fields;
 use crate::infrastructure::bevy_adapters::terrain::streaming::{
     share_elevation_tile_source, TerrainStreamingResource,

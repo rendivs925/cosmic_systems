@@ -99,42 +99,92 @@ are needed:
 Not done in this slice: it needs the 34 MB tile package regenerated and its
 checksums re-recorded.
 
-### 3. Launch facility reads as a detached slab — CONFIRMED, NOT YET FIXED
+### 3. Launch facility reads as a detached slab — CONFIRMED, FIXED
 
 The apron is a flat `Cuboid::new(64.0, 0.5, 64.0)` whose top is 0.05 m above the
 sampled terrain height at the anchor, oriented to the terrain normal at the
 anchor (`sync_launch_pad_presentation`). The terrain *sample* is smooth, but the
 terrain *mesh* near the pad has ~38 m vertex spacing at the LODs the chase camera
 uses, so over the 64 m footprint the rendered ground is two or three triangles
-whose plane does not match the tangent at the centre. The slab ends up buried on
+whose plane does not match the tangent at the centre. The slab ended up buried on
 the uphill edge and floating on the downhill edge, with a visible shadow gap —
-exactly what the ground capture shows. The water tanks, blockhouse and
-floodlights inherit the mismatch because they are parented to the same plane.
+exactly what the ground capture showed. The water tanks, blockhouse and
+floodlights inherited the mismatch because they are parented to the same plane.
 
-Also confirmed: `PadFlatZone` suppresses only the *procedural detail* layer
-(`ProceduralDetailSource::detail_m`), never the measured base, so it cannot make
-the footprint level even in principle. It is a detail-fade, not a grading.
+`PadFlatZone` was not a fix: it suppresses only the *procedural detail* layer
+(`ProceduralDetailSource::detail_m`), never the measured base, so the ground
+under the pad stayed tilted.
 
-Chosen fix (deferred to its own slice because it needs new geometry): build the
-foundation as a **cut-and-fill platform** — inner deck flat at the pad elevation,
-outer ring sampled from the authoritative `TerrainSource` at each rim vertex and
-joined by a graded slope. Presentation-only, so the physics baseline does not
-move, and `TerrainSource` stays the single authority for the sampled rim.
+**Rejected approach, measured.** The first fix built a cut-and-fill platform mesh
+whose rim sampled `TerrainSource` and met the ground. It was written, tested and
+captured, and it failed for a structural reason worth recording: the terrain
+*mesh* interpolates the same source with much coarser triangles than the rim
+sampling, so the platform and the rendered ground interpenetrated in irregular
+wedges along the whole perimeter. A presentation mesh cannot agree with a coarse
+terrain mesh, only with the source. Reverted.
 
-### 4. Near-site terrain is featureless — CONFIRMED (config), NOT YET FIXED
+**Chosen fix.** Grade the site in the terrain authority. `LayeredTerrainSource`
+gained `with_graded_sites`: the *composed* height (base + macro + detail) is
+pulled to the site's own composed height inside a flat radius and restored over a
+blend, in both `height_m` and `mesh_height_m`. Mesh, collision, radar altitude
+and the rendered surface therefore all see the same level platform, and the
+apron sits flush because the ground under it is genuinely level. The anchor
+height is sampled from the ungraded composition before grading is installed, so
+the launch elevation and every physics baseline are unchanged.
 
-Two independent causes:
+All nine predefined sites are graded (KSC, LC-39A, Starbase, Vandenberg,
+Wallops, Kourou, Baikonur, Mahia, Papua lowland), not just the three that had
+detail zones. Grading pins a site to its own composed height, so adding a site
+cannot move that site's launch elevation.
 
-* `EARTH_PAD_FLAT_RADIUS_M = 750` and `EARTH_PAD_BLEND_RADIUS_M = 3000` suppress
-  the ±24 m / ~250 m-wavelength detail field over a 3 km disc around every
-  predefined site. The chase camera stands inside that disc, which is why the
-  ground reads as a smooth green wash. The anchor sample is inside the flat
-  radius either way, so shrinking the radii does **not** move the launch
-  elevation or any physics baseline.
-* The detail layer is faded out entirely at LOD ≤ 11
-  (`DetailLodFade::new(11, 14)`), and the terrain shader adds only *albedo*
-  patchiness below that. Geometry detail therefore does not exist at distance,
-  which is the "distant terrain appears flat" observation.
+The flat/blend radii dropped from 750 m / 3000 m to **250 m / 700 m**. The old
+750 m disc flattened a 1.5 km pancake around every site, which is why the chase
+camera stood on a featureless wash; 250 m still contains the facility, its apron
+and the ground the vehicle can ever touch, while restoring relief close by.
+Regression tests:
+`graded_site_is_level_under_the_pad_and_returns_to_natural_terrain`,
+`a_source_without_sites_is_unchanged`.
+
+**One regression assertion changed, and why.** `rtls_recovery_stage_hands_off_
+and_lands_through_fixed_systems` asserted the landed stage was strictly `< 5.0 m`
+from the pad point. `RocketPhysicsState.position_m` is the cylinder centre and
+the stage's lower extent is 5 m, so a *perfectly vertical* touchdown is exactly
+5.000 m from the pad. The old threshold only passed because the stage used to
+settle a few centimetres off. With level graded ground it lands exactly on the
+pad and reports 5.000 m. The assertion is now `<= 5.0 + 0.05` with the geometry
+written down, and the failure message prints the measured miss. This is a
+tightening of meaning, not a loosened tolerance.
+
+### 3b. Synthetic relief was manufacturing coastline — CONFIRMED, MECHANISM READY, NOT ENABLED
+
+Grading the site exposed a second defect that the large flat disc had been hiding:
+the ±24 m / ~250 m-wavelength detail layer is signed, and on a coastal plain whose
+measured base sits a metre or two above the sea datum it pushed half the plain
+below sea level. The ocean cap then rendered those depressions as open water, so
+the landscape grew angular lakes that were not in any dataset.
+
+Mechanism: `TerrainDetailLayer::with_sea_level_guard`, applied identically in
+`height_m` and `mesh_height_m` so collision and the rendered coast cannot
+disagree. It is opt-in per layer, because only a body with an ocean can be
+flooded. Unit test: `synthetic_detail_cannot_create_sea_near_the_datum`.
+
+**Not enabled on Earth yet.** Turning it on perturbs
+`safe_leo_insertion_matches_committed_baseline_within_tolerances`, and the cause
+is not isolated: the KSC reference point is inside a pad flat zone, so the guard
+should be a no-op there, yet the insertion baseline shifts. Enabling a change
+that moves a committed physics baseline without understanding why is exactly
+what the project forbids, so the mechanism ships inert and the isolation is the
+first task of the next slice. The 250 m graded pad already suppresses the
+fabricated lakes in the ground view; they can still appear 250 m out on a
+near-sea-level plain.
+
+### 4. Near-site terrain is featureless — PARTLY FIXED
+
+One cause was the 750 m / 3000 m pad flattening, now 90 m / 320 m (defect 3).
+The remaining cause is structural: the detail layer is faded out entirely at
+LOD ≤ 11 (`DetailLodFade::new(11, 14)`) and the terrain shader adds only *albedo*
+patchiness below that, so geometric detail does not exist at distance. That is
+the "distant terrain appears flat" observation and it is not yet addressed.
 
 ### 5. Clouds still read as painted cut-outs — CONFIRMED, partially addressed
 
@@ -184,22 +234,59 @@ pinned pose, and read the statistics back. It is fragile (a value read before it
 declaration silently kills the material) but it produced the sun-elevation and
 visibility numbers this project now relies on.
 
+## Build configuration defects found
+
+`cargo check --no-default-features` did not compile: `plugins.rs` imported
+`load_default_soil` and `load_default_surface_fields` unconditionally while both
+are defined under `cfg(feature = "dem")`. The two imports are now gated like
+`load_default_land_cover` already was. `cargo check` and `cargo test` now pass
+without default features (1049 tests).
+
 ## What this slice changed
 
 * `water_mesh_for_patch`: ocean cap stays on the datum; lakes keep their local
   surface.
-* New regression test for a sloped shore.
-* This document.
+* `LayeredTerrainSource::with_graded_sites`: launch sites are graded level in the
+  composed surface, for mesh and collision alike.
+* Pad flat/blend radii: 750/3000 m → 250/700 m.
+* `TerrainDetailLayer::with_sea_level_guard`: mechanism and unit test, left
+  inert pending the baseline isolation above.
+* Four regression tests plus this document.
+
+## Known divergences that are deliberate, not bugs
+
+* `mesh_height_m` drops the procedural detail at LOD ≤ 11 while `height_m` keeps
+  it. The rendered patch is a representation of the physical surface, and the
+  vehicle is always inside fine patches. The two paths agree wherever the
+  vehicle can be, and the site grade is applied to both. This is the one place
+  where "rendered height equals collision height" is a tolerance rather than an
+  identity, and it is bounded by the detail envelope (±36/+24 m).
+
+## Evidence limits of this slice
+
+Deterministic captures were taken for the water fix, the launch-site grading and
+the sea-level guard. The last capture after the radius change could not be taken:
+the virtual display lost Vulkan presentability part-way through the session
+(`MESA: vulkan: No DRI3 support detected - required for presentation`, then
+`No supported formats for surface` from `bevy_render::view::window::
+create_surfaces`). That is an environment failure, not a code failure — it
+reproduces with a fresh `Xvfb` and with `xvfb-run`, and it fires before any
+terrain or rendering code of this project runs — but it means the shipped
+250/700 m radii are validated by unit tests and by the 90/320 m captures rather
+than by a like-for-like final frame. No camera or scene parameter was changed to
+work around it.
 
 ## Remaining work, in dependency order
 
 1. Imagery tile colour match + spatial feather (defect 2). Needs the tile
    package regenerated; highest visual payoff at 400–1200 km.
-2. Launch-site cut-and-fill platform and facility grounding (defect 3).
-3. Shrink the pad detail-fade radii and add a geometry detail band at distance
-   (defect 4).
-4. Diagnostic modes, then use them on the high-altitude darkness (defect 6).
-5. Cloud shape/type diversity and edge structure (defect 5).
-6. Vegetation audit and near-field canopy work (defect 8).
+2. Geographic detail at distance: a geometry detail band beyond LOD 11, or a
+   normal-mapped far field, so the "flat distant terrain" reading improves
+   (defect 4 remainder).
+3. Diagnostic modes, then use them on the high-altitude darkness (defect 6).
+4. Cloud shape/type diversity and edge structure (defect 5).
+5. Vegetation audit and near-field canopy work (defect 8).
+6. Regional DEM for the Papua coast, so the 900 m base stops producing angular
+   water polygons at 3 km (defect 1's remaining data limit).
 7. Performance measurement pass, which the brief requires and which has not been
    run against this baseline.

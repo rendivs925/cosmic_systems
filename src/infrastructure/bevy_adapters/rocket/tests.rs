@@ -1465,9 +1465,15 @@ mod recovery_pipeline_tests {
             "terrain contact must record recovery touchdown"
         );
         assert!(scorecard.touchdown_vertical_speed_mps <= 5.0);
+        // `position_m` is the cylinder centre, and the stage's lower extent is
+        // 5 m below it, so a perfectly vertical touchdown on the pad is exactly
+        // 5 m from the pad point. The old strict `< 5.0` only passed because the
+        // stage used to settle a few centimetres off. Allow the resting offset
+        // plus a small contact tolerance.
+        let miss_m = (rocket.dynamics.position_m - pad_position_m).length();
         assert!(
-            (rocket.dynamics.position_m - pad_position_m).length() < 5.0,
-            "RTLS stage missed its explicit recovery target"
+            miss_m <= 5.0 + 0.05,
+            "RTLS stage missed its explicit recovery target by {miss_m:.3} m"
         );
     }
 

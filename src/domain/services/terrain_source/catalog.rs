@@ -77,12 +77,18 @@ const EARTH_PROCEDURAL_DETAIL_SEED: u64 = 0x00E4_27A6_1E5E_ED01;
 /// Deterministic master seed for Earth's thermal/hydraulic erosion field.
 #[cfg(feature = "dem")]
 const EARTH_EROSION_SEED: u64 = 0x00E4_2705_E0D1_5EED;
-/// Radius around a launch site where the procedural detail is graded flat.
+/// Radius around a launch site where the composed surface is graded level.
+///
+/// This is the prepared-platform footprint, not a visual fade: it has to be
+/// large enough to contain the facility and its apron, and small enough that the
+/// true landscape resumes close by. It was 750 m, which flattened a 1.5 km
+/// pancake around every site and left the chase camera standing on a featureless
+/// wash.
 #[cfg(feature = "dem")]
-const EARTH_PAD_FLAT_RADIUS_M: f64 = 750.0;
+const EARTH_PAD_FLAT_RADIUS_M: f64 = 250.0;
 /// Radius over which the graded pad blends back into natural relief.
 #[cfg(feature = "dem")]
-const EARTH_PAD_BLEND_RADIUS_M: f64 = 3_000.0;
+const EARTH_PAD_BLEND_RADIUS_M: f64 = 700.0;
 
 /// Namespace that scopes Earth's preprocessed erosion tiles to this measured
 /// base. Changing the DEM path invalidates any persisted tiles.
@@ -198,6 +204,10 @@ fn earth_layered_terrain(base: Arc<dyn TerrainSource>) -> LayeredTerrainSource {
             DetailLodFade::new(11, 14),
         )),
     )
+    // Grade the launch-site platforms in the composed surface itself, so the
+    // mesh, collision and radar all see level ground under the facility instead
+    // of a flat apron drawn over a slope.
+    .with_graded_sites(earth_pad_flat_zones())
 }
 
 /// Level pads at the predefined Earth launch sites. The sites are declared in
@@ -209,9 +219,19 @@ fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
         return Vec::new();
     };
     let radius_m = earth.radius_km as f64 * 1_000.0;
+    // Every predefined site, not only the three the vehicle currently launches
+    // from: a facility floats wherever the ground under it has not been graded,
+    // and the grade pins each site to its own composed height, so adding a site
+    // cannot move that site's launch elevation.
     [
         predefined_sites::kennedy_space_center(),
         predefined_sites::kennedy_lc39a(),
+        predefined_sites::starbase_boca_chica(),
+        predefined_sites::vandenberg_california(),
+        predefined_sites::wallops_virginia(),
+        predefined_sites::kourou_french_guiana(),
+        predefined_sites::baikonur_kazakhstan(),
+        predefined_sites::mahia_new_zealand(),
         predefined_sites::papua_indonesia_coastal_lowland(),
     ]
     .into_iter()
