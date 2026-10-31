@@ -13,6 +13,13 @@ rocket-flight modes built on shared Rust domain logic and Bevy application
 adapters. Celestial state uses the repository's provisioned, offline DE440
 scientific-data manifest.
 
+**What is built, what is verified, what is broken, and what comes next:**
+[`docs/progress/README.md`](docs/progress/README.md). That page is the project
+status entry point; the planning detail is in
+[`docs/progress/MASTER_ROADMAP.md`](docs/progress/MASTER_ROADMAP.md) and the
+evidence in [`docs/progress/VISUAL_EVIDENCE.md`](docs/progress/VISUAL_EVIDENCE.md)
+and [`docs/progress/PERFORMANCE_BASELINES.md`](docs/progress/PERFORMANCE_BASELINES.md).
+
 ## Requirements
 
 - A current Rust toolchain with Cargo.
