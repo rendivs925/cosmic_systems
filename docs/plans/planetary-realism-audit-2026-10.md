@@ -33,6 +33,14 @@ Launch/chase captures that depend on a keypress are **not** reproducible across
 runs because the key press lands at a different simulation time. Only the
 pose-pinned site captures are valid for A/B work.
 
+When the machine's Vulkan presentation path is broken (one present, then
+`Couldn't get swap chain texture ... generic error`, or `No supported formats for
+surface` on a virtual display) no frame can be captured at all. The offscreen
+path removes presentation from the loop: it renders into an `Image` target and
+writes a PNG with no window. See `docs/measurement/offscreen_capture.md`. Every
+capture quoted below after the first two was taken through it; the UI/HUD is not
+drawn in that path, so measure the world, not the overlay.
+
 ## Confirmed defects and their source-level causes
 
 ### 1. Polygonal coastlines and pale shoreline ribbons — CONFIRMED, FIXED
@@ -99,11 +107,24 @@ This is a data-fusion problem, not a shading bug. The fix has two parts:
    because a per-patch uniform cannot feather across a patch boundary.
 
 A caveat that matters: the measured brightness mismatch explains the *pale inset
-around Papua*. It does **not** explain the large dark blocks seen at 1200 km over
-Borneo and the Java Sea, which are far outside the region and therefore render
-the overview on both sides. Those remain undiagnosed; LOD-dependent mip selection
-and the far-field globe versus streamed patches are the standing hypotheses, and
-the diagnostic modes are the tool that will settle it.
+around Papua*. It does **not** explain the large rectangular blocks seen at
+1,200 km over Borneo and the Java Sea.
+
+Three differential captures now constrain those blocks:
+
+| test | result |
+| --- | --- |
+| same pose, Sun 7 h later | blocks unchanged; only the glint and shading move |
+| 90 vs 400 rendered frames | blocks unchanged |
+| 1,200 km vs 300 km over the site | blocks appear at both scales |
+
+So they are albedo or geometry, not lighting, occlusion, or patches that have not
+streamed in. They are not the regional imagery either: at 1,200 km no published
+patch resolves to a regional tile (`detailed=0`), and at ground level the imagery
+residency climbs to 70 tiles, so the regional path does work where it applies.
+What is left is per-patch material state — the layered-versus-fallback ground
+material, the per-patch occlusion map, or LOD-dependent texture sampling. The
+diagnostic modes are the tool that will settle which; they are not built yet.
 
 ### 3. Launch facility reads as a detached slab — CONFIRMED, FIXED
 
@@ -184,6 +205,20 @@ first task of the next slice. The 250 m graded pad already suppresses the
 fabricated lakes in the ground view; they can still appear 250 m out on a
 near-sea-level plain.
 
+### 3c. The graded pad leaves a visible pale disc — NEW, from the first clean ground frame
+
+Grading the site (defect 3) is geometrically correct, but the first ground-level
+frame from the offscreen path shows a **~700 m pale-green disc** centred on the
+pad, with a soft edge, standing out against the surrounding darker green. It is
+not a lighting artifact: flattening the ground changes the slope-derived ground
+material blend and the baked occlusion, so the whole graded footprint reads as a
+different surface.
+
+That is a real side effect of the fix, not a camera or exposure problem. Options,
+in order of preference: shrink the footprint (the facility needs ~50 m, not 700),
+and keep the graded area's material classification stable instead of letting
+slope reclassify it. Not changed yet.
+
 ### 4. Near-site terrain is featureless — PARTLY FIXED
 
 One cause was the 750 m / 3000 m pad flattening, now 90 m / 320 m (defect 3).
@@ -259,6 +294,8 @@ without default features (1049 tests).
   inert pending the baseline isolation above.
 * Imagery colour match: measured per-channel linear gain in the manifest, applied
   at tile install before mip generation.
+* Offscreen capture path (`COSMIC_SYSTEMS_OFFSCREEN_CAPTURE`), which renders and
+  writes a PNG with no window or swapchain.
 * Seven regression tests plus this document.
 
 ## Known divergences that are deliberate, not bugs

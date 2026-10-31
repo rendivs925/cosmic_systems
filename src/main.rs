@@ -7,6 +7,9 @@ use std::env;
 use std::num::NonZero;
 
 use cosmic_systems_wasm::application::modes::{parse_launch_options, Mode};
+use cosmic_systems_wasm::application::offscreen_capture::{
+    OffscreenCapture, OffscreenCapturePlugin,
+};
 use cosmic_systems_wasm::application::plugins::{
     CraftModePlugin, RocketModePlugin, SharedSimulationPlugin, SolarSystemModePlugin,
 };
@@ -76,15 +79,28 @@ fn main() {
         Ok("none") => bevy::window::PresentMode::AutoNoVsync,
         _ => bevy::window::PresentMode::AutoVsync,
     };
-    let window_plugin = WindowPlugin {
-        primary_window: Some(Window {
-            title: mode.title().to_string(),
-            resolution: (1280, 720).into(),
-            present_mode,
-            desired_maximum_frame_latency: NonZero::<u32>::new(2),
+    // Offscreen capture renders into an image and writes a PNG, so it needs no
+    // presentable swapchain. That is the only way to get a frame on a machine
+    // whose Vulkan presentation path is broken while rendering itself works.
+    let offscreen = OffscreenCapture::from_env();
+    let window_plugin = if offscreen.is_some() {
+        WindowPlugin {
+            primary_window: None,
+            exit_condition: bevy::window::ExitCondition::DontExit,
+            close_when_requested: false,
             ..default()
-        }),
-        ..default()
+        }
+    } else {
+        WindowPlugin {
+            primary_window: Some(Window {
+                title: mode.title().to_string(),
+                resolution: (1280, 720).into(),
+                present_mode,
+                desired_maximum_frame_latency: NonZero::<u32>::new(2),
+                ..default()
+            }),
+            ..default()
+        }
     };
 
     let plugins = DefaultPlugins
@@ -107,8 +123,18 @@ fn main() {
         plugins
     };
 
+    let plugins = if offscreen.is_some() {
+        plugins.disable::<bevy::winit::WinitPlugin>()
+    } else {
+        plugins
+    };
+
     let mut app = App::new();
     app.add_plugins(plugins);
+    if let Some(capture) = offscreen {
+        app.add_plugins(OffscreenCapturePlugin::runner());
+        app.add_plugins(OffscreenCapturePlugin::new(capture));
+    }
 
     match mode {
         Mode::Solar => {

@@ -2,6 +2,7 @@ pub mod craft_startup;
 pub mod headless_scenario;
 pub mod launch_tower;
 pub mod modes;
+pub mod offscreen_capture;
 pub mod part_catalog;
 pub mod plugins;
 pub mod rocket_config;
