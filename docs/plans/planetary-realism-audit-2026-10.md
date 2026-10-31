@@ -65,7 +65,7 @@ pixels that are bright and desaturated (the pale ribbons: `lum > 0.62` and
 luminance stayed at 0.34, so the change removed the ribbons rather than dimming
 the scene.
 
-### 2. Rectangular albedo patches — CONFIRMED, NOT YET FIXED
+### 2. Rectangular albedo patches — CONFIRMED, HALF FIXED
 
 `imagery_weight` is a **uniform per patch** value that switches from `0` to `1`
 when a produced local imagery tile becomes ready:
@@ -83,21 +83,27 @@ cube-sphere patch edge — a rectangle. The 1200 km capture shows this plainly a
 darker and lighter rectangular blocks with straight edges over Borneo and the
 Java Sea, and the 400 km capture shows one hard-edged rectangle near the bottom.
 
-This is a data-fusion problem, not a shading bug. The fix has two parts and both
-are needed:
+This is a data-fusion problem, not a shading bug. The fix has two parts:
 
-1. **Ingest-time colour match.** Fit a per-channel gain/offset (or a histogram
-   match in a perceptual space) between the regional mosaic and the overview
-   over the region's own footprint, and store it in the imagery manifest so the
-   producer, not the renderer, owns the correction.
-2. **Spatially continuous feather.** Blend `imagery_weight` against a band of the
-   region's angular footprint (`smoothstep` over the last tile-width inside the
-   edge), evaluated from the fragment's body position, so the transition is
-   independent of where patch boundaries fall. A per-patch uniform cannot do
-   this, which is why the rectangles are axis-aligned.
+1. **Colour match — done.** Measured over the region footprint, the Sentinel-2
+   surface-reflectance mosaic is 2.5-4x the linear reflectance of the Blue Marble
+   overview (per-channel means and method in
+   `docs/datasets/earth_imagery_v1.md`). The manifest now declares the measured
+   per-channel linear gain, and it is applied in linear light when a tile is
+   installed, before its mip chain is built. A test asserts the declared gain is
+   still the measured ratio, so reprocessing the mosaic without re-measuring
+   fails the build.
+2. **Spatially continuous feather — not done.** The last patch edge still steps
+   between 10 m imagery and a 2 km overview. It needs the region footprint in the
+   terrain-surface uniform and a `smoothstep` on the fragment's body position,
+   because a per-patch uniform cannot feather across a patch boundary.
 
-Not done in this slice: it needs the 34 MB tile package regenerated and its
-checksums re-recorded.
+A caveat that matters: the measured brightness mismatch explains the *pale inset
+around Papua*. It does **not** explain the large dark blocks seen at 1200 km over
+Borneo and the Java Sea, which are far outside the region and therefore render
+the overview on both sides. Those remain undiagnosed; LOD-dependent mip selection
+and the far-field globe versus streamed patches are the standing hypotheses, and
+the diagnostic modes are the tool that will settle it.
 
 ### 3. Launch facility reads as a detached slab — CONFIRMED, FIXED
 
@@ -251,7 +257,9 @@ without default features (1049 tests).
 * Pad flat/blend radii: 750/3000 m → 250/700 m.
 * `TerrainDetailLayer::with_sea_level_guard`: mechanism and unit test, left
   inert pending the baseline isolation above.
-* Four regression tests plus this document.
+* Imagery colour match: measured per-channel linear gain in the manifest, applied
+  at tile install before mip generation.
+* Seven regression tests plus this document.
 
 ## Known divergences that are deliberate, not bugs
 
@@ -278,8 +286,8 @@ work around it.
 
 ## Remaining work, in dependency order
 
-1. Imagery tile colour match + spatial feather (defect 2). Needs the tile
-   package regenerated; highest visual payoff at 400–1200 km.
+1. Imagery edge feather (defect 2, remaining half), then diagnose the 1200 km
+   blocks with the diagnostic modes; the colour match does not explain them.
 2. Geographic detail at distance: a geometry detail band beyond LOD 11, or a
    normal-mapped far field, so the "flat distant terrain" reading improves
    (defect 4 remainder).

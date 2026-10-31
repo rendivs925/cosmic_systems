@@ -65,6 +65,50 @@ Manifest: `assets/configs/terrain/earth_imagery_v1.ron`
   below the level range uses the most detailed produced tile at or coarser than
   its own level; a coarser patch falls back to the global overview.
 
+## Colour match to the global overview
+
+Two imagery products with different instruments and different atmospheric
+corrections do not agree in tone, and at a patch edge the renderer substitutes one
+for the other. Measured over the region footprint, the Sentinel-2 L2A
+surface-reflectance mosaic is **2.5-4x** the linear reflectance of the Blue
+Marble overview:
+
+| channel | regional linear mean | overview linear mean | gain |
+| --- | ---: | ---: | ---: |
+| R | 0.05449 | 0.01276 | 0.23423 |
+| G | 0.06606 | 0.02681 | 0.40589 |
+| B | 0.04376 | 0.00930 | 0.21253 |
+
+Rendered without correction, the region is a pale rectangle inside an otherwise
+dark-forest continent.
+
+Method (offline, reproducible from the package):
+
+1. Decode `global_overview.png` at its runtime resolution (8192x4096).
+2. Crop the region's own bounding box in equirectangular pixel coordinates
+   (`139.0..140.0 E`, `8.6..7.4 S`).
+3. Concatenate every produced level-8 tile (the coarsest level of the region,
+   24 tiles, whose union covers the same footprint).
+4. Decode both to linear light with the sRGB transfer function and take the
+   per-channel mean.
+5. `linear_gain = overview_mean / regional_mean`, recorded in the manifest
+   together with both means so the derivation is auditable.
+
+The gain is applied in **linear light** when the tile is installed, before its
+mip chain is generated, so the chain is built from corrected texels. Multiplying
+the encoded bytes instead would change contrast and saturation as a side effect;
+this is a radiometric correction, not a curve edit. Identity gain is a no-op and
+is skipped.
+
+The check `checked_in_color_match_is_the_measured_mean_ratio` asserts the
+declared gain is still the measured ratio (within 2 %), so reprocessing the mosaic
+without re-measuring fails the build.
+
+This matches the region's *mean* tone. It does not blend the regional inset into
+the overview spatially, so the last patch edge still steps between 10 m imagery
+and a 2 km overview; an edge feather evaluated from the fragment's body position
+is the remaining half of the fix and is not implemented yet.
+
 ## Package layout
 
 The runtime package lives under the ignored path

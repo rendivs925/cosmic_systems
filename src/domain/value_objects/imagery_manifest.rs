@@ -38,6 +38,39 @@ pub struct ImageryGlobalOverview {
     pub runtime_sha256: String,
 }
 
+/// Offline-derived linear-light colour match between a regional mosaic and the
+/// global overview it replaces.
+///
+/// Two different instruments with two different atmospheric corrections do not
+/// agree in tone: the Sentinel-2 L2A surface-reflectance mosaic over the Papua
+/// region measures about 2.5-4x the linear reflectance of the Blue Marble
+/// overview over the same box. Substituting one for the other at a patch edge
+/// therefore turns the region into a pale rectangle. The gain is the ratio of the
+/// two measured means, applied in linear light so it is a radiometric correction
+/// rather than a curve edit.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ImageryColorMatch {
+    /// Per-channel linear-space gain applied to the regional mosaic.
+    pub linear_gain: [f32; 3],
+    /// Measured linear mean of the regional mosaic over the region.
+    pub regional_linear_mean: [f32; 3],
+    /// Measured linear mean of the global overview over the same footprint.
+    pub overview_linear_mean: [f32; 3],
+}
+
+impl ImageryColorMatch {
+    fn validate(&self, region_id: &str) -> Result<(), String> {
+        for (label, channel) in self.linear_gain.iter().enumerate() {
+            if !channel.is_finite() || *channel <= 0.0 || *channel > 20.0 {
+                return Err(format!(
+                    "imagery region {region_id} colour gain channel {label} is not a positive finite ratio"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A bounded high-detail imagery region in body-fixed geographic coordinates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImageryLocalRegion {
@@ -57,6 +90,19 @@ pub struct ImageryLocalRegion {
     pub runtime_tiles: String,
     pub source_sha256: String,
     pub runtime_sha256: String,
+    /// Linear-light match to the global overview. Absent means identity, which
+    /// is correct for a mosaic already produced on the overview's tonality.
+    #[serde(default)]
+    pub color_match: Option<ImageryColorMatch>,
+}
+
+impl ImageryLocalRegion {
+    /// Per-channel linear gain to apply to this region's tiles.
+    pub fn linear_color_gain(&self) -> [f32; 3] {
+        self.color_match
+            .map(|matched| matched.linear_gain)
+            .unwrap_or([1.0; 3])
+    }
 }
 
 /// Offline-prepared Earth imagery hierarchy metadata.
@@ -188,6 +234,9 @@ fn validate_local_region(region: &ImageryLocalRegion) -> Result<(), String> {
             region.id
         ));
     }
+    if let Some(color_match) = &region.color_match {
+        color_match.validate(&region.id)?;
+    }
     validate_checksums(&region.source_sha256, &region.runtime_sha256)
 }
 
@@ -220,6 +269,53 @@ mod tests {
             .expect("the Papua launch site must fall inside a local region");
         assert_eq!(region.id, "papua_coastal_lowland");
         assert!(manifest.local_region_at(0.0, 0.0).is_none());
+    }
+
+    /// The declared gain must be the measured ratio, not a hand-tuned look. If
+    /// the mosaic is ever reprocessed without re-running the measurement, this
+    /// fails and the numbers get re-derived.
+    #[test]
+    fn checked_in_color_match_is_the_measured_mean_ratio() {
+        let manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        let region = manifest
+            .local_regions
+            .iter()
+            .find(|region| region.id == "papua_coastal_lowland")
+            .expect("the checklist region must exist");
+        let matched = region
+            .color_match
+            .expect("the region must record its colour match");
+        for channel in 0..3 {
+            let regional = f64::from(matched.regional_linear_mean[channel]);
+            let overview = f64::from(matched.overview_linear_mean[channel]);
+            assert!(regional > 0.0 && overview > 0.0);
+            let expected = overview / regional;
+            let declared = f64::from(matched.linear_gain[channel]);
+            assert!(
+                (declared - expected).abs() < 0.02 * expected,
+                "channel {channel}: declared gain {declared} is not the measured ratio {expected}"
+            );
+            assert!(
+                declared < 1.0,
+                "the regional mosaic is brighter than the overview, so the gain must darken it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_region_without_a_colour_match_is_the_identity() {
+        let mut manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        manifest.local_regions[0].color_match = None;
+        assert_eq!(manifest.local_regions[0].linear_color_gain(), [1.0; 3]);
+    }
+
+    #[test]
+    fn a_non_positive_colour_gain_is_rejected() {
+        let mut manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        if let Some(matched) = manifest.local_regions[0].color_match.as_mut() {
+            matched.linear_gain[1] = 0.0;
+        }
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

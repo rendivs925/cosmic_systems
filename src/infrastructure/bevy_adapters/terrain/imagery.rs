@@ -27,6 +27,7 @@ use crate::infrastructure::bevy_adapters::terrain::surface::LAYER_HEIGHT_CONTRAS
 use bevy::asset::{AssetServer, Handle, LoadState};
 use bevy::image::Image;
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
@@ -227,7 +228,16 @@ pub(crate) fn stream_terrain_imagery(
             imagery.pending.remove(&tile);
             if imagery.ready.insert(tile) {
                 imagery.resident_bytes += IMAGERY_TILE_BYTES;
+                // Colour-match before building mips: the chain must be generated
+                // from corrected texels, and the correction is a property of the
+                // region this tile belongs to.
+                let gain = imagery
+                    .package
+                    .as_ref()
+                    .map(|package| package.linear_color_gain(&tile))
+                    .unwrap_or([1.0; 3]);
                 if let Some(handle) = imagery.handles.get(&tile) {
+                    apply_color_match_once(&mut images, handle, gain);
                     add_mip_chain_once(&mut images, handle);
                 }
             }
@@ -406,6 +416,71 @@ fn add_mip_chain_once(images: &mut Assets<Image>, handle: &Handle<Image>) -> boo
     true
 }
 
+/// Encode a linear value as 8-bit sRGB.
+fn linear_to_srgb(linear: f32) -> f32 {
+    if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Decode an 8-bit sRGB value to linear light.
+fn srgb_to_linear(encoded: f32) -> f32 {
+    if encoded <= 0.040_45 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Apply a per-channel gain in linear light to an sRGB-encoded RGBA8 buffer.
+///
+/// Two imagery products with different instruments and atmospheric corrections
+/// do not agree in tone, and substituting one for the other at a patch edge
+/// turns the region into a pale rectangle. Multiplying the *linear* values is a
+/// radiometric correction; multiplying the encoded bytes would instead change
+/// contrast and saturation as a side effect.
+pub(crate) fn apply_linear_gain_srgb_rgba(data: &mut [u8], gain: [f32; 3]) {
+    if gain == [1.0, 1.0, 1.0] {
+        return;
+    }
+    for texel in data.as_chunks_mut::<4>().0 {
+        for channel in 0..3 {
+            let linear = srgb_to_linear(f32::from(texel[channel]) / 255.0) * gain[channel];
+            texel[channel] = (linear_to_srgb(linear.clamp(0.0, 1.0)) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
+/// Apply a tile's declared colour match once, before its mip chain is built so
+/// the chain is generated from corrected texels.
+fn apply_color_match_once(
+    images: &mut Assets<Image>,
+    handle: &Handle<Image>,
+    gain: [f32; 3],
+) -> bool {
+    if gain == [1.0, 1.0, 1.0] {
+        return false;
+    }
+    let Some(image) = images.get_mut(handle.id()) else {
+        return false;
+    };
+    if !matches!(
+        image.texture_descriptor.format,
+        TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm
+    ) {
+        return false;
+    }
+    let Some(data) = image.data.as_mut() else {
+        return false;
+    };
+    apply_linear_gain_srgb_rgba(data, gain);
+    true
+}
+
 fn imagery_asset_path(asset_root: &str, patch: &TerrainPatch) -> String {
     format!(
         "{asset_root}/tiles/{}/{}/{}_{}.png",
@@ -488,6 +563,42 @@ mod tests {
         resource.handles.insert(tile, handle);
         resource.ready.insert(tile);
         (resource, geometry_patch)
+    }
+
+    /// The correction is radiometric: it must scale linear light by the declared
+    /// ratio, not scale the encoded bytes (which would change contrast).
+    #[test]
+    fn color_match_gain_scales_linear_light() {
+        let input = [
+            [128u8, 64, 200, 255],
+            [10, 240, 30, 255],
+            [255, 0, 128, 255],
+        ];
+        let gain = [0.23423_f32, 0.40589, 0.21253];
+        let mut data: Vec<u8> = input.iter().flatten().copied().collect();
+        apply_linear_gain_srgb_rgba(&mut data, gain);
+        for (texel, source) in data.as_chunks::<4>().0.iter().zip(input.iter()) {
+            for channel in 0..3 {
+                let encoded_in = f32::from(source[channel]) / 255.0;
+                let expected_linear = srgb_to_linear(encoded_in) * gain[channel];
+                let expected_encoded = linear_to_srgb(expected_linear.clamp(0.0, 1.0));
+                let expected = (expected_encoded * 255.0).round().clamp(0.0, 255.0) as u8;
+                assert!(
+                    texel[channel].abs_diff(expected) <= 1,
+                    "channel {channel}: {} != {expected}",
+                    texel[channel]
+                );
+            }
+            assert_eq!(texel[3], 255, "alpha must not be touched");
+        }
+    }
+
+    #[test]
+    fn identity_color_match_is_a_no_op() {
+        let original: Vec<u8> = (0..32u8).collect();
+        let mut data = original.clone();
+        apply_linear_gain_srgb_rgba(&mut data, [1.0, 1.0, 1.0]);
+        assert_eq!(data, original);
     }
 
     #[test]

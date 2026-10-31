@@ -41,6 +41,17 @@
             runtime_tiles: "assets/large_files/terrain/earth_imagery_v1/tiles",
             source_sha256: "2d3f5173c44895f714d427429eaa929852169318d48c29d3d8cc1b49f674df23",
             runtime_sha256: "977f14594b871e0fdb0ead79a51bd0495d0564f58e52a127fcf7adedaf737d31",
+            // Measured over the region footprint: the Sentinel-2 L2A
+            // surface-reflectance mosaic is 2.5-4x the linear reflectance of the
+            // Blue Marble overview it replaces, so the region rendered as a pale
+            // rectangle. The gain is the ratio of the two means, applied in
+            // linear light so it is radiometric rather than a contrast edit.
+            // Method and numbers: docs/datasets/earth_imagery_v1.md.
+            color_match: Some((
+                linear_gain: (0.23423, 0.40589, 0.21253),
+                regional_linear_mean: (0.05449, 0.06606, 0.04376),
+                overview_linear_mean: (0.01276, 0.02681, 0.00930),
+            )),
         ),
     ],
 )

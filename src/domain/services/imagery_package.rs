@@ -144,6 +144,18 @@ impl EarthImageryPackage {
             .join(format!("{}_{}.png", patch.tile_x, patch.tile_y))
     }
 
+    /// Per-channel linear gain that matches a produced tile to the global
+    /// overview. Identity outside every region and for regions whose mosaic was
+    /// already produced on the overview's tonality.
+    pub fn linear_color_gain(&self, tile: &TerrainPatch) -> [f32; 3] {
+        let (latitude, longitude) = direction_to_lat_lon(tile.center_direction());
+        self.regions
+            .iter()
+            .find(|region| region.contains(latitude, longitude))
+            .map(|region| region.linear_color_gain())
+            .unwrap_or([1.0; 3])
+    }
+
     /// Resolve the imagery for a patch: the most detailed produced tile at or
     /// coarser than the patch level inside a covering region, else the global
     /// overview. The search is bounded by the region level range and never
@@ -270,6 +282,32 @@ mod tests {
             .join(level.to_string());
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(format!("{x}_{y}.png")), b"").unwrap();
+    }
+
+    /// A tile inside a region carries that region's measured colour match; a
+    /// patch outside every region is left untouched.
+    #[test]
+    fn color_gain_is_scoped_to_the_region() {
+        let root = temp_root("color_gain");
+        std::fs::write(root.join(GLOBAL_OVERVIEW_FILE), b"").unwrap();
+        let inside = TerrainPatch::for_direction(terrain_lat_lon_to_body_fixed(-8.0, 139.5), 12);
+        let outside = TerrainPatch::for_direction(terrain_lat_lon_to_body_fixed(45.0, 10.0), 12);
+        write_tile(
+            &root,
+            cube_face_name(inside.face),
+            inside.level,
+            inside.tile_x,
+            inside.tile_y,
+        );
+        let package = EarthImageryPackage::load(&root, verified_manifest()).unwrap();
+        let expected = EarthImageryManifest::from_ron(MANIFEST)
+            .unwrap()
+            .local_regions[0]
+            .linear_color_gain();
+        assert_eq!(package.linear_color_gain(&inside), expected);
+        assert_ne!(expected, [1.0; 3], "the fixture must declare a real gain");
+        assert_eq!(package.linear_color_gain(&outside), [1.0; 3]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
