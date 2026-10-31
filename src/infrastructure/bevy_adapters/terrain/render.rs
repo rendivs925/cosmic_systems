@@ -3067,6 +3067,24 @@ mod tests {
         );
     }
 
+    /// The Sun march has to reach the top of the slab, which takes
+    /// `layer / sin(elevation)` metres and not `layer`. A path of the slab's
+    /// thickness ends inside the deck as soon as the Sun leaves the zenith, so
+    /// every cell's lee reports a clear beam and the deck loses inter-cell
+    /// shadowing at exactly the angles it is most visible from.
+    #[test]
+    fn cloud_sun_path_reaches_the_top_of_the_slab() {
+        let clouds = include_str!("../../../../assets/shaders/clouds.wgsl");
+        assert!(
+            clouds.contains("let path_length = layer / clamp(sun_elevation, 1.0 / 6.0, 1.0);"),
+            "the Sun path must be the distance to leave the slab, not its thickness"
+        );
+        assert!(
+            clouds.contains("let step_length = path_length / max(clouds.light_steps, 1.0);"),
+            "the light march must step along that path"
+        );
+    }
+
     /// Convective cells are stretched along the wind, and the deck and its
     /// shadows must use that same axis. The helper and the factor both live in
     /// the shared module so no consumer can re-derive either.

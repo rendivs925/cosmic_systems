@@ -310,6 +310,35 @@ Two consequences matter:
   specification used the *sun-path* density for it, which darkened exactly the
   sunlit tops. That term has been removed.
 
+### 4.3.0 Sun-Path Length Through the Deck
+
+`T_multi` comes from a march along the Sun direction that has to reach the top of
+the slab. A sample inside the slab leaves it after
+
+$$
+d_{\text{sun}} = \frac{H - h}{\sin\theta_{\text{sun}}}
+$$
+
+metres, where `H - h` is the height still to climb and `theta_sun` the Sun's
+elevation above that sample's local horizon — **not** the slab thickness. The
+first implementation marched a fixed `top_radius - bottom_radius`, which is the
+right distance only at a zenith Sun: at 30 degrees the ray needs twice that, at
+10 degrees six times.
+
+The consequence was not a subtle bias. At any Sun angle below the zenith the
+march left the slab well before it reached the neighbouring cell, so a column
+standing in another column's lee reported a clear path and the whole deck lit
+evenly. Inter-cell shadowing is exactly the path length between the gap and the
+neighbour's top, so it was missing by construction. The march now takes
+`layer / clamp(sin(theta_sun), 1/6, 1)` metres, bounded at six layer thicknesses
+(~10 degrees), below which the terminator gate is closing the beam anyway. The
+samples above the local top cost nothing — empty air contributes zero density.
+
+Measured on the 1,200 km nadir capture, where the Sun is 76 degrees high, the
+change moves 11% of deck pixels by a 1–5% step (mean |delta| 0.78/255, p1/p99
+-4.8/+4.1/255), which is the small residue that a near-zenith Sun should leave.
+The fix exists for the low-Sun views the deck is also flown through.
+
 ### 4.3.1 Solar Terminator Gate
 
 Direct sunlight reaches a cloud sample only while the Sun is above that sample's

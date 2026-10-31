@@ -156,7 +156,18 @@ fn triple_lobe_phase(cos_theta: f32, g_forward: f32) -> f32 {
 // cloud is already dimmed by the single-scatter step integral below.
 fn march_to_sun(body_pos: vec3<f32>) -> f32 {
     let layer = clouds.top_radius - clouds.bottom_radius;
-    let step_length = layer / max(clouds.light_steps, 1.0);
+    // A ray from inside the slab leaves its top after `(top - r) / sin(elev)`
+    // metres, not after the slab's thickness. Marching only `layer` covers that
+    // distance at a zenith Sun and almost none of it at a low one: at 30 degrees
+    // the ray needs twice the thickness, at 10 degrees six times, so the path
+    // used to end thousands of metres short and the lee of every cell stayed
+    // fully lit. That is why the deck had no inter-cell shadowing at any Sun
+    // angle below the zenith, however dense the cells were.
+    let sun_elevation = max(dot(normalize(body_pos), clouds.sun_direction), 0.0);
+    // Bounded at six layer thicknesses (~10 degrees), below which the terminator
+    // gate is closing the beam anyway.
+    let path_length = layer / clamp(sun_elevation, 1.0 / 6.0, 1.0);
+    let step_length = path_length / max(clouds.light_steps, 1.0);
     let light_step = clouds.sun_direction * step_length;
     let field = cloud_field();
     let lod = density_lod(field, step_length);

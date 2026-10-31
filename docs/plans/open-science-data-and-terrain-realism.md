@@ -615,6 +615,42 @@ specification records the two rejected terms and why, so the next attempt starts
 from the top-height field or a real multiple-scattering integral rather than
 repeating them.
 
+The top-height field was then built and measured, and it is also a no-op — but
+the measurement is worth more than the term. A false-colour pass (R = Sun
+visibility at the visible surface, G = Sun elevation there, B = surface tilt,
+read on the 1,200 km nadir capture) settles the question the earlier attempts
+were guessing at: the Sun is **0.97** above the horizon at that site and hour,
+because the pinned epoch puts 03:00 UTC at local noon on 139.5 E, and the
+visible tops are **93%** lit. A noon deck's tops are uniformly lit, so there is
+little shading to recover and no surface term can invent it.
+
+The height field itself is flat for a structural reason: it is built by climbing
+the density column from the deck base, and the vertical profile clamps the top
+at ~90% of the layer thickness wherever the cell is dense. The *envelope* is
+therefore horizontal even though the iso-surface the camera sees is not. Two
+real bugs were found and fixed while establishing this — a probe that started at
+the ray's own hit point returned its own starting altitude when that point was
+already above the local top (zero gradient by construction), and the probes
+sampled the density with an inertial position where the field expects a
+body-fixed one. Both were corrected and the term was re-measured on the
+deterministic capture (same pose, same clock, same binary): it moved the deck by
+0.03/255 on average, with 11 pixels in the whole frame above one 8-bit step. The
+first chase A/B is not quoted because the launch capture is not reproducible
+across runs -- the keypress lands at a different sim time, so the vehicle and
+camera differ. The flat field, not the code, is the blocker. The term is removed rather than shipped as
+noise; the specification keeps the finding so the next attempt builds the height
+field from the iso-surface or from a multiple-scattering integral.
+
+The Sun-path length was a genuine bug and is fixed. The march toward the Sun
+travelled the slab's *thickness*, which is the distance needed only at a zenith
+Sun; a ray from inside the slab leaves the top after `layer / sin(elevation)`
+metres. Below the zenith it therefore ended thousands of metres short of the
+neighbouring cell, so the lee of every cell reported a clear path — inter-cell
+shadowing was missing by construction, not by tuning. Measured at the noon
+capture the fix moves 11% of deck pixels by 1-5% (mean |delta| 0.78/255); it
+exists for the low-Sun views the deck is also flown through, where the path is
+up to six times longer.
+
 One incidental finding is worth recording because it blocks a plausible-looking
 feature: cloud shadows are only visible from *below* the deck. From altitude the
 camera sees the ground only through cloud-free gaps, and those gaps are exactly
