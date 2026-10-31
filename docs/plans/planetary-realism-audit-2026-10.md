@@ -214,10 +214,15 @@ not a lighting artifact: flattening the ground changes the slope-derived ground
 material blend and the baked occlusion, so the whole graded footprint reads as a
 different surface.
 
-That is a real side effect of the fix, not a camera or exposure problem. Options,
-in order of preference: shrink the footprint (the facility needs ~50 m, not 700),
-and keep the graded area's material classification stable instead of letting
-slope reclassify it. Not changed yet.
+That is a real side effect of the fix, not a camera or exposure problem.
+
+Fixed by shrinking the footprint to what the facility needs: flat radius 250 m ->
+110 m, blend 700 m -> 280 m. The first ground frame from the offscreen path shows
+the disc gone, with consistent ground tone up to the pad edge and the site
+reading as a clearing rather than a lighting artifact. The deeper cause — that
+levelling ground reclassifies its slope-derived material — is still there and
+would return for any larger graded area; keeping the classification stable is the
+next step if the footprint ever grows again.
 
 ### 4. Near-site terrain is featureless — PARTLY FIXED
 

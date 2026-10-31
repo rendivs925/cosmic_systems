@@ -79,16 +79,17 @@ const EARTH_PROCEDURAL_DETAIL_SEED: u64 = 0x00E4_27A6_1E5E_ED01;
 const EARTH_EROSION_SEED: u64 = 0x00E4_2705_E0D1_5EED;
 /// Radius around a launch site where the composed surface is graded level.
 ///
-/// This is the prepared-platform footprint, not a visual fade: it has to be
-/// large enough to contain the facility and its apron, and small enough that the
-/// true landscape resumes close by. It was 750 m, which flattened a 1.5 km
-/// pancake around every site and left the chase camera standing on a featureless
-/// wash.
+/// This is the prepared-platform footprint, not a visual fade: it has to contain
+/// the facility and its apron (about 50 m across) and no more. It was 750 m,
+/// which flattened a 1.5 km pancake around every site; 250 m then still left a
+/// visible pale disc, because levelling the ground changes the slope-derived
+/// ground material over the whole graded footprint. 110 m keeps the clearing
+/// inside the pad and its immediate surroundings.
 #[cfg(feature = "dem")]
-const EARTH_PAD_FLAT_RADIUS_M: f64 = 250.0;
+const EARTH_PAD_FLAT_RADIUS_M: f64 = 110.0;
 /// Radius over which the graded pad blends back into natural relief.
 #[cfg(feature = "dem")]
-const EARTH_PAD_BLEND_RADIUS_M: f64 = 700.0;
+const EARTH_PAD_BLEND_RADIUS_M: f64 = 280.0;
 
 /// Namespace that scopes Earth's preprocessed erosion tiles to this measured
 /// base. Changing the DEM path invalidates any persisted tiles.
