@@ -2269,11 +2269,36 @@ fn water_mesh_for_patch(
             .map(|source| source.lake_depth_m(latitude_deg, longitude_deg).max(0.0))
             .unwrap_or(0.0);
         let depth = ocean_depth.max(lake_depth);
-        let water_radius = radius + depth;
+        // Ocean water is a sea-level sphere cap, not a lid that hugs the bed.
+        // Placing a dry vertex on the terrain instead of on the datum ramped the
+        // surface down into the ground across every triangle that straddled the
+        // shore, and those wedges were what the eye read as polygonal coastlines
+        // and pale shoreline bands: seen at a grazing angle the ramp faced the
+        // sky and lit up, and along the waterline it z-fought the bed. The cap
+        // now stays on the datum for every vertex; the opaque terrain in front
+        // of it cuts the visible water at the true waterline, so the coastline
+        // is resolved per pixel rather than per triangle. Inland lakes keep
+        // their own surface, which is not at the datum and must still follow the
+        // local bed.
+        // A lake surface only exists where the source reports a lake, so an
+        // ordinary dry vertex contributes nothing to the max and the ocean cap
+        // stays on the datum.
+        let lake_surface_radius_m = if lake_depth > 0.0 {
+            radius + lake_depth
+        } else {
+            f64::NEG_INFINITY
+        };
+        let water_radius = if has_ocean {
+            sea_level_radius_m.max(lake_surface_radius_m)
+        } else {
+            radius + lake_depth
+        };
         let water_position = body_to_inertial * (radial * water_radius) - *render_origin;
         positions.push(water_position.as_vec3().to_array());
         normals.push((body_to_inertial * radial).as_vec3().to_array());
         depths.push((depth * inverse_max_depth).min(1.0) as f32);
+        // Only triangles that reach water are emitted, so the cap extends at most
+        // one triangle past the shore before the depth test trims it.
         has_water.push(depth > 0.0);
     }
 
@@ -3628,6 +3653,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Regression for the polygonal shorelines: a dry vertex beside the water
+    /// must sit on the sea-level datum, not on the bed. When it sat on the bed,
+    /// every half-wet triangle ramped the sea surface down into the terrain, and
+    /// those ramps were the pale, hard-edged polygons the eye read as a
+    /// coastline. The cap stays on the datum so the opaque terrain cuts it at
+    /// the pixel-accurate waterline instead.
+    #[test]
+    fn ocean_cap_stays_on_the_datum_across_a_sloped_shore() {
+        /// Latitude ramp from -700 m to +700 m across the patch, crossing sea
+        /// level in the middle, so some vertices are wet and some are dry.
+        #[derive(Debug)]
+        struct Shore;
+        impl TerrainSource for Shore {
+            fn height_m(&self, latitude_deg: f64, _: f64) -> f64 {
+                latitude_deg * 1_000.0
+            }
+            fn elevation_bounds_m(&self) -> ElevationBounds {
+                ElevationBounds::new(-700.0, 700.0)
+            }
+        }
+
+        let res = 9;
+        let planet_radius_m = 6_371_000.0;
+        let patch = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 8,
+            tile_x: 128,
+            tile_y: 128,
+        };
+        let geometry =
+            build_patch_geometry_with_stitches(&patch, &Shore, planet_radius_m, res, 20.0, &[]);
+        let origin = DVec3::from_array(geometry.positions[0]);
+        let mut meshes = Assets::<Mesh>::default();
+        let handle = water_mesh_for_patch(
+            &geometry,
+            res,
+            planet_radius_m,
+            &origin,
+            DQuat::IDENTITY,
+            true,
+            Some(&Shore),
+            &mut meshes,
+        )
+        .expect("a patch spanning the shore needs an ocean cap");
+        let mesh = meshes.get(&handle).unwrap();
+        let bevy_mesh::VertexAttributeValues::Float32x3(positions) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+        else {
+            panic!("positions");
+        };
+        let datum_radius_m = planet_radius_m + WATER_SURFACE_OFFSET_M;
+        let mut saw_wet = false;
+        let mut saw_dry = false;
+        for (water, bed) in positions.iter().zip(&geometry.positions) {
+            let bed = DVec3::from_array(*bed);
+            let radial = bed.normalize();
+            let water_radius = (Vec3::from_array(*water).as_dvec3() + origin).length();
+            let bed_radius = bed.length();
+            assert!(
+                (water_radius - datum_radius_m).abs() < 1.0,
+                "water vertex must lie on the datum: {water_radius} vs {datum_radius_m}"
+            );
+            if bed_radius > datum_radius_m + 1.0 {
+                saw_dry = true;
+                assert!(
+                    water_radius < bed_radius,
+                    "a dry vertex must leave the sea plane below the terrain"
+                );
+            } else {
+                saw_wet = true;
+            }
+            let _ = radial;
+        }
+        assert!(saw_wet && saw_dry, "patch must straddle the shore");
     }
 
     #[test]
