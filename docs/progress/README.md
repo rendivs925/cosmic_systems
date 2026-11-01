@@ -35,7 +35,7 @@ is TD-05, which now has the tool it was waiting for.
 
 | defect | state |
 | --- | --- |
-| Rectangular tone blocks at 300–1,200 km | at 1,200 km the base albedo is clean; the block is a rectangular region of the height field at the datum |
+| Rectangular tone blocks at 300–1,200 km | the land blocks are per-patch constant roughness, measured by A/B; the ocean blocks need a water-side view before they can be attributed |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Land nearly black at 400 km while clouds are white | cause unknown |
 | Cloud edges are cut-outs; one shape per region | planned work |
@@ -81,12 +81,12 @@ sequence), and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**TD-05 — the rectangular tone blocks.** The diagnostics have already done their
-job: at 1,200 km the geographic albedo carries no block, while the height view
-shows a rectangular region sitting within ±2 m of the sea datum against a shelf
-tens of metres below it, with straight image-axis edges that cut across a patch.
-The next step is a transect of the terrain authority across that edge, then
-locating the tile that supplies it.
+**TD-05 — continuous roughness.** The attribution is finished: the land tone
+blocks come from `surface.roughness` being one value per patch, sampled at the
+patch centre, and a controlled A/B with a constant roughness removes two thirds
+of a measured 12/255 step. The fix is to bake roughness per texel where the patch
+surface is prepared, the way the local albedo and normal maps already are. The
+ocean blocks still need a water-side diagnostic first.
 
 After that: TD-04 imagery feather, then AT-02 altitude and limb (which also fills
 two of the five missing evidence scenes).

@@ -64,6 +64,18 @@ set, the same pose and clock as the frame beside them, and camera tonemapping
 and bloom bypassed. Read them as linear values: `linear = srgb_to_linear(byte /
 255)`. Values are documented in `docs/measurement/terrain_diagnostics.md`.
 
+Two rows are marked **modified build**. They are controlled A/B measurements of
+one term, not shipping behaviour, and are reproduced by changing exactly one
+place and re-capturing the same pose, clock and frame count:
+
+- `ab-constant-roughness`: `patch_material(surface.roughness, surface.metallic)`
+  replaced with `patch_material(0.85, 0.0)` in `terrain/render.rs`.
+- `ab-morph-off-height`: the CDLOD `morph_factor` forced to `0.0` in
+  `assets/shaders/terrain_surface.wgsl`.
+
+Neither change is committed; the frames exist so the attribution can be checked
+without repeating the experiment.
+
 | file | pose | frames | sha256 (first 16) | mode | pass criterion |
 | --- | --- | ---: | --- | --- | --- |
 | `2026-11-01-diag-normal-300km.jpg` | `-8.0,139.5,300000` | 200 | `f7b56bc1c5c6df39` | normal | production rendering; mean abs diff 0.92/255 against `2026-10-31-300km-papua.jpg` |
@@ -97,6 +109,20 @@ and bloom bypassed. Read them as linear values: `linear = srgb_to_linear(byte /
 | `2026-11-01-diag-surface-class-3km.jpg` | same | 220 | `07682493e3972262` | surface class | grass and soil classified from the weight map |
 | `2026-11-01-diag-layer-blend-3km.jpg` | same | 220 | `c3512b0bf80d1338` | layer blend | layered path active at ground level |
 | `2026-11-01-diag-height-3km.jpg` | same | 220 | `0616a9c706455eab` | height | coastal plain, rivers below the datum |
+| `2026-11-01-diag-world-normals-1200km.jpg` | `-8.0,139.5,1200000` | 200 | `40362a3366908b19` | world normals | continuous gradient, no face seam or step |
+| `2026-11-01-diag-uv0-1200km.jpg` | same | 200 | `14b8766b4a76005b` | uv0 | continuous geographic ramp; grid unbroken |
+| `2026-11-01-diag-uv1-1200km.jpg` | same | 200 | `69866bdc5e5719a0` | uv1 | per-patch ramp tiles with no gap or overlap |
+| `2026-11-01-diag-lod-1200km.jpg` | same | 200 | `a604b04eacd8d9f7` | lod | levels 4–6 only; seams match the patch grid |
+| `2026-11-01-diag-patch-boundary-1200km.jpg` | same | 200 | `d393e67ea93eae4a` | patch boundary | seams identical to the LOD view, no extra edges |
+| `2026-11-01-diag-occlusion-1200km.jpg` | same | 200 | `85a615342641b359` | occlusion | uniform (1,1): no baked occlusion at this altitude |
+| `2026-11-01-diag-roughness-1200km.jpg` | same | 200 | `ce7937ec3e61ed21` | roughness | **patch-shaped blocks**: 0.25 seafloor vs 0.85 land, sampled once per patch |
+| `2026-11-01-diag-layer-blend-1200km.jpg` | same | 200 | `4c45f62af5b2e918` | layer blend | magenta: single-layer fallback everywhere |
+| `2026-11-01-diag-metallic-1200km.jpg` | same | 200 | `278eb37660dcf9a2` | metallic | black: terrain metallic is 0 |
+| `2026-11-01-diag-detail-weight-1200km.jpg` | same | 200 | `73376043021193e6` | detail weight | black: source detail faded out at LOD ≤ 11 |
+| `2026-11-01-diag-morph-offset-1200km.jpg` | same | 200 | `d1cd98110b251d31` | morph offset | large deltas at coastlines only; lowland near 0 |
+| `2026-11-01-diag-surface-class-1200km.jpg` | same | 200 | `40c73a7072714ef9` | surface class | magenta: no classification data at this altitude |
+| `2026-11-01-ab-constant-roughness-1200km.jpg` | same | 200 | `5b20c6f40af847fc` | production, **modified build** | roughness forced to a constant: patch step 12.2 → 4.1/255 |
+| `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
 
 ## Negative results worth keeping
 

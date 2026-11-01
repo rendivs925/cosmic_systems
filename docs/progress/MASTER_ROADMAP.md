@@ -239,45 +239,67 @@ timings. This phase exists because an unverifiable change is not a change.
   never land this without the parity test.
 - **Completion evidence:** pending.
 
-### TD-05 — Rectangular albedo blocks at altitude
+### TD-05 — Rectangular tone blocks at altitude
 - **Status:** IN_PROGRESS
 - **Priority:** P0 (largest visible defect)
 - **Objective:** Attribute the axis-aligned tone blocks at 300–1,200 km to a
   specific term and remove them.
-- **Dependencies:** P0-03 (now satisfied).
-- **Subsystems:** terrain material, imagery, LOD, elevation data, water material.
-- **Expected files:** `assets/shaders/terrain_surface.wgsl`,
-  `src/infrastructure/bevy_adapters/terrain/render.rs`,
-  `src/domain/services/terrain_source/*` or the elevation payload, depending on
-  the outcome.
+- **Dependencies:** P0-03 (satisfied).
+- **Subsystems:** terrain material (per-patch roughness/metallic), elevation
+  data, water material.
+- **Expected files:** `src/infrastructure/bevy_adapters/terrain/render.rs`,
+  `src/infrastructure/bevy_adapters/terrain/surface/mod.rs`,
+  `assets/shaders/terrain_surface.wgsl`; the water side is still open.
 - **Acceptance:** at the P0-01 pose no block boundary is visible that does not
   correspond to a real albedo change within ±1/255 of the surrounding trend.
 - **Tests:** a capture-pair comparison harness that reports the maximum
   adjacent-pixel step across patch boundaries.
-- **Visual evidence:** five differentials. The earlier three — the blocks survive
-  a seven-hour Sun change, 90 vs 400 frames, and appear at 300 km and 1,200 km —
-  came before diagnostics existed. P0-03 added two more at 1,200 km:
-  * `2026-11-01-diag-albedo-1200km.jpg` contains **no rectangular block**, so the
-    geographic base albedo is not the source at that pose.
-  * `2026-11-01-diag-land-sea-1200km.jpg` and `2026-11-01-diag-height-1200km.jpg`
-    show a rectangular region (screen x ≈ 680–780, y ≈ 140–390 at that pose)
-    sitting within ±2 m of the sea-level datum while the surrounding shelf is
-    tens of metres below it. Its edges are straight and image-axis aligned, and
-    `inputs` reports no imagery, layers or local surfaces at that altitude.
-  The leading hypothesis is therefore a **rectangular region of near-zero
-  elevation data**, not a material or shader term: a water cap drawn over a bed
-  recorded as ~0 m instead of ~−50 m is a shallower, brighter rectangle. This is a
-  hypothesis supported by three frames, not a confirmed cause.
+- **Visual evidence (attribution, 2026-11-01):** the full mode matrix now exists
+  at the failing pose, and it splits the defect in two.
+  * **On land the cause is per-patch constant roughness.** `roughness` renders
+    `surface.roughness`, which is one scalar per patch sampled at the patch
+    *centre* from `surface_appearance`. At 300 km that turns the coastline into a
+    patch-sized staircase between 0.25 (shallow seafloor) and 0.85 (land); at
+    1,200 km the same view is a quilt of roughly 300 px blocks. `metallic` is
+    zero everywhere, so only roughness varies.
+  * **A controlled A/B confirms it.** Rebuilding only `patch_material` with a
+    constant `(0.85, 0.0)` and re-capturing the same pose, clock and frame count
+    (`2026-11-01-ab-constant-roughness-1200km.jpg`) reduces a measured
+    patch-boundary step from **12.2/255 to 4.1/255** (median luminance 50.4→62.6
+    becomes 50.5→54.6 across the same edge). The residual 4/255 is ordinary
+    terrain shading, not a step.
+  * **Everything else at that pose is clean.** `world-normals` is continuous,
+    `uv0`/`uv1` are continuous, `occlusion` is neutral (1,1), `inputs` reports no
+    imagery, layers or local surfaces, `lod` shows only levels 4–6 and its seams
+    match `patch-boundary`, and `layer-blend` is the single-layer fallback
+    throughout.
+  * **The large "datum rectangle" is not a rendering defect.** An offline
+    transect of the same authority (`terrain_authority_transect`) reproduces the
+    in-engine values exactly at fixed points (−13.61 m at −6.0,138.0 and
+    +7.90 m at −6.0,138.6), and every mesh vertex matches the source to within
+    the 5 m skirt. That lowland genuinely sits within a few metres of the datum
+    with shallow depressions, which is why `height` and `land-sea` show a pond
+    field. Disabling the LOD morph does not change it
+    (`2026-11-01-ab-morph-off-height-1200km.jpg`), so the morph is ruled out too.
+    The earlier "rectangle of near-zero elevation data" hypothesis is therefore
+    wrong: there is no data rectangle, only a genuinely near-datum lowland.
+  * **The ocean blocks are not roughness.** The same A/B leaves deep-water
+    large-scale variation unchanged (std 21.10 → 21.05 over 8 bits). At 1,200 km
+    the sea is drawn by `WaterMaterial`, which the terrain diagnostics do not
+    instrument, so the ocean component needs a water-side view before it can be
+    attributed. The `height` view does show rectangular seafloor regions that the
+    water depth ramp would turn into colour steps, which is where that view should
+    start.
 - **Performance:** not applicable until attributed.
-- **Scientific validation:** not applicable yet.
-- **Risks:** attributing it to the wrong term and shipping a cosmetic noise layer
-  over a data bug; the standing rule is that seams are fixed, never hidden. A
-  second contributor is **not diagnosable with the current modes**: at 1,200 km
-  most of the frame is ocean, drawn by `WaterMaterial`, which the terrain
-  diagnostics do not cover. Ocean blocks therefore need a water-side view.
-- **Completion evidence:** pending. Next step: sample the terrain authority along
-  a transect crossing the rectangle's edge and compare it with the surrounding
-  shelf, then locate the tile that supplies it.
+- **Scientific validation:** not applicable; all terms here are presentation.
+- **Risks:** attributing the remainder to roughness when it is not; replacing a
+  patch constant with a texture field costs per-patch CPU and GPU memory, so it
+  must be measured. Standing rule: seams are fixed, never hidden.
+- **Completion evidence:** pending. Next step: replace the per-patch constant
+  roughness/metallic with a continuous field (per-texel roughness baked in
+  `prepare_patch_surface`, sampled like the local albedo/normal maps), verify the
+  patch steps disappear at 300 km and 1,200 km, and add a water-side diagnostic
+  before attributing the ocean blocks.
 
 ### TD-06 — Synthetic detail must not fabricate coastline
 - **Status:** BLOCKED

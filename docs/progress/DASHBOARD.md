@@ -39,7 +39,7 @@ Ordered by visible impact, not by ease.
 
 | # | defect | task | state | evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | five differentials now; at 1,200 km the base albedo is clean and the block is a datum-level rectangle in the height field |
+| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | land component attributed to per-patch constant roughness (A/B: patch step 12.2 → 4.1/255); ocean component not diagnosable until a water-side view exists |
 | 2 | Synthetic detail fabricates lakes on the coastal plain | TD-06 | BLOCKED | visible in `terrain-600m`; guard implemented but inert |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | PLANNED | `300km-papua` |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
@@ -62,7 +62,8 @@ Ordered by visible impact, not by ease.
 | `cargo build --release --features dem` | PASS | `f3b1af6` — the only later change is test-only |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 6 at 1,200 km, 7 at 3–70 km | `f3b1af6` |
+| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km | `<this checkpoint>` |
+| TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `<this checkpoint>` |
 
 ## Visual evidence coverage
 
@@ -109,9 +110,9 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**TD-05 — attribute and remove the rectangular tone blocks.** P0-03 is now
-verified and has already narrowed the defect: at 1,200 km the geographic albedo
-carries no block, and the block that *is* there is a rectangular region of the
-height field sitting within ±2 m of the sea-level datum while the surrounding
-shelf is tens of metres below it. The next step is a terrain-authority transect
-across that rectangle's edge, then locating the tile that supplies it.
+**TD-05 — replace per-patch constant roughness with a continuous field.** The
+transect and A/B work is done: the land tone blocks come from `surface.roughness`
+being one scalar per patch sampled at the patch centre, and forcing it constant
+removes two thirds of a measured 12/255 step. The remaining work is the fix
+(per-texel roughness baked where the patch surface is prepared), plus a
+water-side diagnostic before the ocean blocks can be attributed.

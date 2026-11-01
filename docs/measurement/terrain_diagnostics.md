@@ -127,6 +127,36 @@ square root gives the coastal band roughly 13/255 per 10 m while still showing
 * **Diagnostics are not a performance harness.** Switching is one `u32` per
   material; capture runs remain pinned to 60 Hz by the offscreen runner.
 
+## What the modes have found
+
+The first complete matrix at the 1,200 km pose (`-8.0,139.5,1200000`) separates
+the rectangular tone blocks into two different defects, which is what the modes
+were built for:
+
+| view | result | reading |
+| --- | --- | --- |
+| `world-normals` | continuous gradient | normals are not the cause |
+| `uv0`, `uv1` | continuous ramps, no gap or overlap | mapping is not the cause |
+| `occlusion` | uniform (1,1) | no baked occlusion at this altitude |
+| `inputs` | occlusion bit only | no imagery, layers or local surfaces to differ |
+| `lod`, `patch-boundary` | levels 4–6, seams coincide | patch layout is correct |
+| `roughness` | patch-shaped blocks, 0.25 seafloor vs 0.85 land | **per-patch constant roughness** |
+| `metallic` | black | metallic is zero, so only roughness varies |
+| `height`, `land-sea` | a pond field within ±2 m of the datum | genuine near-sea-level lowland, not a renderer defect |
+
+The roughness blocks are the land component of the defect. A controlled A/B —
+`patch_material` rebuilt with a constant `(0.85, 0.0)` — reduces a measured patch
+boundary step from 12.2/255 to 4.1/255 at the same pose, clock and frame count.
+The height/land-sea pond field was checked the other way: the offline
+`terrain_authority_transect` tool reproduces the in-engine authority values
+exactly, and every mesh vertex matches the source to within the 5 m skirt, so
+that pattern is data, not rendering. Disabling the CDLOD morph leaves it
+unchanged, which rules the morph out as well.
+
+The ocean half of the defect is **not** roughness: the same A/B leaves deep-water
+variation unchanged. The sea is drawn by `WaterMaterial`, which these modes do not
+instrument, so a water-side view has to exist before that half can be attributed.
+
 ## Cost
 
 * One `u32` comparison per fragment in production rendering; the diagnostic

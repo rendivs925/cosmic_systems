@@ -401,3 +401,46 @@ Limits, recorded so the next reader does not over-read a capture:
 * There is no terrain-source identity mode, because the fragment shader cannot see
   the terrain authority. `inputs` reports what the material actually binds.
 * Native frame time with a mode enabled is unmeasured (P0-04 remains blocked).
+
+## 2026-11-01 — Attributing the altitude tone blocks (TD-05)
+
+The diagnostic modes were run as a complete matrix at the failing pose
+(`-8.0,139.5,1200000`, 42 s, 200 frames), which is the first time every terrain
+input was visible at the same instant. Three results matter.
+
+**The land blocks are per-patch constant roughness.** `roughness` renders as a
+quilt of patch-shaped blocks because `surface.roughness` is one scalar per patch,
+sampled at the patch centre from `surface_appearance`. At 300 km the same view
+turns the coastline into a patch-sized staircase between 0.25 (shallow seafloor)
+and 0.85 (land). To confirm, `patch_material` was rebuilt with a constant
+`(0.85, 0.0)` — one line, no other change — and the same pose, clock and frame
+count re-captured. A 12.2/255 step across a patch boundary fell to 4.1/255
+(median luminance across the edge: 50.4→62.6 became 50.5→54.6). That is the
+land component of the defect, measured rather than argued.
+
+**The "datum rectangle" is not a defect.** The earlier hypothesis — a rectangular
+region of near-zero elevation data — was wrong. A transect tool
+(`terrain_authority_transect`, committed with this change) samples every
+composition layer of the Earth authority offline and reproduces the in-engine
+values exactly at fixed points (−13.61 m at −6.0,138.0; +7.90 m at −6.0,138.6).
+Every mesh vertex also matches the source to within the 5 m skirt, and forcing
+the CDLOD `morph_factor` to zero leaves the pond field unchanged. The lowland
+around the site genuinely sits within a few metres of the datum with shallow
+depressions; `height` and `land-sea` are reporting it faithfully. Contour
+darkening in the height view exaggerates it, which is why it looked like a
+rectangle rather than an undulating coastal plain.
+
+**The ocean blocks are not roughness.** The constant-roughness A/B leaves
+deep-water large-scale variation unchanged (std 21.10 → 21.05 over 8 bits). The
+sea is `WaterMaterial`, outside the terrain diagnostics. The `height` view does
+show rectangular seafloor regions that the water's 0–60 m depth ramp would turn
+into colour steps, which is the first place a water-side view should look.
+
+Ruled out along the way, all with a frame: normals (continuous), UV0/UV1
+(continuous), baked occlusion (uniform 1,1), per-patch input differences (none at
+this altitude), LOD layout (levels 4–6, seams coincide with the boundary view),
+and the LOD morph (A/B above).
+
+Method note for the next reader: the A/B frames are marked *modified build* in
+`docs/progress/VISUAL_EVIDENCE.md` and the exact one-line change is recorded
+next to them. They are measurements, not shipping behaviour.
