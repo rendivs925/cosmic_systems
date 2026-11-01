@@ -102,8 +102,8 @@ timings. This phase exists because an unverifiable change is not a change.
   `terrain::diagnostics` ECS tests (including one that a full visit of every
   mode leaves simulation time and the terrain authority untouched), seven
   `presentation::diagnostics` tests.
-- **Visual evidence:** 18 frames at the 300 km pose (one per mode), five at
-  1,200 km, six at ground and altitude (3/10/30/70 km). See
+- **Visual evidence:** 18 frames at the 300 km pose (production plus one per
+  mode), six at 1,200 km, seven at ground and altitude (3/10/30/70 km). See
   `VISUAL_EVIDENCE.md`.
 - **Performance:** one `u32` comparison per fragment in production; the
   diagnostic branch is uniform per patch and not taken. Native frame time with

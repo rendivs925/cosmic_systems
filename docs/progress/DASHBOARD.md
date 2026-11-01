@@ -61,7 +61,7 @@ Ordered by visible impact, not by ease.
 | `cargo build --release --features dem` | PASS (1 m 56 s) | `5901c82` — not re-run since |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 modes at 300 km, 5 at 1,200 km, 7 at 3–70 km | `f3b1af6` |
+| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 6 at 1,200 km, 7 at 3–70 km | `f3b1af6` |
 
 ## Visual evidence coverage
 
