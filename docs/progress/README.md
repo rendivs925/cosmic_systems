@@ -35,7 +35,7 @@ is TD-05, which now has the tool it was waiting for.
 
 | defect | state |
 | --- | --- |
-| Rectangular tone blocks at 300–1,200 km | the land half is fixed — per-vertex roughness cut the patch step from 12.3 to 4.2/255. The ocean half is refuted: the water views show every sea term continuous, with no patch edge distinguishable from any other column |
+| Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Land nearly black at 400 km while clouds are white | cause unknown |
 | Cloud edges are cut-outs; one shape per region | planned work |
@@ -81,13 +81,13 @@ sequence), and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**TD-05 — the sea is measured and clean.** Six water views now false-colour the
-depth attribute, the body-colour ramp, the final alpha, the baked landscape
-shadow, the cloud shadow and the sky mirror. At both poses every term is
-continuous and a column-step test cannot tell the patch-edge columns from random
-columns (p ≥ 0.12). The sea's tone is the depth ramp over real bathymetry plus
-cloud shadow, so the ocean half of the defect does not exist. What is left is the
-land residual at 4.2/255.
+**TD-05 — closed on a paired measurement.** Six water views false-colour the
+sea's depth, body colour, alpha, landscape shadow, cloud shadow and mirror; all
+are continuous, so the ocean half of the defect never existed. The land term was
+per-vertex roughness, and `scripts/measure_patch_seam.py` — which fits each side of
+a seam so a real slope cannot pass for a boundary — measures the seam that
+motivated the task at +4.14/255 before and −0.04/255 after, with frame-wide medians
+of +0.25/255 at 300 km and +0.47/255 at 1,200 km, inside the ±1/255 acceptance.
 
 After that: TD-04 imagery feather, then AT-02 altitude and limb (which also fills
 two of the five missing evidence scenes).

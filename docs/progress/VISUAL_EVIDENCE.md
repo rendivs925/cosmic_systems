@@ -135,6 +135,8 @@ without repeating the experiment.
 | `2026-11-01-diag-water-depth-300km.jpg` | `-8.0,139.5,300000` | 200 | `9fee428d49c37716` | water-depth | continuous contours across the shelf |
 | `2026-11-01-diag-water-body-300km.jpg` | same | 200 | `d34f11b1a6e1f4ff` | water-body | continuous shallow shelf; land drawn in production colours |
 | `2026-11-01-diag-water-opacity-300km.jpg` | same | 200 | `7d04e2f9dee60f20` | water-opacity | opaque offshore, ramping only at the shore |
+| `2026-11-01-td05-pair-300km.jpg` | `-8.0,139.5,300000` | 200 | `6f155973acb77dc5` | paired crop, 3× nearest | **left pre-fix, right post-fix**: the pale wedge across the lowland disappears |
+| `2026-11-01-td05-pair-1200km.jpg` | `-8.0,139.5,1200000` | 200 | `79db3fd10a43bc52` | paired crop, 3× nearest | **left pre-fix, right post-fix**: the lighter patch-shaped wedge is gone; seam excess +4.14 → −0.04/255 |
 | `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
 
 ## Negative results worth keeping

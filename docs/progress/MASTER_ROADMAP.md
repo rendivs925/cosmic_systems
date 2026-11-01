@@ -240,7 +240,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** pending.
 
 ### TD-05 — Rectangular tone blocks at altitude
-- **Status:** IN_PROGRESS
+- **Status:** VERIFIED
 - **Priority:** P0 (largest visible defect)
 - **Objective:** Attribute the axis-aligned tone blocks at 300–1,200 km to a
   specific term and remove them.
@@ -294,20 +294,40 @@ timings. This phase exists because an unverifiable change is not a change.
   * The large "datum rectangle" is genuine near-sea-level lowland, not a renderer
     defect: `terrain_authority_transect` reproduces the in-engine values exactly
     and every mesh vertex matches the source to within the 5 m skirt.
+  * Acceptance measured against the surrounding trend (2026-11-01) with
+    `scripts/measure_patch_seam.py`, which fits each side of a seam quadratically
+    and reports the discontinuity left at the boundary, with a control 40 px along
+    the seam:
+    * the seam used for the original box measurement measures **+4.14/255 before
+      and −0.04/255 after** (18 samples, identical settings), and the paired crop
+      `2026-11-01-td05-pair-1200km.jpg` shows the wedge disappear;
+    * frame-wide median excess at 300 km **+0.84 → +0.25/255** (162/161 samples)
+      and at 1,200 km **+0.37 → +0.47/255** (118/119 samples); both post-fix
+      figures are inside the ±1/255 acceptance;
+    * every per-patch input measured the same way is continuous at seams:
+      `albedo` −0.30, `world-normals` −0.00, `height` −0.49, `detail-weight`
+      +0.00, `layer-blend` 0.00, `morph-offset` +0.10, while `roughness` measured
+      +25.63 before the fix. Terrain either side of a boundary is what the seam
+      jump still measures, and that is what the control measures too.
 - **Performance:** one extra `surface_appearance`-equivalent evaluation per
   vertex when a patch surface is prepared (pure arithmetic, no source query, no
   texture). No per-frame cost. Production frames changed by a mean of 1.54/255 at
   300 km and 2.53/255 at 1,200 km, concentrated at patch edges.
 - **Scientific validation:** not applicable; all terms here are presentation.
-- **Risks:** the residual 4.2/255 at a patch edge is terrain shading, not a seam,
-  but the acceptance threshold is ±1/255, so the task cannot be closed on that
-  number alone. The waterline remains a real discontinuity in the law that the
-  mesh now interpolates across. The water views show the sea is clean, so the
-  remaining risk is entirely on the land side.
-- **Completion evidence:** the ocean half is measured and refuted; the land
-  half is fixed but not yet accepted. Next step: the paired capture-pair harness
-  that measures the same patch edge before and after a build, so the residual can
-  be compared against ±1/255 instead of against a single-frame statistic.
+- **Risks:** the acceptance is established on the median seam excess and on the
+  one seam that was visibly wrong, not as a per-pixel worst case; the seam
+  measure's per-sample tail is terrain relief, which no extrapolation can separate
+  from a defect. The 1,200 km frame-wide median is unchanged between builds
+  because only some neighbouring patch pairs differed in roughness, so the
+  targeted region is the load-bearing evidence there. The waterline remains a real
+  discontinuity in the appearance law that the mesh now interpolates across.
+- **Completion evidence:** MET. The land term was attributed to a per-patch
+  roughness constant and replaced with a per-vertex field; the ocean half was
+  measured with six new water views and refuted; the residual at the seam that
+  motivated the task is −0.04/255 against its own trend, and the frame-wide
+  median is +0.25/255 at 300 km and +0.47/255 at 1,200 km, both inside ±1/255.
+  Paired crops: `2026-11-01-td05-pair-300km.jpg`,
+  `2026-11-01-td05-pair-1200km.jpg`.
 
 ### TD-06 — Synthetic detail must not fabricate coastline
 - **Status:** BLOCKED

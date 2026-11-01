@@ -247,6 +247,69 @@ premise: the sea was never carrying a patch-shaped term. What looked like
 rectangles in the water are the shelf break, which is north–south at this
 location and therefore vertical in a nadir frame.
 
+### Measuring the patch boundary against its own trend
+
+The acceptance for the tone-block defect is phrased against the *surrounding
+trend*, and a pair of boxes either side of a boundary cannot answer that: a real
+30 % slope over 8 px is already 2.4/255. `scripts/measure_patch_seam.py` measures
+a **discontinuity** instead:
+
+1. the seam mask comes from the `patch-boundary` frame, so the tool never guesses
+   where a boundary is;
+2. the seam normal is the gradient of a blurred seam mask;
+3. each side is sampled at 3–8 px along the normal and fitted with a quadratic,
+   which absorbs the terrain's own curvature, and the two fits are evaluated at
+   the seam — a continuous field with any slope gives zero;
+4. the control runs the same estimator 40 px along the seam, inside the
+   neighbouring patch interior;
+5. surface class comes from the `land-sea` frame (so shallow water cannot pass
+   for land) and cloud-covered samples are dropped.
+
+The estimator is sensitive enough to see the defect it exists for: at the region
+used for the original 12.3 → 4.2/255 box measurement it reports the pre-fix seam
+at **+4.14/255** over its control and the post-fix seam at **−0.04/255** (18
+samples, identical settings). Frame-wide, with offsets scaled to the seam width
+the cap draws at that altitude:
+
+| frame | samples | seam jump | control | excess (median) |
+| --- | ---: | ---: | ---: | ---: |
+| 300 km, pre-fix | 162 | 5.06 | 3.58 | +0.84 |
+| 300 km, post-fix | 161 | 3.91 | 3.56 | **+0.25** |
+| 1,200 km, pre-fix | 118 | 8.02 | 8.63 | +0.37 |
+| 1,200 km, post-fix | 119 | 8.64 | 8.17 | **+0.47** |
+
+At 300 km the fix shows in the frame-wide statistic too (seam jump 5.06 → 3.91,
+excess +0.84 → +0.25). At 1,200 km the frame-wide median is unchanged, because
+only a minority of neighbouring patch pairs had different roughness there — which
+is exactly why the targeted region is also reported.
+
+Every per-patch input was measured the same way, so the residual can be
+attributed rather than assumed:
+
+| view at 1,200 km | excess (median) |
+| --- | ---: |
+| `albedo` | −0.30 |
+| `world-normals` | −0.00 |
+| `height` | −0.49 |
+| `detail-weight` | +0.00 |
+| `layer-blend` (300 km) | 0.00 |
+| `morph-offset` | +0.10 |
+| `roughness`, **pre-fix** | +25.63 |
+
+So the patch boundary carries no step in albedo, normals, height, detail weight,
+layer blend or morph; the roughness term was the only one, and it is now
+evaluated per vertex. What the seam jump still measures is the terrain either side
+of the boundary, which is what the control also measures.
+
+Limits: the estimator needs a sample whose whole 3–8 px span, and whose control
+40 px along the seam, stay in one surface class and out of the cloud mask, so a
+frame affords a few hundred samples at 300 km and about 120 at 1,200 km. Its
+per-sample tail is not meaningful — a seam sitting on a ridge crest defeats any
+extrapolation — so the median and its control are the reported quantities. The
+seam band is wider in pixels at 300 km than at 1,200 km, so the sample offsets
+have to be scaled with it; a fixed 3–8 px window finds almost no samples at
+300 km.
+
 ## Cost
 
 * One `u32` comparison per fragment in production rendering; the diagnostic
@@ -262,6 +325,11 @@ location and therefore vertical in a nadir frame.
   flashing production colours.
 
 ## Verification
+
+`scripts/measure_patch_seam.py` is the seam harness described above; it is a
+reporting tool and needs no build. Every mode is pinned to its shader constant by
+`diagnostic_mode_codes_match_the_shader_constants`, and
+`each_material_family_receives_only_its_own_codes` pins the family split.
 
 * `terrain_uniform_layout_matches_the_shader_struct` compares every
   `#[uniform(104)]` field, in order, against the WGSL

@@ -550,3 +550,51 @@ Recorded limits:
   task.
 * One of the four 300 km captures exited 134 after writing a valid PNG — the same
   intermittent shutdown fault already recorded, not a new one.
+
+## 2026-11-01 — Measuring a seam against its own trend (TD-05 acceptance)
+
+The last open question for the tone blocks was a number: 4.2/255 at a patch edge
+against a ±1/255 acceptance. That comparison was not sound. The 4.2 came from two
+boxes either side of a boundary, and two boxes can legitimately differ — a real
+30 % slope over 8 px is already 2.4/255, so the measurement could not distinguish
+a seam from terrain.
+
+`scripts/measure_patch_seam.py` measures a **discontinuity** instead. The seam
+mask comes from the `patch-boundary` diagnostic, the normal from the gradient of
+that mask, and each side is sampled at 3–8 px and fitted with a quadratic, whose
+value at the seam is compared with the other side. A continuous field with any
+slope yields zero; a block yields its step. The control runs the same estimator
+40 px along the seam, inside the neighbouring patch, so "surrounding trend" is
+measured rather than assumed. Surface class comes from the `land-sea` frame, which
+is what stops bright shallow water from passing as land.
+
+Results, all with the same settings (quadratic fit, offsets 6–14 px scaled to the
+seam band, control 40 px):
+
+* The seam that motivated the task — the region used for the original box
+  measurement at 1,200 km — measures **+4.14/255 before and −0.04/255 after** on
+  18 paired samples, and the paired crop shows the pale wedge disappear.
+* Frame-wide land seams: 300 km **+0.84 → +0.25/255** (162/161 samples); 1,200 km
+  **+0.37 → +0.47/255** (118/119 samples). Both post-fix medians are inside
+  ±1/255.
+* The same estimator applied to the diagnostic views localises what is left:
+  `albedo` −0.30, `world-normals` −0.00, `height` −0.49, `detail-weight` +0.00,
+  `layer-blend` 0.00, `morph-offset` +0.10 — while `roughness` measured +25.63
+  before the fix. Every per-patch input is continuous at seams, so the residual
+  seam jump is the terrain either side of the boundary, which is what the control
+  measures too.
+
+Recorded limits:
+
+* The estimator needs a sample whose whole span, and whose control 40 px along the
+  seam, stay in one surface class and out of the cloud mask. That leaves about 160
+  samples at 300 km and 120 at 1,200 km, and it cannot judge a land seam at 300 km
+  in a frame where the deck covers most of the ground.
+* The per-sample tail is not meaningful: a seam sitting on a ridge crest defeats
+  any extrapolation. The median and its control are the reported quantities, so
+  the acceptance is established on the median plus the one seam that was visibly
+  wrong — not as a per-pixel worst case.
+* At 1,200 km the frame-wide median is unchanged between builds, because only a
+  minority of neighbouring patch pairs differed in roughness there. The targeted
+  region is the load-bearing evidence at that pose; saying otherwise would be
+  cherry-picking the frame-wide number in the other direction.

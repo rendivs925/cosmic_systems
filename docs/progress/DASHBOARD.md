@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 1 / 9 | 11 % | active | TD-05 attribution needs P0-03; TD-06 blocked on baseline isolation |
+| P1 Data and terrain correctness | 2 / 9 | 22 % | active | TD-06 blocked on baseline isolation |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 0 / 3 | 0 % | planned | depends on P0-03 |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -39,7 +39,7 @@ Ordered by visible impact, not by ease.
 
 | # | defect | task | state | evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | land component fixed: per-vertex roughness took the patch step 12.3 → 4.2/255 (A/B 4.3). The ocean half is **refuted**: with the new water views every sea term is continuous and no patch edge is distinguishable from an arbitrary column (p ≥ 0.12) |
+| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | **VERIFIED** | per-vertex roughness removed the land term; the seam that motivated it now measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km, inside ±1/255. The ocean half was measured with six new water views and **refuted** (no term carries a patch signal, p ≥ 0.12) |
 | 2 | Synthetic detail fabricates lakes on the coastal plain | TD-06 | BLOCKED | visible in `terrain-600m`; guard implemented but inert |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | PLANNED | `300km-papua` |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
@@ -110,10 +110,10 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**TD-05 — the water views exist and refute the ocean half.** Modes 18–23 now
-false-colour the sea's depth, body colour, opacity, shadow and mirror terms. At
-both poses every one is continuous, and a column-step test cannot separate the
-known patch-edge columns from random columns (p ≥ 0.12 in every view). The sea's
-tone is the depth ramp over real bathymetry plus cloud shadow. What remains for
-TD-05 is the land residual: 4.2/255 at a patch edge against a ±1/255 acceptance,
-which needs the paired capture-pair harness before it can be judged.
+**Next task — TD-04, the regional imagery edge.** TD-05 is closed. Modes 18–23
+now false-colour the sea's depth, body colour, opacity, shadow and mirror, and
+`scripts/measure_patch_seam.py` measures a boundary against its own trend instead
+of against a box either side of it. The next visible defect in the same family is
+TD-04: the regional imagery inset is tone-matched but not feathered, so the tile
+edge is still a straight line. It should use the same seam harness for its
+acceptance.
