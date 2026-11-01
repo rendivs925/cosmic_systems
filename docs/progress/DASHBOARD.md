@@ -55,7 +55,7 @@ Ordered by visible impact, not by ease.
 | `cargo fmt --check` | PASS | `d89e7d6` |
 | `cargo check --all-targets --features dem` | PASS | `d89e7d6` |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `d89e7d6` |
-| `cargo test --features dem --lib` | 1118 passed, 0 failed, 2 ignored | `f3b1af6` |
+| `cargo test --features dem --lib` | 1119 passed, 0 failed, 2 ignored | `f3b1af6` |
 | `cargo test --no-default-features --lib` | 1076 passed, 0 failed, 2 ignored | `f3b1af6` |
 | `openspec validate --all --strict` | 42 passed, 0 failed | `d89e7d6` |
 | `cargo build --release --features dem` | PASS (1 m 56 s) | `5901c82` — not re-run since |

@@ -98,8 +98,10 @@ timings. This phase exists because an unverifiable change is not a change.
   `diagnostic_mode_codes_match_the_shader_constants`,
   `diagnostic_input_flags_match_the_shader_bits`,
   `material_carries_the_diagnostic_uniform`,
-  `patch_identity_separates_neighbours_and_is_stable`, six
-  `terrain::diagnostics` ECS tests, seven `presentation::diagnostics` tests.
+  `patch_identity_separates_neighbours_and_is_stable`, seven
+  `terrain::diagnostics` ECS tests (including one that a full visit of every
+  mode leaves simulation time and the terrain authority untouched), seven
+  `presentation::diagnostics` tests.
 - **Visual evidence:** 18 frames at the 300 km pose (one per mode), five at
   1,200 km, six at ground and altitude (3/10/30/70 km). See
   `VISUAL_EVIDENCE.md`.

@@ -97,7 +97,7 @@ two of the five missing evidence scenes).
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1118 passed, 2 ignored
+cargo test --features dem --lib          # 1119 passed, 2 ignored
 cargo test --no-default-features --lib   # 1076 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```

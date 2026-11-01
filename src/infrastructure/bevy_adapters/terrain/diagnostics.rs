@@ -376,6 +376,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_diagnostic_view_never_touches_simulation_or_terrain_authority() {
+        // The diagnostic systems take only the mode resource, the material
+        // assets, visibility and camera presentation components. This test pins
+        // that: a full visit of every mode must leave simulation time and the
+        // terrain authority exactly as they were.
+        use crate::domain::services::simulation_time::SimulationTime;
+        use crate::infrastructure::bevy_adapters::entity_components::PlanetTerrain;
+        use std::sync::Arc;
+
+        let mut app = test_app();
+        app.insert_resource(SimulationTime::default());
+        let terrain = PlanetTerrain::earth();
+        let source: Arc<dyn crate::domain::services::terrain_source::TerrainSource> =
+            terrain.source.clone();
+        let latitude_deg = -8.0;
+        let longitude_deg = 139.5;
+        let height_before = source.height_m(latitude_deg, longitude_deg);
+        let mesh_height_before = source.mesh_height_m(latitude_deg, longitude_deg, 12);
+        let clock_before = {
+            let clock = app.world().resource::<SimulationTime>();
+            (
+                clock.real_time_s,
+                clock.sim_time_s,
+                clock.time_acceleration,
+                clock.paused,
+            )
+        };
+
+        for mode in TerrainDiagnostic::ALL {
+            app.world_mut().resource_mut::<TerrainDiagnosticMode>().mode = mode;
+            app.update();
+        }
+
+        let clock_after = {
+            let clock = app.world().resource::<SimulationTime>();
+            (
+                clock.real_time_s,
+                clock.sim_time_s,
+                clock.time_acceleration,
+                clock.paused,
+            )
+        };
+        assert_eq!(
+            clock_before, clock_after,
+            "a diagnostic view must not advance simulation time"
+        );
+        assert_eq!(source.height_m(latitude_deg, longitude_deg), height_before);
+        assert_eq!(
+            source.mesh_height_m(latitude_deg, longitude_deg, 12),
+            mesh_height_before
+        );
+        assert!(
+            Arc::ptr_eq(&terrain.source, &source),
+            "the diagnostic systems must not replace the terrain authority"
+        );
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn cycling_the_developer_chord_visits_every_mode_and_returns_to_production() {
