@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-01. Last code checkpoint: `d89e7d6`.
+Snapshot: 2026-11-01. Last code checkpoint: `<this checkpoint>`.
 
 ---
 
@@ -27,15 +27,15 @@ and a measurement path that captures frames without a swapchain.
 
 ## What is currently being built?
 
-**Nothing is mid-edit.** The last checkpoint (`d89e7d6`) is committed, pushed and
-green. The next task — P0-03, developer diagnostic render modes — is defined and
-unstarted.
+**Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
+P0-03 (developer diagnostic render modes) is complete and verified; the next task
+is TD-05, which now has the tool it was waiting for.
 
 ## What is broken?
 
 | defect | state |
 | --- | --- |
-| Rectangular albedo blocks at 300–1,200 km | attributed to albedo/geometry, cause not isolated |
+| Rectangular tone blocks at 300–1,200 km | at 1,200 km the base albedo is clean; the block is a rectangular region of the height field at the datum |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Land nearly black at 400 km while clouds are white | cause unknown |
 | Cloud edges are cut-outs; one shape per region | planned work |
@@ -50,13 +50,14 @@ it.
 
 ## What has been verified?
 
-Ten of forty roadmap tasks, each with implementation + tests + a named frame or a
-named measurement:
+Eleven of forty roadmap tasks, each with implementation + tests + a named frame
+or a named measurement:
 
 | task | evidence |
 | --- | --- |
 | P0-01 deterministic capture view | every frame in the registry |
 | P0-02 offscreen capture | produced 9 frames with no display |
+| P0-03 diagnostic render modes | 18 false-colour views at one pose; uniform-layout parity test |
 | TD-01 ocean on the datum | pale shoreline pixels 1.58 % → 0.40 %; tests |
 | LF-01 launch-site footprint | `pad-250m` (disc) vs `pad-110m` (clean) |
 | CL-01 coverage as sky share | coverage invariant; `1200km-90f` |
@@ -80,13 +81,15 @@ sequence), and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**P0-03, diagnostic render modes.** It is unblocked, it is the tool that converts
-the three remaining guesses (albedo blocks, dark land at altitude, material
-stability under grading) into measurements, and its output is verifiable with the
-capture path that already works.
+**TD-05 — the rectangular tone blocks.** The diagnostics have already done their
+job: at 1,200 km the geographic albedo carries no block, while the height view
+shows a rectangular region sitting within ±2 m of the sea datum against a shelf
+tens of metres below it, with straight image-axis edges that cut across a patch.
+The next step is a transect of the terrain authority across that edge, then
+locating the tile that supplies it.
 
-After that: TD-05 attribution, then TD-04 imagery feather, then AT-02 altitude and
-limb (which also fills two of the five missing evidence scenes).
+After that: TD-04 imagery feather, then AT-02 altitude and limb (which also fills
+two of the five missing evidence scenes).
 
 ## How do we know it works?
 
@@ -94,12 +97,13 @@ limb (which also fills two of the five missing evidence scenes).
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1101 passed, 2 ignored at d89e7d6
-cargo test --no-default-features --lib   # 1059 passed, 2 ignored
+cargo test --features dem --lib          # 1118 passed, 2 ignored
+cargo test --no-default-features --lib   # 1076 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
-And for anything visual:
+And for anything visual (or, with `COSMIC_SYSTEMS_DIAGNOSTIC_MODE=<mode>`, for one
+terrain input on its own — see `docs/measurement/terrain_diagnostics.md`):
 
 ```bash
 COSMIC_SYSTEMS_OFFSCREEN_CAPTURE=/tmp/frame.png \

@@ -74,27 +74,46 @@ timings. This phase exists because an unverifiable change is not a change.
   ground level.
 
 ### P0-03 — Developer diagnostic render modes
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P0 (unblocks TD-05, AT-03, TM-01)
-- **Objective:** One toggle per term — height, normal, UV, land/sea, surface
-  class, LOD level, tile identity, no-data, shadow visibility, terrain-source
-  identity — so a defect can be attributed to a term instead of guessed.
+- **Objective:** One toggle per term — albedo, normal, UV0/UV1, height, land/sea,
+  surface class, LOD level, patch boundary, patch identity, input availability,
+  occlusion, roughness, metallic, layer blend, morph offset, detail weight — so a
+  defect can be attributed to a term instead of guessed.
 - **Dependencies:** P0-02.
-- **Subsystems:** terrain material, presentation HUD/input.
-- **Expected files:** `assets/shaders/terrain_surface.wgsl`,
-  `src/infrastructure/bevy_adapters/terrain/render.rs` (uniform + parity test),
-  new `src/presentation/diagnostics.rs`, `input_systems.rs`.
-- **Acceptance:** each mode renders a deterministic false-colour of exactly one
-  input; toggling off restores the normal frame byte-for-byte; modes are off by
-  default and absent from release key bindings.
-- **Tests:** uniform layout parity test (Rust field order == WGSL struct); mode
-  selection table; a capture per mode at the P0-01 pose.
-- **Visual evidence:** one frame per mode at the 300 km pose.
-- **Performance:** one branch on a uniform; measured delta must be < 1 %.
-- **Scientific validation:** none; diagnostics only.
-- **Risks:** a wrong uniform layout silently kills the terrain material (observed
-  once already), so the parity test is mandatory before any frame is trusted.
-- **Completion evidence:** pending.
+- **Subsystems:** terrain material uniform, terrain fragment shader, presentation
+  camera, water/cloud visibility.
+- **Expected files:** `src/presentation/diagnostics.rs` (mode set, parsing,
+  names), `src/infrastructure/bevy_adapters/terrain/diagnostics.rs` (ECS wiring),
+  `src/infrastructure/bevy_adapters/terrain/render.rs` (uniform fields, per-patch
+  inputs, parity tests), `assets/shaders/terrain_surface.wgsl` (modes),
+  `docs/measurement/terrain_diagnostics.md`.
+- **Acceptance:** each mode renders a deterministic false colour of exactly one
+  input; production is the default and is selected by a `u32` of zero; switching
+  writes one uniform per material and recreates no mesh, image, cached patch or
+  material asset; unknown mode values fall back to production with a warning;
+  the release build registers no diagnostic key binding.
+- **Tests:** `terrain_uniform_layout_matches_the_shader_struct` (every
+  `#[uniform(104)]` field, in order, against the WGSL struct),
+  `diagnostic_mode_codes_match_the_shader_constants`,
+  `diagnostic_input_flags_match_the_shader_bits`,
+  `material_carries_the_diagnostic_uniform`,
+  `patch_identity_separates_neighbours_and_is_stable`, six
+  `terrain::diagnostics` ECS tests, seven `presentation::diagnostics` tests.
+- **Visual evidence:** 18 frames at the 300 km pose (one per mode), five at
+  1,200 km, six at ground and altitude (3/10/30/70 km). See
+  `VISUAL_EVIDENCE.md`.
+- **Performance:** one `u32` comparison per fragment in production; the
+  diagnostic branch is uniform per patch and not taken. Native frame time with
+  diagnostics enabled is **unmeasured** (P0-04 is blocked).
+- **Scientific validation:** none; diagnostics only. Every mode reads an input the
+  production shader already uses, and the terrain authority is untouched.
+- **Risks:** a wrong uniform layout silently kills the terrain material, so the
+  parity test is mandatory. Diagnostics cover streamed terrain patches only; the
+  ocean, clouds and the far-field proxy keep their own materials, which is
+  stated in the mode's own documentation rather than hidden.
+- **Completion evidence:** commit `<this checkpoint>`. What the first runs
+  showed is recorded under TD-05.
 
 ### P0-04 — Performance baseline refresh on current commit
 - **Status:** BLOCKED
@@ -201,7 +220,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Priority:** P1
 - **Objective:** Fade the regional inset into the overview across the region edge
   so the last patch boundary stops stepping between 10 m and 2 km imagery.
-- **Dependencies:** P0-03 (verification), TD-03.
+- **Dependencies:** P0-03 (satisfied), TD-03.
 - **Subsystems:** terrain material uniform, imagery manifest regions.
 - **Expected files:** `assets/shaders/terrain_surface.wgsl`,
   `src/infrastructure/bevy_adapters/terrain/render.rs`,
@@ -223,24 +242,40 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Priority:** P0 (largest visible defect)
 - **Objective:** Attribute the axis-aligned tone blocks at 300–1,200 km to a
   specific term and remove them.
-- **Dependencies:** P0-03.
-- **Subsystems:** terrain material, imagery, LOD.
+- **Dependencies:** P0-03 (now satisfied).
+- **Subsystems:** terrain material, imagery, LOD, elevation data, water material.
 - **Expected files:** `assets/shaders/terrain_surface.wgsl`,
-  `src/infrastructure/bevy_adapters/terrain/render.rs`.
+  `src/infrastructure/bevy_adapters/terrain/render.rs`,
+  `src/domain/services/terrain_source/*` or the elevation payload, depending on
+  the outcome.
 - **Acceptance:** at the P0-01 pose no block boundary is visible that does not
   correspond to a real albedo change within ±1/255 of the surrounding trend.
 - **Tests:** a capture-pair comparison harness that reports the maximum
   adjacent-pixel step across patch boundaries.
-- **Visual evidence:** three differentials already recorded — the blocks survive a
-  seven-hour Sun change, 90 vs 400 frames, and appear at 300 km and 1,200 km
-  (`VISUAL_EVIDENCE.md` rows 3–7). They are albedo/geometry, not lighting or
-  streaming, and not the regional imagery (no regional tile resolves at 1,200 km).
+- **Visual evidence:** five differentials. The earlier three — the blocks survive
+  a seven-hour Sun change, 90 vs 400 frames, and appear at 300 km and 1,200 km —
+  came before diagnostics existed. P0-03 added two more at 1,200 km:
+  * `2026-11-01-diag-albedo-1200km.jpg` contains **no rectangular block**, so the
+    geographic base albedo is not the source at that pose.
+  * `2026-11-01-diag-land-sea-1200km.jpg` and `2026-11-01-diag-height-1200km.jpg`
+    show a rectangular region (screen x ≈ 680–780, y ≈ 140–390 at that pose)
+    sitting within ±2 m of the sea-level datum while the surrounding shelf is
+    tens of metres below it. Its edges are straight and image-axis aligned, and
+    `inputs` reports no imagery, layers or local surfaces at that altitude.
+  The leading hypothesis is therefore a **rectangular region of near-zero
+  elevation data**, not a material or shader term: a water cap drawn over a bed
+  recorded as ~0 m instead of ~−50 m is a shallower, brighter rectangle. This is a
+  hypothesis supported by three frames, not a confirmed cause.
 - **Performance:** not applicable until attributed.
 - **Scientific validation:** not applicable yet.
 - **Risks:** attributing it to the wrong term and shipping a cosmetic noise layer
-  over a data bug; the standing rule is that seams are fixed, never hidden.
-- **Completion evidence:** pending. Remaining candidates: layered-vs-fallback
-  ground material, per-patch occlusion map, LOD-dependent texture sampling.
+  over a data bug; the standing rule is that seams are fixed, never hidden. A
+  second contributor is **not diagnosable with the current modes**: at 1,200 km
+  most of the frame is ocean, drawn by `WaterMaterial`, which the terrain
+  diagnostics do not cover. Ocean blocks therefore need a water-side view.
+- **Completion evidence:** pending. Next step: sample the terrain authority along
+  a transect crossing the rectangle's edge and compare it with the surrounding
+  shelf, then locate the tile that supplies it.
 
 ### TD-06 — Synthetic detail must not fabricate coastline
 - **Status:** BLOCKED
@@ -309,7 +344,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Priority:** P2
 - **Objective:** Pin terrain and imagery continuity across cube-face seams and the
   antimeridian.
-- **Dependencies:** P0-03.
+- **Dependencies:** P0-03 (satisfied).
 - **Subsystems:** terrain source, imagery tiles.
 - **Expected files:** `src/domain/services/terrain_source/`,
   `src/domain/services/imagery_tiles.rs`.
@@ -424,7 +459,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Status:** PLANNED
 - **Priority:** P2
 - **Objective:** Give terrain geometry beyond LOD 11 so distant ground is not flat.
-- **Dependencies:** P0-03.
+- **Dependencies:** P0-03 (satisfied).
 - **Subsystems:** terrain source, LOD, shader.
 - **Expected files:** `terrain_source/procedural.rs`, `layered.rs`,
   `terrain/render.rs`, `assets/shaders/terrain_surface.wgsl`.
@@ -462,7 +497,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Priority:** P2
 - **Objective:** Establish where vegetation should exist and whether the current
   density signal produces it.
-- **Dependencies:** P0-03.
+- **Dependencies:** P0-03 (satisfied).
 - **Subsystems:** vegetation placement, land cover.
 - **Expected files:** `src/domain/services/vegetation.rs`,
   `terrain/surface/scatter.rs`.
@@ -665,7 +700,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Priority:** P2
 - **Objective:** Explain why land reads nearly black at 400 km while the deck is
   white, and fix whichever term is wrong.
-- **Dependencies:** P0-03.
+- **Dependencies:** P0-03 (satisfied).
 - **Subsystems:** terrain albedo, lighting, atmosphere.
 - **Expected files:** `assets/shaders/terrain_surface.wgsl`,
   `rendering/sky.rs`.

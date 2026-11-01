@@ -17,10 +17,11 @@ use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseBinding;
 use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
+use crate::infrastructure::bevy_adapters::terrain::diagnostics::TerrainDiagnosticMode;
 use crate::infrastructure::bevy_adapters::terrain::mips::{mip_chain_rgba8, MipFilter};
 use crate::infrastructure::bevy_adapters::terrain::render::{
-    body_texture_anchor, build_terrain_material, TerrainMaterial, TerrainOcclusionConfig,
-    TerrainPatchRenderState,
+    body_texture_anchor, build_terrain_material, TerrainDiagnosticUniform, TerrainMaterial,
+    TerrainOcclusionConfig, TerrainPatchRenderState,
 };
 use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
 use crate::infrastructure::bevy_adapters::terrain::surface::LAYER_HEIGHT_CONTRAST;
@@ -278,6 +279,7 @@ pub(crate) fn apply_terrain_imagery(
     planet_query: Query<&PlanetComponent>,
     cloud_noise: Res<CloudNoiseBinding>,
     cloud_shadow: Res<CloudShadow>,
+    diagnostics: Res<TerrainDiagnosticMode>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut query: Query<(Entity, &mut TerrainPatchRenderState)>,
     mut commands: Commands,
@@ -367,6 +369,11 @@ pub(crate) fn apply_terrain_imagery(
             inertial_to_body,
             &cloud_noise,
             *cloud_shadow,
+            // Keep the patch's diagnostic inputs; only the mode is live state.
+            TerrainDiagnosticUniform {
+                mode: diagnostics.mode.code(),
+                ..state.diagnostic
+            },
         );
         let new_handle = materials.add(material);
         // Dropping the previous handle releases its material asset when nothing
@@ -610,6 +617,7 @@ mod tests {
             .insert_resource(TerrainOcclusionConfig::default())
             .init_resource::<CloudNoiseBinding>()
             .init_resource::<CloudShadow>()
+            .init_resource::<TerrainDiagnosticMode>()
             .insert_resource(Assets::<TerrainMaterial>::default())
             .add_systems(Update, apply_terrain_imagery);
 
@@ -632,6 +640,7 @@ mod tests {
                 detail_scale: 0.0,
                 local_surface_handles: None,
                 layer: Default::default(),
+                diagnostic: TerrainDiagnosticUniform::default(),
                 vegetation_mesh_handle: None,
                 water_mesh_handle: None,
                 water_material_handle: None,

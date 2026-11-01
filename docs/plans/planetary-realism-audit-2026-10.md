@@ -340,3 +340,64 @@ work around it.
    water polygons at 3 km (defect 1's remaining data limit).
 7. Performance measurement pass, which the brief requires and which has not been
    run against this baseline.
+
+## 2026-11-01 — Diagnostic render modes (P0-03)
+
+The audit above listed "diagnose the 1200 km blocks with the diagnostic modes" as
+the next step, then later still put "diagnostic modes" in the queue. They now
+exist: seventeen false-colour views, one per terrain input, selected by
+`COSMIC_SYSTEMS_DIAGNOSTIC_MODE` or `Ctrl+U`/`Ctrl+I` in debug builds. Details and
+the linear-to-byte encoding are in `docs/measurement/terrain_diagnostics.md`.
+
+Design decisions worth recording:
+
+* The mode is one `u32` in the **existing** terrain material uniform, and the
+  per-patch inputs ride in the same uniform, so switching writes one value per
+  material. Nothing is rebuilt — a test asserts the material asset id survives
+  every mode change and that no second material appears.
+* The diagnostic branch sits at the end of the fragment, after every material
+  input is resolved, and returns before lighting. That makes each view show the
+  value production actually used instead of a re-derived approximation, at the
+  cost of paying for the PBR work in a diagnostic frame. That trade is deliberate:
+  divergence between "what I measure" and "what I render" is the failure mode this
+  tool exists to prevent.
+* Water caps and the cloud deck are hidden while a mode is active (an
+  opt-in marker on their spawn sites). A cap covers exactly the submerged terrain
+  the land/sea view classifies; a deck covers continents at altitude.
+* Camera tonemapping and bloom are saved, bypassed and restored, so the PNG holds
+  the linear value encoded as sRGB rather than a display transform.
+* The height view is a square-root ramp about the datum rather than a linear
+  planetary ramp: on a 5,000 m linear span one 8-bit step is about 5 m, which
+  cannot show the seam steps the mode exists to find.
+* An unknown mode value renders production and logs the accepted values. A typo
+  must not cost a capture run, and rendering diagnostic colours by accident would
+  be worse.
+
+First findings, recorded as observations rather than conclusions:
+
+* At 300 km and 1,200 km, `inputs` reports **no imagery, no layer weights and no
+  local surfaces** on any visible patch, and `occlusion` is neutral (1,1). The
+  layered-material and occlusion-map hypotheses for the tone blocks are therefore
+  ruled out at those altitudes, and `surface-class` is honestly magenta.
+* At 1,200 km the `albedo` view carries **no rectangular block**, so the block is
+  not in the sampled geographic albedo.
+* At the same pose, `land-sea` and `height` show a rectangular region sitting
+  within ±2 m of the datum while the surrounding shelf is tens of metres below
+  it. `patch-identity` shows the rectangle cuts across a patch, so it is a data
+  region bound, not a patch edge. Leading hypothesis: a rectangular area of
+  near-zero elevation data, which a water cap then draws as a shallow, brighter
+  rectangle.
+* This does **not** cover the ocean blocks: at 1,200 km most of the frame is the
+  water cap, drawn by `WaterMaterial`, which the terrain diagnostics do not
+  instrument. A water-side view is needed before the ocean tone blocks can be
+  attributed.
+
+Limits, recorded so the next reader does not over-read a capture:
+
+* Diagnostics cover streamed terrain patches only. The far-field planet proxy,
+  ocean, clouds, vegetation, rock shells and rivers keep their own materials; a
+  surface in production colours inside a diagnostic frame is a surface that is not
+  streamed terrain, which is itself useful information.
+* There is no terrain-source identity mode, because the fragment shader cannot see
+  the terrain authority. `inputs` reports what the material actually binds.
+* Native frame time with a mode enabled is unmeasured (P0-04 remains blocked).

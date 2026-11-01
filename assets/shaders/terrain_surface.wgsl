@@ -114,6 +114,21 @@ struct TerrainSurfaceExtension {
     // Low cloud deck's density field, Sun, and body rotation, for the
     // cloud-shadow march. A zero bottom radius means no deck.
     cloud: CloudShadow,
+    // Developer diagnostic mode. Zero is production rendering; any other value
+    // makes the fragment return a false colour of exactly one input. Uniform
+    // per patch, so the diagnostic branch is uniform control flow and the
+    // production path costs one comparison.
+    diagnostic_mode: u32,
+    // This patch's LOD level, for the level view and for reading a capture.
+    diagnostic_patch_level: u32,
+    // Stable hash of the patch's face, level and tile coordinates.
+    diagnostic_patch_identity: u32,
+    // Bitfield of the per-patch material inputs that exist. Bits are defined by
+    // `PatchInputFlags` in terrain/render.rs and repeated in the shader below.
+    diagnostic_patch_flags: u32,
+    // Radius of the sea-level datum at the patch centre, in metres from the
+    // planet centre. Used by the height and land/sea views only.
+    diagnostic_datum_radius_m: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var terrain_local_albedo: texture_2d<f32>;
@@ -374,6 +389,263 @@ fn sample_layered_triplanar(
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// Developer diagnostic render modes.
+//
+// Each mode returns a deterministic false colour of exactly one authoritative
+// input. Codes must match `TerrainDiagnostic` in src/presentation/diagnostics.rs;
+// a test in terrain/render.rs pins the two together. The modes are presentation
+// only: nothing here can change height, collision, material inputs, or any
+// simulation state.
+//
+// Values are written as linear radiance. Rocket mode renders an HDR view with a
+// filmic display transform and bloom, so while a diagnostic mode is active the
+// camera is switched to `Tonemapping::None` with bloom muted, and the previous
+// values are restored on return. With that bypass, the PNG holds the linear
+// value encoded as sRGB: `linear = srgb_to_linear(byte / 255)`.
+// ---------------------------------------------------------------------------
+const DIAG_NORMAL: u32 = 0u;
+const DIAG_ALBEDO: u32 = 1u;
+const DIAG_WORLD_NORMALS: u32 = 2u;
+const DIAG_UV0: u32 = 3u;
+const DIAG_UV1: u32 = 4u;
+const DIAG_HEIGHT: u32 = 5u;
+const DIAG_LAND_SEA: u32 = 6u;
+const DIAG_SURFACE_CLASS: u32 = 7u;
+const DIAG_LOD: u32 = 8u;
+const DIAG_PATCH_BOUNDARY: u32 = 9u;
+const DIAG_PATCH_IDENTITY: u32 = 10u;
+const DIAG_INPUTS: u32 = 11u;
+const DIAG_OCCLUSION: u32 = 12u;
+const DIAG_ROUGHNESS: u32 = 13u;
+const DIAG_METALLIC: u32 = 14u;
+const DIAG_LAYER_BLEND: u32 = 15u;
+const DIAG_MORPH_OFFSET: u32 = 16u;
+const DIAG_DETAIL_WEIGHT: u32 = 17u;
+
+/// Height view: a symmetric square-root ramp centred on the sea-level datum.
+///
+/// A linear ramp over a planetary range makes a metre-scale seam step
+/// unmeasurable — one pixel of 8-bit sRGB is about 5 m at a 5,000 m span. The
+/// square root keeps the whole range visible while giving the coastal band the
+/// resolution defect work actually needs: 10 m is about 13/255 away from 0,
+/// against 0.5/255 on a linear ramp.
+/// `t = 0.5 + 0.5 * sign(h) * sqrt(min(|h|, HEIGHT_LIMIT) / HEIGHT_LIMIT)`.
+const DIAG_HEIGHT_LIMIT_M: f32 = 2000.0;
+/// Contour interval of the height view, and how much a contour darkens it.
+const DIAG_HEIGHT_CONTOUR_M: f32 = 100.0;
+const DIAG_CONTOUR_DARKEN: f32 = 0.75;
+/// Morph-offset view range, metres. The displacement is the difference between
+/// this patch's surface and its parent's, so both signs occur.
+const DIAG_MORPH_MIN_M: f32 = -100.0;
+const DIAG_MORPH_MAX_M: f32 = 100.0;
+/// Half-width of the patch-U offset drawn as a boundary line.
+const DIAG_BOUNDARY_HALF_WIDTH: f32 = 0.0035;
+/// Input-availability bits, repeated from `PatchInputFlags` in terrain/render.rs.
+const DIAG_INPUT_LOCAL_SURFACES: u32 = 1u;
+const DIAG_INPUT_LAYER_WEIGHTS: u32 = 2u;
+const DIAG_INPUT_IMAGERY: u32 = 4u;
+const DIAG_INPUT_OCCLUSION: u32 = 8u;
+
+fn diag_patch_edge(uv: vec2<f32>) -> f32 {
+    return min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+}
+
+/// One while the fragment is on a patch seam. Derived from the patch-local UV,
+/// so it follows the rendered patch boundary rather than a nominal grid.
+fn diag_boundary(uv: vec2<f32>) -> f32 {
+    return select(0.0, 1.0, diag_patch_edge(uv) < DIAG_BOUNDARY_HALF_WIDTH);
+}
+
+/// Grid overlay for the UV views: dark lines every 1/divisions.
+fn diag_uv_grid(uv: vec2<f32>, divisions: f32) -> f32 {
+    let cell = abs(fract(uv * divisions) - 0.5);
+    return select(1.0, 0.35, min(cell.x, cell.y) > 0.46);
+}
+
+/// Hue ramp for the LOD view: a full turn every 12 levels, held saturation and
+/// value so only the hue carries the level.
+fn diag_hue(t: f32) -> vec3<f32> {
+    let h = fract(t) * 6.0;
+    let x = 1.0 - abs(fract(h) * 2.0 - 1.0);
+    let sector = u32(floor(h)) % 6u;
+    if sector == 0u { return vec3<f32>(1.0, x, 0.0); }
+    if sector == 1u { return vec3<f32>(x, 1.0, 0.0); }
+    if sector == 2u { return vec3<f32>(0.0, 1.0, x); }
+    if sector == 3u { return vec3<f32>(0.0, x, 1.0); }
+    if sector == 4u { return vec3<f32>(x, 0.0, 1.0); }
+    return vec3<f32>(1.0, 0.0, x);
+}
+
+/// Ground-layer palette for the surface-class view. Index order matches the
+/// terrain layer catalog used by `sample_layers`.
+fn diag_class_colour(index: u32) -> vec3<f32> {
+    if index == 0u { return vec3<f32>(0.10, 0.55, 0.10); }  // grass
+    if index == 1u { return vec3<f32>(0.45, 0.28, 0.12); }  // soil
+    if index == 2u { return vec3<f32>(0.55, 0.55, 0.58); }  // rock
+    if index == 3u { return vec3<f32>(0.90, 0.80, 0.35); }  // sand
+    if index == 4u { return vec3<f32>(0.95, 0.97, 1.00); }  // snow
+    if index == 5u { return vec3<f32>(0.30, 0.30, 0.32); }  // gravel
+    return vec3<f32>(0.22, 0.14, 0.10);                     // mud
+}
+
+/// Index of the largest class weight, used by the surface-class view. The two
+/// splats are the same texels the layered material blends.
+fn diag_dominant_layer(weights_0: vec4<f32>, weights_1: vec4<f32>) -> i32 {
+    let weights = array<f32, LAYER_COUNT>(
+        weights_0.r,
+        weights_0.g,
+        weights_0.b,
+        weights_0.a,
+        weights_1.r,
+        weights_1.g,
+        weights_1.b,
+    );
+    var best = 0u;
+    var best_weight = weights[0];
+    for (var i = 1u; i < LAYER_COUNT; i = i + 1u) {
+        if weights[i] > best_weight {
+            best_weight = weights[i];
+            best = i;
+        }
+    }
+    return i32(best);
+}
+
+/// Boundaries darken a view slightly instead of being invisible; the factor is
+/// shared so every overlaid view reads the seam the same way.
+fn boundary_gain(boundary: f32) -> f32 {
+    return 1.0 - 0.6 * boundary;
+}
+
+/// The false colour of one diagnostic mode.
+///
+/// `dominant_layer` is the index of the largest weight-map channel, or -1 when
+/// the patch has no classification data at all: those pixels are drawn magenta,
+/// because "no data" must never look like a classification result.
+fn terrain_diagnostic_colour(
+    mode: u32,
+    uv0: vec2<f32>,
+    uv1: vec2<f32>,
+    geometric_normal: vec3<f32>,
+    height_m: f32,
+    morph_offset_m: f32,
+    geographic_albedo: vec3<f32>,
+    occlusion: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    layer_blend: f32,
+    dominant_layer: i32,
+    detail_weight: f32,
+) -> vec3<f32> {
+    let boundary = diag_boundary(uv1);
+    let no_data = vec3<f32>(1.0, 0.0, 1.0);
+
+    if mode == DIAG_ALBEDO {
+        return geographic_albedo;
+    }
+    if mode == DIAG_WORLD_NORMALS {
+        return normalize(geometric_normal) * 0.5 + vec3<f32>(0.5);
+    }
+    if mode == DIAG_UV0 {
+        // Geographic coordinates span the whole sphere, so the ramp is faint by
+        // design and the grid carries the readable signal.
+        return vec3<f32>(uv0, 0.25) * diag_uv_grid(uv0, 16.0) * boundary_gain(boundary);
+    }
+    if mode == DIAG_UV1 {
+        return vec3<f32>(uv1, 0.25) * diag_uv_grid(uv1, 8.0) * boundary_gain(boundary);
+    }
+    if mode == DIAG_HEIGHT {
+        // Symmetric square-root ramp about the datum; see DIAG_HEIGHT_LIMIT_M.
+        let magnitude = min(abs(height_m), DIAG_HEIGHT_LIMIT_M) / DIAG_HEIGHT_LIMIT_M;
+        let t = 0.5 + 0.5 * sign(height_m) * sqrt(magnitude);
+        // Contours mark 100 m intervals so slope and terracing are legible in a
+        // still frame without changing the plotted value away from a contour.
+        let contour_phase = fract(height_m / DIAG_HEIGHT_CONTOUR_M);
+        let on_contour = contour_phase < 0.08;
+        let shade = select(1.0, DIAG_CONTOUR_DARKEN, on_contour);
+        return vec3<f32>(t * shade);
+    }
+    if mode == DIAG_LAND_SEA {
+        // The datum band is drawn white rather than being folded into one of the
+        // two classes, so the coastline is where the classification changes.
+        if abs(height_m) < 2.0 {
+            return vec3<f32>(1.0);
+        }
+        if height_m < 0.0 {
+            return vec3<f32>(0.05, 0.20, 0.85);
+        }
+        return vec3<f32>(0.15, 0.70, 0.20);
+    }
+    if mode == DIAG_SURFACE_CLASS {
+        if dominant_layer < 0 {
+            return no_data;
+        }
+        return diag_class_colour(u32(dominant_layer)) * boundary_gain(boundary);
+    }
+    if mode == DIAG_LOD {
+        let level = terrain_surface.diagnostic_patch_level;
+        let hue = diag_hue(f32(level) * 0.083);
+        // Darken by level within the turn so neighbouring levels stay separable
+        // even when the hue ramp wraps.
+        let shade = 0.55 + 0.45 * fract(f32(level) * 0.083);
+        return hue * shade * boundary_gain(boundary);
+    }
+    if mode == DIAG_PATCH_BOUNDARY {
+        return vec3<f32>(0.25) + vec3<f32>(0.75) * boundary;
+    }
+    if mode == DIAG_PATCH_IDENTITY {
+        let id = terrain_surface.diagnostic_patch_identity;
+        let colour = vec3<f32>(
+            f32((id >> 16u) & 255u),
+            f32((id >> 8u) & 255u),
+            f32(id & 255u),
+        ) / 255.0;
+        // A fixed floor keeps every patch visible; the seam stays black so the
+        // patch extent is readable without a second overlay.
+        return (colour * 0.85 + vec3<f32>(0.08)) * (1.0 - boundary);
+    }
+    if mode == DIAG_INPUTS {
+        let flags = terrain_surface.diagnostic_patch_flags;
+        var colour = vec3<f32>(0.06);
+        if (flags & DIAG_INPUT_LOCAL_SURFACES) != 0u { colour.r += 0.9; }
+        if (flags & DIAG_INPUT_LAYER_WEIGHTS) != 0u { colour.g += 0.9; }
+        if (flags & DIAG_INPUT_IMAGERY) != 0u { colour.b += 0.9; }
+        if (flags & DIAG_INPUT_OCCLUSION) != 0u { colour += vec3<f32>(0.35); }
+        return colour * boundary_gain(boundary);
+    }
+    if mode == DIAG_OCCLUSION {
+        // Red is the baked self-shadow visibility toward the Sun, green the baked
+        // sky visibility. Blue is unused by the bake, so it marks the patch edge.
+        return vec3<f32>(occlusion.r, occlusion.g, boundary);
+    }
+    if mode == DIAG_ROUGHNESS {
+        return vec3<f32>(roughness) * boundary_gain(boundary);
+    }
+    if mode == DIAG_METALLIC {
+        return vec3<f32>(metallic) * boundary_gain(boundary);
+    }
+    if mode == DIAG_LAYER_BLEND {
+        // Magenta marks the single-layer fallback, so one look separates the
+        // patches that take the layered path from those that do not.
+        return mix(no_data, vec3<f32>(0.15, 0.85, 0.95), step(0.5, layer_blend));
+    }
+    if mode == DIAG_MORPH_OFFSET {
+        let t = clamp(
+            (morph_offset_m - DIAG_MORPH_MIN_M) / (DIAG_MORPH_MAX_M - DIAG_MORPH_MIN_M),
+            0.0,
+            1.0,
+        );
+        // Zero displacement is mid grey, so an unsupported morph (root patches)
+        // reads as its own value instead of an extreme.
+        return vec3<f32>(t);
+    }
+    if mode == DIAG_DETAIL_WEIGHT {
+        return vec3<f32>(clamp(detail_weight, 0.0, 1.0)) * boundary_gain(boundary);
+    }
+    return no_data;
+}
+
 // Terrain vertex stage. Mirrors Bevy's default mesh vertex path for the
 // attributes terrain actually carries, and adds continuous level-of-detail
 // morphing: each vertex stores its offset to the coarser parent surface in the
@@ -436,6 +708,10 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
+    // The normal diagnostic shows the geometric surface. `pbr_input.N` is
+    // perturbed below by the detail, layer and micro normal maps, so it must be
+    // captured here or the view would show the shading normal instead.
+    let geometric_normal = pbr_input.N;
     // Baked landscape occlusion, sampled with the patch-local UV: red is the
     // self-shadow visibility toward the shared ephemeris Sun, green is the
     // sky/ambient visibility. The terms are interpolated from the per-patch
@@ -575,6 +851,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var layered_roughness = 0.0;
     var layered_normal_ts = vec3<f32>(0.0, 0.0, 1.0);
     let layer_fade = terrain_surface.layer_blend_weight * detail_fade;
+    // Raw class weights, hoisted so the surface-class and layer-blend
+    // diagnostics read exactly the texels the material reads. They keep their
+    // neutral fallback (pure grass) where no weight map exists, which the
+    // diagnostics turn into "no data" rather than a confident classification.
+    var class_weights_0 = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    var class_weights_1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if terrain_surface.layer_blend_weight > 0.0 {
         let splat0 = textureSample(
             terrain_layer_weights,
@@ -588,6 +870,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             in.uv_b,
             1,
         );
+        class_weights_0 = splat0;
+        class_weights_1 = splat1;
         let weights = array<f32, LAYER_COUNT>(
             splat0.r,
             splat0.g,
@@ -691,6 +975,49 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 + bitangent * (near_normal.y * near_strength),
         );
         pbr_input.N = normalize(mix(pbr_input.N, with_micro, detail_weight));
+    }
+    // Developer diagnostic rendering. Uniform per patch, so this is one
+    // comparison in production and a uniform branch otherwise; it runs after
+    // every material input is resolved so each view shows the value the
+    // production path actually used. The early return deliberately bypasses
+    // lighting, occlusion and post-processing: a diagnostic frame must not be
+    // shaded by the terms it is meant to reveal.
+    if terrain_surface.diagnostic_mode != DIAG_NORMAL {
+        var morph_offset_m = 0.0;
+#ifdef VERTEX_COLORS
+        morph_offset_m = in.color.r;
+#endif
+        // Sea-level datum radius is supplied per patch from the terrain
+        // authority's own sea level at the patch centre, so the height and
+        // land/sea views use the same datum the water cap is built from.
+        let diagnostic_height_m = length(body_position)
+            - terrain_surface.diagnostic_datum_radius_m;
+        let dominant_layer = select(
+            diag_dominant_layer(class_weights_0, class_weights_1),
+            -1,
+            terrain_surface.layer_blend_weight <= 0.0,
+        );
+        let diagnostic = terrain_diagnostic_colour(
+            terrain_surface.diagnostic_mode,
+            in.uv,
+            in.uv_b,
+            geometric_normal,
+            diagnostic_height_m,
+            morph_offset_m,
+            base_albedo,
+            occlusion.rgb,
+            pbr_input.material.perceptual_roughness,
+            pbr_input.material.metallic,
+            layer_fade,
+            dominant_layer,
+            detail_weight,
+        );
+        var diagnostic_out: FragmentOutput;
+        diagnostic_out.color = vec4<f32>(
+            clamp(diagnostic, vec3<f32>(0.0), vec3<f32>(1.0)),
+            1.0,
+        );
+        return diagnostic_out;
     }
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material,

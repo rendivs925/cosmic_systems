@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-01.
-Last code checkpoint: `d89e7d6` (2026-10-31).
+Last code checkpoint: `<this checkpoint>` (2026-11-01).
 This table describes the 40 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,18 +11,18 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 10 | 25 % |
+| VERIFIED | 11 | 27.5 % |
 | IMPLEMENTED (not verified) | 4 | 10 % |
 | IN_PROGRESS | 1 | 2.5 % |
 | BLOCKED | 3 | 7.5 % |
-| PLANNED | 22 | 55 % |
+| PLANNED | 21 | 52.5 % |
 | **total** | **40** | 100 % |
 
 ## Phase completion
 
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
-| P0 Measurement foundations | 2 / 4 | 50 % | active | P0-03 diagnostics not built; P0-04 blocked by presentation |
+| P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
 | P1 Data and terrain correctness | 1 / 9 | 11 % | active | TD-05 attribution needs P0-03; TD-06 blocked on baseline isolation |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 0 / 3 | 0 % | planned | depends on P0-03 |
@@ -39,7 +39,7 @@ Ordered by visible impact, not by ease.
 
 | # | defect | task | state | evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Rectangular albedo blocks at 300–1,200 km | TD-05 | IN_PROGRESS | three differentials rule out lighting, streaming and regional imagery |
+| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | five differentials now; at 1,200 km the base albedo is clean and the block is a datum-level rectangle in the height field |
 | 2 | Synthetic detail fabricates lakes on the coastal plain | TD-06 | BLOCKED | visible in `terrain-600m`; guard implemented but inert |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | PLANNED | `300km-papua` |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
@@ -55,12 +55,13 @@ Ordered by visible impact, not by ease.
 | `cargo fmt --check` | PASS | `d89e7d6` |
 | `cargo check --all-targets --features dem` | PASS | `d89e7d6` |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `d89e7d6` |
-| `cargo test --features dem --lib` | 1101 passed, 0 failed, 2 ignored | `d89e7d6` |
-| `cargo test --no-default-features --lib` | 1059 passed, 0 failed, 2 ignored | `d89e7d6` |
+| `cargo test --features dem --lib` | 1118 passed, 0 failed, 2 ignored | `<this checkpoint>` |
+| `cargo test --no-default-features --lib` | 1076 passed, 0 failed, 2 ignored | `<this checkpoint>` |
 | `openspec validate --all --strict` | 42 passed, 0 failed | `d89e7d6` |
 | `cargo build --release --features dem` | PASS (1 m 56 s) | `5901c82` — not re-run since |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
+| diagnostic capture matrix | 18 modes at 300 km, 5 at 1,200 km, 7 at 3–70 km | `<this checkpoint>` |
 
 ## Visual evidence coverage
 
@@ -107,6 +108,9 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**P0-03 — developer diagnostic render modes.** It is the only unblocked task that
-unblocks three others (TD-05, AT-03, TM-01) and it can be verified with the
-offscreen path that already works.
+**TD-05 — attribute and remove the rectangular tone blocks.** P0-03 is now
+verified and has already narrowed the defect: at 1,200 km the geographic albedo
+carries no block, and the block that *is* there is a rectangular region of the
+height field sitting within ±2 m of the sea-level datum while the surrounding
+shelf is tens of metres below it. The next step is a terrain-authority transect
+across that rectangle's edge, then locating the tile that supplies it.

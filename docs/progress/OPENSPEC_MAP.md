@@ -13,7 +13,7 @@ over with a new duplicate spec.
 | --- | --- | --- | --- |
 | P0-01 capture view | — | — | measurement facility, deliberately outside the requirement set |
 | P0-02 offscreen capture | — | — | measurement facility; documented in `docs/measurement/offscreen_capture.md` |
-| P0-03 diagnostic modes | — | — | **gap**: no requirement for developer diagnostics |
+| P0-03 diagnostic modes | — | — | **gap**: no requirement for developer diagnostics; behaviour is instead pinned by the uniform-layout parity test and `docs/measurement/terrain_diagnostics.md` |
 | P0-04 performance refresh | `scientific-validation` | — | evidence obligation only |
 | TD-01 ocean datum | `planetary-water` | — | |
 | TD-02 site grading | `terrain-source`, `launch-site-presentation` | — | grading lives in the terrain authority, not the presentation spec |

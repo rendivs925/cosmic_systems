@@ -1,4 +1,5 @@
 // Presentation layer: UI, rendering
+pub mod diagnostics;
 pub mod education_data;
 pub mod education_panel;
 pub mod education_state;

@@ -13,11 +13,14 @@ COSMIC_SYSTEMS_OFFSCREEN_CAPTURE=/tmp/frame.png \
 COSMIC_SYSTEMS_OFFSCREEN_CAPTURE_FRAMES=<frames> \
 COSMIC_SYSTEMS_CAPTURE_POSE="<lat>,<lon>,<alt_m>" \
 COSMIC_SYSTEMS_CAPTURE_TIME=<seconds> \
+[COSMIC_SYSTEMS_DIAGNOSTIC_MODE=<mode>] \
   ./target/debug/cosmic_systems rocket --site papua
 ```
 
 The offscreen path does not draw the HUD, so HUD text is not part of any
-measurement.
+measurement. Diagnostic rows add `COSMIC_SYSTEMS_DIAGNOSTIC_MODE`; the mode's
+values and its linear-to-byte encoding are in
+`docs/measurement/terrain_diagnostics.md`.
 
 ## Required scene matrix
 
@@ -26,17 +29,19 @@ measurement.
 | 1 | prelaunch | PARTIAL | `pad-110m-footprint` | pad and tower, no HUD, chase angle only |
 | 2 | launch site | CURRENT | `pad-110m-footprint` | shows the pad flush after grading |
 | 3 | terrain close-up | CURRENT | `terrain-600m` | 600 m nadir; no geometric relief visible |
-| 4 | coastline | MISSING | `coast-40km-attempt` | two attempts (7 km, 40 km) rendered a featureless field; cause unknown |
-| 5 | clouds | CURRENT | `1200km-90f`, `300km-papua` | deck, edges and shadows visible |
+| 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
+| 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | MISSING | — | no altitude sequence or limb capture yet |
 | 7 | vegetation | PARTIAL | `terrain-600m` | trees read as isolated specks only |
 | 8 | rocket ascent | MISSING | — | no offscreen path for firing the vehicle yet |
-| 9 | high altitude | CURRENT | `300km-papua` | 300 km nadir |
-| 10 | orbit | MISSING | — | 300 km is the highest captured |
+| 9 | high altitude | CURRENT | `300km-papua`, `production-1200km` | 300 km and 1,200 km nadir |
+| 10 | orbit | MISSING | — | 1,200 km is the highest captured |
 
 Five of ten required scenes have no usable frame. That is the point of the
 matrix: it is the most honest measure of how much of the visual programme is
-actually evidenced.
+actually evidenced. The diagnostic views added below do not fill these scenes —
+they are false colours, not production frames — but they do make two of the
+missing ones explainable.
 
 ## Registry
 
@@ -52,17 +57,71 @@ actually evidenced.
 | `2026-11-01-terrain-600m.jpg` | `d89e7d6` | `-8.0,139.5,600` | 42 s | 220 | `3c7b470c5d3bceec` | coastal plain, water bodies, tree specks | relief and canopy visible (failing) |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
+### Diagnostic render modes (`P0-03`, commit `<this checkpoint>`)
+
+All rows are 1,280×720 offscreen captures with `COSMIC_SYSTEMS_DIAGNOSTIC_MODE`
+set, the same pose and clock as the frame beside them, and camera tonemapping
+and bloom bypassed. Read them as linear values: `linear = srgb_to_linear(byte /
+255)`. Values are documented in `docs/measurement/terrain_diagnostics.md`.
+
+| file | pose | frames | sha256 (first 16) | mode | pass criterion |
+| --- | --- | ---: | --- | --- | --- |
+| `2026-11-01-diag-normal-300km.jpg` | `-8.0,139.5,300000` | 200 | `f7b56bc1c5c6df39` | normal | production rendering; mean abs diff 0.92/255 against `2026-10-31-300km-papua.jpg` |
+| `2026-11-01-diag-albedo-300km.jpg` | same | 200 | `ae7a63be01004fba` | albedo | continuous coastline; no patch-shaped albedo seam |
+| `2026-11-01-diag-world-normals-300km.jpg` | same | 200 | `c25807da2abc57b2` | world normals | smooth gradient: R 0.591–0.651 linear, no discontinuity |
+| `2026-11-01-diag-uv0-300km.jpg` | same | 200 | `536fd4e7d3cd0ab5` | uv0 | single continuous ramps field; grid unbroken |
+| `2026-11-01-diag-uv1-300km.jpg` | same | 200 | `7cdb32d525925dec` | uv1 | per-patch ramps tile with no gap or overlap |
+| `2026-11-01-diag-height-300km.jpg` | same | 200 | `7f8d4ec8075ccd1f` | height | datum exactly mid-grey; contours follow the shelf |
+| `2026-11-01-diag-land-sea-300km.jpg` | same | 200 | `f7e2cc25bffd3fcd` | land/sea | classification follows the albedo coastline |
+| `2026-11-01-diag-surface-class-300km.jpg` | same | 200 | `3a776f7ed53a19f5` | surface class | **uniform magenta**: no classification data at this altitude, reported rather than faked |
+| `2026-11-01-diag-lod-300km.jpg` | same | 200 | `a696ba21abfbac3d` | lod | two levels visible (4 and 5), seams match patch edges |
+| `2026-11-01-diag-patch-boundary-300km.jpg` | same | 200 | `8f3521a2dc228c94` | patch boundary | seams lie exactly on the LOD-view patch edges |
+| `2026-11-01-diag-patch-identity-300km.jpg` | same | 200 | `222481f42e4db057` | patch identity | distinct colour per patch, no duplicates in frame |
+| `2026-11-01-diag-inputs-300km.jpg` | same | 200 | `e5508d8734b2208b` | inputs | **occlusion only**: no imagery, layers or local surfaces at 300 km |
+| `2026-11-01-diag-occlusion-300km.jpg` | same | 200 | `c43c97cc8da51d72` | occlusion | uniform (1,1): no baked occlusion on coarse patches |
+| `2026-11-01-diag-roughness-300km.jpg` | same | 200 | `8c51fed419b3e658` | roughness | grey field tracks the surface class bands |
+| `2026-11-01-diag-metallic-300km.jpg` | same | 200 | `289340d25e43a1bc` | metallic | black by construction: terrain metallic is 0 |
+| `2026-11-01-diag-layer-blend-300km.jpg` | same | 200 | `3a776f7ed53a19f5` | layer blend | magenta everywhere: single-layer fallback at this altitude |
+| `2026-11-01-diag-morph-offset-300km.jpg` | same | 200 | `d357f8b4ab9af478` | morph offset | mid grey with small deviations; no patch-sized step |
+| `2026-11-01-diag-detail-weight-300km.jpg` | same | 200 | `289340d25e43a1bc` | detail weight | black: source detail fades out beyond 6 km |
+| `2026-11-01-production-1200km.jpg` | `-8.0,139.5,1200000` | 200 | `122b0a550d10ea19` | normal | production at the failing pose: blocks visible |
+| `2026-11-01-diag-albedo-1200km.jpg` | same | 200 | `46c5a1f2c54bff79` | albedo | **no rectangular block**: the base albedo is clean |
+| `2026-11-01-diag-height-1200km.jpg` | same | 200 | `e04b7da051e73cb0` | height | rectangular region at the datum, straight edges |
+| `2026-11-01-diag-land-sea-1200km.jpg` | same | 200 | `ffe5ec908ef2e50b` | land/sea | same rectangle as a ±2 m datum band on the shelf |
+| `2026-11-01-diag-inputs-1200km.jpg` | same | 200 | `1474fd4d8337cd5b` | inputs | occlusion only, as at 300 km |
+| `2026-11-01-diag-patch-identity-1200km.jpg` | same | 200 | `62ac731951f93972` | patch identity | the datum rectangle is **not** a patch: it cuts across one |
+| `2026-11-01-diag-inputs-3km.jpg` | `-8.3,138.6,3000` | 220 | `2bec60b7ac1250f3` | inputs | local surfaces + layers, no imagery (that longitude is outside the region) |
+| `2026-11-01-diag-inputs-10km.jpg` | same | 220 | `cabd790e3b83c85a` | inputs | data still present at 10 km |
+| `2026-11-01-diag-inputs-30km.jpg` | same | 220 | `2f100d165cc9cb39` | inputs | detail data thinning out |
+| `2026-11-01-diag-inputs-70km.jpg` | same | 220 | `735441272b8376d6` | inputs | occlusion only: detail data gone by 70 km |
+| `2026-11-01-diag-surface-class-3km.jpg` | same | 220 | `07682493e3972262` | surface class | grass and soil classified from the weight map |
+| `2026-11-01-diag-layer-blend-3km.jpg` | same | 220 | `c3512b0bf80d1338` | layer blend | layered path active at ground level |
+| `2026-11-01-diag-height-3km.jpg` | same | 220 | `0616a9c706455eab` | height | coastal plain, rivers below the datum |
+
 ## Negative results worth keeping
 
 * A 7 km attempt at the same coastal pose produced an almost identical featureless
   field, so the 40 km frame is not a one-off. Either the location is under a
   uniform overcast at this epoch or something between camera and ground is filling
   the frame. Recorded as an open observation, not a diagnosis.
+* **Both coastline attempts were at longitude 138.6, which is outside the regional
+  imagery region (139.0–140.0 E).** The diagnostic `inputs` views show no imagery
+  bit at that longitude at 3, 10, 30 or 70 km, so those frames could never have
+  shown the 10 m mosaic. The featureless field is not explained by that alone —
+  the global overview is still bound — but it does mean the attempt was made
+  outside the only region with detailed imagery.
 * An earlier attempt to give cloud tops relief via a top-height field measured
   0.03/255 and was removed; the penetration probes also revealed two real bugs
   (probe origin at the hit point, inertial frame where body-fixed was expected).
 * A cut-and-fill apron mesh sampled from the terrain source interpenetrated the
   rendered terrain and was reverted in favour of grading the authority.
+* **`metallic` renders black for every terrain patch**, because the material never
+  sets it above zero. The frame is included as a passing observation of that
+  fact, not as an empty view: a non-black pixel would mean the material changed.
+* **`detail-weight` is black and `layer-blend` is magenta at 300 km**, and their
+  checksums equal `metallic` and `surface-class` respectively. That identity is
+  the proof that both modes report "absent" uniformly rather than shading one
+  patch differently.
 
 ## Rules
 

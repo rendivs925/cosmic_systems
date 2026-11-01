@@ -37,6 +37,9 @@ use crate::infrastructure::bevy_adapters::rocket::components::{
 };
 use crate::infrastructure::bevy_adapters::rocket::planet::update_rocket_clouds;
 use crate::infrastructure::bevy_adapters::rocket::sky::update_rocket_sky;
+use crate::infrastructure::bevy_adapters::terrain::diagnostics::{
+    TerrainDiagnosticMode, TerrainDiagnosticsPlugin,
+};
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     apply_terrain_imagery, load_earth_imagery_package, stream_terrain_imagery,
     TerrainImageryConfig, TerrainImageryResource,
@@ -241,6 +244,24 @@ pub(crate) struct TerrainSurfaceExtension {
     /// system reports one.
     #[uniform(104)]
     cloud: CloudShadow,
+    /// Developer diagnostic mode: zero is production rendering. Uniform per
+    /// patch so the shader's diagnostic branch is uniform control flow. See
+    /// [`crate::presentation::diagnostics`].
+    #[uniform(104)]
+    pub(crate) diagnostic_mode: u32,
+    /// This patch's LOD level, for the level view.
+    #[uniform(104)]
+    pub(crate) diagnostic_patch_level: u32,
+    /// Stable hash of the patch's face, level and tile coordinates.
+    #[uniform(104)]
+    pub(crate) diagnostic_patch_identity: u32,
+    /// Which per-patch material inputs exist. See [`PatchInputFlags`].
+    #[uniform(104)]
+    pub(crate) diagnostic_patch_flags: u32,
+    /// Radius of the sea-level datum at the patch centre, metres from the
+    /// planet centre. Used only by the height and land/sea views.
+    #[uniform(104)]
+    pub(crate) diagnostic_datum_radius_m: f32,
 }
 
 impl MaterialExtension for TerrainSurfaceExtension {
@@ -256,6 +277,82 @@ impl MaterialExtension for TerrainSurfaceExtension {
 }
 
 pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
+
+/// Per-patch material inputs that exist for this patch, as a bitfield.
+///
+/// The bits are the answer to "why does this patch look different from its
+/// neighbour": a fallback patch beside a fully populated one is a rectangle of
+/// different material inputs, not a lighting or sampling defect. The shader
+/// repeats these values in its own constants and the parity test pins them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PatchInputFlags(u32);
+
+impl PatchInputFlags {
+    /// Source-derived local albedo/normal maps were produced for this patch.
+    pub(crate) const LOCAL_SURFACES: Self = Self(1);
+    /// A per-patch layer weight map exists and the layered path is active.
+    pub(crate) const LAYER_WEIGHTS: Self = Self(2);
+    /// A produced imagery tile is bound (`imagery_weight == 1`).
+    pub(crate) const IMAGERY: Self = Self(4);
+    /// A per-patch baked landscape occlusion map is bound.
+    pub(crate) const OCCLUSION: Self = Self(8);
+
+    pub(crate) const fn bits(self) -> u32 {
+        self.0
+    }
+
+    pub(crate) const fn with(self, other: Self, present: bool) -> Self {
+        if present {
+            Self(self.0 | other.0)
+        } else {
+            self
+        }
+    }
+}
+
+/// The per-patch inputs the diagnostic views need, derived once when a patch
+/// material is built.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct TerrainDiagnosticUniform {
+    pub(crate) mode: u32,
+    pub(crate) patch_level: u32,
+    pub(crate) patch_identity: u32,
+    pub(crate) patch_flags: u32,
+    pub(crate) datum_radius_m: f32,
+}
+
+impl TerrainDiagnosticUniform {
+    pub(crate) fn new(
+        mode: u32,
+        patch: &TerrainPatch,
+        flags: PatchInputFlags,
+        datum_radius_m: f32,
+    ) -> Self {
+        Self {
+            mode,
+            patch_level: patch.level,
+            patch_identity: patch_identity(patch),
+            patch_flags: flags.bits(),
+            datum_radius_m,
+        }
+    }
+}
+
+/// A stable per-patch identity hash, used only by the patch-identity view.
+///
+/// FNV-1a over the patch key: neighbouring tiles and levels must land on very
+/// different colours, and the value must not depend on spawn order, so a hash is
+/// the right tool. It is never used as a simulation seed.
+pub(crate) fn patch_identity(patch: &TerrainPatch) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for value in [patch.face as u32, patch.level, patch.tile_x, patch.tile_y] {
+        for byte in value.to_le_bytes() {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+    }
+    hash
+}
 
 /// Build a patch material from its surface inputs. Kept in one place so the
 /// imagery upgrade path can rebuild the same material with a ready imagery tile
@@ -295,6 +392,7 @@ pub(crate) fn build_terrain_material(
     inertial_to_body: Vec4,
     cloud_noise: &CloudNoiseBinding,
     cloud_shadow: CloudShadow,
+    diagnostic: TerrainDiagnosticUniform,
 ) -> TerrainMaterial {
     TerrainMaterial {
         base,
@@ -333,6 +431,11 @@ pub(crate) fn build_terrain_material(
             cloud_detail_noise: cloud_noise.detail_noise.clone(),
             cloud_weather_map: cloud_noise.weather_map.clone(),
             cloud: cloud_shadow,
+            diagnostic_mode: diagnostic.mode,
+            diagnostic_patch_level: diagnostic.patch_level,
+            diagnostic_patch_identity: diagnostic.patch_identity,
+            diagnostic_patch_flags: diagnostic.patch_flags,
+            diagnostic_datum_radius_m: diagnostic.datum_radius_m,
         },
     }
 }
@@ -427,6 +530,10 @@ pub struct TerrainPatchRenderState {
     pub(crate) local_surface_handles: Option<(Handle<Image>, Handle<Image>)>,
     /// Layered ground-material inputs (shared layer sets, per-patch weights).
     pub(crate) layer: LayerMaterialState,
+    /// Per-patch inputs for the developer diagnostic views. The mode itself is
+    /// read from the live resource on every rebuild, so an imagery upgrade never
+    /// resets an active diagnostic view.
+    pub(crate) diagnostic: TerrainDiagnosticUniform,
     pub vegetation_mesh_handle: Option<Handle<Mesh>>,
     /// Sea-level water cap for patches that contain ocean, released with the
     /// patch. The water material itself is shared unless this patch has its own
@@ -733,6 +840,7 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainMaterialFrame>()
             .init_resource::<CloudNoiseBinding>()
             .init_resource::<CloudShadow>()
+            .add_plugins(TerrainDiagnosticsPlugin)
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_plugins(MaterialPlugin::<VegetationMaterial>::default())
@@ -1232,6 +1340,9 @@ struct TerrainSpawnInputs<'w> {
     cloud_noise: Res<'w, CloudNoiseBinding>,
     /// Current cloud deck field, Sun, and rotation, shared by every material.
     cloud_shadow: Res<'w, CloudShadow>,
+    /// Developer diagnostic mode. Copied into every material so switching a
+    /// view never rebuilds geometry, images or cached patches.
+    diagnostics: Res<'w, TerrainDiagnosticMode>,
 }
 
 #[expect(
@@ -1263,6 +1374,7 @@ fn spawn_patch_mesh_system(
         mut images,
         cloud_noise,
         cloud_shadow,
+        diagnostics,
     } = assets;
     let instrumentation_enabled = performance_config.instrumentation_enabled();
     let occlusion_config = render_assets.occlusion.clone();
@@ -1344,7 +1456,8 @@ fn spawn_patch_mesh_system(
         let asset_submission_started = instrumentation_enabled.then(Instant::now);
         let mesh_handle = meshes.add(mesh);
         let image_asset_creation_started = instrumentation_enabled.then(Instant::now);
-        let local_image_asset_count = usize::from(surface.local_surfaces.is_some()) * 2;
+        let has_local_surfaces = surface.local_surfaces.is_some();
+        let local_image_asset_count = usize::from(has_local_surfaces) * 2;
 
         let (local_albedo, local_normal, local_surface_handles, local_detail_weight) =
             if let Some((albedo, normal)) = surface.local_surfaces {
@@ -1432,6 +1545,33 @@ fn spawn_patch_mesh_system(
             surface.layer_weights,
             patch_size_m,
         );
+        // Inputs for the developer diagnostic views, resolved once per patch.
+        // The datum radius comes from the terrain authority's own sea level at
+        // the patch centre, so the height and land/sea views measure the same
+        // datum the ocean cap is built from.
+        let input_flags = PatchInputFlags::default()
+            .with(PatchInputFlags::LOCAL_SURFACES, has_local_surfaces)
+            .with(PatchInputFlags::LAYER_WEIGHTS, layer.blend_weight > 0.0)
+            .with(PatchInputFlags::IMAGERY, initial_imagery_weight > 0.0)
+            .with(PatchInputFlags::OCCLUSION, occlusion_owned);
+        let datum_radius_m = {
+            let planet_radius_m = f64::from(planet.domain_planet.radius_km) * 1_000.0;
+            let (latitude_deg, longitude_deg) = direction_to_lat_lon(patch.center_direction());
+            let sea_level_m = planet_terrain
+                .map(|terrain| {
+                    terrain
+                        .source
+                        .sea_level_height_m(latitude_deg, longitude_deg)
+                })
+                .unwrap_or(0.0);
+            (planet_radius_m + sea_level_m + WATER_SURFACE_OFFSET_M) as f32
+        };
+        let diagnostic = TerrainDiagnosticUniform::new(
+            diagnostics.mode.code(),
+            &patch,
+            input_flags,
+            datum_radius_m,
+        );
         let material_handle = materials.add(build_terrain_material(
             base_material.clone(),
             local_albedo.clone(),
@@ -1482,6 +1622,7 @@ fn spawn_patch_mesh_system(
             Vec4::from_array(body_to_inertial.inverse().as_quat().to_array()),
             &cloud_noise,
             *cloud_shadow,
+            diagnostic,
         ));
         if let (Some(started), Some(record)) = (
             material_started,
@@ -1610,6 +1751,7 @@ fn spawn_patch_mesh_system(
                     detail_scale: TERRAIN_DETAIL_SCALE,
                     local_surface_handles,
                     layer,
+                    diagnostic,
                     vegetation_mesh_handle: vegetation_mesh_handle.clone(),
                     water_mesh_handle: water_mesh_handle.clone(),
                     water_material_handle: water_material_handle.clone(),
@@ -1703,6 +1845,10 @@ fn spawn_patch_mesh_system(
                         // it stays a non-caster so the blended cap never darkens
                         // the terrain beneath it.
                         NotShadowCaster,
+                        // Hidden while a developer diagnostic view is active: the
+                        // cap covers exactly the submerged terrain the land/sea
+                        // and height views classify.
+                        crate::infrastructure::bevy_adapters::terrain::diagnostics::TerrainDiagnosticOccluder,
                         Name::new(format!(
                             "Water_{:?}_{}_{}_{}",
                             patch.face, patch.level, patch.tile_x, patch.tile_y
@@ -2961,8 +3107,248 @@ mod tests {
     use crate::domain::services::terrain_source::{
         ElevationBounds, ProceduralTerrainSource, TerrainSource,
     };
+    use crate::presentation::diagnostics::TerrainDiagnostic;
     use bevy::ecs::message::Messages;
     use std::collections::BTreeSet;
+
+    // -- Developer diagnostic render modes ---------------------------------
+    //
+    // A wrong uniform layout kills the terrain material silently (it has
+    // happened once in this repository), so these tests compare the Rust
+    // uniform declaration against the WGSL struct directly rather than trusting
+    // a comment.
+
+    /// Fields declared with `#[uniform(104)]`, in declaration order.
+    fn rust_uniform_fields(source: &str) -> Vec<(String, String)> {
+        let header = "pub(crate) struct TerrainSurfaceExtension {";
+        let start = source
+            .find(header)
+            .expect("TerrainSurfaceExtension declaration is missing");
+        let mut fields = Vec::new();
+        let mut pending_uniform = false;
+        for line in source[start + header.len()..].lines() {
+            let trimmed = line.trim();
+            if trimmed == "}" {
+                break;
+            }
+            if trimmed.starts_with("#[uniform(104)]") {
+                pending_uniform = true;
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with("#[") || trimmed.starts_with("//") {
+                continue;
+            }
+            if !pending_uniform {
+                continue;
+            }
+            let declaration = trimmed.trim_end_matches(',');
+            let declaration = declaration
+                .strip_prefix("pub(crate) ")
+                .or_else(|| declaration.strip_prefix("pub "))
+                .unwrap_or(declaration);
+            let (name, ty) = declaration
+                .split_once(':')
+                .expect("a uniform field must declare a name and a type");
+            fields.push((name.trim().to_string(), ty.trim().to_string()));
+            pending_uniform = false;
+        }
+        fields
+    }
+
+    /// Struct fields of a WGSL struct, in declaration order.
+    fn wgsl_struct_fields(source: &str, name: &str) -> Vec<(String, String)> {
+        let header = format!("struct {name} {{");
+        let start = source
+            .find(&header)
+            .unwrap_or_else(|| panic!("the shader must declare `{header}`"));
+        let mut fields = Vec::new();
+        for line in source[start + header.len()..].lines() {
+            let code = line.split("//").next().unwrap_or("").trim();
+            if code.is_empty() {
+                continue;
+            }
+            if code.starts_with('}') {
+                break;
+            }
+            let declaration = code.trim_end_matches(',');
+            let (field, ty) = declaration
+                .split_once(':')
+                .expect("a WGSL struct member must declare a name and a type");
+            fields.push((field.trim().to_string(), ty.trim().to_string()));
+        }
+        fields
+    }
+
+    fn wgsl_type_of(rust_type: &str) -> &str {
+        match rust_type {
+            "f32" => "f32",
+            "u32" => "u32",
+            "Vec3" => "vec3<f32>",
+            "Vec4" => "vec4<f32>",
+            // A nested uniform struct keeps its name in both languages.
+            other => other,
+        }
+    }
+
+    /// The single most important guard in this change: the uniform the Rust
+    /// material writes must be byte-for-byte the struct the shader reads. Field
+    /// order, names and types are compared; both layouts use the same alignment
+    /// rules, so an identical sequence is an identical layout.
+    #[test]
+    fn terrain_uniform_layout_matches_the_shader_struct() {
+        let rust = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/infrastructure/bevy_adapters/terrain/render.rs"
+        ));
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+
+        let rust_fields = rust_uniform_fields(rust);
+        let shader_fields = wgsl_struct_fields(shader, "TerrainSurfaceExtension");
+        assert!(
+            !rust_fields.is_empty(),
+            "no `#[uniform(104)]` fields were found; the parser or the layout changed"
+        );
+        assert!(
+            rust_fields.len() >= 20,
+            "the terrain uniform should still carry every material input; found {}",
+            rust_fields.len()
+        );
+
+        let mapped: Vec<(String, String)> = rust_fields
+            .into_iter()
+            .map(|(name, ty)| (name, wgsl_type_of(&ty).to_string()))
+            .collect();
+        assert_eq!(
+            mapped, shader_fields,
+            "the Rust uniform declaration drifted from assets/shaders/terrain_surface.wgsl. \
+             A mismatch silently breaks the terrain material; fix the layout, not the test."
+        );
+    }
+
+    /// Each diagnostic mode's code is carried by a named shader constant. A
+    /// reordered enum or an edited shader constant must fail here rather than
+    /// render the wrong term under a confident label.
+    #[test]
+    fn diagnostic_mode_codes_match_the_shader_constants() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        for mode in TerrainDiagnostic::ALL {
+            let expected = format!("const {}: u32 = {}u;", mode.shader_constant(), mode.code());
+            assert!(
+                shader.contains(&expected),
+                "missing shader constant: {expected}"
+            );
+        }
+        // Production must stay the value the shader tests against zero.
+        assert!(shader.contains("if terrain_surface.diagnostic_mode != DIAG_NORMAL {"));
+        // Documented visualization ranges are part of the mode's contract.
+        assert!(shader.contains("const DIAG_HEIGHT_LIMIT_M: f32 = 2000.0;"));
+        assert!(shader.contains("let t = 0.5 + 0.5 * sign(height_m) * sqrt(magnitude);"));
+        assert!(shader.contains("const DIAG_MORPH_MIN_M: f32 = -100.0;"));
+        assert!(shader.contains("const DIAG_MORPH_MAX_M: f32 = 100.0;"));
+    }
+
+    /// The input-availability bits are duplicated in the shader; keep them equal.
+    #[test]
+    fn diagnostic_input_flags_match_the_shader_bits() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        for (constant, flag) in [
+            ("DIAG_INPUT_LOCAL_SURFACES", PatchInputFlags::LOCAL_SURFACES),
+            ("DIAG_INPUT_LAYER_WEIGHTS", PatchInputFlags::LAYER_WEIGHTS),
+            ("DIAG_INPUT_IMAGERY", PatchInputFlags::IMAGERY),
+            ("DIAG_INPUT_OCCLUSION", PatchInputFlags::OCCLUSION),
+        ] {
+            let expected = format!("const {constant}: u32 = {}u;", flag.bits());
+            assert!(shader.contains(&expected), "missing {expected}");
+        }
+        assert_eq!(
+            [
+                PatchInputFlags::LOCAL_SURFACES.bits(),
+                PatchInputFlags::LAYER_WEIGHTS.bits(),
+                PatchInputFlags::IMAGERY.bits(),
+                PatchInputFlags::OCCLUSION.bits(),
+            ],
+            [1, 2, 4, 8],
+            "each diagnostic input must own exactly one bit"
+        );
+    }
+
+    /// The uniform builder must carry every per-patch field into the material,
+    /// and the mode must come from the caller rather than a constant.
+    #[test]
+    fn material_carries_the_diagnostic_uniform() {
+        let patch = TerrainPatch::root(CubeFace::PosZ);
+        let flags = PatchInputFlags::default()
+            .with(PatchInputFlags::LAYER_WEIGHTS, true)
+            .with(PatchInputFlags::IMAGERY, true);
+        let diagnostic = TerrainDiagnosticUniform::new(
+            TerrainDiagnostic::SurfaceClass.code(),
+            &patch,
+            flags,
+            6_371_123.5,
+        );
+        let material = build_terrain_material(
+            StandardMaterial::default(),
+            Handle::default(),
+            Handle::default(),
+            0.0,
+            Handle::default(),
+            Handle::default(),
+            0.0,
+            0.0,
+            1.0,
+            Handle::default(),
+            1.0,
+            Handle::default(),
+            0.0,
+            0.0,
+            Handle::default(),
+            Handle::default(),
+            Handle::default(),
+            Handle::default(),
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.0,
+            Vec3::ZERO,
+            Vec4::W,
+            &CloudNoiseBinding::default(),
+            CloudShadow::default(),
+            diagnostic,
+        );
+        assert_eq!(material.extension.diagnostic_mode, 7);
+        assert_eq!(material.extension.diagnostic_patch_level, patch.level);
+        assert_eq!(
+            material.extension.diagnostic_patch_identity,
+            patch_identity(&patch)
+        );
+        assert_eq!(material.extension.diagnostic_patch_flags, 6);
+        assert_eq!(material.extension.diagnostic_datum_radius_m, 6_371_123.5);
+    }
+
+    /// The identity hash must separate neighbouring patches, or the identity
+    /// view would paint a uniform region and hide the seam it exists to show.
+    #[test]
+    fn patch_identity_separates_neighbours_and_is_stable() {
+        let root = TerrainPatch::root(CubeFace::PosX);
+        let children = root.children();
+        let mut seen = BTreeSet::new();
+        for patch in std::iter::once(root).chain(children) {
+            assert_eq!(patch_identity(&patch), patch_identity(&patch));
+            assert!(seen.insert(patch_identity(&patch)), "{patch:?} collided");
+        }
+        // Different faces at the same level and tile must not share an identity.
+        assert_ne!(
+            patch_identity(&TerrainPatch::root(CubeFace::PosX)),
+            patch_identity(&TerrainPatch::root(CubeFace::NegX))
+        );
+    }
 
     /// Regression: the cloud-density module is imported by asset path. A
     /// `#define_import_path` in an importable module makes naga_oil register it
@@ -3531,6 +3917,7 @@ mod tests {
             detail_scale: 0.0,
             local_surface_handles: None,
             layer: LayerMaterialState::default(),
+            diagnostic: TerrainDiagnosticUniform::default(),
             vegetation_mesh_handle: None,
             water_mesh_handle: None,
             water_material_handle: Some(water_material_handle.clone()),
@@ -4076,6 +4463,7 @@ mod tests {
                     detail_scale: 0.0,
                     local_surface_handles: None,
                     layer: LayerMaterialState::default(),
+                    diagnostic: TerrainDiagnosticUniform::default(),
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
                     water_material_handle: None,
@@ -4122,6 +4510,7 @@ mod tests {
                     detail_scale: 0.0,
                     local_surface_handles: None,
                     layer: LayerMaterialState::default(),
+                    diagnostic: TerrainDiagnosticUniform::default(),
                     vegetation_mesh_handle: None,
                     water_mesh_handle: None,
                     water_material_handle: None,
@@ -4513,6 +4902,7 @@ mod tests {
             detail_scale: 0.0,
             local_surface_handles: None,
             layer: LayerMaterialState::default(),
+            diagnostic: TerrainDiagnosticUniform::default(),
             vegetation_mesh_handle: Some(vegetation_mesh_handle.clone()),
             water_mesh_handle: None,
             water_material_handle: Some(water_material_handle.clone()),

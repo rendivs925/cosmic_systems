@@ -390,6 +390,9 @@ fn spawn_cloud_dome(
         NoFrustumCulling,
         NotShadowCaster,
         NotShadowReceiver,
+        // Hidden while a developer diagnostic view is active: the deck covers
+        // whole continents at altitude and would hide the ground being measured.
+        crate::infrastructure::bevy_adapters::terrain::diagnostics::TerrainDiagnosticOccluder,
         Name::new(format!("RocketFarField{body_name}{}Clouds", layer.label())),
     ));
 }
