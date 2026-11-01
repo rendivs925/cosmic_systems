@@ -62,8 +62,8 @@ Ordered by visible impact, not by ease.
 | `cargo build --release --features dem` | PASS | `f3b1af6` — the only later change is test-only |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km | `<this checkpoint>` |
-| TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `<this checkpoint>` |
+| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km | `ec97d6e` |
+| TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `ec97d6e` |
 
 ## Visual evidence coverage
 
