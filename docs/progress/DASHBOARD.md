@@ -52,14 +52,14 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | `3155717` |
-| `cargo check --all-targets --features dem` | PASS | `f3b1af6` |
-| `cargo check --no-default-features` | PASS | `f3b1af6` |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `3155717` |
-| `cargo test --features dem --lib` | 1119 passed, 0 failed, 2 ignored | `3155717` |
-| `cargo test --no-default-features --lib` | 1077 passed, 0 failed, 2 ignored | `3155717` |
-| `openspec validate --all --strict` | 42 passed, 0 failed | `f3b1af6` |
-| `cargo build --release --features dem` | PASS | `f3b1af6` — the only later change is test-only |
+| `cargo fmt --check` | PASS | `d02a774` |
+| `cargo check --all-targets --features dem` | PASS | `d02a774` |
+| `cargo check --no-default-features` | PASS | `d02a774` |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `d02a774` |
+| `cargo test --features dem --lib` | 1119 passed, 0 failed, 2 ignored | `d02a774` |
+| `cargo test --no-default-features --lib` | 1077 passed, 0 failed, 2 ignored | `d02a774` |
+| `openspec validate --all --strict` | 42 passed, 0 failed | `ec97d6e` |
+| `cargo build --release --features dem` | PASS | `ec97d6e` — the later change is a Cargo manifest gate and docs |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
 | diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km | `ec97d6e` |
