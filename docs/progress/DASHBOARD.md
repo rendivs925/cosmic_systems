@@ -52,17 +52,17 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | `d02a774` |
-| `cargo check --all-targets --features dem` | PASS | `d02a774` |
-| `cargo check --no-default-features` | PASS | `d02a774` |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `d02a774` |
-| `cargo test --features dem --lib` | 1119 passed, 0 failed, 2 ignored | `d02a774` |
-| `cargo test --no-default-features --lib` | 1077 passed, 0 failed, 2 ignored | `d02a774` |
-| `openspec validate --all --strict` | 42 passed, 0 failed | `ec97d6e` |
-| `cargo build --release --features dem` | PASS | `ec97d6e` — the later change is a Cargo manifest gate and docs |
+| `cargo fmt --check` | PASS | `c9b3854` |
+| `cargo check --all-targets --features dem` | PASS | `c9b3854` |
+| `cargo check --no-default-features` | PASS | `c9b3854` |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `c9b3854` |
+| `cargo test --features dem --lib` | 1124 passed, 0 failed, 2 ignored | `c9b3854` |
+| `cargo test --no-default-features --lib` | 1082 passed, 0 failed, 2 ignored | `c9b3854` |
+| `openspec validate --all --strict` | 42 passed, 0 failed | `c9b3854` |
+| `cargo build --release --features dem` | PASS | `c9b3854` |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km; plus the post-fix roughness/production pair at both altitudes | `<this checkpoint>` |
+| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km; plus the post-fix roughness/production pair at both altitudes | `c9b3854` |
 | TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `ec97d6e` |
 
 ## Visual evidence coverage
