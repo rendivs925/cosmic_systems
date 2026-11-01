@@ -52,17 +52,17 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | `c9b3854` |
-| `cargo check --all-targets --features dem` | PASS | `c9b3854` |
-| `cargo check --no-default-features` | PASS | `c9b3854` |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `c9b3854` |
-| `cargo test --features dem --lib` | 1124 passed, 0 failed, 2 ignored | `c9b3854` |
-| `cargo test --no-default-features --lib` | 1082 passed, 0 failed, 2 ignored | `c9b3854` |
-| `openspec validate --all --strict` | 42 passed, 0 failed | `c9b3854` |
-| `cargo build --release --features dem` | PASS | `c9b3854` |
+| `cargo fmt --check` | PASS | `8cadd1a` |
+| `cargo check --all-targets --features dem` | PASS | `8cadd1a` |
+| `cargo check --no-default-features` | PASS | `8cadd1a` |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `8cadd1a` |
+| `cargo test --features dem --lib` | 1125 passed, 0 failed, 2 ignored | `8cadd1a` |
+| `cargo test --no-default-features --lib` | 1083 passed, 0 failed, 2 ignored | `8cadd1a` |
+| `openspec validate --all --strict` | 42 passed, 0 failed | `8cadd1a` |
+| `cargo build --release --features dem` | PASS | `8cadd1a` |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km; plus the post-fix roughness/production pair at both altitudes | `c9b3854` |
+| diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; plus the post-fix roughness/production pair, and 9 water-view frames across 300 km and 1,200 km | `8cadd1a` |
 | TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `ec97d6e` |
 
 ## Visual evidence coverage
