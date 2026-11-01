@@ -156,3 +156,8 @@ required-features = ["native"]
 name = "shadr_gravity_bake"
 path = "src/bin/shadr_gravity_bake.rs"
 required-features = ["native"]
+
+[[bin]]
+name = "terrain_authority_transect"
+path = "src/bin/terrain_authority_transect.rs"
+required-features = ["dem"]
