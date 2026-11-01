@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-01.
-Last code checkpoint: `<this checkpoint>` (2026-11-01).
+Last code checkpoint: `f3b1af6` (2026-11-01).
 This table describes the 40 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -55,13 +55,13 @@ Ordered by visible impact, not by ease.
 | `cargo fmt --check` | PASS | `d89e7d6` |
 | `cargo check --all-targets --features dem` | PASS | `d89e7d6` |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `d89e7d6` |
-| `cargo test --features dem --lib` | 1118 passed, 0 failed, 2 ignored | `<this checkpoint>` |
-| `cargo test --no-default-features --lib` | 1076 passed, 0 failed, 2 ignored | `<this checkpoint>` |
+| `cargo test --features dem --lib` | 1118 passed, 0 failed, 2 ignored | `f3b1af6` |
+| `cargo test --no-default-features --lib` | 1076 passed, 0 failed, 2 ignored | `f3b1af6` |
 | `openspec validate --all --strict` | 42 passed, 0 failed | `d89e7d6` |
 | `cargo build --release --features dem` | PASS (1 m 56 s) | `5901c82` — not re-run since |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 modes at 300 km, 5 at 1,200 km, 7 at 3–70 km | `<this checkpoint>` |
+| diagnostic capture matrix | 18 modes at 300 km, 5 at 1,200 km, 7 at 3–70 km | `f3b1af6` |
 
 ## Visual evidence coverage
 

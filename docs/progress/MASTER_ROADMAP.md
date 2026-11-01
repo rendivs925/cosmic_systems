@@ -112,7 +112,7 @@ timings. This phase exists because an unverifiable change is not a change.
   parity test is mandatory. Diagnostics cover streamed terrain patches only; the
   ocean, clouds and the far-field proxy keep their own materials, which is
   stated in the mode's own documentation rather than hidden.
-- **Completion evidence:** commit `<this checkpoint>`. What the first runs
+- **Completion evidence:** commit `f3b1af6`. What the first runs
   showed is recorded under TD-05.
 
 ### P0-04 — Performance baseline refresh on current commit
