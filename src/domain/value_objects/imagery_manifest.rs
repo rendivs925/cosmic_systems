@@ -85,6 +85,18 @@ pub struct ImageryLocalRegion {
     pub south_deg: f64,
     pub east_deg: f64,
     pub north_deg: f64,
+    /// Width of the cross-fade band, measured inward from the region bounds, in
+    /// geographic degrees.
+    ///
+    /// The regional mosaic and the global overview are two different
+    /// instruments, so swapping between them cannot be a hard edge without the
+    /// region reading as a rectangle. A fragment inside the region shows the
+    /// mosaic; across this band it fades back to the overview. The width is
+    /// expressed in degrees of the *coarser* instrument's own footprint rather
+    /// than in metres so it stays a fixed fraction of the overview's resolution:
+    /// the runtime overview is 8192 px across 360°, i.e. 0.0439° per texel, and
+    /// the declared band is several of those texels.
+    pub feather_deg: f64,
     pub min_level: u32,
     pub max_level: u32,
     pub runtime_tiles: String,
@@ -97,6 +109,16 @@ pub struct ImageryLocalRegion {
 }
 
 impl ImageryLocalRegion {
+    /// The declared cross-fade band in degrees.
+    pub fn feather_band_deg(&self) -> f64 {
+        self.feather_deg
+    }
+
+    /// The wider of the region's two geographic extents, in degrees.
+    fn narrowest_extent_deg(&self) -> f64 {
+        (self.east_deg - self.west_deg).min(self.north_deg - self.south_deg)
+    }
+
     /// Per-channel linear gain to apply to this region's tiles.
     pub fn linear_color_gain(&self) -> [f32; 3] {
         self.color_match
@@ -234,6 +256,18 @@ fn validate_local_region(region: &ImageryLocalRegion) -> Result<(), String> {
             region.id
         ));
     }
+    // A band wider than half the region would leave the region with no fully
+    // opaque interior, so the mosaic would never reach its measured tone: the
+    // cross-fade would swallow the data it exists to blend.
+    if !region.feather_deg.is_finite()
+        || region.feather_deg <= 0.0
+        || region.feather_deg > 0.5 * region.narrowest_extent_deg()
+    {
+        return Err(format!(
+            "imagery region {} feather band must be positive and narrower than half the region",
+            region.id
+        ));
+    }
     if let Some(color_match) = &region.color_match {
         color_match.validate(&region.id)?;
     }
@@ -307,6 +341,37 @@ mod tests {
         let mut manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
         manifest.local_regions[0].color_match = None;
         assert_eq!(manifest.local_regions[0].linear_color_gain(), [1.0; 3]);
+    }
+
+    /// The checked-in band must stay several runtime overview texels wide. A
+    /// narrower band would put two instruments against each other over a couple
+    /// of pixels, which is the defect the band exists to remove.
+    #[test]
+    fn checked_in_feather_band_spans_several_overview_texels() {
+        let manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        let region = manifest
+            .local_regions
+            .iter()
+            .find(|region| region.id == "papua_coastal_lowland")
+            .expect("the checklist region must exist");
+        let texel_deg = 360.0 / 8192.0;
+        assert!(
+            region.feather_band_deg() >= 3.0 * texel_deg,
+            "the feather band must span at least three overview texels"
+        );
+        assert!(
+            region.feather_band_deg() <= 0.5 * region.narrowest_extent_deg(),
+            "the band must leave the region a fully opaque interior"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_impossible_feather_band_is_rejected() {
+        let mut manifest = EarthImageryManifest::from_ron(CHECKED_IN_MANIFEST).unwrap();
+        manifest.local_regions[0].feather_deg = 0.0;
+        assert!(manifest.validate().is_err());
+        manifest.local_regions[0].feather_deg = 10.0;
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

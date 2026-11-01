@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 2 / 9 | 22 % | active | TD-06 blocked on baseline isolation |
+| P1 Data and terrain correctness | 3 / 9 | 33 % | active | TD-06 blocked on baseline isolation |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 0 / 3 | 0 % | planned | depends on P0-03 |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -44,7 +44,7 @@ Ordered by visible impact, not by ease.
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | PLANNED | `300km-papua` |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
 | 5 | Vegetation is sparse and reads as specks | VG-01/02 | PLANNED | `terrain-600m` |
-| 6 | Regional imagery inset still steps at its patch edge | TD-04 | PLANNED | tone matched, boundary not feathered |
+| 6 | Regional imagery inset still steps at its patch edge | TD-04 | **VERIFIED** | the edge is now a 16.6 km cross-fade at the region bound: the frame's worst step within ±40 px of the bound fell from 4.23 to 0.72/255 (its own texture level), and the before/after change is confined to x=381..737, the declared band. Resolution now uses patch overlap, so a straddling patch binds the tile |
 | 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | PLANNED | `300km-papua` |
 | 8 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
 
@@ -52,18 +52,19 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | `903d7c8` |
-| `cargo check --all-targets --features dem` | PASS | `8cadd1a` |
-| `cargo check --no-default-features` | PASS | `8cadd1a` |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | `903d7c8` |
-| `cargo test --features dem --lib` | 1125 passed, 0 failed, 2 ignored | `903d7c8` |
-| `cargo test --no-default-features --lib` | 1083 passed, 0 failed, 2 ignored | `8cadd1a` |
-| `openspec validate --all --strict` | 42 passed, 0 failed | `903d7c8` |
-| `cargo build --release --features dem` | PASS | `8cadd1a` |
+| `cargo fmt --check` | PASS | pending hash (TD-04) |
+| `cargo check --all-targets --features dem` | PASS | pending hash (TD-04) |
+| `cargo check --no-default-features` | PASS | pending hash (TD-04) |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | pending hash (TD-04) |
+| `cargo test --features dem --lib` | 1133 passed, 0 failed, 2 ignored | pending hash (TD-04) |
+| `cargo test --no-default-features --lib` | 1091 passed, 0 failed, 2 ignored | pending hash (TD-04) |
+| `openspec validate --all --strict` | 42 passed, 0 failed | pending hash (TD-04) |
+| `cargo build --release --features dem` | PASS | pending hash (TD-04) |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
+| region-edge harness | `scripts/imagery_region_mask.py` + `scripts/measure_tone_edge.py` report the imagery edge at 4.23/255 before and 0.72/255 after, and the change confined to 16.4 km | pending hash (TD-04) |
 | TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `ec97d6e` |
 
 ## Visual evidence coverage
@@ -111,10 +112,11 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — TD-04, the regional imagery edge.** TD-05 is closed. Modes 18–23
-now false-colour the sea's depth, body colour, opacity, shadow and mirror, and
-`scripts/measure_patch_seam.py` measures a boundary against its own trend instead
-of against a box either side of it. The next visible defect in the same family is
-TD-04: the regional imagery inset is tone-matched but not feathered, so the tile
-edge is still a straight line. It should use the same seam harness for its
-acceptance.
+**Next task — AT-03, land reads nearly black at altitude.** TD-04 is closed: the
+imagery edge now follows the region bound as a 16.6 km cross-fade, and the frame's
+worst first difference near the bound is the frame's own texture level. The next
+open visual defect in the list is AT-03: at 300–400 km the land is much darker than
+the cloud deck above it, which reads as an unlit continent rather than a lit one.
+The `albedo` and `occlusion` views already exist for it; the question is whether
+the darkness is the albedo itself, the shadow term, or the lit path, and that is
+decidable from frames already on disk before any code changes.

@@ -12,7 +12,7 @@ use crate::domain::services::imagery_package::{
 };
 use crate::domain::services::imagery_tiles::cube_face_name;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
-use crate::domain::value_objects::imagery_manifest::EarthImageryManifest;
+use crate::domain::value_objects::imagery_manifest::{EarthImageryManifest, ImageryLocalRegion};
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseBinding;
@@ -20,8 +20,8 @@ use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
 use crate::infrastructure::bevy_adapters::terrain::diagnostics::TerrainDiagnosticMode;
 use crate::infrastructure::bevy_adapters::terrain::mips::{mip_chain_rgba8, MipFilter};
 use crate::infrastructure::bevy_adapters::terrain::render::{
-    body_texture_anchor, build_terrain_material, TerrainDiagnosticUniform, TerrainMaterial,
-    TerrainOcclusionConfig, TerrainPatchRenderState,
+    body_texture_anchor, build_terrain_material, ImageryBlend, TerrainDiagnosticUniform,
+    TerrainMaterial, TerrainOcclusionConfig, TerrainPatchRenderState,
 };
 use crate::infrastructure::bevy_adapters::terrain::streaming::TerrainStreamingResource;
 use crate::infrastructure::bevy_adapters::terrain::surface::LAYER_HEIGHT_CONTRAST;
@@ -101,6 +101,13 @@ impl TerrainImageryResource {
             return None;
         }
         self.handles.get(&tile)
+    }
+
+    /// The local imagery region a patch's footprint overlaps, if the package is
+    /// loaded. The renderer needs it while no tile is ready as well, so the
+    /// cross-fade band is already known on the first upgrade frame.
+    pub(crate) fn region_for_patch(&self, patch: TerrainPatch) -> Option<&ImageryLocalRegion> {
+        self.package.as_ref()?.region_for_patch(&patch)
     }
 
     /// The package's verified global overview, if loaded. Earth's terrain
@@ -291,11 +298,12 @@ pub(crate) fn apply_terrain_imagery(
         let Some(handle) = imagery.imagery_for_patch(state.patch).cloned() else {
             continue;
         };
-        if state.imagery_weight >= 1.0 && state.imagery_albedo == handle {
+        let blend = ImageryBlend::for_region(1.0, imagery.region_for_patch(state.patch));
+        if state.imagery_blend == blend && state.imagery_albedo == handle {
             continue;
         }
         state.imagery_albedo = handle.clone();
-        state.imagery_weight = 1.0;
+        state.imagery_blend = blend;
         // Rebuild with the current body-fixed frame and precision anchors so the
         // upgraded material matches every other terrain material.
         let orientation = ephemeris_snapshot.as_deref().and_then(|snapshot| {
@@ -342,7 +350,7 @@ pub(crate) fn apply_terrain_imagery(
             state.local_detail_weight,
             state.global_albedo.clone(),
             state.imagery_albedo.clone(),
-            state.imagery_weight,
+            state.imagery_blend,
             state.morph_start_m,
             state.morph_end_m,
             state.detail_texture.clone(),
@@ -633,7 +641,7 @@ mod tests {
                 local_detail_weight: 0.0,
                 global_albedo: Handle::default(),
                 imagery_albedo: Handle::default(),
-                imagery_weight: 0.0,
+                imagery_blend: ImageryBlend::default(),
                 morph_start_m: 0.0,
                 morph_end_m: 0.0,
                 detail_texture: Handle::default(),
@@ -659,8 +667,12 @@ mod tests {
 
         let state = app.world().get::<TerrainPatchRenderState>(entity).unwrap();
         assert_eq!(
-            state.imagery_weight, 1.0,
+            state.imagery_blend.weight, 1.0,
             "detailed imagery must be applied"
+        );
+        assert!(
+            state.imagery_blend.feather_deg > 0.0,
+            "a patch inside a region must carry the cross-fade band"
         );
         assert_ne!(
             state.imagery_albedo,

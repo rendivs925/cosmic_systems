@@ -6,7 +6,9 @@
 //! back to the global overview otherwise. Imagery is presentation-only and
 //! never a terrain-height, collision, or physics authority.
 
-use crate::domain::services::cube_sphere::{direction_to_lat_lon, TerrainPatch};
+use crate::domain::services::cube_sphere::{
+    direction_to_lat_lon, face_uv_to_direction, TerrainPatch,
+};
 use crate::domain::services::imagery_tiles::{
     ancestor_at_level, cube_face_from_name, cube_face_name,
 };
@@ -87,6 +89,106 @@ impl ImageryResolution {
     }
 }
 
+/// Body-fixed geographic window covered by a cube-sphere patch, in degrees.
+///
+/// A cube-sphere patch is a spherical quadrilateral whose edges are great-circle
+/// arcs. Imagery is published from level 8 down, where a patch spans at most
+/// 0.35°, so the corner bounding box covers the patch to far better than one
+/// texel of either instrument. Longitude is stored as a circular interval
+/// (`west_deg > east_deg` means it crosses the antimeridian), and `covers_pole`
+/// marks a patch that contains a pole, where every longitude is present.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PatchGeoWindow {
+    south_deg: f64,
+    north_deg: f64,
+    west_deg: f64,
+    east_deg: f64,
+    covers_pole: bool,
+}
+
+impl PatchGeoWindow {
+    /// Whether this window overlaps a region's geographic bounds.
+    fn overlaps(&self, region: &ImageryLocalRegion) -> bool {
+        if self.north_deg < region.south_deg || self.south_deg > region.north_deg {
+            return false;
+        }
+        if self.covers_pole {
+            return true;
+        }
+        // Both intervals are closed. A patch may wrap the antimeridian while a
+        // region, being validated as west < east inside [-180, 180], never does,
+        // so shifting the patch interval by a full turn settles the wrap.
+        [0.0, 360.0, -360.0].iter().any(|shift| {
+            let start = self.west_deg + shift;
+            let end = self.east_deg + shift;
+            start <= region.east_deg && end >= region.west_deg
+        })
+    }
+}
+
+/// The geographic window covering a patch, from its four corner directions.
+fn patch_geo_window(patch: &TerrainPatch) -> PatchGeoWindow {
+    let (u0, v0, u1, v1) = patch.uv_bounds();
+    let corners = [
+        face_uv_to_direction(patch.face, u0, v0),
+        face_uv_to_direction(patch.face, u1, v0),
+        face_uv_to_direction(patch.face, u0, v1),
+        face_uv_to_direction(patch.face, u1, v1),
+    ];
+    let mut south_deg = f64::INFINITY;
+    let mut north_deg = f64::NEG_INFINITY;
+    let mut covers_pole = false;
+    let mut longitudes = [0.0_f64; 4];
+    for (index, corner) in corners.iter().enumerate() {
+        let (latitude_deg, longitude_deg) = direction_to_lat_lon(*corner);
+        south_deg = south_deg.min(latitude_deg);
+        north_deg = north_deg.max(latitude_deg);
+        covers_pole |= latitude_deg.abs() >= 89.999;
+        longitudes[index] = longitude_deg;
+    }
+    let (west_deg, east_deg) = smallest_longitude_span(longitudes);
+    PatchGeoWindow {
+        south_deg,
+        north_deg,
+        west_deg,
+        east_deg,
+        covers_pole,
+    }
+}
+
+/// The shortest circular interval containing four longitudes, in degrees.
+///
+/// The interval is the complement of the largest gap between them, so a patch
+/// straddling the antimeridian comes out as a wrapped pair (`west > east`)
+/// instead of a 350° span that would overlap every region on the planet.
+fn smallest_longitude_span(mut longitudes: [f64; 4]) -> (f64, f64) {
+    longitudes.sort_by(|a, b| a.partial_cmp(b).expect("corner longitudes are finite"));
+    let mut start_deg = longitudes[0];
+    let mut largest_gap_deg = f64::NEG_INFINITY;
+    for index in 0..4 {
+        let current = longitudes[index];
+        let next = if index == 3 {
+            longitudes[0] + 360.0
+        } else {
+            longitudes[index + 1]
+        };
+        let gap = next - current;
+        if gap > largest_gap_deg {
+            largest_gap_deg = gap;
+            // The interval begins immediately after the largest gap.
+            start_deg = next;
+        }
+    }
+    start_deg = wrap_longitude(start_deg);
+    let span_deg = 360.0 - largest_gap_deg;
+    (start_deg, start_deg + span_deg)
+}
+
+/// Wrap a longitude into `[-180, 180)`. `+180` maps to `-180`, the same meridian.
+fn wrap_longitude(longitude_deg: f64) -> f64 {
+    (longitude_deg + 180.0).rem_euclid(360.0) - 180.0
+}
+
 /// A verified, resident Earth imagery package with its produced tiles indexed.
 #[derive(Debug)]
 pub struct EarthImageryPackage {
@@ -136,6 +238,16 @@ impl EarthImageryPackage {
         self.available.len()
     }
 
+    /// The local region a patch's footprint overlaps in body-fixed coordinates.
+    ///
+    /// Overlap, not centre containment: a patch that straddles the region edge
+    /// must still receive the regional tile, or the cross-fade band could not be
+    /// evaluated there and the region edge would fall back on a patch edge.
+    pub fn region_for_patch(&self, patch: &TerrainPatch) -> Option<&ImageryLocalRegion> {
+        let window = patch_geo_window(patch);
+        self.regions.iter().find(|region| window.overlaps(region))
+    }
+
     pub fn tile_path(&self, patch: &TerrainPatch) -> PathBuf {
         self.root
             .join(TILES_DIRECTORY)
@@ -147,11 +259,16 @@ impl EarthImageryPackage {
     /// Per-channel linear gain that matches a produced tile to the global
     /// overview. Identity outside every region and for regions whose mosaic was
     /// already produced on the overview's tonality.
+    ///
+    /// Resolution is by overlap for the same reason as [`Self::region_for_patch`]:
+    /// a tile that straddles the edge is drawn by patches on both sides, and
+    /// matching only its centre would leave the straddling half of the tile
+    /// uncorrected — a bright rim exactly where the cross-fade runs. A tile
+    /// overlapping two regions with different gains would take the first; the
+    /// package currently publishes one region per body, and the manifest
+    /// validator does not yet reject overlapping regions.
     pub fn linear_color_gain(&self, tile: &TerrainPatch) -> [f32; 3] {
-        let (latitude, longitude) = direction_to_lat_lon(tile.center_direction());
-        self.regions
-            .iter()
-            .find(|region| region.contains(latitude, longitude))
+        self.region_for_patch(tile)
             .map(|region| region.linear_color_gain())
             .unwrap_or([1.0; 3])
     }
@@ -161,9 +278,9 @@ impl EarthImageryPackage {
     /// overview. The search is bounded by the region level range and never
     /// touches the filesystem.
     pub fn resolve(&self, patch: &TerrainPatch) -> ImageryResolution {
-        let (latitude, longitude) = direction_to_lat_lon(patch.center_direction());
+        let window = patch_geo_window(patch);
         for region in &self.regions {
-            if !region.contains(latitude, longitude) || patch.level < region.min_level {
+            if !window.overlaps(region) || patch.level < region.min_level {
                 continue;
             }
             let mut level = patch.level.min(region.max_level);
@@ -307,6 +424,107 @@ mod tests {
         assert_eq!(package.linear_color_gain(&inside), expected);
         assert_ne!(expected, [1.0; 3], "the fixture must declare a real gain");
         assert_eq!(package.linear_color_gain(&outside), [1.0; 3]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The patch window is a corner bounding box on a sphere, so it has to get
+    /// the wrap and the pole right: a wrapped patch read as a 350° span would
+    /// claim every region on the planet, and a polar patch has no longitude
+    /// edges at all.
+    #[test]
+    fn patch_windows_handle_longitude_wrap_and_poles() {
+        let region = EarthImageryManifest::from_ron(MANIFEST)
+            .unwrap()
+            .local_regions[0]
+            .clone();
+        let window = |west, east, south, north| PatchGeoWindow {
+            south_deg: south,
+            north_deg: north,
+            west_deg: west,
+            east_deg: east,
+            covers_pole: false,
+        };
+        assert!(window(139.5, 140.5, -9.0, -7.0).overlaps(&region));
+        assert!(window(138.5, 139.2, -9.0, -7.0).overlaps(&region));
+        assert!(!window(137.0, 138.9, -9.0, -7.0).overlaps(&region));
+        assert!(
+            !window(179.5, 180.5, -9.0, -7.0).overlaps(&region),
+            "a patch across the antimeridian is not near Papua"
+        );
+        assert!(
+            !window(-179.5, -178.5, -9.0, -7.0).overlaps(&region),
+            "the wrapped form must not collapse to a planet-wide span"
+        );
+        let polar = PatchGeoWindow {
+            south_deg: 89.0,
+            north_deg: 90.0,
+            west_deg: 0.0,
+            east_deg: 0.0,
+            covers_pole: true,
+        };
+        assert!(!polar.overlaps(&region), "latitude still decides");
+        let polar_near = PatchGeoWindow {
+            south_deg: -9.0,
+            north_deg: -7.0,
+            west_deg: 0.0,
+            east_deg: 0.0,
+            covers_pole: true,
+        };
+        assert!(
+            polar_near.overlaps(&region),
+            "a pole patch spans every meridian"
+        );
+    }
+
+    #[test]
+    fn longitude_span_is_the_complement_of_the_largest_gap() {
+        assert_eq!(
+            smallest_longitude_span([10.0, 13.0, 11.0, 12.0]),
+            (10.0, 13.0)
+        );
+        let (west, east) = smallest_longitude_span([-179.0, -178.0, 179.0, 178.0]);
+        assert_eq!((west, east), (178.0, 182.0));
+        assert!(west > 180.0 - 3.0 && east <= 180.0 + 3.0);
+    }
+
+    /// A patch that straddles the region edge must still resolve to the regional
+    /// tile. Under the old centre-containment rule it did not, so the cross-fade
+    /// band would have had nowhere to run: the edge would fall back on a patch
+    /// boundary exactly where the band is needed.
+    #[test]
+    fn a_patch_straddling_the_region_edge_still_resolves_to_the_tile() {
+        let root = temp_root("resolve_straddle");
+        std::fs::write(root.join(GLOBAL_OVERVIEW_FILE), b"").unwrap();
+        let manifest = verified_manifest();
+        let region = manifest.local_regions[0].clone();
+
+        let patch = (0..256)
+            .find_map(|step| {
+                let longitude = region.east_deg + 0.0005 + f64::from(step) * 0.0005;
+                let patch =
+                    TerrainPatch::for_direction(terrain_lat_lon_to_body_fixed(-8.0, longitude), 10);
+                let (_, centre_longitude) = direction_to_lat_lon(patch.center_direction());
+                (centre_longitude > region.east_deg && patch_geo_window(&patch).overlaps(&region))
+                    .then_some(patch)
+            })
+            .expect("some level-10 patch must straddle the region's east edge");
+
+        write_tile(
+            &root,
+            cube_face_name(patch.face),
+            patch.level,
+            patch.tile_x,
+            patch.tile_y,
+        );
+        let package = EarthImageryPackage::load(&root, manifest).unwrap();
+        assert!(
+            package.region_for_patch(&patch).is_some(),
+            "the renderer needs the region to know the feather band"
+        );
+        assert!(
+            matches!(package.resolve(&patch), ImageryResolution::Detailed { .. }),
+            "a straddling patch must bind the regional tile"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

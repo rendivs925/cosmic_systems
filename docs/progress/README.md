@@ -28,8 +28,8 @@ and a measurement path that captures frames without a swapchain.
 ## What is currently being built?
 
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
-P0-03 (developer diagnostic render modes) is complete and verified; the next task
-is TD-05, which now has the tool it was waiting for.
+TD-05 (tone blocks) and TD-04 (regional imagery edge) are closed; the next open
+visual defect is AT-03, the land reading nearly black at altitude.
 
 ## What is broken?
 
@@ -40,7 +40,7 @@ is TD-05, which now has the tool it was waiting for.
 | Land nearly black at 400 km while clouds are white | cause unknown |
 | Cloud edges are cut-outs; one shape per region | planned work |
 | Vegetation reads as specks | planned work |
-| Regional imagery steps at its patch edge | tone matched, edge not feathered |
+| Regional imagery steps at its patch edge | **verified and closed.** The edge is now a 16.6 km cross-fade at the region bound; the worst step near the bound fell from 4.23 to 0.72/255 (the frame's own texture level) and the change is confined to the declared band |
 | No geometric terrain detail beyond LOD 11 | planned work |
 | **Windowed rendering fails on this machine** | environment: swapchain lost after one present |
 
@@ -50,7 +50,7 @@ it.
 
 ## What has been verified?
 
-Eleven of forty roadmap tasks, each with implementation + tests + a named frame
+Thirteen of forty roadmap tasks, each with implementation + tests + a named frame
 or a named measurement:
 
 | task | evidence |
@@ -65,6 +65,8 @@ or a named measurement:
 | CL-03 sun path to slab top | 11 % of deck pixels moved 1–5 %; parity test |
 | CL-04 aerial perspective | parity test; limb behaviour |
 | RD-03 shadow lifecycle | 90-pose sweep pixel-identical; residency test |
+| TD-05 tone blocks | seam excess +4.14 → −0.04/255 at the seam that motivated it; frame-wide +0.25/+0.47/255; ocean half refuted with six water views |
+| TD-04 imagery edge | the inset edge is a 16.6 km cross-fade at the region bound; worst step near the bound 4.23 → 0.72/255, change confined to x=381..737 |
 | VL-02 OpenSpec strict | 42/42 |
 
 Four more are implemented but **not** verified: site grading at more than one

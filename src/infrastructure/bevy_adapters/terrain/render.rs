@@ -18,6 +18,7 @@ use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rotation;
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::services::volumetric_geology::RockShell;
+use crate::domain::value_objects::imagery_manifest::ImageryLocalRegion;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
@@ -135,6 +136,16 @@ pub(crate) struct TerrainSurfaceExtension {
     imagery_albedo: Handle<Image>,
     #[uniform(104)]
     imagery_weight: f32,
+    /// Body-fixed geographic footprint of the regional imagery this patch
+    /// draws, as `(west, south, east, north)` degrees. Ignored unless
+    /// `imagery_feather_deg > 0`.
+    #[uniform(104)]
+    imagery_bounds: Vec4,
+    /// Width of the cross-fade band inside those bounds, in degrees. Zero for a
+    /// patch with no regional imagery, which keeps the production path free of
+    /// the geographic evaluation.
+    #[uniform(104)]
+    imagery_feather_deg: f32,
     /// View-distance band over which a patch morphs toward its coarser parent
     /// surface. Scaled to the patch's world size so neighbouring LODs agree.
     #[uniform(104)]
@@ -278,6 +289,48 @@ impl MaterialExtension for TerrainSurfaceExtension {
 
 pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainSurfaceExtension>;
 
+/// How a patch's regional imagery cross-fades into the global overview.
+///
+/// The two products are different instruments at different resolutions, so the
+/// swap between them cannot be a hard edge without the region reading as a
+/// rectangle. `weight` is one once a produced tile is bound; `bounds_deg` is the
+/// region's body-fixed footprint and `feather_deg` the band inside it over which
+/// the fragment stage fades the tile back to the overview. The fragment
+/// evaluates that band from its own body position, so its position and width do
+/// not move when patch boundaries do.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct ImageryBlend {
+    /// One once a produced regional tile is bound, zero otherwise.
+    pub(crate) weight: f32,
+    /// `(west, south, east, north)` of the region, in degrees.
+    pub(crate) bounds_deg: Vec4,
+    /// Cross-fade band width inside those bounds, in degrees.
+    pub(crate) feather_deg: f32,
+}
+
+impl ImageryBlend {
+    /// The blend for a patch: `weight` from tile readiness, the band from the
+    /// region the patch overlaps (if any).
+    pub(crate) fn for_region(weight: f32, region: Option<&ImageryLocalRegion>) -> Self {
+        match region {
+            Some(region) => Self {
+                weight,
+                bounds_deg: Vec4::new(
+                    region.west_deg as f32,
+                    region.south_deg as f32,
+                    region.east_deg as f32,
+                    region.north_deg as f32,
+                ),
+                feather_deg: region.feather_band_deg() as f32,
+            },
+            None => Self {
+                weight,
+                ..Self::default()
+            },
+        }
+    }
+}
+
 /// Per-patch material inputs that exist for this patch, as a bitfield.
 ///
 /// The bits are the answer to "why does this patch look different from its
@@ -292,7 +345,9 @@ impl PatchInputFlags {
     pub(crate) const LOCAL_SURFACES: Self = Self(1);
     /// A per-patch layer weight map exists and the layered path is active.
     pub(crate) const LAYER_WEIGHTS: Self = Self(2);
-    /// A produced imagery tile is bound (`imagery_weight == 1`).
+    /// A produced imagery tile is bound for this patch. The fragment still
+    /// tapers its weight across the region's cross-fade band, so a bound patch
+    /// near the region edge shows part overview by design.
     pub(crate) const IMAGERY: Self = Self(4);
     /// A per-patch baked landscape occlusion map is bound.
     pub(crate) const OCCLUSION: Self = Self(8);
@@ -365,7 +420,7 @@ pub(crate) fn build_terrain_material(
     local_detail_weight: f32,
     global_albedo: Handle<Image>,
     imagery_albedo: Handle<Image>,
-    imagery_weight: f32,
+    imagery_blend: ImageryBlend,
     morph_start_m: f32,
     morph_end_m: f32,
     detail_texture: Handle<Image>,
@@ -402,7 +457,9 @@ pub(crate) fn build_terrain_material(
             local_detail_weight,
             global_albedo,
             imagery_albedo,
-            imagery_weight,
+            imagery_weight: imagery_blend.weight,
+            imagery_bounds: imagery_blend.bounds_deg,
+            imagery_feather_deg: imagery_blend.feather_deg,
             morph_start_m,
             morph_end_m,
             detail_texture,
@@ -519,7 +576,8 @@ pub struct TerrainPatchRenderState {
     pub(crate) global_albedo: Handle<Image>,
     /// The imagery tile currently bound, or a neutral placeholder.
     pub(crate) imagery_albedo: Handle<Image>,
-    pub(crate) imagery_weight: f32,
+    /// Tile readiness plus the region footprint the fragment stage tapers over.
+    pub(crate) imagery_blend: ImageryBlend,
     /// View-distance morph band for this patch, passed through on material rebuild.
     pub(crate) morph_start_m: f32,
     pub(crate) morph_end_m: f32,
@@ -1537,6 +1595,10 @@ fn spawn_patch_mesh_system(
             .clone()
             .unwrap_or_else(|| local_albedo.clone());
         let initial_imagery_weight = if ready_imagery.is_some() { 1.0 } else { 0.0 };
+        // The feather geometry follows the patch's region even while no tile is
+        // ready, so the first upgrade frame already knows the band.
+        let imagery_blend =
+            ImageryBlend::for_region(initial_imagery_weight, imagery.region_for_patch(patch));
         // Select the layered path versus the single-layer fallback from whether
         // a per-patch weight map was produced (native `dem` only).
         let layer = build_layer_material_state(
@@ -1579,7 +1641,7 @@ fn spawn_patch_mesh_system(
             local_detail_weight,
             global_albedo.clone(),
             initial_imagery_albedo.clone(),
-            initial_imagery_weight,
+            imagery_blend,
             morph_start_m,
             morph_end_m,
             detail_texture.clone(),
@@ -1744,7 +1806,7 @@ fn spawn_patch_mesh_system(
                     local_detail_weight,
                     global_albedo: global_albedo.clone(),
                     imagery_albedo: initial_imagery_albedo.clone(),
-                    imagery_weight: initial_imagery_weight,
+                    imagery_blend,
                     morph_start_m,
                     morph_end_m,
                     detail_texture,
@@ -3232,6 +3294,135 @@ mod tests {
         );
     }
 
+    // -- Regional imagery cross-fade ----------------------------------------
+
+    /// The cross-fade is the change itself: the tile weight must be multiplied
+    /// by a band evaluated from the fragment's body position. Either half going
+    /// missing silently restores the hard rectangle the task exists to remove,
+    /// so both are pinned to the shader source.
+    #[test]
+    fn regional_imagery_is_tapered_across_the_region_edge() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        assert!(
+            shader.contains("fn imagery_region_weight("),
+            "the regional cross-fade must be a named, reviewable law"
+        );
+        assert!(
+            shader.contains("regional_weight = regional_weight * imagery_region_weight("),
+            "the tile weight must be multiplied by the band, not left per patch"
+        );
+        assert!(
+            shader.contains("smoothstep(0.0, feather_deg, inside_deg)"),
+            "the band must be a smoothstep of the depth inside the region"
+        );
+        // The coordinate must be the fragment's body position: a patch-local UV
+        // would put the band back on the patch layout.
+        assert!(shader.contains("let latitude_deg = degrees(asin(clamp(direction.y, -1.0, 1.0)));"));
+        assert!(shader.contains("let longitude_deg = degrees(atan2(direction.z, direction.x));"));
+        assert!(
+            shader.contains("let body_position = rotate_by_quat("),
+            "the geographic coordinate must come from the body-fixed position"
+        );
+    }
+
+    /// Mirror of `imagery_region_weight`, used only to pin the band's
+    /// documented endpoints. The shader is the implementation; this exists so
+    /// "zero at the edge, one a band inside" is asserted rather than eyeballed.
+    fn feather_weight(region: &ImageryLocalRegion, latitude_deg: f32, longitude_deg: f32) -> f32 {
+        let feather_deg = region.feather_band_deg() as f32;
+        let inside_deg = (latitude_deg - region.south_deg as f32)
+            .min(region.north_deg as f32 - latitude_deg)
+            .min(longitude_deg - region.west_deg as f32)
+            .min(region.east_deg as f32 - longitude_deg);
+        let t = (inside_deg / feather_deg).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    #[test]
+    fn feather_band_is_zero_at_the_edge_and_one_a_band_inside() {
+        let manifest =
+            crate::domain::value_objects::imagery_manifest::EarthImageryManifest::from_ron(
+                include_str!("../../../../assets/configs/terrain/earth_imagery_v1.ron"),
+            )
+            .expect("the checked-in imagery manifest must parse");
+        let region = &manifest.local_regions[0];
+        let centre_latitude = ((region.south_deg + region.north_deg) * 0.5) as f32;
+        let centre_longitude = ((region.west_deg + region.east_deg) * 0.5) as f32;
+        let feather_deg = region.feather_band_deg() as f32;
+
+        assert_eq!(
+            feather_weight(region, centre_latitude, centre_longitude),
+            1.0,
+            "the region centre must show the mosaic at full weight"
+        );
+        assert_eq!(
+            feather_weight(region, centre_latitude, region.east_deg as f32),
+            0.0,
+            "the bound itself must be the overview"
+        );
+        assert_eq!(
+            feather_weight(region, centre_latitude, region.east_deg as f32 + 0.01),
+            0.0,
+            "outside the region the tile must not contribute"
+        );
+        assert_eq!(
+            feather_weight(region, region.north_deg as f32 + 0.01, centre_longitude),
+            0.0,
+            "the same holds on the latitude bounds"
+        );
+        let midpoint = feather_weight(
+            region,
+            centre_latitude,
+            region.east_deg as f32 - feather_deg * 0.5,
+        );
+        assert!(
+            (midpoint - 0.5).abs() < 1e-3,
+            "the band must be centred on half weight, got {midpoint}"
+        );
+        assert!(
+            feather_weight(
+                region,
+                centre_latitude,
+                region.east_deg as f32 - feather_deg
+            ) >= 0.999,
+            "a full band inside must be fully opaque"
+        );
+        // Monotone: every step inward is at least as opaque as the last.
+        let mut previous = 0.0;
+        for step in 0..=10 {
+            let inward = feather_deg * step as f32 / 10.0;
+            let weight = feather_weight(region, centre_latitude, region.east_deg as f32 - inward);
+            assert!(weight + 1e-6 >= previous, "the band must not reverse");
+            previous = weight;
+        }
+    }
+
+    #[test]
+    fn imagery_blend_carries_the_region_footprint_only_when_one_applies() {
+        let manifest =
+            crate::domain::value_objects::imagery_manifest::EarthImageryManifest::from_ron(
+                include_str!("../../../../assets/configs/terrain/earth_imagery_v1.ron"),
+            )
+            .expect("the checked-in imagery manifest must parse");
+        let region = &manifest.local_regions[0];
+        let blended = ImageryBlend::for_region(1.0, Some(region));
+        assert_eq!(blended.weight, 1.0);
+        assert_eq!(blended.bounds_deg.x, region.west_deg as f32);
+        assert_eq!(blended.bounds_deg.y, region.south_deg as f32);
+        assert_eq!(blended.bounds_deg.z, region.east_deg as f32);
+        assert_eq!(blended.bounds_deg.w, region.north_deg as f32);
+        assert_eq!(blended.feather_deg, region.feather_band_deg() as f32);
+        assert!(blended.feather_deg > 0.0);
+
+        let plain = ImageryBlend::for_region(0.0, None);
+        assert_eq!(plain, ImageryBlend::default());
+        assert_eq!(plain.weight, 0.0);
+        assert_eq!(
+            plain.feather_deg, 0.0,
+            "no region must mean no geographic evaluation at all"
+        );
+    }
+
     /// Each diagnostic mode's code is carried by a named shader constant. A
     /// reordered enum or an edited shader constant must fail here rather than
     /// render the wrong term under a confident label.
@@ -3347,7 +3538,7 @@ mod tests {
             0.0,
             Handle::default(),
             Handle::default(),
-            0.0,
+            ImageryBlend::default(),
             0.0,
             1.0,
             Handle::default(),
@@ -3964,7 +4155,7 @@ mod tests {
             local_detail_weight: 0.0,
             global_albedo: Handle::default(),
             imagery_albedo: Handle::default(),
-            imagery_weight: 0.0,
+            imagery_blend: ImageryBlend::default(),
             morph_start_m: 0.0,
             morph_end_m: 0.0,
             detail_texture: Handle::default(),
@@ -4556,7 +4747,7 @@ mod tests {
                     local_detail_weight: 0.0,
                     global_albedo: Handle::default(),
                     imagery_albedo: Handle::default(),
-                    imagery_weight: 0.0,
+                    imagery_blend: ImageryBlend::default(),
                     morph_start_m: 0.0,
                     morph_end_m: 0.0,
                     detail_texture: Handle::default(),
@@ -4603,7 +4794,7 @@ mod tests {
                     local_detail_weight: 0.0,
                     global_albedo: Handle::default(),
                     imagery_albedo: Handle::default(),
-                    imagery_weight: 0.0,
+                    imagery_blend: ImageryBlend::default(),
                     morph_start_m: 0.0,
                     morph_end_m: 0.0,
                     detail_texture: Handle::default(),
@@ -4995,7 +5186,7 @@ mod tests {
             local_detail_weight: 0.0,
             global_albedo: Handle::default(),
             imagery_albedo: Handle::default(),
-            imagery_weight: 0.0,
+            imagery_blend: ImageryBlend::default(),
             morph_start_m: 0.0,
             morph_end_m: 0.0,
             detail_texture: Handle::default(),

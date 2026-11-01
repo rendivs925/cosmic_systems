@@ -48,7 +48,7 @@ capture path has no window, no focus, and no HUD.
 | code | name | what it shows |
 | ---: | --- | --- |
 | 0 | `normal` | production rendering; the only mode that ships |
-| 1 | `albedo` | geographic base colour: the global overview mixed with the regional imagery tile by `imagery_weight` |
+| 1 | `albedo` | geographic base colour: the global overview mixed with the regional imagery tile, through the region's cross-fade band |
 | 2 | `world-normals` | world-space geometric normal as `n * 0.5 + 0.5` |
 | 3 | `uv0` | geographic equirectangular UV0 with a 16-division grid |
 | 4 | `uv1` | patch-local UV1 with an 8-division grid |
@@ -301,6 +301,25 @@ layer blend or morph; the roughness term was the only one, and it is now
 evaluated per vertex. What the seam jump still measures is the terrain either side
 of the boundary, which is what the control also measures.
 
+### The regional imagery edge, and how to measure an edge that is not a seam
+
+The `albedo` view also shows the regional imagery inset, and it is the reason
+that inset's edge could be fixed. A regional imagery edge is not a mesh seam, so
+`measure_patch_seam.py` is the wrong instrument for it: before the fix the edge
+did not even sit where the region bound is — it sat on whichever patch boundary
+owned the tile — and after the fix it is a deliberately soft gradient hundreds of
+pixels wide, which a seam detector would call "no step" without saying anything
+about its shape.
+
+`scripts/imagery_region_mask.py` projects the region's geographic bounds into a
+capture frame with the capture camera's own conventions (nadir, 45° vertical
+field of view, north up, sea-level sphere), and `scripts/measure_tone_edge.py`
+measures the frame's first-difference profile against that bound and against the
+frame's own texture level. The same statistic answers both halves of the
+question: whether a column near the bound carries a step the frame's detail does
+not, and — with `--against` — how far from the bound the two builds actually
+differ, which is the cross-fade's real extent.
+
 Limits: the estimator needs a sample whose whole 3–8 px span, and whose control
 40 px along the seam, stay in one surface class and out of the cloud mask, so a
 frame affords a few hundred samples at 300 km and about 120 at 1,200 km. Its
@@ -326,8 +345,9 @@ have to be scaled with it; a fixed 3–8 px window finds almost no samples at
 
 ## Verification
 
-`scripts/measure_patch_seam.py` is the seam harness described above; it is a
-reporting tool and needs no build. Every mode is pinned to its shader constant by
+`scripts/measure_patch_seam.py` is the seam harness described above, and
+`scripts/measure_tone_edge.py` with `scripts/imagery_region_mask.py` are the
+region-edge harness; all three are reporting tools and need no build. Every mode is pinned to its shader constant by
 `diagnostic_mode_codes_match_the_shader_constants`, and
 `each_material_family_receives_only_its_own_codes` pins the family split.
 

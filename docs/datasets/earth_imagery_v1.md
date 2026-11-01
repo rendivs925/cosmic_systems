@@ -61,9 +61,21 @@ Manifest: `assets/configs/terrain/earth_imagery_v1.ron`
   `2d3f5173c44895f714d427429eaa929852169318d48c29d3d8cc1b49f674df23`.
 - Aggregate runtime tile SHA-256:
   `977f14594b871e0fdb0ead79a51bd0495d0564f58e52a127fcf7adedaf737d31`.
-- Role: detailed imagery for visible patches inside the region. A patch at or
-  below the level range uses the most detailed produced tile at or coarser than
-  its own level; a coarser patch falls back to the global overview.
+- Role: detailed imagery for visible patches that overlap the region. A patch at
+  or below the level range uses the most detailed produced tile at or coarser than
+  its own level; a patch coarser than the range falls back to the global overview.
+  Overlap, not centre containment: a patch that straddles the region edge must
+  still receive the tile, or there would be nowhere for the cross-fade band below
+  to run. That also means a straddling tile is colour-matched by the region it
+  overlaps rather than by where its own centre happens to fall.
+- Cross-fade band: `feather_deg = 0.15`, measured inward from the region bounds.
+  The runtime overview is 8192 px across 360° (0.0439° per texel), so the band
+  spans 3.4 of the overview's own texels — about 16.6 km at this latitude. A
+  narrower band would put a 10 m mosaic against a 2 km overview over a couple of
+  pixels; wider would eat into the region's opaque interior. The manifest
+  validator rejects a band that is not positive or that exceeds half the region's
+  narrowest extent, and a test pins the checked-in value to the overview's runtime
+  resolution.
 
 ## Colour match to the global overview
 
@@ -104,10 +116,37 @@ The check `checked_in_color_match_is_the_measured_mean_ratio` asserts the
 declared gain is still the measured ratio (within 2 %), so reprocessing the mosaic
 without re-measuring fails the build.
 
-This matches the region's *mean* tone. It does not blend the regional inset into
-the overview spatially, so the last patch edge still steps between 10 m imagery
-and a 2 km overview; an edge feather evaluated from the fragment's body position
-is the remaining half of the fix and is not implemented yet.
+This matches the region's *mean* tone, which is necessary but not sufficient: two
+correctly matched products still meet at a visible line if the switch is abrupt.
+The spatial half is a cross-fade evaluated per fragment from its body-fixed
+position:
+
+  * the material carries the region footprint `(west, south, east, north)` and the
+    band width as uniform values;
+  * the fragment converts its body-fixed position to latitude/longitude with the
+    same mapping the terrain lat/lon authority uses, takes the signed depth
+    inside the box (`min` over the four bounds) and fades the tile weight with
+    `smoothstep(0, feather_deg, depth)`;
+  * so the transition is a property of the region, not of the patch layout. A
+    patch that overlaps the region binds the tile; its fragment weight is zero
+    outside the bounds and one a full band inside, which is exactly what its
+    neighbour that binds no tile shows at the shared patch edge.
+
+Measured at the 40 km pose `-8.0,139.9,40000` in the `albedo` view (which hides
+the cloud deck and shows the albedo mix alone), on the region's east bound:
+
+| frame | worst column within ±40 px of the bound (p90) | worst column in the frame (p90) |
+| --- | ---: | ---: |
+| before | 4.23/255 at x = 380, a patch edge | 16.14/255 at x = 459, a patch edge |
+| after | 0.72/255 at x = 424 | 0.93/255 — the frame's own texture level |
+
+The before-frame's imagery edge sat on **patch boundaries**, not on the region
+bound at x = 400: the patch straddling the bound had its centre outside the
+region, so it bound no tile at all and the tile started at the next patch edge
+59 px inside the bound. That is the defect. After the change the largest first difference
+anywhere in the frame is the same as the frame's interior detail, and the
+before/after tonal change is confined to x = 381..737 (16.4 km), i.e. the declared
+band and nothing else. Numbers and method: `docs/plans/planetary-realism-audit-2026-10.md`.
 
 ## Package layout
 

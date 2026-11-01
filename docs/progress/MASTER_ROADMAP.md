@@ -218,26 +218,69 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** commit `aca26dd`.
 
 ### TD-04 — Imagery edge feather
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Fade the regional inset into the overview across the region edge
   so the last patch boundary stops stepping between 10 m and 2 km imagery.
 - **Dependencies:** P0-03 (satisfied), TD-03.
-- **Subsystems:** terrain material uniform, imagery manifest regions.
+- **Subsystems:** terrain material uniform, imagery manifest regions, imagery
+  tile resolution.
 - **Expected files:** `assets/shaders/terrain_surface.wgsl`,
   `src/infrastructure/bevy_adapters/terrain/render.rs`,
-  `src/domain/value_objects/imagery_manifest.rs`.
+  `src/infrastructure/bevy_adapters/terrain/imagery.rs`,
+  `src/domain/value_objects/imagery_manifest.rs`,
+  `src/domain/services/imagery_package.rs`,
+  `assets/configs/terrain/earth_imagery_v1.ron`.
 - **Acceptance:** `imagery_weight` is multiplied by a `smoothstep` over a band
   inside the region bounds, evaluated from the fragment's body position; the
   transition is independent of where patch boundaries fall.
-- **Tests:** uniform parity; feather math at the boundary, centre and outside.
-- **Visual evidence:** 40 km and 400 km frames at the P0-01 pose, before/after.
-- **Performance:** two dot products per fragment; measured delta < 1 %.
-- **Scientific validation:** the feather is presentation only; it must not move
-  the region's data or its checksums.
-- **Risks:** adding a uniform field can break the material if the layout drifts —
-  never land this without the parity test.
-- **Completion evidence:** pending.
+- **What had to change besides the shader:** the tile had to be *bound* for
+  patches that straddle the region edge. Resolution was centre containment, so a
+  straddling patch bound no tile and the edge fell on the next patch boundary
+  instead — measured at x = 459 in the 40 km frame, 59 px inside the region bound.
+  Resolution and colour matching now use footprint overlap.
+- **Tests:** `terrain_uniform_layout_matches_the_shader_struct` (the new
+  `imagery_bounds`/`imagery_feather_deg` fields), `regional_imagery_is_tapered_across_the_region_edge`
+  (the weight is multiplied by the band and the coordinate is the body position),
+  `feather_band_is_zero_at_the_edge_and_one_a_band_inside` (edge, centre, outside,
+  midpoint, monotonicity), `imagery_blend_carries_the_region_footprint_only_when_one_applies`,
+  `checked_in_feather_band_spans_several_overview_texels`,
+  `a_missing_or_impossible_feather_band_is_rejected`,
+  `patch_windows_handle_longitude_wrap_and_poles`,
+  `longitude_span_is_the_complement_of_the_largest_gap`,
+  `a_patch_straddling_the_region_edge_still_resolves_to_the_tile`.
+- **Visual evidence:** `2026-11-01-td04-pair-40km.jpg` (left: a hard patch-shaped
+  corner before; right: the same ground after), the full `albedo` frames at 40 km
+  before and after, the 80 km `albedo` frame, and the `patch-boundary` view at the
+  same pose that shows which columns are patch edges. Measured with
+  `scripts/imagery_region_mask.py` + `scripts/measure_tone_edge.py`:
+  * worst first difference within ±40 px of the region bound: **4.23/255 before,
+    0.72/255 after** (p90); after it equals the frame's own texture level and the
+    frame's worst column anywhere falls from **16.14** to **0.93/255**;
+  * the before/after tonal change is confined to x = 381..737, **16.4 km**, which
+    is the declared 0.15° band (16.6 km) — nothing outside it changes.
+- **No 400 km frame, and why:** the manifest publishes levels 8–12 and the visible
+  cover at 400 km is coarser, so no regional tile is bound there at all — the
+  400 km `albedo` frame is unchanged within 1/255. The defect lives where the
+  inset is drawn, roughly below 100 km; a 40 km and an 80 km frame are the honest
+  evidence.
+- **Performance:** two normalisations, an `asin`, an `atan2`, a `min` over four
+  bounds and a `smoothstep`, per fragment, **only** for patches that bind a
+  regional tile (the branch is on uniform per-patch values, so every other patch
+  skips it). No frame-time A/B was run: the change is confined to the handful of
+  patches inside one 1°×1.2° region and the available frame-time metrics cannot
+  resolve it. Claiming "< 1 %" would be a guess, so it is not claimed.
+- **Scientific validation:** the feather is presentation only. It does not move
+  terrain height, collision, the region's data, or its checksums; the manifest
+  change adds a presentation band, and the elevation and imagery checksums are
+  unchanged.
+- **Risks:** the uniform layout gained a `vec4` and an `f32`, so the material
+  breaks silently if the parity test is ever skipped. The band is declared in
+  degrees, so it is a different width in metres at different latitudes — correct
+  for a geographic box, but it means the transition is wider near the poles.
+- **Completion evidence:** MET. The imagery edge now follows the region bound as
+  a 16.6 km cross-fade, the frame's worst step at either the bound or a patch edge
+  is the frame's own texture level, and the change is confined to the band.
 
 ### TD-05 — Rectangular tone blocks at altitude
 - **Status:** VERIFIED

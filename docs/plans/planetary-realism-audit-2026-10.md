@@ -598,3 +598,81 @@ Recorded limits:
   minority of neighbouring patch pairs differed in roughness there. The targeted
   region is the load-bearing evidence at that pose; saying otherwise would be
   cherry-picking the frame-wide number in the other direction.
+
+## 2026-11-01 — Regional imagery cross-fade (TD-04)
+
+TD-03 matched the regional mosaic's *mean* tone to the Blue Marble overview, which
+removed the pale rectangle but not the line around it. The remaining edge was
+still a patch boundary, because `imagery_weight` was a per-patch scalar: a patch
+either bound the Sentinel tile or did not.
+
+Looking at the 40 km `albedo` frame at `-8.0,139.9,40000` showed a second cause
+that no shader-only fix would have addressed. The region's east bound is at
+longitude 140.0, which projects to x = 400. The imagery edge in that frame was at
+x = 459 — 59 px *inside* the bound — because the patch that straddles the bound
+has its centre outside the region, and `resolve` tested centre containment. So
+the patch bound no tile at all, and the next patch edge to the east started the
+imagery. There was nothing to feather at the region bound because nothing changed
+there.
+
+The fix therefore has two parts:
+
+1. **Resolution by overlap.** `EarthImageryPackage::region_for_patch` tests the
+   patch's geographic footprint (its four corner directions, with the circular
+   longitude interval taken as the complement of the largest gap, and a pole flag)
+   against the region bounds. `resolve` and `linear_color_gain` both use it, so a
+   straddling patch binds the tile and gets the region's measured gain. Without
+   the gain change the straddling half of a tile would have been left uncorrected,
+   which would have put a bright rim exactly where the fade runs.
+2. **A per-fragment band.** The material carries the region footprint and the band
+   width; the fragment converts its body-fixed position to latitude/longitude with
+   the terrain lat/lon authority's mapping, takes the signed depth inside the box
+   and multiplies the tile weight by `smoothstep(0, feather_deg, depth)`. The
+   branch is on uniform per-patch values, so only patches that bind a regional
+   tile pay for it.
+
+The band is declared in the manifest (`feather_deg: 0.15`) rather than in code,
+because it is a property of the two products: the runtime overview is 8192 px
+across 360°, i.e. 0.0439° per texel, and 0.15° is 3.4 of the overview's own
+texels — about 16.6 km here. The manifest validator rejects a band that is not
+positive or that exceeds half the region's narrowest extent, and a test pins the
+checked-in value to the overview's runtime resolution.
+
+Measurement needed a harness of its own, because a region bound is not a mesh
+seam. `measure_patch_seam.py` answers "is this seam a discontinuity": for the
+imagery edge that is the wrong question twice over — before the fix the edge was
+not at the bound, and after the fix it is deliberately a soft ramp hundreds of
+pixels wide. So `scripts/imagery_region_mask.py` projects the region's bounds into
+a capture frame with the capture camera's own conventions, and
+`scripts/measure_tone_edge.py` reports the frame's first-difference profile
+against the bound and against the frame's own texture level. The same tool with
+`--against` reports how far from the bound two builds actually differ, which is
+how the band's extent is checked rather than assumed.
+
+At the 40 km pose, `albedo` view (deck hidden by design, so the albedo mix is
+alone):
+
+| frame | worst column within ±40 px of the bound (p90) | worst column anywhere (p90) |
+| --- | ---: | ---: |
+| before | 4.23/255 at x = 380 (a patch edge) | 16.14/255 at x = 459 (a patch edge) |
+| after | 0.72/255 at x = 424 | 0.93/255 — the frame's texture level |
+
+and before-minus-after is above 0.1/255 only over x = 381..737, i.e. **16.4 km**,
+against the declared 16.6 km band. Nothing outside the band changes.
+
+Recorded limits:
+
+* At 400 km no regional tile is bound at all: the manifest publishes levels 8–12
+  and the visible cover there is coarser. The 400 km `albedo` frame is unchanged
+  within 1/255, so TD-04 has no 400 km case; the inset lives below roughly 100 km.
+  At 80 km there is neither an inset rectangle nor a LOD-boundary rectangle.
+* The band is declared in degrees, so its width in metres grows toward the poles.
+  That is right for a geographic box and wrong for nothing here, but a second
+  region at a high latitude would need its band chosen with that in mind.
+* No frame-time A/B was run. The added work is confined to patches that bind a
+  regional tile and the available frame-time metrics cannot resolve it, so the
+  "< 1 %" in the task's acceptance is not claimed.
+* The production frame at 40 km is dominated by the cloud deck seen from above,
+  with vertical streak artifacts that are a separate (cloud) defect. The imagery
+  edge is therefore measured on the `albedo` view, which is the mode that exists
+  to remove exactly that kind of obscuration.

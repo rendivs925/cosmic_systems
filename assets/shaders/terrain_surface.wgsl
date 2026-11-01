@@ -69,6 +69,12 @@ struct TerrainSurfaceExtension {
     // 0 while only the global overview is available, 1 when a produced local
     // imagery tile has replaced it for this patch.
     imagery_weight: f32,
+    // Body-fixed geographic footprint of the regional imagery this patch draws,
+    // as (west, south, east, north) degrees, and the width of the cross-fade
+    // band measured inward from those bounds. A zero band means no taper: the
+    // patch either shows the tile whole or does not bind one.
+    imagery_bounds: vec4<f32>,
+    imagery_feather_deg: f32,
     // View-distance band over which a patch morphs toward its coarser parent.
     morph_start_m: f32,
     morph_end_m: f32,
@@ -705,6 +711,39 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     return out;
 }
 
+/// Cross-fade of the regional imagery across the region's own edge.
+///
+/// The regional mosaic replaces the global overview inside a body-fixed
+/// geographic box. Without a taper the swap happens wherever the tile first
+/// becomes bound — a cube-sphere patch edge — so the box reads as a rectangle.
+/// The band is measured inward from the box bounds on the fragment's own body
+/// position, so its location and width are properties of the region and do not
+/// move when patch boundaries do. It is zero at the bound and one a full band
+/// inside; outside the box it stays zero, which is why a patch that straddles
+/// the edge agrees with its neighbour that binds no tile at all.
+fn imagery_region_weight(
+    bounds: vec4<f32>,
+    feather_deg: f32,
+    body_position: vec3<f32>,
+) -> f32 {
+    if feather_deg <= 0.0 {
+        return 1.0;
+    }
+    // Body-fixed geography, the same mapping the terrain lat/lon authority uses:
+    // +Y is the north pole, longitude is atan2(z, x).
+    let direction = normalize(body_position);
+    let latitude_deg = degrees(asin(clamp(direction.y, -1.0, 1.0)));
+    let longitude_deg = degrees(atan2(direction.z, direction.x));
+    // Signed depth inside the box in degrees; negative outside it. The minimum
+    // over the four bounds is the distance to the nearest edge, so the band is
+    // symmetric and the corners fade along both edges at once.
+    let inside_deg = min(
+        min(latitude_deg - bounds.y, bounds.w - latitude_deg),
+        min(longitude_deg - bounds.x, bounds.z - longitude_deg),
+    );
+    return smoothstep(0.0, feather_deg, inside_deg);
+}
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
@@ -780,10 +819,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         terrain_imagery_albedo_sampler,
         in.uv_b,
     );
+    // Regional tile weight: readiness, faded over the region's edge band. The
+    // branch is on uniform per-patch values, so the geographic evaluation only
+    // runs for the patches that actually bind a regional tile.
+    var regional_weight = terrain_surface.imagery_weight;
+    if regional_weight > 0.0 && terrain_surface.imagery_feather_deg > 0.0 {
+        regional_weight = regional_weight * imagery_region_weight(
+            terrain_surface.imagery_bounds,
+            terrain_surface.imagery_feather_deg,
+            body_position,
+        );
+    }
     let base_albedo = mix(
         global_albedo.rgb,
         imagery_albedo.rgb,
-        terrain_surface.imagery_weight,
+        regional_weight,
     );
     let local_surface = textureSample(
         terrain_local_normal,

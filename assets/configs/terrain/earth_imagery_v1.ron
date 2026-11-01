@@ -36,6 +36,13 @@
             south_deg: -8.6,
             east_deg: 140.0,
             north_deg: -7.4,
+            // Cross-fade band inside the region bounds. The runtime overview is
+            // 8192 px across 360 deg (0.0439 deg per texel), so 0.15 deg spans
+            // 3.4 overview texels, about 16.6 km at this latitude: wide enough
+            // that the two instruments blend over several of the coarser one's
+            // own pixels, and 15 % of the region's narrowest extent, so the
+            // mosaic still has a fully opaque interior.
+            feather_deg: 0.15,
             min_level: 8,
             max_level: 12,
             runtime_tiles: "assets/large_files/terrain/earth_imagery_v1/tiles",

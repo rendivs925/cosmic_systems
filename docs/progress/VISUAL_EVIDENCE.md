@@ -137,6 +137,12 @@ without repeating the experiment.
 | `2026-11-01-diag-water-opacity-300km.jpg` | same | 200 | `7d04e2f9dee60f20` | water-opacity | opaque offshore, ramping only at the shore |
 | `2026-11-01-td05-pair-300km.jpg` | `-8.0,139.5,300000` | 200 | `6f155973acb77dc5` | paired crop, 3× nearest | **left pre-fix, right post-fix**: the pale wedge across the lowland disappears |
 | `2026-11-01-td05-pair-1200km.jpg` | `-8.0,139.5,1200000` | 200 | `79db3fd10a43bc52` | paired crop, 3× nearest | **left pre-fix, right post-fix**: the lighter patch-shaped wedge is gone; seam excess +4.14 → −0.04/255 |
+| `2026-11-01-td04-albedo-40km-before.jpg` | `-8.0,139.9,40000` | 200 | `71f9188683c9f414` | albedo | the imagery inset ends on a hard patch-shaped corner at x ≈ 381/459, not on the region bound at x = 400 |
+| `2026-11-01-td04-albedo-40km-after.jpg` | same | 200 | `441afe4aa4535d4a` | albedo | the same edge is now a soft ramp centred on the region bound; no column exceeds the frame's texture level |
+| `2026-11-01-td04-pair-40km.jpg` | same | 200 | `e145fe546300b135` | paired crop, 2× nearest | **left before, right after**: the hard corner is gone; the change is confined to the declared band |
+| `2026-11-01-td04-albedo-80km-after.jpg` | `-8.0,139.9,80000` | 200 | `e9d6c5ac99fe3218` | albedo | no inset rectangle and no LOD-boundary rectangle at 80 km |
+| `2026-11-01-td04-production-40km-after.jpg` | `-8.0,139.9,40000` | 200 | `258748115c5b497e` | production | context only: the cloud deck covers most of the ground at 40 km, so the imagery edge is measured on the albedo view |
+| `2026-11-01-diag-patch-boundary-40km.jpg` | same | 200 | `3478f268b8a8ec97` | patch-boundary | patch edges at x = 145, 302, 381, 459, 617, 774, 930, 1086, 1242; the before frame's imagery edge is on two of them |
 | `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
 
 ## Negative results worth keeping
