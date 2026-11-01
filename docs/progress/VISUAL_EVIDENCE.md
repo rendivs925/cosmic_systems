@@ -143,6 +143,11 @@ without repeating the experiment.
 | `2026-11-01-td04-albedo-80km-after.jpg` | `-8.0,139.9,80000` | 200 | `e9d6c5ac99fe3218` | albedo | no inset rectangle and no LOD-boundary rectangle at 80 km |
 | `2026-11-01-td04-production-40km-after.jpg` | `-8.0,139.9,40000` | 200 | `258748115c5b497e` | production | context only: the cloud deck covers most of the ground at 40 km, so the imagery edge is measured on the albedo view |
 | `2026-11-01-diag-patch-boundary-40km.jpg` | same | 200 | `3478f268b8a8ec97` | patch-boundary | patch edges at x = 145, 302, 381, 459, 617, 774, 930, 1086, 1242; the before frame's imagery edge is on two of them |
+| `2026-11-01-at03-prod-400km.jpg` | `-4.0,138.0,400000` | 200 | `338a2cdd4f96b47f` | production | land dark, deck white: the AT-03 symptom |
+| `2026-11-01-at03-albedo-400km.jpg` | same | 200 | `64854b29621aca66` | albedo | the albedo itself is dark: ~4 % linear reflectance over Borneo forest |
+| `2026-11-01-at03-prod-3km.jpg` | `-4.0,138.0,3000` | 200 | `3794352ca3a8631d` | production | the same ground at 3 km: bright green, 2.1× the 300 km production luminance |
+| `2026-11-01-at03-albedo-3km.jpg` | same | 200 | `464c36804dad5d17` | albedo | **identical to the 400 km albedo** (0.0169 linear p50), so the altitude path is right |
+| `2026-11-01-at03-inputs-3km.jpg` | same | 200 | `5bd54c265bef0691` | inputs | `(255,255,171)` = LOCAL_SURFACES + LAYER_WEIGHTS + OCCLUSION, no imagery: the near-ground material inputs that replace the overview |
 | `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
 
 ## Negative results worth keeping

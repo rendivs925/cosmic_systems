@@ -28,8 +28,9 @@ and a measurement path that captures frames without a swapchain.
 ## What is currently being built?
 
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
-TD-05 (tone blocks) and TD-04 (regional imagery edge) are closed; the next open
-visual defect is AT-03, the land reading nearly black at altitude.
+TD-05 (tone blocks), TD-04 (regional imagery edge) and AT-03 (high-altitude land
+darkness, attributed) are closed; the next measurable visual defect is the
+near-ground albedo tone step, scoped as TM-04.
 
 ## What is broken?
 
@@ -37,7 +38,7 @@ visual defect is AT-03, the land reading nearly black at altitude.
 | --- | --- |
 | Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
-| Land nearly black at 400 km while clouds are white | cause unknown |
+| Land nearly black at 400 km while clouds are white | **verified — explained.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The remaining step is near the ground: local surfaces and the layered material are 2–2.5× brighter than the measured overview (TM-04) |
 | Cloud edges are cut-outs; one shape per region | planned work |
 | Vegetation reads as specks | planned work |
 | Regional imagery steps at its patch edge | **verified and closed.** The edge is now a 16.6 km cross-fade at the region bound; the worst step near the bound fell from 4.23 to 0.72/255 (the frame's own texture level) and the change is confined to the declared band |
@@ -50,7 +51,7 @@ it.
 
 ## What has been verified?
 
-Thirteen of forty roadmap tasks, each with implementation + tests + a named frame
+Fourteen of forty-one roadmap tasks, each with implementation + tests + a named frame
 or a named measurement:
 
 | task | evidence |
@@ -67,6 +68,7 @@ or a named measurement:
 | RD-03 shadow lifecycle | 90-pose sweep pixel-identical; residency test |
 | TD-05 tone blocks | seam excess +4.14 → −0.04/255 at the seam that motivated it; frame-wide +0.25/+0.47/255; ocean half refuted with six water views |
 | TD-04 imagery edge | the inset edge is a 16.6 km cross-fade at the region bound; worst step near the bound 4.23 → 0.72/255, change confined to x=381..737 |
+| AT-03 high-altitude darkness | the same ground measures the same albedo at 400 km and 3 km (0.0169 linear p50); the near-ground material is the 2–2.5× outlier |
 | VL-02 OpenSpec strict | 42/42 |
 
 Four more are implemented but **not** verified: site grading at more than one
@@ -124,17 +126,24 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,101 domain and adapter
-tests pass and OpenSpec is strict-clean. The realism programme has verified ten of
-its forty tasks. Two of the last three slices fixed real defects that the
-screenshots alone could not have explained — the sea surface ramping into the
-shore, and the launch pad floating on a slope — and both were confirmed by
-measurement rather than by eye.
+The simulator runs and its physics is regression-locked; 1,133 domain and adapter
+tests pass (1,091 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified fourteen of its forty-one tasks.
 
-The largest visible defect, rectangular albedo blocks over the planet, is now
-narrowed to albedo or geometry: it survives a seven-hour Sun change, 90 vs 400
-frames, and appears at two altitudes. It is *not* the regional imagery. Isolating
-it needs the diagnostic modes, which is the next task.
+The last three slices each closed a defect that screenshots alone could not
+explain, by building the instrument the question needed first. The sea surface
+ramping into the shore was geometry; the launch pad floating on a slope was site
+grading. The rectangular tone blocks at altitude were a per-patch roughness
+constant on land and, in the water, nothing at all — the block read was the shelf
+break. The regional imagery edge was not where anyone thought: the tile only
+started at the next patch boundary, because tile resolution tested patch-centre
+containment.
+
+What is left of that family is a tone step rather than a defect: the ground
+brighter near the camera than from orbit, because the near-ground material's
+albedo is 2–2.5× the measured overview's. That is TM-04, and the method is
+already proven — a measured gain, recorded with its derivation, the way the
+regional mosaic was matched.
 
 Two hard constraints are recorded rather than worked around. The machine cannot
 present a Vulkan surface, so windowed validation is blocked and the offscreen

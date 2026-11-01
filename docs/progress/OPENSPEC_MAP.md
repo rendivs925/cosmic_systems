@@ -29,6 +29,7 @@ over with a new duplicate spec.
 | TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | |
 | TM-02 distance detail | `terrain-lod`, `terrain-rendering` | — | |
 | TM-03 land/sea reconciliation | `earth-imagery-streaming`, `terrain-source` | — | |
+| TM-04 near-ground albedo tone | `planetary-terrain-material`, `terrain-material-splat`, `scientific-lighting` | — | tone continuity between the measured overview and the layered material |
 | VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | `stabilize-far-field-tree-placement` | change tasks complete, not archived |
 | VG-02 canopy | `vegetation-species` | — | |
 | VG-03 wind and shading | `vegetation-species` | — | |

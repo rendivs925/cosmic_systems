@@ -676,3 +676,55 @@ Recorded limits:
   with vertical streak artifacts that are a separate (cloud) defect. The imagery
   edge is therefore measured on the `albedo` view, which is the mode that exists
   to remove exactly that kind of obscuration.
+
+## 2026-11-01 — Why land reads dark from orbit (AT-03 attribution)
+
+The complaint was that land is nearly black at 400 km while the cloud deck is
+white. The honest first step is to separate the two ends of the same surface: the
+albedo the material uses at altitude, and the albedo it uses near the ground.
+
+At `-4.0,138.0` (inland Borneo, no regional imagery, so the overview is the only
+albedo source at both altitudes):
+
+| view | 400 km | 3 km |
+| --- | ---: | ---: |
+| `albedo` linear luminance p50 | **0.0169** | **0.0169** |
+| production linear luminance p50 | 0.0333 | 0.0742 |
+
+The albedo view is *identical* to four decimals, so mip filtering, the atmosphere
+and the lit path preserve the surface tone with altitude. Baked occlusion on that
+ground is neutral — self-shadow and sky visibility are exactly 1.000 at p5, p50
+and p95 — so no shadow term is subtracting light. The production-to-albedo ratio
+at altitude (1.77 at the 300 km Papua pose, 2.07 at the 400 km Borneo pose) is
+the lighting factor, and it is consistent between those two poses.
+
+So land is dark from orbit because the measured overview over tropical forest is
+dark: 0.017 linear is about 4 % reflectance. A white deck at ~0.9 is genuinely
+around 50× brighter per unit area. Nothing is underexposed, and no altitude term
+is wrong.
+
+What is visible is the *other* end. On descent the same ground becomes 2.2×
+brighter in production (0.0333 → 0.0742) while its albedo does not change, so the
+extra brightness comes from material inputs that only exist near the ground. The
+`inputs` view at 3 km reports `(255,255,171)`, i.e. LOCAL_SURFACES + LAYER_WEIGHTS
++ OCCLUSION and no imagery, and `layer-blend` reports the layered path active;
+both fade out with view distance. Their albedo is therefore about 2–2.5× the
+overview's on the same ground.
+
+That is a tone-calibration question of exactly the kind TD-03 solved for the
+regional mosaic, and it is scoped as TM-04 rather than bolted onto this task. The
+reference for the calibration is already measured: the Sentinel mosaic after its
+gain has a linear mean of 0.019, which agrees with the overview's 0.017.
+
+Recorded limits:
+
+* The near/far brightness ratio compares two poses that differ by about 4° of
+  latitude and by the air column above the camera, so it is quoted as a range
+  (2–2.5×) rather than a calibrated constant. A clean calibration needs the same
+  pose at several altitudes with the Sun and sky held fixed, which TM-04 must do.
+* "Identical albedo" is a statement about the rendered overview, not about the
+  surface's true reflectance; the overview is a composited product and its
+  absolute calibration is not what this measurement establishes.
+* The 3 km frame is a 4 km-wide patch inside a single overview texel, which is why
+  the two albedo values agree so exactly. A wider near-ground frame would average
+  across texels and could not have been compared this way.

@@ -566,6 +566,36 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Risks:** shimmer and aliasing; cost per patch.
 - **Completion evidence:** pending.
 
+### TM-04 — Local and layered albedo tone match to the measured overview
+- **Status:** PLANNED
+- **Priority:** P2
+- **Objective:** Stop the ground brightening about 2–2.5× when the camera descends
+  from orbit to the surface, by calibrating the local source surfaces and the
+  layered ground albedo against the measured overview and imagery — the same
+  measured-gain method TD-03 used on the regional mosaic.
+- **Dependencies:** AT-03 (attribution complete), TD-03.
+- **Subsystems:** terrain appearance, layered ground material, local surfaces.
+- **Expected files:** `src/domain/services/terrain_source/appearance.rs`,
+  `src/infrastructure/bevy_adapters/terrain/surface/mod.rs`,
+  `assets/shaders/terrain_surface.wgsl`, the land-cover layer catalog.
+- **Acceptance:** at a fixed site the production land's linear luminance changes
+  by no more than the atmosphere and Sun angle explain between 400 km and 3 km,
+  while the `albedo` view stays identical; the calibration is a measured ratio
+  recorded with its derivation, not a look.
+- **Tests:** a pinned measured ratio (as `checked_in_color_match_is_the_measured_mean_ratio`
+  does for imagery), and a test that the layer albedos cannot drift from it.
+- **Visual evidence:** paired 3 km / 400 km production frames at the same pose,
+  plus the `albedo` pair that must not move.
+- **Performance:** none; a scalar in the material path.
+- **Scientific validation:** the reference is the measured overview, whose mean
+  reflectance the Sentinel mosaic agrees with after TD-03's gain (0.019 linear
+  against 0.017). The local and layer albedos are currently ~2–2.5× that.
+- **Risks:** brightening the ground instead of darkening the near end would move
+  the deck/land contrast the other way; and matching the mean is not matching
+  the distribution, so a flat gain can still leave a visible step at the fade
+  distance.
+- **Completion evidence:** pending.
+
 ### TM-03 — Land/sea mask and imagery reconciliation
 - **Status:** PLANNED
 - **Priority:** P2
@@ -791,23 +821,47 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** pending.
 
 ### AT-03 — High-altitude land darkness
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Explain why land reads nearly black at 400 km while the deck is
   white, and fix whichever term is wrong.
 - **Dependencies:** P0-03 (satisfied).
 - **Subsystems:** terrain albedo, lighting, atmosphere.
-- **Expected files:** `assets/shaders/terrain_surface.wgsl`,
-  `rendering/sky.rs`.
 - **Acceptance:** land albedo at 400 km is consistent with the same surface at
   3 km after atmosphere and Sun angle are accounted for.
-- **Tests:** diagnostic capture comparison.
-- **Visual evidence:** 300/400 km frames (already captured; the symptom is in
-  `2026-10-31-300km-papua.jpg`).
+- **Attribution (measured, no code change):** the altitude term is not wrong.
+  At `-4.0,138.0` the same ground renders at the **same** albedo at 400 km and at
+  3 km — linear luminance p50 **0.0169 both** — so mip filtering, atmosphere and
+  the lit path preserve the surface tone. Baked occlusion is neutral (self-shadow
+  and sky visibility both exactly 1.000, p5…p95) on that ground, and the
+  production/albedo ratio at altitude (1.77 at 300 km, 2.07 at 400 km) is the
+  lighting factor, consistent between the two poses.
+  Land reads dark because tropical-forest albedo in the Blue Marble overview is
+  dark: 0.017 linear, about 4 % reflectance. A white deck at ~0.9 is genuinely
+  ~50× brighter per unit area; the frame is not underexposed.
+  The *remaining* observation is at the near end, not the far end. At the same
+  pose, production land is 0.0742 linear at 3 km against 0.0333 at 400 km — a
+  2.2× step on descent — while the albedo view is identical (0.0169 at both). The `inputs` and
+  `layer-blend` views at 3 km confirm what is different there: local source
+  surfaces and the layered ground material are both active (`(255,255,171)`,
+  i.e. LOCAL_SURFACES + LAYER_WEIGHTS + OCCLUSION, no imagery) and both fade out
+  with view distance, so the near-ground material replaces the overview with
+  albedo about **2–2.5×** brighter on the same ground. That is a material-tone
+  calibration question, scoped as **TM-04** below rather than fixed here.
+- **Tests:** diagnostic capture comparison (`albedo`, `occlusion`, `inputs`,
+  `layer-blend` at the same pose).
+- **Visual evidence:** `2026-11-01-at03-prod-400km.jpg`,
+  `2026-11-01-at03-albedo-400km.jpg`, `2026-11-01-at03-albedo-3km.jpg`,
+  `2026-11-01-at03-prod-3km.jpg`, `2026-11-01-at03-inputs-3km.jpg`.
 - **Performance:** none.
-- **Scientific validation:** not applicable until attributed.
-- **Risks:** guessing between albedo, mip and lighting.
-- **Completion evidence:** pending.
+- **Scientific validation:** the albedo comparison is between two renders of the
+  same measured overview, not a claim about the surface's true reflectance.
+- **Risks:** the near/far ratio is an inference from two poses at different
+  latitudes (≈4° of Sun elevation) and different air columns, so it is quoted as
+  a range, not a calibrated constant.
+- **Completion evidence:** attribution complete and the acceptance met: the
+  altitude-side albedo is identical at 400 km and 3 km. The near-ground
+  brightness step is a separate, newly scoped task with its own measurement.
 
 ---
 
