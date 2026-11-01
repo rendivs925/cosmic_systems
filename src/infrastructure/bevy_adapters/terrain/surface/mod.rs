@@ -40,7 +40,7 @@ use crate::domain::services::land_cover::LandCoverLookup;
 use crate::domain::services::soil::SoilLookup;
 use crate::domain::services::surface_fields::SurfaceFieldsLookup;
 use crate::domain::services::terrain_source::{
-    slope_deg_at, surface_appearance, with_river_appearance, TerrainSource,
+    slope_deg_at, surface_appearance, surface_roughness, with_river_appearance, TerrainSource,
 };
 use crate::domain::services::vegetation::VegetationConfig;
 use bevy::asset::RenderAssetUsages;
@@ -653,7 +653,6 @@ pub(crate) fn prepare_patch_surface(
     // Global Earth albedo supplies broad geography. Source-derived local maps
     // are generated only once their detail is visible at close range.
     let uses_erosion_surface_data = supports_local_surfaces(patch.level);
-    let vertex_colors = vec![[1.0, 1.0, 1.0, 1.0]; geometry.positions.len()];
 
     let center = patch.center_direction();
     let (lat, lon) = direction_to_lat_lon(center);
@@ -678,6 +677,39 @@ pub(crate) fn prepare_patch_surface(
         surface_appearance(elevation_m, moisture, source.zone_lat(lat), slope_deg),
         river_strength,
     );
+    // Per-vertex roughness. It used to be one scalar per patch sampled at the
+    // patch centre, which turned a continuous coastline into a patch-shaped
+    // staircase of 0.25 seafloor beside 0.85 land. Every input of the roughness
+    // law is available per vertex without a source query: the height comes from
+    // the vertex itself, the latitude zone from its direction, and the slope
+    // from its normal. Shared boundary vertices therefore get identical values
+    // at every LOD and across cube faces, so the field cannot step at a seam.
+    // Green carries roughness to the fragment shader; red stays free for the LOD
+    // morph offset, which the mesh builder writes there.
+    let datum_radius_m = radius_m + source.sea_level_height_m(lat, lon);
+    let vertex_colors: Vec<[f32; 4]> = geometry
+        .positions
+        .iter()
+        .zip(geometry.normals.iter())
+        .map(|(position, normal)| {
+            let position = DVec3::from_array(*position);
+            let vertex_radius = position.length();
+            let radial = if vertex_radius > f64::EPSILON {
+                position / vertex_radius
+            } else {
+                DVec3::Y
+            };
+            let (vertex_latitude_deg, _) = direction_to_lat_lon(radial);
+            let normal = DVec3::from_array(*normal);
+            let slope_deg = normal.dot(radial).clamp(-1.0, 1.0).acos().to_degrees();
+            let roughness = surface_roughness(
+                vertex_radius - datum_radius_m,
+                source.zone_lat(vertex_latitude_deg),
+                slope_deg,
+            );
+            [1.0, roughness, 0.0, 1.0]
+        })
+        .collect();
     let local_surfaces = supports_local_surfaces(patch.level)
         .then(|| build_patch_surfaces(source, patch, geometry, radius_m, land_cover, soil, fields));
     // The layered material is selected at runtime from build capability. Browser
@@ -1991,6 +2023,94 @@ mod tests {
             println!("Papua L{level}: cover={density:.3}, grass cards={grass_cards}, tree cards={tree_cards}");
             assert!(grass_cards > 0, "no grass at L{level}");
             assert!(tree_cards > 0, "no trees at L{level}");
+        }
+    }
+    /// A surface that crosses sea level inside a patch, so the roughness law's
+    /// seafloor and land branches both appear and the vertex field has to vary.
+    #[derive(Debug)]
+    struct CoastTerrain;
+
+    impl TerrainSource for CoastTerrain {
+        fn height_m(&self, latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            // 1 km of relief per degree of latitude, crossing sea level at 6 N
+            // so the chosen equatorial patch pair spans both branches.
+            (latitude_deg - 6.0) * 1_000.0
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(-9_000.0, 9_000.0)
+        }
+    }
+
+    /// Roughness must be a per-vertex field that agrees exactly on a shared patch
+    /// edge. A per-patch constant was what turned the coastline into a
+    /// patch-shaped staircase (TD-05), so this is the regression that matters.
+    #[test]
+    fn per_vertex_roughness_agrees_across_a_shared_patch_edge() {
+        let source = CoastTerrain;
+        let radius_m = 6_371_000.0;
+        let level = 3;
+        // Two tiles side by side on the PosZ face, sharing their north edge.
+        let left = patch_at(level, 2, 4);
+        let right = patch_at(level, 3, 4);
+        let resolution = 9;
+        let left_geometry = build_patch_geometry(&left, &source, radius_m, resolution, 20.0);
+        let right_geometry = build_patch_geometry(&right, &source, radius_m, resolution, 20.0);
+        let left_surface =
+            prepare_patch_surface(&source, &left, &left_geometry, radius_m, None, None, None);
+        let right_surface =
+            prepare_patch_surface(&source, &right, &right_geometry, radius_m, None, None, None);
+
+        // The per-vertex field must actually vary, or this test proves nothing.
+        let roughness_of = |surface: &PreparedPatchSurface| -> Vec<f32> {
+            surface.vertex_colors.iter().map(|color| color[1]).collect()
+        };
+        let left_values = roughness_of(&left_surface);
+        let min = left_values.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = left_values
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max - min > 0.2,
+            "the per-vertex roughness must span the coast, got {min}..{max}"
+        );
+
+        let key = |position: &[f64; 3]| -> (i64, i64, i64) {
+            (
+                (position[0] * 1e3).round() as i64,
+                (position[1] * 1e3).round() as i64,
+                (position[2] * 1e3).round() as i64,
+            )
+        };
+        let mut left_edge = std::collections::HashMap::new();
+        for (index, position) in left_geometry.positions.iter().enumerate() {
+            left_edge.insert(key(position), left_surface.vertex_colors[index][1]);
+        }
+        let mut shared = 0;
+        for (index, position) in right_geometry.positions.iter().enumerate() {
+            if let Some(left_value) = left_edge.get(&key(position)) {
+                let right_value = right_surface.vertex_colors[index][1];
+                assert_eq!(
+                    *left_value, right_value,
+                    "roughness steps across a shared edge vertex at {position:?}"
+                );
+                shared += 1;
+            }
+        }
+        assert!(
+            shared >= resolution,
+            "expected the two patches to share an edge, found {shared} shared vertices"
+        );
+    }
+
+    /// One patch of the two-by-two subdivision on the PosZ face.
+    fn patch_at(level: u32, tile_x: u32, tile_y: u32) -> TerrainPatch {
+        TerrainPatch {
+            face: crate::domain::services::cube_sphere::CubeFace::PosZ,
+            level,
+            tile_x,
+            tile_y,
         }
     }
 }

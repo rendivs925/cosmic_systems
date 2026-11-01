@@ -444,3 +444,48 @@ and the LOD morph (A/B above).
 Method note for the next reader: the A/B frames are marked *modified build* in
 `docs/progress/VISUAL_EVIDENCE.md` and the exact one-line change is recorded
 next to them. They are measurements, not shipping behaviour.
+
+## 2026-11-01 — Per-vertex roughness (TD-05, land half)
+
+The attribution said the land tone blocks were a per-patch constant, so the fix
+removes the constant rather than hiding it. Roughness is now evaluated **per
+vertex** by `surface_roughness(elevation, zone_lat, slope_deg)`, the same law
+`surface_appearance` calls, and carried to the fragment shader in the green
+channel of the terrain vertex colour — beside the LOD morph offset in red, which
+the mesh builder already owned. The fragment uses the interpolated value as the
+base that the detail and layer roughness still blend over, so the close-range path
+is unchanged.
+
+Why this shape:
+
+* The law needs only a vertex's height, latitude zone and normal, which the
+  geometry already has. No source query, no extra texture, no CPU bake loop.
+* Shared boundary vertices have the same height, latitude and normal, so they get
+  **bit-identical** roughness at every LOD and across cube faces. A test asserts
+  exactly that across two adjacent patches, which is the property a patch-shaped
+  seam violates.
+* Moisture is deliberately not an input; it drives albedo only. That is what makes
+  the per-vertex evaluation free.
+
+Verification, same pose, clock and frame count as the attribution runs: the
+1,200 km patch-boundary step measured **12.3/255 before and 4.2/255 after**,
+against **4.3/255** for the forced-constant A/B. The fix reproduces the
+experiment's number without discarding the continuous depth and shore variation.
+At 300 km the roughness view now follows the coastline instead of splitting the
+frame on one patch edge; the production frame differs from the pre-fix reference
+by a mean 1.54/255, concentrated at patch edges.
+
+Recorded limits:
+
+* The residual 4.2/255 is terrain shading on either side of a real edge, not a
+  seam, but it is above the ±1/255 acceptance threshold, so TD-05 cannot be
+  closed on it.
+* The waterline is still a real discontinuity in the law (glossy seafloor against
+  rough land). The mesh interpolates across it; the constant-roughness A/B shows
+  what removing it entirely would cost.
+* The ocean blocks remain unattributed. `WaterMaterial` has no diagnostic view.
+* Two of the four captures in this slice died with a core dump **after** writing
+  their PNG and with no panic in the log; the identical command exited 0 on a
+  retry and produced the same frame to within a handful of pixels. This is the
+  same intermittent shutdown failure recorded earlier in this log, not a
+  regression from this change, but it stays on the list.

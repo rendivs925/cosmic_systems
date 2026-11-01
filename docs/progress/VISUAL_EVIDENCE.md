@@ -91,7 +91,7 @@ without repeating the experiment.
 | `2026-11-01-diag-patch-identity-300km.jpg` | same | 200 | `222481f42e4db057` | patch identity | distinct colour per patch, no duplicates in frame |
 | `2026-11-01-diag-inputs-300km.jpg` | same | 200 | `e5508d8734b2208b` | inputs | **occlusion only**: no imagery, layers or local surfaces at 300 km |
 | `2026-11-01-diag-occlusion-300km.jpg` | same | 200 | `c43c97cc8da51d72` | occlusion | uniform (1,1): no baked occlusion on coarse patches |
-| `2026-11-01-diag-roughness-300km.jpg` | same | 200 | `8c51fed419b3e658` | roughness | grey field tracks the surface class bands |
+| `2026-11-01-diag-roughness-300km.jpg` | same | 200 | `8c51fed419b3e658` | roughness | **pre-fix**: the coastline is one patch edge between 0.25 and 0.85 |
 | `2026-11-01-diag-metallic-300km.jpg` | same | 200 | `289340d25e43a1bc` | metallic | black by construction: terrain metallic is 0 |
 | `2026-11-01-diag-layer-blend-300km.jpg` | same | 200 | `3a776f7ed53a19f5` | layer blend | magenta everywhere: single-layer fallback at this altitude |
 | `2026-11-01-diag-morph-offset-300km.jpg` | same | 200 | `d357f8b4ab9af478` | morph offset | mid grey with small deviations; no patch-sized step |
@@ -115,13 +115,17 @@ without repeating the experiment.
 | `2026-11-01-diag-lod-1200km.jpg` | same | 200 | `a604b04eacd8d9f7` | lod | levels 4–6 only; seams match the patch grid |
 | `2026-11-01-diag-patch-boundary-1200km.jpg` | same | 200 | `d393e67ea93eae4a` | patch boundary | seams identical to the LOD view, no extra edges |
 | `2026-11-01-diag-occlusion-1200km.jpg` | same | 200 | `85a615342641b359` | occlusion | uniform (1,1): no baked occlusion at this altitude |
-| `2026-11-01-diag-roughness-1200km.jpg` | same | 200 | `ce7937ec3e61ed21` | roughness | **patch-shaped blocks**: 0.25 seafloor vs 0.85 land, sampled once per patch |
+| `2026-11-01-diag-roughness-1200km.jpg` | same | 200 | `ce7937ec3e61ed21` | roughness | **pre-fix**: patch-shaped blocks, 0.25 seafloor vs 0.85 land sampled once per patch |
 | `2026-11-01-diag-layer-blend-1200km.jpg` | same | 200 | `4c45f62af5b2e918` | layer blend | magenta: single-layer fallback everywhere |
 | `2026-11-01-diag-metallic-1200km.jpg` | same | 200 | `278eb37660dcf9a2` | metallic | black: terrain metallic is 0 |
 | `2026-11-01-diag-detail-weight-1200km.jpg` | same | 200 | `73376043021193e6` | detail weight | black: source detail faded out at LOD ≤ 11 |
 | `2026-11-01-diag-morph-offset-1200km.jpg` | same | 200 | `d1cd98110b251d31` | morph offset | large deltas at coastlines only; lowland near 0 |
 | `2026-11-01-diag-surface-class-1200km.jpg` | same | 200 | `40c73a7072714ef9` | surface class | magenta: no classification data at this altitude |
 | `2026-11-01-ab-constant-roughness-1200km.jpg` | same | 200 | `5b20c6f40af847fc` | production, **modified build** | roughness forced to a constant: patch step 12.2 → 4.1/255 |
+| `2026-11-01-diag-roughness-1200km-continuous.jpg` | same | 200 | `b547028dca0d5228` | roughness | **after**: the field follows the coastline and the depth ramp, no patch-shaped blocks |
+| `2026-11-01-diag-roughness-300km-continuous.jpg` | `-8.0,139.5,300000` | 200 | `91985641eb20b3b3` | roughness | **after**: one continuous field across the coast; the edge is mesh resolution, not a patch |
+| `2026-11-01-production-1200km-continuous.jpg` | `-8.0,139.5,1200000` | 200 | `f628c5150f195a7d` | production | patch step 12.3 → 4.2/255, matching the constant-roughness A/B |
+| `2026-11-01-production-300km-continuous.jpg` | `-8.0,139.5,300000` | 200 | `d3049dbbb67e9c65` | production | mean 1.54/255 from `2026-10-31-300km-papua.jpg`, concentrated at patch edges |
 | `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
 
 ## Negative results worth keeping

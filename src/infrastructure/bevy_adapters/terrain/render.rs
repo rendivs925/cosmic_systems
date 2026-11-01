@@ -2276,14 +2276,21 @@ fn patch_geometry_to_mesh(
     let uvs = geometry.uvs.to_vec();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, geometry.local_uvs.clone());
-    // Terrain vertex colour is otherwise neutral, so it carries the per-vertex
-    // LOD morph offset (metres, radial) in the red channel for the terrain
-    // vertex shader. Falls back to neutral colour when no morph data exists.
+    // Terrain vertex colour carries two independent per-vertex values:
+    // red is the LOD morph offset (metres, radial) for the terrain vertex
+    // shader, green is the surface roughness from the prepared patch. The mesh
+    // builder is the one place they are combined, so neither producer has to
+    // know about the other. Falls back to the prepared colours when there is no
+    // morph data (a root patch), and to neutral when even those are missing.
     let colors: Vec<[f32; 4]> = if geometry.morph_deltas.len() == geometry.positions.len() {
         geometry
             .morph_deltas
             .iter()
-            .map(|delta| [*delta, 0.0, 0.0, 1.0])
+            .enumerate()
+            .map(|(index, delta)| {
+                let prepared = vertex_colors.get(index).copied().unwrap_or([1.0; 4]);
+                [*delta, prepared[1], prepared[2], prepared[3]]
+            })
             .collect()
     } else {
         vertex_colors.to_vec()
@@ -3269,6 +3276,32 @@ mod tests {
             ],
             [1, 2, 4, 8],
             "each diagnostic input must own exactly one bit"
+        );
+    }
+
+    /// Roughness must come from the interpolated vertex field, not from the
+    /// per-patch material scalar that produced the TD-05 tone blocks. The shader
+    /// is the only place that decision lives, so it is pinned here.
+    #[test]
+    fn shader_takes_roughness_from_the_vertex_field() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        assert!(
+            shader.contains(
+                "pbr_input.material.perceptual_roughness = clamp(in.color.g, 0.02, 1.0);"
+            ),
+            "the fragment shader must take roughness from the vertex field"
+        );
+        // The override has to precede the detail/layer blends, which take over at
+        // close range, and it must stay behind the vertex-colour define.
+        let override_at = shader
+            .find("clamp(in.color.g, 0.02, 1.0)")
+            .expect("roughness override");
+        let blend_at = shader
+            .find("var roughness_value =")
+            .expect("detail/layer roughness blend");
+        assert!(
+            override_at < blend_at,
+            "the vertex roughness must be the base the detail and layer terms blend over"
         );
     }
 
@@ -4391,10 +4424,17 @@ mod tests {
             None,
         );
 
+        // Red is free for the morph offset (written by the mesh builder), green
+        // is the per-vertex roughness, and both LODs derive it from the same
+        // geometry and vertex positions, so they agree exactly.
         assert!(coarse
             .vertex_colors
             .iter()
-            .all(|color| *color == [1.0, 1.0, 1.0, 1.0]));
+            .all(|color| color[0] == 1.0 && color[3] == 1.0));
+        assert!(coarse
+            .vertex_colors
+            .iter()
+            .all(|color| (0.0..=1.0).contains(&color[1])));
         assert_eq!(coarse.vertex_colors, fine.vertex_colors);
         assert!(coarse.local_surfaces.is_none());
         assert!(fine.local_surfaces.is_some());
@@ -4408,6 +4448,45 @@ mod tests {
         );
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+    }
+
+    /// The mesh builder is the one place the two per-vertex terrain values are
+    /// combined. A swap here would feed a morph offset to the roughness term (or
+    /// the reverse) and every patch would shade differently, so the channels are
+    /// asserted individually.
+    #[test]
+    fn mesh_carries_roughness_and_morph_offsets_in_separate_channels() {
+        let source = crate::domain::services::terrain_source::ProceduralTerrainSource::new(
+            7, 2_000.0, 800.0, 0,
+        );
+        let patch = TerrainPatch::for_direction(DVec3::new(0.2, 0.3, 1.0).normalize(), 3);
+        let geometry = build_patch_geometry(&patch, &source, 6_371_000.0, 9, 40.0);
+        assert_eq!(
+            geometry.morph_deltas.len(),
+            geometry.positions.len(),
+            "this test needs a LOD with morph data"
+        );
+        let mut prepared: Vec<[f32; 4]> = vec![[1.0, 0.42, 0.0, 1.0]; geometry.positions.len()];
+        prepared[0][1] = 0.66;
+
+        let mesh = patch_geometry_to_mesh(&geometry, &DVec3::ZERO, DQuat::IDENTITY, &prepared);
+        let Some(bevy_mesh::VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("the terrain mesh must carry vertex colours");
+        };
+        for (index, color) in colors.iter().enumerate() {
+            assert_eq!(
+                color[0], geometry.morph_deltas[index],
+                "red must carry the morph offset"
+            );
+            assert_eq!(
+                color[1], prepared[index][1],
+                "green must carry the per-vertex roughness"
+            );
+            assert_eq!(color[2], 0.0);
+            assert_eq!(color[3], 1.0);
+        }
     }
 
     #[test]

@@ -30,7 +30,9 @@ mod layered;
 mod noise;
 mod procedural;
 
-pub use appearance::{slope_deg_at, surface_appearance, with_river_appearance, SurfaceAppearance};
+pub use appearance::{
+    slope_deg_at, surface_appearance, surface_roughness, with_river_appearance, SurfaceAppearance,
+};
 pub use catalog::EarthTerrainSource;
 #[cfg(feature = "dem")]
 pub use catalog::{
@@ -998,6 +1000,56 @@ mod tests {
         );
         // Seafloor below sea level.
         assert_eq!(surface_appearance(-100.0, 0.5, 0.5, 0.0).metallic, 0.0);
+    }
+
+    /// The renderer evaluates `surface_roughness` per vertex, while the material
+    /// scalar still comes from `surface_appearance`. They must never disagree:
+    /// a drift here would put a step between the per-vertex field and the
+    /// fallback material at every LOD transition.
+    #[test]
+    fn surface_roughness_is_the_appearance_law() {
+        for elevation_m in [
+            -2_000.0, -300.0, -1.0, 0.0, 1.0, 4.0, 300.0, 2_500.0, 5_200.0,
+        ] {
+            for zone_lat in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                for slope_deg in [0.0, 10.0, 34.0, 45.0, 70.0] {
+                    let appearance = surface_appearance(elevation_m, 0.5, zone_lat, slope_deg);
+                    assert_eq!(
+                        appearance.roughness,
+                        surface_roughness(elevation_m, zone_lat, slope_deg),
+                        "roughness drifted at {elevation_m} m, zone {zone_lat}, slope {slope_deg}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Roughness must vary smoothly with the only inputs the renderer can supply
+    /// per vertex, because a per-patch constant was what produced patch-shaped
+    /// tone blocks (TD-05).
+    #[test]
+    fn surface_roughness_is_continuous_in_height_and_slope() {
+        let mut previous = surface_roughness(-50.0, 0.5, 5.0);
+        let mut worst = 0.0f64;
+        for step in 1..=200 {
+            let height = -50.0 + f64::from(step) * 0.5;
+            let current = f64::from(surface_roughness(height, 0.5, 5.0));
+            worst = worst.max((current - f64::from(previous)).abs());
+            previous = surface_roughness(height, 0.5, 5.0);
+        }
+        // The waterline is the one real discontinuity in the law (glossy
+        // seafloor against rough land); everything else must move in small
+        // steps so a mesh interpolates it cleanly.
+        assert!(
+            worst < 0.5,
+            "roughness jumped by {worst} over a 0.5 m height step"
+        );
+        let flat = surface_roughness(300.0, 0.5, 0.0);
+        let steep = surface_roughness(300.0, 0.5, 45.0);
+        assert!(steep > flat, "steeper ground must be rougher");
+        let equator = surface_roughness(300.0, 0.5, 0.0);
+        let pole = surface_roughness(300.0, 1.0, 0.0);
+        assert!(pole <= equator, "cold ground must not be rougher");
     }
 
     #[test]

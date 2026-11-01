@@ -39,7 +39,7 @@ Ordered by visible impact, not by ease.
 
 | # | defect | task | state | evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | land component attributed to per-patch constant roughness (A/B: patch step 12.2 → 4.1/255); ocean component not diagnosable until a water-side view exists |
+| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | land component fixed: per-vertex roughness took the patch step 12.3 → 4.2/255 (A/B 4.3); ocean component still needs a water-side view |
 | 2 | Synthetic detail fabricates lakes on the coastal plain | TD-06 | BLOCKED | visible in `terrain-600m`; guard implemented but inert |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | PLANNED | `300km-papua` |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
@@ -62,7 +62,7 @@ Ordered by visible impact, not by ease.
 | `cargo build --release --features dem` | PASS | `ec97d6e` — the later change is a Cargo manifest gate and docs |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
-| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km | `ec97d6e` |
+| diagnostic capture matrix | 18 frames at 300 km (production plus 17 modes), 18 at 1,200 km (production plus 17 modes), 7 at 3–70 km; plus the post-fix roughness/production pair at both altitudes | `<this checkpoint>` |
 | TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `ec97d6e` |
 
 ## Visual evidence coverage
@@ -110,9 +110,8 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**TD-05 — replace per-patch constant roughness with a continuous field.** The
-transect and A/B work is done: the land tone blocks come from `surface.roughness`
-being one scalar per patch sampled at the patch centre, and forcing it constant
-removes two thirds of a measured 12/255 step. The remaining work is the fix
-(per-texel roughness baked where the patch surface is prepared), plus a
-water-side diagnostic before the ocean blocks can be attributed.
+**TD-05 — a water-side diagnostic.** The land half is fixed and measured:
+roughness is now a per-vertex field and the patch step fell from 12.3 to
+4.2/255. The ocean half is still unattributed because `WaterMaterial` has no
+diagnostic view; the next step is to expose its depth attribute, depth ramp and
+sky/glint terms the same way the terrain views work.

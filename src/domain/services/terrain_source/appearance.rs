@@ -57,7 +57,7 @@ pub fn surface_appearance(
         let albedo = lerp3([0.035, 0.11, 0.17], SEAFLOOR, depth);
         return SurfaceAppearance {
             albedo,
-            roughness: lerp_f(0.25, 0.7, depth),
+            roughness: surface_roughness(elevation_m, zone_lat, slope_deg),
             metallic: 0.0,
         };
     }
@@ -98,13 +98,43 @@ pub fn surface_appearance(
     let snow_start = 4500.0 * (1.0 - polar_dist).powf(1.6);
     let snow_t = ss(snow_start, snow_start + 700.0, elevation_m);
     albedo = lerp3(albedo, SNOW, snow_t);
-    let roughness = (0.85 + 0.08 * rock_t - 0.35 * snow_t - 0.15 * wet_shore).clamp(0.0, 1.0);
 
     SurfaceAppearance {
         albedo,
-        roughness: roughness as f32,
+        // Deliberately re-derived through the shared function rather than from
+        // the intermediate terms above: roughness and albedo then cannot drift
+        // apart, and the renderer evaluates exactly the same law per vertex.
+        roughness: surface_roughness(elevation_m, zone_lat, slope_deg),
         metallic: 0.0,
     }
+}
+
+/// The roughness half of the appearance law, which depends only on elevation,
+/// latitude zone and slope.
+///
+/// It is separate because the renderer evaluates it *per vertex*: roughness was
+/// once a single scalar per terrain patch, sampled at the patch centre, which
+/// turned a continuous coastline into a patch-shaped staircase of 0.25 seafloor
+/// against 0.85 land. Evaluating the same law at each vertex makes the field
+/// continuous across patch and LOD boundaries — shared boundary vertices have
+/// the same height, latitude and normal, so they get the same roughness — while
+/// keeping one authoritative implementation of the law.
+///
+/// Moisture is deliberately not an input: it drives albedo only, so a per-vertex
+/// evaluation needs no source query. The waterline is the one real
+/// discontinuity (glossy seafloor against rough land); the mesh interpolates
+/// across it rather than stepping at a patch edge.
+pub fn surface_roughness(elevation_m: f64, zone_lat: f64, slope_deg: f64) -> f32 {
+    if elevation_m < 0.0 {
+        let depth = (-elevation_m).min(4000.0) / 4000.0;
+        return lerp_f(0.25, 0.7, depth);
+    }
+    let polar_dist = (zone_lat - 0.5).abs() * 2.0;
+    let rock_t = ss(35.0, 55.0, slope_deg);
+    let snow_start = 4500.0 * (1.0 - polar_dist).powf(1.6);
+    let snow_t = ss(snow_start, snow_start + 700.0, elevation_m);
+    let wet_shore = 1.0 - ss(0.0, 2.5, elevation_m.min(2.5));
+    (0.85 + 0.08 * rock_t - 0.35 * snow_t - 0.15 * wet_shore).clamp(0.0, 1.0) as f32
 }
 
 /// Blend a ground appearance with a source-derived river channel. The strength

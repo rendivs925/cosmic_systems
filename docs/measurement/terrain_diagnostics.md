@@ -157,6 +157,28 @@ The ocean half of the defect is **not** roughness: the same A/B leaves deep-wate
 variation unchanged. The sea is drawn by `WaterMaterial`, which these modes do not
 instrument, so a water-side view has to exist before that half can be attributed.
 
+### The roughness fix, seen through the same view
+
+Roughness is no longer a per-patch scalar. It is evaluated **per vertex** from the
+same appearance law (`surface_roughness`, which `surface_appearance` itself
+calls), using only inputs a vertex already has: its height above the datum, its
+latitude zone and its normal. Shared boundary vertices therefore receive identical
+values at every LOD and across cube faces, and the fragment shader interpolates
+the field. Moisture is not an input because it drives albedo only, so no source
+query is needed per vertex.
+
+The before/after is visible in the mode itself: `diag-roughness-300km.jpg` splits
+the frame on a single patch edge, while `diag-roughness-300km-continuous.jpg`
+follows the coastline. At 1,200 km the same production frame measures a patch
+step of **12.3/255 before and 4.2/255 after**, against 4.3/255 for the
+forced-constant A/B — the fix reproduces the experiment's result without giving
+up the continuous depth and shore variation. The residual is ordinary terrain
+shading on either side of a real terrain edge, not a seam.
+
+The waterline stays a real discontinuity in the law (glossy seafloor against rough
+land); the mesh interpolates across it instead of stepping at a patch boundary,
+and the constant-roughness A/B shows the visible cost of removing it entirely.
+
 ## Cost
 
 * One `u32` comparison per fragment in production rendering; the diagnostic

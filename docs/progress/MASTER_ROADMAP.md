@@ -245,61 +245,54 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Objective:** Attribute the axis-aligned tone blocks at 300–1,200 km to a
   specific term and remove them.
 - **Dependencies:** P0-03 (satisfied).
-- **Subsystems:** terrain material (per-patch roughness/metallic), elevation
-  data, water material.
-- **Expected files:** `src/infrastructure/bevy_adapters/terrain/render.rs`,
+- **Subsystems:** terrain material (per-vertex roughness), elevation data, water
+  material.
+- **Expected files:** `src/domain/services/terrain_source/appearance.rs`,
   `src/infrastructure/bevy_adapters/terrain/surface/mod.rs`,
+  `src/infrastructure/bevy_adapters/terrain/render.rs`,
   `assets/shaders/terrain_surface.wgsl`; the water side is still open.
 - **Acceptance:** at the P0-01 pose no block boundary is visible that does not
   correspond to a real albedo change within ±1/255 of the surrounding trend.
-- **Tests:** a capture-pair comparison harness that reports the maximum
-  adjacent-pixel step across patch boundaries.
-- **Visual evidence (attribution, 2026-11-01):** the full mode matrix now exists
-  at the failing pose, and it splits the defect in two.
-  * **On land the cause is per-patch constant roughness.** `roughness` renders
-    `surface.roughness`, which is one scalar per patch sampled at the patch
-    *centre* from `surface_appearance`. At 300 km that turns the coastline into a
-    patch-sized staircase between 0.25 (shallow seafloor) and 0.85 (land); at
-    1,200 km the same view is a quilt of roughly 300 px blocks. `metallic` is
-    zero everywhere, so only roughness varies.
-  * **A controlled A/B confirms it.** Rebuilding only `patch_material` with a
-    constant `(0.85, 0.0)` and re-capturing the same pose, clock and frame count
-    (`2026-11-01-ab-constant-roughness-1200km.jpg`) reduces a measured
-    patch-boundary step from **12.2/255 to 4.1/255** (median luminance 50.4→62.6
-    becomes 50.5→54.6 across the same edge). The residual 4/255 is ordinary
-    terrain shading, not a step.
-  * **Everything else at that pose is clean.** `world-normals` is continuous,
-    `uv0`/`uv1` are continuous, `occlusion` is neutral (1,1), `inputs` reports no
-    imagery, layers or local surfaces, `lod` shows only levels 4–6 and its seams
-    match `patch-boundary`, and `layer-blend` is the single-layer fallback
-    throughout.
-  * **The large "datum rectangle" is not a rendering defect.** An offline
-    transect of the same authority (`terrain_authority_transect`) reproduces the
-    in-engine values exactly at fixed points (−13.61 m at −6.0,138.0 and
-    +7.90 m at −6.0,138.6), and every mesh vertex matches the source to within
-    the 5 m skirt. That lowland genuinely sits within a few metres of the datum
-    with shallow depressions, which is why `height` and `land-sea` show a pond
-    field. Disabling the LOD morph does not change it
-    (`2026-11-01-ab-morph-off-height-1200km.jpg`), so the morph is ruled out too.
-    The earlier "rectangle of near-zero elevation data" hypothesis is therefore
-    wrong: there is no data rectangle, only a genuinely near-datum lowland.
-  * **The ocean blocks are not roughness.** The same A/B leaves deep-water
-    large-scale variation unchanged (std 21.10 → 21.05 over 8 bits). At 1,200 km
-    the sea is drawn by `WaterMaterial`, which the terrain diagnostics do not
-    instrument, so the ocean component needs a water-side view before it can be
-    attributed. The `height` view does show rectangular seafloor regions that the
-    water depth ramp would turn into colour steps, which is where that view should
-    start.
-- **Performance:** not applicable until attributed.
+- **Tests:** `surface_roughness_is_the_appearance_law` (the per-vertex function
+  and the material law cannot drift), `surface_roughness_is_continuous_in_height_and_slope`,
+  `per_vertex_roughness_agrees_across_a_shared_patch_edge` (shared edge vertices
+  are bit-identical), `mesh_carries_roughness_and_morph_offsets_in_separate_channels`,
+  `shader_takes_roughness_from_the_vertex_field`, and the existing capture-pair
+  comparison.
+- **Visual evidence:** the land component is attributed **and fixed**.
+  * Attribution (2026-11-01): `roughness` rendered `surface.roughness`, one scalar
+    per patch sampled at the patch centre. At 300 km that turned the coastline
+    into a patch-sized staircase between 0.25 (shallow seafloor) and 0.85 (land);
+    at 1,200 km it was a quilt of ~300 px blocks.
+  * A/B: rebuilding only `patch_material` with a constant `(0.85, 0.0)` reduced a
+    measured patch-boundary step from 12.2/255 to 4.1/255
+    (`2026-11-01-ab-constant-roughness-1200km.jpg`).
+  * Fix: roughness is now `surface_roughness(elevation, zone_lat, slope)` per
+    vertex — the same law `surface_appearance` calls — carried in the green
+    channel of the terrain vertex colour beside the morph offset in red. The
+    measurement repeats: **12.3/255 before, 4.2/255 after**, against 4.3/255 for
+    the A/B (`2026-11-01-production-1200km-continuous.jpg`). The 300 km view now
+    follows the coastline instead of one patch edge
+    (`2026-11-01-diag-roughness-300km-continuous.jpg`).
+  * Ruled out with a frame: world normals, UV0/UV1, baked occlusion, per-patch
+    input differences, LOD layout, and the CDLOD morph
+    (`2026-11-01-ab-morph-off-height-1200km.jpg`).
+  * The large "datum rectangle" is genuine near-sea-level lowland, not a renderer
+    defect: `terrain_authority_transect` reproduces the in-engine values exactly
+    and every mesh vertex matches the source to within the 5 m skirt.
+- **Performance:** one extra `surface_appearance`-equivalent evaluation per
+  vertex when a patch surface is prepared (pure arithmetic, no source query, no
+  texture). No per-frame cost. Production frames changed by a mean of 1.54/255 at
+  300 km and 2.53/255 at 1,200 km, concentrated at patch edges.
 - **Scientific validation:** not applicable; all terms here are presentation.
-- **Risks:** attributing the remainder to roughness when it is not; replacing a
-  patch constant with a texture field costs per-patch CPU and GPU memory, so it
-  must be measured. Standing rule: seams are fixed, never hidden.
-- **Completion evidence:** pending. Next step: replace the per-patch constant
-  roughness/metallic with a continuous field (per-texel roughness baked in
-  `prepare_patch_surface`, sampled like the local albedo/normal maps), verify the
-  patch steps disappear at 300 km and 1,200 km, and add a water-side diagnostic
-  before attributing the ocean blocks.
+- **Risks:** the residual 4.2/255 at a patch edge is terrain shading, not a seam,
+  but the acceptance threshold is ±1/255, so the task cannot be closed on that
+  number alone. The ocean half is still unattributed. Replacing a patch constant
+  with a per-vertex field is cheap, but the waterline remains a real
+  discontinuity in the law that the mesh now interpolates across.
+- **Completion evidence:** pending. Next step: a water-side diagnostic that
+  reports the depth attribute, the depth ramp and the sky/glint terms, then
+  attribute the ocean blocks the same way.
 
 ### TD-06 — Synthetic detail must not fabricate coastline
 - **Status:** BLOCKED

@@ -712,6 +712,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // perturbed below by the detail, layer and micro normal maps, so it must be
     // captured here or the view would show the shading normal instead.
     let geometric_normal = pbr_input.N;
+    // Per-vertex roughness from the domain's appearance law, interpolated across
+    // the triangle. It replaces the single material scalar, which was one value
+    // per patch sampled at the patch centre and therefore stepped at every patch
+    // edge (0.25 seafloor beside 0.85 land). Because the law reads only a
+    // vertex's height, latitude zone and normal, shared boundary vertices agree
+    // at every LOD and across cube faces. Detail and layer roughness still blend
+    // over this base below, so the close-range path is unchanged.
+#ifdef VERTEX_COLORS
+    if in.color.g > 0.0 {
+        pbr_input.material.perceptual_roughness = clamp(in.color.g, 0.02, 1.0);
+    }
+#endif
     // Baked landscape occlusion, sampled with the patch-local UV: red is the
     // self-shadow visibility toward the shared ephemeris Sun, green is the
     // sky/ambient visibility. The terms are interpolated from the per-patch

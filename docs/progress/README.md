@@ -35,7 +35,7 @@ is TD-05, which now has the tool it was waiting for.
 
 | defect | state |
 | --- | --- |
-| Rectangular tone blocks at 300–1,200 km | the land blocks are per-patch constant roughness, measured by A/B; the ocean blocks need a water-side view before they can be attributed |
+| Rectangular tone blocks at 300–1,200 km | the land half is fixed — per-vertex roughness cut the patch step from 12.3 to 4.2/255; the ocean half needs a water-side view |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Land nearly black at 400 km while clouds are white | cause unknown |
 | Cloud edges are cut-outs; one shape per region | planned work |
@@ -81,12 +81,11 @@ sequence), and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**TD-05 — continuous roughness.** The attribution is finished: the land tone
-blocks come from `surface.roughness` being one value per patch, sampled at the
-patch centre, and a controlled A/B with a constant roughness removes two thirds
-of a measured 12/255 step. The fix is to bake roughness per texel where the patch
-surface is prepared, the way the local albedo and normal maps already are. The
-ocean blocks still need a water-side diagnostic first.
+**TD-05 — a water-side diagnostic.** The land half is fixed: roughness is now
+evaluated per vertex from the appearance law, and the measured patch step fell
+from 12.3 to 4.2/255, matching the forced-constant A/B. The ocean blocks are still
+unattributed because `WaterMaterial` has no diagnostic view, so the next step is
+to expose its depth attribute, depth ramp and sky/glint terms.
 
 After that: TD-04 imagery feather, then AT-02 altitude and limb (which also fills
 two of the five missing evidence scenes).
