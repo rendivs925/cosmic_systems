@@ -35,7 +35,7 @@ is TD-05, which now has the tool it was waiting for.
 
 | defect | state |
 | --- | --- |
-| Rectangular tone blocks at 300–1,200 km | the land half is fixed — per-vertex roughness cut the patch step from 12.3 to 4.2/255; the ocean half needs a water-side view |
+| Rectangular tone blocks at 300–1,200 km | the land half is fixed — per-vertex roughness cut the patch step from 12.3 to 4.2/255. The ocean half is refuted: the water views show every sea term continuous, with no patch edge distinguishable from any other column |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Land nearly black at 400 km while clouds are white | cause unknown |
 | Cloud edges are cut-outs; one shape per region | planned work |
@@ -81,11 +81,13 @@ sequence), and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**TD-05 — a water-side diagnostic.** The land half is fixed: roughness is now
-evaluated per vertex from the appearance law, and the measured patch step fell
-from 12.3 to 4.2/255, matching the forced-constant A/B. The ocean blocks are still
-unattributed because `WaterMaterial` has no diagnostic view, so the next step is
-to expose its depth attribute, depth ramp and sky/glint terms.
+**TD-05 — the sea is measured and clean.** Six water views now false-colour the
+depth attribute, the body-colour ramp, the final alpha, the baked landscape
+shadow, the cloud shadow and the sky mirror. At both poses every term is
+continuous and a column-step test cannot tell the patch-edge columns from random
+columns (p ≥ 0.12). The sea's tone is the depth ramp over real bathymetry plus
+cloud shadow, so the ocean half of the defect does not exist. What is left is the
+land residual at 4.2/255.
 
 After that: TD-04 imagery feather, then AT-02 altitude and limb (which also fills
 two of the five missing evidence scenes).

@@ -66,6 +66,7 @@ const WATER_PARAM_FIELDS: &[&str] = &[
     "foam_coverage",
     "flow_speed",
     "planet_center",
+    "diagnostic",
 ];
 
 /// Shared uniform for every water patch. Must match `WaterParams` in
@@ -116,6 +117,10 @@ pub struct WaterParams {
     /// origin-invariant body position, so the wave and foam fields stay pinned to
     /// the planet when the render origin recentres (AGENTS.md section 13).
     pub planet_center: Vec3,
+    /// Developer diagnostic view code, or 0 for production. The water material
+    /// decodes only the water modes; the ECS wiring writes production for a
+    /// terrain mode, so each shader keeps a single, explicit code set.
+    pub diagnostic: u32,
 }
 
 impl Default for WaterParams {
@@ -146,6 +151,7 @@ impl Default for WaterParams {
             foam_coverage: DEFAULT_FOAM_COVERAGE,
             flow_speed: 0.0,
             planet_center: Vec3::ZERO,
+            diagnostic: 0,
         }
     }
 }

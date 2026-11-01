@@ -75,6 +75,9 @@ struct WaterParams {
     /// Subtracting it recovers an origin-invariant body position, so the wave and
     /// foam fields do not slide when the render origin recentres.
     planet_center: vec3<f32>,
+    /// Developer diagnostic view code, or 0 for production. Only the water modes
+    /// reach this shader; a terrain mode leaves it at production.
+    diagnostic: u32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: WaterParams;
@@ -93,6 +96,22 @@ struct WaterParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var<uniform> cloud_shadow: CloudShadow;
 // The atmosphere the sky dome is drawn with, so the sea can reflect it.
 @group(#{MATERIAL_BIND_GROUP}) @binding(110) var<uniform> sky: SkyParams;
+
+// Diagnostic views for the water pass. The codes are shared with
+// presentation::diagnostics; a test pins these constants to it. The terrain
+// material has its own set in the same namespace, so an unknown code stays
+// visible rather than silently rendering production colours.
+const DIAG_NORMAL: u32 = 0u;
+const DIAG_WATER_DEPTH: u32 = 18u;
+const DIAG_WATER_UV1: u32 = 19u;
+const DIAG_WATER_BODY: u32 = 20u;
+const DIAG_WATER_SHADOW: u32 = 21u;
+const DIAG_WATER_REFLECTION: u32 = 22u;
+const DIAG_WATER_OPACITY: u32 = 23u;
+/// Depth contour spacing in normalized-depth units. The cap normalizes by the
+/// maximum visible depth, so this is a fixed number of metres on the seafloor.
+const DIAG_WATER_DEPTH_CONTOUR: f32 = 0.05;
+const DIAG_WATER_CONTOUR_DARKEN: f32 = 0.7;
 
 const GRAVITY: f32 = 9.81;
 const TAU: f32 = 6.283185307;
@@ -116,6 +135,70 @@ fn wave_term(p: vec2<f32>, dir: vec2<f32>, wavelength_m: f32, amplitude_m: f32, 
     let height = amplitude_m * sin(phase) * resolved;
     let slope = dir * (amplitude_m * k * cos(phase)) * resolved;
     return vec3<f32>(height, slope.x, slope.y);
+}
+
+/// Patch-local grid for the water UV view. Lines fall on the patch border and on
+/// every subdivision, so the cap's own patch layout is readable in a still frame.
+fn diag_water_grid(uv: vec2<f32>, divisions: f32) -> f32 {
+    let scaled = fract(uv * divisions);
+    let line = min(
+        min(scaled.x, 1.0 - scaled.x),
+        min(scaled.y, 1.0 - scaled.y),
+    );
+    return select(1.0, 0.3, line < 0.03);
+}
+
+/// False-colour views of the terms the water fragment stage consumes. Lighting,
+/// the sky mirror and post-processing are bypassed by the caller, so a mode
+/// shows the value production actually used.
+fn water_diagnostic_colour(
+    mode: u32,
+    depth: f32,
+    uv1: vec2<f32>,
+    body_colour: vec3<f32>,
+    opacity: f32,
+    landscape_visibility: f32,
+    cloud_visibility: f32,
+    mirror_contribution: vec3<f32>,
+) -> vec3<f32> {
+    if mode == DIAG_WATER_DEPTH {
+        // Contours make a small depth step visible in a still frame without
+        // changing the plotted value away from a contour.
+        let phase = fract(depth / DIAG_WATER_DEPTH_CONTOUR);
+        let shade = select(1.0, DIAG_WATER_CONTOUR_DARKEN, phase < 0.08);
+        return vec3<f32>(depth * shade);
+    }
+    if mode == DIAG_WATER_UV1 {
+        return vec3<f32>(uv1, 0.25) * diag_water_grid(uv1, 8.0);
+    }
+    if mode == DIAG_WATER_BODY {
+        return body_colour;
+    }
+    if mode == DIAG_WATER_SHADOW {
+        // Red is the baked landscape shadow, green the cloud deck, blue their
+        // product: white is fully lit, and a patch-shaped term shows up as a
+        // patch-shaped step in exactly one channel.
+        return vec3<f32>(
+            landscape_visibility,
+            cloud_visibility,
+            landscape_visibility * cloud_visibility,
+        );
+    }
+    if mode == DIAG_WATER_OPACITY {
+        // Contours again: alpha moves in small steps across an ocean, and the
+        // patch shape of a step matters more than its exact value.
+        let phase = fract(opacity / 0.05);
+        let shade = select(1.0, DIAG_WATER_CONTOUR_DARKEN, phase < 0.08);
+        return vec3<f32>(clamp(opacity, 0.0, 1.0) * shade);
+    }
+    if mode == DIAG_WATER_REFLECTION {
+        let luminance = dot(
+            mirror_contribution,
+            vec3<f32>(0.2126, 0.7152, 0.0722),
+        );
+        return vec3<f32>(clamp(luminance, 0.0, 1.0));
+    }
+    return vec3<f32>(1.0, 0.0, 1.0);
 }
 
 struct WaveSample {
@@ -254,19 +337,23 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // Landscape self-shadow: terrain beyond the directional-shadow cascades
     // still darkens the sea through the patch's baked terrain occlusion map.
-    var landscape_visibility = 1.0;
+    // The baked term and the cloud term are kept apart so the shadow diagnostic
+    // can show which of the two moved a patch's tone.
+    var terrain_visibility = 1.0;
+    var diagnostic_uv1 = vec2<f32>(0.0);
 #ifdef VERTEX_UVS_B
+    diagnostic_uv1 = in.uv_b;
     let landscape = textureSample(
         terrain_occlusion,
         terrain_occlusion_sampler,
         in.uv_b,
     )
     .r;
-    landscape_visibility = mix(1.0, landscape, water.landscape_shadow_strength);
+    terrain_visibility = mix(1.0, landscape, water.landscape_shadow_strength);
 #endif
     // Cloud shadow: the same density field, extinction, and diffuse floor the
     // terrain ground uses, so a deck darkens the sea and the land together.
-    landscape_visibility = landscape_visibility * cloud_shadow_visibility(
+    let cloud_visibility = cloud_shadow_visibility(
         cloud_shadow,
         body_position,
         cloud_base_noise,
@@ -276,6 +363,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         cloud_weather_map,
         cloud_weather_map_sampler,
     );
+    let landscape_visibility = terrain_visibility * cloud_visibility;
 
     // Shoreline foam: strongest exactly at the waterline and modulated by a
     // slow travelling pattern so the edge reads as moving surf, not a hard line.
@@ -312,6 +400,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         alpha_discard(pbr.material, pbr.material.base_color);
 
     var out: FragmentOutput;
+    // The mirror term is accumulated separately so the reflection diagnostic can
+    // show the sea's tone that comes from the sky and deck rather than the body.
+    var mirror_contribution = vec3<f32>(0.0);
     if (pbr.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         let lit_color = apply_pbr_lighting(pbr);
         var color = lit_color.rgb
@@ -372,12 +463,38 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 reflected = mix(deck_radiance, reflected, deck_transmittance);
             }
             let mirror_fresnel = WATER_F0 + (1.0 - WATER_F0) * grazing;
-            color += view.exposure * mirror_fresnel
+            mirror_contribution = view.exposure * mirror_fresnel
                 * max(reflected - lights.ambient_color.rgb, vec3(0.0));
+            color += mirror_contribution;
         }
         out.color = vec4<f32>(color, lit_color.a);
     } else {
         out.color = pbr.material.base_color;
+    }
+    // Developer diagnostic rendering. Every term above is resolved by this
+    // point, so each view shows the value production used. Like the terrain
+    // views, this bypasses lighting and post-processing: a frame must not be
+    // shaded by the terms it is meant to reveal.
+    if water.diagnostic != DIAG_NORMAL {
+        var diagnostic_out: FragmentOutput;
+        diagnostic_out.color = vec4<f32>(
+            clamp(
+                water_diagnostic_colour(
+                    water.diagnostic,
+                    depth,
+                    diagnostic_uv1,
+                    water_color.rgb,
+                    opacity,
+                    terrain_visibility,
+                    cloud_visibility,
+                    mirror_contribution,
+                ),
+                vec3<f32>(0.0),
+                vec3<f32>(1.0),
+            ),
+            1.0,
+        );
+        return diagnostic_out;
     }
     out.color = main_pass_post_lighting_processing(pbr, out.color);
     return out;

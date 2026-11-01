@@ -1,7 +1,7 @@
-# Terrain diagnostic render modes
+# Terrain and water diagnostic render modes
 
-Developer-only false-colour views of the terrain material, one per input, so a
-visible defect can be attributed to a term instead of guessed at.
+Developer-only false-colour views of the terrain and water materials, one per
+input, so a visible defect can be attributed to a term instead of guessed at.
 
 ## Why they exist
 
@@ -65,6 +65,17 @@ capture path has no window, no focus, and no HUD.
 | 15 | `layer-blend` | whether the layered ground material is active; magenta is the single-layer fallback |
 | 16 | `morph-offset` | per-vertex LOD morph displacement in metres |
 | 17 | `detail-weight` | source-derived local detail weight after the view-distance fade |
+| 18 | `water-depth` | sea-cap normalized depth, the input of the colour and opacity ramps |
+| 19 | `water-uv1` | the water pass's own patch-local UV1 with a grid |
+| 20 | `water-body` | the shallow/deep ramp, crest scatter and foam before lighting |
+| 21 | `water-shadow` | baked landscape shadow (red), cloud shadow (green), product (blue) |
+| 22 | `water-reflection` | the sky/deck mirror contribution added over the lit sea |
+| 23 | `water-opacity` | final alpha, i.e. how much seafloor shows through |
+
+Modes 1–17 are decoded by the terrain material, 18–23 by the water material. Both
+families share one selector and one code namespace, but each material is given
+only the codes its own shader decodes and production otherwise, so an unknown
+code stays a visible no-data magenta instead of a silent fallback.
 
 Code order is a contract: codes are never reordered, only appended. A test pins
 each code to its shader constant.
@@ -93,6 +104,12 @@ Documented ranges:
 | `surface-class` | grass green, soil brown, rock grey, sand yellow, snow white, gravel dark grey, mud dark brown; magenta means no data |
 | `patch-boundary` | mid grey fill, white seam; the seam half-width is 0.0035 of the patch in UV1 |
 | `uv0` / `uv1` | `(u, v, 0.25)` with dark grid lines; UV0 divides the sphere into 16, UV1 the patch into 8 |
+| `water-depth` | `depth` as grey, with every 0.05 normalized-depth contour darkened to 0.7 (about 3 m on the 60 m visible-depth scale) |
+| `water-uv1` | `(u, v, 0.25)` of the cap's patch-local UV1 with an 8-division grid, lines darkened to 0.3 |
+| `water-body` | the water colour after the depth ramp, crest scatter and foam, before any lighting |
+| `water-shadow` | `(terrain visibility, cloud visibility, product)`; white is fully lit |
+| `water-reflection` | luminance of the mirror contribution, clamped to `[0, 1]` |
+| `water-opacity` | final alpha as grey, every 0.05 contour darkened to 0.7 |
 
 The height datum is the terrain authority's own sea level at the **patch
 centre** plus the renderer's water offset, i.e. the same value the ocean cap is
@@ -109,15 +126,21 @@ square root gives the coastal band roughly 13/255 per 10 m while still showing
 
 ## What these modes do not cover
 
-* **Only streamed terrain patches are diagnosed.** The far-field planet proxy,
-  the ocean caps, the cloud deck, vegetation, rock shells and rivers keep their
-  own materials. If a diagnostic capture shows a surface in production colours,
-  that surface is not streamed terrain — which is itself the answer when a defect
-  only appears at altitude.
-* **Water caps and the cloud deck are hidden** while a mode is active: a cap
-  covers exactly the submerged terrain `land-sea` classifies, and a deck covers
-  continents at altitude. Both return to `Inherited` on the way back to
+* **Only the material family a mode belongs to is diagnosed.** A terrain mode
+  false-colours streamed terrain; a water mode false-colours the sea. The
+  far-field planet proxy, vegetation, rock shells and rivers keep their own
+  materials. If a capture shows a surface in production colours, that surface is
+  not the one being measured — which is itself the answer when a defect only
+  appears at altitude.
+* **The surface that would hide the measured one is hidden.** Terrain modes hide
+  the sea caps, because a cap covers exactly the submerged terrain `land-sea`
+  classifies; the cloud deck is hidden for both families because it covers
+  continents at altitude. The caps stay visible in a water mode — they are the
+  surface being measured. Everything returns to `Inherited` on the way back to
   production.
+* **A water view shows the ground in production colours.** That is deliberate:
+  the coastline is the frame's most useful reference, and a false-coloured land
+  would hide it.
 * **There is no terrain-source identity mode.** The fragment shader has no
   access to the terrain authority, and a mode that guessed the contributing
   source would be a confident picture of something nobody measured. `inputs`
@@ -155,7 +178,8 @@ unchanged, which rules the morph out as well.
 
 The ocean half of the defect is **not** roughness: the same A/B leaves deep-water
 variation unchanged. The sea is drawn by `WaterMaterial`, which these modes do not
-instrument, so a water-side view has to exist before that half can be attributed.
+instrument; the water modes below were added for it, and they close that question
+by refuting it rather than fixing it.
 
 ### The roughness fix, seen through the same view
 
@@ -178,6 +202,50 @@ shading on either side of a real terrain edge, not a seam.
 The waterline stays a real discontinuity in the law (glossy seafloor against rough
 land); the mesh interpolates across it instead of stepping at a patch boundary,
 and the constant-roughness A/B shows the visible cost of removing it entirely.
+
+### The sea has no patch-boundary signal
+
+The land fix left one open question: the sea showed its own tone structure, and
+nothing so far had looked at the water material. The water modes (18–23) answer
+it directly. At both poses every term that can shade the sea — depth, body
+colour, opacity, baked landscape shadow, cloud shadow, sky mirror — is
+continuous, and none of them steps at a patch edge:
+
+| view | 1,200 km | 300 km |
+| --- | --- | --- |
+| `water-depth` | contours follow the shelf break, no straight edge | same |
+| `water-body` | organic shelf/abyss ramp, no straight edge | same |
+| `water-opacity` | smooth ramp, contours follow depth | same |
+| `water-shadow` | exactly 1.0 across the open sea; only cloud shadows darken it | n/a |
+| `water-reflection` | near zero at nadir; the visible structure is cloud shadow | n/a |
+
+The numbers come from a column-step statistic: for every image column, the
+median absolute luminance step across it over sea pixels, using 8-pixel boxes on
+either side. The patch-edge columns are known independently — `water-uv1` and the
+terrain `patch-boundary` view agree on them (175, 340/353, 528, 694, 700, 991,
+1170 px). Comparing the mean step at those columns against 20,000 random draws of
+the same number of columns from the same frame:
+
+| frame | patch-edge mean step | random 5–95 % | p |
+| --- | ---: | ---: | ---: |
+| `water-body` 1,200 km | 2.43 | 0.55 – 2.89 | 0.12 |
+| `water-depth` 1,200 km | 5.14 | 4.71 – 6.85 | 0.83 |
+| `water-depth` 300 km | 1.86 | 1.61 – 3.53 | 0.87 |
+| `water-opacity` 1,200 km | 1.35 | 0.44 – 2.04 | 0.35 |
+| `water-opacity` 300 km | 0.43 | 0.56 – 1.67 | 1.00 |
+| `water-shadow` 1,200 km | 0.00 | 0.00 – 0.10 | 1.00 |
+| production 1,200 km | 1.01 | 0.35 – 1.95 | 0.28 |
+| production 300 km | 0.33 | 0.16 – 0.63 | 0.63 |
+| production 1,200 km, **pre-fix** | 0.90 | 0.34 – 2.01 | 0.39 |
+
+No water term, and no production frame, distinguishes a patch edge from an
+arbitrary column. The sea's tone at these poses is the depth ramp over real
+bathymetry (`-0.78` correlation between production luminance and the depth view
+across 1,127 columns) plus cloud shadow. The earlier inference that "the ocean
+blocks are not roughness, therefore they are something else" had the wrong
+premise: the sea was never carrying a patch-shaped term. What looked like
+rectangles in the water are the shelf break, which is north–south at this
+location and therefore vertical in a nadir frame.
 
 ## Cost
 

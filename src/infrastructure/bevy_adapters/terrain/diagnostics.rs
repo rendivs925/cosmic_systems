@@ -12,15 +12,16 @@
 //!
 //! ## What a diagnostic frame contains
 //!
-//! * **Only streamed terrain patches are diagnosed.** The far-field planet
-//!   proxy, the water caps and the cloud deck keep their own materials; they are
-//!   drawn as usual (or hidden, for the occluders below), never false-coloured.
-//!   A diagnostic capture therefore also shows which surfaces are *not* streamed
-//!   terrain, which is itself useful information when a defect only appears at
-//!   altitude.
-//! * **Water caps and the cloud deck are hidden** while a mode is active. A
-//!   water cap covers exactly the submerged terrain the land/sea view is meant
-//!   to classify, and a cloud deck covers whole continents at altitude. Both are
+//! * **Only the material family the mode belongs to is diagnosed.** A terrain
+//!   mode false-colours streamed terrain patches; a water mode false-colours the
+//!   sea instead. Each material is given the codes its own shader decodes and
+//!   production otherwise, so the far-field proxy and the cloud deck keep their
+//!   production materials and a diagnostic capture also shows which surfaces are
+//!   *not* the one being measured.
+//! * **The surfaces that would cover the one being measured are hidden.** A
+//!   water cap covers exactly the submerged terrain the land/sea view is meant to
+//!   classify, so terrain modes hide the caps; a cloud deck covers whole
+//!   continents at altitude, so it is hidden for both families. Everything is
 //!   restored to `Inherited` on return to production rendering.
 //! * **The camera display transform is bypassed.** Rocket mode uses an HDR view
 //!   with `Tonemapping::TonyMcMapface` and bloom, which would reshape every
@@ -36,6 +37,7 @@ use bevy::prelude::*;
 use crate::presentation::diagnostics::TerrainDiagnostic;
 
 use super::render::TerrainMaterial;
+use super::water::WaterMaterial;
 
 /// The selected terrain diagnostic view.
 ///
@@ -62,14 +64,23 @@ impl TerrainDiagnosticMode {
     }
 }
 
-/// Marks a presentation entity that must be hidden while a diagnostic view is
-/// active because it covers the terrain being measured.
+/// Marks a presentation entity that must be hidden whenever any diagnostic view
+/// is active because it covers the surface being measured.
 ///
-/// Applied by the water-cap and cloud-deck spawn sites. Opting in from the
-/// spawn site keeps the marker's meaning local: neither subsystem has to know
-/// that diagnostics exist.
+/// Applied by the cloud-deck spawn site. Opting in from the spawn site keeps the
+/// marker's meaning local: the subsystem does not have to know that diagnostics
+/// exist.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainDiagnosticOccluder;
+
+/// Marks a sea cap, which is hidden only by *terrain* views.
+///
+/// A water view needs the cap visible — it is the surface being measured — while
+/// a terrain view needs it gone, because the cap covers exactly the submerged
+/// ground the land/sea and height views classify. Two markers rather than one
+/// flag keep the rule readable at both spawn sites.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TerrainDiagnosticWaterSurface;
 
 /// Camera presentation terms saved when a diagnostic view is entered, so normal
 /// rendering is restored exactly rather than to an assumed default.
@@ -92,6 +103,7 @@ impl Plugin for TerrainDiagnosticsPlugin {
                 Update,
                 (
                     apply_terrain_diagnostic_mode,
+                    apply_water_diagnostic_mode,
                     apply_terrain_diagnostic_occluders,
                     apply_terrain_diagnostic_display,
                 ),
@@ -144,7 +156,14 @@ pub(crate) fn apply_terrain_diagnostic_mode(
     mode: Res<TerrainDiagnosticMode>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
-    let code = mode.mode.code();
+    // A water mode leaves the terrain in production: the terrain shader treats an
+    // unknown code as visible no-data magenta, which is the right answer for a
+    // genuine mistake and the wrong one for the other family's mode.
+    let code = if mode.mode.is_terrain() {
+        mode.mode.code()
+    } else {
+        TerrainDiagnostic::Normal.code()
+    };
     let mut updated = 0usize;
     for (_, material) in materials.iter_mut() {
         if material.extension.diagnostic_mode != code {
@@ -161,7 +180,28 @@ pub(crate) fn apply_terrain_diagnostic_mode(
     }
 }
 
-/// Hide the surfaces that would cover the terrain being measured.
+/// Copy the selected water diagnostic view into every water material.
+///
+/// The sea is its own material family: patches with a baked occlusion map own a
+/// material each, and the rest share one. All of them are written, because a
+/// per-patch material created after the switch must converge on the next frame.
+pub(crate) fn apply_water_diagnostic_mode(
+    mode: Res<TerrainDiagnosticMode>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+) {
+    let code = if mode.mode.is_water() {
+        mode.mode.code()
+    } else {
+        TerrainDiagnostic::Normal.code()
+    };
+    for (_, material) in materials.iter_mut() {
+        if material.extension.params.diagnostic != code {
+            material.extension.params.diagnostic = code;
+        }
+    }
+}
+
+/// Hide the surfaces that would cover the one being measured.
 ///
 /// Runs every frame because patches and their water caps keep spawning; the
 /// write happens only when the visibility actually differs, so a steady frame
@@ -169,15 +209,33 @@ pub(crate) fn apply_terrain_diagnostic_mode(
 fn apply_terrain_diagnostic_occluders(
     mode: Res<TerrainDiagnosticMode>,
     mut occluders: Query<&mut Visibility, With<TerrainDiagnosticOccluder>>,
+    mut water_surfaces: Query<
+        &mut Visibility,
+        (
+            With<TerrainDiagnosticWaterSurface>,
+            Without<TerrainDiagnosticOccluder>,
+        ),
+    >,
 ) {
-    let target = if mode.mode.is_active() {
+    let occluder_target = if mode.mode.is_active() {
         Visibility::Hidden
     } else {
         Visibility::Inherited
     };
     for mut visibility in &mut occluders {
-        if *visibility != target {
-            *visibility = target;
+        if *visibility != occluder_target {
+            *visibility = occluder_target;
+        }
+    }
+    // A water view is rendered on the cap, so only a terrain view may hide it.
+    let water_target = if mode.mode.is_terrain() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    for mut visibility in &mut water_surfaces {
+        if *visibility != water_target {
+            *visibility = water_target;
         }
     }
 }
@@ -227,18 +285,21 @@ fn apply_terrain_diagnostic_display(
 mod tests {
     use super::*;
     use crate::infrastructure::bevy_adapters::terrain::render::TerrainSurfaceExtension;
+    use crate::infrastructure::bevy_adapters::terrain::water::{WaterExtension, WaterParams};
     use bevy::asset::AssetPlugin;
 
     fn test_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_asset::<TerrainMaterial>()
+            .init_asset::<WaterMaterial>()
             .init_resource::<TerrainDiagnosticMode>()
             .init_resource::<DiagnosticDisplayGuard>();
         app.add_systems(
             Update,
             (
                 apply_terrain_diagnostic_mode,
+                apply_water_diagnostic_mode,
                 apply_terrain_diagnostic_occluders,
             ),
         );
@@ -254,6 +315,28 @@ mod tests {
             })
     }
 
+    fn add_water_material(app: &mut App) -> Handle<WaterMaterial> {
+        use crate::infrastructure::bevy_adapters::rendering::cloud_assets::CloudNoiseBinding;
+        use crate::infrastructure::bevy_adapters::rendering::materials::CloudShadow;
+        let extension = WaterExtension::new(
+            WaterParams::default(),
+            Handle::default(),
+            &CloudNoiseBinding {
+                base_noise: Handle::default(),
+                detail_noise: Handle::default(),
+                weather_map: Handle::default(),
+                bound: false,
+            },
+            CloudShadow::default(),
+        );
+        app.world_mut()
+            .resource_mut::<Assets<WaterMaterial>>()
+            .add(WaterMaterial {
+                base: StandardMaterial::default(),
+                extension,
+            })
+    }
+
     fn diagnostic_mode(app: &App, handle: &Handle<TerrainMaterial>) -> u32 {
         app.world()
             .resource::<Assets<TerrainMaterial>>()
@@ -261,6 +344,16 @@ mod tests {
             .expect("terrain material")
             .extension
             .diagnostic_mode
+    }
+
+    fn water_diagnostic_mode(app: &App, handle: &Handle<WaterMaterial>) -> u32 {
+        app.world()
+            .resource::<Assets<WaterMaterial>>()
+            .get(handle)
+            .expect("water material")
+            .extension
+            .params
+            .diagnostic
     }
 
     #[test]
@@ -296,6 +389,43 @@ mod tests {
         );
     }
 
+    /// Each material family must receive only the codes its own shader decodes.
+    /// Giving the terrain a water code would paint the whole surface no-data
+    /// magenta, and giving the sea a terrain code would silently restore
+    /// production, so this is the contract that keeps a capture honest.
+    #[test]
+    fn each_material_family_receives_only_its_own_codes() {
+        let mut app = test_app();
+        let terrain = add_material(&mut app);
+        let water = add_water_material(&mut app);
+        app.update();
+        for mode in TerrainDiagnostic::ALL {
+            app.world_mut().resource_mut::<TerrainDiagnosticMode>().mode = mode;
+            app.update();
+            let terrain_code = diagnostic_mode(&app, &terrain);
+            let water_code = water_diagnostic_mode(&app, &water);
+            if mode.is_terrain() {
+                assert_eq!(terrain_code, mode.code(), "{mode:?} must reach terrain");
+                assert_eq!(
+                    water_code,
+                    TerrainDiagnostic::Normal.code(),
+                    "{mode:?} is a terrain view and must leave the sea in production"
+                );
+            } else if mode.is_water() {
+                assert_eq!(water_code, mode.code(), "{mode:?} must reach water");
+                assert_eq!(
+                    terrain_code,
+                    TerrainDiagnostic::Normal.code(),
+                    "{mode:?} is a water view and must leave the ground in production"
+                );
+            } else {
+                assert_eq!(mode, TerrainDiagnostic::Normal);
+                assert_eq!(terrain_code, TerrainDiagnostic::Normal.code());
+                assert_eq!(water_code, TerrainDiagnostic::Normal.code());
+            }
+        }
+    }
+
     #[test]
     fn a_material_created_while_a_mode_is_active_starts_in_that_mode() {
         // Patches keep streaming; a new material must not flash production
@@ -319,7 +449,12 @@ mod tests {
         for mode in TerrainDiagnostic::ALL {
             app.world_mut().resource_mut::<TerrainDiagnosticMode>().mode = mode;
             app.update();
-            assert_eq!(diagnostic_mode(&app, &handle), mode.code(), "{mode:?}");
+            let expected = if mode.is_terrain() {
+                mode.code()
+            } else {
+                TerrainDiagnostic::Normal.code()
+            };
+            assert_eq!(diagnostic_mode(&app, &handle), expected, "{mode:?}");
         }
         let assets = app.world().resource::<Assets<TerrainMaterial>>();
         assert_eq!(
@@ -333,46 +468,61 @@ mod tests {
         );
     }
 
+    fn visibility(app: &App, entity: Entity) -> Visibility {
+        *app.world().entity(entity).get::<Visibility>().unwrap()
+    }
+
     #[test]
-    fn occluders_are_hidden_only_while_a_mode_is_active() {
+    fn cloud_deck_is_hidden_by_every_mode_and_water_only_by_terrain_modes() {
         let mut app = test_app();
-        let occluder = app
+        let cloud = app
             .world_mut()
             .spawn((TerrainDiagnosticOccluder, Visibility::Inherited))
             .id();
+        let water = app
+            .world_mut()
+            .spawn((TerrainDiagnosticWaterSurface, Visibility::Inherited))
+            .id();
         app.update();
-        assert_eq!(
-            *app.world().entity(occluder).get::<Visibility>().unwrap(),
-            Visibility::Inherited,
-            "production rendering must leave the water and clouds visible"
-        );
+        for entity in [cloud, water] {
+            assert_eq!(
+                visibility(&app, entity),
+                Visibility::Inherited,
+                "production rendering must leave the sea and the deck visible"
+            );
+        }
 
+        // A terrain view hides both: the cap covers the submerged terrain and the
+        // deck covers whole continents.
         app.world_mut().resource_mut::<TerrainDiagnosticMode>().mode = TerrainDiagnostic::Height;
         app.update();
+        assert_eq!(visibility(&app, cloud), Visibility::Hidden);
+        assert_eq!(visibility(&app, water), Visibility::Hidden);
+
+        // A water view is drawn on the cap, so only the deck may be hidden.
+        app.world_mut().resource_mut::<TerrainDiagnosticMode>().mode =
+            TerrainDiagnostic::WaterDepth;
+        app.update();
+        assert_eq!(visibility(&app, cloud), Visibility::Hidden);
         assert_eq!(
-            *app.world().entity(occluder).get::<Visibility>().unwrap(),
-            Visibility::Hidden
+            visibility(&app, water),
+            Visibility::Inherited,
+            "a water view must not hide the surface it measures"
         );
 
-        // An occluder spawned while the mode is active is hidden on the next
-        // frame; patches and their water caps keep streaming in.
-        let late = app
+        // Entities spawned while a mode is active converge on the next frame;
+        // patches and their caps keep streaming in.
+        let late_water = app
             .world_mut()
-            .spawn((TerrainDiagnosticOccluder, Visibility::Inherited))
+            .spawn((TerrainDiagnosticWaterSurface, Visibility::Inherited))
             .id();
         app.update();
-        assert_eq!(
-            *app.world().entity(late).get::<Visibility>().unwrap(),
-            Visibility::Hidden
-        );
+        assert_eq!(visibility(&app, late_water), Visibility::Inherited);
 
         app.world_mut().resource_mut::<TerrainDiagnosticMode>().mode = TerrainDiagnostic::Normal;
         app.update();
-        for entity in [occluder, late] {
-            assert_eq!(
-                *app.world().entity(entity).get::<Visibility>().unwrap(),
-                Visibility::Inherited
-            );
+        for entity in [cloud, water, late_water] {
+            assert_eq!(visibility(&app, entity), Visibility::Inherited);
         }
     }
 

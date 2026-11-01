@@ -246,19 +246,24 @@ timings. This phase exists because an unverifiable change is not a change.
   specific term and remove them.
 - **Dependencies:** P0-03 (satisfied).
 - **Subsystems:** terrain material (per-vertex roughness), elevation data, water
-  material.
+  material (diagnostics).
 - **Expected files:** `src/domain/services/terrain_source/appearance.rs`,
   `src/infrastructure/bevy_adapters/terrain/surface/mod.rs`,
   `src/infrastructure/bevy_adapters/terrain/render.rs`,
-  `assets/shaders/terrain_surface.wgsl`; the water side is still open.
+  `src/infrastructure/bevy_adapters/terrain/diagnostics.rs`,
+  `src/infrastructure/bevy_adapters/terrain/water.rs`,
+  `assets/shaders/terrain_surface.wgsl`, `assets/shaders/water.wgsl`.
 - **Acceptance:** at the P0-01 pose no block boundary is visible that does not
   correspond to a real albedo change within ±1/255 of the surrounding trend.
 - **Tests:** `surface_roughness_is_the_appearance_law` (the per-vertex function
   and the material law cannot drift), `surface_roughness_is_continuous_in_height_and_slope`,
   `per_vertex_roughness_agrees_across_a_shared_patch_edge` (shared edge vertices
   are bit-identical), `mesh_carries_roughness_and_morph_offsets_in_separate_channels`,
-  `shader_takes_roughness_from_the_vertex_field`, and the existing capture-pair
-  comparison.
+  `shader_takes_roughness_from_the_vertex_field`; for the water views,
+  `each_material_family_receives_only_its_own_codes` (a terrain code must never
+  reach the sea shader or the reverse), `cloud_deck_is_hidden_by_every_mode_and_water_only_by_terrain_modes`,
+  `diagnostic_mode_codes_match_the_shader_constants` (now pins each family's code
+  to the shader that decodes it), and the existing capture-pair comparison.
 - **Visual evidence:** the land component is attributed **and fixed**.
   * Attribution (2026-11-01): `roughness` rendered `surface.roughness`, one scalar
     per patch sampled at the patch centre. At 300 km that turned the coastline
@@ -277,6 +282,15 @@ timings. This phase exists because an unverifiable change is not a change.
   * Ruled out with a frame: world normals, UV0/UV1, baked occlusion, per-patch
     input differences, LOD layout, and the CDLOD morph
     (`2026-11-01-ab-morph-off-height-1200km.jpg`).
+  * **The ocean half does not exist (2026-11-01).** Six water views were added
+    (modes 18–23: depth, UV1, body colour, shadow, mirror, opacity) and applied
+    at 300 km and 1,200 km. Every term is continuous, and a column-step test
+    cannot separate the known patch-edge columns from random columns
+    (`p = 0.12 … 1.00`, production included). The sea's tone is the depth ramp
+    over real bathymetry — production luminance correlates with the depth view at
+    `-0.78` across 1,127 columns — plus cloud shadow. The earlier inference that
+    "the ocean blocks are not roughness, therefore they are something else" had a
+    false premise: no water term carries a patch signal at all.
   * The large "datum rectangle" is genuine near-sea-level lowland, not a renderer
     defect: `terrain_authority_transect` reproduces the in-engine values exactly
     and every mesh vertex matches the source to within the 5 m skirt.
@@ -287,12 +301,13 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Scientific validation:** not applicable; all terms here are presentation.
 - **Risks:** the residual 4.2/255 at a patch edge is terrain shading, not a seam,
   but the acceptance threshold is ±1/255, so the task cannot be closed on that
-  number alone. The ocean half is still unattributed. Replacing a patch constant
-  with a per-vertex field is cheap, but the waterline remains a real
-  discontinuity in the law that the mesh now interpolates across.
-- **Completion evidence:** pending. Next step: a water-side diagnostic that
-  reports the depth attribute, the depth ramp and the sky/glint terms, then
-  attribute the ocean blocks the same way.
+  number alone. The waterline remains a real discontinuity in the law that the
+  mesh now interpolates across. The water views show the sea is clean, so the
+  remaining risk is entirely on the land side.
+- **Completion evidence:** the ocean half is measured and refuted; the land
+  half is fixed but not yet accepted. Next step: the paired capture-pair harness
+  that measures the same patch edge before and after a build, so the residual can
+  be compared against ±1/255 instead of against a single-frame statistic.
 
 ### TD-06 — Synthetic detail must not fabricate coastline
 - **Status:** BLOCKED

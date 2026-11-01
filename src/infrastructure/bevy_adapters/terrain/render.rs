@@ -1845,10 +1845,10 @@ fn spawn_patch_mesh_system(
                         // it stays a non-caster so the blended cap never darkens
                         // the terrain beneath it.
                         NotShadowCaster,
-                        // Hidden while a developer diagnostic view is active: the
-                        // cap covers exactly the submerged terrain the land/sea
-                        // and height views classify.
-                        crate::infrastructure::bevy_adapters::terrain::diagnostics::TerrainDiagnosticOccluder,
+                        // Hidden by terrain diagnostic views only: the cap covers
+                        // exactly the submerged terrain the land/sea and height
+                        // views classify, while the water views are drawn on it.
+                        crate::infrastructure::bevy_adapters::terrain::diagnostics::TerrainDiagnosticWaterSurface,
                         Name::new(format!(
                             "Water_{:?}_{}_{}_{}",
                             patch.face, patch.level, patch.tile_x, patch.tile_y
@@ -3238,11 +3238,32 @@ mod tests {
     #[test]
     fn diagnostic_mode_codes_match_the_shader_constants() {
         let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        let water_shader = include_str!("../../../../assets/shaders/water.wgsl");
         for mode in TerrainDiagnostic::ALL {
             let expected = format!("const {}: u32 = {}u;", mode.shader_constant(), mode.code());
+            // Each family's code must live in the shader that decodes it. A code
+            // in the wrong file would be a confidently labelled view of nothing.
+            let owner = if mode.is_water() {
+                water_shader
+            } else {
+                shader
+            };
             assert!(
-                shader.contains(&expected),
+                owner.contains(&expected),
                 "missing shader constant: {expected}"
+            );
+            // Production's constant is shared: both shaders test against zero.
+            if mode == TerrainDiagnostic::Normal {
+                continue;
+            }
+            let other_owner = if mode.is_water() {
+                shader.contains(&expected)
+            } else {
+                water_shader.contains(&expected)
+            };
+            assert!(
+                !other_owner,
+                "{expected} must belong to exactly one material family"
             );
         }
         // Production must stay the value the shader tests against zero.

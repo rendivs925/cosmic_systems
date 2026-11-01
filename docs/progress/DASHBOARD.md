@@ -39,7 +39,7 @@ Ordered by visible impact, not by ease.
 
 | # | defect | task | state | evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | land component fixed: per-vertex roughness took the patch step 12.3 → 4.2/255 (A/B 4.3); ocean component still needs a water-side view |
+| 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | IN_PROGRESS | land component fixed: per-vertex roughness took the patch step 12.3 → 4.2/255 (A/B 4.3). The ocean half is **refuted**: with the new water views every sea term is continuous and no patch edge is distinguishable from an arbitrary column (p ≥ 0.12) |
 | 2 | Synthetic detail fabricates lakes on the coastal plain | TD-06 | BLOCKED | visible in `terrain-600m`; guard implemented but inert |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | PLANNED | `300km-papua` |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
@@ -110,8 +110,10 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**TD-05 — a water-side diagnostic.** The land half is fixed and measured:
-roughness is now a per-vertex field and the patch step fell from 12.3 to
-4.2/255. The ocean half is still unattributed because `WaterMaterial` has no
-diagnostic view; the next step is to expose its depth attribute, depth ramp and
-sky/glint terms the same way the terrain views work.
+**TD-05 — the water views exist and refute the ocean half.** Modes 18–23 now
+false-colour the sea's depth, body colour, opacity, shadow and mirror terms. At
+both poses every one is continuous, and a column-step test cannot separate the
+known patch-edge columns from random columns (p ≥ 0.12 in every view). The sea's
+tone is the depth ramp over real bathymetry plus cloud shadow. What remains for
+TD-05 is the land residual: 4.2/255 at a patch edge against a ±1/255 acceptance,
+which needs the paired capture-pair harness before it can be judged.

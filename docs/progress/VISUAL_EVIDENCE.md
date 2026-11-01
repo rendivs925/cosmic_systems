@@ -126,6 +126,15 @@ without repeating the experiment.
 | `2026-11-01-diag-roughness-300km-continuous.jpg` | `-8.0,139.5,300000` | 200 | `91985641eb20b3b3` | roughness | **after**: one continuous field across the coast; the edge is mesh resolution, not a patch |
 | `2026-11-01-production-1200km-continuous.jpg` | `-8.0,139.5,1200000` | 200 | `f628c5150f195a7d` | production | patch step 12.3 → 4.2/255, matching the constant-roughness A/B |
 | `2026-11-01-production-300km-continuous.jpg` | `-8.0,139.5,300000` | 200 | `d3049dbbb67e9c65` | production | mean 1.54/255 from `2026-10-31-300km-papua.jpg`, concentrated at patch edges |
+| `2026-11-01-diag-water-depth-1200km.jpg` | `-8.0,139.5,1200000` | 200 | `676b710ce8eb9cec` | water-depth | continuous contours; no straight patch edge |
+| `2026-11-01-diag-water-body-1200km.jpg` | same | 200 | `3016c3b18c53d142` | water-body | organic shelf/abyss ramp, no rectangular structure |
+| `2026-11-01-diag-water-opacity-1200km.jpg` | same | 200 | `30cf59901479ae0e` | water-opacity | smooth alpha ramp, no patch step |
+| `2026-11-01-diag-water-shadow-1200km.jpg` | same | 200 | `cce7ec945fe63642` | water-shadow | exactly (1,1,1) over the open sea; salmon is cloud shadow only |
+| `2026-11-01-diag-water-reflection-1200km.jpg` | same | 200 | `3ca7ca4fc6f8657f` | water-reflection | near zero at nadir; the grey shapes are cloud shadow |
+| `2026-11-01-diag-water-uv1-1200km.jpg` | same | 200 | `690c04f211e650c4` | water-uv1 | the cap's own patch layout, and it agrees with the terrain `patch-boundary` view |
+| `2026-11-01-diag-water-depth-300km.jpg` | `-8.0,139.5,300000` | 200 | `9fee428d49c37716` | water-depth | continuous contours across the shelf |
+| `2026-11-01-diag-water-body-300km.jpg` | same | 200 | `d34f11b1a6e1f4ff` | water-body | continuous shallow shelf; land drawn in production colours |
+| `2026-11-01-diag-water-opacity-300km.jpg` | same | 200 | `7d04e2f9dee60f20` | water-opacity | opaque offshore, ramping only at the shore |
 | `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
 
 ## Negative results worth keeping

@@ -390,7 +390,8 @@ First findings, recorded as observations rather than conclusions:
 * This does **not** cover the ocean blocks: at 1,200 km most of the frame is the
   water cap, drawn by `WaterMaterial`, which the terrain diagnostics do not
   instrument. A water-side view is needed before the ocean tone blocks can be
-  attributed.
+  attributed. *(Superseded 2026-11-01: the water views exist and refute the
+  ocean half — see "Water-side diagnostics" below.)*
 
 Limits, recorded so the next reader does not over-read a capture:
 
@@ -435,6 +436,9 @@ deep-water large-scale variation unchanged (std 21.10 → 21.05 over 8 bits). Th
 sea is `WaterMaterial`, outside the terrain diagnostics. The `height` view does
 show rectangular seafloor regions that the water's 0–60 m depth ramp would turn
 into colour steps, which is the first place a water-side view should look.
+*(Superseded 2026-11-01: the depth ramp is indeed where the sea's tone comes
+from, but it is continuous — no water term carries a patch signal. The deep-water
+A/B above only ever measured opaque water.)*
 
 Ruled out along the way, all with a frame: normals (continuous), UV0/UV1
 (continuous), baked occlusion (uniform 1,1), per-patch input differences (none at
@@ -483,9 +487,66 @@ Recorded limits:
 * The waterline is still a real discontinuity in the law (glossy seafloor against
   rough land). The mesh interpolates across it; the constant-roughness A/B shows
   what removing it entirely would cost.
-* The ocean blocks remain unattributed. `WaterMaterial` has no diagnostic view.
+* The ocean blocks remain unattributed at this point. `WaterMaterial` has no
+  diagnostic view. *(Resolved 2026-11-01: they are refuted, not fixed — see
+  "Water-side diagnostics" below.)*
 * Two of the four captures in this slice died with a core dump **after** writing
   their PNG and with no panic in the log; the identical command exited 0 on a
   retry and produced the same frame to within a handful of pixels. This is the
   same intermittent shutdown failure recorded earlier in this log, not a
   regression from this change, but it stays on the list.
+
+## 2026-11-01 — Water-side diagnostics (TD-05, ocean half)
+
+The land fix left a hypothesis standing: that the sea carried its own rectangular
+tone blocks, since a constant-roughness A/B changed nothing in deep water. That
+A/B only ever measured deep water, where the cap is opaque and the seafloor is
+invisible, so it could not have seen anything. The hypothesis was untested rather
+than supported.
+
+To test it the same way as the land, the terrain diagnostic namespace grew a
+second family: six water views decoded by the water material (depth, patch-local
+UV1, body colour, baked landscape shadow, cloud shadow, sky mirror, opacity).
+Both materials share one selector and one code namespace, but each is given only
+the codes its own shader decodes and production otherwise, so an unknown code
+stays a visible no-data magenta. A water view keeps the caps visible — they are
+the surface being measured — while the cloud deck is hidden for every mode, and
+terrain modes still hide the caps. That split is why the water caps and the cloud
+deck now carry different markers instead of one occluder tag.
+
+The result is a refutation rather than a fix. At 300 km and 1,200 km every water
+term is continuous, and none of them steps at a patch edge. Measured with a
+column-step statistic (median absolute luminance step across each column over sea
+pixels, 8-pixel boxes either side), the known patch-edge columns — 175, 340/353,
+528, 694, 700, 991, 1170 px, cross-checked between `water-uv1` and the terrain
+`patch-boundary` view — are indistinguishable from random column sets:
+
+* `water-body` 1,200 km: 2.43 vs a 5–95 % null band of 0.55–2.89, p = 0.12
+* `water-depth` 1,200 km: 5.14 vs 4.71–6.85, p = 0.83
+* `water-depth` 300 km: 1.86 vs 1.61–3.53, p = 0.87
+* `water-opacity` 1,200 km: 1.35 vs 0.44–2.04, p = 0.35
+* `water-opacity` 300 km: 0.43 vs 0.56–1.67, p = 1.00
+* `water-shadow` 1,200 km: 0.00 vs 0.00–0.10, p = 1.00
+* production 1,200 km: 1.01 vs 0.35–1.95, p = 0.28
+* production 300 km: 0.33 vs 0.16–0.63, p = 0.63
+* production 1,200 km, pre-fix: 0.90 vs 0.34–2.01, p = 0.39
+
+The sea's tone is the depth ramp over real bathymetry — production luminance
+correlates with the depth view at −0.78 across 1,127 columns — plus cloud shadow.
+What reads as a rectangle in the water is the shelf break, which runs north–south
+here and is therefore a vertical line in a nadir frame. The earlier claim that
+"the ocean blocks are not roughness, therefore they are something else" had a
+false premise: the sea never carried a patch-shaped term, before or after the
+land fix.
+
+Recorded limits:
+
+* These are presentation-term views. `bathymetry` is the terrain authority, and
+  the depth ramp clamps at the 60 m visible depth, so everything deeper than 60 m
+  renders identically; the views cannot say anything about the deep seafloor.
+* The column-step test is a distribution comparison, not a paired measurement. It
+  can say a patch edge is not special; it cannot put a per-edge number on a
+  1/255 threshold. That is what the land residual still needs, and it is the next
+  task.
+* One of the four 300 km captures exited 134 after writing a valid PNG — the same
+  intermittent shutdown fault already recorded, not a new one.

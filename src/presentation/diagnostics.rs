@@ -28,6 +28,21 @@
 //! | [`TerrainDiagnostic::Roughness`] / [`TerrainDiagnostic::Metallic`] / [`TerrainDiagnostic::LayerBlend`] / [`TerrainDiagnostic::DetailWeight`] | the material inputs the lighting path consumes |
 //! | [`TerrainDiagnostic::MorphOffset`] | the per-vertex LOD morph displacement, which exposes transitions that would pop |
 //!
+//! The water cap is a separate material with its own shader, so it has its own
+//! views in the same namespace:
+//!
+//! | mode | proves |
+//! | --- | --- |
+//! | [`TerrainDiagnostic::WaterDepth`] | whether the normalized depth attribute — the input of the colour and opacity ramps — steps at a patch edge |
+//! | [`TerrainDiagnostic::WaterUv1`] | where the water pass's own patches fall, independent of the terrain pass |
+//! | [`TerrainDiagnostic::WaterBody`] | the shallow/deep ramp, crest scatter and foam before any lighting |
+//! | [`TerrainDiagnostic::WaterShadow`] | whether the baked landscape shadow or the cloud deck is shading the sea unevenly |
+//! | [`TerrainDiagnostic::WaterReflection`] | how much of the sea's tone comes from the sky/deck mirror term |
+//!
+//! Both families share one selector and one code namespace, but each material
+//! receives only the codes its own shader decodes; the other material is given
+//! production. That keeps an unknown code a visible no-data error.
+//!
 //! Modes that cannot be answered from data the shader actually has are not
 //! listed here. In particular there is no "terrain source identity" mode: the
 //! fragment shader has no access to the terrain authority, so inventing one
@@ -83,11 +98,27 @@ pub enum TerrainDiagnostic {
     MorphOffset = 16,
     /// Source-derived local detail weight after the view-distance fade.
     DetailWeight = 17,
+    /// Sea-cap normalized depth from the water vertex attribute, on a grey ramp
+    /// with contours.
+    WaterDepth = 18,
+    /// The water pass's own patch-local UV1 with a grid, so the cap layout can be
+    /// read independently of the terrain pass.
+    WaterUv1 = 19,
+    /// The water body colour before lighting: the shallow/deep ramp, crest
+    /// scatter and foam.
+    WaterBody = 20,
+    /// The two visibility terms the sea is shaded by: baked landscape shadow
+    /// (red), cloud shadow (green) and their product (blue).
+    WaterShadow = 21,
+    /// The sky/deck mirror contribution added on top of the lit sea.
+    WaterReflection = 22,
+    /// Final water alpha, which decides how much seafloor is visible through it.
+    WaterOpacity = 23,
 }
 
 impl TerrainDiagnostic {
     /// Every mode, in shader-code order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 24] = [
         Self::Normal,
         Self::Albedo,
         Self::WorldNormals,
@@ -106,6 +137,12 @@ impl TerrainDiagnostic {
         Self::LayerBlend,
         Self::MorphOffset,
         Self::DetailWeight,
+        Self::WaterDepth,
+        Self::WaterUv1,
+        Self::WaterBody,
+        Self::WaterShadow,
+        Self::WaterReflection,
+        Self::WaterOpacity,
     ];
 
     /// The shader mode code.
@@ -116,6 +153,48 @@ impl TerrainDiagnostic {
     /// Whether this mode replaces production rendering.
     pub const fn is_active(self) -> bool {
         !matches!(self, Self::Normal)
+    }
+
+    /// Whether this mode is decoded by the terrain material shader.
+    ///
+    /// The two shaders have separate code sets in one namespace: each material
+    /// receives the code that belongs to its own family and production (0)
+    /// otherwise, so an unknown code can stay a visible no-data error instead of
+    /// silently rendering production colours.
+    pub const fn is_terrain(self) -> bool {
+        matches!(
+            self,
+            Self::Albedo
+                | Self::WorldNormals
+                | Self::Uv0
+                | Self::Uv1
+                | Self::Height
+                | Self::LandSea
+                | Self::SurfaceClass
+                | Self::LodLevel
+                | Self::PatchBoundary
+                | Self::PatchIdentity
+                | Self::Inputs
+                | Self::Occlusion
+                | Self::Roughness
+                | Self::Metallic
+                | Self::LayerBlend
+                | Self::MorphOffset
+                | Self::DetailWeight
+        )
+    }
+
+    /// Whether this mode is decoded by the water material shader.
+    pub const fn is_water(self) -> bool {
+        matches!(
+            self,
+            Self::WaterDepth
+                | Self::WaterUv1
+                | Self::WaterBody
+                | Self::WaterShadow
+                | Self::WaterReflection
+                | Self::WaterOpacity
+        )
     }
 
     /// The stable command-line / environment name.
@@ -139,6 +218,12 @@ impl TerrainDiagnostic {
             Self::LayerBlend => "layer-blend",
             Self::MorphOffset => "morph-offset",
             Self::DetailWeight => "detail-weight",
+            Self::WaterDepth => "water-depth",
+            Self::WaterUv1 => "water-uv1",
+            Self::WaterBody => "water-body",
+            Self::WaterShadow => "water-shadow",
+            Self::WaterReflection => "water-reflection",
+            Self::WaterOpacity => "water-opacity",
         }
     }
 
@@ -165,6 +250,12 @@ impl TerrainDiagnostic {
             Self::LayerBlend => "DIAG_LAYER_BLEND",
             Self::MorphOffset => "DIAG_MORPH_OFFSET",
             Self::DetailWeight => "DIAG_DETAIL_WEIGHT",
+            Self::WaterDepth => "DIAG_WATER_DEPTH",
+            Self::WaterUv1 => "DIAG_WATER_UV1",
+            Self::WaterBody => "DIAG_WATER_BODY",
+            Self::WaterShadow => "DIAG_WATER_SHADOW",
+            Self::WaterReflection => "DIAG_WATER_REFLECTION",
+            Self::WaterOpacity => "DIAG_WATER_OPACITY",
         }
     }
 
@@ -284,7 +375,7 @@ mod tests {
             TerrainDiagnostic::parse("5"),
             Some(TerrainDiagnostic::Height)
         );
-        assert_eq!(TerrainDiagnostic::parse("18"), None);
+        assert_eq!(TerrainDiagnostic::parse("24"), None);
         assert_eq!(TerrainDiagnostic::parse("heightmap"), None);
         assert_eq!(TerrainDiagnostic::parse("   "), None);
         assert_eq!(
@@ -321,7 +412,7 @@ mod tests {
         assert_eq!(mode.next(), TerrainDiagnostic::Normal);
         assert_eq!(
             TerrainDiagnostic::Normal.previous(),
-            TerrainDiagnostic::DetailWeight
+            *TerrainDiagnostic::ALL.last().expect("mode list")
         );
         for mode in TerrainDiagnostic::ALL {
             assert_eq!(mode.next().previous(), mode);
