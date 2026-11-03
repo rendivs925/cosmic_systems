@@ -883,7 +883,8 @@ timings. This phase exists because an unverifiable change is not a change.
   i.e. LOCAL_SURFACES + LAYER_WEIGHTS + OCCLUSION, no imagery) and both fade out
   with view distance, so the near-ground material replaces the overview with
   albedo about **2–2.5×** brighter on the same ground. That is a material-tone
-  calibration question, scoped as **TM-04** below rather than fixed here.
+  calibration question, scoped as **TM-04** below rather than fixed here; TM-04
+  later measured the local map at 4× the overview's luminance and closed it.
 - **Tests:** diagnostic capture comparison (`albedo`, `occlusion`, `inputs`,
   `layer-blend` at the same pose).
 - **Visual evidence:** `2026-11-01-at03-prod-400km.jpg`,
