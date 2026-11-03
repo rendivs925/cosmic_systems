@@ -52,21 +52,21 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | pending hash (TM-04) |
-| `cargo check --all-targets --features dem` | PASS | pending hash (TM-04) |
-| `cargo check --no-default-features` | PASS | pending hash (TM-04) |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | pending hash (TM-04) |
-| `cargo test --features dem --lib` | 1137 passed, 0 failed, 2 ignored | pending hash (TM-04) |
-| `cargo test --no-default-features --lib` | 1095 passed, 0 failed, 2 ignored | pending hash (TM-04) |
-| `openspec validate --all --strict` | 42 passed, 0 failed | pending hash (TM-04) |
-| `cargo build --release --features dem` | PASS | pending hash (TM-04) |
+| `cargo fmt --check` | PASS | eba5d6e |
+| `cargo check --all-targets --features dem` | PASS | eba5d6e |
+| `cargo check --no-default-features` | PASS | eba5d6e |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | eba5d6e |
+| `cargo test --features dem --lib` | 1137 passed, 0 failed, 2 ignored | eba5d6e |
+| `cargo test --no-default-features --lib` | 1095 passed, 0 failed, 2 ignored | eba5d6e |
+| `openspec validate --all --strict` | 42 passed, 0 failed | eba5d6e |
+| `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
 | region-edge harness | `scripts/imagery_region_mask.py` + `scripts/measure_tone_edge.py` report the imagery edge at 4.23/255 before and 0.72/255 after, and the change confined to 16.4 km | 81f3c04 |
 | TD-05 attribution A/B | constant-roughness and morph-off frames, same pose/clock/frames | `ec97d6e` |
-| near-ground tone control | replacing the local albedo mix with the base (same normals, roughness, layers) drops the 3 km ratio from 4.36 to 1.98; the tint build measures 2.01 against 2.03 at 40 km | pending hash (TM-04) |
+| near-ground tone control | replacing the local albedo mix with the base (same normals, roughness, layers) drops the 3 km ratio from 4.36 to 1.98; the tint build measures 2.01 against 2.03 at 40 km | eba5d6e |
 
 ## Visual evidence coverage
 
