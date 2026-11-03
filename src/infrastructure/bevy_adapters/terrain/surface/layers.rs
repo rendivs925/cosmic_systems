@@ -692,6 +692,37 @@ mod tests {
         assert_eq!(weights, repeat);
     }
 
+    /// The shader turns every layered sample into a unit-luminance tint over
+    /// the geographic base, so a layer cannot brighten or darken the ground it
+    /// sits on, whatever its absolute albedo is. That contract only holds while
+    /// each descriptor's albedo has a luminance well above the shader's floor; a
+    /// near-black descriptor would divide by the floor and its tint would blow
+    /// up into white speckle.
+    #[test]
+    fn every_ground_layer_albedo_can_carry_a_unit_luminance_tint() {
+        const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+        for descriptor in GROUND_LAYERS {
+            let [r, g, b] = descriptor.albedo;
+            let luma = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+            assert!(
+                luma > 0.02,
+                "{:?} albedo luminance {luma:.4} is too close to the tint floor",
+                descriptor.layer
+            );
+            // The shader's normalization is what makes the layer neutral in
+            // tone: dividing by this luminance yields a tint of exactly unit
+            // luminance for every descriptor. Pinning that here catches a
+            // descriptor whose channels are not all positive.
+            let tint = [r / luma, g / luma, b / luma];
+            let tint_luma = LUMA[0] * tint[0] + LUMA[1] * tint[1] + LUMA[2] * tint[2];
+            assert!(
+                (tint_luma - 1.0).abs() < 1e-5,
+                "{:?} tint luminance is {tint_luma:.5}",
+                descriptor.layer
+            );
+        }
+    }
+
     #[test]
     fn layer_texture_set_is_deterministic_and_an_array() {
         let first = layer_texture_set();

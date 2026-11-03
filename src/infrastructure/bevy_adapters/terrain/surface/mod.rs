@@ -27,6 +27,13 @@ pub use scatter::{build_river_mesh, build_vegetation_mesh, build_vegetation_mesh
 pub use surface_maps::build_patch_surfaces;
 use surface_maps::SURFACE_TEX_RES;
 
+/// Texels per side of the per-patch local surface maps. Exposed to the shader
+/// parity test so the mean-mip level stays the single-texel level.
+#[cfg(test)]
+pub(crate) const fn surface_tex_res() -> u32 {
+    SURFACE_TEX_RES
+}
+
 pub(crate) use layers::{
     build_layer_weight_map, layer_texture_set, LAYER_HEIGHT_CONTRAST, LAYER_NORMAL_STRENGTH,
     LAYER_TILING_SCALE, NEAR_DETAIL_SCALE, NEAR_DETAIL_STRENGTH,

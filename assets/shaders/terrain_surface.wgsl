@@ -26,6 +26,15 @@ const DETAIL_FADE_END_M: f32 = 6000.0;
 // streamed imagery does not resolve.
 const MACRO_FREQUENCY: f32 = 0.0009;
 const MACRO_STRENGTH: f32 = 0.09;
+/// Rec. 709 luminance weights. Every tone-matching term in this material uses
+/// the same weights, so the local tint and the layered tint cannot disagree
+/// about what "same brightness" means.
+const LUMA_REC709: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+/// Coarsest mip of the per-patch local albedo map. The map is 128 texels square,
+/// so level 7 is its single-texel mean: the reference the local tint is scaled
+/// against. A texture with a shorter chain clamps to its smallest level, which
+/// degrades to the per-fragment match rather than to an artefact.
+const LOCAL_ALBEDO_MEAN_LOD: f32 = 7.0;
 // Mid-scale patchiness at 6-17 m: the band the streamed imagery cannot resolve
 // and the sub-metre ground detail averages away beyond a few metres, so close
 // ground otherwise reads as a flat wash of colour.
@@ -966,13 +975,35 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // where that term is present. Both are continuous, so neighbouring LODs do
     // not step in brightness and coarse patches keep their existing look.
     let crevice = mix(texture_crevice, 1.0, 1.0 - sky_occlusion);
-    let detail_albedo = mix(base_albedo, local_albedo.rgb, 0.4 * detail_weight);
+    // The local map is a material *tint* over the continuous geographic base,
+    // not an independent absolute reflectance. The overview is the measured
+    // authority for how bright this ground is: its reflectance comes from the
+    // same product the orbital view shows. The map is scaled by the ratio of
+    // the base sample to the patch's own mean albedo, so the near ground's mean
+    // tone equals the overview it refines while the map keeps its relative
+    // material contrast (rock stays brighter than forest at the same base).
+    // Mixing the map's absolute albedo instead measured 4x the overview's
+    // luminance on Borneo forest, which is what made a descent brighten the
+    // land. Chromaticity, roughness, normals and the layered tint still carry
+    // material identity.
+    let base_luma = max(dot(base_albedo, LUMA_REC709), 0.0001);
+    let local_mean = textureSampleLevel(
+        terrain_local_albedo,
+        terrain_local_albedo_sampler,
+        in.uv_b,
+        LOCAL_ALBEDO_MEAN_LOD,
+    );
+    let local_mean_luma = max(dot(local_mean.rgb, LUMA_REC709), 0.0001);
+    // A saturated tint over a bright base can exceed one in a single channel;
+    // clamping is the only departure from matching the mean luminance.
+    let local_tinted = min(local_albedo.rgb * (base_luma / local_mean_luma), vec3<f32>(1.0));
+    let detail_albedo = mix(base_albedo, local_tinted, 0.4 * detail_weight);
     // The layered material is a unit-luminance tint over the continuous
     // geographic base, not a replacement. A patch that lacks layer maps (coarse
     // LOD, or before its weight map is ready) therefore cannot show a
     // rectangular base-colour step against a neighbour that has them; it only
     // loses the layer grain. `layer_fade` fades with view distance as before.
-    let layered_luma = max(dot(layered_albedo, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.02);
+    let layered_luma = max(dot(layered_albedo, LUMA_REC709), 0.02);
     let layered_tint = layered_albedo / layered_luma;
     let layers_modulated = clamp(
         detail_albedo * layered_tint,

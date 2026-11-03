@@ -728,3 +728,98 @@ Recorded limits:
 * The 3 km frame is a 4 km-wide patch inside a single overview texel, which is why
   the two albedo values agree so exactly. A wider near-ground frame would average
   across texels and could not have been compared this way.
+
+## 2026-11-03 — The near ground was calibrated to a look, not to the measurement (TM-04)
+
+AT-03 left one number behind: at `-4.0,138.0` the production frame was 2.2×
+brighter at 3 km than at 400 km while the `albedo` view was identical at both.
+The first question was whether that was lighting or albedo, and the `albedo`
+view answers it directly — the base albedo does not change with altitude, so the
+extra brightness enters between the base and the pixel.
+
+The shader composes the local map like this:
+
+```wgsl
+let detail_albedo = mix(base_albedo, local_albedo.rgb, 0.4 * detail_weight);
+```
+
+`local_albedo` is the source-derived per-patch map from `surface_appearance`
+(forest `[0.025, 0.10, 0.015]`, blended toward wet soil inside the Papua profile).
+Its luminance is about 0.078 linear; the measured overview over that ground is
+0.0169. At the 3 km pose the detail weight is 1, so the mix evaluates to
+`0.6 + 0.4 × 4.6 ≈ 2.4` times the base. That is the step, and it is not a
+lighting bug, an exposure bug, or a mip bug.
+
+**The control.** To make that attribution a measurement rather than an
+arithmetic guess, one build replaced the local albedo term with the base:
+
+```wgsl
+let detail_albedo = mix(base_albedo, base_albedo, 0.4 * detail_weight); // control
+```
+
+Normals, roughness, the layered material and every variation term still ran. The
+3 km frame's per-pixel `production / albedo` over the same forest tone fell from
+**4.36 to 1.98** — the orbital level (2.03 at 40 km) — and nothing else moved.
+Solving `4.36 / 1.98 = (1 − w) + w·g` with `w = 0.4` gives `g = 4.01`: the local
+map carried four times the overview's luminance on that ground. The layered
+material was already a unit-luminance tint and contributed nothing, which the
+control confirms by leaving it in.
+
+**The fix.** The local map is now a tint anchored to the base:
+
+```wgsl
+let base_luma = max(dot(base_albedo, LUMA_REC709), 0.0001);
+let local_mean = textureSampleLevel(terrain_local_albedo, sampler, in.uv_b, LOCAL_ALBEDO_MEAN_LOD);
+let local_mean_luma = max(dot(local_mean.rgb, LUMA_REC709), 0.0001);
+let local_tinted = min(local_albedo.rgb * (base_luma / local_mean_luma), vec3<f32>(1.0));
+let detail_albedo = mix(base_albedo, local_tinted, 0.4 * detail_weight);
+```
+
+The reference is the map's own mean, sampled from its coarsest mip (the map is
+128 texels square, so level 7 is a single texel), not the fragment's own texel.
+That distinction matters: scaling by the fragment's own luminance would flatten
+every material to the base's brightness, while scaling by the patch mean leaves
+rock brighter than forest and still puts the *mean* on the overview. A texture
+with a shorter mip chain clamps to its smallest level, which degrades to the
+per-fragment match rather than to an artefact.
+
+The result at the same pose, same clock, same 200 frames:
+
+| statistic | before | after |
+| --- | ---: | ---: |
+| 3 km production / albedo, same forest tone | 4.36 | **2.01** |
+| 40 km production / albedo, same forest tone | 2.03 | 2.03 |
+| 3 km land production, linear p50 | 0.0738 | 0.0340 |
+| centred crop, 3 km vs 40 km | +128 % | **+2 %** |
+| 300 / 400 km frames | 1.84 / 1.85 | measured identically (detail weight is zero there) |
+
+The 40, 300 and 400 km frames measure identically before and after because the
+detail weight is zero there; the fix can only act where a local map is
+visible. The remaining 2.01 versus 1.84–1.85 at 300–400 km is the longer air
+column above the camera, which is the atmosphere's job (AT-02).
+
+**What this gives up, stated plainly.** The local map's absolute reflectance is
+no longer used. A material that is physically brighter than the ground around it
+now appears at the base's brightness, tinted by its own chromaticity, with the
+patch mean — not the fragment — carrying the scale. That is deliberate: the
+overview is the measured authority for this surface, and the local map is a
+refinement of *its* structure, not a second, independently calibrated estimate of
+absolute reflectance. The alternative — per-biome gains against the overview —
+would need a global classification of the overview and would still leave a step
+wherever the classification is wrong.
+
+Recorded limits and follow-ups:
+
+* One extra texture fetch at an explicit mip level per fragment, only for patches
+  that bind a local map. No frame-time A/B was run, so no cost percentage is
+  claimed.
+* Clamping at 1 is the only departure from exact mean matching and only trips for
+  saturated tints over a bright base.
+* The near-ground frame still varies ~4 % between runs at frame 200, because the
+  closest patch may or may not have finished its material upload by then. The
+  before/after difference (a factor of 2.2) is far outside that, but the docs
+  quote the run and the statistic rather than a single pixel.
+* With the tone matched, the near ground is visibly darker than it used to be —
+  it now looks like the orbital view. That is the intended result, and it makes
+  the tropical-forest albedo of the overview the thing to question next if the
+  surface reads too dark, not the material.

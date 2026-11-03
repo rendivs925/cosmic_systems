@@ -567,34 +567,70 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** pending.
 
 ### TM-04 — Local and layered albedo tone match to the measured overview
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Stop the ground brightening about 2–2.5× when the camera descends
   from orbit to the surface, by calibrating the local source surfaces and the
   layered ground albedo against the measured overview and imagery — the same
   measured-gain method TD-03 used on the regional mosaic.
 - **Dependencies:** AT-03 (attribution complete), TD-03.
-- **Subsystems:** terrain appearance, layered ground material, local surfaces.
-- **Expected files:** `src/domain/services/terrain_source/appearance.rs`,
-  `src/infrastructure/bevy_adapters/terrain/surface/mod.rs`,
-  `assets/shaders/terrain_surface.wgsl`, the land-cover layer catalog.
+- **Subsystems:** terrain material composition (local surfaces, layered ground).
+- **What was wrong (measured):** at `-4.0,138.0` the 3 km production frame was
+  **4.36×** its own `albedo` view (per-pixel median over the same forest tone);
+  the 40, 300 and 400 km frames were 2.03×, 1.84× and 1.85×. The extra factor is
+  the local surface map's *absolute* albedo, mixed at weight
+  `0.4 × detail_weight`: it is about **4×** the overview's luminance on Borneo
+  forest. The layered material was already a unit-luminance tint and contributed
+  nothing to the step.
+- **Causal control:** a build that replaced that mix with the base — leaving
+  normals, roughness, the layered material and every variation term untouched —
+  returned the 3 km frame to **1.98×**, i.e. the orbital level. Solving
+  `4.36 / 1.98 = (1 − w) + w·g` with `w = 0.4` gives `g = 4.01`.
+- **Fix:** the local map is now a *tint* anchored to the base. Its sample is
+  scaled by `base_luma / local_mean_luma`, where the mean is the map's own
+  coarsest mip (level 7 of 128 texels, its single-texel mean), and mixed at the
+  same `0.4 × detail_weight`. `LUMA_REC709` became one shader constant shared
+  with the layered tint. Scaling by the *patch* mean rather than by the
+  fragment's own texel keeps the map's relative material contrast — rock stays
+  brighter than forest — while fixing the mean.
+- **Why not retune `appearance.rs`:** its values are physically plausible and
+  feed every other material; a single global gain would have darkened deserts
+  and snow, which already agree with the overview, and a per-biome gain would
+  have needed its own global measurement. The mismatch is one of *tone
+  authority*, so it is fixed where the two sources meet, in the composition
+  step, and the source values stay the appearance law's.
 - **Acceptance:** at a fixed site the production land's linear luminance changes
   by no more than the atmosphere and Sun angle explain between 400 km and 3 km,
   while the `albedo` view stays identical; the calibration is a measured ratio
-  recorded with its derivation, not a look.
-- **Tests:** a pinned measured ratio (as `checked_in_color_match_is_the_measured_mean_ratio`
-  does for imagery), and a test that the layer albedos cannot drift from it.
-- **Visual evidence:** paired 3 km / 400 km production frames at the same pose,
-  plus the `albedo` pair that must not move.
-- **Performance:** none; a scalar in the material path.
+  recorded with its derivation, not a look. **MET:** the 3 km frame is 2.01× its
+  albedo against 2.03× at 40 km; the centred crop of the same ground moves
+  0.0783 → 0.0351 linear against 0.0344 at 40 km, i.e. **+2 % where the defect
+  was +128 %**. The `albedo` view is unchanged (centre p50 0.0169 at 3 km and
+  40 km).
+- **Tests:** `local_detail_albedo_is_tinted_to_the_base_luminance`,
+  `local_albedo_mean_mip_matches_the_patch_map_resolution`,
+  `measured_local_albedo_gain_and_the_tint_that_removes_it`,
+  `every_ground_layer_albedo_can_carry_a_unit_luminance_tint`.
+- **Visual evidence:** `2026-11-03-tm04-pair-3km.jpg` (left: the 2.2× brighter
+  near ground; right: the same ground at the measured tone),
+  `2026-11-03-tm04-3km-before.jpg`, `2026-11-03-tm04-3km-after.jpg`,
+  `2026-11-03-tm04-albedo-3km.jpg`, `2026-11-03-tm04-400km-after.jpg`.
+- **Performance:** one extra texture fetch at an explicit mip level per fragment,
+  taken only by patches that bind a local surface map. No frame-time A/B was run
+  (the same limitation as TD-04), so no percentage is claimed.
 - **Scientific validation:** the reference is the measured overview, whose mean
   reflectance the Sentinel mosaic agrees with after TD-03's gain (0.019 linear
-  against 0.017). The local and layer albedos are currently ~2–2.5× that.
-- **Risks:** brightening the ground instead of darkening the near end would move
-  the deck/land contrast the other way; and matching the mean is not matching
-  the distribution, so a flat gain can still leave a visible step at the fade
-  distance.
-- **Completion evidence:** pending.
+  against 0.017). The local map is now a modulation of that measurement rather
+  than an independent reflectance estimate; its absolute values are deliberately
+  no longer used for tone.
+- **Risks:** the map's absolute reflectance is no longer used, so a locally
+  distinct material inside one overview texel is carried by chromaticity and the
+  patch mean rather than by a brightness ratio; clamping at 1 is the only
+  departure from exact mean matching; the mean depends on the mip chain, and a
+  parity test pins the sampled level to the map resolution.
+- **Completion evidence:** MET. The near-ground step is gone (4.36 → 2.01
+  against 2.03 at 40 km), the `albedo` view did not move, and the remaining
+  altitude difference (1.84–1.85 at 300–400 km) is the longer air column.
 
 ### TM-03 — Land/sea mask and imagery reconciliation
 - **Status:** PLANNED

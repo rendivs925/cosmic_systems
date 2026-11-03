@@ -3423,6 +3423,109 @@ mod tests {
         );
     }
 
+    // -- Near-ground albedo tone match --------------------------------------
+
+    /// The local map must reach the fragment as a tint of the base sample, not
+    /// as its own absolute reflectance. Either half going missing restores the
+    /// near-ground brightening TM-04 measured, so both are pinned to the shader
+    /// source.
+    #[test]
+    fn local_detail_albedo_is_tinted_to_the_base_luminance() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        assert!(
+            shader.contains("const LUMA_REC709: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);")
+        );
+        assert!(shader.contains("let base_luma = max(dot(base_albedo, LUMA_REC709), 0.0001);"));
+        assert!(
+            shader.contains("let local_mean_luma = max(dot(local_mean.rgb, LUMA_REC709), 0.0001);")
+        );
+        assert!(shader
+            .contains("min(local_albedo.rgb * (base_luma / local_mean_luma), vec3<f32>(1.0))"));
+        // The reference is the patch mean, sampled from the map's coarsest mip,
+        // not the fragment's own texel: matching per fragment would flatten the
+        // material contrast that makes rock and forest differ up close.
+        assert!(shader.contains("const LOCAL_ALBEDO_MEAN_LOD: f32 = 7.0;"));
+        assert!(shader.contains("textureSampleLevel("));
+        assert!(shader
+            .contains("let detail_albedo = mix(base_albedo, local_tinted, 0.4 * detail_weight);"));
+        assert!(
+            !shader.contains("mix(base_albedo, local_albedo.rgb"),
+            "mixing the map's own albedo is the defect: it measured 4x the overview"
+        );
+        // One luminance authority for both tinted maps; a second copy of the
+        // weights would let the local and layered tints drift apart.
+        assert_eq!(shader.matches("0.2126, 0.7152, 0.0722").count(), 1);
+        assert!(shader.contains("let layered_luma = max(dot(layered_albedo, LUMA_REC709), 0.02);"));
+    }
+
+    /// The mean mip is only the patch mean while the map's resolution and the
+    /// declared level agree. Raising `SURFACE_TEX_RES` without raising the level
+    /// would sample a block average instead of the mean and let the near-ground
+    /// tone drift again, silently.
+    #[test]
+    fn local_albedo_mean_mip_matches_the_patch_map_resolution() {
+        let shader = include_str!("../../../../assets/shaders/terrain_surface.wgsl");
+        let declaration = "const LOCAL_ALBEDO_MEAN_LOD: f32 = ";
+        let start = shader
+            .find(declaration)
+            .expect("the shader must declare the mean level")
+            + declaration.len();
+        let level: u32 = shader[start..]
+            .split(';')
+            .next()
+            .expect("the declaration must end")
+            .trim()
+            .trim_end_matches(".0")
+            .parse()
+            .expect("the mean level must be a whole number");
+        let resolution = crate::infrastructure::bevy_adapters::terrain::surface::surface_tex_res();
+        assert_eq!(
+            1u32 << level,
+            resolution,
+            "the mean mip must be the single-texel level of the local map"
+        );
+    }
+
+    /// Mirror of the measured near-ground step, used only to pin the numbers
+    /// and their derivation.
+    ///
+    /// At `-4.0,138.0` on Borneo forest the 3 km frame measured
+    /// `production / albedo = 4.36` (per-pixel median over the same forest
+    /// tone) with the local map's absolute albedo mixed at weight 0.4. A control
+    /// build that replaced that mix with the base — keeping normals, roughness,
+    /// the layered material and every variation term — measured 1.98, i.e. the
+    /// far-altitude level. Solving `4.36 / 1.98 = (1 - w) + w * g` gives
+    /// `g = 4.01`: the local map was 4x the overview's luminance, and the
+    /// layered material contributed nothing. The tint forces `g = 1`, so the
+    /// expected ratio is the control's.
+    #[test]
+    fn measured_local_albedo_gain_and_the_tint_that_removes_it() {
+        const MEASURED_RATIO_WITH_LOCAL_ALBEDO: f64 = 4.36;
+        const CONTROL_RATIO_WITH_BASE_ALBEDO: f64 = 1.98;
+        const MIX_WEIGHT: f64 = 0.4;
+        let gain = (MEASURED_RATIO_WITH_LOCAL_ALBEDO / CONTROL_RATIO_WITH_BASE_ALBEDO
+            - (1.0 - MIX_WEIGHT))
+            / MIX_WEIGHT;
+        assert!(
+            (gain - 4.00).abs() < 0.05,
+            "the measured local/base luminance gain is {gain:.3}"
+        );
+        // Reconstructing the before-number from the control and the gain is
+        // what makes this a measurement rather than a fit.
+        let reconstructed =
+            CONTROL_RATIO_WITH_BASE_ALBEDO * ((1.0 - MIX_WEIGHT) + MIX_WEIGHT * gain);
+        assert!((reconstructed - MEASURED_RATIO_WITH_LOCAL_ALBEDO).abs() < 0.01);
+        // With a unit-luminance tint the mixture is luminance-neutral at any
+        // detail weight, so no altitude can show the step.
+        for detail_weight in [0.0, 0.4, 0.7, 1.0] {
+            let mixed_luminance = (1.0 - MIX_WEIGHT) + MIX_WEIGHT * 1.0;
+            assert!(
+                (mixed_luminance - 1.0).abs() < 1e-12,
+                "detail weight {detail_weight} must not scale the base"
+            );
+        }
+    }
+
     /// Each diagnostic mode's code is carried by a named shader constant. A
     /// reordered enum or an edited shader constant must fail here rather than
     /// render the wrong term under a confident label.

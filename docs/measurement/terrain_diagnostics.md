@@ -329,6 +329,33 @@ seam band is wider in pixels at 300 km than at 1,200 km, so the sample offsets
 have to be scaled with it; a fixed 3–8 px window finds almost no samples at
 300 km.
 
+### A tone step between two sources, attributed by neutralising one term
+
+`albedo` shows only the geographic base, so it is the authority a near-ground
+material can be measured against: on the same ground, `production / albedo` is
+the lighting factor times whatever the material did to the albedo. Comparing that
+ratio at two altitudes separates a tone defect from a lighting one:
+
+| frame at `-4.0,138.0` | production / albedo (per-pixel median) |
+| --- | ---: |
+| 3 km, before | **4.36** |
+| 3 km, local albedo mix replaced by the base | **1.98** |
+| 3 km, after the tint | **2.01** |
+| 40 km / 300 km / 400 km | 2.03 / 1.84 / 1.85 |
+
+The middle row is the instrument. It is a build in which the only changed term
+is the local map's contribution to `detail_albedo`; normals, roughness, the
+layered material and every variation term still run. Because that single
+substitution returns the frame to the orbital level, the step is that term and
+nothing else — no inference about atmosphere or Sun angle is needed. The
+`detail-weight` view then explains *why* only the near frame is affected: it is
+1.00 at 3 km and 0.00 from 40 km up, so the term lives inside the detail fade.
+
+The ratio must be taken over one material tone, not over all land: production has
+an additive lift (sky light, in-scatter) that raises the ratio at dark albedo, so
+a mixed population reads 2.56× at 40 km where the forest tone reads 2.03×. The
+same-tone restriction is what makes two altitudes comparable.
+
 ## Cost
 
 * One `u32` comparison per fragment in production rendering; the diagnostic

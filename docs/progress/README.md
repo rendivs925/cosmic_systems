@@ -28,9 +28,9 @@ and a measurement path that captures frames without a swapchain.
 ## What is currently being built?
 
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
-TD-05 (tone blocks), TD-04 (regional imagery edge) and AT-03 (high-altitude land
-darkness, attributed) are closed; the next measurable visual defect is the
-near-ground albedo tone step, scoped as TM-04.
+TD-05 (tone blocks), TD-04 (regional imagery edge), AT-03 (high-altitude land
+darkness, attributed) and TM-04 (near-ground albedo tone, closed) are done; the
+next task is AT-02, the altitude transition and limb.
 
 ## What is broken?
 
@@ -38,7 +38,7 @@ near-ground albedo tone step, scoped as TM-04.
 | --- | --- |
 | Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
-| Land nearly black at 400 km while clouds are white | **verified — explained.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The remaining step is near the ground: local surfaces and the layered material are 2–2.5× brighter than the measured overview (TM-04) |
+| Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
 | Cloud edges are cut-outs; one shape per region | planned work |
 | Vegetation reads as specks | planned work |
 | Regional imagery steps at its patch edge | **verified and closed.** The edge is now a 16.6 km cross-fade at the region bound; the worst step near the bound fell from 4.23 to 0.72/255 (the frame's own texture level) and the change is confined to the declared band |
@@ -51,8 +51,8 @@ it.
 
 ## What has been verified?
 
-Fourteen of forty-one roadmap tasks, each with implementation + tests + a named frame
-or a named measurement:
+Fifteen of forty-one roadmap tasks, each with implementation + tests + a named
+frame or a named measurement:
 
 | task | evidence |
 | --- | --- |
@@ -69,6 +69,7 @@ or a named measurement:
 | TD-05 tone blocks | seam excess +4.14 → −0.04/255 at the seam that motivated it; frame-wide +0.25/+0.47/255; ocean half refuted with six water views |
 | TD-04 imagery edge | the inset edge is a 16.6 km cross-fade at the region bound; worst step near the bound 4.23 → 0.72/255, change confined to x=381..737 |
 | AT-03 high-altitude darkness | the same ground measures the same albedo at 400 km and 3 km (0.0169 linear p50); the near-ground material is the 2–2.5× outlier |
+| TM-04 near-ground tone | the local albedo map was 4× the overview; a control build isolates it (4.36 → 1.98) and the tint build measures 2.01 at 3 km against 2.03 at 40 km |
 | VL-02 OpenSpec strict | 42/42 |
 
 Four more are implemented but **not** verified: site grading at more than one
@@ -126,9 +127,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,133 domain and adapter
-tests pass (1,091 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified fourteen of its forty-one tasks.
+The simulator runs and its physics is regression-locked; 1,137 domain and adapter
+tests pass (1,095 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified fifteen of its forty-one tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -139,11 +140,12 @@ break. The regional imagery edge was not where anyone thought: the tile only
 started at the next patch boundary, because tile resolution tested patch-centre
 containment.
 
-What is left of that family is a tone step rather than a defect: the ground
-brighter near the camera than from orbit, because the near-ground material's
-albedo is 2–2.5× the measured overview's. That is TM-04, and the method is
-already proven — a measured gain, recorded with its derivation, the way the
-regional mosaic was matched.
+The last of that family was a tone step rather than a defect: the ground read
+brighter near the camera than from orbit because the local surface map carried an
+absolute albedo 4× the measured overview's. A control build that replaced only
+that term put the near frame back at the orbital level (4.36 → 1.98), and the
+map is now a tint anchored to the overview, so a descent changes the tone by
++2 % instead of +128 %.
 
 Two hard constraints are recorded rather than worked around. The machine cannot
 present a Vulkan surface, so windowed validation is blocked and the offscreen
