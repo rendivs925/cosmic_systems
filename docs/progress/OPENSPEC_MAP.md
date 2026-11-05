@@ -43,7 +43,7 @@ over with a new duplicate spec.
 | RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | |
 | RK-02 plume | `rocket-engine-effects`, `flight-presentation-effects` | — | |
 | RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | |
-| RD-02 streaming measurement | `terrain-lod`, `terrain-rendering` | — | |
+| RD-02 streaming measurement | `terrain-lod`, `terrain-rendering` | — | culling, LOD reconcile and the upload burst are timed separately; GPU upload completion is still unexposed and not claimed |
 | RD-03 shadow lifecycle | `terrain-lighting-occlusion` | — | |
 | VL-01 smoke | `scientific-validation` | — | |
 | VL-02 spec validation | — | — | process check |

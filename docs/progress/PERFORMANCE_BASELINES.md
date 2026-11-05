@@ -53,6 +53,39 @@ CPU: one 30 s rocket run measured 35.5 s task-clock (~1.2 cores average).
 Memory floor is dominated by Bevy/wgpu/shader pipelines plus terrain caches
 (~600 MB); one extra mode costs ~30 MB.
 
+## 2026-11-05 — terrain phase attribution (RD-02)
+
+Environment: Ryzen 9 8940HX, RTX 5070 Laptop, **debug** binary, offscreen capture
+runner (no window, fixed 60 Hz `ScheduleRunnerPlugin`), warm erosion cache,
+`COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 900 frames, `COSMIC_SYSTEMS_CAPTURE_TIME=0`.
+The reported window is the last 600 frames (10 s); the upload figures come from
+the window that still contains the startup stream. These are CPU phase timings.
+Frame-time percentiles from this runner are the runner's cadence, not render cost,
+so they are deliberately not quoted.
+
+| scenario | culling p95 / p99 (ms/frame) | LOD reconcile p95 / p99 (ms/frame) | culling total (ms / 600 f) | LOD total (ms / 600 f) | meshes uploaded | mesh build (ms total / per mesh) | CPU submission proxy (ms total / per mesh) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| prelaunch, Papua | 0.257 / 0.283 | 0.865 / 1.028 | 64.99 | 211.98 | 352 | 5.79 / 0.0164 | 67.62 / 0.192 |
+| 40 km over Papua | 0.171 / 0.178 | 0.597 / 0.674 | 36.13 | 142.06 | 347 | 6.46 / 0.0186 | 65.13 / 0.188 |
+
+How to read the numbers:
+
+* **Culling and LOD reconcile are cadenced at 30 Hz**, so their p50 is zero
+  (every other frame does no selection work). The p95/p99 columns are the
+  reconcile-frame cost; the totals are the sum over 600 frames, i.e. about 300
+  reconciles. `viewport_culling_ms` includes the per-frame viewport extraction
+  plus the frustum/horizon traversal; the traversal is the dominant part.
+* **Upload is a startup burst, not a steady rate.** All 347–352 meshes arrived
+  in the first window. Per mesh, mesh construction was 0.016–0.019 ms and the
+  inclusive CPU submission proxy was 0.188–0.192 ms. `cpu_to_gpu_submission_ms`
+  is a CPU-side timer around asset submission, **not** GPU completion; GPU
+  upload time is still not exposed.
+* Culling counts in the same runs: prelaunch 310 candidates, 18 horizon and 43
+  frustum rejected; 40 km 254 candidates, 36 horizon and 102 frustum rejected.
+* The 600-frame window (`TERRAIN_ATTRIBUTION_HISTORY_CAPACITY`) replaced a
+  120-frame window because the 5 s report cadence otherwise skipped the upload
+  burst entirely — the first full report would already be steady state.
+
 ## What a complete baseline must contain
 
 The programme needs one row per scenario, at a named commit, with every column
@@ -81,5 +114,7 @@ reports completion poll, viewport culling, LOD selection and scheduling timings,
 plus patch counts and cache bytes. `render_performance` reports per-pass GPU span
 times when the backend supports timestamp queries.
 
-Known gaps in the telemetry itself: CPU mesh-build versus surface-preparation
-time, upload duration and GPU upload completion, draw calls, triangle counts.
+Known gaps in the telemetry itself: GPU upload completion, draw calls, triangle
+counts. CPU mesh-build versus surface preparation and the inclusive CPU
+submission proxy are now split (RD-02); GPU upload duration still needs backend
+timestamp support.

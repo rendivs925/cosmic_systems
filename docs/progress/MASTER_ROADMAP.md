@@ -1159,21 +1159,46 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** pending.
 
 ### RD-02 — Streaming and culling measurement
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Quantify horizon/frustum culling, LOD reconciliation and upload
   cost separately.
-- **Dependencies:** P0-04.
+- **Dependencies:** P0-04 for a full frame baseline; the CPU phase split is
+  independent of presentation and was measured on the offscreen path.
 - **Subsystems:** streaming, performance.
-- **Expected files:** `terrain/streaming.rs`, `performance_systems.rs`.
+- **Expected files:** `terrain/streaming.rs`, `performance_systems.rs`,
+  `terrain/performance.rs`.
 - **Acceptance:** the three costs are reported as separate timings.
-- **Tests:** telemetry fields present and bounded.
+- **Implementation:** `TerrainPerformanceTelemetry` already times completion
+  poll, viewport culling, LOD selection, scheduling, task admission, publication,
+  eviction, CPU mesh construction, material/image creation, the inclusive CPU
+  submission proxy and activation, with per-phase p50/p95/p99. The attribution
+  window was 120 frames, which cannot contain the startup upload burst at the
+  5 s report cadence; it is now 600 frames (10 s), so one report retains the
+  transient upload cost alongside steady culling and LOD cost.
+- **Tests:** `phase_percentiles_are_present_and_bounded_by_their_samples`,
+  `inclusive_submission_does_not_double_count_nested_phases`,
+  `aggregation_sums_counters_and_retains_the_most_expensive_frame`,
+  `frame_reset_and_queue_observation_do_not_leak_between_frames`.
+- **Measured** (debug binary, offscreen 60 Hz runner, warm erosion cache,
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 900 frames, 600-frame window; full
+  table and method in `PERFORMANCE_BASELINES.md`):
+  prelaunch Papua — culling p95/p99 0.257/0.283 ms per frame, LOD reconciliation
+  0.865/1.028 ms, 64.99 ms culling and 211.98 ms LOD over 600 frames; 40 km over
+  Papua — 0.171/0.178 ms and 0.597/0.674 ms, 36.13 ms and 142.06 ms. Upload was
+  a startup burst of 347–352 meshes: mesh construction 0.016–0.019 ms per mesh,
+  inclusive CPU submission proxy 0.188–0.192 ms per mesh.
+- **Interpretation:** selection is cadenced at 30 Hz, so p50 is zero and the
+  p95/p99 columns are the reconcile-frame cost. `cpu_to_gpu_submission_ms` is a
+  CPU-side proxy; GPU upload completion remains unexposed and is not claimed.
 - **Visual evidence:** not applicable.
-- **Performance:** this task produces the numbers.
+- **Performance:** this task produces the numbers; it does not optimise.
 - **Scientific validation:** none.
-- **Risks:** nested spans reported as additive.
-- **Completion evidence:** bounded streaming exists and holds its budget in the
-  2026-09-11 audit; the split is not implemented.
+- **Risks:** the frame-time percentiles from the offscreen runner are the
+  runner's cadence, not render cost, and are not used here. Nested spans are
+  documented so the submission proxy is not summed with its own sub-timers.
+- **Completion evidence:** `e0ea385` and the 2026-11-05 table in
+  `PERFORMANCE_BASELINES.md`.
 
 ### RD-03 — Shadow resource lifecycle
 - **Status:** VERIFIED

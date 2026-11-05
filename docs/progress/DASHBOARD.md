@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-05.
-Last code checkpoint: `458d0b1` (2026-11-05).
+Last code checkpoint: `e0ea385` (2026-11-05).
 This table describes the 44 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,8 +11,8 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 21 | 47.7 % |
-| IMPLEMENTED (not verified) | 1 | 2.3 % |
+| VERIFIED | 22 | 50.0 % |
+| IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 3 | 6.8 % |
 | PLANNED | 19 | 43.2 % |
@@ -30,7 +30,7 @@ evidenced", not "the simulator does not work".
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 3 / 4 | 75 % | active | AT-01/02/03 verified; AT-04 tracks the single-scattering horizon hue |
 | P7 Rocket and VFX | 0 / 2 | 0 % | planned | attitude audit not started |
-| P8 Rendering optimisation | 1 / 3 | 33 % | active | performance baseline blocked |
+| P8 Rendering optimisation | 2 / 3 | 67 % | active | RD-01 needs the presentation baseline |
 | P9 Final validation | 1 / 3 | 33 % | active | three-mode smoke blocked by presentation |
 
 ## Critical unresolved defects
@@ -56,13 +56,13 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 458d0b1 |
-| `cargo check --all-targets --features dem` | PASS | 458d0b1 |
-| `cargo check --no-default-features` | PASS | 458d0b1 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 458d0b1 |
-| `cargo test --features dem --lib` | 1147 passed, 0 failed, 2 ignored | 458d0b1 |
-| `cargo test --no-default-features --lib` | 1105 passed, 0 failed, 2 ignored | 458d0b1 |
-| `openspec validate --all --strict` | 42 passed, 0 failed | 458d0b1 |
+| `cargo fmt --check` | PASS | e0ea385 |
+| `cargo check --all-targets --features dem` | PASS | e0ea385 |
+| `cargo check --no-default-features` | PASS | e0ea385 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | e0ea385 |
+| `cargo test --features dem --lib` | 1148 passed, 0 failed, 2 ignored | e0ea385 |
+| `cargo test --no-default-features --lib` | 1106 passed, 0 failed, 2 ignored | e0ea385 |
+| `openspec validate --all --strict` | 42 passed, 0 failed | e0ea385 |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -117,13 +117,13 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — RD-02, the streaming split timings.** It is implemented but has no
-measured breakdown. AT-04 (multiple-scattering horizon) follows, then the TD-06
-guard re-evaluation.
+**Next task — AT-04, multiple scattering at the horizon.** The single-scattering
+sky reddens the 10–70 km noon horizon; the measured limb e-folding is 8.30/8.54
+km and the fix must keep 24–32 km within 8 ± 1 km. AT-04 needs an OpenSpec change
+and a bounded multiple-scattering term.
 
-TD-03 is closed: the measured per-channel linear gain is applied before mip
-generation and the before/after frame shows the pale inset gone. One limit is
-recorded rather than hidden: above roughly 80 km, patches outside the fine focus
-are coarser than the regional package's `min_level: 8`, so the mosaic/overview
-*resolution* boundary follows a patch edge even though the tone now matches.
-Closing that needs regional imagery below level 8 (a package-production change).
+RD-02 is closed: the CPU phases are now measured separately (culling, LOD
+reconciliation, upload burst) in `PERFORMANCE_BASELINES.md`, with the offscreen
+runner's frame times explicitly excluded because they are the runner's cadence.
+The full frame baseline (P0-04) and RD-01 still need a presentable display; TD-06's
+guard re-evaluation and the remaining terrain audits follow.

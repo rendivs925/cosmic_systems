@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `458d0b1`.
+Snapshot: 2026-11-05. Last code checkpoint: `e0ea385`.
 
 ---
 
@@ -63,7 +63,7 @@ it.
 
 ## What has been verified?
 
-Twenty-one of forty-four roadmap tasks, each with implementation + tests + a
+Twenty-two of forty-four roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -87,11 +87,12 @@ named frame or a named measurement:
 | TD-02 site grading | one capture per predefined site, all flush and dry (`2026-11-05-td02-*-fixed`); pad anchors now come from the resident payload |
 | TD-10 cache-independent terrain | erosion baked from the immutable global DEM; Starbase cold/warm/off 2.53/2.37/2.40/255 mean, Baikonur 2.96/3.16/3.06/255, all within repeat-run noise; `2026-11-05-td10-*` |
 | TD-03 imagery colour match | region/overview linear-luma ratio 3.87× → 1.16×; median before/after ratio 4.264/2.470/4.705 vs inverse gain 4.269/2.464/4.705 (0.2 %); outside unchanged; `2026-11-05-td03-albedo-40km-*` |
+| RD-02 streaming split | culling, LOD reconcile and upload burst timed separately; prelaunch p95 0.257 / 0.865 ms per frame, 40 km 0.171 / 0.597 ms; 347–352 meshes at 0.016–0.019 ms build and 0.188–0.192 ms submission each; `PERFORMANCE_BASELINES.md` |
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | VL-02 OpenSpec strict | 42/42 |
 
-One more is implemented but **not** verified: streaming measurement (no split
-timings).
+Every implemented task is now verified. The remaining three blocked items are
+environmental or need a maintainer decision; the rest are planned work.
 
 ## What is blocked or needs a decision?
 
@@ -103,9 +104,11 @@ timings).
 
 ## What should be built next?
 
-**RD-02 — the streaming split timings.** It is implemented but still has no
-measured breakdown. After that, AT-04 (multiple-scattering horizon hue, opened by
-AT-02's measurement rather than hidden), then the TD-06 guard re-evaluation.
+**AT-04 — multiple-scattering horizon hue.** The single-scattering sky reddens
+the 10–70 km noon horizon; the fix must keep the measured 24–32 km limb
+e-folding at 8 ± 1 km. It needs an OpenSpec change and a bounded
+multiple-scattering term. After that, the TD-06 guard re-evaluation and the
+remaining terrain audits.
 
 The practical caveat from TD-10 is convergence time: a cold or cache-off erosion
 run needs about 1,200 frames at this pose, because the runtime bake is expensive
@@ -119,8 +122,8 @@ performance work, not to terrain authority.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1147 passed, 2 ignored
-cargo test --no-default-features --lib   # 1105 passed, 2 ignored
+cargo test --features dem --lib          # 1148 passed, 2 ignored
+cargo test --no-default-features --lib   # 1106 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -143,9 +146,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,147 domain and adapter
-tests pass (1,105 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-one of its forty-four tasks.
+The simulator runs and its physics is regression-locked; 1,148 domain and adapter
+tests pass (1,106 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-two of its forty-four tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -205,6 +208,15 @@ matches the declared inverse gain in all three channels to within 0.2 %. Outside
 the region the frame is untouched. The residual boundary at 80 km is a package
 LOD-coverage limit — patches coarser than `min_level: 8` cannot bind the mosaic —
 and is recorded rather than smoothed over.
+
+The performance split had a subtler gap: the phase timers existed, but the
+rolling window was shorter than the report cadence, so the startup upload burst
+was always gone before the first full report. Widening the window to ten seconds
+retained it. At the current machine the terrain LOD reconcile costs about
+0.6–0.9 ms per reconcile frame and culling about 0.17–0.26 ms; upload is a
+one-time 347–352 meshes at roughly 0.02 ms of mesh construction and 0.19 ms of
+CPU submission each. Those are CPU costs; GPU upload completion is still not
+exposed.
 
 Of the ten required visual scenes, five have usable evidence, two are partial,
 and three are missing. That is the truest single measure of where this stands.
