@@ -100,9 +100,14 @@ pub const EARTH_SITE_PLATFORM_CLEARANCE_M: f64 = 3.0;
 const EARTH_PAD_BLEND_RADIUS_M: f64 = 280.0;
 
 /// Namespace that scopes Earth's preprocessed erosion tiles to this measured
-/// base. Changing the DEM path invalidates any persisted tiles.
+/// base *and* bake semantics. Changing the DEM path, or changing what the
+/// rasters are simulated from, invalidates any persisted tiles. Erosion is
+/// baked from the stable global measured DEM; resident regional payloads are a
+/// sampling overlay, so their load order must never enter the bake identity.
 #[cfg(feature = "dem")]
-pub const EARTH_EROSION_NAMESPACE: &str = DEFAULT_EARTH_DEM_PATH;
+pub fn earth_erosion_namespace() -> String {
+    format!("{DEFAULT_EARTH_DEM_PATH}#bake-base=global-measured-v1")
+}
 
 /// Default ceiling for the on-disk erosion tile cache. The cache is a
 /// regenerable preprocessed artifact, so it is bounded rather than allowed to
@@ -185,9 +190,28 @@ fn default_erosion_cache_root() -> Option<PathBuf> {
 /// of being simulated at runtime.
 #[cfg(feature = "dem")]
 pub fn earth_eroded_base(base: Arc<dyn TerrainSource>) -> Arc<dyn TerrainSource> {
+    let bake_base = Arc::clone(&base);
+    earth_eroded_base_over(base, bake_base)
+}
+
+/// Erosion wrapped around a sampling `base` but baked from an immutable
+/// `bake_base`.
+///
+/// The distinction matters when `base` carries a streamed measured payload
+/// overlay: a resident payload should refine the *sample*, but the erosion
+/// raster must come from a surface that cannot change during the run, or its
+/// height, moisture, flow and river channels would depend on which tiles
+/// happened to be loaded when the tile was first touched.
+#[cfg(feature = "dem")]
+fn earth_eroded_base_over(
+    base: Arc<dyn TerrainSource>,
+    bake_base: Arc<dyn TerrainSource>,
+) -> Arc<dyn TerrainSource> {
     let cfg = earth_erosion_config();
-    let store = erosion_store(&cfg, EARTH_EROSION_NAMESPACE);
-    Arc::new(ErodedTerrainSource::with_store(base, cfg, store))
+    let store = erosion_store(&cfg, &earth_erosion_namespace());
+    Arc::new(ErodedTerrainSource::with_store_over_bake_base(
+        base, bake_base, cfg, store,
+    ))
 }
 
 /// Compose Earth's measured base terrain with the bounded procedural detail
@@ -198,8 +222,17 @@ pub fn earth_eroded_base(base: Arc<dyn TerrainSource>) -> Arc<dyn TerrainSource>
 /// documented presentation-scale relief.
 #[cfg(feature = "dem")]
 fn earth_layered_terrain(base: Arc<dyn TerrainSource>) -> LayeredTerrainSource {
+    earth_layered_terrain_over(Arc::clone(&base), base)
+}
+
+/// The same composition with a distinct immutable erosion bake base.
+#[cfg(feature = "dem")]
+fn earth_layered_terrain_over(
+    base: Arc<dyn TerrainSource>,
+    bake_base: Arc<dyn TerrainSource>,
+) -> LayeredTerrainSource {
     let base_bounds = base.elevation_bounds_m();
-    let eroded = earth_eroded_base(base);
+    let eroded = earth_eroded_base_over(base, bake_base);
     let detail: Arc<dyn TerrainSource> = Arc::new(ProceduralDetailSource::with_flat_zones(
         EARTH_PROCEDURAL_DETAIL_SEED,
         earth_pad_flat_zones(),
@@ -403,6 +436,11 @@ impl EarthTerrainSource {
         measured_global: Arc<dyn TerrainSource>,
         manifest_roots: &[PathBuf],
     ) -> Result<Self, EarthTerrainDataError> {
+        // Erosion bakes from the stable global measured surface; the payload
+        // pyramid is a resident overlay on top of it. Passing the tiled source
+        // as the bake base made the surrounding field depend on payload load
+        // order and on the erosion cache.
+        let bake_base = Arc::clone(&measured_global);
         let tiles = Arc::new(TileElevationSource::from_manifest_roots(
             measured_global,
             manifest_roots,
@@ -410,8 +448,9 @@ impl EarthTerrainSource {
         )?);
         preload_launch_site_payloads(&tiles);
         Ok(Self {
-            source: Arc::new(earth_layered_terrain(
-                Arc::clone(&tiles) as Arc<dyn TerrainSource>
+            source: Arc::new(earth_layered_terrain_over(
+                Arc::clone(&tiles) as Arc<dyn TerrainSource>,
+                bake_base,
             )),
             tiles: Some(tiles),
         })

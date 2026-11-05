@@ -36,11 +36,11 @@ pub use appearance::{
 pub use catalog::EarthTerrainSource;
 #[cfg(feature = "dem")]
 pub use catalog::{
-    earth_eroded_base, earth_erosion_config, erosion_store, EarthTerrainDataError,
-    MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
+    earth_eroded_base, earth_erosion_config, earth_erosion_namespace, erosion_store,
+    EarthTerrainDataError, MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
     DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EARTH_GEOID_PATH,
     DEFAULT_EROSION_CACHE_MAX_BYTES, DEFAULT_MARS_DEM_PATH, DEFAULT_MOON_DEM_PATH,
-    EARTH_EROSION_NAMESPACE, EARTH_SITE_PLATFORM_CLEARANCE_M,
+    EARTH_SITE_PLATFORM_CLEARANCE_M,
 };
 pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
 pub use noise::ValueNoise;

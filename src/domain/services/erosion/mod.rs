@@ -367,6 +367,55 @@ mod tests {
         );
     }
 
+    /// The erosion raster is simulated from an immutable bake base, not from
+    /// the sampling overlay. Two sources whose payload overlays differ (and
+    /// whose coarse fallbacks would differ) must produce the same surrounding
+    /// field, while each still returns its own resident measurement.
+    #[test]
+    fn erosion_bakes_from_the_stable_base_not_the_sampling_overlay() {
+        let stable: Arc<dyn TerrainSource> = Arc::new(base());
+        let first = ErodedTerrainSource::with_store_over_bake_base(
+            Arc::new(PartlyMeasuredBase {
+                coarse_m: 100.0,
+                measured_m: 5.0,
+            }),
+            Arc::clone(&stable),
+            cfg(),
+            None,
+        );
+        let second = ErodedTerrainSource::with_store_over_bake_base(
+            Arc::new(PartlyMeasuredBase {
+                coarse_m: 300.0,
+                measured_m: 60.0,
+            }),
+            Arc::clone(&stable),
+            cfg(),
+            None,
+        );
+
+        for (latitude_deg, longitude_deg) in [(-10.0, 20.0), (-20.0, 30.0), (-5.0, -40.0)] {
+            assert_eq!(
+                first.height_m(latitude_deg, longitude_deg),
+                second.height_m(latitude_deg, longitude_deg),
+                "the field outside the payload must not depend on the overlay"
+            );
+            assert_eq!(
+                first.moisture(latitude_deg, longitude_deg),
+                second.moisture(latitude_deg, longitude_deg),
+                "moisture comes from the baked raster, not the overlay"
+            );
+            assert_eq!(
+                first.flow(latitude_deg, longitude_deg),
+                second.flow(latitude_deg, longitude_deg),
+                "flow comes from the baked raster, not the overlay"
+            );
+        }
+
+        // Each source still prefers its own resident measurement.
+        assert_eq!(first.height_m(10.0, 20.0), 5.0);
+        assert_eq!(second.height_m(10.0, 20.0), 60.0);
+    }
+
     #[test]
     fn mesh_height_samples_the_eroded_field_at_every_level() {
         let source = ErodedTerrainSource::new(Arc::new(base()), cfg());

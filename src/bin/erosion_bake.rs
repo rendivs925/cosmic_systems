@@ -8,7 +8,7 @@
 //! CPU.
 //!
 //! The store signature matches the running simulator because both derive it
-//! from [`earth_erosion_config`] and [`EARTH_EROSION_NAMESPACE`]; changing the
+//! from [`earth_erosion_config`] and [`earth_erosion_namespace`]; changing the
 //! quality, seed, or DEM produces a different namespace and cannot mix tiles.
 //!
 //! Usage:
@@ -20,8 +20,8 @@ use cosmic_systems_wasm::domain::services::erosion::{
     tile_bytes, BaseProbe, ErodedTerrainSource, ErosionConfig, ErosionTileStore,
 };
 use cosmic_systems_wasm::domain::services::terrain_source::{
-    earth_erosion_config, TerrainSource, DEFAULT_EARTH_DEM_PATH, DEFAULT_EROSION_CACHE_MAX_BYTES,
-    EARTH_EROSION_NAMESPACE,
+    earth_erosion_config, earth_erosion_namespace, TerrainSource, DEFAULT_EARTH_DEM_PATH,
+    DEFAULT_EROSION_CACHE_MAX_BYTES,
 };
 use std::env;
 use std::path::PathBuf;
@@ -160,7 +160,8 @@ fn main() {
     config.seed = earth_erosion_config().seed;
     config.validate();
 
-    let signature = config.bake_signature(EARTH_EROSION_NAMESPACE);
+    let namespace = earth_erosion_namespace();
+    let signature = config.bake_signature(&namespace);
     let store = Arc::new(
         ErosionTileStore::open_with_budget(&args.cache_dir, signature, args.max_bytes)
             .unwrap_or_else(|error| panic!("cannot open erosion cache: {error}")),

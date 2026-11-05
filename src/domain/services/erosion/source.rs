@@ -47,7 +47,15 @@ pub(super) fn erosion_weight(edge_factor: f64, edge_feather: f64) -> f64 {
 /// analytic source near tile boundaries so independent tiles stay continuous.
 #[derive(Debug)]
 pub struct ErodedTerrainSource {
+    /// Surface the erosion wrapper samples for per-point queries (payload
+    /// overlay, sea datum, classification). It may change residency while the
+    /// app runs.
     pub(super) base: Arc<dyn TerrainSource>,
+    /// Base the rasters are *baked* from. It must be immutable for the life of
+    /// the source: streamed measured payloads are a sampling overlay, not a
+    /// bake input. Baking from a source whose residency changes would make the
+    /// eroded field (and its moisture/flow channels) depend on load order.
+    bake_base: Arc<dyn TerrainSource>,
     cfg: ErosionConfig,
     pub(super) cache: Mutex<TileCache>,
     in_flight: Mutex<HashMap<(i64, i64), Arc<TileBuild>>>,
@@ -135,10 +143,27 @@ impl ErodedTerrainSource {
         cfg: ErosionConfig,
         store: Option<Arc<ErosionTileStore>>,
     ) -> Self {
+        Self::with_store_over_bake_base(Arc::clone(&base), base, cfg, store)
+    }
+
+    /// Construct with a distinct, immutable bake base.
+    ///
+    /// `base` answers per-point queries and may include a streamed measured
+    /// payload overlay; `bake_base` is the coarse surface the erosion rasters
+    /// are simulated from. Callers must pass a `bake_base` whose value cannot
+    /// change during the run, or the field would depend on which payload tiles
+    /// happened to be resident when a tile was first sampled.
+    pub fn with_store_over_bake_base(
+        base: Arc<dyn TerrainSource>,
+        bake_base: Arc<dyn TerrainSource>,
+        cfg: ErosionConfig,
+        store: Option<Arc<ErosionTileStore>>,
+    ) -> Self {
         cfg.validate();
         let cache_capacity = cfg.cache_max_tiles;
         Self {
             base,
+            bake_base,
             cfg,
             // Raster buffers are retained by the bounded cache, so reserve all
             // metadata storage before the first terrain task reaches it.
@@ -148,11 +173,11 @@ impl ErodedTerrainSource {
         }
     }
 
-    /// Sample the pre-erosion base across a tile on the store's probe grid.
-    /// Stored with every baked tile so a cache hit is rejected when the base
-    /// changes.
+    /// Sample the pre-erosion bake base across a tile on the store's probe
+    /// grid. Stored with every baked tile so a cache hit is rejected when the
+    /// bake base changes.
     fn base_probe(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> BaseProbe {
-        BaseProbe::sample(self.base.as_ref(), lat_min, lat_max, lon_min, lon_max)
+        BaseProbe::sample(self.bake_base.as_ref(), lat_min, lat_max, lon_min, lon_max)
     }
 
     /// Install an offline-baked erosion tile. The tile is keyed by its
@@ -240,7 +265,7 @@ impl ErodedTerrainSource {
         let lon_min = tx as f64 * tile_deg;
         let lon_max = lon_min + tile_deg;
         erode_tile(
-            self.base.as_ref(),
+            self.bake_base.as_ref(),
             lat_min,
             lat_max,
             lon_min,
@@ -330,7 +355,7 @@ impl ErodedTerrainSource {
         }
 
         let tile = Arc::new(erode_tile(
-            self.base.as_ref(),
+            self.bake_base.as_ref(),
             lat_min,
             lat_max,
             lon_min,
@@ -385,7 +410,9 @@ impl TerrainSource for ErodedTerrainSource {
         if weight == 1.0 {
             eroded
         } else {
-            let base_h = self.base.height_m(latitude_deg, longitude_deg);
+            // Feather back to the field this raster was baked from, never to a
+            // different streamed overlay.
+            let base_h = self.bake_base.height_m(latitude_deg, longitude_deg);
             base_h + (eroded - base_h) * weight
         }
     }
@@ -441,7 +468,7 @@ impl TerrainSource for ErodedTerrainSource {
         if weight == 1.0 {
             eroded
         } else {
-            let base = self.base.moisture(latitude_deg, longitude_deg);
+            let base = self.bake_base.moisture(latitude_deg, longitude_deg);
             base + (eroded - base) * weight
         }
     }
@@ -457,7 +484,7 @@ impl TerrainSource for ErodedTerrainSource {
             / 3.0f64.log2();
         let eroded = normalized.clamp(0.0, 1.0);
         let weight = erosion_weight(edge, self.cfg.edge_feather);
-        let base = self.base.river_strength(latitude_deg, longitude_deg);
+        let base = self.bake_base.river_strength(latitude_deg, longitude_deg);
         base + (eroded - base) * weight
     }
 
@@ -473,7 +500,7 @@ impl TerrainSource for ErodedTerrainSource {
         let reference = f64::from(self.cfg.river_flow_threshold.max(f32::MIN_POSITIVE)) * 3.0;
         let eroded = (flow / reference).clamp(0.0, 1.0);
         let weight = erosion_weight(edge, self.cfg.edge_feather);
-        let base = self.base.flow(latitude_deg, longitude_deg);
+        let base = self.bake_base.flow(latitude_deg, longitude_deg);
         base + (eroded - base) * weight
     }
 
