@@ -13,7 +13,7 @@ use crate::domain::services::reference_frames::{
     barycentric_to_relative_state, barycentric_to_solar_inertial_state,
     icrf_j2000_to_solar_inertial,
 };
-use crate::domain::services::simulation_epoch::LeapSecondTable;
+use crate::domain::services::simulation_epoch::{LeapSecondTable, UtcDateTime};
 use crate::domain::services::simulation_time::SimulationTime;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -21,6 +21,20 @@ pub const DEFAULT_EPHEMERIS_MANIFEST_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/configs/ephemeris/de440.ron"
 );
+
+/// Measurement-only start instant for deterministic captures.
+///
+/// The shared default start (`DEFAULT_SIMULATION_START_UTC`) is chosen for the
+/// Papua site; at any other longitude it is a different local time, often
+/// night. A site-grading or lighting capture that needs daylight at an
+/// arbitrary site pins the start instant here instead. Format is
+/// `YYYY-MM-DDTHH:MM:SS` in UTC, with a space instead of `T` and a trailing
+/// `Z` also accepted.
+///
+/// Unset, the default instant is used. This is a capture facility, never a
+/// scenario input: a normal run and every physics baseline keep the pinned
+/// default epoch.
+pub const CAPTURE_UTC_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_UTC";
 
 /// States required by the shared snapshot. The Earth-Moon barycenter is not a
 /// catalog body but remains available for same-epoch lunar relative states.
@@ -233,6 +247,44 @@ impl EphemerisSnapshot {
     }
 }
 
+/// Parse the optional capture start instant from the environment.
+fn capture_start_utc() -> Option<UtcDateTime> {
+    parse_capture_utc(std::env::var(CAPTURE_UTC_ENV).ok().as_deref()?)
+}
+
+/// Parse `YYYY-MM-DDTHH:MM:SS` (or a space separator, optional trailing `Z`)
+/// and reject an instant the calendar authority would not accept. A mistyped
+/// capture instant is dropped rather than silently clamped, so the default
+/// epoch shows up in the log instead of a near-miss time.
+fn parse_capture_utc(value: &str) -> Option<UtcDateTime> {
+    let value = value.trim();
+    let value = value.strip_suffix(['Z', 'z']).unwrap_or(value).trim_end();
+    let (date, time) = value.split_once(['T', 't', ' '])?;
+    let mut date_fields = date.split('-');
+    let year: i32 = date_fields.next()?.trim().parse().ok()?;
+    let month: u8 = date_fields.next()?.trim().parse().ok()?;
+    let day: u8 = date_fields.next()?.trim().parse().ok()?;
+    if date_fields.next().is_some() {
+        return None;
+    }
+    let mut time_fields = time.split(':');
+    let hour: u8 = time_fields.next()?.trim().parse().ok()?;
+    let minute: u8 = time_fields.next()?.trim().parse().ok()?;
+    let second: f64 = time_fields.next()?.trim().parse().ok()?;
+    if time_fields.next().is_some() {
+        return None;
+    }
+    let utc = UtcDateTime {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    };
+    utc.julian_date().ok().map(|_| utc)
+}
+
 /// Shared kernel composition. All modes load the same immutable local manifest;
 /// mode-specific systems only consume the resulting snapshot.
 pub struct EphemerisPlugin;
@@ -268,6 +320,21 @@ impl Plugin for EphemerisPlugin {
             .unwrap_or_else(|error| {
                 panic!("cannot configure scientific simulation epoch: {error}")
             });
+        if let Some(utc) = capture_start_utc() {
+            app.world_mut()
+                .resource_mut::<SimulationTime>()
+                .set_scientific_epoch_from_utc(utc)
+                .unwrap_or_else(|error| panic!("cannot pin the capture start instant: {error}"));
+            bevy::log::info!(
+                "capture start instant pinned to {year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:05.2} UTC",
+                year = utc.year,
+                month = utc.month,
+                day = utc.day,
+                hour = utc.hour,
+                minute = utc.minute,
+                second = utc.second,
+            );
+        }
         let startup_epoch = app
             .world()
             .resource::<SimulationTime>()
@@ -425,6 +492,84 @@ mod tests {
             DEFAULT_SIMULATION_START_UTC.julian_date().unwrap()
         );
         assert_eq!(epoch.ut1_julian_date(), None);
+    }
+
+    #[test]
+    fn capture_utc_accepts_the_documented_forms() {
+        let expected = UtcDateTime {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 18,
+            minute: 46,
+            second: 37.0,
+        };
+        for text in [
+            "2000-01-01T18:46:37",
+            "2000-01-01T18:46:37Z",
+            "2000-01-01 18:46:37z",
+        ] {
+            assert_eq!(parse_capture_utc(text), Some(expected), "{text}");
+        }
+        assert_eq!(
+            parse_capture_utc("2000-01-01T00:26:31"),
+            Some(UtcDateTime {
+                year: 2000,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 26,
+                second: 31.0,
+            })
+        );
+    }
+
+    #[test]
+    fn capture_utc_rejects_a_malformed_or_impossible_instant() {
+        for text in [
+            "",
+            "2000-01-01",
+            "2000-01-01T18:46",
+            "2000-13-01T18:46:37",
+            "2000-01-32T18:46:37",
+            "2000-01-01T24:00:00",
+            "2000-01-01T18:61:00",
+            "2000-01-01T18:46:60",
+            "2000-01-01T18:46:37:00",
+        ] {
+            assert_eq!(parse_capture_utc(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn capture_utc_override_moves_the_start_epoch_through_the_lsk_authority() {
+        let mut simulation_time = SimulationTime::default();
+        let leap_seconds = LeapSecondTable::parse_lsk(
+            SpiceEphemeris::load(DEFAULT_EPHEMERIS_MANIFEST_PATH)
+                .expect("offline kernels")
+                .leap_seconds_lsk(),
+        )
+        .expect("validated LSK");
+        simulation_time
+            .configure_scientific_epoch(leap_seconds)
+            .expect("configured authority");
+        let captured = parse_capture_utc("2000-01-01T18:46:37").expect("valid capture instant");
+        simulation_time
+            .set_scientific_epoch_from_utc(captured)
+            .expect("the capture instant is inside the validated epoch");
+        let epoch = simulation_time
+            .scientific_epoch()
+            .expect("configured epoch");
+        let published_utc_jd = captured.julian_date().expect("valid calendar instant");
+        assert!(
+            (epoch.utc_julian_date() - published_utc_jd).abs() < 1.0e-9,
+            "capture epoch {} does not round-trip to {published_utc_jd}",
+            epoch.utc_julian_date()
+        );
+        assert_ne!(
+            epoch.utc_julian_date(),
+            DEFAULT_SIMULATION_START_UTC.julian_date().unwrap()
+        );
     }
 
     #[test]
