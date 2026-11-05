@@ -273,6 +273,48 @@ is expensive and the 64-tile in-memory cache thrashes; the warm store path
 settles by 240. The global startup bake still touches thousands of 2 ° tiles and
 belongs to the performance work, not to terrain authority.
 
+### Regional imagery colour match (`TD-03`, commit `458d0b1`)
+
+The regional tiles are installed without the measured gain when
+`COSMIC_SYSTEMS_IMAGERY_COLOR_MATCH=off`, so the only difference between the two
+frames is the correction. Both are at `-8.0,139.9,40000`, 400 frames,
+`COSMIC_SYSTEMS_CAPTURE_TIME=0`, diagnostic mode `albedo` (geographic base colour,
+no lighting or atmosphere), and the default epoch (local noon at Papua).
+
+| file | commit | mode | gain | time | frames | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- | --- | ---: | --- | --- |
+| `2026-11-05-td03-albedo-40km-before.jpg` | `458d0b1` | `albedo` | off | 0 s | 400 | `ffcd184419567248` | pale regional inset; region is 3.87× the overview |
+| `2026-11-05-td03-albedo-40km-after.jpg` | `458d0b1` | `albedo` | on | 0 s | 400 | `42ea7725d8cb1437` | region matches the overview; 1.16× |
+| `2026-11-05-td03-production-80km-before.jpg` | `458d0b1` | production | off | 0 s | 400 | `65e4118340427603` | the same pale inset in context |
+| `2026-11-05-td03-production-80km-after.jpg` | `458d0b1` | production | on | 0 s | 400 | `632a3c67268b279e` | corrected in context |
+| `2026-11-05-td03-albedo-80km-before.jpg` | `458d0b1` | `albedo` | off | 0 s | 400 | `bc7742a2cc9788f2` | mosaic vs overview at 80 km |
+| `2026-11-05-td03-albedo-80km-after.jpg` | `458d0b1` | `albedo` | on | 0 s | 400 | `7a4fa01cd0831d09` | tone matched; residual patch edge is the LOD limit below |
+| `2026-11-05-td03-lod-80km.jpg` | `458d0b1` | `lod` | on | 0 s | 400 | `0a379f512e4a64c9` | the 80 km edge is a patch/LOD boundary, not the colour term |
+
+Measured on the 40 km albedo pair over fixed pixel blocks (inside x 800–1200,
+outside x 100–350, rows 60–660), converted from sRGB to linear:
+
+| quantity | before | after |
+| --- | ---: | ---: |
+| region linear luma | 0.06667 | 0.01991 |
+| overview linear luma | 0.01721 | 0.01721 |
+| region / overview | **3.87×** | **1.16×** |
+| median per-pixel before/after, R | 4.264 (declared 4.269) | |
+| median per-pixel before/after, G | 2.470 (declared 2.464) | |
+| median per-pixel before/after, B | 4.705 (declared 4.705) | |
+
+Outside the region the frame is untouched: mean difference **0.007/255**, with 3
+of 180,000 pixels above 2/255. The 16.6 km cross-fade is the gradual difference
+rise between x ≈ 400 and 560, so the correction and the fade compose.
+
+**Recorded limit:** at 80 km the patches outside the fine focus are coarser than
+the package's `min_level: 8`, so they bind the global overview and cannot bind the
+mosaic. The tone now matches across that boundary, but the resolution change is
+still a straight patch edge. The `lod` frame shows the level change on the same
+line. Closing it needs regional tiles below level 8, which is package production,
+not a shader term; it is listed as a TD-03 caveat rather than presented as
+corrected.
+
 ## Negative results worth keeping
 
 * A 7 km attempt at the same coastal pose produced an almost identical featureless

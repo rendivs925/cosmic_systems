@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `5134ed2`.
+Snapshot: 2026-11-05. Last code checkpoint: `458d0b1`.
 
 ---
 
@@ -37,7 +37,10 @@ global fallback (Vandenberg was 81 m out). And a 3 m platform floor keeps a pad
 above the local sea datum, with Kourou moved from the town to the ELA-3 pad.
 TD-10 is now closed too: the erosion rasters are simulated from the immutable
 measured global DEM, not from the streamed payload overlay, so cache-on,
-cache-off and cold runs agree to repeat-run noise.
+cache-off and cold runs agree to repeat-run noise. And TD-03 now has the
+before/after frame it was missing: a capture switch turns the regional colour
+match off, and at the same 40 km pose the region/overview tone ratio falls from
+3.87× to 1.16×.
 
 ## What is broken?
 
@@ -60,8 +63,8 @@ it.
 
 ## What has been verified?
 
-Twenty of forty-four roadmap tasks, each with implementation + tests + a named
-frame or a named measurement:
+Twenty-one of forty-four roadmap tasks, each with implementation + tests + a
+named frame or a named measurement:
 
 | task | evidence |
 | --- | --- |
@@ -83,11 +86,12 @@ frame or a named measurement:
 | AT-02 altitude transition and limb | 6° limb e-folding 8.30 km (200 km) and 8.54 km (400 km) in linear light over 24–32 km, within 7 % of 8 km; displayable top 35–38 km; horizon luminance monotonic 0.138 → 0.073 → 0.026 → floor |
 | TD-02 site grading | one capture per predefined site, all flush and dry (`2026-11-05-td02-*-fixed`); pad anchors now come from the resident payload |
 | TD-10 cache-independent terrain | erosion baked from the immutable global DEM; Starbase cold/warm/off 2.53/2.37/2.40/255 mean, Baikonur 2.96/3.16/3.06/255, all within repeat-run noise; `2026-11-05-td10-*` |
+| TD-03 imagery colour match | region/overview linear-luma ratio 3.87× → 1.16×; median before/after ratio 4.264/2.470/4.705 vs inverse gain 4.269/2.464/4.705 (0.2 %); outside unchanged; `2026-11-05-td03-albedo-40km-*` |
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | VL-02 OpenSpec strict | 42/42 |
 
-Two more are implemented but **not** verified: imagery colour match (no
-before/after frame) and streaming measurement (no split timings).
+One more is implemented but **not** verified: streaming measurement (no split
+timings).
 
 ## What is blocked or needs a decision?
 
@@ -99,10 +103,9 @@ before/after frame) and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**TD-03 — the regional imagery colour match.** It is implemented but still has
-no before/after frame at a fixed pose. After that, RD-02 (streaming split
-timings), then AT-04 (multiple-scattering horizon hue, opened by AT-02's
-measurement rather than hidden).
+**RD-02 — the streaming split timings.** It is implemented but still has no
+measured breakdown. After that, AT-04 (multiple-scattering horizon hue, opened by
+AT-02's measurement rather than hidden), then the TD-06 guard re-evaluation.
 
 The practical caveat from TD-10 is convergence time: a cold or cache-off erosion
 run needs about 1,200 frames at this pose, because the runtime bake is expensive
@@ -116,8 +119,8 @@ performance work, not to terrain authority.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1146 passed, 2 ignored
-cargo test --no-default-features --lib   # 1104 passed, 2 ignored
+cargo test --features dem --lib          # 1147 passed, 2 ignored
+cargo test --no-default-features --lib   # 1105 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -140,9 +143,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,146 domain and adapter
-tests pass (1,104 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty of its forty-four tasks.
+The simulator runs and its physics is regression-locked; 1,147 domain and adapter
+tests pass (1,105 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-one of its forty-four tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -192,6 +195,16 @@ loaded first and whether an old raster came from disk. The rasters now bake from
 the immutable measured global DEM, which is what the offline baker already used;
 a resident payload stays a finer measurement on top. Cache-on, cache-off and cold
 frames then agree to the same 2–3/255 that two identical warm runs already did.
+
+The imagery colour match had the opposite problem: it was implemented and
+numerically tested, but never demonstrated against the artefact it exists to
+remove. A capture-only switch now installs the regional tiles without the gain.
+At 40 km the Sentinel-2 mosaic measured 3.87× the overview in linear luminance;
+with the gain it measures 1.16×, and the median per-pixel before/after ratio
+matches the declared inverse gain in all three channels to within 0.2 %. Outside
+the region the frame is untouched. The residual boundary at 80 km is a package
+LOD-coverage limit — patches coarser than `min_level: 8` cannot bind the mosaic —
+and is recorded rather than smoothed over.
 
 Of the ten required visual scenes, five have usable evidence, two are partial,
 and three are missing. That is the truest single measure of where this stands.

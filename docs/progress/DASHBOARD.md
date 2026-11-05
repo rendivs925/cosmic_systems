@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-05.
-Last code checkpoint: `5134ed2` (2026-11-05).
+Last code checkpoint: `458d0b1` (2026-11-05).
 This table describes the 44 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,8 +11,8 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 20 | 45.5 % |
-| IMPLEMENTED (not verified) | 2 | 4.5 % |
+| VERIFIED | 21 | 47.7 % |
+| IMPLEMENTED (not verified) | 1 | 2.3 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 3 | 6.8 % |
 | PLANNED | 19 | 43.2 % |
@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 6 / 11 | 55 % | active | TD-02, TD-10 and TD-11 verified; TD-03, TD-06 and the audits remain |
+| P1 Data and terrain correctness | 7 / 11 | 64 % | active | TD-02, TD-03, TD-10 and TD-11 verified; TD-06 and the audits remain |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -50,18 +50,19 @@ Ordered by visible impact, not by ease.
 | 9 | Three graded pads sat under water: Starbase, KSC LC-39A and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | TD-11 | **VERIFIED — fixed** | resident payloads replace the erosion refinement and a 3 m platform floor raises each pad; `2026-11-05-td02-*-fixed.jpg` shows all seven flush; clearances +3.00 … +113.55 m |
 | 10 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | TD-10 | **VERIFIED — fixed** | erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean, Baikonur to 3.0–3.2/255, the same as repeat-run noise; `2026-11-05-td10-*` |
 | 11 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
+| 12 | The regional Sentinel-2 mosaic rendered as a pale inset against the Blue Marble overview | TD-03 | **VERIFIED — fixed** | measured per-channel linear gain applied before mips; region/overview linear-luma ratio 3.87× → 1.16×, median before/after ratio matches the inverse gain to 0.2 %; `2026-11-05-td03-albedo-40km-*` |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 5134ed2 |
-| `cargo check --all-targets --features dem` | PASS | 5134ed2 |
-| `cargo check --no-default-features` | PASS | 5134ed2 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 5134ed2 |
-| `cargo test --features dem --lib` | 1146 passed, 0 failed, 2 ignored | 5134ed2 |
-| `cargo test --no-default-features --lib` | 1104 passed, 0 failed, 2 ignored | 5134ed2 |
-| `openspec validate --all --strict` | 42 passed, 0 failed | 5134ed2 |
+| `cargo fmt --check` | PASS | 458d0b1 |
+| `cargo check --all-targets --features dem` | PASS | 458d0b1 |
+| `cargo check --no-default-features` | PASS | 458d0b1 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 458d0b1 |
+| `cargo test --features dem --lib` | 1147 passed, 0 failed, 2 ignored | 458d0b1 |
+| `cargo test --no-default-features --lib` | 1105 passed, 0 failed, 2 ignored | 458d0b1 |
+| `openspec validate --all --strict` | 42 passed, 0 failed | 458d0b1 |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -116,14 +117,13 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — TD-03, the regional imagery colour match.** It is implemented but
-has no before/after frame at a fixed pose. Then RD-02 (streaming split timings)
-and AT-04 (multiple-scattering horizon).
+**Next task — RD-02, the streaming split timings.** It is implemented but has no
+measured breakdown. AT-04 (multiple-scattering horizon) follows, then the TD-06
+guard re-evaluation.
 
-TD-10 is closed: the erosion rasters now come from the immutable measured global
-DEM instead of the streamed payload overlay, and the cache-on, cache-off and cold
-runs agree to repeat-run noise. The practical caveat is convergence time: a cold
-or cache-off run needs about 1,200 frames at this pose, because the runtime bake
-is expensive and the 64-tile in-memory cache thrashes; the warm store path
-converges by 240. The global startup bake that touches thousands of 2 ° tiles is
-a P0-04 performance item, not a terrain-authority issue.
+TD-03 is closed: the measured per-channel linear gain is applied before mip
+generation and the before/after frame shows the pale inset gone. One limit is
+recorded rather than hidden: above roughly 80 km, patches outside the fine focus
+are coarser than the regional package's `min_level: 8`, so the mosaic/overview
+*resolution* boundary follows a patch edge even though the tone now matches.
+Closing that needs regional imagery below level 8 (a package-production change).

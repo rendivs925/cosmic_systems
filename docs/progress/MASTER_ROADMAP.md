@@ -300,7 +300,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `17bc6f5`; tests plus the seven re-captured pads.
 
 ### TD-03 — Regional imagery colour match to the global overview
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Remove the pale inset created by substituting a Sentinel-2
   surface-reflectance mosaic for a Blue Marble overview at a patch edge.
@@ -315,16 +315,39 @@ timings. This phase exists because an unverifiable change is not a change.
   generation; tiles outside a region are untouched.
 - **Tests:** `checked_in_color_match_is_the_measured_mean_ratio`,
   `color_match_gain_scales_linear_light`, `identity_color_match_is_a_no_op`,
-  `color_gain_is_scoped_to_the_region`.
-- **Visual evidence:** **none yet.** The gain is validated numerically (means
-  match by construction) but no before/after frame was captured.
+  `color_gain_is_scoped_to_the_region`,
+  `the_colour_match_switch_only_disables_on_an_explicit_off_value`.
+- **Measurement facility:** `COSMIC_SYSTEMS_IMAGERY_COLOR_MATCH=off` installs
+  regional tiles without the measured gain, so a before/after pair differs by
+  exactly the correction. The default is on; any unrecognised value keeps it on,
+  and the switch is presentation-only.
+- **Visual evidence:** `2026-11-05-td03-albedo-40km-{before,after}.jpg` at
+  `-8.0,139.9,40000`, 400 frames, `COSMIC_SYSTEMS_CAPTURE_TIME=0`, diagnostic
+  `albedo`. The linear-light means over the same pixel blocks move from
+  **3.87×** region/overview before to **1.16×** after. The median per-pixel
+  before/after ratio is **4.264, 2.470, 4.705** against the declared inverse gain
+  **4.269, 2.464, 4.705** (worst channel 0.2 %). Outside the region the frame is
+  unchanged: mean difference 0.007/255, 3 of 180,000 pixels above 2/255. The
+  16.6 km cross-fade is the gradual rise between x ≈ 400 and 560, so the colour
+  correction and the fade compose rather than step. In-context production frames
+  at 80 km are `2026-11-05-td03-production-80km-{before,after}.jpg`.
+- **Caveat recorded, not hidden:** at 80 km the outer patches are coarser than
+  the package's `min_level: 8`, so they bind the global overview and the
+  mosaic/overview *resolution* boundary is quantised to a patch edge. The tone
+  now matches across it, but the edge remains a coverage limit of the package's
+  LOD range, visible in `2026-11-05-td03-albedo-80km-*` and identified by
+  `2026-11-05-td03-lod-80km.jpg`. Fixing it needs regional tiles below level 8
+  (a package-production change), not another shader term.
 - **Performance:** one pass over 256×256 texels per tile install; unmeasured, but
   bounded by the 4-tile-per-frame admission limit.
 - **Scientific validation:** gain = overview mean / regional mean in linear light,
   both means recorded in the manifest with the method and source checksums.
 - **Risks:** matching the mean is not matching the distribution; a mosaic with a
-  different contrast still reads slightly different.
-- **Completion evidence:** commit `aca26dd`.
+  different contrast still reads slightly different. The measured band matches
+  the luminance but not every per-channel mean in every sub-block, because the
+  measurement footprint and a given frame sample different terrain.
+- **Completion evidence:** `aca26dd` (gain and tests); `2026-11-05-td03-*`
+  frames and this A/B.
 
 ### TD-04 — Imagery edge feather
 - **Status:** VERIFIED

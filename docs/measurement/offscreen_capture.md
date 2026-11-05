@@ -46,6 +46,16 @@ count falls back to the defaults rather than failing the run. A malformed
 capture instant is dropped, so the log shows the default epoch instead of a
 near-miss time.
 
+## Imagery colour-match A/B
+
+`COSMIC_SYSTEMS_IMAGERY_COLOR_MATCH=off` (also `0`, `false`, `none`, `disabled`)
+installs regional imagery tiles without their measured linear colour match. Unset
+or unrecognised keeps the correction, so production is the default. Pair it with
+`COSMIC_SYSTEMS_DIAGNOSTIC_MODE=albedo` to remove lighting and atmosphere and
+measure the correction alone; the two frames then differ only by the declared
+gain. This is presentation-only and changes no terrain, collision, altitude, or
+physics value.
+
 ## Frame budget and the erosion cache
 
 The frame count is also a convergence budget, not just a settling delay. A warm

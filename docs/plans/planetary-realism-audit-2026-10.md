@@ -926,3 +926,23 @@ mean, Baikonur 3.0–3.2/255). A cold or cache-off run needs about 1,200 frames 
 this pose to finish streaming; that convergence cost is performance work, not a
 terrain-authority change. The ascent fixture pins its launch altitude and pad, so
 none of this moved a committed trajectory.
+
+## 2026-11-05 — Regional imagery colour-match A/B (TD-03)
+
+TD-03 had a measured gain and unit tests but no frame showing the artefact it
+removes. A capture-only switch, `COSMIC_SYSTEMS_IMAGERY_COLOR_MATCH=off`, now
+installs regional tiles without the gain, so a paired capture differs by exactly
+that term. At `-8.0,139.9,40000` in the `albedo` diagnostic (no lighting or
+atmosphere), the Sentinel-2 region measured 3.87× the Blue Marble overview in
+linear luminance before and 1.16× after. The median per-pixel before/after ratio
+was 4.264, 2.470, 4.705 against the declared inverse gain 4.269, 2.464, 4.705:
+worst channel 0.2 %. Outside the region the frame was unchanged (mean
+0.007/255, 3 of 180,000 pixels above 2/255). The 16.6 km cross-fade is visible as
+a gradual difference rise, so the correction and the fade compose.
+
+One limit is recorded rather than smoothed over. Above roughly 80 km the patches
+outside the fine focus are coarser than the regional package's `min_level: 8`,
+so they cannot bind the mosaic. The tone now matches across that boundary, but
+the resolution change is still a patch edge (`2026-11-05-td03-lod-80km.jpg` shows
+the level change on the same line). Closing it needs regional imagery below level
+8, which is package production rather than a shader term.

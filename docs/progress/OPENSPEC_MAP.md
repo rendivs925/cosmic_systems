@@ -17,7 +17,7 @@ over with a new duplicate spec.
 | P0-04 performance refresh | `scientific-validation` | — | evidence obligation only |
 | TD-01 ocean datum | `planetary-water` | — | |
 | TD-02 site grading | `terrain-source`, `launch-site-presentation` | — | grading lives in the terrain authority; pad anchors come from the resident payload and a 3 m platform floor |
-| TD-03 imagery colour match | `earth-imagery-streaming` | — | |
+| TD-03 imagery colour match | `earth-imagery-streaming` | — | measured per-channel linear gain before mip generation; region/overview ratio 3.87× → 1.16×; coarse-LOD mosaic coverage below level 8 remains a package limit |
 | TD-04 imagery feather | `earth-imagery-streaming` | — | |
 | TD-05 albedo blocks | `earth-imagery-streaming`, `terrain-rendering`, `planetary-terrain-material` | — | cause not yet attributed, so no single requirement owns it |
 | TD-06 fabricated coastline | `terrain-source` | — | |
