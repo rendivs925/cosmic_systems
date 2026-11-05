@@ -238,8 +238,40 @@ re-captured at `17bc6f5`. All seven pads are now flush and dry:
 Two repeat runs at the same pose differ by mean 2.4/255 (Starbase) and 3.1/255
 (Baikonur), with 2.3 % and 4.8 % of pixels above 8/255: inside the documented
 near-ground streaming variance, and the pad state is identical in both. The
-surrounding terrain still comes from the erosion field outside the resident
-payload tile, which is the remaining TD-10 item.
+surrounding terrain outside the resident payload tile was the remaining TD-10
+item; the cache A/B/C frames below close it.
+
+### Cache-independent terrain (`TD-10`, commit `5134ed2`)
+
+The erosion rasters are now simulated from the immutable measured global DEM,
+not from the streamed payload overlay, so the surrounding height, moisture, flow
+and river channels no longer depend on payload load order or on an old disk tile.
+Each pair below is the same site, pose and capture clock; the difference is only
+`COSMIC_SYSTEMS_EROSION_CACHE`.
+
+| file | commit | site, UTC | cache | frames | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- | ---: | --- | --- |
+| `2026-11-05-td10-starbase-cold.jpg` | `5134ed2` | `starbase`, `2000-01-01T18:46:37` | empty dir (cold bake) | 240 | `fab2fad7bbee1850` | pad dry, surrounding land complete |
+| `2026-11-05-td10-starbase-warm.jpg` | `5134ed2` | same | same dir, second run | 240 | `4ddaec915041c907` | same scene; mean 2.53/255 from cold |
+| `2026-11-05-td10-starbase-off-1200.jpg` | `5134ed2` | same | `off` | 1,200 | `8250b69e1abee9aa` | same scene; 2.37/255 from cold |
+| `2026-11-05-td10-starbase-off-240.jpg` | `5134ed2` | same | `off` | 240 | `8c864b3ab4a0d4a5` | **expected incomplete**: runtime bake still streaming, ungenerated water |
+| `2026-11-05-td10-baikonur-cold.jpg` | `5134ed2` | `baikonur`, `2000-01-01T08:04:47` | empty dir (cold bake) | 240 | `4515d39c1fc5febc` | green steppe, pad dry |
+| `2026-11-05-td10-baikonur-warm.jpg` | `5134ed2` | same | same dir, second run | 240 | `6f13c880b58d4b12` | same scene; 2.96/255 from cold |
+| `2026-11-05-td10-baikonur-off-1200.jpg` | `5134ed2` | same | `off` | 1,200 | `c570be1de6d24e2b` | same scene; 3.16/255 from cold |
+
+Measured frame differences (per-pixel max over RGB):
+
+| site | cold vs warm | cold vs off | warm vs off |
+| --- | --- | --- | --- |
+| Starbase | 2.53/255 mean, 2.59 % > 8 | 2.37, 1.43 % | 2.40, 2.02 % |
+| Baikonur | 2.96, 4.00 % | 3.16, 4.67 % | 3.06, 4.45 % |
+
+These are the same magnitude as two identical warm runs (2.4 and 3.1/255), so the
+disk cache no longer selects a different field. The frame budget matters: a cold
+or cache-off run needs about 1,200 frames at this pose because the runtime bake
+is expensive and the 64-tile in-memory cache thrashes; the warm store path
+settles by 240. The global startup bake still touches thousands of 2 ° tiles and
+belongs to the performance work, not to terrain authority.
 
 ## Negative results worth keeping
 

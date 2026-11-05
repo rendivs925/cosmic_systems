@@ -16,7 +16,7 @@ over with a new duplicate spec.
 | P0-03 diagnostic modes | — | — | **gap**: no requirement for developer diagnostics; behaviour is instead pinned by the uniform-layout parity test and `docs/measurement/terrain_diagnostics.md` |
 | P0-04 performance refresh | `scientific-validation` | — | evidence obligation only |
 | TD-01 ocean datum | `planetary-water` | — | |
-| TD-02 site grading | `terrain-source`, `launch-site-presentation` | — | grading lives in the terrain authority; blocked on TD-10/TD-11 |
+| TD-02 site grading | `terrain-source`, `launch-site-presentation` | — | grading lives in the terrain authority; pad anchors come from the resident payload and a 3 m platform floor |
 | TD-03 imagery colour match | `earth-imagery-streaming` | — | |
 | TD-04 imagery feather | `earth-imagery-streaming` | — | |
 | TD-05 albedo blocks | `earth-imagery-streaming`, `terrain-rendering`, `planetary-terrain-material` | — | cause not yet attributed, so no single requirement owns it |
@@ -24,8 +24,8 @@ over with a new duplicate spec.
 | TD-07 regional DEM | `elevation-tile-payload`, `terrain-source` | — | |
 | TD-08 vertical datum | `terrain-source` | — | |
 | TD-09 seam continuity | `terrain-source`, `terrain-lod` | — | |
-| TD-10 pad anchor vs payload and cache | `elevation-tile-payload`, `terrain-source`, `determinism-regression` | — | erosion must consume the same resident payload composition as the launch sample |
-| TD-11 coastal datum clearance | `terrain-source`, `planetary-water` | — | needs a baselines decision: the baseline site is itself below the sea datum |
+| TD-10 pad anchor vs payload and cache | `elevation-tile-payload`, `terrain-source`, `determinism-regression` | — | payload outranks erosion for the sample; erosion bakes from the immutable global DEM so load order and the disk cache cannot select a different field |
+| TD-11 coastal datum clearance | `terrain-source`, `planetary-water` | — | platform floor at sea + 3 m; the ascent fixture pins its launch altitude, so baselines are unaffected |
 | LF-01 footprint | `launch-site-presentation` | — | |
 | LF-02…04 facility | `launch-site-presentation` | — | |
 | TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | |

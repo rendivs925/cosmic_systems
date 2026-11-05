@@ -46,6 +46,17 @@ count falls back to the defaults rather than failing the run. A malformed
 capture instant is dropped, so the log shows the default epoch instead of a
 near-miss time.
 
+## Frame budget and the erosion cache
+
+The frame count is also a convergence budget, not just a settling delay. A warm
+erosion cache (the default on-disk store) settles a near-ground launch-site frame
+by 240 frames. With `COSMIC_SYSTEMS_EROSION_CACHE=off`, or with an empty cache
+directory, the runtime bake plus streaming needs about 1,200 frames at the same
+pose; at 240 the frame is a valid *incomplete* capture and shows ungenerated
+water. This is a performance limit, not a terrain-content difference: once
+converged, cold, warm and off frames agree to repeat-run noise. Record the cache
+mode and frame count with any frame used as evidence.
+
 ## Daylight at an arbitrary site
 
 The shared default start instant is local noon at the Papua site, so a

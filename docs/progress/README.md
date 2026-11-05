@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `17bc6f5`.
+Snapshot: 2026-11-05. Last code checkpoint: `5134ed2`.
 
 ---
 
@@ -34,8 +34,10 @@ because the shared default epoch is local noon only at Papua. Resident regional
 payloads now override the erosion refinement, and every site payload is preloaded
 before the grade anchors are sampled, so a pad no longer lands on the coarse
 global fallback (Vandenberg was 81 m out). And a 3 m platform floor keeps a pad
-above the local sea datum, with Kourou moved from the town to the ELA-3 pad. The
-remaining TD-10 item is terrain determinism outside the resident payload tile.
+above the local sea datum, with Kourou moved from the town to the ELA-3 pad.
+TD-10 is now closed too: the erosion rasters are simulated from the immutable
+measured global DEM, not from the streamed payload overlay, so cache-on,
+cache-off and cold runs agree to repeat-run noise.
 
 ## What is broken?
 
@@ -44,7 +46,7 @@ remaining TD-10 item is terrain determinism outside the resident payload tile.
 | Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Three launch pads sat under water: Starbase, KSC and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | **verified and closed.** Resident payloads replace the erosion refinement, the platform is floored 3 m above the sea datum, and all seven captured pads are dry |
-| Terrain outside the resident payload tile depends on the erosion cache: a cold bake is incomplete at frame 240 and changes the surrounding ground | **partly fixed.** The pad anchor is cache-independent (`5a7eb1d`); the surrounding field still needs TD-10's remaining half |
+| Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | **verified and closed.** Erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean and Baikonur to 3.0–3.2/255, the same as two identical warm runs. A cold or cache-off run needs ~1,200 frames to finish streaming |
 | Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
 | Cloud edges are cut-outs; one shape per region | planned work |
 | Vegetation reads as specks | planned work |
@@ -58,7 +60,7 @@ it.
 
 ## What has been verified?
 
-Nineteen of forty-four roadmap tasks, each with implementation + tests + a named
+Twenty of forty-four roadmap tasks, each with implementation + tests + a named
 frame or a named measurement:
 
 | task | evidence |
@@ -80,12 +82,12 @@ frame or a named measurement:
 | AT-01 single-scattering sky | one `SkyParams` authority; the 10/30/70/200/400 km sequence and the 200/400 km limb exercise it from sea level to vacuum |
 | AT-02 altitude transition and limb | 6° limb e-folding 8.30 km (200 km) and 8.54 km (400 km) in linear light over 24–32 km, within 7 % of 8 km; displayable top 35–38 km; horizon luminance monotonic 0.138 → 0.073 → 0.026 → floor |
 | TD-02 site grading | one capture per predefined site, all flush and dry (`2026-11-05-td02-*-fixed`); pad anchors now come from the resident payload |
+| TD-10 cache-independent terrain | erosion baked from the immutable global DEM; Starbase cold/warm/off 2.53/2.37/2.40/255 mean, Baikonur 2.96/3.16/3.06/255, all within repeat-run noise; `2026-11-05-td10-*` |
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | VL-02 OpenSpec strict | 42/42 |
 
-Three more are implemented but **not** verified: imagery colour match (no
-before/after frame), streaming measurement (no split timings), and TD-10's
-cache-independence half outside the resident payload tile.
+Two more are implemented but **not** verified: imagery colour match (no
+before/after frame) and streaming measurement (no split timings).
 
 ## What is blocked or needs a decision?
 
@@ -97,15 +99,16 @@ cache-independence half outside the resident payload tile.
 
 ## What should be built next?
 
-**TD-10's remaining half — terrain determinism outside the resident payload
-tile.** The pad anchor is fixed and all seven captured pads are dry. The
-surrounding ground still comes from the erosion field, so a warm vs cold cache
-changes it and a cold 240-frame capture is incomplete. That is a rendering
-determinism item, separate from launch elevation.
+**TD-03 — the regional imagery colour match.** It is implemented but still has
+no before/after frame at a fixed pose. After that, RD-02 (streaming split
+timings), then AT-04 (multiple-scattering horizon hue, opened by AT-02's
+measurement rather than hidden).
 
-After that: TD-03 (imagery colour-match A/B), RD-02 (streaming split timings),
-then AT-04 (multiple-scattering horizon hue, opened by AT-02's measurement rather
-than hidden).
+The practical caveat from TD-10 is convergence time: a cold or cache-off erosion
+run needs about 1,200 frames at this pose, because the runtime bake is expensive
+and the 64-tile in-memory cache thrashes; the warm store path settles by 240. The
+global startup bake that touches thousands of 2 ° tiles belongs to the P0-04
+performance work, not to terrain authority.
 
 ## How do we know it works?
 
@@ -113,8 +116,8 @@ than hidden).
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1139 passed, 2 ignored
-cargo test --no-default-features --lib   # 1097 passed, 2 ignored
+cargo test --features dem --lib          # 1146 passed, 2 ignored
+cargo test --no-default-features --lib   # 1104 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -137,9 +140,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,145 domain and adapter
-tests pass (1,103 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified nineteen of its forty-four tasks.
+The simulator runs and its physics is regression-locked; 1,146 domain and adapter
+tests pass (1,104 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty of its forty-four tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -180,8 +183,15 @@ payload now outranks the erosion refinement, every site's payload tile is loaded
 before the grade anchor is sampled, and a 3 m platform floor plus the Kourou
 coordinate correction put all seven captured pads on dry, flush ground. The
 baselines did not move because the ascent fixture now pins its launch altitude
-and pad (`c886205`, `17bc6f5`). The surrounding terrain still depends on the
-erosion cache; that half of TD-10 stays open and is stated as such.
+and pad (`c886205`, `17bc6f5`).
+
+The last piece was subtler than the pad itself. Even with the pad anchored to the
+payload, the erosion rasters were baked from the *streamed* surface, so the
+surrounding height, moisture and rivers depended on which payload tiles had
+loaded first and whether an old raster came from disk. The rasters now bake from
+the immutable measured global DEM, which is what the offline baker already used;
+a resident payload stays a finer measurement on top. Cache-on, cache-off and cold
+frames then agree to the same 2–3/255 that two identical warm runs already did.
 
 Of the ten required visual scenes, five have usable evidence, two are partial,
 and three are missing. That is the truest single measure of where this stands.

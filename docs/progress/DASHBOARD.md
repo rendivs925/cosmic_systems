@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-05.
-Last code checkpoint: `17bc6f5` (2026-11-05).
+Last code checkpoint: `5134ed2` (2026-11-05).
 This table describes the 44 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,8 +11,8 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 19 | 43.2 % |
-| IMPLEMENTED (not verified) | 3 | 6.8 % |
+| VERIFIED | 20 | 45.5 % |
+| IMPLEMENTED (not verified) | 2 | 4.5 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 3 | 6.8 % |
 | PLANNED | 19 | 43.2 % |
@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 5 / 11 | 45 % | active | TD-02 and TD-11 verified; TD-10's cache-independence half remains |
+| P1 Data and terrain correctness | 6 / 11 | 55 % | active | TD-02, TD-10 and TD-11 verified; TD-03, TD-06 and the audits remain |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -48,20 +48,20 @@ Ordered by visible impact, not by ease.
 | 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | PLANNED | `300km-papua` |
 | 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | PLANNED | `2026-11-05-at02-sky2-10/30/70km`; the orbital limb itself is blue and measures 8.30/8.54 km e-folding |
 | 9 | Three graded pads sat under water: Starbase, KSC LC-39A and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | TD-11 | **VERIFIED — fixed** | resident payloads replace the erosion refinement and a 3 m platform floor raises each pad; `2026-11-05-td02-*-fixed.jpg` shows all seven flush; clearances +3.00 … +113.55 m |
-| 10 | Terrain outside the resident payload tile still depends on the erosion cache: a cold bake is incomplete at frame 240 and changes the surrounding ground | TD-10 | IMPLEMENTED | warm/cold pairs; the pad anchor itself is now cache-independent |
+| 10 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | TD-10 | **VERIFIED — fixed** | erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean, Baikonur to 3.0–3.2/255, the same as repeat-run noise; `2026-11-05-td10-*` |
 | 11 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 17bc6f5 |
-| `cargo check --all-targets --features dem` | PASS | 17bc6f5 |
-| `cargo check --no-default-features` | PASS | 17bc6f5 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 17bc6f5 |
-| `cargo test --features dem --lib` | 1145 passed, 0 failed, 2 ignored | 17bc6f5 |
-| `cargo test --no-default-features --lib` | 1103 passed, 0 failed, 2 ignored | 17bc6f5 |
-| `openspec validate --all --strict` | 42 passed, 0 failed | 17bc6f5 |
+| `cargo fmt --check` | PASS | 5134ed2 |
+| `cargo check --all-targets --features dem` | PASS | 5134ed2 |
+| `cargo check --no-default-features` | PASS | 5134ed2 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 5134ed2 |
+| `cargo test --features dem --lib` | 1146 passed, 0 failed, 2 ignored | 5134ed2 |
+| `cargo test --no-default-features --lib` | 1104 passed, 0 failed, 2 ignored | 5134ed2 |
+| `openspec validate --all --strict` | 42 passed, 0 failed | 5134ed2 |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -116,14 +116,14 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — TD-10's remaining cache-independence half.** The pad anchor is
-fixed: resident regional payloads now override the erosion refinement, every site
-payload is preloaded before the grade anchors are sampled, and the seven site
-captures are dry. What remains is the surrounding terrain. Outside the resident
-payload tile the erosion field is still baked from the coarse global base and a
-cold vs warm cache changes it; a cold 240-frame capture is incomplete. That is a
-rendering-determinism item with its own measurement, not a launch-elevation item.
+**Next task — TD-03, the regional imagery colour match.** It is implemented but
+has no before/after frame at a fixed pose. Then RD-02 (streaming split timings)
+and AT-04 (multiple-scattering horizon).
 
-TD-03 (imagery colour-match A/B) and RD-02 (streaming split timings) remain the
-other implemented-but-unverified tasks. AT-04 comes after them because it changes
-the sky model, not just its evidence.
+TD-10 is closed: the erosion rasters now come from the immutable measured global
+DEM instead of the streamed payload overlay, and the cache-on, cache-off and cold
+runs agree to repeat-run noise. The practical caveat is convergence time: a cold
+or cache-off run needs about 1,200 frames at this pose, because the runtime bake
+is expensive and the 64-tile in-memory cache thrashes; the warm store path
+converges by 240. The global startup bake that touches thousands of 2 ° tiles is
+a P0-04 performance item, not a terrain-authority issue.

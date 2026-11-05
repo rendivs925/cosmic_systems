@@ -900,8 +900,8 @@ Consequences for the roadmap:
 This is the same class of seam as TD-06 and the reason it is written down rather
 than patched: a baseline shift nobody has agreed to is not a fix.
 
-**Resolution (2026-11-05, `5a7eb1d` + `17bc6f5`).** The pad anchor now comes from
-the resident regional payload: `TerrainSource::resident_measured_height_m`
+**Resolution (2026-11-05, `5a7eb1d` + `17bc6f5` + `5134ed2`).** The pad anchor now
+comes from the resident regional payload: `TerrainSource::resident_measured_height_m`
 exposes it, `ErodedTerrainSource` returns it instead of the refinement, and
 `EarthTerrainSource` preloads one covering payload tile per predefined site
 before the grade anchors are sampled. Sites whose measured ground is still at
@@ -910,7 +910,19 @@ the waterline get a 3 m platform floor above the local sea datum
 (`5.159, −52.649`, a marsh 4 m under the sea surface) to the ELA-3 pad
 (`5.2361, −52.7686`). All seven captured pads are now flush and dry; the
 clearances run from +3.00 m (Starbase, Papua, KSC reference) to +113.55 m
-(Baikonur). The ascent fixture pins its launch altitude and pad, so none of this
-moved a committed trajectory. What remains of TD-10 is terrain determinism
-outside the resident payload tile: a warm vs cold erosion cache still changes the
-surrounding ground, and a cold 240-frame capture is incomplete.
+(Baikonur).
+
+The surrounding-field half was a second, independent coupling. The erosion
+rasters were simulated from the *sampling* base, which is the streamed
+`TileElevationSource`, so which payload tiles were resident when a raster was
+first touched changed its height, moisture, flow and river channels — and an old
+disk tile froze one such version. `ErodedTerrainSource` now holds a separate
+immutable `bake_base`; Earth passes the coarse measured global DEM, which is what
+the offline `erosion_bake` binary already used. The feather blends back to that
+same base, and the bake namespace gained a `#bake-base=global-measured-v1`
+suffix so no raster baked under the old semantics can be reused. Cache-on,
+cache-off and cold captures now agree to repeat-run noise (Starbase 2.4–2.5/255
+mean, Baikonur 3.0–3.2/255). A cold or cache-off run needs about 1,200 frames at
+this pose to finish streaming; that convergence cost is performance work, not a
+terrain-authority change. The ascent fixture pins its launch altitude and pad, so
+none of this moved a committed trajectory.

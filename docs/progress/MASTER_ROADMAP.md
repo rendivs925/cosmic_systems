@@ -199,8 +199,8 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** grading mechanism and tests at `5901c82`; the
   per-site capture set and the two fixing slices at `17bc6f5`.
 
-### TD-10 — The pad anchor must come from the regional payload, not the erosion cache
-- **Status:** IMPLEMENTED
+### TD-10 — The pad anchor and the surrounding field must not depend on the erosion cache
+- **Status:** VERIFIED
 - **Priority:** P0
 - **Objective:** Stop the launch-site elevation and the visible terrain from
   depending on which regional payload tiles happen to be resident when the
@@ -213,40 +213,59 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Acceptance:** the pad anchor sampled at startup equals the resident payload
   (or its TD-11 floor); the same site renders the same terrain with
   `COSMIC_SYSTEMS_EROSION_CACHE` on, off, and cold.
-- **Implemented:** `TerrainSource::resident_measured_height_m` exposes the
-  resident payload sample, `ErodedTerrainSource` returns it instead of the
-  erosion refinement, and `EarthTerrainSource` preloads every predefined site's
-  covering payload tile before the grade anchors are sampled. The pad anchor now
-  equals the package probe (before the TD-11 floor) at every site.
+- **Pad anchor (`5a7eb1d`):** `TerrainSource::resident_measured_height_m`
+  exposes the resident payload sample, `ErodedTerrainSource` returns it instead
+  of the erosion refinement, and `EarthTerrainSource` preloads every predefined
+  site's covering payload tile before the grade anchors are sampled. The pad
+  anchor now equals the package probe (before the TD-11 floor) at every site.
+- **Surrounding field (`5134ed2`):** the erosion rasters used to be baked from
+  the *sampling* base — the streamed `TileElevationSource` — so height, moisture,
+  flow and river channels outside a resident payload tile depended on which
+  payload tiles had loaded first, and on whether an old raster came from disk.
+  `ErodedTerrainSource` now holds a separate immutable `bake_base`
+  (`with_store_over_bake_base`); Earth passes the coarse measured global DEM,
+  which is also what the offline `erosion_bake` already used. The feather blends
+  back to that same base. The bake namespace gained a
+  `#bake-base=global-measured-v1` suffix, so every raster baked under the old
+  semantics is invalidated rather than silently reused.
 - **Tests:** `resident_measured_height_is_absent_until_a_payload_tile_installs`,
   `a_resident_measured_payload_suppresses_the_erosion_refinement`,
+  `erosion_bakes_from_the_stable_base_not_the_sampling_overlay`,
   `default_earth_source_grades_launch_pads_above_the_sea_datum`.
-- **Measured coupling before the fix** (cold composition probe; resident payload
-  `D` against composed `height_m` `H`): Vandenberg `D=68.10, H=149.22`
+- **Measured coupling before the pad fix** (cold composition probe; resident
+  payload `D` against composed `height_m` `H`): Vandenberg `D=68.10, H=149.22`
   (**+81.12 m**); Mahia `58.94 → 28.65` (−30.29); KSC LC-39A `−15.96 → −29.87`
   (−13.90); Wallops `−24.43 → −51.31` (−26.88); Papua `71.98 → 77.59` (+5.61);
   Starbase `−22.49 → −23.37` (−0.88). The pattern was the difference between
   the regional NASADEM and the coarse global fallback.
-- **Visual evidence:** the `-fixed` frames show the corrected anchors;
-  `2026-11-05-td02-{baikonur,starbase}-cold.jpg` document the cache dependence
-  that remains outside the resident payload tile.
-- **Remaining for VERIFIED:** terrain outside the resident payload tiles still
-  comes from the erosion field, so a warm vs cold cache changes the surrounding
-  ground and a 240-frame cold capture is incomplete. That is now a rendering
-  determinism item, not a launch-elevation item, and needs its own measurement.
+- **Cache A/B/C after the fix** (identical pose, `COSMIC_SYSTEMS_CAPTURE_TIME=0`):
+  Starbase cold-vs-warm mean **2.53/255** (2.59 % > 8), cold-vs-off
+  **2.37/255** (1.43 %), warm-vs-off **2.40/255** (2.02 %); Baikonur
+  cold-vs-warm **2.96/255** (4.00 %), cold-vs-off **3.16/255** (4.67 %),
+  warm-vs-off **3.06/255** (4.45 %). These are the same magnitude as two
+  identical warm runs (2.4–3.1/255), so the disk cache no longer selects a
+  different field. The off runs need **1,200 frames** to converge; at 240 frames
+  the runtime bake is still streaming and shows ungenerated water
+  (`2026-11-05-td10-*-off-240.jpg`). The pad state is identical in every frame.
+- **Visual evidence:** `2026-11-05-td10-{starbase,baikonur}-{cold,warm,off-1200}.jpg`
+  and the incomplete `2026-11-05-td10-starbase-off-240.jpg`; the TD-02 `-fixed`
+  frames still show the corrected pads.
 - **Repeatability:** two identical warm-cache Starbase runs differ by mean
   2.4/255 (2.3 % above 8/255) and Baikonur by 3.1/255 (4.8 %); both are inside
   the documented near-ground streaming variance and neither changes the pad
   state.
 - **Scientific validation:** the regional package's own site probe is the
-  reference the runtime now matches.
+  reference the runtime now matches. Erosion refines only the coarse measured
+  base; a resident payload is the finer measurement and outranks it.
 - **Risks:** preloading whole payload regions would defeat the residency budget;
-  the fix loads one tile per site, not a region.
+  the fix loads one tile per site, not a region. The global startup bake still
+  touches thousands of 2 ° erosion tiles, which the P0-04 performance work must
+  revisit.
 - **Baseline decoupling:** the ascent fixture pins its launch altitude and uses a
-  flat pad (`c886205`, `17bc6f5`), so neither this fix nor TD-11 moves the
-  committed trajectories.
-- **Completion evidence:** `5a7eb1d` (payload precedence and preload); the
-  remaining cache-independence half is documented above.
+  flat pad (`c886205`, `17bc6f5`), so neither TD-10 nor TD-11 moves the committed
+  trajectories.
+- **Completion evidence:** `5a7eb1d` (payload precedence and preload),
+  `5134ed2` (stable bake base), and the A/B/C captures above.
 
 ### TD-11 — A graded coastal pad must sit above the local sea datum
 - **Status:** VERIFIED
