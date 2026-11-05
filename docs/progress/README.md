@@ -86,7 +86,7 @@ before/after frame) and streaming measurement (no split timings). Site grading
 across the predefined sites is now captured but **blocked** on the two terrain
 defects above.
 
-## What is blocked?
+## What is blocked or needs a decision?
 
 | task | reason |
 | --- | --- |
