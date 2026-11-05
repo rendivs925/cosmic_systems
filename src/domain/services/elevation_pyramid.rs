@@ -831,6 +831,11 @@ impl TerrainSource for TileElevationSource {
         self.base.sea_level_height_m(latitude_deg, longitude_deg)
     }
 
+    fn resident_measured_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> Option<f64> {
+        let direction = terrain_direction(latitude_deg, longitude_deg)?;
+        self.sample_resident(direction)
+    }
+
     fn elevation_bounds_m(&self) -> ElevationBounds {
         let base = self.base.elevation_bounds_m();
         let mut min_m = base.min_m;
@@ -1052,6 +1057,28 @@ mod tests {
         let base_height = base().height_m(10.0, 20.0);
         assert_eq!(source.height_m(10.0, 20.0), base_height);
         assert_eq!(source.resident_tile_count(), 0);
+    }
+
+    #[test]
+    fn resident_measured_height_is_absent_until_a_payload_tile_installs() {
+        let patch = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 0,
+            tile_x: 0,
+            tile_y: 0,
+        };
+        let manifest = manifest_with(vec![
+            tile_at(patch, 999.0, 5.0).metadata("tiles/root.cstile".into())
+        ]);
+        let source = TileElevationSource::new(base(), manifest, 4).expect("valid manifest");
+
+        // No payload is resident yet: the refinement layers must keep working
+        // from the base rather than believing a measurement exists.
+        assert_eq!(source.resident_measured_height_m(0.0, 90.0), None);
+        source.install_tile(tile_at(patch, 999.0, 5.0));
+        assert_eq!(source.resident_measured_height_m(0.0, 90.0), Some(999.0));
+        // A direction the tile does not cover stays unmeasured.
+        assert_eq!(source.resident_measured_height_m(0.0, 0.0), None);
     }
 
     #[test]

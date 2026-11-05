@@ -368,6 +368,17 @@ impl ErodedTerrainSource {
 impl TerrainSource for ErodedTerrainSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let (latitude_deg, longitude_deg) = canonical_lat_lon(latitude_deg, longitude_deg);
+        // A resident regional payload is measured data at a finer resolution
+        // than this erosion field, which refines the coarse global base. Never
+        // let the refinement overwrite the measurement: on a coastal site the
+        // global fallback can sit several metres below the payload, and the
+        // erosion tile is baked before most payload tiles are resident.
+        if let Some(measured) = self
+            .base
+            .resident_measured_height_m(latitude_deg, longitude_deg)
+        {
+            return measured;
+        }
         let tile = self.get_tile(latitude_deg, longitude_deg);
         let (eroded, edge) = sample(&tile, latitude_deg, longitude_deg);
         let weight = erosion_weight(edge, self.cfg.edge_feather);

@@ -144,6 +144,16 @@ pub trait TerrainSource: Send + Sync + Debug {
         0.0
     }
 
+    /// Height from a higher-resolution *measured* payload tile resident at this
+    /// point, or `None` when only the generic surface applies.
+    ///
+    /// Refinement layers consult this before replacing measured ground: a
+    /// generated field is allowed to add detail to coarse data, but it must not
+    /// overwrite a resident measurement. The default has no payloads.
+    fn resident_measured_height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> Option<f64> {
+        None
+    }
+
     /// Compatibility classification for sources that only expose elevation.
     fn surface_class(&self, latitude_deg: f64, longitude_deg: f64) -> SurfaceClass {
         if self.height_m(latitude_deg, longitude_deg)
@@ -604,11 +614,11 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
-    fn default_earth_source_grades_launch_pads_level() {
+    fn default_earth_source_grades_launch_pads_onto_the_measured_payload() {
         let source = EarthTerrainSource::new();
-        let package_source = DemTerrainSource::from_path(DEFAULT_EARTH_DEM_PATH)
-            .expect("resident Earth terrain package must load");
-        let eroded_source = earth_eroded_base(Arc::new(package_source));
+        let tiles = source
+            .elevation_tile_source()
+            .expect("Earth exposes a payload pyramid");
         let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).expect("Earth exists");
 
         for site in [
@@ -616,10 +626,18 @@ mod tests {
             predefined_sites::papua_indonesia_coastal_lowland(),
         ] {
             let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
+            let measured = tiles
+                .resident_measured_height_m(latitude_deg, longitude_deg)
+                .expect("every site payload is preloaded before the grade anchor samples");
             assert_eq!(
                 source.height_m(latitude_deg, longitude_deg),
-                eroded_source.height_m(latitude_deg, longitude_deg),
-                "a graded pad must suppress procedural detail over the eroded base at {latitude_deg}, {longitude_deg}"
+                measured,
+                "the graded pad must sit on the measured payload at {latitude_deg}, {longitude_deg}"
+            );
+            assert_eq!(
+                source.mesh_height_m(latitude_deg, longitude_deg, 12),
+                measured,
+                "the rendered pad must agree with collision at {latitude_deg}, {longitude_deg}"
             );
         }
     }

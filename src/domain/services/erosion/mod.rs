@@ -318,6 +318,55 @@ mod tests {
         );
     }
 
+    #[derive(Debug)]
+    struct PartlyMeasuredBase {
+        coarse_m: f64,
+        measured_m: f64,
+    }
+
+    impl TerrainSource for PartlyMeasuredBase {
+        fn height_m(&self, _latitude_deg: f64, _longitude_deg: f64) -> f64 {
+            self.coarse_m
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(-1_000.0, 10_000.0)
+        }
+
+        fn resident_measured_height_m(
+            &self,
+            latitude_deg: f64,
+            _longitude_deg: f64,
+        ) -> Option<f64> {
+            (latitude_deg > 0.0).then_some(self.measured_m)
+        }
+    }
+
+    /// A resident measured payload is authoritative; the erosion field refines
+    /// the coarse base, not the measurement. This is the regression for the
+    /// coastal-pad defect: the erosion tile is baked before most payload tiles
+    /// are resident, so it must not overwrite a resident measurement.
+    #[test]
+    fn a_resident_measured_payload_suppresses_the_erosion_refinement() {
+        let source = ErodedTerrainSource::new(
+            Arc::new(PartlyMeasuredBase {
+                coarse_m: 100.0,
+                measured_m: 5.0,
+            }),
+            cfg(),
+        );
+
+        assert_eq!(source.height_m(10.0, 20.0), 5.0);
+        assert_eq!(source.mesh_height_m(10.0, 20.0, 12), 5.0);
+
+        // Outside the measured area the eroded field still applies.
+        let coarse = source.height_m(-10.0, 20.0);
+        assert!(
+            (coarse - 100.0).abs() < 1.0,
+            "erosion must still refine the coarse base, got {coarse}"
+        );
+    }
+
     #[test]
     fn mesh_height_samples_the_eroded_field_at_every_level() {
         let source = ErodedTerrainSource::new(Arc::new(base()), cfg());

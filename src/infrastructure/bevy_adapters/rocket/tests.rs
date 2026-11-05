@@ -1607,6 +1607,7 @@ mod ascent_pipeline_tests {
     use crate::domain::entities::rocket::{
         EngineState, Rocket, RocketEngine, RocketStage, ThrustReference,
     };
+    use crate::domain::services::cube_sphere::TerrainPatch;
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::reference_frames::{
@@ -1615,6 +1616,7 @@ mod ascent_pipeline_tests {
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::simulation_time::SimulationTime;
     use crate::domain::services::terrain_collision::radial_direction;
+    use crate::domain::services::terrain_source::{ElevationBounds, TerrainSource};
     use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, PlanetTerrain};
     use crate::infrastructure::bevy_adapters::rocket::contact::resolve_ground_contact;
     use crate::infrastructure::bevy_adapters::rocket::control::{actuation_system, control_system};
@@ -1641,6 +1643,77 @@ mod ascent_pipeline_tests {
     /// bit-identical. `height_m` at this site is still exercised by the
     /// terrain and contact tests.
     const KSC_BASELINE_LAUNCH_HEIGHT_M: f64 = f64::from_bits(0xc03ea4ab36d7a4c7);
+
+    /// Earth terrain with a fixed flat pad at the launch point.
+    ///
+    /// The regression baselines test flight dynamics, not the terrain field. The
+    /// pad is pinned at one altitude so a terrain correction cannot move a
+    /// committed trajectory, while every other sample still comes from the real
+    /// Earth source (the flight leaves the pad within the first ticks, and the
+    /// orbital fixture never touches it).
+    #[derive(Debug)]
+    struct PadPinnedTerrain {
+        inner: std::sync::Arc<dyn TerrainSource>,
+        pad_up: DVec3,
+        pin_cos: f64,
+        pad_height_m: f64,
+    }
+
+    impl PadPinnedTerrain {
+        fn new(pad_height_m: f64, pad_lat: f64, pad_lon: f64) -> Self {
+            const PIN_RADIUS_M: f64 = 50_000.0;
+            let pad_up = radial_direction(pad_lat, pad_lon);
+            Self {
+                inner: PlanetTerrain::earth().source,
+                pad_up,
+                pin_cos: (PIN_RADIUS_M / EARTH_RADIUS_M).cos(),
+                pad_height_m,
+            }
+        }
+
+        fn pinned_at(&self, latitude_deg: f64, longitude_deg: f64) -> bool {
+            radial_direction(latitude_deg, longitude_deg).dot(self.pad_up) >= self.pin_cos
+        }
+    }
+
+    impl TerrainSource for PadPinnedTerrain {
+        fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+            if self.pinned_at(latitude_deg, longitude_deg) {
+                self.pad_height_m
+            } else {
+                self.inner.height_m(latitude_deg, longitude_deg)
+            }
+        }
+
+        fn mesh_height_m(&self, latitude_deg: f64, longitude_deg: f64, patch_level: u32) -> f64 {
+            if self.pinned_at(latitude_deg, longitude_deg) {
+                self.pad_height_m
+            } else {
+                self.inner
+                    .mesh_height_m(latitude_deg, longitude_deg, patch_level)
+            }
+        }
+
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            self.inner.elevation_bounds_m()
+        }
+
+        fn patch_geometric_error(
+            &self,
+            patch: &TerrainPatch,
+        ) -> crate::domain::services::cube_sphere::PatchGeometricError {
+            self.inner.patch_geometric_error(patch)
+        }
+
+        fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+            self.inner.sea_level_height_m(latitude_deg, longitude_deg)
+        }
+
+        fn resident_measured_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> Option<f64> {
+            self.inner
+                .resident_measured_height_m(latitude_deg, longitude_deg)
+        }
+    }
 
     /// Electron-class vehicle: nine 25.8 kN engines with a 0.6 throttle
     /// floor (stage envelope [0.6, 1.0]), ~13 t gross.
@@ -1726,6 +1799,7 @@ mod ascent_pipeline_tests {
         let planet =
             crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
                 .expect("Earth exists");
+        let (lat, lon) = ksc_terrain_coordinates();
         app.world_mut().spawn((
             PlanetComponent {
                 domain_planet: planet,
@@ -1734,7 +1808,13 @@ mod ascent_pipeline_tests {
                 base_reflectance: 1.0,
                 base_roughness: 1.0,
             },
-            PlanetTerrain::earth(),
+            PlanetTerrain {
+                source: std::sync::Arc::new(PadPinnedTerrain::new(
+                    KSC_BASELINE_LAUNCH_HEIGHT_M,
+                    lat,
+                    lon,
+                )),
+            },
         ));
 
         let vehicle = electron_like();
@@ -1748,7 +1828,6 @@ mod ascent_pipeline_tests {
             1_250.0, 11_300.0, 0.6, 18.0,
         );
 
-        let (lat, lon) = ksc_terrain_coordinates();
         let h = KSC_BASELINE_LAUNCH_HEIGHT_M;
         let up = radial_direction(lat, lon);
         let surface_radius = EARTH_RADIUS_M + h;
@@ -3075,7 +3154,7 @@ mod determinism_regression_tests {
             vehicle_configuration_sha256: None,
             launch_site_id: "ksc-default-geodetic".into(),
             environment_model_id: "test-earth-default-flight-conditions".into(),
-            terrain_source_id: "planet-terrain-earth-default".into(),
+            terrain_source_id: "planet-terrain-earth-default/pinned-launch-altitude".into(),
             ephemeris_authority_id: "synthetic-earth-orientation-j2000".into(),
             start_epoch_tdb_seconds_since_j2000: 0.0,
             state_reference_frame: "Earth-centered inertial".into(),

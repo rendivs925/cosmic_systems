@@ -7,7 +7,7 @@
         vehicle_configuration_sha256: None,
         launch_site_id: "ksc-default-geodetic",
         environment_model_id: "test-earth-default-flight-conditions",
-        terrain_source_id: "planet-terrain-earth-default",
+        terrain_source_id: "planet-terrain-earth-default/pinned-launch-altitude",
         ephemeris_authority_id: "synthetic-earth-orientation-j2000",
         start_epoch_tdb_seconds_since_j2000: 0.0,
         state_reference_frame: "Earth-centered inertial",

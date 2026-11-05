@@ -27,7 +27,9 @@ use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
 #[cfg(feature = "dem")]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(feature = "dem")]
-use crate::domain::value_objects::launch_site_coordinates::predefined_sites;
+use crate::domain::value_objects::launch_site_coordinates::{
+    predefined_sites, PredefinedLaunchSite,
+};
 #[cfg(feature = "dem")]
 use std::env;
 #[cfg(feature = "dem")]
@@ -399,12 +401,41 @@ impl EarthTerrainSource {
             manifest_roots,
             DEFAULT_ELEVATION_TILE_CAPACITY,
         )?);
+        preload_launch_site_payloads(&tiles);
         Ok(Self {
             source: Arc::new(earth_layered_terrain(
                 Arc::clone(&tiles) as Arc<dyn TerrainSource>
             )),
             tiles: Some(tiles),
         })
+    }
+}
+
+/// Load the covering payload tile for every predefined launch site before the
+/// graded platform anchors are computed.
+///
+/// `with_graded_sites` samples each site's composed height at construction.
+/// Erosion and detail stand back where a measured payload is resident (see
+/// `TerrainSource::resident_measured_height_m`), so the anchor is only the
+/// payload's own probe if that tile is resident *now*. Waiting for streaming to
+/// load it would anchor the pad to the coarse global fallback and put several
+/// coastal sites under water. Nine tiles is a bounded, one-time startup cost.
+#[cfg(feature = "dem")]
+fn preload_launch_site_payloads(tiles: &TileElevationSource) {
+    let Some(earth) = PlanetFactory::create_by_id(&CelestialBodyId::earth()) else {
+        return;
+    };
+    for site in PredefinedLaunchSite::ALL {
+        // Use the site's exact declared coordinates: the grade anchor samples
+        // the same conversion, so the tile must cover the same point.
+        let (latitude_deg, longitude_deg) =
+            geodetic_to_terrain_lat_lon(&site.coordinates(), &earth);
+        if let Err(error) = tiles.ensure_covering_tile_loaded(latitude_deg, longitude_deg) {
+            eprintln!(
+                "{} launch elevation payload failed to preload: {error:?}",
+                site.label()
+            );
+        }
     }
 }
 
