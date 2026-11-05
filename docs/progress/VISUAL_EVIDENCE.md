@@ -31,7 +31,7 @@ values and its linear-to-byte encoding are in
 | # | scene | state | frame | note |
 | --- | --- | --- | --- | --- |
 | 1 | prelaunch | PARTIAL | `pad-110m-footprint` | pad and tower, no HUD, chase angle only |
-| 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*` | one graded pad per predefined site; four flush, three submerged (TD-11) |
+| 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed` | one graded pad per predefined site, all flush and dry |
 | 3 | terrain close-up | CURRENT | `terrain-600m` | 600 m nadir; no geometric relief visible |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
@@ -220,6 +220,26 @@ three water rows as the defect they expose, not as a site-grading failure.
 The cold frames are also incomplete at frame 240 because a from-scratch erosion
 bake is slower than streaming, so they are evidence about cache dependence, not
 about the site.
+
+After TD-10 (resident payloads override the erosion refinement) and TD-11 (a
+3 m platform floor above the local sea datum), the same seven sites were
+re-captured at `17bc6f5`. All seven pads are now flush and dry:
+
+| file | commit | site, UTC | time | frames | sha256 (first 16) | demonstrates | criterion |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `2026-11-05-td02-starbase-fixed.jpg` | `17bc6f5` | `starbase`, `2000-01-01T18:46:37` | 0 s | 240 | `6cc3b8264530d203` | pad on the measured coastal flat, lagoons beyond | dry pad, +3.00 m above sea |
+| `2026-11-05-td02-ksc-fixed.jpg` | `17bc6f5` | `ksc`, `2000-01-01T17:40:25` | 0 s | 240 | `0438e2d7f0a6ae80` | LC-39A pad flush on dark marsh ground, water beyond | dry pad, +13.76 m |
+| `2026-11-05-td02-wallops-fixed.jpg` | `17bc6f5` | `wallops`, `2000-01-01T17:19:52` | 0 s | 240 | `2086f9cf2a9189c0` | pad dry beside the coastal lagoons | dry pad, +13.26 m |
+| `2026-11-05-td02-baikonur-fixed.jpg` | `17bc6f5` | `baikonur`, `2000-01-01T08:04:47` | 0 s | 240 | `e3635fa969186256` | steppe pad flush | dry pad, +113.55 m |
+| `2026-11-05-td02-vandenberg-fixed.jpg` | `17bc6f5` | `vandenberg`, `2000-01-01T20:20:17` | 0 s | 240 | `e30c29a6720a5718` | coastal ridge pad flush; pale synthetic lakes are TD-06 | dry pad, +104.31 m |
+| `2026-11-05-td02-kourou-fixed.jpg` | `17bc6f5` | `kourou`, `2000-01-01T15:48:36` | 0 s | 240 | `b4963047703ff27b` | ELA-3 pad flush beside the lagoons | dry pad, +9.19 m |
+| `2026-11-05-td02-mahia-fixed.jpg` | `17bc6f5` | `mahia`, `2000-01-01T00:26:33` | 0 s | 240 | `a0a3cfadaf59c938` | peninsula pad flush; pale estuary patches are TD-06 | dry pad, +37.59 m |
+
+Two repeat runs at the same pose differ by mean 2.4/255 (Starbase) and 3.1/255
+(Baikonur), with 2.3 % and 4.8 % of pixels above 8/255: inside the documented
+near-ground streaming variance, and the pad state is identical in both. The
+surrounding terrain still comes from the erosion field outside the resident
+payload tile, which is the remaining TD-10 item.
 
 ## Negative results worth keeping
 

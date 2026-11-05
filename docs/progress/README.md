@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `c582708`.
+Snapshot: 2026-11-05. Last code checkpoint: `17bc6f5`.
 
 ---
 
@@ -28,14 +28,14 @@ and a measurement path that captures frames without a swapchain.
 ## What is currently being built?
 
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
-TD-02's capture set is complete and it found a real defect. A capture-only
-`COSMIC_SYSTEMS_CAPTURE_UTC` now pins the start instant, because the shared
-default epoch is local noon only at Papua; with it, every predefined site can be
-measured in daylight. Four pads are flush (Baikonur, Vandenberg, Kourou, Mahia);
-three stand in open water (Starbase, KSC, Wallops). The probe says the composed
-ground at those three is below the local sea datum, and that the pad anchor is
-decoupled from its regional payload by the erosion field (up to 81 m at
-Vandenberg). That is TD-10, the next task.
+TD-02 is verified: every captured pad is flush and dry. Getting there needed
+three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
+because the shared default epoch is local noon only at Papua. Resident regional
+payloads now override the erosion refinement, and every site payload is preloaded
+before the grade anchors are sampled, so a pad no longer lands on the coarse
+global fallback (Vandenberg was 81 m out). And a 3 m platform floor keeps a pad
+above the local sea datum, with Kourou moved from the town to the ELA-3 pad. The
+remaining TD-10 item is terrain determinism outside the resident payload tile.
 
 ## What is broken?
 
@@ -43,8 +43,8 @@ Vandenberg). That is TD-10, the next task.
 | --- | --- |
 | Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
-| Three launch pads sit under water: Starbase, KSC and Wallops are −0.78, −0.14 and −13.61 m against the local sea datum | **diagnosed**; needs TD-10 and TD-11 |
-| The pad anchor and the visible terrain depend on the erosion cache: Vandenberg samples 81 m above its published package probe, and a warm vs cold cache changes 90 % of the frame | **diagnosed**; TD-10. The baselines are now decoupled (`c886205`) so the fix cannot move them |
+| Three launch pads sat under water: Starbase, KSC and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | **verified and closed.** Resident payloads replace the erosion refinement, the platform is floored 3 m above the sea datum, and all seven captured pads are dry |
+| Terrain outside the resident payload tile depends on the erosion cache: a cold bake is incomplete at frame 240 and changes the surrounding ground | **partly fixed.** The pad anchor is cache-independent (`5a7eb1d`); the surrounding field still needs TD-10's remaining half |
 | Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
 | Cloud edges are cut-outs; one shape per region | planned work |
 | Vegetation reads as specks | planned work |
@@ -58,7 +58,7 @@ it.
 
 ## What has been verified?
 
-Seventeen of forty-four roadmap tasks, each with implementation + tests + a named
+Nineteen of forty-four roadmap tasks, each with implementation + tests + a named
 frame or a named measurement:
 
 | task | evidence |
@@ -79,28 +79,29 @@ frame or a named measurement:
 | TM-04 near-ground tone | the local albedo map was 4× the overview; a control build isolates it (4.36 → 1.98) and the tint build measures 2.01 at 3 km against 2.03 at 40 km |
 | AT-01 single-scattering sky | one `SkyParams` authority; the 10/30/70/200/400 km sequence and the 200/400 km limb exercise it from sea level to vacuum |
 | AT-02 altitude transition and limb | 6° limb e-folding 8.30 km (200 km) and 8.54 km (400 km) in linear light over 24–32 km, within 7 % of 8 km; displayable top 35–38 km; horizon luminance monotonic 0.138 → 0.073 → 0.026 → floor |
+| TD-02 site grading | one capture per predefined site, all flush and dry (`2026-11-05-td02-*-fixed`); pad anchors now come from the resident payload |
+| TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | VL-02 OpenSpec strict | 42/42 |
 
-Two more are implemented but **not** verified: imagery colour match (no
-before/after frame) and streaming measurement (no split timings). Site grading
-across the predefined sites is now captured but **blocked** on the two terrain
-defects above.
+Three more are implemented but **not** verified: imagery colour match (no
+before/after frame), streaming measurement (no split timings), and TD-10's
+cache-independence half outside the resident payload tile.
 
 ## What is blocked or needs a decision?
 
 | task | reason |
 | --- | --- |
 | P0-04 performance baseline | no presentable window |
-| TD-02 site grading | three pads are below the sea datum (TD-10, TD-11) |
-| TD-06 fabricated coastline | enabling the guard moves the committed LEO baseline, cause not isolated |
-| TD-11 coastal datum floor | the baselines are no longer a blocker: the fixture launch altitude is pinned (`c886205`). It still waits on TD-10 for a correct coast |
+| TD-06 fabricated coastline | enabling the guard used to move the committed LEO baseline; the fixture is now decoupled (`c886205`), so the guard can be re-evaluated |
 | VL-01 three-mode smoke | same presentation failure |
 
 ## What should be built next?
 
-**TD-02 — one capture per predefined site.** The grading itself is implemented
-and tested, and Papua has a clean frame; Starbase, Baikonur, Vandenberg, Wallops,
-Kourou, Mahia and KSC do not. That is the remaining evidence for a P0 task.
+**TD-10's remaining half — terrain determinism outside the resident payload
+tile.** The pad anchor is fixed and all seven captured pads are dry. The
+surrounding ground still comes from the erosion field, so a warm vs cold cache
+changes it and a cold 240-frame capture is incomplete. That is a rendering
+determinism item, separate from launch elevation.
 
 After that: TD-03 (imagery colour-match A/B), RD-02 (streaming split timings),
 then AT-04 (multiple-scattering horizon hue, opened by AT-02's measurement rather
@@ -136,9 +137,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,142 domain and adapter
-tests pass (1,100 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified seventeen of its forty-four tasks.
+The simulator runs and its physics is regression-locked; 1,145 domain and adapter
+tests pass (1,103 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified nineteen of its forty-four tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -174,8 +175,13 @@ tile is built from the coarse global fallback — Vandenberg's pad samples 81 m
 above the site probe its own package publishes. And Starbase's measured payload
 is only 0.2 m above the sea surface, so a sub-metre erosion term drowns it.
 Worse, the disk cache freezes one version of that field: a warm and a cold cache
-change 90 % of the frame. Neither is a site-grading bug; both must be fixed
-before the pads can be called verified.
+change 90 % of the frame. Both were fixed for the pad: a resident regional
+payload now outranks the erosion refinement, every site's payload tile is loaded
+before the grade anchor is sampled, and a 3 m platform floor plus the Kourou
+coordinate correction put all seven captured pads on dry, flush ground. The
+baselines did not move because the ascent fixture now pins its launch altitude
+and pad (`c886205`, `17bc6f5`). The surrounding terrain still depends on the
+erosion cache; that half of TD-10 stays open and is stated as such.
 
 Of the ten required visual scenes, five have usable evidence, two are partial,
 and three are missing. That is the truest single measure of where this stands.

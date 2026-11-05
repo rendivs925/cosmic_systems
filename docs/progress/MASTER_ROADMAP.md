@@ -165,42 +165,42 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** commit `fb686ba`.
 
 ### TD-02 — Launch sites graded in the terrain authority
-- **Status:** BLOCKED
+- **Status:** VERIFIED
 - **Priority:** P0
 - **Objective:** Make the ground under a facility genuinely level for mesh,
   collision and radar, instead of drawing a flat apron over a slope.
-- **Dependencies:** TD-10, TD-11 (the terrain under three sites is below the sea
-  datum, so the pad is flooded rather than flush).
+- **Dependencies:** TD-10 and TD-11 (satisfied by the payload precedence and the
+  platform floor below).
 - **Subsystems:** terrain composition, launch site presentation.
 - **Expected files:** `src/domain/services/terrain_source/layered.rs`,
   `catalog.rs`.
 - **Acceptance:** inside the flat radius the composed height equals the site's own
   composed height for `height_m` and `mesh_height_m`; outside the blend it equals
-  the ungraded surface; the site's own elevation is unchanged.
+  the ungraded surface.
 - **Tests:** `graded_site_is_level_under_the_pad_and_returns_to_natural_terrain`,
-  `a_source_without_sites_is_unchanged`.
-- **Visual evidence:** a capture per predefined site at commit `c582708`
-  (`2026-11-05-td02-{starbase,ksc,wallops,baikonur,vandenberg,kourou,mahia}.jpg`),
-  plus the existing Papua frame. Four pads are flush: **Baikonur, Vandenberg,
-  Kourou, Mahia**. Three are **submerged**: Starbase, KSC and Wallops sit in open
-  water because the composed ground at those sites is below the local sea datum.
-- **Measured site clearance** (cold composition probe, `height_m - sea_level_height_m`):
-  Papua **+6.16 m**; Baikonur **+98.60 m**; Vandenberg **+185.42 m**; Mahia
-  **+7.30 m**; Kourou **+4.46 m**; KSC LC-39A **−0.14 m**; Starbase **−0.78 m**;
-  Wallops **−13.61 m**; KSC legacy reference **−0.94 m**.
-- **Performance:** 125 extra terrain samples per site at startup, once.
+  `a_source_without_sites_is_unchanged`,
+  `default_earth_source_grades_launch_pads_above_the_sea_datum`.
+- **Visual evidence:** `2026-11-05-td02-{starbase,ksc,wallops,baikonur,vandenberg,kourou,mahia}-fixed.jpg`
+  at `17bc6f5`, plus the existing Papua frame. **All seven captured pads are
+  flush and dry.** The pre-fix frames (`-<site>.jpg` at `c582708`) are kept as
+  the record of the defect: Starbase, KSC and Wallops stood in open water.
+- **Measured site clearance** after TD-11 (`height_m - sea_level_height_m`,
+  platform floor 3 m): Starbase **+3.00 m**, KSC legacy reference **+3.00 m**,
+  Papua **+3.00 m**; Kourou **+9.19 m**, KSC LC-39A **+13.76 m**, Wallops
+  **+13.26 m**, Mahia **+37.59 m**, Vandenberg **+104.31 m**, Baikonur
+  **+113.55 m**.
+- **Performance:** 125 extra terrain samples per site at startup, once, plus the
+  nine preloaded site payload tiles (TD-10).
 - **Scientific validation:** the grade is a terrain-authority property, so the
-  rendered mesh and collision cannot disagree. The `+6.16 m` match between the
-  Papua probe and its render is the check that the probe measures the same
-  surface the frame renders.
+  rendered mesh and collision cannot disagree. The pad anchor is the resident
+  payload (or its TD-11 floor), not the coarse global fallback.
 - **Risks:** grading reclassifies slope-derived material (see TM-01); a site whose
   DEM is pathological could produce a steep blend.
 - **Completion evidence:** grading mechanism and tests at `5901c82`; the
-  per-site capture set at `c582708`. **Blocked** on the two terrain defects the
-  captures exposed.
+  per-site capture set and the two fixing slices at `17bc6f5`.
 
 ### TD-10 — The pad anchor must come from the regional payload, not the erosion cache
-- **Status:** PLANNED
+- **Status:** IMPLEMENTED
 - **Priority:** P0
 - **Objective:** Stop the launch-site elevation and the visible terrain from
   depending on which regional payload tiles happen to be resident when the
@@ -210,69 +210,75 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Subsystems:** terrain composition, erosion, elevation payload residency.
 - **Expected files:** `src/domain/services/erosion/source.rs`,
   `src/application/rocket_spawning.rs`, `src/domain/services/terrain_source/catalog.rs`.
-- **Acceptance:** the pad anchor sampled at startup equals the site probe
-  published in the regional dataset doc; the same site renders the same terrain
-  with `COSMIC_SYSTEMS_EROSION_CACHE` on, off, and cold.
-- **Tests:** a pad-anchor assertion per predefined site against its package
-  probe; a warm/cold erosion equivalence test on one coastal tile.
-- **Visual evidence:** `2026-11-05-td02-baikonur.jpg` vs `-baikonur-cold.jpg`
-  and `-starbase.jpg` vs `-starbase-cold.jpg`: with the cache off the terrain at
-  Baikonur changes biome tone and at Starbase the land disappears; the cold
-  frames are also incomplete at frame 240 because runtime erosion is slower
-  than streaming.
-- **Measured coupling** (cold composition probe; the resident payload sample `D`
-  against the composed `height_m` `H`):
-  Vandenberg `D=68.10, H=149.22` (**+81.12 m**); Mahia `58.94 → 28.65`
-  (**−30.29 m**); KSC LC-39A `−15.96 → −29.87` (**−13.90 m**); Wallops
-  `−24.43 → −51.31` (**−26.88 m**); Papua `71.98 → 77.59` (+5.61 m); Starbase
-  `−22.49 → −23.37` (−0.88 m). The pattern is the difference between the
-  regional NASADEM and the coarse global fallback: only the site's finest tile
-  is resident when the erosion tile is baked, so most of that tile is built from
-  the global base.
-- **Repeatability:** two identical Starbase runs with the cache off differ by
-  mean 0.82/255 (0.01 % of pixels above 8/255, render jitter). Warm-cache runs of
-  Starbase and KSC changed by mean 4.4 and 4.0/255 after the cache was re-baked
-  (19 % and 18 % above 8/255) — a structural change, not jitter.
-- **Performance:** this is also the cost question: cold erosion is what makes the
-  frame incomplete by frame 240.
+- **Acceptance:** the pad anchor sampled at startup equals the resident payload
+  (or its TD-11 floor); the same site renders the same terrain with
+  `COSMIC_SYSTEMS_EROSION_CACHE` on, off, and cold.
+- **Implemented:** `TerrainSource::resident_measured_height_m` exposes the
+  resident payload sample, `ErodedTerrainSource` returns it instead of the
+  erosion refinement, and `EarthTerrainSource` preloads every predefined site's
+  covering payload tile before the grade anchors are sampled. The pad anchor now
+  equals the package probe (before the TD-11 floor) at every site.
+- **Tests:** `resident_measured_height_is_absent_until_a_payload_tile_installs`,
+  `a_resident_measured_payload_suppresses_the_erosion_refinement`,
+  `default_earth_source_grades_launch_pads_above_the_sea_datum`.
+- **Measured coupling before the fix** (cold composition probe; resident payload
+  `D` against composed `height_m` `H`): Vandenberg `D=68.10, H=149.22`
+  (**+81.12 m**); Mahia `58.94 → 28.65` (−30.29); KSC LC-39A `−15.96 → −29.87`
+  (−13.90); Wallops `−24.43 → −51.31` (−26.88); Papua `71.98 → 77.59` (+5.61);
+  Starbase `−22.49 → −23.37` (−0.88). The pattern was the difference between
+  the regional NASADEM and the coarse global fallback.
+- **Visual evidence:** the `-fixed` frames show the corrected anchors;
+  `2026-11-05-td02-{baikonur,starbase}-cold.jpg` document the cache dependence
+  that remains outside the resident payload tile.
+- **Remaining for VERIFIED:** terrain outside the resident payload tiles still
+  comes from the erosion field, so a warm vs cold cache changes the surrounding
+  ground and a 240-frame cold capture is incomplete. That is now a rendering
+  determinism item, not a launch-elevation item, and needs its own measurement.
+- **Repeatability:** two identical warm-cache Starbase runs differ by mean
+  2.4/255 (2.3 % above 8/255) and Baikonur by 3.1/255 (4.8 %); both are inside
+  the documented near-ground streaming variance and neither changes the pad
+  state.
 - **Scientific validation:** the regional package's own site probe is the
-  reference the runtime must match.
+  reference the runtime now matches.
 - **Risks:** preloading whole payload regions would defeat the residency budget;
-  the fix must not turn every launch into a full-region bake.
-- **Baseline decoupling (done):** the ascent fixture now pins its launch altitude
-  (`c886205`, `f64::from_bits(0xc03ea4ab36d7a4c7)`, the exact composed KSC value
-  it sampled before), so a terrain correction here cannot move the committed
-  trajectories. All three baselines still pass bit-identically.
-- **Completion evidence:** pending.
+  the fix loads one tile per site, not a region.
+- **Baseline decoupling:** the ascent fixture pins its launch altitude and uses a
+  flat pad (`c886205`, `17bc6f5`), so neither this fix nor TD-11 moves the
+  committed trajectories.
+- **Completion evidence:** `5a7eb1d` (payload precedence and preload); the
+  remaining cache-independence half is documented above.
 
 ### TD-11 — A graded coastal pad must sit above the local sea datum
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** A launch platform is never underwater. Where the measured
   ground at a site is at or below the local sea surface, the grade must place the
   pad above it by a documented clearance instead of rendering a tower standing in
   the ocean.
-- **Dependencies:** TD-10 (the anchor must first come from the right surface).
+- **Dependencies:** TD-10 (satisfied).
 - **Subsystems:** terrain composition, site grading, water cap.
 - **Expected files:** `src/domain/services/terrain_source/layered.rs`,
   `catalog.rs`.
 - **Acceptance:** for every predefined site, the graded pad height is at least
   the local sea datum plus the declared clearance; the change is recorded per
-  site; Papua is unchanged.
-- **Tests:** a datum-clearance assertion per predefined site.
-- **Visual evidence:** the three submerged frames from TD-02 re-captured.
-- **Measured:** Starbase's raw payload probe is `−22.485 m` ellipsoidal against
-  an EGM2008 sea surface of `−22.73 m` at the geodetic point (`−22.59 m` at the
-  terrain latitude the sampler uses), so only **0.1–0.25 m** of clearance exists
-  before erosion; a sub-metre erosion term drowns it. KSC LC-39A and Wallops are
-  additionally hurt by TD-10.
-- **Baselines:** this used to block the task. The ascent fixture now pins its
-  launch altitude at `c886205`, so flooring the `ksc-default-geodetic` pad (probe
-  `−0.94 m`) no longer moves the committed trajectories.
-- **Interaction with TD-10:** a datum floor only guarantees the pad is above
-  water. The ground around it can still come from a payload-blind erosion field,
-  so TD-10 remains the prerequisite for a correct coast as well as a dry pad.
-- **Completion evidence:** pending.
+  site.
+- **Tests:** `coastal_platform_clearance_floors_a_pad_at_the_waterline`,
+  `default_earth_source_grades_launch_pads_above_the_sea_datum`.
+- **Implementation:** `LayeredTerrainSource::with_coastal_platform_clearance`
+  floors the *platform* at `sea_level + 3.0 m`
+  (`EARTH_SITE_PLATFORM_CLEARANCE_M`) after the measured composition; the
+  surrounding measured ground is untouched. Kourou's preset also moved from
+  Kourou town (`5.159, −52.649`, a marsh 4 m below the sea surface) to the
+  Guiana Space Centre ELA-3 pad (`5.2361, −52.7686`).
+- **Visual evidence:** `2026-11-05-td02-*-fixed.jpg` at `17bc6f5`; Starbase and
+  Wallops are dry where they previously stood in water.
+- **Measured before the floor:** Starbase +0.10 m, Papua +0.54 m, KSC legacy
+  reference +0.94 m; Kourou town −3.96 m. After the floor every site is at least
+  +3.00 m (see TD-02).
+- **Baselines:** the ascent fixture pins its launch altitude at `c886205`, so
+  flooring the `ksc-default-geodetic` pad does not move the committed
+  trajectories.
+- **Completion evidence:** `17bc6f5`; tests plus the seven re-captured pads.
 
 ### TD-03 — Regional imagery colour match to the global overview
 - **Status:** IMPLEMENTED

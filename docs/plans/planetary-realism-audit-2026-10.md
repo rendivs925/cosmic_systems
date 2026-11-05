@@ -899,3 +899,18 @@ Consequences for the roadmap:
 
 This is the same class of seam as TD-06 and the reason it is written down rather
 than patched: a baseline shift nobody has agreed to is not a fix.
+
+**Resolution (2026-11-05, `5a7eb1d` + `17bc6f5`).** The pad anchor now comes from
+the resident regional payload: `TerrainSource::resident_measured_height_m`
+exposes it, `ErodedTerrainSource` returns it instead of the refinement, and
+`EarthTerrainSource` preloads one covering payload tile per predefined site
+before the grade anchors are sampled. Sites whose measured ground is still at
+the waterline get a 3 m platform floor above the local sea datum
+(`with_coastal_platform_clearance`), and Kourou's preset moved from the town
+(`5.159, −52.649`, a marsh 4 m under the sea surface) to the ELA-3 pad
+(`5.2361, −52.7686`). All seven captured pads are now flush and dry; the
+clearances run from +3.00 m (Starbase, Papua, KSC reference) to +113.55 m
+(Baikonur). The ascent fixture pins its launch altitude and pad, so none of this
+moved a committed trajectory. What remains of TD-10 is terrain determinism
+outside the resident payload tile: a warm vs cold erosion cache still changes the
+surrounding ground, and a cold 240-frame capture is incomplete.

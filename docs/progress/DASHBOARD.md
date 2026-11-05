@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-05.
-Last code checkpoint: `c582708` (2026-11-05).
+Last code checkpoint: `17bc6f5` (2026-11-05).
 This table describes the 44 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 17 | 38.6 % |
-| IMPLEMENTED (not verified) | 2 | 4.5 % |
+| VERIFIED | 19 | 43.2 % |
+| IMPLEMENTED (not verified) | 3 | 6.8 % |
 | IN_PROGRESS | 0 | 0 % |
-| BLOCKED | 4 | 9.1 % |
-| PLANNED | 21 | 47.7 % |
+| BLOCKED | 3 | 6.8 % |
+| PLANNED | 19 | 43.2 % |
 | **total** | **44** | 100 % |
 
 ## Phase completion
@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 3 / 11 | 27 % | active | TD-02 submerged pads; TD-10 payload/cache coupling; TD-11 waits on TD-10 (baselines now decoupled) |
+| P1 Data and terrain correctness | 5 / 11 | 45 % | active | TD-02 and TD-11 verified; TD-10's cache-independence half remains |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -47,21 +47,21 @@ Ordered by visible impact, not by ease.
 | 6 | Regional imagery inset still steps at its patch edge | TD-04 | **VERIFIED** | the edge is now a 16.6 km cross-fade at the region bound: the frame's worst step within ±40 px of the bound fell from 4.23 to 0.72/255 (its own texture level), and the before/after change is confined to x=381..737, the declared band. Resolution now uses patch overlap, so a straddling patch binds the tile |
 | 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | PLANNED | `300km-papua` |
 | 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | PLANNED | `2026-11-05-at02-sky2-10/30/70km`; the orbital limb itself is blue and measures 8.30/8.54 km e-folding |
-| 9 | Three graded pads sit under water: Starbase, KSC LC-39A and Wallops are at −0.78, −0.14 and −13.61 m against the local sea datum | TD-11 (and TD-10) | BLOCKED | `2026-11-05-td02-{starbase,ksc,wallops}.jpg`; Baikonur/Vandenberg/Kourou/Mahia are flush |
-| 10 | The visible terrain and the pad anchor depend on the erosion cache and on which payload tiles are resident: Vandenberg's pad samples 81 m above its published package probe, and a warm vs cold cache changes the frame by 90 % of pixels | TD-10 | PLANNED | cold composition probe per site; warm/cold pairs |
+| 9 | Three graded pads sat under water: Starbase, KSC LC-39A and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | TD-11 | **VERIFIED — fixed** | resident payloads replace the erosion refinement and a 3 m platform floor raises each pad; `2026-11-05-td02-*-fixed.jpg` shows all seven flush; clearances +3.00 … +113.55 m |
+| 10 | Terrain outside the resident payload tile still depends on the erosion cache: a cold bake is incomplete at frame 240 and changes the surrounding ground | TD-10 | IMPLEMENTED | warm/cold pairs; the pad anchor itself is now cache-independent |
 | 11 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | c582708 |
-| `cargo check --all-targets --features dem` | PASS | c582708 |
-| `cargo check --no-default-features` | PASS | c582708 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | c582708 |
-| `cargo test --features dem --lib` | 1142 passed, 0 failed, 2 ignored | c582708 |
-| `cargo test --no-default-features --lib` | 1100 passed, 0 failed, 2 ignored | c582708 |
-| `openspec validate --all --strict` | 42 passed, 0 failed | c582708 |
+| `cargo fmt --check` | PASS | 17bc6f5 |
+| `cargo check --all-targets --features dem` | PASS | 17bc6f5 |
+| `cargo check --no-default-features` | PASS | 17bc6f5 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 17bc6f5 |
+| `cargo test --features dem --lib` | 1145 passed, 0 failed, 2 ignored | 17bc6f5 |
+| `cargo test --no-default-features --lib` | 1103 passed, 0 failed, 2 ignored | 17bc6f5 |
+| `openspec validate --all --strict` | 42 passed, 0 failed | 17bc6f5 |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -76,7 +76,7 @@ Ordered by visible impact, not by ease.
 | scene | state |
 | --- | --- |
 | prelaunch | partial (no HUD) |
-| launch site | current — one graded pad per predefined site; four flush, three submerged |
+| launch site | current — one graded pad per predefined site, all flush and dry |
 | terrain close-up | current |
 | coastline | **missing** |
 | clouds | current |
@@ -116,19 +116,14 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — TD-10, decouple the pad anchor and the visible terrain from the
-erosion cache.** The TD-02 capture set is complete and did its job: Baikonur,
-Vandenberg, Kourou and Mahia show a flush pad, while Starbase, KSC and Wallops
-stand in open water. The probe explains why. Sampling the resident payload tile
-and then the composed surface differs by up to 81 m (Vandenberg), because the
-erosion tile is baked while only the site's finest payload tile is resident, so
-most of it comes from the coarse global base. The disk cache then freezes one
-version of that field: a warm and a cold cache change 90 % of the frame.
+**Next task — TD-10's remaining cache-independence half.** The pad anchor is
+fixed: resident regional payloads now override the erosion refinement, every site
+payload is preloaded before the grade anchors are sampled, and the seven site
+captures are dry. What remains is the surrounding terrain. Outside the resident
+payload tile the erosion field is still baked from the coarse global base and a
+cold vs warm cache changes it; a cold 240-frame capture is incomplete. That is a
+rendering-determinism item with its own measurement, not a launch-elevation item.
 
-TD-10 is P0 and must land before TD-11 can floor the coastal pads above the sea
-datum without guessing at the surface. The baseline objection is now retired:
-the ascent fixture pins its launch altitude at `c886205`, so a terrain correction
-cannot move the committed trajectories. The three baselines still pass
-bit-identically. TD-03 and RD-02 remain the other implemented-but-unverified
-tasks; AT-04 comes after them because it changes the sky model, not just its
-evidence.
+TD-03 (imagery colour-match A/B) and RD-02 (streaming split timings) remain the
+other implemented-but-unverified tasks. AT-04 comes after them because it changes
+the sky model, not just its evidence.
