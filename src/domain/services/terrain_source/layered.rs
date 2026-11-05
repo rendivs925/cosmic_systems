@@ -227,9 +227,17 @@ impl LayeredTerrainSource {
     /// level, where the ocean cap then renders it as open water. Near the datum
     /// the contribution is allowed to add relief but not to lower ground, and it
     /// returns to fully signed relief above the layer's `full_m`.
+    ///
+    /// The guard is a *land* rule. Once the base is below the datum the ground
+    /// is already measured ocean, and suppressing its negative octaves would
+    /// rewrite bathymetry (and every terrain normal derived from it) for no
+    /// visible benefit. The removal therefore fades back to zero over the
+    /// octave's own depth below the datum, which keeps the composed height
+    /// continuous at the waterline instead of leaving a cliff.
     fn negative_removal_weight(
         &self,
         guard: Option<(f64, f64)>,
+        detail_min_m: f64,
         latitude_deg: f64,
         longitude_deg: f64,
         base_height_m: f64,
@@ -241,6 +249,10 @@ impl LayeredTerrainSource {
             .base
             .source
             .sea_level_height_m(latitude_deg, longitude_deg);
+        if base_height_m < sea_level_m {
+            let shore_fade_m = (-detail_min_m).max(0.0);
+            return ss(sea_level_m - shore_fade_m, sea_level_m, base_height_m);
+        }
         1.0 - ss(sea_level_m + guard_m, sea_level_m + full_m, base_height_m)
     }
 
@@ -257,6 +269,7 @@ impl LayeredTerrainSource {
             let detail_m = layer.source.height_m(latitude_deg, longitude_deg);
             let negative_removal = self.negative_removal_weight(
                 layer.sea_level_guard,
+                layer.bounds().min_m,
                 latitude_deg,
                 longitude_deg,
                 height_m,
@@ -339,6 +352,7 @@ impl TerrainSource for LayeredTerrainSource {
             // surface, or the rendered coast would disagree with collision.
             let negative_removal = self.negative_removal_weight(
                 detail.sea_level_guard,
+                detail.bounds().min_m,
                 latitude_deg,
                 longitude_deg,
                 height_m,
@@ -546,7 +560,7 @@ mod tests {
                     ElevationBounds::new(-36.0, 24.0),
                     DetailLodFade::new(0, 0),
                 )
-                .with_sea_level_guard(3.0, 40.0),
+                .with_sea_level_guard(4.0, 60.0),
             ),
         )
     }
@@ -573,6 +587,59 @@ mod tests {
         );
         // The mesh path must agree with the physical path.
         assert!((near_sea.mesh_height_m(0.0, 0.0, 14) - 1.0).abs() < 1e-9);
+    }
+
+    /// The guard window is chosen from the detail layer's own negative bound.
+    /// Sweeping the whole worst case proves the composed height cannot cross the
+    /// datum anywhere, not merely in the two spot checks above. Earth's detail
+    /// layer bottoms out at −36 m, so the guard spans 4 m to 60 m.
+    #[test]
+    fn sea_level_guard_cannot_lower_ground_below_the_datum() {
+        const AMPLITUDE_M: f64 = 36.0;
+        for step in 0..=6_000 {
+            let base_m = step as f64 * 0.01;
+            let source = layered_with(base_m, -AMPLITUDE_M);
+            let height_m = source.height_m(0.0, 0.0);
+            assert!(
+                height_m >= -1e-9,
+                "base {base_m} m plus worst-case detail crossed the datum: {height_m} m"
+            );
+            assert!(
+                height_m <= base_m + 1e-9,
+                "the guard must never add negative detail's inverse"
+            );
+            assert!(
+                (source.mesh_height_m(0.0, 0.0, 14) - height_m).abs() < 1e-9,
+                "mesh and physical paths must agree at base {base_m} m"
+            );
+        }
+        // Above the window the signed detail is restored exactly.
+        let fully_signed = layered_with(100.0, -AMPLITUDE_M);
+        assert!((fully_signed.height_m(0.0, 0.0) - 64.0).abs() < 1e-9);
+
+        // Below the datum the ground is measured ocean, not fabricated
+        // coastline, so the layer keeps its signed relief. Suppressing it there
+        // would rewrite bathymetry (and the terrain normals derived from it) for
+        // no visible benefit.
+        let deep_ocean = layered_with(-500.0, -AMPLITUDE_M);
+        assert!(
+            (deep_ocean.height_m(0.0, 0.0) + 536.0).abs() < 1e-9,
+            "deep ocean must keep its signed detail"
+        );
+
+        // The land rule fades out below the datum and the land branch is fully
+        // applied at it, so the composed height must be continuous across the
+        // waterline rather than jumping by an octave.
+        let mut previous = layered_with(-100.0, -AMPLITUDE_M).height_m(0.0, 0.0);
+        for step in -9_999..=6_000 {
+            let base_m = step as f64 * 0.01;
+            let height_m = layered_with(base_m, -AMPLITUDE_M).height_m(0.0, 0.0);
+            assert!(
+                (height_m - previous).abs() < 0.05,
+                "waterline discontinuity at base {base_m} m: {previous} -> {height_m}"
+            );
+            previous = height_m;
+        }
     }
 
     /// A graded pad at the waterline is still a tower standing in the sea. The

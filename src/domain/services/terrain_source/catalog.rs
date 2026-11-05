@@ -99,6 +99,29 @@ pub const EARTH_SITE_PLATFORM_CLEARANCE_M: f64 = 3.0;
 #[cfg(feature = "dem")]
 const EARTH_PAD_BLEND_RADIUS_M: f64 = 280.0;
 
+/// Height above the local sea datum below which Earth's synthetic detail may
+/// add relief but must not lower the ground (TD-06).
+///
+/// The detail octave is signed (`−36..+24 m`), and ETOPO on a coastal plain sits
+/// only a metre or two above the datum, so the negative half would push land
+/// below sea level and the ocean cap would render it as open water. Below this
+/// height every negative octave is removed.
+#[cfg(feature = "dem")]
+const EARTH_DETAIL_SEA_GUARD_M: f64 = 4.0;
+
+/// Height above the local sea datum at which the negative detail octave is
+/// fully restored.
+///
+/// This is not a visual fade: it is bounded by the layer's own negative
+/// amplitude. The removal weight is a smoothstep over
+/// `[guard, full]`, so the residual negative contribution is at most
+/// `amplitude * (1 - smoothstep)`. Keeping `full - guard` at least
+/// `1.5 * amplitude` (here `54 m`) makes that residual fall faster than the
+/// base height rises, so the composed surface cannot cross the datum anywhere
+/// in the window (see `sea_level_guard_cannot_lower_ground_below_the_datum`).
+#[cfg(feature = "dem")]
+const EARTH_DETAIL_SEA_GUARD_FULL_M: f64 = 60.0;
+
 /// Namespace that scopes Earth's preprocessed erosion tiles to this measured
 /// base *and* bake semantics. Changing the DEM path, or changing what the
 /// rasters are simulated from, invalidates any persisted tiles. Erosion is
@@ -240,11 +263,17 @@ fn earth_layered_terrain_over(
     LayeredTerrainSource::new(
         TerrainElevationLayer::new(eroded, base_bounds),
         None,
-        Some(TerrainDetailLayer::new(
-            detail,
-            ProceduralDetailSource::elevation_bounds_m(),
-            DetailLodFade::new(11, 14),
-        )),
+        Some(
+            TerrainDetailLayer::new(
+                detail,
+                ProceduralDetailSource::elevation_bounds_m(),
+                DetailLodFade::new(11, 14),
+            )
+            // Presentation relief may raise a coastal plain but must not lower it
+            // into the ocean (TD-06). The guard is per-layer because only a body
+            // with an ocean can be flooded by a negative octave.
+            .with_sea_level_guard(EARTH_DETAIL_SEA_GUARD_M, EARTH_DETAIL_SEA_GUARD_FULL_M),
+        ),
     )
     // Grade the launch-site platforms in the composed surface itself, so the
     // mesh, collision and radar all see level ground under the facility instead
