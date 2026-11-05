@@ -1,7 +1,13 @@
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-const TERRAIN_ATTRIBUTION_HISTORY_CAPACITY: usize = 120;
+/// Rolling attribution window. The cadence-limited reporter samples every 5 s,
+/// which is 300 frames at the 60 Hz runner. A 120-frame window would therefore
+/// miss the startup upload burst entirely: patches upload in the first seconds
+/// and the first full report would already be steady state. 600 frames covers
+/// ten seconds, so one report retains the transient upload cost alongside the
+/// steady culling and LOD-reconciliation cost (RD-02).
+const TERRAIN_ATTRIBUTION_HISTORY_CAPACITY: usize = 600;
 
 /// CPU-side attribution for one terrain presentation frame. Upload timing ends
 /// after Bevy asset submission; it is not a measurement of GPU completion.
@@ -312,6 +318,53 @@ mod tests {
         assert_eq!(summary.top.frame_id, 1);
         assert_eq!(summary.percentiles.cpu_mesh_construction_ms.p50_ms, 1.0);
         assert_eq!(summary.percentiles.cpu_mesh_construction_ms.p95_ms, 3.0);
+    }
+
+    #[test]
+    fn phase_percentiles_are_present_and_bounded_by_their_samples() {
+        let mut telemetry = TerrainPerformanceTelemetry::default();
+        let samples = [0.5, 2.0, 1.0, 4.0];
+        for (index, ms) in samples.into_iter().enumerate() {
+            telemetry.begin_frame(true);
+            let record = telemetry.current_mut(true).unwrap();
+            record.viewport_culling_ms = ms;
+            record.lod_selection_ms = ms * 2.0;
+            record.cpu_mesh_construction_ms = ms * 3.0;
+            record.cpu_to_gpu_submission_ms = ms * 4.0;
+            assert_eq!(record.frame_id, index as u64);
+            telemetry.finish_frame(true);
+        }
+
+        let summary = telemetry.summary().expect("samples were recorded");
+        let minimum = samples.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        for percentile in [
+            summary.percentiles.viewport_culling_ms,
+            summary.percentiles.lod_selection_ms,
+            summary.percentiles.cpu_mesh_construction_ms,
+            summary.percentiles.cpu_to_gpu_submission_ms,
+        ] {
+            for value in [percentile.p50_ms, percentile.p95_ms, percentile.p99_ms] {
+                assert!(
+                    value.is_finite() && value >= 0.0,
+                    "a phase timing must be finite and non-negative"
+                );
+            }
+            assert!(percentile.p50_ms <= percentile.p95_ms);
+            assert!(percentile.p95_ms <= percentile.p99_ms);
+        }
+        // Each phase is a scaled copy of the same sample sequence, so its
+        // percentiles must stay inside that phase's own observed range.
+        let bounds = [
+            (summary.percentiles.viewport_culling_ms, 1.0),
+            (summary.percentiles.lod_selection_ms, 2.0),
+            (summary.percentiles.cpu_mesh_construction_ms, 3.0),
+            (summary.percentiles.cpu_to_gpu_submission_ms, 4.0),
+        ];
+        for (percentile, scale) in bounds {
+            assert!(percentile.p50_ms >= minimum * scale);
+            assert!(percentile.p99_ms <= maximum * scale);
+        }
     }
 
     #[test]
