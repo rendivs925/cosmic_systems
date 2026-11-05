@@ -1,7 +1,7 @@
 use super::components::{PrimaryVehicle, RocketFlightConditions, RocketPhysicsState};
 use super::planet::RocketBoundPlanet;
 use crate::application::solar_system_startup::SUN_ILLUMINANCE_AT_EARTH_LUX;
-use crate::domain::services::atmosphere::SEA_LEVEL_DENSITY_KG_M3;
+use crate::domain::services::atmosphere::{atmosphere_for, SEA_LEVEL_DENSITY_KG_M3};
 use crate::domain::services::ephemeris::NaifBodyId;
 use crate::domain::units::AU_IN_METERS;
 use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
@@ -77,24 +77,35 @@ pub fn setup_rocket_sun_light(
 pub fn update_rocket_sky_ambient_light(
     ephemeris_snapshot: Res<EphemerisSnapshot>,
     bound_planet: Res<RocketBoundPlanet>,
-    rocket_query: Query<(&RocketPhysicsState, &RocketFlightConditions), PrimaryVehicle>,
+    render_origin: Res<RenderOrigin>,
+    planet_query: Query<&PlanetComponent>,
+    rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
+    camera_query: Query<(&Transform, &Camera), With<Camera3d>>,
     mut ambient: ResMut<AmbientLight>,
 ) {
-    let Some(sun) = bound_planet
-        .0
-        .as_ref()
-        .and_then(|id| bound_planet_sun(&ephemeris_snapshot, id))
+    let Some(bound_id) = bound_planet.0.as_ref() else {
+        return;
+    };
+    let Some(sun) = bound_planet_sun(&ephemeris_snapshot, bound_id) else {
+        return;
+    };
+    let Some(planet) = planet_query
+        .iter()
+        .find(|planet| planet.matches_body(bound_id))
     else {
         return;
     };
-    let Some((rocket, conditions)) = rocket_query.iter().next() else {
+    let Some(rocket) = rocket_query.iter().next() else {
         return;
     };
-    let daylight = twilight_daylight_unit(solar_altitude_rad(
-        rocket.dynamics.position_m,
-        sun.direction,
-    ));
-    let presentation = atmospheric_presentation(conditions, daylight);
+    let observer_m = observer_position_m(&render_origin, &camera_query, rocket.dynamics.position_m);
+    let surface_radius_m = planet.domain_planet.radius_km as f64 * 1_000.0;
+    let altitude_m = (observer_m.length() - surface_radius_m).max(0.0);
+    let density_kg_m3 = atmosphere_for(bound_id.as_str())
+        .properties(altitude_m)
+        .density_kg_m3;
+    let daylight = twilight_daylight_unit(solar_altitude_rad(observer_m, sun.direction));
+    let presentation = atmospheric_presentation(density_kg_m3, altitude_m, daylight);
     ambient.color = Color::srgb(0.56, 0.68, 0.82);
     // `AmbientLight::brightness` is a sky radiance in cd/m^2, so it must scale
     // with the same solar illuminance that drives the directional light. A
@@ -210,21 +221,31 @@ pub fn update_rocket_sky_color(
     render_origin: Res<RenderOrigin>,
     mut fog_query: Query<(&mut DistanceFog, &Transform, &Camera), With<Camera3d>>,
 ) {
-    let Some(sun) = bound_planet
-        .0
-        .as_ref()
-        .and_then(|id| bound_planet_sun(&ephemeris_snapshot, id))
-    else {
+    let Some(bound_id) = bound_planet.0.as_ref() else {
+        return;
+    };
+    let Some(sun) = bound_planet_sun(&ephemeris_snapshot, bound_id) else {
         return;
     };
     let Some((rocket, conditions)) = rocket_query.iter().next() else {
         return;
     };
-    let daylight = twilight_daylight_unit(solar_altitude_rad(
-        rocket.dynamics.position_m,
-        sun.direction,
-    ));
-    let presentation = atmospheric_presentation(conditions, daylight);
+    let planet = planet_query
+        .iter()
+        .find(|planet| planet.matches_body(bound_id));
+    let observer_m = fog_query
+        .iter()
+        .find(|(_, _, camera)| camera.is_active)
+        .map(|(_, transform, _)| render_origin.origin + transform.translation.as_dvec3())
+        .unwrap_or(rocket.dynamics.position_m);
+    let altitude_m = planet.map_or(conditions.altitude_m, |planet| {
+        observer_m.length() - planet.domain_planet.radius_km as f64 * 1_000.0
+    });
+    let density_kg_m3 = atmosphere_for(bound_id.as_str())
+        .properties(altitude_m)
+        .density_kg_m3;
+    let daylight = twilight_daylight_unit(solar_altitude_rad(observer_m, sun.direction));
+    let presentation = atmospheric_presentation(density_kg_m3, altitude_m, daylight);
     let sky = presentation.sky_unit;
     *clear_color = ClearColor(Color::srgb(
         0.002 + 0.3 * sky,
@@ -232,16 +253,9 @@ pub fn update_rocket_sky_color(
         0.006 + 0.79 * sky,
     ));
 
-    let optics = bound_planet
-        .0
-        .as_ref()
-        .and_then(|id| {
-            planet_query
-                .iter()
-                .find(|planet| planet.matches_body(id))
-                .map(|planet| (id.as_str(), planet.domain_planet.radius_km * 1_000.0))
-        })
-        .and_then(|(name, radius_m)| AtmosphericOptics::for_body(name, radius_m));
+    let optics = planet.and_then(|planet| {
+        AtmosphericOptics::for_body(bound_id.as_str(), planet.domain_planet.radius_km * 1_000.0)
+    });
 
     for (mut fog, transform, camera) in fog_query.iter_mut() {
         if !camera.is_active {
@@ -298,21 +312,41 @@ struct AtmosphericPresentation {
     ambient_unit: f32,
 }
 
-/// Smooth render controls from the authoritative fixed-tick atmospheric sample.
-/// The constants are visual thresholds only and never feed atmospheric physics.
+/// Smooth render controls from the authoritative atmosphere sample at the
+/// observer. The constants are visual thresholds only and never feed
+/// atmospheric physics.
+///
+/// The observer is the active camera, not the vehicle: a camera parked at
+/// 400 km above a pad on the ground must see a black sky, and a chase camera
+/// beside the vehicle sees the same air the vehicle flies through. Both pass
+/// the same authoritative density from `atmosphere_for`.
 fn atmospheric_presentation(
-    conditions: &RocketFlightConditions,
+    density_kg_m3: f64,
+    altitude_m: f64,
     daylight: f32,
 ) -> AtmosphericPresentation {
-    let density_unit =
-        (conditions.density_kg_m3.max(0.0) / SEA_LEVEL_DENSITY_KG_M3).clamp(0.0, 1.0) as f32;
-    let altitude_unit = (conditions.altitude_m.max(0.0) / 100_000.0).clamp(0.0, 1.0) as f32;
+    let density_unit = (density_kg_m3.max(0.0) / SEA_LEVEL_DENSITY_KG_M3).clamp(0.0, 1.0) as f32;
+    let altitude_unit = (altitude_m.max(0.0) / 100_000.0).clamp(0.0, 1.0) as f32;
     let atmosphere_unit = (density_unit * (1.0 - altitude_unit * 0.35)).clamp(0.0, 1.0);
     let daylight = daylight.clamp(0.0, 1.0);
     AtmosphericPresentation {
         sky_unit: daylight * atmosphere_unit,
         ambient_unit: daylight * atmosphere_unit,
     }
+}
+
+/// The active camera's planet-centred position, or the vehicle's when no
+/// camera is active yet.
+fn observer_position_m(
+    render_origin: &RenderOrigin,
+    camera_query: &Query<(&Transform, &Camera), With<Camera3d>>,
+    fallback_m: bevy::math::DVec3,
+) -> bevy::math::DVec3 {
+    camera_query
+        .iter()
+        .find(|(_, camera)| camera.is_active)
+        .map(|(transform, _)| render_origin.origin + transform.translation.as_dvec3())
+        .unwrap_or(fallback_m)
 }
 
 /// Solar altitude of the observer above its own local horizon, in radians.
@@ -494,28 +528,36 @@ mod tests {
         assert!(twilight_daylight_unit(0.5) == 1.0);
     }
 
+    /// AT-02 samples the transition at 10, 30, 70 and 200 km. The presentation
+    /// must follow the authoritative density table monotonically and remain
+    /// continuous at those points; a step would be the "altitude colour switch"
+    /// the acceptance forbids.
     #[test]
-    fn atmospheric_presentation_continuously_fades_to_vacuum() {
-        let dense = RocketFlightConditions::from_sample(
-            crate::domain::services::atmosphere::FlightConditions {
-                altitude_m: 0.0,
-                density_kg_m3: SEA_LEVEL_DENSITY_KG_M3,
-                ..default()
-            },
-        );
-        let thin = RocketFlightConditions::from_sample(
-            crate::domain::services::atmosphere::FlightConditions {
-                altitude_m: 80_000.0,
-                density_kg_m3: 0.01,
-                ..default()
-            },
-        );
-        let dense = atmospheric_presentation(&dense, 1.0);
-        let thin = atmospheric_presentation(&thin, 1.0);
+    fn atmospheric_presentation_follows_the_table_across_the_atmosphere() {
+        let earth = atmosphere_for("Earth");
+        let presentation = |altitude_m: f64| {
+            let density = earth.properties(altitude_m).density_kg_m3;
+            atmospheric_presentation(density, altitude_m, 1.0)
+        };
 
-        assert!((0.0..=1.0).contains(&dense.sky_unit));
-        assert!(thin.sky_unit < dense.sky_unit);
-        assert!(thin.ambient_unit < dense.ambient_unit);
+        let mut previous = f32::INFINITY;
+        for altitude_m in [0.0, 3_000.0, 10_000.0, 30_000.0, 70_000.0, 200_000.0] {
+            let current = presentation(altitude_m).sky_unit;
+            assert!((0.0..=1.0).contains(&current));
+            assert!(current <= previous, "sky brightness rose at {altitude_m} m");
+            previous = current;
+        }
+        assert!(presentation(200_000.0).sky_unit < presentation(10_000.0).sky_unit);
+
+        for altitude_m in [10_000.0, 30_000.0, 70_000.0, 200_000.0] {
+            let below = presentation(altitude_m - 0.5);
+            let above = presentation(altitude_m + 0.5);
+            assert!(
+                (above.sky_unit - below.sky_unit).abs() < 1e-3,
+                "presentation steps at {altitude_m} m"
+            );
+            assert!((above.ambient_unit - below.ambient_unit).abs() < 1e-3);
+        }
     }
 
     #[test]
