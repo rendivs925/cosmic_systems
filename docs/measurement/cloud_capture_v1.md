@@ -33,6 +33,7 @@ Four environment variables, all off by default:
 | `COSMIC_SYSTEMS_CAPTURE_TIME=<seconds>` | Pin the presentation clock, so every animated shader is at a fixed phase. |
 | `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG=<degrees>` | Optional tilt from nadir (0 = down, 90 = local horizon), added for the AT-02 limb sequence. |
 | `COSMIC_SYSTEMS_CAPTURE_FOV_DEG=<degrees>` | Optional vertical field of view; narrow lenses resolve the limb band. |
+| `COSMIC_SYSTEMS_CAPTURE_UTC=YYYY-MM-DDTHH:MM:SS` | Optional start instant, added for the TD-02 site captures. Unset keeps the shared default epoch. |
 
 ```sh
 COSMIC_SYSTEMS_CAPTURE_POSE="-8.0,139.5,1200000" \

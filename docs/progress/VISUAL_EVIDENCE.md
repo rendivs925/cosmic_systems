@@ -15,6 +15,8 @@ COSMIC_SYSTEMS_CAPTURE_POSE="<lat>,<lon>,<alt_m>" \
 COSMIC_SYSTEMS_CAPTURE_TIME=<seconds> \
 [COSMIC_SYSTEMS_CAPTURE_PITCH_DEG=<degrees>] \
 [COSMIC_SYSTEMS_CAPTURE_FOV_DEG=<degrees>] \
+[COSMIC_SYSTEMS_CAPTURE_UTC=YYYY-MM-DDTHH:MM:SS] \
+[COSMIC_SYSTEMS_EROSION_CACHE=<on|off>] \
 [COSMIC_SYSTEMS_DIAGNOSTIC_MODE=<mode>] \
   ./target/debug/cosmic_systems rocket --site papua
 ```
@@ -29,7 +31,7 @@ values and its linear-to-byte encoding are in
 | # | scene | state | frame | note |
 | --- | --- | --- | --- | --- |
 | 1 | prelaunch | PARTIAL | `pad-110m-footprint` | pad and tower, no HUD, chase angle only |
-| 2 | launch site | CURRENT | `pad-110m-footprint` | shows the pad flush after grading |
+| 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*` | one graded pad per predefined site; four flush, three submerged (TD-11) |
 | 3 | terrain close-up | CURRENT | `terrain-600m` | 600 m nadir; no geometric relief visible |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
@@ -190,6 +192,34 @@ repeated on the archived JPEGs.
 | `2026-11-05-at02-limb-400km-linear.jpg` | `b46ee1b` | `-4.0,138.0,400000`, 73.2° / 6°, `DIAGNOSTIC_MODE=height` | 42 s | 200 | `177750fa1e23d880` | **linear-light** profile (tonemapping bypassed): e-folding 8.54 km | 8 ± 0.8 km |
 | `2026-11-05-at02-nadir-30km.jpg` | `b46ee1b` | `-4.0,138.0,30000`, nadir / default | 42 s | 200 | `6c826e5b4c96cda1` | the "dark 30 km" view: dark forest, bright cloud puffs | ground p50 0.0286 vs 0.0337 at 3 km (−15 %) |
 | `2026-11-05-at02-nadir-200km.jpg` | `b46ee1b` | `-4.0,138.0,200000`, nadir / default | 42 s | 200 | `41592245f5ef4a1b` | same forest at 200 km: dark green, white deck | ground p50 0.0304 (−10 %); no altitude veil |
+
+### Launch-site grading per predefined site (`TD-02`, commit `c582708`)
+
+The capture pinning the start instant is new: at the shared default epoch
+(2000-01-01 03:00 UTC) only Papua is in daylight. Each frame below sets
+`COSMIC_SYSTEMS_CAPTURE_UTC` so the site sees the same solar hour angle Papua
+sees (`utc = 03:00 + (139.5 − longitude) / 15 h`), keeps the default chase
+camera, and renders 240 frames at presentation time 0.
+
+The terrain around these frames is read through the erosion field, which is the
+subject of TD-10; treat the four clean rows as the site-grading result and the
+three water rows as the defect they expose, not as a site-grading failure.
+
+| file | commit | site, UTC | time | frames | sha256 (first 16) | demonstrates | criterion |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `2026-11-05-td02-baikonur.jpg` | `c582708` | `baikonur`, `2000-01-01T08:04:47` | 0 s | 240 | `1aaa39400047cffc` | steppe pad flush, no floating or buried edge | pass |
+| `2026-11-05-td02-vandenberg.jpg` | `c582708` | `vandenberg`, `2000-01-01T20:20:17` | 0 s | 240 | `04fe9bf0102e354f` | coastal ridge pad flush; pale synthetic lakes in the distance are TD-06 | pass |
+| `2026-11-05-td02-kourou.jpg` | `c582708` | `kourou`, `2000-01-01T15:48:36` | 0 s | 240 | `a2ca8dffd72ede64` | pad flush beside the estuary | pass |
+| `2026-11-05-td02-mahia.jpg` | `c582708` | `mahia`, `2000-01-01T00:26:33` | 0 s | 240 | `c5b411e866446052` | peninsula pad flush; pale estuary patches are TD-06 | pass |
+| `2026-11-05-td02-starbase.jpg` | `c582708` | `starbase`, `2000-01-01T18:46:37` | 0 s | 240 | `2b287f4ad37f14ee` | pad and tower standing in open water | **fail** — ground is −0.78 m against the sea datum |
+| `2026-11-05-td02-ksc.jpg` | `c582708` | `ksc`, `2000-01-01T17:40:25` | 0 s | 240 | `3259fd2c738901fa` | pad and tower in water | **fail** — −0.14 m |
+| `2026-11-05-td02-wallops.jpg` | `c582708` | `wallops`, `2000-01-01T17:19:52` | 0 s | 240 | `509abf95728c5a2a` | pad and tower in open water | **fail** — −13.61 m |
+| `2026-11-05-td02-baikonur-cold.jpg` | `c582708` | same, `COSMIC_SYSTEMS_EROSION_CACHE=off` | 0 s | 240 | `fc86abde3a74f20f` | cold erosion cache: same pad, brown desert instead of green steppe | diagnostic for TD-10, not site evidence |
+| `2026-11-05-td02-starbase-cold.jpg` | `c582708` | same, `COSMIC_SYSTEMS_EROSION_CACHE=off` | 0 s | 240 | `a7fd60edf982e15c` | cold erosion cache: surrounding land does not render at all | diagnostic for TD-10, not site evidence |
+
+The cold frames are also incomplete at frame 240 because a from-scratch erosion
+bake is slower than streaming, so they are evidence about cache dependence, not
+about the site.
 
 ## Negative results worth keeping
 

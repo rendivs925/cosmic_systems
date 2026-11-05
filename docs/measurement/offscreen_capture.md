@@ -39,9 +39,29 @@ COSMIC_SYSTEMS_CAPTURE_TIME=42 \
 | `COSMIC_SYSTEMS_CAPTURE_TIME` | existing deterministic simulation clock, unchanged |
 | `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG` | tilt away from nadir: `0` is straight down (default), `90` is the local horizon. Valid range −90…90. |
 | `COSMIC_SYSTEMS_CAPTURE_FOV_DEG` | vertical field of view, 0.1…120. Unset keeps the flight camera's lens. |
+| `COSMIC_SYSTEMS_CAPTURE_UTC` | pin the simulation start instant, `YYYY-MM-DDTHH:MM:SS` in UTC (`Z`, `T` or a space accepted). Unset keeps the shared 2000-01-01 03:00 UTC default. |
 
 The run exits with status 0 after writing the PNG. A malformed size or frame
-count falls back to the defaults rather than failing the run.
+count falls back to the defaults rather than failing the run. A malformed
+capture instant is dropped, so the log shows the default epoch instead of a
+near-miss time.
+
+## Daylight at an arbitrary site
+
+The shared default start instant is local noon at the Papua site, so a
+site-grading or lighting capture anywhere else is often in darkness. Pin the
+instant with `COSMIC_SYSTEMS_CAPTURE_UTC` instead of moving the site or the Sun.
+To match the solar hour angle Papua has at the default epoch:
+
+```text
+utc = 03:00 + (139.5 − longitude_deg) / 15 hours
+```
+
+The value goes through `SimulationTime::set_scientific_epoch_from_utc` and the
+validated LSK, so it is one authoritative epoch, not a second clock. The
+`TD-02` captures use it to put Baikonur, Vandenberg, Wallops, Kourou, Mahia,
+Starbase and KSC into daylight. Unset, no normal run and no physics baseline
+changes.
 
 ## Pitched captures and the limb
 

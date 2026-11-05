@@ -836,3 +836,64 @@ Recorded limits and follow-ups:
   it now looks like the orbital view. That is the intended result, and it makes
   the tropical-forest albedo of the overview the thing to question next if the
   surface reads too dark, not the material.
+
+## 2026-11-05 — Site grading at every launch site (TD-02) exposed the erosion coupling
+
+The capture path now pins the simulation start instant
+(`COSMIC_SYSTEMS_CAPTURE_UTC`), because the shared default (`2000-01-01
+03:00 UTC`) is local noon only at Papua. Every predefined site was captured at
+the same solar hour angle with the default chase camera and 240 frames.
+
+| site | composed ground − local sea datum | outcome |
+| --- | ---: | --- |
+| Baikonur | +98.60 m | pad flush |
+| Vandenberg | +185.42 m | pad flush |
+| Mahia | +7.30 m | pad flush |
+| Kourou | +4.46 m | pad flush |
+| Papua | +6.16 m | pad flush (existing frame) |
+| KSC LC-39A | −0.14 m | **tower in water** |
+| Starbase | −0.78 m | **tower in water** |
+| Wallops | −13.61 m | **tower in open water** |
+| KSC legacy reference | −0.94 m | used by the physics baselines |
+
+Two causes, both measured by sampling the composition directly (the probe loads
+each site's covering payload tile first, so it sees what the launch setup sees):
+
+1. **The erosion field decouples the pad from its payload.** The resident
+   payload sample `D` and the composed `height_m` `H` disagree:
+   Vandenberg `68.10 → 149.22` (**+81.12 m**), Mahia `58.94 → 28.65`
+   (−30.29 m), Wallops `−24.43 → −51.31` (−26.88 m), KSC LC-39A
+   `−15.96 → −29.87` (−13.90 m), Baikonur `80.03 → 65.09` (−14.94 m),
+   Kourou `−38.21 → −29.80` (+8.41 m), Papua `71.98 → 77.59` (+5.61 m),
+   Starbase `−22.49 → −23.37` (−0.88 m). The deltas track the difference
+   between the regional NASADEM and the coarse global fallback, which is the
+   tell: the erosion tile is baked while only the site's finest payload tile is
+   resident, so most of the tile is built from the global base and the erosion
+   transport then smooths the small payload island into it.
+2. **The erosion cache is not a cache of the same field.** Two identical runs
+   with `COSMIC_SYSTEMS_EROSION_CACHE=off` agree to render jitter (mean
+   0.82/255, 0.01 % above 8/255). A warm and a cold cache differ by 90 % of
+   pixels; Baikonur changes from green steppe to brown desert and Starbase loses
+   its surrounding land entirely. The cold frames are also incomplete at frame
+   240, because a from-scratch erosion bake is slower than streaming.
+
+Starbase is additionally marginal on its own data: the package probe is
+`−22.485 m` ellipsoidal against the runtime EGM2008 sea surface of `−22.59 m`,
+so only **0.1 m** separates the pad from the sea before erosion. The "site probe
+is approximately 3 m above the EGM2008 sea surface" line in
+`docs/datasets/earth_regional_starbase_v1.md` does not match those numbers; the
+0.5° geoid grid gives the smaller clearance. That is recorded rather than
+silently adjusted.
+
+Consequences for the roadmap:
+
+* **TD-02 is BLOCKED** on TD-10 and TD-11: the capture set is complete, but
+  three of the pads are not flush and the terrain under them is wrong.
+* **TD-10** owns the erosion/payload coupling and the cache dependence.
+* **TD-11** owns the datum floor. It cannot land without a maintainer decision,
+  because the committed ascent, gravity-turn and LEO baselines launch from
+  `ksc-default-geodetic`, which the same probe puts 0.94 m under the sea
+  surface; flooring that pad moves those baselines.
+
+This is the same class of seam as TD-06 and the reason it is written down rather
+than patched: a baseline shift nobody has agreed to is not a fix.
