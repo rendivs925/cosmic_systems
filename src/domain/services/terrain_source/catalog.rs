@@ -89,6 +89,12 @@ const EARTH_EROSION_SEED: u64 = 0x00E4_2705_E0D1_5EED;
 /// inside the pad and its immediate surroundings.
 #[cfg(feature = "dem")]
 const EARTH_PAD_FLAT_RADIUS_M: f64 = 110.0;
+
+/// Minimum height of a launch platform above the local sea datum. The measured
+/// ground at Starbase and Papua is under a metre above the waterline, so a
+/// level grade alone still leaves the tower in the sea; a pad is a
+/// construction, not a terrain sample (TD-11).
+pub const EARTH_SITE_PLATFORM_CLEARANCE_M: f64 = 3.0;
 /// Radius over which the graded pad blends back into natural relief.
 #[cfg(feature = "dem")]
 const EARTH_PAD_BLEND_RADIUS_M: f64 = 280.0;
@@ -211,6 +217,7 @@ fn earth_layered_terrain(base: Arc<dyn TerrainSource>) -> LayeredTerrainSource {
     // mesh, collision and radar all see level ground under the facility instead
     // of a flat apron drawn over a slope.
     .with_graded_sites(earth_pad_flat_zones())
+    .with_coastal_platform_clearance(EARTH_SITE_PLATFORM_CLEARANCE_M)
 }
 
 /// Level pads at the predefined Earth launch sites. The sites are declared in

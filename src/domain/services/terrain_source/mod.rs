@@ -40,7 +40,7 @@ pub use catalog::{
     MarsTerrainSource, MoonTerrainSource, DEFAULT_EARTH_DEM_PATH,
     DEFAULT_EARTH_ELEVATION_MANIFEST_ROOT, DEFAULT_EARTH_GEOID_PATH,
     DEFAULT_EROSION_CACHE_MAX_BYTES, DEFAULT_MARS_DEM_PATH, DEFAULT_MOON_DEM_PATH,
-    EARTH_EROSION_NAMESPACE,
+    EARTH_EROSION_NAMESPACE, EARTH_SITE_PLATFORM_CLEARANCE_M,
 };
 pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
 pub use noise::ValueNoise;
@@ -614,7 +614,7 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
-    fn default_earth_source_grades_launch_pads_onto_the_measured_payload() {
+    fn default_earth_source_grades_launch_pads_above_the_sea_datum() {
         let source = EarthTerrainSource::new();
         let tiles = source
             .elevation_tile_source()
@@ -629,14 +629,16 @@ mod tests {
             let measured = tiles
                 .resident_measured_height_m(latitude_deg, longitude_deg)
                 .expect("every site payload is preloaded before the grade anchor samples");
+            let sea_level_m = source.sea_level_height_m(latitude_deg, longitude_deg);
+            let expected = measured.max(sea_level_m + EARTH_SITE_PLATFORM_CLEARANCE_M);
             assert_eq!(
                 source.height_m(latitude_deg, longitude_deg),
-                measured,
-                "the graded pad must sit on the measured payload at {latitude_deg}, {longitude_deg}"
+                expected,
+                "the graded pad must sit on the measured payload or the platform floor at {latitude_deg}, {longitude_deg}"
             );
             assert_eq!(
                 source.mesh_height_m(latitude_deg, longitude_deg, 12),
-                measured,
+                expected,
                 "the rendered pad must agree with collision at {latitude_deg}, {longitude_deg}"
             );
         }

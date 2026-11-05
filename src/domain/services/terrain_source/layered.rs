@@ -169,6 +169,29 @@ impl LayeredTerrainSource {
         self
     }
 
+    /// Raise every graded platform to at least `clearance_m` above the local
+    /// sea datum.
+    ///
+    /// A launch pad is a construction, not a terrain sample. Where the measured
+    /// ground is at or just above the waterline (Starbase is 0.1 m, Papua
+    /// 0.5 m), a level grade still leaves the tower standing in the sea. This
+    /// floors the *platform*, never the surrounding measured surface, and is a
+    /// no-op for every site already above the clearance.
+    pub fn with_coastal_platform_clearance(mut self, clearance_m: f64) -> Self {
+        if !clearance_m.is_finite() || clearance_m <= 0.0 {
+            return self;
+        }
+        for site in &mut self.site_grades {
+            let (latitude_deg, longitude_deg) = site.zone.terrain_lat_lon();
+            let sea_level_m = self
+                .base
+                .source
+                .sea_level_height_m(latitude_deg, longitude_deg);
+            site.height_m = site.height_m.max(sea_level_m + clearance_m);
+        }
+        self
+    }
+
     /// Pull a composed height toward the nearest site's graded height. Outside
     /// every site's blend radius the weight is one and the height is untouched.
     fn grade(&self, latitude_deg: f64, longitude_deg: f64, height_m: f64) -> f64 {
@@ -550,6 +573,38 @@ mod tests {
         );
         // The mesh path must agree with the physical path.
         assert!((near_sea.mesh_height_m(0.0, 0.0, 14) - 1.0).abs() < 1e-9);
+    }
+
+    /// A graded pad at the waterline is still a tower standing in the sea. The
+    /// platform clearance floors the pad, never the measured ground around it,
+    /// and leaves an already-high site untouched.
+    #[test]
+    fn coastal_platform_clearance_floors_a_pad_at_the_waterline() {
+        let at_datum = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantGround(-2.0)),
+                ElevationBounds::new(-1_000.0, 10_000.0),
+            ),
+            None,
+            None,
+        )
+        .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, 6_371_000.0, 90.0, 320.0)])
+        .with_coastal_platform_clearance(3.0);
+        assert!((at_datum.height_m(0.0, 0.0) - 3.0).abs() < 1e-9);
+        // Outside the blend radius the measured ground is untouched.
+        assert!((at_datum.height_m(40.0, 0.0) + 2.0).abs() < 1e-9);
+
+        let already_high = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantGround(100.0)),
+                ElevationBounds::new(-1_000.0, 10_000.0),
+            ),
+            None,
+            None,
+        )
+        .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, 6_371_000.0, 90.0, 320.0)])
+        .with_coastal_platform_clearance(3.0);
+        assert!((already_high.height_m(0.0, 0.0) - 100.0).abs() < 1e-9);
     }
 
     #[test]

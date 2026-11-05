@@ -254,8 +254,11 @@ pub mod predefined_sites {
         LaunchSiteCoordinates::new(CelestialBodyId::earth(), 37.9402, -75.4665, 3.0)
     }
 
+    /// Guiana Space Centre ELA-3 pad. (5.159 N, 52.649 W is Kourou town,
+    /// 14 km east and on the coastal marsh; the measured payload puts that
+    /// point 4 m below the local sea surface.)
     pub fn kourou_french_guiana() -> LaunchSiteCoordinates {
-        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 5.159, -52.649, 3.0)
+        LaunchSiteCoordinates::new(CelestialBodyId::earth(), 5.2361, -52.7686, 10.0)
     }
 
     pub fn baikonur_kazakhstan() -> LaunchSiteCoordinates {
