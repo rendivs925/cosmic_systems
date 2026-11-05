@@ -20,12 +20,13 @@ over with a new duplicate spec.
 | TD-03 imagery colour match | `earth-imagery-streaming` | — | measured per-channel linear gain before mip generation; region/overview ratio 3.87× → 1.16×; coarse-LOD mosaic coverage below level 8 remains a package limit |
 | TD-04 imagery feather | `earth-imagery-streaming` | — | |
 | TD-05 albedo blocks | `earth-imagery-streaming`, `terrain-rendering`, `planetary-terrain-material` | — | cause not yet attributed, so no single requirement owns it |
-| TD-06 fabricated coastline | `terrain-source` | — | |
+| TD-06 fabricated coastline | `terrain-source` | — | added and archived `2026-11-05-guard-coastal-synthetic-detail`: land-only sea-datum guard, continuous underwater fade, worst-case non-crossing |
 | TD-07 regional DEM | `elevation-tile-payload`, `terrain-source` | — | |
 | TD-08 vertical datum | `terrain-source` | — | |
 | TD-09 seam continuity | `terrain-source`, `terrain-lod` | — | |
 | TD-10 pad anchor vs payload and cache | `elevation-tile-payload`, `terrain-source`, `determinism-regression` | — | payload outranks erosion for the sample; erosion bakes from the immutable global DEM so load order and the disk cache cannot select a different field |
 | TD-11 coastal datum clearance | `terrain-source`, `planetary-water` | — | platform floor at sea + 3 m; the ascent fixture pins its launch altitude, so baselines are unaffected |
+| TD-12 near-datum base water | `terrain-source`, `terrain-erosion` | — | open: compare persisting water against the measured DEM before changing erosion |
 | LF-01 footprint | `launch-site-presentation` | — | |
 | LF-02…04 facility | `launch-site-presentation` | — | |
 | TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | |

@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `6f99a0e`.
+Snapshot: 2026-11-05. Last code checkpoint: `5c7585e`.
 
 ---
 
@@ -17,7 +17,7 @@ Snapshot: 2026-11-05. Last code checkpoint: `6f99a0e`.
 A single Rust + Bevy simulator with three modes (`solar`, `craft`, `rocket`) over
 one shared domain: SPICE/DE440 ephemerides, WGS-84 reference frames, a cube-sphere
 `TerrainSource` with measured ETOPO 2022 + regional payloads, fixed-step 6-DOF
-flight, streamed terrain with LOD, volumetric clouds, a single-scattering sky, and
+flight, streamed terrain with LOD, volumetric clouds, a physically based sky with a bounded diffuse fill, and
 deterministic regression baselines (ascent, LEO, staging recovery).
 
 On the realism programme specifically: ocean surface on the sea-level datum,
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-three of forty-four roadmap tasks, each with implementation + tests + a
+Twenty-four of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -91,33 +91,32 @@ named frame or a named measurement:
 | RD-02 streaming split | culling, LOD reconcile and upload burst timed separately; prelaunch p95 0.257 / 0.865 ms per frame, 40 km 0.171 / 0.597 ms; 347–352 meshes at 0.016–0.019 ms build and 0.188–0.192 ms submission each; `PERFORMANCE_BASELINES.md` |
 | AT-04 multiple-scattering horizon | +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km; 70 km teal band 0.670 → 0.339; limb e-folding 8.30/8.33 km (before 8.24/8.45); `2026-11-05-at04-*` |
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
+| TD-06 synthetic coastline guard | land-only sea-datum guard enabled; worst-case detail cannot cross the datum across the whole window, measured ocean keeps signed relief, all three committed baselines unchanged; Papua A/B mean 1.53/255; `2026-11-05-td06-papua-*` |
 | VL-02 OpenSpec strict | 42/42 |
 
-Every implemented task is now verified. The remaining three blocked items are
-environmental or need a maintainer decision; the rest are planned work.
+Every implemented task is now verified. The two remaining blocked items are
+environmental; the rest are planned work.
 
 ## What is blocked or needs a decision?
 
 | task | reason |
 | --- | --- |
 | P0-04 performance baseline | no presentable window |
-| TD-06 fabricated coastline | enabling the guard used to move the committed LEO baseline; the fixture is now decoupled (`c886205`), so the guard can be re-evaluated |
 | VL-01 three-mode smoke | same presentation failure |
 
 ## What should be built next?
 
-**TD-06 — re-evaluate the fabricated-coastline guard.** It is implemented and
-unit-tested but disabled, because enabling it moved the committed LEO baseline.
-The ascent fixture now pins its launch altitude and pad, so the guard can be
-tested without moving a trajectory; if it still shifts the baseline, isolate the
-cause rather than re-enabling it blind. After that, RK-01/RK-02 and the remaining
-terrain audits.
+**RK-01 — attitude, staging and model-axis audit.** Verify that the rendered
+vehicle's body axes, thrust axis, gimbal direction and separation impulses agree
+with the authoritative dynamics, and that staging does not change the attitude
+state. RK-02 (plume from propulsion state) follows.
 
-The practical caveat from TD-10 is convergence time: a cold or cache-off erosion
-run needs about 1,200 frames at this pose, because the runtime bake is expensive
-and the 64-tile in-memory cache thrashes; the warm store path settles by 240. The
-global startup bake that touches thousands of 2 ° tiles belongs to the P0-04
-performance work, not to terrain authority.
+TD-06 is closed. The land-only sea-datum guard is enabled and the three committed
+baselines are unchanged; the earlier LEO shift is explained (the old guard had
+suppressed negative detail across the ocean floor). The angular water bodies that
+remain on the Papua plain are **not** detail-fabricated — by construction the
+guard cannot lower land above the datum — so TD-12 now tracks them against the
+measured DEM before any erosion change.
 
 ## How do we know it works?
 
@@ -125,8 +124,8 @@ performance work, not to terrain authority.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1150 passed, 2 ignored
-cargo test --no-default-features --lib   # 1108 passed, 2 ignored
+cargo test --features dem --lib          # 1151 passed, 2 ignored
+cargo test --no-default-features --lib   # 1109 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -149,9 +148,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,150 domain and adapter
-tests pass (1,108 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-three of its forty-four tasks.
+The simulator runs and its physics is regression-locked; 1,151 domain and adapter
+tests pass (1,109 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-four of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -171,10 +170,12 @@ map is now a tint anchored to the overview, so a descent changes the tone by
 
 Two hard constraints are recorded rather than worked around. The machine cannot
 present a Vulkan surface, so windowed validation is blocked and the offscreen
-capture path exists instead. And a terrain guard that would stop synthetic relief
-from fabricating lakes is implemented but switched off, because enabling it moves
-a committed physics baseline for a reason that is not yet understood — and a
-baseline shift nobody can explain is not a fix.
+capture path exists instead. The other was a terrain guard that would stop
+synthetic relief from fabricating lakes. It is now enabled, but only after the
+baseline shift was isolated rather than accepted: the guard had been suppressing
+negative detail across the entire ocean floor, and the orbital fixture samples
+that floor. Making it a land rule restored the committed bathymetry
+bit-for-bit.
 
 Site grading added a third such seam, and this one is now measured rather than
 suspected. At the epoch the shared clock uses, only Papua is in daylight, so the
@@ -222,6 +223,18 @@ km the +2° saturation falls from 0.252/0.467/0.655 to 0.204/0.305/0.344, and th
 8.30/8.33 km. It is explicitly an approximation of the diffuse fill's
 desaturating effect, not a second-order radiative-transfer solve, and the
 exact-horizon cloud-deck band is left to the cloud work.
+
+The coastal-lake guard had the same shape of problem as the sky: the mechanism
+was right, but its scope was wrong. Suppressing negative synthetic detail near
+the sea datum is what stops a ±36 m octave from turning a plain that is 2–14 m
+above the sea into angular lakes. Applying it everywhere below the datum also
+rewrote the ocean floor, which changed the terrain normal the orbital fixture
+samples and moved a committed baseline. The guard is now a land rule with a
+continuous fade below the datum, bounded from the octave's own amplitude so the
+worst case cannot cross the datum anywhere. All three baselines pass unchanged.
+The large water bodies that remain in the Papua frame are therefore not
+detail-fabricated; they are below the datum in the base surface and are tracked
+separately as TD-12 instead of being claimed as fixed.
 
 The performance split had a subtler gap: the phase timers existed, but the
 rolling window was shorter than the report cadence, so the startup upload burst

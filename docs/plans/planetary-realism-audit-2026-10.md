@@ -965,3 +965,32 @@ Measured: +2° saturation became 0.204 / 0.305 / 0.344 at 10/30/70 km, and the
 models the diffuse fill's desaturating effect, not an absolute
 multiple-scattering radiance. The exact-horizon tan band at 30 km is the cloud
 deck's own single-scattered radiance and remains with the cloud-edge work.
+
+## 2026-11-05 — Synthetic detail guard (TD-06)
+
+The signed detail octave was the remaining source of invented coastline. A
+sea-level guard already existed but was inert because enabling it moved the
+`leo-insertion-safe` baseline. The cause is now isolated: the guard suppressed
+negative detail for every sample below `sea + 4 m`, which includes the entire
+ocean floor. The orbital fixture samples the equatorial sea floor, so its terrain
+normal changed and its resting-contact clamp produced a different velocity.
+
+The guard is now a land rule. Ground at or above the datum may be raised by
+positive detail but not lowered by negative detail; below the datum the removal
+fades to zero over the octave's own depth, so measured bathymetry is unchanged and
+the waterline stays continuous. Earth uses a `4..60 m` window. Because a
+smoothstep of width `W` has maximum slope `1.5/W`, `W >= 1.5 * 36 m` makes the
+residual negative contribution rise slower than the base height, so the composed
+surface cannot cross the datum anywhere in the window.
+
+Measured at Papua: ETOPO 2022 is 73–85 m ellipsoid, the EGM2008 datum is 71.43 m,
+so the plain is 1.6–13.6 m above the sea inside a −36..+24 m octave. The A/B at
+`-8.0,139.5,600` (time 42 s, 220 frames) differs by 1.53/255 mean, with 5.1 % of
+pixels above 8/255. All three committed baselines pass unchanged.
+
+Recorded rather than hidden: the two large angular water bodies keep their extent
+after the guard. By construction the guard removes every detail-only crossing on
+land above the datum, so this water is below the datum in the base surface
+(erosion or measurement). It is opened as TD-12 and must be compared against the
+measured DEM before any erosion change, because real river incision near a coast
+can also cut below sea level.

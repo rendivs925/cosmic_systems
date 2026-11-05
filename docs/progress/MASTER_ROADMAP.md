@@ -299,6 +299,33 @@ timings. This phase exists because an unverifiable change is not a change.
   trajectories.
 - **Completion evidence:** `17bc6f5`; tests plus the seven re-captured pads.
 
+### TD-12 — Near-datum water bodies that persist after the detail guard
+- **Status:** PLANNED
+- **Priority:** P2
+- **Objective:** Determine whether the angular water bodies that remain on the
+  Papua plain after TD-06 come from erosion-carved base heights or from the
+  measured DEM, and stop the simulator from inventing any that the measured data
+  does not contain.
+- **Dependencies:** TD-06, TD-10 (verified).
+- **Subsystems:** terrain erosion, hydrology, water cap.
+- **Expected files:** `src/domain/services/erosion/`,
+  `src/domain/services/terrain_source/catalog.rs`.
+- **Acceptance:** every remaining water body at the observed coordinates is shown
+  to be present in the measured DEM within its published uncertainty, or the
+  erosion hydrology is corrected so that it cannot carve new below-datum
+  depressions on land whose measured base is above the datum.
+- **Tests:** a composition test at the observed polygon coordinates that records
+  measured height, eroded base, composed height and classification; a
+  regression that a land column measured above the datum is not eroded below it.
+- **Visual evidence:** repeat the `2026-11-05-td06-papua-*` pose.
+- **Performance:** none expected; erosion is baked.
+- **Scientific validation:** river incision may legitimately cut below sea level
+  near a coast; the fix must compare against the measured DEM rather than
+  suppress all incision.
+- **Risks:** flattening real estuaries or delta channels to remove a synthetic
+  artifact.
+- **Completion evidence:** pending.
+
 ### TD-03 — Regional imagery colour match to the global overview
 - **Status:** VERIFIED
 - **Priority:** P1
@@ -505,28 +532,54 @@ timings. This phase exists because an unverifiable change is not a change.
   `2026-11-01-td05-pair-1200km.jpg`.
 
 ### TD-06 — Synthetic detail must not fabricate coastline
-- **Status:** BLOCKED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Stop the signed ±24 m detail octave from pushing near-sea-level
   ground below the datum and having the ocean cap flood it.
-- **Dependencies:** isolation of the LEO baseline shift.
+- **Dependencies:** TD-10 (satisfied); the ascent fixture pins its launch altitude.
 - **Subsystems:** terrain composition, water.
 - **Expected files:** `src/domain/services/terrain_source/layered.rs`,
   `catalog.rs`.
 - **Acceptance:** near the datum the detail contribution may raise ground but not
   lower it, identically in `height_m` and `mesh_height_m`.
-- **Tests:** `synthetic_detail_cannot_create_sea_near_the_datum` (passes with the
-  guard enabled in the fixture).
-- **Visual evidence:** the defect is visible in the ground frames as pale-blue
-  flooded patches on the coastal plain.
-- **Performance:** none.
-- **Scientific validation:** the guard is opt-in per detail layer because only a
-  body with an ocean can be flooded by it.
-- **Risks:** **enabling it moves the committed LEO insertion baseline**, and the
-  cause is not isolated — the site reference sits inside a pad flat zone where the
-  guard should be a no-op. Shipping a baseline shift without understanding it is
-  forbidden by the project rules, so the mechanism ships inert.
-- **Completion evidence:** mechanism + test at `5901c82`; activation pending.
+- **Specification:** `terrain-source` gained "Synthetic detail must not fabricate
+  coastline" (archived change `2026-11-05-guard-coastal-synthetic-detail`).
+- **Implementation:** the guard is a **land** rule. On ground at or above the
+  local sea datum, the negative half of the layer is removed (positive detail is
+  always applied); the removal fades to zero over the octave's own depth below
+  the datum, so measured ocean bathymetry keeps its signed relief and the
+  waterline stays continuous. Earth enables it with `guard = 4 m`,
+  `full = 60 m`; `full − guard ≥ 1.5 × 36 m` makes the residual negative
+  contribution fall slower than the base height rises, so the composed surface
+  cannot cross the datum anywhere in the window.
+- **Tests:** `synthetic_detail_cannot_create_sea_near_the_datum`,
+  `sea_level_guard_cannot_lower_ground_below_the_datum` (sweeps the worst case
+  across the window, deep ocean and the waterline), and the three committed
+  flight baselines.
+- **Baselines:** `ascent`, `ascent-gravity-turn` and `leo-insertion-safe` stay
+  within their committed tolerances. The earlier block was isolated: the guard
+  had suppressed negative detail across the whole ocean floor, including the
+  equatorial point the insertion fixture samples. Making it land-only restores
+  that bathymetry bit-for-bit. The fixture itself was not recorded or changed.
+- **Visual evidence:** `2026-11-05-td06-papua-{before,after,diff}.jpg` at
+  `-8.0,139.5,600`, time 42 s, 220 frames, 600 m nadir. Mean per-pixel
+  difference **1.53/255**, 47,322 of 921,600 pixels above 8/255 (5.1 %),
+  concentrated on the near-datum plain and in the depth shading of the existing
+  water bodies.
+- **Measured context:** ETOPO 2022 around Papua is **73–85 m** on the WGS 84
+  ellipsoid against a **71.43 m** EGM2008 sea datum, i.e. **1.6–13.6 m** of land
+  inside a ±36 m octave, so the guard window covers the plain.
+- **Recorded limit:** the two large angular water bodies in that frame keep their
+  extent (water pixels 15,343 → 15,296; the mask shifts only inside them). By
+  construction the guard removes every detail-only crossing for land above the
+  datum, so water that persists must have its **base** below the datum
+  (erosion/measurement). That is a separate defect, opened as TD-12, not claimed
+  as fixed here.
+- **Performance:** one smoothstep per detail sample; no additional samples.
+- **Scientific validation:** the window bound is analytic (`1.5 × amplitude`);
+  the guard is not a bathymetry or hydrology model and does not decide where
+  water is.
+- **Completion evidence:** `5c7585e`; tests plus the Papua A/B pair.
 
 ### TD-07 — Coastal DEM resolution for the Papua site
 - **Status:** PLANNED

@@ -1,8 +1,8 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-05.
-Last code checkpoint: `6f99a0e` (2026-11-05).
-This table describes the 44 tasks in `MASTER_ROADMAP.md` — not the whole
+Last code checkpoint: `5c7585e` (2026-11-05).
+This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
 evidenced", not "the simulator does not work".
@@ -11,19 +11,19 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 23 | 52.3 % |
+| VERIFIED | 24 | 53.3 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
-| BLOCKED | 3 | 6.8 % |
-| PLANNED | 18 | 40.9 % |
-| **total** | **44** | 100 % |
+| BLOCKED | 2 | 4.4 % |
+| PLANNED | 19 | 42.2 % |
+| **total** | **45** | 100 % |
 
 ## Phase completion
 
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 7 / 11 | 64 % | active | TD-02, TD-03, TD-10 and TD-11 verified; TD-06 and the audits remain |
+| P1 Data and terrain correctness | 8 / 12 | 67 % | active | TD-02, TD-03, TD-06, TD-10 and TD-11 verified; TD-12 and the audits remain |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -40,7 +40,7 @@ Ordered by visible impact, not by ease.
 | # | defect | task | state | evidence |
 | --- | --- | --- | --- | --- |
 | 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | **VERIFIED** | per-vertex roughness removed the land term; the seam that motivated it now measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km, inside ±1/255. The ocean half was measured with six new water views and **refuted** (no term carries a patch signal, p ≥ 0.12) |
-| 2 | Synthetic detail fabricates lakes on the coastal plain | TD-06 | BLOCKED | visible in `terrain-600m`; guard implemented but inert |
+| 2 | Synthetic detail fabricated lakes on the coastal plain | TD-06 | **VERIFIED — fixed** | land-only sea-datum guard; worst-case detail cannot cross the datum, ocean floor keeps signed relief, all three baselines unchanged; Papua A/B mean 1.53/255, `2026-11-05-td06-papua-*` |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | **VERIFIED — explained** | the altitude term is right: at `-4.0,138.0` the same ground measures the same albedo at 400 km and 3 km (0.0169 linear p50), occlusion is exactly 1.000, and the production/albedo ratio matches 300 km (1.77 vs 2.07). Tropical-forest albedo really is ~4 %; the deck is white because it is white. The *near-ground* render was 2.2× brighter because the local surface map carried absolute albedo 4× the overview's. **Fixed by TM-04**: it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
 | 5 | Vegetation is sparse and reads as specks | VG-01/02 | PLANNED | `terrain-600m` |
@@ -51,18 +51,19 @@ Ordered by visible impact, not by ease.
 | 10 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | TD-10 | **VERIFIED — fixed** | erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean, Baikonur to 3.0–3.2/255, the same as repeat-run noise; `2026-11-05-td10-*` |
 | 11 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
 | 12 | The regional Sentinel-2 mosaic rendered as a pale inset against the Blue Marble overview | TD-03 | **VERIFIED — fixed** | measured per-channel linear gain applied before mips; region/overview linear-luma ratio 3.87× → 1.16×, median before/after ratio matches the inverse gain to 0.2 %; `2026-11-05-td03-albedo-40km-*` |
+| 13 | Angular water bodies persist on the Papua plain after the detail guard | TD-12 | PLANNED | base is below the datum (erosion or measurement); by construction the detail guard cannot lower land above the datum; `2026-11-05-td06-papua-*` |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 6f99a0e |
-| `cargo check --all-targets --features dem` | PASS | 6f99a0e |
-| `cargo check --no-default-features` | PASS | 6f99a0e |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 6f99a0e |
-| `cargo test --features dem --lib` | 1150 passed, 0 failed, 2 ignored | 6f99a0e |
-| `cargo test --no-default-features --lib` | 1108 passed, 0 failed, 2 ignored | 6f99a0e |
-| `openspec validate --all --strict` | 42 passed, 0 failed | 6f99a0e |
+| `cargo fmt --check` | PASS | 5c7585e |
+| `cargo check --all-targets --features dem` | PASS | 5c7585e |
+| `cargo check --no-default-features` | PASS | 5c7585e |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 5c7585e |
+| `cargo test --features dem --lib` | 1151 passed, 0 failed, 2 ignored | 5c7585e |
+| `cargo test --no-default-features --lib` | 1109 passed, 0 failed, 2 ignored | 5c7585e |
+| `openspec validate --all --strict` | 42 passed, 0 failed | 5c7585e |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -111,21 +112,22 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 30 |
+| archived changes | 31 |
 | strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — re-evaluate TD-06 now that the baseline fixture is pinned.** The
-synthetic coastal-lake guard is implemented and unit-tested but disabled; it was
-blocked because enabling it moved the committed LEO baseline. The ascent fixture
-now pins its launch altitude and pad, so the guard can be tested without moving a
-trajectory. If it still shifts the baseline, isolate why instead of re-enabling it
-blind.
+**Next task — RK-01, rocket attitude, staging and model-axis audit.** Verify that
+the rendered vehicle's body axes, thrust axis, gimbal direction and separation
+impulses agree with the authoritative dynamics, and that staging does not change
+the attitude state. RK-02 (plume from propulsion state) follows.
 
-AT-04 is closed: the +2° horizon and the 70 km teal tail are measurably paler,
-the limb e-folding is unchanged, and the fill is bounded and luminance-preserving.
-The exact-horizon tan band at 30 km is the cloud deck's own radiance, not the sky,
-and stays with the cloud-edge work (CL-05/06). RK-01/RK-02 and the remaining
-terrain audits follow.
+TD-06 is closed: the land-only sea-datum guard is enabled, the three committed
+baselines are unchanged, and the earlier LEO shift is explained (the old guard
+was suppressing negative detail across the ocean floor). The large angular water
+bodies that remain on the Papua plain are **not** detail-fabricated — by
+construction the guard cannot lower land above the datum — so they are opened as
+TD-12 and must be compared against the measured DEM before any erosion change.
+The remaining terrain and material audits (TD-07, TD-08, TD-09, TM-01/02/03,
+TG-01/02, RD-01) follow.

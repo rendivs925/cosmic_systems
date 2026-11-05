@@ -32,7 +32,7 @@ values and its linear-to-byte encoding are in
 | --- | --- | --- | --- | --- |
 | 1 | prelaunch | PARTIAL | `pad-110m-footprint` | pad and tower, no HUD, chase angle only |
 | 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed` | one graded pad per predefined site, all flush and dry |
-| 3 | terrain close-up | CURRENT | `terrain-600m` | 600 m nadir; no geometric relief visible |
+| 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*` | 600 m nadir; the detail guard A/B is the same pose with the guard off and on |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
@@ -230,6 +230,34 @@ method for both.
 own** single-scattered radiance, not the sky dome. This sky-only fill does not
 change it; it stays tracked with the cloud-edge work (CL-05/06). The +2° sky hue
 and the upper limb tail are the quantities AT-04 changes.
+
+### Synthetic detail guard on the coastal plain (`TD-06`, commit `5c7585e`)
+
+Same pose, start instant, time (42 s) and frame count (220) for both frames; the
+only difference is the sea-level guard on Earth's detail layer. The pose is the
+600 m nadir used by the earlier `terrain-600m` ground frame.
+
+| file | commit | guard | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- | --- |
+| `2026-11-05-td06-papua-before.jpg` | `5c7585e` | off | `90eff8dc8ec3274c` | signed detail on the near-datum plain; angular water bodies |
+| `2026-11-05-td06-papua-after.jpg` | `5c7585e` | on | `cd1fd925c2601f72` | same scene with the land-only guard |
+| `2026-11-05-td06-papua-diff.jpg` | `5c7585e` | — | `471f01c4f5a4bd00` | amplified absolute difference (×3) |
+
+Measured: mean per-pixel difference **1.53/255**; **47,322 of 921,600** pixels
+change by more than 8/255 (5.1 %). The change is concentrated on the near-datum
+plain and in the depth shading inside the existing water bodies.
+
+Measured context: ETOPO 2022 around the site is **73–85 m** on the WGS 84
+ellipsoid and the EGM2008 sea datum there is **71.43 m**, so the plain is
+**1.6–13.6 m** above the sea inside a detail octave of **−36..+24 m**. The guard
+window (`4..60 m` above the datum) covers it.
+
+**Recorded limit:** the two large angular water bodies keep their extent after the
+guard (water-like pixels 15,343 → 15,296, with the mask shifting only inside
+them). The guard provably removes every detail-only crossing on land above the
+datum, so this water is below the datum in the base surface (erosion or
+measurement), not detail-fabricated. It is tracked as **TD-12** and is not
+claimed as fixed here.
 
 ### Launch-site grading per predefined site (`TD-02`, commit `c582708`)
 
