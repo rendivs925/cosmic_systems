@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 3 / 11 | 27 % | active | TD-02 submerged pads; TD-06 and TD-11 blocked on baseline isolation; TD-10 payload/cache coupling |
+| P1 Data and terrain correctness | 3 / 11 | 27 % | active | TD-02 submerged pads; TD-10 payload/cache coupling; TD-11 waits on TD-10 (baselines now decoupled) |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -126,9 +126,9 @@ most of it comes from the coarse global base. The disk cache then freezes one
 version of that field: a warm and a cold cache change 90 % of the frame.
 
 TD-10 is P0 and must land before TD-11 can floor the coastal pads above the sea
-datum without guessing at the surface. TD-11 in turn needs a maintainer ruling,
-because the committed ascent, gravity-turn and LEO baselines launch from
-`ksc-default-geodetic`, which the same probe puts 0.94 m under the sea surface,
-so any datum floor moves those baselines. TD-03 and RD-02 remain the other
-implemented-but-unverified tasks; AT-04 comes after them because it changes the
-sky model, not just its evidence.
+datum without guessing at the surface. The baseline objection is now retired:
+the ascent fixture pins its launch altitude at `c886205`, so a terrain correction
+cannot move the committed trajectories. The three baselines still pass
+bit-identically. TD-03 and RD-02 remain the other implemented-but-unverified
+tasks; AT-04 comes after them because it changes the sky model, not just its
+evidence.

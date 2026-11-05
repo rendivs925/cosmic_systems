@@ -890,10 +890,12 @@ Consequences for the roadmap:
 * **TD-02 is BLOCKED** on TD-10 and TD-11: the capture set is complete, but
   three of the pads are not flush and the terrain under them is wrong.
 * **TD-10** owns the erosion/payload coupling and the cache dependence.
-* **TD-11** owns the datum floor. It cannot land without a maintainer decision,
-  because the committed ascent, gravity-turn and LEO baselines launch from
-  `ksc-default-geodetic`, which the same probe puts 0.94 m under the sea
-  surface; flooring that pad moves those baselines.
+* **TD-11** owns the datum floor. The committed ascent, gravity-turn and LEO
+  baselines launch from `ksc-default-geodetic`, which the same probe puts 0.94 m
+  under the sea surface, so flooring that pad would have moved them. The ascent
+  fixture now pins its launch altitude at the exact pre-fix value (`c886205`),
+  and all three baselines still pass bit-identically; the terrain fix can
+  proceed without touching a recorded trajectory.
 
 This is the same class of seam as TD-06 and the reason it is written down rather
 than patched: a baseline shift nobody has agreed to is not a fix.

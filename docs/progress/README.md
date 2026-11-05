@@ -44,7 +44,7 @@ Vandenberg). That is TD-10, the next task.
 | Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
 | Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
 | Three launch pads sit under water: Starbase, KSC and Wallops are −0.78, −0.14 and −13.61 m against the local sea datum | **diagnosed**; needs TD-10 and TD-11 |
-| The pad anchor and the visible terrain depend on the erosion cache: Vandenberg samples 81 m above its published package probe, and a warm vs cold cache changes 90 % of the frame | **diagnosed**; TD-10 |
+| The pad anchor and the visible terrain depend on the erosion cache: Vandenberg samples 81 m above its published package probe, and a warm vs cold cache changes 90 % of the frame | **diagnosed**; TD-10. The baselines are now decoupled (`c886205`) so the fix cannot move them |
 | Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
 | Cloud edges are cut-outs; one shape per region | planned work |
 | Vegetation reads as specks | planned work |
@@ -93,7 +93,7 @@ defects above.
 | P0-04 performance baseline | no presentable window |
 | TD-02 site grading | three pads are below the sea datum (TD-10, TD-11) |
 | TD-06 fabricated coastline | enabling the guard moves the committed LEO baseline, cause not isolated |
-| TD-11 coastal datum floor | the baselines launch from `ksc-default-geodetic`, which is itself 0.94 m under the sea datum; moving it needs a baselines decision |
+| TD-11 coastal datum floor | the baselines are no longer a blocker: the fixture launch altitude is pinned (`c886205`). It still waits on TD-10 for a correct coast |
 | VL-01 three-mode smoke | same presentation failure |
 
 ## What should be built next?

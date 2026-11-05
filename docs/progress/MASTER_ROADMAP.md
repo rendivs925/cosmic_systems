@@ -239,6 +239,10 @@ timings. This phase exists because an unverifiable change is not a change.
   reference the runtime must match.
 - **Risks:** preloading whole payload regions would defeat the residency budget;
   the fix must not turn every launch into a full-region bake.
+- **Baseline decoupling (done):** the ascent fixture now pins its launch altitude
+  (`c886205`, `f64::from_bits(0xc03ea4ab36d7a4c7)`, the exact composed KSC value
+  it sampled before), so a terrain correction here cannot move the committed
+  trajectories. All three baselines still pass bit-identically.
 - **Completion evidence:** pending.
 
 ### TD-11 — A graded coastal pad must sit above the local sea datum
@@ -262,11 +266,12 @@ timings. This phase exists because an unverifiable change is not a change.
   terrain latitude the sampler uses), so only **0.1–0.25 m** of clearance exists
   before erosion; a sub-metre erosion term drowns it. KSC LC-39A and Wallops are
   additionally hurt by TD-10.
-- **Risk and blocker:** the committed ascent, gravity-turn and LEO baselines
-  launch from `ksc-default-geodetic`, whose probe is `−0.94 m` below the sea
-  datum. Any datum floor raises that pad and therefore **moves the committed
-  physics baselines**, which the project forbids without an explicit decision.
-  This task needs a maintainer ruling on regenerating those baselines.
+- **Baselines:** this used to block the task. The ascent fixture now pins its
+  launch altitude at `c886205`, so flooring the `ksc-default-geodetic` pad (probe
+  `−0.94 m`) no longer moves the committed trajectories.
+- **Interaction with TD-10:** a datum floor only guarantees the pad is above
+  water. The ground around it can still come from a payload-blind erosion field,
+  so TD-10 remains the prerequisite for a correct coast as well as a dry pad.
 - **Completion evidence:** pending.
 
 ### TD-03 — Regional imagery colour match to the global overview
