@@ -35,7 +35,7 @@ values and its linear-to-byte encoding are in
 | 3 | terrain close-up | CURRENT | `terrain-600m` | 600 m nadir; no geometric relief visible |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
-| 6 | atmosphere | CURRENT | `2026-11-05-at02-sky2-10/30/70/200/400km`, `2026-11-05-at02-limb-200/400km-fov6` | altitude sequence plus a 6° limb that measures 8.30/8.54 km e-folding in linear light |
+| 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
 | 7 | vegetation | PARTIAL | `terrain-600m` | trees read as isolated specks only |
 | 8 | rocket ascent | MISSING | — | no offscreen path for firing the vehicle yet |
 | 9 | high altitude | CURRENT | `300km-papua`, `production-1200km` | 300 km and 1,200 km nadir |
@@ -192,6 +192,44 @@ repeated on the archived JPEGs.
 | `2026-11-05-at02-limb-400km-linear.jpg` | `b46ee1b` | `-4.0,138.0,400000`, 73.2° / 6°, `DIAGNOSTIC_MODE=height` | 42 s | 200 | `177750fa1e23d880` | **linear-light** profile (tonemapping bypassed): e-folding 8.54 km | 8 ± 0.8 km |
 | `2026-11-05-at02-nadir-30km.jpg` | `b46ee1b` | `-4.0,138.0,30000`, nadir / default | 42 s | 200 | `6c826e5b4c96cda1` | the "dark 30 km" view: dark forest, bright cloud puffs | ground p50 0.0286 vs 0.0337 at 3 km (−15 %) |
 | `2026-11-05-at02-nadir-200km.jpg` | `b46ee1b` | `-4.0,138.0,200000`, nadir / default | 42 s | 200 | `41592245f5ef4a1b` | same forest at 200 km: dark green, white deck | ground p50 0.0304 (−10 %); no altitude veil |
+
+### Multiple-scattering horizon hue (`AT-04`, commit `6f99a0e`)
+
+Same poses, start instant, time (42 s), frame count (200) and 6° field as the
+AT-02 sequence, so each `at04` frame is directly comparable with the `at02`
+frame above it. The bounded diffuse fill is the only change.
+
+| file | commit | pose, pitch / FOV | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- | --- |
+| `2026-11-05-at04-sky2-10km.jpg` | `6f99a0e` | `-4.0,138.0,10000`, 89.2° / 6° | `b3d7f4f5803ac6b9` | +2° horizon pale grey-blue; saturation 0.204 (was 0.252) |
+| `2026-11-05-at04-sky2-30km.jpg` | `6f99a0e` | `-4.0,138.0,30000`, 86.5° / 6° | `5a9d00354c818192` | +2° horizon pale blue-grey; saturation 0.305 (was 0.467) |
+| `2026-11-05-at04-sky2-70km.jpg` | `6f99a0e` | `-4.0,138.0,70000`, 83.5° / 6° | `c44e4ebd516fedd4` | teal tail desaturated; band saturation 0.339 (was 0.670) |
+| `2026-11-05-at04-sky2-200km.jpg` | `6f99a0e` | `-4.0,138.0,200000`, 77.8° / 6° | `a84f898176a310de` | limb still below the +2° 8-bit floor, as before |
+| `2026-11-05-at04-sky2-400km.jpg` | `6f99a0e` | `-4.0,138.0,400000`, 72.2° / 6° | `abdf084f602494af` | limb still below the +2° 8-bit floor |
+| `2026-11-05-at04-limb-200km-fov6.jpg` | `6f99a0e` | `-4.0,138.0,200000`, 78.8° / 6° | `b94c0409187ce649` | orbital limb arc in production tonemapping |
+| `2026-11-05-at04-limb-400km-fov6.jpg` | `6f99a0e` | `-4.0,138.0,400000`, 73.2° / 6° | `09aedb23c54e94d2` | 400 km limb arc |
+| `2026-11-05-at04-limb-200km-linear.jpg` | `6f99a0e` | same, `DIAGNOSTIC_MODE=height` | `3f3041e97b16ddf6` | **linear-light** 24–32 km fit: 8.30 km (before 8.24 km on the same method) |
+| `2026-11-05-at04-limb-400km-linear.jpg` | `6f99a0e` | same, `DIAGNOSTIC_MODE=height` | `e345201c9778ae92` | **linear-light** 24–32 km fit: 8.33 km (before 8.45 km) |
+
+Measured +2° horizon (mean RGB over rows 350–370, columns 100–1180; saturation
+`(max−min)/max`):
+
+| altitude | saturation before | saturation after | B/R before | B/R after |
+| --- | ---: | ---: | ---: | ---: |
+| 10 km | 0.252 | 0.204 | 1.34 | 1.26 |
+| 30 km | 0.467 | 0.305 | 1.88 | 1.44 |
+| 70 km | 0.655 | 0.344 | 2.90 | 1.53 |
+
+The 70 km teal band (rows 330–370) moves from 0.670 to 0.339 saturation. The limb
+e-folding is unchanged within the fit: 200 km 8.24 → 8.30 km, 400 km
+8.45 → 8.33 km, both inside 8 ± 1 km. The archived AT-02 values (8.30/8.54 km)
+used a slightly different row sampling; the before/after pair above uses one
+method for both.
+
+**Recorded limit:** the exact-horizon tan/pink band at 30 km is the **cloud deck's
+own** single-scattered radiance, not the sky dome. This sky-only fill does not
+change it; it stays tracked with the cloud-edge work (CL-05/06). The +2° sky hue
+and the upper limb tail are the quantities AT-04 changes.
 
 ### Launch-site grading per predefined site (`TD-02`, commit `c582708`)
 

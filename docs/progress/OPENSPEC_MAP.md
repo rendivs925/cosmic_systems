@@ -39,7 +39,7 @@ over with a new duplicate spec.
 | AT-01 sky | `atmosphere`, `rocket-flight-presentation` | — | |
 | AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |
 | AT-03 high-altitude darkness | `atmosphere`, `scientific-lighting` | — | |
-| AT-04 multiple-scattering horizon | — | — | **gap**: the presentation spec requires continuity, not a multiple-scattering reference; write a change before implementing |
+| AT-04 multiple-scattering horizon | `scientific-lighting` | — | added and archived `2026-11-05-add-sky-multiple-scattering`: bounded, luminance-preserving diffuse fill with an explicit energy bound and unchanged limb e-folding |
 | RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | |
 | RK-02 plume | `rocket-engine-effects`, `flight-presentation-effects` | — | |
 | RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | |

@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `e0ea385`.
+Snapshot: 2026-11-05. Last code checkpoint: `6f99a0e`.
 
 ---
 
@@ -52,6 +52,7 @@ match off, and at the same 40 km pose the region/overview tone ratio falls from
 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | **verified and closed.** Erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean and Baikonur to 3.0–3.2/255, the same as two identical warm runs. A cold or cache-off run needs ~1,200 frames to finish streaming |
 | Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
 | Cloud edges are cut-outs; one shape per region | planned work |
+| Noon horizon reddened to tan/pink and the limb tail read teal | **verified and fixed by a bounded diffuse fill** (AT-04); the exact-horizon cloud-deck band remains a cloud task |
 | Vegetation reads as specks | planned work |
 | Regional imagery steps at its patch edge | **verified and closed.** The edge is now a 16.6 km cross-fade at the region bound; the worst step near the bound fell from 4.23 to 0.72/255 (the frame's own texture level) and the change is confined to the declared band |
 | No geometric terrain detail beyond LOD 11 | planned work |
@@ -63,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-two of forty-four roadmap tasks, each with implementation + tests + a
+Twenty-three of forty-four roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -88,6 +89,7 @@ named frame or a named measurement:
 | TD-10 cache-independent terrain | erosion baked from the immutable global DEM; Starbase cold/warm/off 2.53/2.37/2.40/255 mean, Baikonur 2.96/3.16/3.06/255, all within repeat-run noise; `2026-11-05-td10-*` |
 | TD-03 imagery colour match | region/overview linear-luma ratio 3.87× → 1.16×; median before/after ratio 4.264/2.470/4.705 vs inverse gain 4.269/2.464/4.705 (0.2 %); outside unchanged; `2026-11-05-td03-albedo-40km-*` |
 | RD-02 streaming split | culling, LOD reconcile and upload burst timed separately; prelaunch p95 0.257 / 0.865 ms per frame, 40 km 0.171 / 0.597 ms; 347–352 meshes at 0.016–0.019 ms build and 0.188–0.192 ms submission each; `PERFORMANCE_BASELINES.md` |
+| AT-04 multiple-scattering horizon | +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km; 70 km teal band 0.670 → 0.339; limb e-folding 8.30/8.33 km (before 8.24/8.45); `2026-11-05-at04-*` |
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | VL-02 OpenSpec strict | 42/42 |
 
@@ -104,11 +106,12 @@ environmental or need a maintainer decision; the rest are planned work.
 
 ## What should be built next?
 
-**AT-04 — multiple-scattering horizon hue.** The single-scattering sky reddens
-the 10–70 km noon horizon; the fix must keep the measured 24–32 km limb
-e-folding at 8 ± 1 km. It needs an OpenSpec change and a bounded
-multiple-scattering term. After that, the TD-06 guard re-evaluation and the
-remaining terrain audits.
+**TD-06 — re-evaluate the fabricated-coastline guard.** It is implemented and
+unit-tested but disabled, because enabling it moved the committed LEO baseline.
+The ascent fixture now pins its launch altitude and pad, so the guard can be
+tested without moving a trajectory; if it still shifts the baseline, isolate the
+cause rather than re-enabling it blind. After that, RK-01/RK-02 and the remaining
+terrain audits.
 
 The practical caveat from TD-10 is convergence time: a cold or cache-off erosion
 run needs about 1,200 frames at this pose, because the runtime bake is expensive
@@ -122,8 +125,8 @@ performance work, not to terrain authority.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1148 passed, 2 ignored
-cargo test --no-default-features --lib   # 1106 passed, 2 ignored
+cargo test --features dem --lib          # 1150 passed, 2 ignored
+cargo test --no-default-features --lib   # 1108 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -146,9 +149,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,148 domain and adapter
-tests pass (1,106 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-two of its forty-four tasks.
+The simulator runs and its physics is regression-locked; 1,150 domain and adapter
+tests pass (1,108 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-three of its forty-four tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -208,6 +211,17 @@ matches the declared inverse gain in all three channels to within 0.2 %. Outside
 the region the frame is untouched. The residual boundary at 80 km is a package
 LOD-coverage limit — patches coarser than `min_level: 8` cannot bind the mosaic —
 and is recorded rather than smoothed over.
+
+The atmosphere's last defect was a missing physical term rather than a shading
+error: a single-scattering sky cannot keep the horizon pale when the path is
+long, because the light that scattered more than once is absent. A full
+multiple-scattering LUT was out of proportion to the task, so the sky now applies
+a bounded, luminance-preserving diffuse fill that grows with altitude. At 10/30/70
+km the +2° saturation falls from 0.252/0.467/0.655 to 0.204/0.305/0.344, and the
+70 km teal tail from 0.670 to 0.339, while the linear-light limb e-folding stays
+8.30/8.33 km. It is explicitly an approximation of the diffuse fill's
+desaturating effect, not a second-order radiative-transfer solve, and the
+exact-horizon cloud-deck band is left to the cloud work.
 
 The performance split had a subtler gap: the phase timers existed, but the
 rolling window was shorter than the report cadence, so the startup upload burst

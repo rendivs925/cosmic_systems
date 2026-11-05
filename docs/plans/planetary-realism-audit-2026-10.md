@@ -946,3 +946,22 @@ so they cannot bind the mosaic. The tone now matches across that boundary, but
 the resolution change is still a patch edge (`2026-11-05-td03-lod-80km.jpg` shows
 the level change on the same line). Closing it needs regional imagery below level
 8, which is package production rather than a shader term.
+
+## 2026-11-05 — Multiple-scattering horizon hue (AT-04)
+
+The single-scattering sky was measurably too chromatic at altitude: +2° horizon
+saturation rose from 0.252 at 10 km to 0.467 at 30 km and 0.655 at 70 km, and the
+upper limb tail read as a teal band. A full Hillaire multiple-scattering LUT was
+out of proportion to a P2 visual task, so the sky now applies a bounded,
+luminance-preserving diffuse fill: a convex mix of the radiance toward its own
+luminance, with strength `k = 0.6 (1 - exp(-h / 20 km))`. The mix is zero for an
+airless body, cannot produce negative radiance, and preserves linear luminance
+exactly, so the 24–32 km limb e-folding cannot move by construction.
+
+Measured: +2° saturation became 0.204 / 0.305 / 0.344 at 10/30/70 km, and the
+70 km teal band 0.339 (was 0.670). The linear-light 24–32 km fit moved 8.24 →
+8.30 km at 200 km and 8.45 → 8.33 km at 400 km. The approximation treats orders
+≥2 as isotropic and spectrally flat (Hillaire 2020's isotropic assumption); it
+models the diffuse fill's desaturating effect, not an absolute
+multiple-scattering radiance. The exact-horizon tan band at 30 km is the cloud
+deck's own single-scattered radiance and remains with the cloud-edge work.

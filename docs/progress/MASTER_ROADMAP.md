@@ -1072,7 +1072,7 @@ timings. This phase exists because an unverifiable change is not a change.
   brightness step is a separate, newly scoped task with its own measurement.
 
 ### AT-04 — Multiple-scattering horizon hue
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** The 10–70 km sky reddens too much near the horizon (tan at
   10 km, pink at 30 km) and the faint upper limb tail reads teal because the
@@ -1086,13 +1086,42 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Acceptance:** at 10/30/70 km the +2° horizon hue is consistent with a
   multiple-scattering daylight sky, and the 24–32 km limb e-folding stays within
   8 ± 1 km.
-- **Tests:** an analytic energy bound for the approximation; reuse the AT-02
-  limb profile measurement as the regression.
-- **Visual evidence:** repeat `2026-11-05-at02-sky2-*` and `*-fov6`.
-- **Performance:** bounded additional samples in the existing march, counted.
-- **Scientific validation:** cite the approximation and its assumptions.
-- **Risks:** a second unofficial sky model; cost.
-- **Completion evidence:** pending.
+- **Specification:** `scientific-lighting` gained "Sky includes a bounded diffuse
+  multiple-scattering fill" (archived change
+  `2026-11-05-add-sky-multiple-scattering`). The fill is a convex,
+  luminance-preserving mix of the radiance toward its luminance, with strength
+  `k = k_max (1 - exp(-h / H))`, `k_max = 0.6`, `H = 20 km`. It is zero for an
+  airless body or a ray that misses the atmosphere, and the same shared function
+  serves the dome, the sea reflection and the cloud haze.
+- **Tests:** `multiple_scattering_fill_grows_with_altitude_and_is_zero_in_vacuum`,
+  `multiple_scattering_mix_is_bounded_and_luminance_preserving`,
+  `rust_field_order_matches_the_shader_struct`.
+- **Measured +2° horizon** (same pose, time 42 s, 200 frames, 6° FOV; saturation
+  is `(max−min)/max` of the mean RGB): 10 km **0.252 → 0.204** (B/R 1.34 →
+  1.26); 30 km **0.467 → 0.305** (1.88 → 1.44); 70 km **0.655 → 0.344**
+  (2.90 → 1.53). The 70 km teal band (rows 330–370) moves **0.670 → 0.339**.
+- **Limb regression:** the same fit on the archived before and the new after
+  frames over 24–32 km tangent gives 200 km **8.24 → 8.30 km** and 400 km
+  **8.45 → 8.33 km**, inside 8 ± 1 km. The fill is luminance-preserving by
+  construction, so it cannot move the profile; the small change is the fit and
+  the display transform. The archived AT-02 values were 8.30/8.54 km.
+- **Visual evidence:** `2026-11-05-at04-sky2-10/30/70/200/400km.jpg` and
+  `2026-11-05-at04-limb-200/400km-{fov6,linear}.jpg`, all at `6f99a0e`, same
+  pose/time/frame count as AT-02.
+- **Performance:** one `exp` and one `mix` per evaluated sky direction; no extra
+  march samples, no LUT, no texture, no render node. The sky, sea reflection and
+  cloud haze share it.
+- **Scientific validation:** orders ≥2 are treated as isotropic and spectrally
+  flat (Hillaire 2020's isotropic assumption), so the fill is modelled as a
+  convex mix toward the luminance-equivalent gray. This is a bounded
+  approximation of the diffuse fill's desaturating effect, **not** a second-order
+  radiative-transfer solve and not a validated multiple-scattering radiance; it
+  is labelled as such in code, design and the spec.
+- **Risks / limits:** the exact-horizon tan/pink band at 30 km is the **cloud
+  deck's own** single-scattered radiance, which this sky-only term does not
+  touch; it remains tracked with the cloud-edge work (CL-05/06). The +2° sky hue
+  and the teal limb tail are corrected.
+- **Completion evidence:** `6f99a0e` and the nine AT-04 frames.
 
 ---
 
