@@ -891,7 +891,7 @@ impl Plugin for TerrainRenderPlugin {
             .init_resource::<TerrainPerformanceTelemetry>()
             .init_resource::<PendingTerrainPatchHides>()
             .init_resource::<TerrainPatchRenderIndex>()
-            .init_resource::<TerrainImageryConfig>()
+            .insert_resource(TerrainImageryConfig::from_environment())
             .init_resource::<TerrainImageryResource>()
             .init_resource::<TerrainOcclusionConfig>()
             .init_resource::<WaterQualityConfig>()

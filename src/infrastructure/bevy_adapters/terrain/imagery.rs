@@ -39,11 +39,21 @@ const EARTH_IMAGERY_MANIFEST: &str =
 /// CPU-side image data may additionally mirror these bytes until asset release.
 const IMAGERY_TILE_BYTES: u64 = (4 * 256 * 256 - 1) * 4 / 3;
 
+/// Capture-only switch for the regional imagery colour match. `off` (or `0`,
+/// `false`, `none`) installs regional tiles without their measured linear gain,
+/// which is what the before/after frame for TD-03 needs. Any other value keeps
+/// the declared correction, so production behaviour is the default.
+pub const IMAGERY_COLOR_MATCH_ENV: &str = "COSMIC_SYSTEMS_IMAGERY_COLOR_MATCH";
+
 /// Imagery streaming configuration. Disabled or absent imagery falls back to
 /// the existing global albedo without touching terrain or collision data.
 #[derive(Resource)]
 pub(crate) struct TerrainImageryConfig {
     pub(crate) enabled: bool,
+    /// Apply each region's declared linear colour match at tile install. A
+    /// capture may turn this off to isolate the correction; it never changes
+    /// terrain, collision, altitude, or physics.
+    pub(crate) color_match: bool,
     /// Asset-relative package root, under `assets/`.
     pub(crate) asset_root: String,
     pub(crate) budget_bytes: u64,
@@ -54,11 +64,33 @@ impl Default for TerrainImageryConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            color_match: true,
             asset_root: "large_files/terrain/earth_imagery_v1".into(),
             budget_bytes: 64 * 1024 * 1024,
             max_uploads_per_frame: 4,
         }
     }
+}
+
+impl TerrainImageryConfig {
+    /// The default configuration with the capture-only colour-match switch
+    /// applied from the environment.
+    pub(crate) fn from_environment() -> Self {
+        let mut config = Self::default();
+        if let Ok(value) = std::env::var(IMAGERY_COLOR_MATCH_ENV) {
+            config.color_match = parse_color_match_switch(&value);
+        }
+        config
+    }
+}
+
+/// `false` only for an explicit off value; an absent or unrecognised value
+/// keeps the correction so a typo cannot silently change production imagery.
+fn parse_color_match_switch(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "off" | "0" | "false" | "none" | "disabled"
+    )
 }
 
 /// Cadence-limited imagery residency snapshot folded into terrain streaming
@@ -239,11 +271,15 @@ pub(crate) fn stream_terrain_imagery(
                 // Colour-match before building mips: the chain must be generated
                 // from corrected texels, and the correction is a property of the
                 // region this tile belongs to.
-                let gain = imagery
-                    .package
-                    .as_ref()
-                    .map(|package| package.linear_color_gain(&tile))
-                    .unwrap_or([1.0; 3]);
+                let gain = if config.color_match {
+                    imagery
+                        .package
+                        .as_ref()
+                        .map(|package| package.linear_color_gain(&tile))
+                        .unwrap_or([1.0; 3])
+                } else {
+                    [1.0; 3]
+                };
                 if let Some(handle) = imagery.handles.get(&tile) {
                     apply_color_match_once(&mut images, handle, gain);
                     add_mip_chain_once(&mut images, handle);
@@ -514,6 +550,18 @@ mod tests {
     use crate::domain::services::imagery_tiles::ancestor_at_level;
     use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
     use bevy::math::{DQuat, DVec3};
+
+    #[test]
+    fn the_colour_match_switch_only_disables_on_an_explicit_off_value() {
+        for off in ["off", " OFF ", "0", "false", "none", "disabled"] {
+            assert!(!parse_color_match_switch(off), "{off:?} must disable");
+        }
+        for on in ["on", "1", "true", "", "typo"] {
+            assert!(parse_color_match_switch(on), "{on:?} must keep the match");
+        }
+        // The default is production behaviour.
+        assert!(TerrainImageryConfig::default().color_match);
+    }
 
     #[test]
     fn imagery_residency_budget_accounts_for_the_full_mip_chain() {
