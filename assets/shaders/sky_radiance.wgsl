@@ -37,6 +37,11 @@ struct SkyParams {
     sun_irradiance: vec3<f32>,
     ground_albedo: vec3<f32>,
     sky_strength: f32,
+    // Bounded diffuse multiple-scattering fill. `max` is the largest fraction
+    // of the radiance moved toward its luminance, and `scale_height` is the
+    // observer-altitude e-folding of that fraction. Zero for an airless body.
+    multi_scatter_max: f32,
+    multi_scatter_scale_height: f32,
 }
 
 // Loop bounds are static; callers pass the actual counts so the sea can trade
@@ -67,6 +72,44 @@ fn sky_ray_sphere(origin: vec3<f32>, dir: vec3<f32>, radius: f32) -> vec2<f32> {
 
 fn sky_saturate(x: f32) -> f32 {
     return clamp(x, 0.0, 1.0);
+}
+
+// Fraction of the radiance replaced by the diffuse multiple-scattering fill.
+// The local single-scattered source falls with density while the diffuse field
+// from the layer below persists, so the fraction grows with observer altitude
+// and saturates at `multi_scatter_max`. Must match
+// `SkyParams::multi_scatter_fraction` in rendering/sky.rs.
+fn sky_multiple_scatter_fraction(params: SkyParams, altitude: f32) -> f32 {
+    if params.multi_scatter_max <= 0.0 || params.multi_scatter_scale_height <= 0.0 {
+        return 0.0;
+    }
+    let k = params.multi_scatter_max
+        * (1.0 - exp(-max(altitude, 0.0) / params.multi_scatter_scale_height));
+    return clamp(k, 0.0, 0.999);
+}
+
+// Bounded, luminance-preserving diffuse fill.
+//
+// Orders of scattering above the first are approximated as isotropic and
+// spectrally flat, so their visible effect is to pull the chromatic
+// single-scattered radiance toward its own luminance. This is a convex mix:
+// the result is non-negative and has exactly the input luminance, which keeps
+// the AT-02 limb luminance profile and its 8 km e-folding unchanged. It is an
+// approximation of the diffuse fill's desaturating effect, not a second-order
+// radiative-transfer solve; see
+// openspec/changes/add-sky-multiple-scattering/design.md.
+fn sky_apply_multiple_scatter(
+    params: SkyParams,
+    position: vec3<f32>,
+    radiance: vec3<f32>,
+) -> vec3<f32> {
+    let altitude = length(position) - params.bottom_radius;
+    let k = sky_multiple_scatter_fraction(params, altitude);
+    if k <= 0.0 {
+        return radiance;
+    }
+    let luminance = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return mix(radiance, vec3<f32>(luminance), k);
 }
 
 fn sky_exponential_density(altitude: f32, scale_height: f32) -> f32 {
@@ -218,7 +261,7 @@ fn sky_radiance_direction(
             * cos_sun;
         radiance += transmittance * ground_radiance;
     }
-    result.radiance = radiance;
+    result.radiance = sky_apply_multiple_scatter(params, position, radiance);
     result.transmittance = transmittance;
     return result;
 }

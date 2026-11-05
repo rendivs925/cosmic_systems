@@ -21,6 +21,25 @@ use bevy::render::render_resource::ShaderType;
 /// changing the Rayleigh/Mie colour balance.
 pub const SKY_RADIANCE_SCALE: f32 = 1.0;
 
+/// Maximum strength of the bounded diffuse multiple-scattering fill.
+///
+/// The single-scattered sky is too chromatic at altitude and the limb: the long
+/// path removes the light that would have been scattered back by the rest of the
+/// atmosphere. The fill approximates that diffuse field as an isotropic, gray
+/// component and is a convex mix toward the radiance's own luminance, so it is
+/// luminance-preserving and bounded by construction. `k_max < 1` keeps a floor
+/// of the single-scattered chromaticity. This is an approximation of the diffuse
+/// fill's desaturating effect, not a second-order radiative-transfer solve; see
+/// `openspec/changes/add-sky-multiple-scattering/design.md`.
+pub const SKY_MULTI_SCATTER_MAX: f32 = 0.6;
+
+/// Observer-altitude scale height for the diffuse fill, in meters.
+///
+/// The local single-scattered source falls with density while the diffuse field
+/// from the dense layer below persists, so the relative fill grows with altitude
+/// and saturates at [`SKY_MULTI_SCATTER_MAX`].
+pub const SKY_MULTI_SCATTER_SCALE_HEIGHT_M: f32 = 20_000.0;
+
 /// Uniform parameters for the sky radiance model. Field order and types must
 /// match the `SkyParams` WGSL struct in `assets/shaders/sky_radiance.wgsl`
 /// exactly.
@@ -42,6 +61,8 @@ pub struct SkyParams {
     pub sun_irradiance: Vec3,
     pub ground_albedo: Vec3,
     pub sky_strength: f32,
+    pub multi_scatter_max: f32,
+    pub multi_scatter_scale_height: f32,
 }
 
 impl SkyParams {
@@ -78,7 +99,23 @@ impl SkyParams {
             sun_irradiance,
             ground_albedo: Vec3::from(optics.ground_albedo),
             sky_strength: SKY_RADIANCE_SCALE,
+            multi_scatter_max: SKY_MULTI_SCATTER_MAX,
+            multi_scatter_scale_height: SKY_MULTI_SCATTER_SCALE_HEIGHT_M,
         }
+    }
+
+    /// Fraction of the radiance replaced by the bounded diffuse fill at an
+    /// observer altitude.
+    ///
+    /// This mirrors `sky_multiple_scatter_fraction` in the shared shader; the
+    /// Rust copy exists so the bound and monotonicity are testable without a GPU.
+    pub fn multi_scatter_fraction(&self, altitude_m: f32) -> f32 {
+        if self.multi_scatter_max <= 0.0 || self.multi_scatter_scale_height <= 0.0 {
+            return 0.0;
+        }
+        let k = self.multi_scatter_max
+            * (1.0 - (-altitude_m.max(0.0) / self.multi_scatter_scale_height).exp());
+        k.clamp(0.0, 0.999)
     }
 
     /// Whether these parameters describe a scattering atmosphere. Airless
@@ -188,6 +225,8 @@ mod tests {
                 "sun_irradiance",
                 "ground_albedo",
                 "sky_strength",
+                "multi_scatter_max",
+                "multi_scatter_scale_height",
             ],
             "SkyParams field order drifted from assets/shaders/sky_radiance.wgsl"
         );
@@ -206,5 +245,61 @@ mod tests {
         assert_eq!(params.ground_albedo, ground);
         params.apply_measured_surface_pressure(f64::NAN);
         assert!((params.rayleigh_scattering.x - rayleigh.x * ratio as f32).abs() < 1e-3);
+    }
+
+    #[test]
+    fn multiple_scattering_fill_grows_with_altitude_and_is_zero_in_vacuum() {
+        let optics = AtmosphericOptics::earth(6_371_000.0);
+        let params =
+            SkyParams::for_optics(Some(optics), Vec3::ZERO, Vec3::X, Vec3::splat(127_000.0));
+        assert_eq!(params.multi_scatter_fraction(0.0), 0.0);
+        let mut previous = 0.0;
+        for altitude in [1_000.0, 10_000.0, 30_000.0, 70_000.0, 200_000.0] {
+            let fraction = params.multi_scatter_fraction(altitude);
+            assert!(fraction >= previous, "fill must not decrease with altitude");
+            assert!(
+                fraction <= SKY_MULTI_SCATTER_MAX,
+                "fill must stay bounded, got {fraction}"
+            );
+            previous = fraction;
+        }
+        assert!((previous - SKY_MULTI_SCATTER_MAX).abs() < 1e-3);
+
+        let vacuum = SkyParams::for_optics(None, Vec3::ZERO, Vec3::X, Vec3::ZERO);
+        assert_eq!(vacuum.multi_scatter_fraction(70_000.0), 0.0);
+    }
+
+    /// The fill is a convex mix toward the radiance's own luminance. That is
+    /// the analytic energy bound: the result is non-negative, its luminance is
+    /// exactly the input's, and every channel lies on the segment between the
+    /// input and the luminance-equivalent gray.
+    #[test]
+    fn multiple_scattering_mix_is_bounded_and_luminance_preserving() {
+        let luminance = |value: Vec3| 0.2126 * value.x + 0.7152 * value.y + 0.0722 * value.z;
+        for radiance in [
+            Vec3::new(0.6, 2.1, 5.6),
+            Vec3::new(1600.0, 3030.0, 5426.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        ] {
+            for k in [0.0, 0.1, SKY_MULTI_SCATTER_MAX] {
+                let gray = luminance(radiance);
+                let mixed = radiance.lerp(Vec3::splat(gray), k);
+                assert!(mixed.min_element() >= -1e-6, "fill must not go negative");
+                assert!(
+                    (luminance(mixed) - gray).abs() <= 1e-3,
+                    "fill must preserve luminance"
+                );
+                for channel in 0..3 {
+                    let low = radiance[channel].min(gray) - 1e-3;
+                    let high = radiance[channel].max(gray) + 1e-3;
+                    assert!(
+                        (low..=high).contains(&mixed[channel]),
+                        "channel {channel} left the convex hull: {}",
+                        mixed[channel]
+                    );
+                }
+            }
+        }
     }
 }
