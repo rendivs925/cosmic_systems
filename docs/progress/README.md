@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-01. Last code checkpoint: `f3b1af6`.
+Snapshot: 2026-11-05. Last code checkpoint: `b46ee1b`.
 
 ---
 
@@ -28,9 +28,12 @@ and a measurement path that captures frames without a swapchain.
 ## What is currently being built?
 
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
-TD-05 (tone blocks), TD-04 (regional imagery edge), AT-03 (high-altitude land
-darkness, attributed) and TM-04 (near-ground albedo tone, closed) are done; the
-next task is AT-02, the altitude transition and limb.
+AT-02 closed the atmosphere sequence: the capture camera can now pitch toward
+the horizon with a narrow lens, the sky and ambient are read at the active
+camera, and the 6° limb e-folds at 8.30 km (200 km) and 8.54 km (400 km) in
+linear light over 24–32 km tangent altitude — within 7 % of the 8 km Rayleigh
+scale height. The
+next task is TD-02: one site-grading capture per predefined launch site.
 
 ## What is broken?
 
@@ -51,7 +54,7 @@ it.
 
 ## What has been verified?
 
-Fifteen of forty-one roadmap tasks, each with implementation + tests + a named
+Seventeen of forty-two roadmap tasks, each with implementation + tests + a named
 frame or a named measurement:
 
 | task | evidence |
@@ -70,11 +73,13 @@ frame or a named measurement:
 | TD-04 imagery edge | the inset edge is a 16.6 km cross-fade at the region bound; worst step near the bound 4.23 → 0.72/255, change confined to x=381..737 |
 | AT-03 high-altitude darkness | the same ground measures the same albedo at 400 km and 3 km (0.0169 linear p50); the near-ground material was the 2.2× outlier, closed by TM-04 |
 | TM-04 near-ground tone | the local albedo map was 4× the overview; a control build isolates it (4.36 → 1.98) and the tint build measures 2.01 at 3 km against 2.03 at 40 km |
+| AT-01 single-scattering sky | one `SkyParams` authority; the 10/30/70/200/400 km sequence and the 200/400 km limb exercise it from sea level to vacuum |
+| AT-02 altitude transition and limb | 6° limb e-folding 8.30 km (200 km) and 8.54 km (400 km) in linear light over 24–32 km, within 7 % of 8 km; displayable top 35–38 km; horizon luminance monotonic 0.138 → 0.073 → 0.026 → floor |
 | VL-02 OpenSpec strict | 42/42 |
 
-Four more are implemented but **not** verified: site grading at more than one
-site, imagery colour match (no before/after frame), the sky model (no altitude
-sequence), and streaming measurement (no split timings).
+Three more are implemented but **not** verified: site grading at more than one
+site, imagery colour match (no before/after frame), and streaming measurement
+(no split timings).
 
 ## What is blocked?
 
@@ -86,16 +91,13 @@ sequence), and streaming measurement (no split timings).
 
 ## What should be built next?
 
-**TD-05 — closed on a paired measurement.** Six water views false-colour the
-sea's depth, body colour, alpha, landscape shadow, cloud shadow and mirror; all
-are continuous, so the ocean half of the defect never existed. The land term was
-per-vertex roughness, and `scripts/measure_patch_seam.py` — which fits each side of
-a seam so a real slope cannot pass for a boundary — measures the seam that
-motivated the task at +4.14/255 before and −0.04/255 after, with frame-wide medians
-of +0.25/255 at 300 km and +0.47/255 at 1,200 km, inside the ±1/255 acceptance.
+**TD-02 — one capture per predefined site.** The grading itself is implemented
+and tested, and Papua has a clean frame; Starbase, Baikonur, Vandenberg, Wallops,
+Kourou, Mahia and KSC do not. That is the remaining evidence for a P0 task.
 
-After that: TD-04 imagery feather, then AT-02 altitude and limb (which also fills
-two of the five missing evidence scenes).
+After that: TD-03 (imagery colour-match A/B), RD-02 (streaming split timings),
+then AT-04 (multiple-scattering horizon hue, opened by AT-02's measurement rather
+than hidden).
 
 ## How do we know it works?
 
@@ -103,8 +105,8 @@ two of the five missing evidence scenes).
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1119 passed, 2 ignored
-cargo test --no-default-features --lib   # 1077 passed, 2 ignored
+cargo test --features dem --lib          # 1139 passed, 2 ignored
+cargo test --no-default-features --lib   # 1097 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -127,9 +129,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,137 domain and adapter
-tests pass (1,095 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified fifteen of its forty-one tasks.
+The simulator runs and its physics is regression-locked; 1,139 domain and adapter
+tests pass (1,097 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified seventeen of its forty-two tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -154,5 +156,5 @@ from fabricating lakes is implemented but switched off, because enabling it move
 a committed physics baseline for a reason that is not yet understood — and a
 baseline shift nobody can explain is not a fix.
 
-Of the ten required visual scenes, five have usable evidence, two are partial, and
-three are missing. That is the truest single measure of where this stands.
+Of the ten required visual scenes, five have usable evidence, two are partial,
+and three are missing. That is the truest single measure of where this stands.

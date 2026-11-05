@@ -241,13 +241,26 @@ The hard edges are the erosion threshold on a low-resolution density field, not 
 lighting problem. This is the "shape/type diversity + edge structure" work that
 was already queued before this audit; nothing in this slice changes it.
 
-### 6. Terrain lighting at altitude is very dark — CONFIRMED (symptom), cause open
+### 6. Terrain lighting at altitude is very dark — CLOSED (albedo), with one appearance note
 
 At 400 km the land is nearly black while the deck is white. The same surface
-looks correctly lit at 3 km. Candidates, in order of suspicion: the albedo the
-global overview supplies at those LODs, the 8k overview's own dark bias, and the
-sun-angle term at that latitude. Not diagnosed yet; the diagnostic mode below is
-the tool for it.
+looks correctly lit at 3 km. The albedo diagnosis (AT-03) found the altitude path
+correct: the same ground measures the same albedo at 400 km and 3 km, tropical
+forest really is ~4 % reflectance, and the near-ground material was the 2.2×
+outlier because it carried absolute local albedo; TM-04 replaced that with a tint
+anchored to the measured overview (descent +2 % instead of +128 %).
+
+AT-02 then measured the residual "10–100 km veil" at `-4.0,138.0`: ground
+linear-luminance p50 is 0.0286 at 30 km, 0.0304 at 200 km and 0.0333 at 400 km
+against 0.0337 at 3 km, and the 30 km centre crop is 0.0337 against 0.0358
+(−6 %). There is no altitude-dependent layer; the dark impression is a nadir
+frame filled with dark forest and no bright sky.
+
+One appearance note remains and is tracked as **AT-04**: at 10–30 km the ground
+hue shifts from the local green to the far-field brown-olive at similar
+luminance, and the single-scattering sky reddens the horizon (tan at 10 km,
+pink at 30 km). Neither is an altitude *lighting* failure; both are material and
+sky-model fidelity, recorded rather than hidden.
 
 ### 7. Repeated missing-shadow-map warnings — ALREADY FIXED, guarded
 

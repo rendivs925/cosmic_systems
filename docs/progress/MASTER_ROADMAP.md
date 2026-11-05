@@ -820,7 +820,7 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P6 — Atmosphere
 
 ### AT-01 — Single-scattering sky
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Physically informed Rayleigh/Mie sky with optical depth and Sun
   angle shared by the ground, sea and deck.
@@ -831,15 +831,17 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Acceptance:** one `SkyParams` authority; the sea reflects the sky it is drawn
   with.
 - **Tests:** sky parameter defaults; airless-body guard; sea reflection parity.
-- **Visual evidence:** present in every frame; no dedicated altitude A/B yet.
+- **Visual evidence:** the 10/30/70/200/400 km altitude sequence and the 200/400
+  km limb frames from AT-02 (`2026-11-05-at02-*`), which exercise the same
+  `SkyParams` from sea level to vacuum.
 - **Performance:** full-screen march; cost not isolated.
 - **Scientific validation:** coefficients from the documented atmosphere model.
 - **Risks:** treated as verified on sight rather than measured.
-- **Completion evidence:** code and tests exist; **needs an altitude sequence for
-  VERIFIED**.
+- **Completion evidence:** the altitude sequence that was missing now exists;
+  one parameter block still drives the dome and the sea (parity test).
 
 ### AT-02 — Altitude transition and limb
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Continuous ground → stratosphere → space transition with a thin,
   correctly lit limb at orbital altitude.
@@ -849,12 +851,49 @@ timings. This phase exists because an unverifiable change is not a change.
   `src/domain/services/atmosphere.rs`.
 - **Acceptance:** density/pressure/temperature drive the visual; no altitude colour
   switch; limb thickness agrees with the exponential scale height.
-- **Tests:** continuity at 10/30/70/200 km sample points.
-- **Visual evidence:** 10, 30, 70, 200 km and a limb view.
-- **Performance:** measured per altitude band.
-- **Scientific validation:** atmosphere table documented with source.
+- **Tests:** continuity at 10/30/70/200 km sample points
+  (`atmospheric_presentation_follows_the_table_across_the_atmosphere`) and
+  pitch/FOV parsing plus a 90° pitch-is-horizontal test in `capture_view.rs`.
+- **Visual evidence:** `2026-11-05-at02-sky2-10/30/70/200/400km.jpg` (same +2°
+  view at each altitude), `2026-11-05-at02-limb-200/400km-fov6.jpg`, and the
+  linear-light `2026-11-05-at02-limb-200/400km-linear.jpg`.
+- **Measurement:** the capture path now accepts
+  `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG` (0 = nadir, 90 = horizon) and
+  `COSMIC_SYSTEMS_CAPTURE_FOV_DEG`, so the sub-degree limb can be framed. The
+  6° limb captures were mapped row → tangent altitude with
+  `f = (H/2)/tan(FOV/2)`, `α = pitch + atan((H/2 − y)/f)`,
+  `t = (R + h)·sin α − R`, and the linear-light luminance was fitted against `t`.
+  **Measured in linear light** (a `height` diagnostic capture switches the camera
+  to `Tonemapping::None`; only the terrain is false-coloured, the sky keeps its
+  production shading), the two limbs e-fold at **8.30 km (200 km)** and
+  **8.54 km (400 km)** over 24–32 km tangent altitude — **4–7 % above the 8.0 km
+  Rayleigh scale height** and within 3 % of each other. Over 20–30 km the fit is
+  9.7–9.9 km, and over 28–36 km it steepens to 5.2–5.8 km: exactly the curvature
+  the same optics model predicts once the ozone band and Mie term are included.
+  A Rayleigh-only run of that model e-folds at **8.00 km**. The displayable limb
+  ends at 35 km (200 km camera) and 38 km (400 km camera), about 4.4–4.8 scale
+  heights: a thin band, not a shell. The tonemapped captures fit 8.76/8.87 km
+  over the same band — the same profile through the filmic transform.
+- **Continuity evidence:** the +2° horizon luminance falls monotonically
+  0.138 → 0.073 → 0.026 → below the 8-bit floor at 10/30/70/200 km; no step.
+- **Nadir-darkness attribution (measured, no code change):** at `-4.0,138.0`
+  linear-luminance p50 of the ground is 0.0286 at 30 km, 0.0304 at 200 km and
+  0.0333 at 400 km against 0.0337 at 3 km (TM-04 after). The 30 km centre crop
+  is 0.0337 against 0.0358 at 3 km (−6 %). The 10–100 km "veil" is therefore a
+  framing/albedo impression — a frame filled with dark tropical forest and no
+  bright sky — not an altitude-dependent atmospheric layer.
+- **Open appearance note:** the low-luminance limb tail at 30–70 km reads
+  pink/teal because the model is single-scattering only; the orbital limb itself
+  is blue. Tracked as AT-04, not hidden here.
+- **Performance:** the sky march is 16 view × 8 sun samples per pixel at every
+  altitude; the cost is altitude-independent by construction. It was not
+  separately timed because no window/telemetry path is available on this
+  machine (P0-04 blocked); this is a reasoning statement, not a measurement.
+- **Scientific validation:** atmosphere table documented with source in
+  `src/domain/services/atmosphere.rs`; Rayleigh 8 km / Mie 1.2 km / ozone 25 km
+  in `atmospheric_optics.rs`.
 - **Risks:** a large blue shell or a flat plate.
-- **Completion evidence:** pending.
+- **Completion evidence:** captures, profile fits and the continuity test above.
 
 ### AT-03 — High-altitude land darkness
 - **Status:** VERIFIED
@@ -899,6 +938,29 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** attribution complete and the acceptance met: the
   altitude-side albedo is identical at 400 km and 3 km. The near-ground
   brightness step is a separate, newly scoped task with its own measurement.
+
+### AT-04 — Multiple-scattering horizon hue
+- **Status:** PLANNED
+- **Priority:** P2
+- **Objective:** The 10–70 km sky reddens too much near the horizon (tan at
+  10 km, pink at 30 km) and the faint upper limb tail reads teal because the
+  model integrates single scattering only. Add a bounded multiple-scattering
+  term so the noon horizon stays pale blue-white and the limb tail follows,
+  without changing the 8 km limb thickness.
+- **Dependencies:** AT-02 (verified).
+- **Subsystems:** sky, atmosphere optics.
+- **Expected files:** `assets/shaders/sky_radiance.wgsl`,
+  `src/infrastructure/bevy_adapters/rendering/sky.rs`.
+- **Acceptance:** at 10/30/70 km the +2° horizon hue is consistent with a
+  multiple-scattering daylight sky, and the 24–32 km limb e-folding stays within
+  8 ± 1 km.
+- **Tests:** an analytic energy bound for the approximation; reuse the AT-02
+  limb profile measurement as the regression.
+- **Visual evidence:** repeat `2026-11-05-at02-sky2-*` and `*-fov6`.
+- **Performance:** bounded additional samples in the existing march, counted.
+- **Scientific validation:** cite the approximation and its assumptions.
+- **Risks:** a second unofficial sky model; cost.
+- **Completion evidence:** pending.
 
 ---
 

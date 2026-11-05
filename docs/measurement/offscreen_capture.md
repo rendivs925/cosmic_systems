@@ -37,9 +37,36 @@ COSMIC_SYSTEMS_CAPTURE_TIME=42 \
 | `COSMIC_SYSTEMS_OFFSCREEN_CAPTURE_SIZE` | `WIDTHxHEIGHT` (default `1280x720`) |
 | `COSMIC_SYSTEMS_CAPTURE_POSE` | existing deterministic viewpoint, unchanged |
 | `COSMIC_SYSTEMS_CAPTURE_TIME` | existing deterministic simulation clock, unchanged |
+| `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG` | tilt away from nadir: `0` is straight down (default), `90` is the local horizon. Valid range −90…90. |
+| `COSMIC_SYSTEMS_CAPTURE_FOV_DEG` | vertical field of view, 0.1…120. Unset keeps the flight camera's lens. |
 
 The run exits with status 0 after writing the PNG. A malformed size or frame
 count falls back to the defaults rather than failing the run.
+
+## Pitched captures and the limb
+
+The altitude sequence and limb measurements (`AT-01`/`AT-02`) use the two pitch
+and field-of-view variables. A limb is a sub-degree band in an ordinary lens, so
+a narrow field is what makes it measurable: at 6° over 720 rows one row is about
+0.25–0.33 km of tangent altitude near the horizon (the 20° sequence is ~1 km per
+row). The horizon angle from nadir is
+
+```text
+pitch_horizon = asin(R / (R + h))
+```
+
+and the tangent altitude for a pixel row is
+
+```text
+f  = (H/2) / tan(FOV/2)
+α  = pitch + atan((H/2 − y) / f)
+t  = (R + h) · sin α − R
+```
+
+where `R` is the planet radius, `h` the camera altitude, `H` the image height and
+`y` the row measured from the top. Pitch is a rotation about the camera's local
+right axis toward local north, so it does not change the camera's up convention.
+These are measurement controls only: unset, the flight camera is untouched.
 
 ## What it does not change
 

@@ -25,12 +25,14 @@ render different moments of the same animation.
 
 ## The facility
 
-Two environment variables, both off by default:
+Four environment variables, all off by default:
 
 | Variable | Meaning |
 | --- | --- |
 | `COSMIC_SYSTEMS_CAPTURE_POSE="<lat>,<lon>,<altitude_m>"` | Place the active flight camera on a fixed body-fixed direction, looking straight down at the planet centre. |
 | `COSMIC_SYSTEMS_CAPTURE_TIME=<seconds>` | Pin the presentation clock, so every animated shader is at a fixed phase. |
+| `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG=<degrees>` | Optional tilt from nadir (0 = down, 90 = local horizon), added for the AT-02 limb sequence. |
+| `COSMIC_SYSTEMS_CAPTURE_FOV_DEG=<degrees>` | Optional vertical field of view; narrow lenses resolve the limb band. |
 
 ```sh
 COSMIC_SYSTEMS_CAPTURE_POSE="-8.0,139.5,1200000" \
@@ -80,5 +82,7 @@ cloud change, which is what the harness is for.
   a change that only affects terrain will show residual variation.
 - The vehicle still flies. Its sprite and effects move between captures; crop or
   ignore the centre of the frame for cloud measurements.
-- The view is nadir only. A view along the limb would need a pitch parameter,
-  which nothing has needed yet.
+- The view was nadir only when this harness was written. `AT-02` added
+  `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG` and `COSMIC_SYSTEMS_CAPTURE_FOV_DEG`, so a
+  limb or an oblique deck view is now reproducible; the cloud measurements in
+  this document remain nadir frames and are unaffected.

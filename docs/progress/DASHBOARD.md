@@ -1,8 +1,8 @@
 # Progress dashboard
 
-Snapshot date: 2026-11-01.
-Last code checkpoint: `f3b1af6` (2026-11-01).
-This table describes the 40 tasks in `MASTER_ROADMAP.md` — not the whole
+Snapshot date: 2026-11-05.
+Last code checkpoint: `b46ee1b` (2026-11-05).
+This table describes the 42 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
 evidenced", not "the simulator does not work".
@@ -11,12 +11,12 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 11 | 27.5 % |
-| IMPLEMENTED (not verified) | 4 | 10 % |
-| IN_PROGRESS | 1 | 2.5 % |
-| BLOCKED | 3 | 7.5 % |
-| PLANNED | 21 | 52.5 % |
-| **total** | **40** | 100 % |
+| VERIFIED | 17 | 40.5 % |
+| IMPLEMENTED (not verified) | 3 | 7.1 % |
+| IN_PROGRESS | 0 | 0 % |
+| BLOCKED | 3 | 7.1 % |
+| PLANNED | 19 | 45.2 % |
+| **total** | **42** | 100 % |
 
 ## Phase completion
 
@@ -28,7 +28,7 @@ evidenced", not "the simulator does not work".
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
-| P6 Atmosphere | 1 / 3 | 33 % | active | AT-03 attributed and closed; AT-02 needs altitude and limb captures |
+| P6 Atmosphere | 3 / 4 | 75 % | active | AT-01/02/03 verified; AT-04 tracks the single-scattering horizon hue |
 | P7 Rocket and VFX | 0 / 2 | 0 % | planned | attitude audit not started |
 | P8 Rendering optimisation | 1 / 3 | 33 % | active | performance baseline blocked |
 | P9 Final validation | 1 / 3 | 33 % | active | three-mode smoke blocked by presentation |
@@ -46,19 +46,20 @@ Ordered by visible impact, not by ease.
 | 5 | Vegetation is sparse and reads as specks | VG-01/02 | PLANNED | `terrain-600m` |
 | 6 | Regional imagery inset still steps at its patch edge | TD-04 | **VERIFIED** | the edge is now a 16.6 km cross-fade at the region bound: the frame's worst step within ±40 px of the bound fell from 4.23 to 0.72/255 (its own texture level), and the before/after change is confined to x=381..737, the declared band. Resolution now uses patch overlap, so a straddling patch binds the tile |
 | 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | PLANNED | `300km-papua` |
-| 8 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
+| 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | PLANNED | `2026-11-05-at02-sky2-10/30/70km`; the orbital limb itself is blue and measures 8.30/8.54 km e-folding |
+| 9 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | eba5d6e |
-| `cargo check --all-targets --features dem` | PASS | eba5d6e |
-| `cargo check --no-default-features` | PASS | eba5d6e |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | eba5d6e |
-| `cargo test --features dem --lib` | 1137 passed, 0 failed, 2 ignored | eba5d6e |
-| `cargo test --no-default-features --lib` | 1095 passed, 0 failed, 2 ignored | eba5d6e |
-| `openspec validate --all --strict` | 42 passed, 0 failed | eba5d6e |
+| `cargo fmt --check` | PASS | b46ee1b |
+| `cargo check --all-targets --features dem` | PASS | b46ee1b |
+| `cargo check --no-default-features` | PASS | b46ee1b |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | b46ee1b |
+| `cargo test --features dem --lib` | 1139 passed, 0 failed, 2 ignored | b46ee1b |
+| `cargo test --no-default-features --lib` | 1097 passed, 0 failed, 2 ignored | b46ee1b |
+| `openspec validate --all --strict` | 42 passed, 0 failed | b46ee1b |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -77,13 +78,13 @@ Ordered by visible impact, not by ease.
 | terrain close-up | current |
 | coastline | **missing** |
 | clouds | current |
-| atmosphere / limb | **missing** |
+| atmosphere / limb | current — 10/30/70/200/400 km sequence and 200/400 km limb at 6° FOV |
 | vegetation | partial |
 | rocket ascent | **missing** |
 | high altitude | current |
 | orbit | **missing** |
 
-Five of ten required scenes have no usable frame. See `VISUAL_EVIDENCE.md`.
+Three of ten required scenes have no usable frame. See `VISUAL_EVIDENCE.md`.
 
 ## Performance baseline
 
@@ -113,12 +114,13 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — AT-02, the altitude transition and limb.** TM-04 is closed: the
-near ground is anchored to the measured overview and a descent no longer brightens
-the land (4.36 → 2.01 against 2.03 at 40 km). AT-02 is the next open atmosphere
-task and the last one that needs frames rather than analysis: a continuous
-ground → stratosphere → space sequence at 10, 30, 70 and 200 km plus a limb view,
-checked against the exponential scale height. It is also the instrument the
-remaining altitude questions need, because the residual 3 km vs 300–400 km
-difference (2.01 vs 1.84) is air column, which is exactly what AT-02 must
-characterise.
+**Next task — TD-02, extend the site-grading capture to every predefined site.**
+AT-02 is verified: the 6° limb e-folds at 8.30 km (200 km) and 8.54 km (400 km) in linear light
+over 24–32 km tangent altitude, within 11 % of the 8 km Rayleigh scale height,
+and the +2° horizon luminance falls monotonically across 10/30/70/200 km. The
+single-scattering hue at 10–70 km is recorded as AT-04 rather than hidden.
+
+TD-02 is P0 and already implemented; it lacks one capture per predefined site
+(only Papua has been captured). After that, TD-03 (imagery colour-match A/B) and
+RD-02 (streaming split timings) are the other implemented-but-unverified tasks.
+AT-04 comes after those because it changes the sky model, not just its evidence.

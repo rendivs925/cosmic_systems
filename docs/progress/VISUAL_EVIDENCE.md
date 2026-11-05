@@ -13,6 +13,8 @@ COSMIC_SYSTEMS_OFFSCREEN_CAPTURE=/tmp/frame.png \
 COSMIC_SYSTEMS_OFFSCREEN_CAPTURE_FRAMES=<frames> \
 COSMIC_SYSTEMS_CAPTURE_POSE="<lat>,<lon>,<alt_m>" \
 COSMIC_SYSTEMS_CAPTURE_TIME=<seconds> \
+[COSMIC_SYSTEMS_CAPTURE_PITCH_DEG=<degrees>] \
+[COSMIC_SYSTEMS_CAPTURE_FOV_DEG=<degrees>] \
 [COSMIC_SYSTEMS_DIAGNOSTIC_MODE=<mode>] \
   ./target/debug/cosmic_systems rocket --site papua
 ```
@@ -31,13 +33,13 @@ values and its linear-to-byte encoding are in
 | 3 | terrain close-up | CURRENT | `terrain-600m` | 600 m nadir; no geometric relief visible |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
-| 6 | atmosphere | MISSING | — | no altitude sequence or limb capture yet |
+| 6 | atmosphere | CURRENT | `2026-11-05-at02-sky2-10/30/70/200/400km`, `2026-11-05-at02-limb-200/400km-fov6` | altitude sequence plus a 6° limb that measures 8.30/8.54 km e-folding in linear light |
 | 7 | vegetation | PARTIAL | `terrain-600m` | trees read as isolated specks only |
 | 8 | rocket ascent | MISSING | — | no offscreen path for firing the vehicle yet |
 | 9 | high altitude | CURRENT | `300km-papua`, `production-1200km` | 300 km and 1,200 km nadir |
 | 10 | orbit | MISSING | — | 1,200 km is the highest captured |
 
-Five of ten required scenes have no usable frame. That is the point of the
+Three of ten required scenes have no usable frame. That is the point of the
 matrix: it is the most honest measure of how much of the visual programme is
 actually evidenced. The diagnostic views added below do not fill these scenes —
 they are false colours, not production frames — but they do make two of the
@@ -154,6 +156,40 @@ without repeating the experiment.
 | `2026-11-01-at03-albedo-3km.jpg` | same | 200 | `464c36804dad5d17` | albedo | **identical to the 400 km albedo** (0.0169 linear p50), so the altitude path is right |
 | `2026-11-01-at03-inputs-3km.jpg` | same | 200 | `5bd54c265bef0691` | inputs | `(255,255,171)` = LOCAL_SURFACES + LAYER_WEIGHTS + OCCLUSION, no imagery: the near-ground material inputs that replace the overview |
 | `2026-11-01-ab-morph-off-height-1200km.jpg` | same | 200 | `8423bdabcdd17c4f` | height, **modified build** | LOD morph disabled: the near-datum pond field is unchanged |
+
+### Atmosphere altitude sequence and limb (`AT-01`/`AT-02`, commit `b46ee1b`)
+
+All frames were captured at `-4.0,138.0`, time 42 s, 200 frames, with the new
+measurement-only `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG` (0 = nadir, 90 = local
+horizon) and `COSMIC_SYSTEMS_CAPTURE_FOV_DEG`. The `sky2` rows look at the same
++2° elevation above the local horizon at each altitude; the `fov6` rows frame the
+limb with one image row ≈ 0.25–0.33 km of tangent altitude (the 20° rows are
+≈ 1 km). The `-linear` rows are the same pose with `DIAGNOSTIC_MODE=height`,
+which switches the camera to `Tonemapping::None` so the profile is linear light;
+it also false-colours the terrain and hides the deck, both below the sampled sky
+rows, while the sky keeps its production shading. They
+are JPEG q85 conversions
+of the lossless capture, as the registry rules require; the profile fits were
+repeated on the archived JPEGs.
+
+| file | commit | pose, pitch / FOV | time | frames | sha256 (first 16) | demonstrates | pass criterion |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `2026-11-05-at02-sky2-10km.jpg` | `b46ee1b` | `-4.0,138.0,10000`, 89.2° / 6° | 42 s | 200 | `f413ac8c6c67fde3` | horizon +2° at 10 km: pale grey-blue sky, deck and sea below | horizon luminance 0.138 (linear) |
+| `2026-11-05-at02-sky2-30km.jpg` | `b46ee1b` | `-4.0,138.0,30000`, 86.5° / 6° | 42 s | 200 | `b7e819c0490f2c92` | same view at 30 km: pink/tan low-luminance horizon | luminance 0.073; continuous with 10 km |
+| `2026-11-05-at02-sky2-70km.jpg` | `b46ee1b` | `-4.0,138.0,70000`, 83.5° / 6° | 42 s | 200 | `ea62221e50da47a7` | same view at 70 km: dark blue band, teal tail above the deck | luminance 0.026; no step |
+| `2026-11-05-at02-sky2-200km.jpg` | `b46ee1b` | `-4.0,138.0,200000`, 77.8° / 6° | 42 s | 200 | `c2f5f3cd78321408` | same elevation is black space; the limb sits lower in the frame | below the 8-bit floor as expected for 51 km tangent |
+| `2026-11-05-at02-sky2-400km.jpg` | `b46ee1b` | `-4.0,138.0,400000`, 72.2° / 6° | 42 s | 200 | `febfb58229497856` | same elevation is black space; limb visible at 77 km tangent | below the 8-bit floor |
+| `2026-11-05-at02-limb-10km.jpg` | `b46ee1b` | `-4.0,138.0,10000`, 87.2° / 20° | 42 s | 200 | `b6138961c5fd24ed` | inside the cloud slab: bright cloud tops, dark surface, horizon at mid-frame | qualitative: no shell, no switch |
+| `2026-11-05-at02-limb-30km.jpg` | `b46ee1b` | `-4.0,138.0,30000`, 84.5° / 20° | 42 s | 200 | `ac84ac7ef76d064d` | deck below, horizon band; cloud edges are hard | qualitative |
+| `2026-11-05-at02-limb-70km.jpg` | `b46ee1b` | `-4.0,138.0,70000`, 81.5° / 20° | 42 s | 200 | `233a4dcb9f14e7dd` | limb against black above the deck | thin band, not a shell |
+| `2026-11-05-at02-limb-200km.jpg` | `b46ee1b` | `-4.0,138.0,200000`, 75.8° / 20° | 42 s | 200 | `a6f90c9eab48629f` | orbital limb: thin blue arc, black space above | arc visible; no flat plate |
+| `2026-11-05-at02-limb-400km.jpg` | `b46ee1b` | `-4.0,138.0,400000`, 70.2° / 20° | 42 s | 200 | `26f500025f63ecb6` | orbital limb at 400 km | arc visible |
+| `2026-11-05-at02-limb-200km-fov6.jpg` | `b46ee1b` | `-4.0,138.0,200000`, 78.8° / 6° | 42 s | 200 | `6a66e68fbea7a16b` | **measured** limb profile: display e-folding 8.76 km over 24–32 km tangent | 8 ± 1 km |
+| `2026-11-05-at02-limb-400km-fov6.jpg` | `b46ee1b` | `-4.0,138.0,400000`, 73.2° / 6° | 42 s | 200 | `dbb6b3ec146b8632` | **measured** limb profile: display e-folding 8.87 km; displayable top 38 km | 8 ± 1 km |
+| `2026-11-05-at02-limb-200km-linear.jpg` | `b46ee1b` | `-4.0,138.0,200000`, 78.8° / 6°, `DIAGNOSTIC_MODE=height` | 42 s | 200 | `6e927ee1be32dbb0` | **linear-light** profile (tonemapping bypassed): e-folding 8.30 km over 24–32 km | 8 ± 0.8 km |
+| `2026-11-05-at02-limb-400km-linear.jpg` | `b46ee1b` | `-4.0,138.0,400000`, 73.2° / 6°, `DIAGNOSTIC_MODE=height` | 42 s | 200 | `177750fa1e23d880` | **linear-light** profile (tonemapping bypassed): e-folding 8.54 km | 8 ± 0.8 km |
+| `2026-11-05-at02-nadir-30km.jpg` | `b46ee1b` | `-4.0,138.0,30000`, nadir / default | 42 s | 200 | `6c826e5b4c96cda1` | the "dark 30 km" view: dark forest, bright cloud puffs | ground p50 0.0286 vs 0.0337 at 3 km (−15 %) |
+| `2026-11-05-at02-nadir-200km.jpg` | `b46ee1b` | `-4.0,138.0,200000`, nadir / default | 42 s | 200 | `41592245f5ef4a1b` | same forest at 200 km: dark green, white deck | ground p50 0.0304 (−10 %); no altitude veil |
 
 ## Negative results worth keeping
 

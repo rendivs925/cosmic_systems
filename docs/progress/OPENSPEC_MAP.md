@@ -34,9 +34,10 @@ over with a new duplicate spec.
 | VG-02 canopy | `vegetation-species` | — | |
 | VG-03 wind and shading | `vegetation-species` | — | |
 | CL-01…06 clouds | — | — | **gap**: requirements live in `docs/technical_specification_photorealistic_procedural_3d_cloud_engine.md`, not in OpenSpec |
-| AT-01 sky | `atmosphere` | — | |
-| AT-02 altitude/limb | `atmosphere` | — | |
+| AT-01 sky | `atmosphere`, `rocket-flight-presentation` | — | |
+| AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |
 | AT-03 high-altitude darkness | `atmosphere`, `scientific-lighting` | — | |
+| AT-04 multiple-scattering horizon | — | — | **gap**: the presentation spec requires continuity, not a multiple-scattering reference; write a change before implementing |
 | RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | |
 | RK-02 plume | `rocket-engine-effects`, `flight-presentation-effects` | — | |
 | RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | |
