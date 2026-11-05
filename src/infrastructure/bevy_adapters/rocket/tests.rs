@@ -1632,6 +1632,16 @@ mod ascent_pipeline_tests {
     const EARTH_RADIUS_M: f64 = 6_371_000.0;
     const DT: f64 = 1.0 / 64.0;
 
+    /// Launch altitude used by the ascent regression fixture.
+    ///
+    /// The baselines test flight dynamics, not the terrain field. The composed
+    /// KSC height is pinned at the value measured before TD-10/TD-11
+    /// (`-30.643237521788958` m, bits `0xc03ea4ab36d7a4c7`), so a terrain
+    /// correction cannot move a committed trajectory while the samples stay
+    /// bit-identical. `height_m` at this site is still exercised by the
+    /// terrain and contact tests.
+    const KSC_BASELINE_LAUNCH_HEIGHT_M: f64 = f64::from_bits(0xc03ea4ab36d7a4c7);
+
     /// Electron-class vehicle: nine 25.8 kN engines with a 0.6 throttle
     /// floor (stage envelope [0.6, 1.0]), ~13 t gross.
     pub(super) fn electron_like() -> Rocket {
@@ -1739,7 +1749,7 @@ mod ascent_pipeline_tests {
         );
 
         let (lat, lon) = ksc_terrain_coordinates();
-        let h = PlanetTerrain::earth().source.height_m(lat, lon);
+        let h = KSC_BASELINE_LAUNCH_HEIGHT_M;
         let up = radial_direction(lat, lon);
         let surface_radius = EARTH_RADIUS_M + h;
 
