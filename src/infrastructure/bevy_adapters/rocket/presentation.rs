@@ -18,7 +18,7 @@ use bevy::time::Fixed;
 pub fn capture_render_state(
     mut rocket_query: Query<(
         &RocketPhysicsState,
-        &RocketMissionState,
+        Option<&RocketMissionState>,
         Option<&GroundRest>,
         Option<&TipOverState>,
         &mut RocketRenderState,
@@ -30,15 +30,19 @@ pub fn capture_render_state(
         // from the previous tick makes the chase camera sawtooth relative to
         // that surface once per fixed update.
         let is_toppling = tip_over.is_some_and(TipOverState::is_toppling);
-        if !is_toppling
-            && matches!(
+        // Jettisoned hardware (spent stages, fairing halves) has no mission
+        // state: it is debris, not a mission vehicle. It must still advance its
+        // snapshot, otherwise its rendered transform stays frozen at the
+        // separation pose while its authoritative state flies away.
+        let surface_constrained = mission.is_some_and(|mission| {
+            matches!(
                 *mission,
                 RocketMissionState::Landing
                     | RocketMissionState::Landed
                     | RocketMissionState::Crashed
             )
-            || (!is_toppling && ground_rest.is_some_and(|rest| rest.active))
-        {
+        });
+        if !is_toppling && (surface_constrained || ground_rest.is_some_and(|rest| rest.active)) {
             render.prev = rocket.dynamics;
             render.current = rocket.dynamics;
             continue;
@@ -106,6 +110,7 @@ mod tests {
     use super::*;
     use crate::domain::math::{DMat3, DQuat};
     use bevy::math::Vec3;
+    use bevy::prelude::{App, Update};
 
     #[test]
     fn render_transform_rebases_before_f32_conversion() {
@@ -201,5 +206,110 @@ mod tests {
         let before = original;
         let _ = render_transform(original, DVec3::ZERO, &scale);
         assert_eq!(original, before);
+    }
+
+    fn dynamics_at(position_m: DVec3, orientation: DQuat) -> RocketDynamicsState {
+        RocketDynamicsState::new(
+            position_m,
+            DVec3::ZERO,
+            orientation,
+            1_000.0,
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+        )
+    }
+
+    /// Jettisoned hardware carries no mission state. Before this regression was
+    /// pinned, `capture_render_state` required one, so debris snapshots stopped
+    /// advancing at the separation tick and the rendered stage stayed frozen in
+    /// the sky while its authoritative state flew on.
+    #[test]
+    fn debris_without_a_mission_state_tracks_its_own_dynamics() {
+        let mut app = App::new();
+        app.add_systems(Update, capture_render_state);
+
+        let spawned = dynamics_at(DVec3::new(6_600_000.0, 0.0, 0.0), DQuat::IDENTITY);
+        let flown = dynamics_at(
+            DVec3::new(6_601_000.0, 400.0, -50.0),
+            DQuat::from_axis_angle(DVec3::Y, 0.3),
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState { dynamics: flown },
+                RocketRenderState {
+                    prev: spawned,
+                    current: spawned,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let render = app.world().get::<RocketRenderState>(entity).unwrap();
+        assert_eq!(render.prev, spawned);
+        assert_eq!(render.current, flown);
+    }
+
+    /// The surface-constrained branch is deliberate: interpolating a landed
+    /// vehicle against the latest fixed surface snapshot sawtooths once per
+    /// fixed step. It must keep pinning, and the optional mission read must not
+    /// turn it into a normal interpolation.
+    #[test]
+    fn landed_vehicle_still_pins_the_latest_snapshot() {
+        use crate::domain::entities::rocket::RocketMissionState as DomainMissionState;
+        use crate::infrastructure::bevy_adapters::rocket::components::GroundRest;
+
+        let mut app = App::new();
+        app.add_systems(Update, capture_render_state);
+
+        let spawned = dynamics_at(DVec3::new(6_600_000.0, 0.0, 0.0), DQuat::IDENTITY);
+        let settled = dynamics_at(DVec3::new(6_600_000.5, 0.0, 0.0), DQuat::IDENTITY);
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState { dynamics: settled },
+                RocketMissionState(DomainMissionState::Landed),
+                GroundRest { active: true },
+                RocketRenderState {
+                    prev: spawned,
+                    current: spawned,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let render = app.world().get::<RocketRenderState>(entity).unwrap();
+        assert_eq!(render.prev, settled);
+        assert_eq!(render.current, settled);
+    }
+
+    /// The projection itself must not introduce an attitude. Debris has no
+    /// mission state but the same body→world quaternion as any other body.
+    #[test]
+    fn debris_render_transform_follows_its_own_attitude() {
+        let mut app = App::new();
+        app.insert_resource(RenderOrigin::default());
+        app.insert_resource(PhysicalScale::default());
+        app.insert_resource(Time::<Fixed>::default());
+        app.add_systems(Update, interpolate_render_transform);
+
+        let orientation = DQuat::from_axis_angle(DVec3::new(0.3, 0.9, 0.2).normalize(), 0.9);
+        let dynamics = dynamics_at(DVec3::new(1.0, 2.0, 3.0), orientation);
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState { dynamics },
+                RocketRenderState::new(dynamics),
+                Transform::default(),
+            ))
+            .id();
+
+        app.update();
+
+        let transform = app.world().get::<Transform>(entity).unwrap();
+        assert_eq!(transform.rotation, orientation.as_quat());
+        assert_eq!(transform.translation, Vec3::new(1.0, 2.0, 3.0));
     }
 }

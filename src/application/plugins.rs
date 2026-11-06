@@ -85,7 +85,9 @@ use crate::infrastructure::bevy_adapters::rocket::camera::{
     handle_free_camera_input, handle_rocket_camera_input, setup_rocket_camera_and_origin,
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
 };
-use crate::infrastructure::bevy_adapters::rocket::capture_view::apply_capture_pose;
+use crate::infrastructure::bevy_adapters::rocket::capture_view::{
+    apply_capture_pose, warm_start_capture_flight, CaptureWarmStartState,
+};
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketCameraConfig, RocketCameraMode, RocketMode, RocketPresentationQuality, RocketTelemetry,
 };
@@ -470,6 +472,7 @@ impl Plugin for RocketFixedSimulationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RocketTelemetry>();
         app.init_resource::<SimulationTelemetryRecorder>();
+        app.init_resource::<CaptureWarmStartState>();
         app.init_resource::<ActiveForceModel>();
         app.init_resource::<RocketEventFeed>();
         app.init_resource::<ReplaySnapshotStream>();
@@ -726,6 +729,10 @@ impl Plugin for RocketModePlugin {
             (
                 handle_rocket_camera_input,
                 handle_free_camera_input,
+                // Capture-only: advance the real fixed pipeline from a launch
+                // order before the first frame. Inert unless the environment
+                // asks for it.
+                warm_start_capture_flight.before(interpolate_render_transform),
                 interpolate_render_transform
                     .after(recenter_render_origin)
                     .after(handle_rocket_launch_input),

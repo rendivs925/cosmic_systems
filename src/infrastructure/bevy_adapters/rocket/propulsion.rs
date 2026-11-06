@@ -74,7 +74,7 @@ pub fn propulsion_staging(
                 if let (Some(rocket_mesh), Some(meshes)) =
                     (rocket_mesh.as_deref_mut(), meshes.as_deref_mut())
                 {
-                    *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &serial_stack));
+                    *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &serial_stack, 0.0));
                     // Bevy only inserts an `Aabb` for entities that lack one, so
                     // an in-place mesh swap must drop the stale bounds or the
                     // vehicle can be frustum-culled against its former size.
@@ -283,8 +283,9 @@ pub fn propulsion_staging(
             shed_mass_kg: shed,
         });
         info!(
-            "Stage {} separated: shed {shed:.0} kg, upper stage {:.0} kg",
+            "Stage {} separated at T+{:.1} s: shed {shed:.0} kg, upper stage {:.0} kg",
             propulsion.active_stage - 1,
+            sim_time.sim_time_s,
             new_mass
         );
     }

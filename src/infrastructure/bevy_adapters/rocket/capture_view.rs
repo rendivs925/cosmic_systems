@@ -32,6 +32,9 @@ use crate::domain::services::reference_frames::{
 };
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
+use crate::infrastructure::bevy_adapters::rocket::components::{
+    RocketAutopilot, RocketMissionState, RocketPhysicsState, RocketRenderState, SpentStage,
+};
 use crate::infrastructure::bevy_adapters::rocket::planet::RocketBoundPlanet;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 
@@ -47,6 +50,17 @@ pub const CAPTURE_PITCH_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_PITCH_DEG";
 /// view, in degrees. A limb is a thin band in a normal lens; a narrow field
 /// resolves it without changing the projection model.
 pub const CAPTURE_FOV_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_FOV_DEG";
+
+/// Environment variable that advances the authoritative fixed pipeline before
+/// the first captured frame. A capture has no keyboard, so an ascent or staging
+/// frame would otherwise be impossible: the vehicle would still be on the pad.
+/// This is an explicit launch order plus `n` real `FixedUpdate` steps, not a
+/// teleported pose, so the frame shows the same physics a piloted run reaches.
+pub const CAPTURE_WARMUP_STEPS_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS";
+
+/// Upper bound on the warm start (200 s at 64 Hz). A capture is a measurement,
+/// not a batch runner; a runaway value should fail visibly rather than hang.
+const MAX_CAPTURE_WARMUP_STEPS: u32 = 64 * 200;
 
 /// A fixed body-fixed viewpoint, in degrees and metres above the reference
 /// surface.
@@ -86,6 +100,96 @@ pub fn capture_pitch_deg() -> Option<f32> {
 pub fn capture_fov_deg() -> Option<f32> {
     static FOV: OnceLock<Option<f32>> = OnceLock::new();
     *FOV.get_or_init(|| parse_capture_fov_deg(std::env::var(CAPTURE_FOV_ENV).ok().as_deref()))
+}
+
+/// The warm-start length requested by the environment, parsed once.
+pub fn capture_warmup_steps() -> u32 {
+    static STEPS: OnceLock<u32> = OnceLock::new();
+    *STEPS.get_or_init(|| {
+        parse_capture_warmup_steps(std::env::var(CAPTURE_WARMUP_STEPS_ENV).ok().as_deref())
+    })
+}
+
+/// Parse the warm-start step count. Absent or nonsense means no warm start, so
+/// a normal interactive run never launches itself.
+fn parse_capture_warmup_steps(value: Option<&str>) -> u32 {
+    value
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .min(MAX_CAPTURE_WARMUP_STEPS)
+}
+
+/// One-shot guard for [`warm_start_capture_flight`].
+#[derive(Resource, Default)]
+pub struct CaptureWarmStartState {
+    applied: bool,
+}
+
+/// Run the authoritative fixed pipeline forward from a real launch order before
+/// the first captured frame.
+///
+/// This system is opt-in through [`CAPTURE_WARMUP_STEPS_ENV`] and runs once. It
+/// deliberately reuses `spawn`'s pre-launch state and the production
+/// `FixedUpdate` schedule, so the captured pose is reached by the same
+/// guidance, propulsion, staging, gravity and contact systems a piloted flight
+/// uses. No transform is written from here.
+pub fn warm_start_capture_flight(world: &mut World) {
+    world.init_resource::<CaptureWarmStartState>();
+    if world.resource::<CaptureWarmStartState>().applied {
+        return;
+    }
+    world.resource_mut::<CaptureWarmStartState>().applied = true;
+    run_capture_warm_start(world, capture_warmup_steps());
+}
+
+/// Issue a launch order to every pre-launch vehicle and run `steps` production
+/// fixed ticks. Split from the environment wrapper so the mechanics are
+/// testable without touching process-wide environment state.
+fn run_capture_warm_start(world: &mut World, steps: u32) {
+    if steps == 0 {
+        return;
+    }
+
+    {
+        let mut query = world.query::<(
+            &mut RocketMissionState,
+            &RocketPhysicsState,
+            &mut RocketRenderState,
+            Option<&mut RocketAutopilot>,
+        )>();
+        for (mut mission, rocket, mut render, autopilot) in query.iter_mut(world) {
+            if *mission != RocketMissionState::PreLaunch {
+                continue;
+            }
+            // Mirror the Space launch order: drop the prelaunch interpolation
+            // buffer and re-arm the tower-clearance gate.
+            *render = RocketRenderState::new(rocket.dynamics);
+            if let Some(mut autopilot) = autopilot {
+                autopilot.ascent_pitch_over_engaged = false;
+            }
+            *mission = RocketMissionState::Launch;
+        }
+    }
+
+    bevy::log::info!("Capture warm start: {steps} fixed steps from launch");
+    for _ in 0..steps {
+        world.run_schedule(FixedUpdate);
+    }
+
+    // Capture diagnostics: report the achieved attitude of every body so a
+    // staging frame can be checked against the authoritative state.
+    let mut bodies = world.query::<(&RocketPhysicsState, Option<&SpentStage>)>();
+    for (state, spent) in bodies.iter(world) {
+        let longitudinal = state.dynamics.orientation * DVec3::Y;
+        bevy::log::info!(
+            "Capture warm start body ({}): +Y inertial [{:.3}, {:.3}, {:.3}], |v| {:.1} m/s",
+            if spent.is_some() { "debris" } else { "primary" },
+            longitudinal.x,
+            longitudinal.y,
+            longitudinal.z,
+            state.dynamics.velocity_mps.length()
+        );
+    }
 }
 
 /// Parse an optional pitch in degrees. Nonsense is rejected rather than
@@ -348,5 +452,66 @@ mod tests {
         assert!(position.is_finite());
         assert!(rotation.is_finite());
         assert!((rotation.length() - 1.0).abs() < 1e-5);
+    }
+
+    #[derive(Resource, Default)]
+    struct WarmStartProbe(u32);
+
+    /// The warm start must issue a real launch order and run the production
+    /// fixed schedule — no pose is written into the authoritative state. It is
+    /// the only way a capture can show an ascent or a staging tick.
+    #[test]
+    fn warm_start_launches_and_runs_the_real_fixed_schedule() {
+        use crate::domain::math::{DMat3, DQuat as MathDQuat, DVec3 as MathDVec3};
+        use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+
+        let mut app = App::new();
+        app.init_resource::<WarmStartProbe>();
+        app.add_systems(FixedUpdate, |mut probe: ResMut<WarmStartProbe>| {
+            probe.0 += 1;
+        });
+
+        let dynamics = RocketDynamicsState::new(
+            MathDVec3::new(6_500_000.0, 0.0, 0.0),
+            MathDVec3::ZERO,
+            MathDQuat::IDENTITY,
+            1_000.0,
+            DMat3::IDENTITY,
+            MathDVec3::ZERO,
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketMissionState::default(),
+                RocketPhysicsState { dynamics },
+                RocketRenderState::new(dynamics),
+            ))
+            .id();
+
+        run_capture_warm_start(app.world_mut(), 3);
+
+        assert_eq!(app.world().resource::<WarmStartProbe>().0, 3);
+        assert_eq!(
+            *app.world().get::<RocketMissionState>(entity).unwrap(),
+            RocketMissionState(crate::domain::entities::rocket::RocketMissionState::Launch)
+        );
+        // With no flight systems in this test the pose is untouched: the warm
+        // start never teleports.
+        let render = app.world().get::<RocketRenderState>(entity).unwrap();
+        assert_eq!(render.current, dynamics);
+
+        run_capture_warm_start(app.world_mut(), 0);
+        assert_eq!(app.world().resource::<WarmStartProbe>().0, 3);
+    }
+
+    #[test]
+    fn warm_start_steps_are_optional_and_bounded() {
+        assert_eq!(parse_capture_warmup_steps(None), 0);
+        assert_eq!(parse_capture_warmup_steps(Some(" 64 ")), 64);
+        assert_eq!(parse_capture_warmup_steps(Some("nonsense")), 0);
+        assert_eq!(
+            parse_capture_warmup_steps(Some("999999")),
+            MAX_CAPTURE_WARMUP_STEPS
+        );
     }
 }

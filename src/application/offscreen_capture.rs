@@ -207,6 +207,7 @@ fn capture_when_ready(
     mut commands: Commands,
     mut target: ResMut<CaptureTarget>,
     path: Res<CaptureOutputPath>,
+    sim_time: Res<crate::domain::services::simulation_time::SimulationTime>,
 ) {
     if target.captured {
         return;
@@ -218,6 +219,13 @@ fn capture_when_ready(
         return;
     }
     target.captured = true;
+    // A capture may warm-start the simulation, so record the authoritative
+    // clock with the frame instead of implying it is the startup instant.
+    bevy::log::info!(
+        "Offscreen capture at T+{:.1} s ({} frames)",
+        sim_time.sim_time_s,
+        target.frames
+    );
     commands
         .spawn(Screenshot::image(handle))
         .observe(save_to_disk(path.0.clone()))

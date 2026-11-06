@@ -462,6 +462,21 @@ mod tests {
         );
 
         assert_eq!(separated.upper.mass_kg, upper_properties.mass_kg);
+        // Separation is a discrete impulse and a frame re-origin, never an
+        // attitude event: both bodies keep the pre-separation rigid attitude
+        // and body-frame angular velocity.
+        assert_eq!(separated.upper.orientation, pre.orientation);
+        assert_eq!(separated.spent.orientation, pre.orientation);
+        assert_eq!(
+            separated.upper.angular_velocity_radps,
+            pre.angular_velocity_radps
+        );
+        assert_eq!(
+            separated.spent.angular_velocity_radps,
+            pre.angular_velocity_radps
+        );
+        assert_eq!(separated.upper.angular_acceleration_radps2, DVec3::ZERO);
+        assert_eq!(separated.spent.angular_acceleration_radps2, DVec3::ZERO);
         assert_eq!(separated.upper.inertia_body, upper_properties.inertia_body);
         assert_eq!(
             separated.upper.center_of_mass_m,
@@ -612,6 +627,14 @@ mod tests {
                 * DVec3::new(attachment_m.x as f64, 0.0, attachment_m.z as f64).normalize())
                 * PARALLEL_BOOSTER_SEPARATION_DV_MPS;
             assert!((dynamics.velocity_mps - (rigid_point_velocity + radial)).length() < 1e-12);
+            assert_eq!(
+                dynamics.orientation, pre.orientation,
+                "a jettisoned booster keeps the stack attitude, not a re-derived one"
+            );
+            assert_eq!(
+                dynamics.angular_velocity_radps, pre.angular_velocity_radps,
+                "a jettisoned booster keeps its inherited body angular velocity"
+            );
             separation_impulse_kg_mps +=
                 (dynamics.velocity_mps - rigid_point_velocity) * dynamics.mass_kg;
         }

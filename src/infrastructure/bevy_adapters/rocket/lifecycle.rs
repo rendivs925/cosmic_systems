@@ -162,7 +162,7 @@ pub fn apply_relaunch_requests(
                 .unwrap_or(0.0);
             propulsion.reset_for_relaunch(attached_payload_kg);
             if let (Some(mut rocket_mesh), Some(meshes)) = (rocket_mesh, meshes.as_deref_mut()) {
-                *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &propulsion.vehicle));
+                *rocket_mesh = Mesh3d(build_rocket_mesh(meshes, &propulsion.vehicle, 0.0));
                 // Bevy never refreshes an existing `Aabb`, so the mesh swap must
                 // drop it or the full refueled stack can be culled against the
                 // spent upper stage's smaller bounds.

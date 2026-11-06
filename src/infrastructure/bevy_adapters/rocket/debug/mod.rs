@@ -48,6 +48,10 @@ pub struct RocketDebugConfig {
     pub show_com_cop: bool,
     pub show_collision: bool,
     pub show_lod: bool,
+    /// Capture-only mesh tripod in the vehicle body frame. Offscreen captures
+    /// do not carry the gizmo pass, so a frame used as axis evidence needs real
+    /// meshes parented to the vehicle.
+    pub capture_body_axes: bool,
 }
 
 impl Default for RocketDebugConfig {
@@ -71,7 +75,47 @@ impl Default for RocketDebugConfig {
             show_com_cop: true,
             show_collision: true,
             show_lod: false,
+            capture_body_axes: false,
         }
+    }
+}
+
+impl RocketDebugConfig {
+    /// Initial configuration for a normal run, or a capture-only body-axis
+    /// overlay when `COSMIC_SYSTEMS_CAPTURE_BODY_AXES` is set.
+    ///
+    /// The overlay is a measurement facility: a capture cannot press F1/F6, so
+    /// the same read-only gizmos are enabled from the environment. Every other
+    /// category is switched off so a frame used as axis evidence contains only
+    /// the body frame. Unset, the defaults (all debug off) are unchanged.
+    pub fn from_environment() -> Self {
+        const BODY_AXES_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_BODY_AXES";
+        Self::from_body_axes_value(std::env::var(BODY_AXES_ENV).ok().as_deref())
+    }
+
+    fn from_body_axes_value(value: Option<&str>) -> Self {
+        let mut config = Self::default();
+        let enabled = value.is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "on" | "true" | "yes"
+            )
+        });
+        if enabled {
+            bevy::log::info!("Rocket debug body-axis overlay enabled for capture");
+            config.enabled = true;
+            config.capture_body_axes = true;
+            config.show_frames = true;
+            config.show_gravity = false;
+            config.show_velocity = false;
+            config.show_thrust = false;
+            config.show_aero = false;
+            config.show_trajectory = false;
+            config.show_com_cop = false;
+            config.show_collision = false;
+            config.show_lod = false;
+        }
+        config
     }
 }
 
@@ -82,13 +126,14 @@ pub struct RocketDebugPlugin;
 
 impl Plugin for RocketDebugPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RocketDebugConfig>()
+        app.insert_resource(RocketDebugConfig::from_environment())
             .init_resource::<TrajectoryCache>()
             .init_gizmo_group::<RocketDebugGizmos>()
             .add_systems(Update, handle_debug_input)
             .add_systems(
                 Update,
                 (
+                    update_capture_body_axes,
                     update_trajectory_cache,
                     draw_gravity_vectors,
                     draw_velocity_vectors,
@@ -332,6 +377,86 @@ fn draw_aero_forces(
             config.aero_scale,
             config.max_visual_length,
         );
+    }
+}
+
+/// Capture-only body-axis tripod. Offscreen captures do not carry the gizmo
+/// pass, so axis evidence is drawn with ordinary meshes parented to the vehicle.
+#[derive(Component)]
+struct CaptureBodyAxisMarker;
+
+/// Length of each capture axis rod, metres. Long enough to clear a full stack
+/// so the longitudinal axis is visible above the hull, not buried inside it.
+const CAPTURE_AXIS_LENGTH_M: f32 = 60.0;
+
+/// Spawn three unlit axis rods in the vehicle body frame, once per vehicle.
+///
+/// The rods are children of the vehicle, so they inherit the authoritative
+/// attitude with no second transform path. They are inert unless
+/// `COSMIC_SYSTEMS_CAPTURE_BODY_AXES` enabled the capture overlay.
+#[expect(
+    clippy::type_complexity,
+    reason = "The query names the primary-vehicle filter and its child markers explicitly."
+)]
+fn update_capture_body_axes(
+    mut commands: Commands,
+    config: Res<RocketDebugConfig>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    rockets: Query<
+        (Entity, Option<&Children>),
+        (
+            With<RocketPhysicsState>,
+            Without<SpentStage>,
+            Without<RecoveringStage>,
+            Without<CaptureBodyAxisMarker>,
+        ),
+    >,
+    markers: Query<(), With<CaptureBodyAxisMarker>>,
+) {
+    if !config.capture_body_axes {
+        return;
+    }
+    for (entity, children) in &rockets {
+        let already_spawned = children
+            .is_some_and(|children| children.iter().any(|child| markers.get(child).is_ok()));
+        if already_spawned {
+            continue;
+        }
+
+        // Body +X red, +Y green, +Z blue, matching the gizmo overlay.
+        let axes = [
+            (
+                DVec3::X,
+                Color::srgb(1.0, 0.0, 0.0),
+                Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+            ),
+            (DVec3::Y, Color::srgb(0.0, 1.0, 0.0), Quat::IDENTITY),
+            (
+                DVec3::Z,
+                Color::srgb(0.0, 0.0, 1.0),
+                Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            ),
+        ];
+        let rod_mesh = meshes.add(Cuboid::new(0.35, CAPTURE_AXIS_LENGTH_M, 0.35));
+        commands.entity(entity).with_children(|parent| {
+            for (_axis, color, rotation) in axes {
+                let material = materials.add(StandardMaterial {
+                    base_color: color,
+                    emissive: color.to_linear(),
+                    unlit: true,
+                    ..default()
+                });
+                parent.spawn((
+                    CaptureBodyAxisMarker,
+                    Mesh3d(rod_mesh.clone()),
+                    MeshMaterial3d(material),
+                    Transform::from_translation(rotation * Vec3::Y * (CAPTURE_AXIS_LENGTH_M * 0.5))
+                        .with_rotation(rotation),
+                    Name::new("CaptureBodyAxis"),
+                ));
+            }
+        });
     }
 }
 
@@ -637,5 +762,37 @@ mod tests {
 
         assert!(terrain_lod_center_in_flight_frame(center, rotation, origin)
             .abs_diff_eq(DVec3::new(0.0, 3.0, 0.0), 1.0e-12));
+    }
+
+    /// A capture cannot press F1/F6, so the body-axis overlay is opt-in from the
+    /// environment. Unset must leave the interactive defaults alone.
+    #[test]
+    fn body_axes_capture_config_is_opt_in_and_isolated() {
+        assert!(!RocketDebugConfig::from_body_axes_value(None).enabled);
+
+        for value in ["1", "on", "TRUE", " yes "] {
+            let config = RocketDebugConfig::from_body_axes_value(Some(value));
+            assert!(config.enabled, "{value:?} must enable the overlay");
+            assert!(config.show_frames, "{value:?} must show the body frame");
+            assert!(
+                config.capture_body_axes,
+                "{value:?} must spawn the mesh tripod used by offscreen captures"
+            );
+            assert!(
+                !config.show_gravity
+                    && !config.show_velocity
+                    && !config.show_thrust
+                    && !config.show_aero
+                    && !config.show_trajectory
+                    && !config.show_com_cop
+                    && !config.show_collision
+                    && !config.show_lod,
+                "an axis-evidence frame must not carry unrelated gizmos"
+            );
+        }
+
+        for value in ["0", "off", "false", ""] {
+            assert!(!RocketDebugConfig::from_body_axes_value(Some(value)).enabled);
+        }
     }
 }

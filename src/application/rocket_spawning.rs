@@ -272,7 +272,7 @@ pub(crate) fn spawn_rockets(
     let entity = spawn_rocket_core(commands, &setup);
 
     // Create a proper multi-part rocket mesh from the vehicle configuration.
-    let mesh_handle = build_rocket_mesh(meshes, &setup.rocket);
+    let mesh_handle = build_rocket_mesh(meshes, &setup.rocket, 0.0);
 
     // Create rocket material: white painted hull, lit by the sun so the body
     // shades correctly (cylinder silhouette reads as a rocket, not a ghost).
@@ -628,9 +628,18 @@ fn rocket_mesh_engine_stations(
         .collect()
 }
 
+/// Build a catalog-derived multi-part rocket mesh in the physical body frame.
+///
+/// Vertices are assembled bottom-up from the declared stack envelope, so
+/// `body_origin_offset_y_m` is the shift that puts the simulated body origin at
+/// `(0, 0, 0)`. The full attached stack passes `0` (the envelope centre is its
+/// physical origin). A surviving serial stage passes `+envelope / 2`, because
+/// its physical origin is the *stage* cylinder centre while the mesh also
+/// carries the attached upper envelope above it.
 pub(crate) fn build_rocket_mesh(
     meshes: &mut Assets<Mesh>,
     rocket: &crate::domain::entities::rocket::Rocket,
+    body_origin_offset_y_m: f32,
 ) -> Handle<Mesh> {
     let total_height = rocket.height_m;
 
@@ -851,6 +860,12 @@ pub(crate) fn build_rocket_mesh(
         }
     }
 
+    if body_origin_offset_y_m != 0.0 {
+        for position in &mut positions {
+            position[1] += body_origin_offset_y_m;
+        }
+    }
+
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
@@ -883,6 +898,12 @@ pub(crate) fn build_serial_stage_mesh(
             stages: vec![stage.clone()],
             parallel_boosters: None,
         },
+        // Physics changes to a stage-centred frame at separation
+        // (`RocketGeometry::lower_extent_y_m = -stage.height / 2`), so the
+        // stage cylinder — not the stage+envelope assembly — must land on the
+        // origin. Without this the rendered upper stage sits half an envelope
+        // too low.
+        upper_envelope_height_m.max(0.0) * 0.5,
     )
 }
 
@@ -1106,19 +1127,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn serial_stage_mesh_has_only_the_active_stage_geometry() {
-        let stage = RocketStage {
+    fn upper_stage_fixture(height_m: f32) -> RocketStage {
+        RocketStage {
             name: "Upper".into(),
             diameter_m: 1.0,
-            height_m: 8.0,
+            height_m,
             dry_mass_kg: 50.0,
             propellant_mass_kg: 250.0,
             recovery_propellant_reserve_kg: None,
             landing_gear: None,
             fairing_dry_mass_kg: None,
             engines: vec![RocketEngine {
-                position_m: Vec3::new(0.0, -4.0, 0.0),
+                position_m: Vec3::new(0.0, -height_m * 0.5, 0.0),
                 thrust_axis: Vec3::Y,
                 isp_sea_level: 250.0,
                 isp_vacuum: 300.0,
@@ -1131,13 +1151,79 @@ mod tests {
                 ignition_count: 0,
                 state: EngineState::Off,
             }],
+        }
+    }
+
+    fn mesh_positions(meshes: &Assets<Mesh>, handle: &Handle<Mesh>) -> Vec<[f32; 3]> {
+        let mesh = meshes.get(handle).expect("serial mesh handle is live");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("rocket mesh must expose f32 vertex positions");
         };
+        positions.clone()
+    }
+
+    #[test]
+    fn serial_stage_mesh_has_only_the_active_stage_geometry() {
+        let stage = upper_stage_fixture(8.0);
         let mut meshes = Assets::<Mesh>::default();
         let mesh = build_serial_stage_mesh(&mut meshes, &stage, 0.0);
 
         assert!(meshes.get(&mesh).is_some());
     }
 
+    /// Physics switches to a stage-centred body frame at serial separation:
+    /// `RocketGeometry::lower_extent_y_m = -stage.height / 2`. The rebuilt mesh
+    /// must put that same cylinder centre on its origin, with the retained
+    /// upper envelope above it. Before this regression was pinned the builder
+    /// kept the stage+envelope assembly centred, so the rendered upper stage
+    /// sat half an envelope too low and jumped at the staging tick.
+    #[test]
+    fn serial_stage_mesh_is_centred_on_the_stage_not_the_envelope() {
+        let stage = upper_stage_fixture(8.0);
+        let envelope_m = 3.0_f32;
+        let mut meshes = Assets::<Mesh>::default();
+        let handle = build_serial_stage_mesh(&mut meshes, &stage, envelope_m);
+        let positions = mesh_positions(&meshes, &handle);
+
+        let stage_half_m = stage.height_m * 0.5;
+        let bell_height_m = (stage.diameter_m * 0.35).max(0.2);
+        let max_y_m = positions
+            .iter()
+            .map(|position| position[1])
+            .fold(f32::MIN, f32::max);
+        let min_y_m = positions
+            .iter()
+            .map(|position| position[1])
+            .fold(f32::MAX, f32::min);
+
+        // Nose apex is the stage top plus the whole envelope.
+        assert!(
+            (max_y_m - (stage_half_m + envelope_m)).abs() < 1e-4,
+            "mesh top {max_y_m} must be stage half-height {stage_half_m} plus envelope {envelope_m}"
+        );
+        // Engine bells are the lowest geometry, one bell below the stage base.
+        assert!(
+            (min_y_m - (-stage_half_m - bell_height_m)).abs() < 1e-4,
+            "mesh bottom {min_y_m} must be the stage base plus one bell {bell_height_m}"
+        );
+
+        // The stage cylinder itself, not the envelope, spans ±height/2.
+        let radius_m = stage.diameter_m * 0.5;
+        for expected_y_m in [-stage_half_m, stage_half_m] {
+            let ring_exists = positions.iter().any(|position| {
+                (position[1] - expected_y_m).abs() < 1e-4
+                    && ((position[0] * position[0] + position[2] * position[2]).sqrt() - radius_m)
+                        .abs()
+                        < 1e-3
+            });
+            assert!(
+                ring_exists,
+                "stage cylinder must have a {radius_m} m ring at y={expected_y_m}"
+            );
+        }
+    }
     /// Checkpoint 3 acceptance: the vehicle must rest on the same authoritative
     /// terrain surface that collision and rendering use. The held prelaunch
     /// state samples the procedural surface rather than a fixed altitude, so a
