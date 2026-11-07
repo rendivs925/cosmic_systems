@@ -1106,6 +1106,104 @@ mod tests {
         );
     }
 
+    /// TD-09: every adjacent cube-face pair shares its edge samples. The same
+    /// great-circle point sampled through either face must return the same
+    /// height; the DEM stores one f32 per shared edge sample, so this is exact.
+    #[test]
+    fn global_dem_shares_face_seam_samples() {
+        let source = DemTerrainSource::from_path(
+            crate::domain::services::terrain_source::DEFAULT_EARTH_DEM_PATH,
+        )
+        .expect("resident Earth DEM must load");
+        let faces = [
+            (CubeFace::PosX, DVec3::X),
+            (CubeFace::NegX, -DVec3::X),
+            (CubeFace::PosY, DVec3::Y),
+            (CubeFace::NegY, -DVec3::Y),
+            (CubeFace::PosZ, DVec3::Z),
+            (CubeFace::NegZ, -DVec3::Z),
+        ];
+        let mut pairs = 0;
+        for (index, (face_a, normal_a)) in faces.iter().enumerate() {
+            for (face_b, normal_b) in faces.iter().skip(index + 1) {
+                if normal_a.dot(*normal_b).abs() > 0.5 {
+                    continue; // opposite faces do not share an edge
+                }
+                pairs += 1;
+                let along = normal_a.cross(*normal_b).normalize();
+                for step in 0..=64 {
+                    let s = -1.0 + 2.0 * step as f64 / 64.0;
+                    let direction = (*normal_a + *normal_b + along * s).normalize();
+                    let face_uv_of = |face: CubeFace| {
+                        let x = direction.x.abs();
+                        let y = direction.y.abs();
+                        let z = direction.z.abs();
+                        match face {
+                            CubeFace::PosX | CubeFace::NegX => (
+                                ((direction.y / x) + 1.0) / 2.0,
+                                ((direction.z / x) + 1.0) / 2.0,
+                            ),
+                            CubeFace::PosY | CubeFace::NegY => (
+                                ((direction.x / y) + 1.0) / 2.0,
+                                ((direction.z / y) + 1.0) / 2.0,
+                            ),
+                            CubeFace::PosZ | CubeFace::NegZ => (
+                                ((direction.x / z) + 1.0) / 2.0,
+                                ((direction.y / z) + 1.0) / 2.0,
+                            ),
+                        }
+                    };
+                    let (ua, va) = face_uv_of(*face_a);
+                    let (ub, vb) = face_uv_of(*face_b);
+                    let ha = source.dem.sample_face_m(*face_a, ua, va);
+                    let hb = source.dem.sample_face_m(*face_b, ub, vb);
+                    assert!(
+                        (ha - hb).abs() < 1e-6,
+                        "{face_a:?}/{face_b:?} at step {step}: {ha} vs {hb} m"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            pairs, 12,
+            "a cube has twelve edges and twelve adjacent pairs"
+        );
+    }
+
+    /// TD-09: the global DEM is continuous across the antimeridian and collapses
+    /// every longitude onto the same polar sample.
+    #[test]
+    fn global_dem_is_continuous_across_the_antimeridian_and_poles() {
+        let source = DemTerrainSource::from_path(
+            crate::domain::services::terrain_source::DEFAULT_EARTH_DEM_PATH,
+        )
+        .expect("resident Earth DEM must load");
+
+        // 1e-6 degrees is about 0.1 m on the ground; the sampled heights must not
+        // step by more than the interpolation tolerance at that separation.
+        for latitude_deg in [-80.0, -45.0, 0.0, 45.0, 80.0, 89.9] {
+            let east = source.height_m(latitude_deg, 180.0 - 1e-6);
+            let west = source.height_m(latitude_deg, -180.0 + 1e-6);
+            assert!(
+                (east - west).abs() < 0.01,
+                "antimeridian step at {latitude_deg}: {east} vs {west} m"
+            );
+        }
+
+        // The pole is one point: every longitude must return the same sample.
+        for latitude_deg in [90.0, -90.0] {
+            let reference = source.height_m(latitude_deg, 0.0);
+            for step in 0..360 {
+                let longitude_deg = -180.0 + f64::from(step);
+                let height_m = source.height_m(latitude_deg, longitude_deg);
+                assert!(
+                    (height_m - reference).abs() < 1e-3,
+                    "polar clamp at {latitude_deg}, {longitude_deg}: {height_m} vs {reference} m"
+                );
+            }
+        }
+    }
+
     #[test]
     fn geoid_moves_the_sea_level_classification() {
         let dem_raw = [0u8; 16];

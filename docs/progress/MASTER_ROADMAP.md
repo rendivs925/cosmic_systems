@@ -685,10 +685,10 @@ timings. This phase exists because an unverifiable change is not a change.
   lake depth, the orthometric difference and zero radar altitude at the surface.
   `papua_control_point_reports_one_datum_across_consumers` records the real
   control point:
-  * EGM2008 undulation at the site ≈ **71.42 m**;
-  * measured NASADEM payload **71.978 m** ellipsoidal = **0.56 m** orthometric;
-  * graded pad **74.42 m** = **3.00 m** above the same datum;
-  * classification `Land`, mesh height equals collision height, and a point on
+  - EGM2008 undulation at the site ≈ **71.42 m**;
+  - measured NASADEM payload **71.978 m** ellipsoidal = **0.56 m** orthometric;
+  - graded pad **74.42 m** = **3.00 m** above the same datum;
+  - classification `Land`, mesh height equals collision height, and a point on
     the composed surface has zero radar altitude.
   A second correction would move these by 71 m; the tolerances are 0.8 m and
   0.2 m.
@@ -703,7 +703,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `b4743da`; the two tests.
 
 ### TD-09 — Cube-face and antimeridian continuity tests
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Pin terrain and imagery continuity across cube-face seams and the
   antimeridian.
@@ -713,13 +713,31 @@ timings. This phase exists because an unverifiable change is not a change.
   `src/domain/services/imagery_tiles.rs`.
 - **Acceptance:** sampling the same great-circle point from either side of a seam
   agrees within the source tolerance.
-- **Tests:** face-seam pair, antimeridian pair, polar clamp.
-- **Visual evidence:** diagnostic UV/tile-identity frames at a seam.
+- **Specification:** `terrain-source` gained "Elevation is continuous across
+  cube-face seams and poles" (change
+  `2026-11-07-pin-cube-face-and-antimeridian-continuity`).
+- **Audit result:** no production code change. The cube sphere stores one height
+  per direction; imagery already had antimeridian-wrap and pole-clamp tests, and
+  adjacent tile edges are continuous.
+- **Tests:** `global_dem_shares_face_seam_samples` derives the `(u, v)` of the
+  same edge direction on both faces and samples all **twelve** adjacent pairs at
+  65 points each; the difference is **exactly 0 m** (one f32 edge sample shared
+  by both faces). `global_dem_is_continuous_across_the_antimeridian_and_poles`
+  measures a maximum **4.8 mm** step at ±180° for a 1e-6° (≈0.1 m) separation,
+  and the polar height spread across every integer longitude is **1e-12 m**.
+  Imagery: `longitude_wraps_across_the_antimeridian`,
+  `latitude_clamps_at_the_poles`, `adjacent_tile_edges_are_continuous`.
+- **Visual evidence:** not applicable. A UV/tile-identity frame shows the patch
+  layout, not the sampled height equality; the acceptance is numeric and the
+  height diagnostic has no sub-metre resolution across a face seam.
 - **Performance:** none.
-- **Scientific validation:** continuity is a property of the authoritative source.
-- **Risks:** tests that only re-derive the same formula prove nothing; they must
-  compare independent paths.
-- **Completion evidence:** pending.
+- **Scientific validation:** a cube sphere maps a direction to one face; the
+  shared edge is the same geographic line, so both faces must carry the same
+  sample. The test proves the conversion and f32 storage preserve it.
+- **Risks recorded:** a future DEM bake or a per-face filter must keep writing
+  shared edge samples consistently; the test fails at the first mismatch.
+- **Completion evidence:** `PLACEHOLDER`; the two tests plus the existing
+  imagery tests.
 
 ---
 

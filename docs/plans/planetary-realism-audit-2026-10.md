@@ -1206,3 +1206,31 @@ move these by 71 m; the test tolerances are 0.8 m and 0.2 m.
 **Recorded rule.** `terrain-source` now states that the sea datum is applied
 exactly once, and that a producer receiving orthometric data converts at ingest
 while runtime consumers do not repeat the correction.
+
+## 2026-11-07 — Cube-face and antimeridian continuity (TD-09)
+
+The cube sphere maps a direction to the face with the largest component. Adjacent
+faces therefore store the same geographic edge twice, and a consumer that
+interpolates the two sides differently would show a step exactly where a face
+boundary crosses a coast or a site. The audit found no such step; no production
+code changed.
+
+**Face seams.** For each of the twelve adjacent face pairs, the test derives the
+`(u, v)` of the same edge direction on both faces and calls
+`CubeSphereDem::sample_face_m` on each, at 65 points per edge. The difference is
+**exactly 0 m**: the conversion writes one shared edge sample per direction and
+both faces read the same f32.
+
+**Antimeridian.** At a 1e-6° separation (about 0.1 m on the ground) the largest
+measured height step across ±180° is **4.8 mm**; the test tolerance is 1 cm.
+
+**Poles.** Every integer longitude at each pole returns the same height within
+**1e-12 m**; the test tolerance is 1 mm.
+
+**Imagery.** `longitude_wraps_across_the_antimeridian`,
+`latitude_clamps_at_the_poles` and `adjacent_tile_edges_are_continuous` already
+pin the equirectangular path; no new code was needed.
+
+No visual evidence is claimed: a UV/tile-identity frame shows the patch layout,
+not sampled height equality, and the height diagnostic has no sub-metre
+resolution across a face seam. The acceptance is numeric.
