@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-07. Last code checkpoint: `6209a73`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-six of forty-five roadmap tasks, each with implementation + tests + a
+Twenty-seven of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -94,7 +94,8 @@ named frame or a named measurement:
 | TD-06 synthetic coastline guard | land-only sea-datum guard enabled; worst-case detail cannot cross the datum across the whole window, measured ocean keeps signed relief, all three committed baselines unchanged; Papua A/B mean 1.53/255; `2026-11-05-td06-papua-*` |
 | RK-01 attitude and staging | separation preserves attitude/angular velocity; jettisoned debris now advances its own render snapshot; the serial-stage mesh is centred on the physical stage; the debug tripod uses the flight frame; three body-axis frames, staging at `T+27.5 s`, capture at `T+29.9 s`; `2026-11-06-rk01-*` |
 | RK-02 plume state | intensity is the burned mass-flow fraction, length follows the pressure expansion, direction follows the gimbaled thrust axis; same flow fraction at sea level 6.6 m / 96.8 kPa and 40.4 km 20.7 m / 274 Pa; 33 effects, 0.022 ms update; `2026-11-07-rk02-*` |
-| VL-02 OpenSpec strict | 43/43 |
+| TD-12 near-datum water | the Papua strip is measured NASADEM (4.3 cm below the datum; the eroded base is +4 m above it); the ocean cap had used its 0.5 m depth-test offset as a flood threshold and submerged measured land at 0.28–0.46 m; classification now follows the datum, offset 0.05 m, pale water share 8.19 % → 3.27 %; `2026-11-07-td12-papua-after.jpg` |
+| VL-02 OpenSpec strict | 42/42 |
 
 Every implemented task is now verified. The two remaining blocked items are
 environmental; the rest are planned work.
@@ -108,17 +109,18 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TD-12 — the Papua water bodies.** Determine whether the angular water bodies
-that persist after the land-only detail guard are carved by erosion or measured,
-by comparing against ETOPO before changing the erosion model.
+**TD-07 — terrain LOD transitions.** The patch-identity diagnostic shows hard
+gaps between some neighbouring patches; TD-07 audits the crack-free transition
+claims and the stitch weights at those boundaries.
 
-RK-02 is closed. The plume was already partly state-driven, but intensity used a
-binary running flag, length ignored the pressure expansion, and direction ignored
-the gimbal. It now reads the mass flow the fixed pipeline actually burned,
-lengthens with the same expansion that widens it, and points along the
-authoritative gimbaled thrust axis — including for a recovering first stage, which
-previously had no applied-propulsion sample. The remaining terrain and material
-audits (TD-07, TD-08, TD-09, TD-12, TM-01/02/03, TG-01/02) and RD-01 follow.
+TD-12 is closed. The Papua water is measured NASADEM: the finest payload puts
+the observed strip 4.3 cm below the EGM2008 datum and the source's own
+classification calls it ocean, while the eroded base over the global DEM is four
+metres above the datum. The visible over-extent was a rendering bug: the ocean
+cap used its 0.5 m depth-test offset as the flood threshold, submerging measured
+land at 0.28–0.46 m. Classification now follows the datum and the offset is
+0.05 m. The remaining terrain and material audits (TD-07, TD-08, TD-09,
+TM-01/02/03, TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -126,8 +128,8 @@ audits (TD-07, TD-08, TD-09, TD-12, TM-01/02/03, TG-01/02) and RD-01 follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1165 passed, 2 ignored
-cargo test --no-default-features --lib   # 1123 passed, 2 ignored
+cargo test --features dem --lib          # 1167 passed, 2 ignored
+cargo test --no-default-features --lib   # 1124 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -150,9 +152,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,165 domain and adapter
-tests pass (1,123 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-six of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,167 domain and adapter
+tests pass (1,124 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-seven of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -270,3 +272,12 @@ burned, lengthens with the pressure-derived expansion, and follows the
 authoritative gimbaled thrust axis. The same change gave recovering first stages
 their own applied-propulsion sample, so a landing burn is no longer drawn from a
 commanded-throttle guess.
+
+The Papua water bodies were the last open question from the terrain audits, and the
+answer was neither of the two candidates. They are measured: the NASADEM payload
+puts the strip four centimetres below the sea datum, and the source itself calls
+it ocean. Erosion is four metres above the datum there. What made the bodies look
+invented was the renderer: the ocean cap had used its half-metre depth-test lift
+as the wet/dry threshold, so every measured plain within half a metre of the sea
+was drawn as water. The lift now belongs to the surface only; classification
+follows the datum, and the measured plain at 0.28–0.46 m stays land.

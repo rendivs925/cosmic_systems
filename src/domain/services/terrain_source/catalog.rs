@@ -684,3 +684,66 @@ impl TerrainSource for EarthTerrainSource {
         self.source.zone_lat(latitude_deg)
     }
 }
+
+#[cfg(all(test, feature = "dem"))]
+mod tests {
+    use super::*;
+    use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
+
+    /// TD-12: the angular water bodies on the Papua plain. The finest measured
+    /// payload puts the observed strip a few centimetres below the EGM2008 sea
+    /// datum, and the source classifies it as ocean. The eroded base at the
+    /// same coordinates is metres *above* the datum, so erosion did not carve
+    /// it and the water is measurement, not a synthetic basin.
+    #[test]
+    fn papua_near_datum_water_is_measured_payload_not_erosion() {
+        let composed = EarthTerrainSource::new();
+        let tiles = composed
+            .elevation_tile_source()
+            .expect("Earth exposes a payload pyramid");
+        let global: Arc<dyn TerrainSource> = Arc::new(
+            DemTerrainSource::from_path_with_geoid(
+                DEFAULT_EARTH_DEM_PATH,
+                DEFAULT_EARTH_GEOID_PATH,
+                GlobalRasterSpec::egm2008_geoid_0p5deg(),
+            )
+            .expect("the resident measured authority must load"),
+        );
+        let eroded = earth_eroded_base(global);
+
+        for (latitude_deg, longitude_deg) in [(-8.01912, 139.49950), (-8.01651, 139.49950)] {
+            tiles
+                .ensure_covering_tile_loaded(latitude_deg, longitude_deg)
+                .expect("the regional payload must decode");
+            let direction = terrain_lat_lon_to_body_fixed(latitude_deg, longitude_deg);
+            let measured_m = tiles
+                .sample_resident(direction)
+                .expect("the finest covering payload is resident");
+            let sea_level_m = composed.sea_level_height_m(latitude_deg, longitude_deg);
+            let composed_m = composed.height_m(latitude_deg, longitude_deg);
+            let eroded_m = eroded.height_m(latitude_deg, longitude_deg);
+
+            // Recorded composition at the observed water:
+            // measured 71.363 m, sea 71.406-71.408 m, eroded ~+4 m over sea,
+            // composed = measured (the payload overlay outranks erosion).
+            assert!(
+                (composed_m - measured_m).abs() < 1e-3,
+                "the composed surface must be the measured payload: {composed_m} vs {measured_m}"
+            );
+            assert_eq!(
+                composed.surface_class(latitude_deg, longitude_deg),
+                SurfaceClass::Ocean
+            );
+            let below_m = sea_level_m - composed_m;
+            assert!(
+                (0.0..0.1).contains(&below_m),
+                "the measured depression is centimetres, not a carved basin: {below_m} m"
+            );
+            assert!(
+                eroded_m > sea_level_m + 1.0,
+                "erosion must not carve this below the datum: {} m over sea",
+                eroded_m - sea_level_m
+            );
+        }
+    }
+}

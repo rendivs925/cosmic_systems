@@ -26,7 +26,7 @@ over with a new duplicate spec.
 | TD-09 seam continuity | `terrain-source`, `terrain-lod` | — | |
 | TD-10 pad anchor vs payload and cache | `elevation-tile-payload`, `terrain-source`, `determinism-regression` | — | payload outranks erosion for the sample; erosion bakes from the immutable global DEM so load order and the disk cache cannot select a different field |
 | TD-11 coastal datum clearance | `terrain-source`, `planetary-water` | — | platform floor at sea + 3 m; the ascent fixture pins its launch altitude, so baselines are unaffected |
-| TD-12 near-datum base water | `terrain-source`, `terrain-erosion` | — | open: compare persisting water against the measured DEM before changing erosion |
+| TD-12 near-datum base water | `terrain-source`, `terrain-erosion`, `terrain-rendering` | — | change `2026-11-07-classify-water-at-the-sea-datum`: water is measured NASADEM (4.3 cm below the datum), erosion is +4 m above it; the cap now classifies at the datum and keeps the 0.05 m offset for depth stability only |
 | LF-01 footprint | `launch-site-presentation` | — | |
 | LF-02…04 facility | `launch-site-presentation` | — | |
 | TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | |

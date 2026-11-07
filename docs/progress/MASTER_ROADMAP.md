@@ -300,7 +300,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `17bc6f5`; tests plus the seven re-captured pads.
 
 ### TD-12 — Near-datum water bodies that persist after the detail guard
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Determine whether the angular water bodies that remain on the
   Papua plain after TD-06 come from erosion-carved base heights or from the
@@ -314,17 +314,44 @@ timings. This phase exists because an unverifiable change is not a change.
   to be present in the measured DEM within its published uncertainty, or the
   erosion hydrology is corrected so that it cannot carve new below-datum
   depressions on land whose measured base is above the datum.
-- **Tests:** a composition test at the observed polygon coordinates that records
-  measured height, eroded base, composed height and classification; a
-  regression that a land column measured above the datum is not eroded below it.
-- **Visual evidence:** repeat the `2026-11-05-td06-papua-*` pose.
-- **Performance:** none expected; erosion is baked.
-- **Scientific validation:** river incision may legitimately cut below sea level
-  near a coast; the fix must compare against the measured DEM rather than
-  suppress all incision.
-- **Risks:** flattening real estuaries or delta channels to remove a synthetic
-  artifact.
-- **Completion evidence:** pending.
+- **Specification:** `terrain-rendering` gained "Ocean cap classifies water at
+  the sea datum" (change `2026-11-07-classify-water-at-the-sea-datum`).
+- **Determination:** the water is **measured, not eroded**. At the observed strip
+  the finest resident NASADEM payload is 71.363 m against a 71.406–71.408 m
+  EGM2008 sea datum — 4.3 cm below — and the source's own `surface_class`
+  returns `Ocean`. The eroded base over the stable global DEM is 4.0–4.1 m
+  *above* the datum at the same coordinates. No erosion or hydrology change was
+  justified.
+- **Defect found and fixed:** the ocean cap classified a vertex by comparing the
+  bed against `sea level + WATER_SURFACE_OFFSET_M`. That 0.5 m offset exists so
+  the translucent water wins the depth test against the far-field globe; using
+  it in the wet/dry test flooded every measured coastal plain within half a
+  metre of the datum. The Papua payload puts the plain at 0.28–0.46 m above the
+  datum, so land the source called `Land` was drawn as sea. Classification now
+  follows the source datum; only the surface radius carries the offset, and the
+  offset is now 0.05 m so an adjacent wet triangle cannot cover the measured
+  plain either.
+- **Tests:** `papua_near_datum_water_is_measured_payload_not_erosion` records the
+  measured, eroded, composed and classified values at the observed coordinates;
+  `ocean_cap_requires_the_bed_at_or_below_the_datum` pins the classification at
+  0.28, 0.05, 0.0 and −0.043 m relative to the datum.
+- **Visual evidence:** `2026-11-07-td12-papua-after.jpg`, the same pose
+  (`-8.0,139.5,600`), instant, time (42 s) and frame count (220) as
+  `2026-11-05-td06-papua-after.jpg`. Under a documented pale near-neutral
+  metric (channel mean > 110/255 and max−min < 35) the water-like share falls
+  from **8.19 % to 3.27 %** (−60.1 %). The remaining strip is the measured
+  4.3 cm below-datum payload sample, not a synthetic basin.
+- **Performance:** none; one constant and one comparison, evaluated per patch
+  vertex during the existing cap build.
+- **Scientific validation:** NASADEM's vertical accuracy is metres (see
+  `docs/datasets/earth_regional_papua_v1.md`), so the residual strip is at the
+  limit of the measured data rather than a resolved water body. Removing it
+  would require cross-tile payload smoothing in the ingest pipeline, which would
+  also smooth real channels and is out of scope.
+- **Risks recorded:** a bed less than 5 cm below the datum now renders as land.
+  That is inside the measured coast's vertical uncertainty and is the price of
+  not flooding measured land.
+- **Completion evidence:** `PLACEHOLDER`; tests plus the repeated frame.
 
 ### TD-03 — Regional imagery colour match to the global overview
 - **Status:** VERIFIED

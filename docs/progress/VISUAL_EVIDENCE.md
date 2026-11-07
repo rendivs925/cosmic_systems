@@ -32,7 +32,7 @@ values and its linear-to-byte encoding are in
 | --- | --- | --- | --- | --- |
 | 1 | prelaunch | CURRENT | `pad-110m-footprint`, `2026-11-06-rk01-prelaunch-axes` | pad and tower; the RK-01 frame adds the body tripod and the retained upper envelope |
 | 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed` | one graded pad per predefined site, all flush and dry |
-| 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*` | 600 m nadir; the detail guard A/B is the same pose with the guard off and on |
+| 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*`, `2026-11-07-td12-papua-after` | 600 m nadir; the detail guard A/B is the same pose with the guard off and on, and the TD-12 frame repeats it after the datum-classification fix |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
@@ -301,12 +301,51 @@ ellipsoid and the EGM2008 sea datum there is **71.43 m**, so the plain is
 **1.6–13.6 m** above the sea inside a detail octave of **−36..+24 m**. The guard
 window (`4..60 m` above the datum) covers it.
 
-**Recorded limit:** the two large angular water bodies keep their extent after the
-guard (water-like pixels 15,343 → 15,296, with the mask shifting only inside
-them). The guard provably removes every detail-only crossing on land above the
-datum, so this water is below the datum in the base surface (erosion or
-measurement), not detail-fabricated. It is tracked as **TD-12** and is not
-claimed as fixed here.
+**Recorded limit (closed by TD-12):** the two large angular water bodies kept
+their extent after the guard (water-like pixels 15,343 → 15,296, with the mask
+shifting only inside them). The guard provably removes every detail-only
+crossing on land above the datum, so this water was below the datum in the base
+surface. TD-12 identified the base as the measured NASADEM payload and the
+over-extent as a rendering flood threshold; see the next section.
+
+### Near-datum water on the Papua plain (`TD-12`, commit `PLACEHOLDER`)
+
+Same pose (`-8.0,139.5,600`), default start instant, presentation time 42 s and
+220 frames as `2026-11-05-td06-papua-after.jpg`; only the ocean-cap
+classification changed.
+
+| file | commit | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- |
+| `2026-11-05-td06-papua-after.jpg` | `5c7585e` | `cd1fd925c2601f72` | before: the 0.5 m depth-test offset also acted as a flood threshold |
+| `2026-11-07-td12-papua-after.jpg` | `PLACEHOLDER` | `d59dd3c099cd9d24` | after: classification at the datum, surface offset 0.05 m |
+
+Measured composition at the observed strip (finest resident payload):
+
+| quantity | value |
+| --- | --- |
+| measured NASADEM height | 71.363 m ellipsoidal |
+| EGM2008 sea datum | 71.406–71.408 m |
+| measured minus datum | **−0.043 m** |
+| source `surface_class` | **Ocean** |
+| eroded base (stable global DEM) | +4.0 to +4.1 m above the datum |
+| composed height | equals the measured payload |
+
+So the water is measured, not eroded. The *over-extent* was rendering: the cap
+tested the bed against `sea datum + 0.5 m`, so measured land at **0.28–0.46 m**
+above the datum was drawn as sea wherever a triangle reached a wet vertex.
+Classification now follows the datum; the 0.05 m offset only positions the
+surface.
+
+Measured: pale near-neutral pixels (channel mean > 110/255 and max−min < 35,
+a documented proxy for the pale water surface) fall from **75,498 / 921,600
+(8.19 %)** to **30,149 (3.27 %)** — a **60.1 %** reduction. The remaining strip
+is the measured 4.3 cm below-datum payload sample.
+
+**Recorded limit:** NASADEM's vertical accuracy is metres (see
+`docs/datasets/earth_regional_papua_v1.md`), so the residual strip is at the
+limit of the measured data, not a resolved water body. Removing it would require
+cross-tile payload smoothing in the ingest pipeline, which would also smooth
+real channels.
 
 ### Launch-site grading per predefined site (`TD-02`, commit `c582708`)
 

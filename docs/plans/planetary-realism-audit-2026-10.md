@@ -1100,3 +1100,41 @@ Recorded limits: the layer proportions are presentation constants, not a
 gas-dynamic solution; per-layer materials stay shared, so brightness is not scaled
 per vehicle; the mid-body orange band at altitude is the existing aerodynamic
 heating shell.
+
+## 2026-11-07 — Near-datum water on the Papua plain (TD-12)
+
+TD-06 left two angular water bodies on the Papua plain with an open question:
+the detail guard cannot lower land above the datum, so the water had to come
+from the base surface, either erosion or measurement. The answer is measurement,
+and the reason the bodies looked "invented" was a rendering threshold.
+
+**Determination.** At the observed strip the finest resident NASADEM payload is
+71.363 m ellipsoidal against a 71.406–71.408 m EGM2008 sea datum: 4.3 cm below,
+and `TerrainSource::surface_class` already returns `Ocean`. The eroded base over
+the stable global DEM is 4.0–4.1 m *above* the datum at the same coordinates, and
+the composed surface equals the measured payload because a resident payload
+outranks erosion. No erosion or hydrology change is justified.
+
+**The defect.** `water_mesh_for_patch` classified a vertex as wet by comparing
+its bed radius against `sea level + WATER_SURFACE_OFFSET_M`. That 0.5 m offset is
+a depth-stability lift against the coincident far-field globe, not a sea level.
+Using it as the flood threshold submerged every measured coastal plain within
+half a metre of the datum. The Papua payload puts the plain at 0.28–0.46 m above
+the datum, so the source called it land and the renderer drew sea. The fix
+separates the two roles: classification uses the datum (the same rule as
+`surface_class`), and only the surface radius carries the offset, now 0.05 m so
+an adjacent wet triangle cannot cover the measured plain either.
+
+**Measured.** Same pose, instant, time and frame count as the TD-06 frame. Under
+a documented pale near-neutral proxy (channel mean > 110/255 and max−min < 35),
+the water-like share falls from 75,498 pixels (8.19 %) to 30,149 (3.27 %), a
+60.1 % reduction. The remaining strip is the measured 4.3 cm below-datum sample.
+
+**Residual.** NASADEM's vertical accuracy is metres, so a 4.3 cm depression is
+at the limit of the data. The renderer is not inventing it, but it is also not
+evidence of open water. Removing it would require smoothing across payload tile
+edges in the ingest pipeline, which would smooth real channels too; it is
+recorded rather than hidden.
+
+Cost: one comparison and one constant per patch vertex in the existing cap
+build. All three flight baselines are unchanged.

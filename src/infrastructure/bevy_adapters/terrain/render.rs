@@ -99,7 +99,12 @@ const TERRAIN_DETAIL_SCALE: f32 = 0.6;
 pub(crate) const MESO_FREQUENCY: f32 = 0.06;
 /// Small lift so the translucent water cap wins the depth test against the
 /// coincident far-field fallback globe instead of z-fighting it.
-const WATER_SURFACE_OFFSET_M: f64 = 0.5;
+///
+/// This margin is also the height above the datum at which land is submerged
+/// by an adjacent wet triangle, so it must stay far below the vertical
+/// uncertainty of the measured coast. It was 0.5 m, which flooded the Papua
+/// lowland (measured 0.28–0.46 m above the datum) with angular seas (TD-12).
+const WATER_SURFACE_OFFSET_M: f64 = 0.05;
 /// Depth mapped to full deep-water colour and opacity. Deeper samples clamp.
 /// Clear water becomes visually deep within tens of metres, not kilometres, so
 /// a 4 km scale left every coastal and inland water body at the shallowest
@@ -2474,8 +2479,16 @@ fn water_mesh_for_patch(
         let sea_level_m = source
             .map(|source| source.sea_level_height_m(latitude_deg, longitude_deg))
             .unwrap_or(0.0);
-        let sea_level_radius_m = planet_radius_m + sea_level_m + WATER_SURFACE_OFFSET_M;
-        let ocean_depth = if has_ocean {
+        // The surface sits a small offset above the datum so the sea and the
+        // bed do not z-fight. That offset is a rendering margin, not a flood
+        // threshold: using it to decide *whether* a vertex is wet classified
+        // every coastal plain within half a metre of the datum as ocean, which
+        // is how the Papua lowland grew angular seas over measured land
+        // (TD-12). Classification follows the source's own rule (at or below
+        // the datum); only the surface radius carries the offset.
+        let sea_level_datum_radius_m = planet_radius_m + sea_level_m;
+        let sea_level_radius_m = sea_level_datum_radius_m + WATER_SURFACE_OFFSET_M;
+        let ocean_depth = if has_ocean && radius <= sea_level_datum_radius_m {
             (sea_level_radius_m - radius).max(0.0)
         } else {
             0.0
@@ -4312,6 +4325,62 @@ mod tests {
         assert!(!state.occlusion_owned);
         assert!(state.occlusion_field.is_none());
         assert_eq!(state.baked_sun_body, DVec3::ZERO);
+    }
+
+    /// TD-12: the water surface sits a small offset above the datum for depth
+    /// stability, but that offset must not decide *whether* a vertex is wet.
+    /// When it did, land measured 0.28–0.46 m above the datum was drawn as sea
+    /// on the Papua plain. Classification follows the source rule (at or below
+    /// the datum); only the surface radius carries the offset.
+    #[test]
+    fn ocean_cap_requires_the_bed_at_or_below_the_datum() {
+        #[derive(Debug)]
+        struct Flat(f64);
+        impl TerrainSource for Flat {
+            fn height_m(&self, _: f64, _: f64) -> f64 {
+                self.0
+            }
+            fn elevation_bounds_m(&self) -> ElevationBounds {
+                ElevationBounds::new(self.0, self.0)
+            }
+        }
+
+        let res = 5;
+        let planet_radius_m = 6_371_000.0;
+        let patch = TerrainPatch {
+            face: CubeFace::PosZ,
+            level: 8,
+            tile_x: 128,
+            tile_y: 128,
+        };
+        for (height_m, expects_cap) in [(0.28, false), (0.05, false), (0.0, true), (-0.043, true)] {
+            let source = Flat(height_m);
+            let geometry = build_patch_geometry_with_stitches(
+                &patch,
+                &source,
+                planet_radius_m,
+                res,
+                20.0,
+                &[],
+            );
+            let origin = DVec3::from_array(geometry.positions[0]);
+            let mut meshes = Assets::<Mesh>::default();
+            let cap = water_mesh_for_patch(
+                &geometry,
+                res,
+                planet_radius_m,
+                &origin,
+                DQuat::IDENTITY,
+                true,
+                Some(&source),
+                &mut meshes,
+            );
+            assert_eq!(
+                cap.is_some(),
+                expects_cap,
+                "a flat bed at {height_m} m relative to the datum"
+            );
+        }
     }
 
     #[test]
