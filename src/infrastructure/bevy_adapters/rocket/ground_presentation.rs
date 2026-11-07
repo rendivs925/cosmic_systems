@@ -118,8 +118,11 @@ pub(crate) fn update_rocket_ground_presentation(
             (0..boosters.count()).any(|index| propulsion.booster_is_ignitable(index))
         });
     let parameters = map_presentation_parameters(RocketPresentationInputs {
-        throttle_unit: f64::from(propulsion.throttle),
-        thrust_fraction_unit: f64::from(running as u8),
+        mass_flow_fraction_unit: if running {
+            f64::from(propulsion.throttle.clamp(0.0, 1.0))
+        } else {
+            0.0
+        },
         ignition_elapsed_s: 1.0,
         ignition_ramp_duration_s: 1.0,
         ambient_pressure_pa: conditions.ambient_pressure_pa,

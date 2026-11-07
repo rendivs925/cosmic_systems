@@ -11,11 +11,18 @@ const SHOCK_FULL_DYNAMIC_PRESSURE_PA: f64 = 50_000.0;
 const HEATING_VISIBLE_HEAT_FLUX_W_M2: f64 = 10_000.0;
 const EXTERNAL_AUDIO_REFERENCE_DISTANCE_M: f64 = 1_000.0;
 
-/// Numeric inputs sampled from authoritative state by a future presentation system.
+/// Numeric inputs sampled from authoritative state by presentation systems.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RocketPresentationInputs {
-    pub throttle_unit: f64,
-    pub thrust_fraction_unit: f64,
+    /// Propellant mass flow burned this tick divided by the full-throttle mass
+    /// flow of the same running engines.
+    ///
+    /// Mass flow is the plume's physical driver: it is what leaves the nozzle.
+    /// The applied axial thrust is not used because an entry-flow effectiveness
+    /// multiplier can reduce net force without reducing combustion. The
+    /// commanded throttle and the propellant-limited burn fraction are already
+    /// folded into this fraction.
+    pub mass_flow_fraction_unit: f64,
     pub ignition_elapsed_s: f64,
     pub ignition_ramp_duration_s: f64,
     pub ambient_pressure_pa: f64,
@@ -43,9 +50,8 @@ pub struct RocketPresentationParameters {
 pub fn map_presentation_parameters(
     inputs: RocketPresentationInputs,
 ) -> RocketPresentationParameters {
-    let throttle_unit = unit_interval(inputs.throttle_unit);
-    let thrust_fraction_unit = unit_interval(inputs.thrust_fraction_unit);
-    let plume_intensity_unit = throttle_unit * thrust_fraction_unit;
+    let mass_flow_fraction_unit = unit_interval(inputs.mass_flow_fraction_unit);
+    let plume_intensity_unit = mass_flow_fraction_unit;
     let ignition_intensity_unit = plume_intensity_unit
         * ramp_unit(inputs.ignition_elapsed_s, inputs.ignition_ramp_duration_s);
     let pressure_fraction_unit = nonnegative(inputs.ambient_pressure_pa) / SEA_LEVEL_PRESSURE_PA;
@@ -129,8 +135,7 @@ mod tests {
     #[test]
     fn maps_sea_level_ignition_with_terrain_ground_effect() {
         let parameters = map_presentation_parameters(RocketPresentationInputs {
-            throttle_unit: 1.0,
-            thrust_fraction_unit: 1.0,
+            mass_flow_fraction_unit: 1.0,
             ignition_elapsed_s: 0.5,
             ignition_ramp_duration_s: 1.0,
             ambient_pressure_pa: SEA_LEVEL_PRESSURE_PA,
@@ -152,8 +157,7 @@ mod tests {
     #[test]
     fn maps_max_q_to_bounded_shock_and_heating() {
         let parameters = map_presentation_parameters(RocketPresentationInputs {
-            throttle_unit: 1.0,
-            thrust_fraction_unit: 1.0,
+            mass_flow_fraction_unit: 1.0,
             ignition_elapsed_s: 2.0,
             ignition_ramp_duration_s: 1.0,
             ambient_pressure_pa: 30_000.0,
@@ -208,10 +212,31 @@ mod tests {
         assert_eq!(parameters.external_audio_attenuation_unit, 0.0);
     }
 
+    #[test]
+    fn plume_intensity_is_the_burned_mass_flow_fraction() {
+        // The authoritative applied thrust already contains the commanded
+        // throttle and the propellant-limited burn fraction, so presentation
+        // must not multiply by throttle a second time.
+        let half = map_presentation_parameters(RocketPresentationInputs {
+            mass_flow_fraction_unit: 0.5,
+            ..inactive_inputs()
+        });
+        assert_eq!(half.plume_intensity_unit, 0.5);
+        assert_eq!(
+            half.ignition_intensity_unit, 0.0,
+            "no ignition ramp has elapsed"
+        );
+
+        let starved = map_presentation_parameters(RocketPresentationInputs {
+            mass_flow_fraction_unit: 0.02,
+            ..inactive_inputs()
+        });
+        assert!(starved.plume_intensity_unit < 0.05);
+    }
+
     fn inactive_inputs() -> RocketPresentationInputs {
         RocketPresentationInputs {
-            throttle_unit: 0.0,
-            thrust_fraction_unit: 0.0,
+            mass_flow_fraction_unit: 0.0,
             ignition_elapsed_s: 0.0,
             ignition_ramp_duration_s: 1.0,
             ambient_pressure_pa: 0.0,

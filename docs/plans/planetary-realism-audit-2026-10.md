@@ -1044,3 +1044,59 @@ the two bodies' inertial `+Y` are `[0.509, 0.690, −0.515]` and
 `[0.506, 0.692, −0.515]` (0.2°). The staging frame at `T+29.9 s` shows the spent
 stage flying on its own attitude, with the upper at 1,545.8 m/s and the spent at
 1,543.3 m/s. All three committed flight baselines are unchanged.
+
+## 2026-11-07 — Plume driven by propulsion state (RK-02)
+
+The audit asked whether the plume is a static cone. It is not: the effect system
+already spawned one bounded three-layer plume per catalog engine station, gated
+visibility on a running engine, scaled intensity with the commanded throttle,
+scaled inner/outer width with ambient pressure, and retired stations on staging.
+Three channels were still coarse.
+
+**1. Intensity was a running flag.** `map_presentation_parameters` computed
+`plume_intensity = throttle × (engine_running as u8)`. That cannot represent a
+tank delivering a partial final tick, and it has no meaning once the engine is
+marked off but the last sample is stale. `AppliedPropulsionState` now records the
+propellant mass flow actually burned (the force writer already computed it and
+discarded it), and intensity is that fraction of the full-throttle mass flow of
+the same running engines.
+
+Mass flow was chosen over the applied thrust because `propulsion_thrust`
+multiplies thrust by an entry-flow effectiveness factor that can drop to ~0.66 at
+high Mach. That is a force model, not a combustion model: the propellant still
+burns and the plume is still bright. Using the applied force dimmed the upper
+stage to 66 % during a nominal full-throttle ascent.
+
+**2. Length ignored the expansion.** Only radius scaled with the pressure-derived
+expansion ratio, so a vacuum plume widened but stayed short. The inner layer now
+grows by `1 + 0.6 (e − 1)` and the outer by `e`, with the core pinned to the
+nozzle. Measured at the same mass-flow fraction: `1.09` expansion and a `6.6 m`
+outer plume at 386 m / 96.8 kPa; `2.99` and `20.7 m` at 40,351 m / 274 Pa.
+
+**3. Direction ignored the gimbal.** Every plume pointed along body `-Y` while the
+force path used `stage_gimbaled_thrust_body`. The effect now calls the same
+`clamp_gimbal` and `gimbaled_thrust_direction_body` pair and rotates the cone's
+authored `+Y` apex onto the exhaust direction.
+
+The audit also found that a recovering first stage carries `RocketPropulsion` but
+was spawned without `AppliedPropulsionState`, so its 5 % landing burn was drawn
+from the commanded throttle. The recovery spawn now inserts the diagnostic sample
+and the shared force writer fills it, so each vehicle's plume follows its own
+burn.
+
+Evidence needed a new instrument. A chase camera sits along the thrust axis and
+foreshortens a 20 m plume to a dot, so `COSMIC_SYSTEMS_CAPTURE_TRACK=side` stands
+the camera off along the body's lateral axis. `COSMIC_SYSTEMS_CAPTURE_EFFECTS=1`
+logs the driving state every 30 frames. Both are measurement-only and inert when
+unset. The two frames are at Starbase, `2000-01-01T18:46:37Z`: sea level `T+4.4 s`
+(386 m, expansion 1.09, outer 6.6 m) and altitude `T+43.8 s` (40,351 m, expansion
+2.99, outer 20.7 m), both at a mass-flow fraction of 1.000.
+
+Cost: 33 effect entities (21 visible) and 0.016–0.022 ms of engine-effect update
+per frame in a debug offscreen run at 40 km. All three committed flight baselines
+are unchanged.
+
+Recorded limits: the layer proportions are presentation constants, not a
+gas-dynamic solution; per-layer materials stay shared, so brightness is not scaled
+per vehicle; the mid-body orange band at altitude is the existing aerodynamic
+heating shell.

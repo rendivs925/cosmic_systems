@@ -80,9 +80,13 @@ pub(crate) fn update_rocket_audio_controls(
         &mut rockets
     {
         let engine_running = propulsion.has_running_engines();
+        let engine_fraction_unit = if engine_running {
+            f64::from(propulsion.throttle.clamp(0.0, 1.0))
+        } else {
+            0.0
+        };
         let presentation = map_presentation_parameters(RocketPresentationInputs {
-            throttle_unit: f64::from(propulsion.throttle),
-            thrust_fraction_unit: f64::from(engine_running as u8),
+            mass_flow_fraction_unit: engine_fraction_unit,
             ignition_elapsed_s: 1.0,
             ignition_ramp_duration_s: 1.0,
             ambient_pressure_pa: conditions.ambient_pressure_pa,

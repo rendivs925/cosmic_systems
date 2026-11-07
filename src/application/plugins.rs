@@ -86,7 +86,8 @@ use crate::infrastructure::bevy_adapters::rocket::camera::{
     setup_rocket_camera_controller, update_rocket_camera, update_rocket_camera_projection,
 };
 use crate::infrastructure::bevy_adapters::rocket::capture_view::{
-    apply_capture_pose, warm_start_capture_flight, CaptureWarmStartState,
+    apply_capture_pose, apply_capture_track_camera, warm_start_capture_flight,
+    CaptureWarmStartState,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
     RocketCameraConfig, RocketCameraMode, RocketMode, RocketPresentationQuality, RocketTelemetry,
@@ -754,7 +755,10 @@ impl Plugin for RocketModePlugin {
                 // through the environment. Owns the final pose before anything
                 // that reads the camera to place the sky, stars or clouds.
                 apply_capture_pose,
-                update_launch_site_structure_visibility.after(apply_capture_pose),
+                // Capture-only side view for plume evidence; inert unless the
+                // environment asks for it.
+                apply_capture_track_camera.after(apply_capture_pose),
+                update_launch_site_structure_visibility.after(apply_capture_track_camera),
             )
                 .chain(),
         );

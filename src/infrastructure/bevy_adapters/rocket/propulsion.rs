@@ -273,6 +273,11 @@ pub fn propulsion_staging(
                 ParachuteState::default(),
                 CommsState::default(),
                 RetroPropulsionEffect::default(),
+                // The recovered stage flies its own authoritative force
+                // pipeline, so it needs the same applied-propulsion sample as
+                // the primary vehicle; presentation reads it to keep the
+                // recovery-burn plume tied to real thrust instead of throttle.
+                AppliedPropulsionState::default(),
             ));
         }
         propulsion.time_since_separation_s = 0.0;
@@ -312,6 +317,7 @@ pub fn propulsion_thrust(
         // Diagnostic output is optional so minimal test fixtures without the
         // channel still apply authoritative thrust. Production always spawns it.
         let mut thrust_n = 0.0;
+        let mut total_mass_flow_kg_s = 0.0;
         let mut active_engine_count = 0_u32;
         let throttle = propulsion.throttle.clamp(0.0, 1.0);
         if let Some((active_core_stage, core_throttle)) = propulsion.running_core_stage() {
@@ -328,6 +334,7 @@ pub fn propulsion_thrust(
                 sim_time.fixed_timestep(),
             ) / sim_time.fixed_timestep();
             thrust_n += thrust_body.length() * retro.thrust_multiplier * burn_fraction;
+            total_mass_flow_kg_s += mass_flow_kg_s * burn_fraction;
             active_engine_count += active_core_stage
                 .stage()
                 .engines
@@ -363,6 +370,7 @@ pub fn propulsion_thrust(
                         * burn_fraction,
                 );
                 thrust_n += booster_thrust_body.length() * retro.thrust_multiplier * burn_fraction;
+                total_mass_flow_kg_s += booster_mass_flow_kg_s * burn_fraction;
                 active_engine_count += boosters
                     .stage
                     .engines
@@ -374,6 +382,7 @@ pub fn propulsion_thrust(
         if let Some(mut applied) = applied {
             *applied = AppliedPropulsionState {
                 thrust_n,
+                mass_flow_kg_s: total_mass_flow_kg_s,
                 active_engine_count,
             };
         }

@@ -1,7 +1,7 @@
 # Progress dashboard
 
-Snapshot date: 2026-11-06.
-Last code checkpoint: `a9d51a2` (2026-11-06).
+Snapshot date: 2026-11-07.
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 25 | 55.6 % |
+| VERIFIED | 26 | 57.8 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 18 | 40.0 % |
+| PLANNED | 17 | 37.8 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -29,7 +29,7 @@ evidenced", not "the simulator does not work".
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
-| P7 Rocket and VFX | 1 / 2 | 50 % | active | RK-01 closed; plume still driven by a static cone |
+| P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
 | P8 Rendering optimisation | 2 / 3 | 67 % | active | RD-01 needs the presentation baseline |
 | P9 Final validation | 1 / 3 | 33 % | active | three-mode smoke blocked by presentation |
 
@@ -53,18 +53,19 @@ Ordered by visible impact, not by ease.
 | 12 | The regional Sentinel-2 mosaic rendered as a pale inset against the Blue Marble overview | TD-03 | **VERIFIED — fixed** | measured per-channel linear gain applied before mips; region/overview linear-luma ratio 3.87× → 1.16×, median before/after ratio matches the inverse gain to 0.2 %; `2026-11-05-td03-albedo-40km-*` |
 | 13 | Angular water bodies persist on the Papua plain after the detail guard | TD-12 | PLANNED | base is below the datum (erosion or measurement); by construction the detail guard cannot lower land above the datum; `2026-11-05-td06-papua-*` |
 | 14 | A separated stage stayed frozen in the sky, and the rebuilt upper-stage mesh sat half an envelope low | RK-01 | **VERIFIED — fixed** | debris render snapshots now advance without a mission state; the serial mesh is built in the stage frame; the debug tripod also used the solar factor and drew at the planet centre; `2026-11-06-rk01-*` |
+| 15 | The plume treated an engine as fully on or fully off, ignored gimbal direction, and did not lengthen with altitude | RK-02 | **VERIFIED — fixed** | intensity now follows burned mass flow, length follows the pressure expansion, direction follows the gimbaled thrust axis, and recovering stages drive their own plume; sea level 6.6 m / 96.8 kPa vs 40.4 km 20.7 m / 274 Pa at the same flow fraction; `2026-11-07-rk02-*` |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | a9d51a2 |
-| `cargo check --all-targets --features dem` | PASS | a9d51a2 |
-| `cargo check --no-default-features` | PASS | a9d51a2 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | a9d51a2 |
-| `cargo test --features dem --lib` | 1159 passed, 0 failed, 2 ignored | a9d51a2 |
-| `cargo test --no-default-features --lib` | 1117 passed, 0 failed, 2 ignored | a9d51a2 |
-| `openspec validate --all --strict` | 42 passed, 0 failed | a9d51a2 |
+| `cargo fmt --check` | PASS | PLACEHOLDER |
+| `cargo check --all-targets --features dem` | PASS | PLACEHOLDER |
+| `cargo check --no-default-features` | PASS | PLACEHOLDER |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | PLACEHOLDER |
+| `cargo test --features dem --lib` | 1165 passed, 0 failed, 2 ignored | PLACEHOLDER |
+| `cargo test --no-default-features --lib` | 1123 passed, 0 failed, 2 ignored | PLACEHOLDER |
+| `openspec validate --all --strict` | 43 passed, 0 failed | PLACEHOLDER |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -89,7 +90,7 @@ Ordered by visible impact, not by ease.
 | high altitude | current |
 | orbit | **missing** |
 
-Three of ten required scenes have no usable frame. See `VISUAL_EVIDENCE.md`.
+One of ten required scenes (coastline) has no usable frame. See `VISUAL_EVIDENCE.md`.
 
 ## Performance baseline
 
@@ -103,6 +104,7 @@ Three of ten required scenes have no usable frame. See `VISUAL_EVIDENCE.md`.
 | Draw calls / triangles | not exposed |
 | Memory | 1,261–1,492 MiB GPU; ~1.77 GB RSS (2026-09-11); 610–640 MB RSS (2026-08-23) |
 | Terrain streaming | bounded at 128 MiB geometry budget; two worker bakes/frame (2026-09-11) |
+| Rocket effects (debug capture, 40 km) | 33 effect entities / 21 visible; engine effect update 0.016–0.022 ms, ground 0.0011–0.0017 ms (2026-11-07) |
 
 The offscreen capture path is pinned to 60 Hz and is therefore **not** a
 frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
@@ -111,22 +113,21 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 | item | value |
 | --- | --- |
-| specs | 40 |
+| specs | 41 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 32 |
-| strict validation | 42/42 pass |
+| archived changes | 33 |
+| strict validation | 43/43 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — RK-02, plume driven by propulsion state.** The plume is still a
-static layered cone; RK-02 maps its expansion, shock and extinction to thrust,
-mass flow, throttle, ambient pressure and altitude, and measures the effect cost
-with the existing telemetry.
+**Next task — TD-12, the Papua water bodies.** Determine whether the angular
+water bodies that persist after the land-only detail guard are carved by erosion
+or measured, by comparing against ETOPO before changing the erosion model.
 
-RK-01 is closed: the physics already preserved attitude through separation, but
-jettisoned debris never advanced its render snapshot, the rebuilt serial-stage
-mesh was centred on the stage plus its envelope, and the debug tripod used the
-solar-map conversion (so it drew at the planet centre). All three are fixed and
-pinned. The remaining terrain and material audits (TD-07, TD-08, TD-09, TD-12,
-TM-01/02/03, TG-01/02) and RD-01 follow.
+RK-02 is closed: plume intensity is the fraction of full-throttle mass flow the
+fixed pipeline actually burned, length grows with the pressure-derived
+expansion as well as the burn fraction, direction follows the gimbaled thrust
+axis, and recovering stages drive their own plume. The remaining terrain and
+material audits (TD-07, TD-08, TD-09, TD-12, TM-01/02/03, TG-01/02) and RD-01
+follow.

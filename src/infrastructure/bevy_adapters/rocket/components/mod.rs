@@ -773,7 +773,13 @@ pub struct ThermalState {
 /// `propulsion_thrust`, which is also the sole propulsion force writer.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct AppliedPropulsionState {
+    /// Net axial force after the engine, propellant-limited burn fraction and
+    /// any entry-flow effectiveness multiplier.
     pub thrust_n: f64,
+    /// Propellant mass flow actually burned this tick, kg/s. Independent of
+    /// the entry-flow force multiplier: combustion feeds the plume even when
+    /// external flow reduces the net axial force.
+    pub mass_flow_kg_s: f64,
     pub active_engine_count: u32,
 }
 

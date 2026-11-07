@@ -1243,7 +1243,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `a9d51a2`; tests plus the three frames.
 
 ### RK-02 — Plume driven by propulsion state
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Drive plume shape from thrust, mass flow, throttle, ambient
   pressure and altitude instead of a static cone.
@@ -1253,13 +1253,52 @@ timings. This phase exists because an unverifiable change is not a change.
   `propulsion.rs`, `assets/shaders/`.
 - **Acceptance:** plume expands with altitude, separates by stage, and disappears
   at zero throttle.
-- **Tests:** plume parameter mapping from propulsion state.
-- **Visual evidence:** sea-level and altitude burn frames.
-- **Performance:** effect count and update cost measured (existing telemetry
-  reports both).
-- **Scientific validation:** not CFD; documented as a real-time approximation.
-- **Risks:** matching a look instead of the state.
-- **Completion evidence:** pending.
+- **Specification:** `rocket-engine-effects` gained "Plume intensity follows
+  burned propellant", "Plume length follows expansion", "Plume direction follows
+  the gimbaled thrust axis" and "Recovering hardware presents its own effects"
+  (change `2026-11-07-drive-plume-from-propulsion-state`).
+- **Implementation:** the plume was already partly state-driven (running-engine
+  visibility, commanded throttle, pressure-driven width, quality gating). Three
+  gaps were closed:
+  1. Intensity used a binary `engine_running` flag. `AppliedPropulsionState` now
+     records the propellant mass flow actually burned, and intensity is that
+     fraction of the full-throttle mass flow of the same running engines. Mass
+     flow is the physical driver and, unlike the applied axial force, is not
+     reduced by the entry-flow force multiplier.
+  2. Length scaled only with intensity. The inner layer now grows by
+     `1 + 0.6 (e − 1)` and the outer by `e` for the pressure-derived expansion
+     ratio `e ∈ 1..3`; the core stays pinned to the nozzle.
+  3. Direction ignored the gimbal. Each plume now uses the same
+     `clamp_gimbal`/`gimbaled_thrust_direction_body` pair as the force path and
+     is rotated from the cone's authored `+Y` apex to the exhaust direction.
+  Recovering first stages also receive `AppliedPropulsionState`, so their landing
+  burn drives their own plume instead of a commanded-throttle fallback.
+- **Tests:** `plume_intensity_follows_applied_mass_flow`,
+  `plume_follows_the_gimbaled_thrust_axis`,
+  `outer_plume_lengthens_as_ambient_pressure_falls`,
+  `plume_intensity_is_the_burned_mass_flow_fraction`,
+  `side_capture_camera_profiles_the_vehicle`,
+  `capture_track_parsing_is_opt_in`.
+- **Visual evidence:** `2026-11-07-rk02-sealevel-side.jpg` (capture `T+4.4 s`,
+  386 m, 96,775 Pa, expansion 1.09, outer plume 6.6 m) and
+  `2026-11-07-rk02-altitude-side.jpg` (capture `T+43.8 s`, 40,351 m, 274 Pa,
+  expansion 2.99, outer plume 20.7 m). Both at Starbase,
+  `2000-01-01T18:46:37Z`, 1280x720, side tracking camera. The mass-flow fraction
+  is 1.000 in both frames, so the 3.1× length ratio is the expansion response,
+  not a throttle difference. The orange band at mid-body in the altitude frame
+  is the existing aerodynamic-heating shell, not the plume.
+- **Capture controls:** `COSMIC_SYSTEMS_CAPTURE_EFFECTS` logs the driving state
+  every 30 frames; `COSMIC_SYSTEMS_CAPTURE_TRACK=side` stands the capture camera
+  off along the body lateral axis. Both are measurement-only and inert when
+  unset.
+- **Performance:** 33 effect entities, 21 visible; engine effect update
+  0.016–0.022 ms and ground 0.0011–0.0017 ms (debug capture, 40 km).
+- **Scientific validation:** not CFD. The mapping is a bounded real-time
+  approximation: intensity is burned mass flow, length is mass flow times a
+  documented expansion factor, and direction is the authoritative thrust axis.
+- **Risks recorded:** the layer proportions are presentation constants; per-layer
+  materials stay shared, so brightness is not per-vehicle.
+- **Completion evidence:** `PLACEHOLDER`; tests plus the two frames.
 
 ---
 

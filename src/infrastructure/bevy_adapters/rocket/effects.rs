@@ -5,11 +5,14 @@
 //! authoritative flight state but only mutate their own presentation entities.
 
 use super::components::{
-    RocketFlightConditions, RocketGeometry, RocketPresentationQuality, RocketPresentationSmoothing,
-    RocketPropulsion, ThermalState,
+    AppliedPropulsionState, RocketFlightConditions, RocketGeometry, RocketPresentationQuality,
+    RocketPresentationSmoothing, RocketPropulsion, ThermalState,
 };
 use super::presentation_parameters::{map_presentation_parameters, RocketPresentationInputs};
-use crate::domain::entities::rocket::EngineState;
+use crate::domain::entities::rocket::{EngineState, RocketEngine};
+use crate::domain::services::rocket_propulsion::{
+    clamp_gimbal, gimbaled_thrust_direction_body, stage_thrust_body,
+};
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec3;
 use bevy::prelude::*;
@@ -19,6 +22,23 @@ use std::time::Instant;
 
 const MAX_ENGINE_EFFECT_STATIONS: usize = 32;
 const IGNITION_SMOOTHING_PER_SECOND: f32 = 7.0;
+
+/// Capture-only switch that logs each vehicle's plume driving state every
+/// 30 frames. The offscreen capture has no debug console, so this is how the
+/// numbers behind a frame are recorded. Unset, nothing is logged.
+const CAPTURE_EFFECTS_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_EFFECTS";
+
+fn capture_effects_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var(CAPTURE_EFFECTS_ENV).is_ok_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "on" | "true" | "yes"
+            )
+        })
+    })
+}
 
 /// Rocket-mode-only snapshot consumed by shared cadence-limited performance reporting.
 /// It tracks presentation entities and Update work only, never flight state.
@@ -72,6 +92,9 @@ pub(crate) struct RocketEngineEffect {
     key: EngineEffectStationKey,
     layer: EngineEffectLayer,
     station_m: Vec3,
+    /// Gimbaled thrust direction in the vehicle body frame. The plume exhaust
+    /// points the opposite way; a gimballed engine must tilt its plume.
+    thrust_axis_body: Vec3,
     rated_thrust_kn: f32,
     running: bool,
 }
@@ -80,6 +103,7 @@ pub(crate) struct RocketEngineEffect {
 struct DesiredEngineEffectStation {
     key: EngineEffectStationKey,
     station_m: Vec3,
+    thrust_axis_body: Vec3,
     rated_thrust_kn: f32,
     running: bool,
 }
@@ -210,6 +234,7 @@ pub(crate) fn update_rocket_engine_effects(
             &RocketFlightConditions,
             &ThermalState,
             &Transform,
+            Option<&AppliedPropulsionState>,
             Option<&mut RocketPresentationSmoothing>,
         ),
         Without<RocketEngineEffect>,
@@ -223,8 +248,11 @@ pub(crate) fn update_rocket_engine_effects(
         ),
         Without<Camera3d>,
     >,
+    mut capture_frame: Local<u32>,
 ) {
     let update_started = Instant::now();
+    *capture_frame = capture_frame.wrapping_add(1);
+    let capture_tick = *capture_frame;
     effect_assets.initialize(&mut meshes, &mut materials);
     let existing = effects
         .iter()
@@ -242,8 +270,16 @@ pub(crate) fn update_rocket_engine_effects(
         }
     }
 
-    for (rocket_entity, propulsion, geometry, conditions, thermal, rocket_transform, smoothing) in
-        rockets.iter_mut()
+    for (
+        rocket_entity,
+        propulsion,
+        geometry,
+        conditions,
+        thermal,
+        rocket_transform,
+        applied,
+        smoothing,
+    ) in rockets.iter_mut()
     {
         if smoothing.is_none() {
             // This is presentation-local state. Inserting it here lets rockets
@@ -293,6 +329,7 @@ pub(crate) fn update_rocket_engine_effects(
                                 key: station.key,
                                 layer,
                                 station_m: station.station_m,
+                                thrust_axis_body: station.thrust_axis_body,
                                 rated_thrust_kn: station.rated_thrust_kn,
                                 running: station.running,
                             },
@@ -307,9 +344,14 @@ pub(crate) fn update_rocket_engine_effects(
         }
 
         let engine_running = desired.iter().any(|station| station.running);
+        let mass_flow_fraction_unit = applied_mass_flow_fraction(
+            propulsion,
+            conditions.ambient_pressure_pa,
+            applied,
+            engine_running,
+        );
         let target = map_presentation_parameters(RocketPresentationInputs {
-            throttle_unit: f64::from(propulsion.throttle),
-            thrust_fraction_unit: f64::from(engine_running as u8),
+            mass_flow_fraction_unit,
             // Smoothing below is the render-only ignition transition.
             ignition_elapsed_s: 1.0,
             ignition_ramp_duration_s: 1.0,
@@ -339,6 +381,41 @@ pub(crate) fn update_rocket_engine_effects(
         let distance_m =
             super::camera::nearest_active_camera_distance_m(rocket_transform.translation, &cameras);
 
+        if capture_effects_enabled() && intensity > 0.01 && capture_tick.is_multiple_of(30) {
+            bevy::log::info!(
+                "Plume capture frame {} ({}): stage {}, throttle {:.3}, mass flow {:.1}/{:.1} kg/s, \
+                 altitude {:.0} m, pressure {:.0} Pa, fraction {:.3}, expansion {:.2}, shock {:.2}, \
+                 camera {:.0} m / {:.0} m, intensity {:.3}, outer length {:.1} m, heating {:.3}",
+                capture_tick,
+                propulsion.vehicle.name,
+                propulsion.active_stage,
+                propulsion.throttle,
+                applied.map_or(f64::NAN, |value| value.mass_flow_kg_s),
+                rated_mass_flow_at_ambient_kg_s(propulsion, conditions.ambient_pressure_pa),
+                conditions.altitude_m,
+                conditions.ambient_pressure_pa,
+                mass_flow_fraction_unit,
+                target.plume_expansion_ratio,
+                target.shock_intensity_unit,
+                distance_m,
+                quality.max_effect_distance_m,
+                intensity,
+                existing
+                    .iter()
+                    .filter(|(_, effect)| {
+                        effect.owner == rocket_entity && effect.layer == EngineEffectLayer::Outer
+                    })
+                    .map(|(_, effect)| {
+                        plume_local_transform(*effect, intensity, target, EngineEffectLayer::Outer)
+                            .scale
+                            .y
+                    })
+                    .next()
+                    .unwrap_or(0.0),
+                target.heating_intensity_unit,
+            );
+        }
+
         for (entity, effect) in &existing {
             if effect.owner != rocket_entity || !desired_keys.contains(&(effect.key, effect.layer))
             {
@@ -350,6 +427,7 @@ pub(crate) fn update_rocket_engine_effects(
             };
             if let Some(station) = desired.iter().find(|station| station.key == effect.key) {
                 effect.station_m = station.station_m;
+                effect.thrust_axis_body = station.thrust_axis_body;
                 effect.rated_thrust_kn = station.rated_thrust_kn;
                 effect.running = station.running;
             }
@@ -446,6 +524,11 @@ fn desired_engine_effect_stations(
                 engine_index,
             },
             station_m: origin_m + engine.position_m,
+            thrust_axis_body: gimbaled_plume_axis_body(
+                engine,
+                propulsion.gimbal_pitch_rad,
+                propulsion.gimbal_yaw_rad,
+            ),
             rated_thrust_kn: engine.rated_thrust_kn,
             running: core_running && engine.state == EngineState::Running,
         });
@@ -462,6 +545,11 @@ fn desired_engine_effect_stations(
                         engine_index,
                     },
                     station_m: attachment_m + engine.position_m,
+                    thrust_axis_body: gimbaled_plume_axis_body(
+                        engine,
+                        propulsion.gimbal_pitch_rad,
+                        propulsion.gimbal_yaw_rad,
+                    ),
                     rated_thrust_kn: engine.rated_thrust_kn,
                     running: propulsion.booster_is_ignitable(booster_index)
                         && engine.state == EngineState::Running,
@@ -471,6 +559,73 @@ fn desired_engine_effect_stations(
     }
     stations.truncate(MAX_ENGINE_EFFECT_STATIONS);
     stations
+}
+
+/// Gimbaled thrust direction in the body frame, using the same clamp and
+/// direction function the force path uses. Falls back to the nominal `+Y` axis
+/// if a catalog entry declares a degenerate thrust axis.
+fn gimbaled_plume_axis_body(
+    engine: &RocketEngine,
+    gimbal_pitch_rad: f32,
+    gimbal_yaw_rad: f32,
+) -> Vec3 {
+    let direction = gimbaled_thrust_direction_body(
+        engine.thrust_axis.as_dvec3(),
+        f64::from(clamp_gimbal(gimbal_pitch_rad, engine.gimbal_range_deg)),
+        f64::from(clamp_gimbal(gimbal_yaw_rad, engine.gimbal_range_deg)),
+    )
+    .as_vec3();
+    if direction.length_squared() > 1e-12 {
+        direction.normalize()
+    } else {
+        Vec3::Y
+    }
+}
+
+/// Fraction of full-throttle mass flow the current engine set burns.
+///
+/// The numerator is the propellant flow the fixed pipeline actually consumed,
+/// so the plume follows a propellant-limited final tick instead of a binary
+/// "engine running" flag. It deliberately ignores the entry-flow force
+/// multiplier: combustion still feeds the plume when external flow reduces the
+/// net axial force. Without the diagnostic component (minimal test fixtures)
+/// the commanded throttle is the best available projection.
+fn applied_mass_flow_fraction(
+    propulsion: &RocketPropulsion,
+    ambient_pressure_pa: f64,
+    applied: Option<&AppliedPropulsionState>,
+    engine_running: bool,
+) -> f64 {
+    if !engine_running {
+        return 0.0;
+    }
+    let Some(applied) = applied else {
+        return f64::from(propulsion.throttle.clamp(0.0, 1.0));
+    };
+    let rated_mass_flow_kg_s = rated_mass_flow_at_ambient_kg_s(propulsion, ambient_pressure_pa);
+    if !rated_mass_flow_kg_s.is_finite() || rated_mass_flow_kg_s <= 0.0 {
+        return 0.0;
+    }
+    (applied.mass_flow_kg_s / rated_mass_flow_kg_s).clamp(0.0, 1.0)
+}
+
+/// Full-throttle mass flow of every engine currently running or ignitable. This
+/// is a normalizer only: it reuses the authoritative engine operating point and
+/// never produces a force.
+fn rated_mass_flow_at_ambient_kg_s(propulsion: &RocketPropulsion, ambient_pressure_pa: f64) -> f64 {
+    let mut rated_mass_flow_kg_s = 0.0;
+    if let Some(stage) = propulsion.active_stage_configuration() {
+        rated_mass_flow_kg_s += stage_thrust_body(&stage.engines, 1.0, ambient_pressure_pa).1;
+    }
+    if let Some((boosters, _)) = propulsion.attached_boosters() {
+        for index in 0..boosters.count() {
+            if propulsion.booster_is_ignitable(index) {
+                rated_mass_flow_kg_s +=
+                    stage_thrust_body(&boosters.stage.engines, 1.0, ambient_pressure_pa).1;
+            }
+        }
+    }
+    rated_mass_flow_kg_s
 }
 
 fn plume_local_transform(
@@ -495,16 +650,36 @@ fn plume_local_transform(
                 * (1.0 + parameters.shock_intensity_unit as f32 * 0.2)
         }
     };
+    // An under-expanded plume both widens and lengthens as ambient pressure
+    // falls. The core stays close to the nozzle; the outer envelope carries the
+    // visible altitude response. Real plume shape is a gas-dynamic solution;
+    // this is a bounded real-time approximation.
+    let axial_expansion = match layer {
+        EngineEffectLayer::Core => 1.0,
+        EngineEffectLayer::Inner => 1.0 + (expansion - 1.0) * 0.6,
+        EngineEffectLayer::Outer => expansion,
+    };
     let thermal_length = 1.0 + parameters.heating_intensity_unit as f32 * 0.15;
-    let length_m = length_m * intensity_unit.max(0.05) * thermal_length;
+    let length_m = length_m * intensity_unit.max(0.05) * thermal_length * axial_expansion;
+
+    // The cone is authored with its apex at local `+Y`; exhaust leaves along
+    // the gimbaled thrust axis, so the plume body points the opposite way.
+    let thrust_axis = effect.thrust_axis_body.normalize_or_zero();
+    let exhaust = if thrust_axis == Vec3::ZERO {
+        Vec3::NEG_Y
+    } else {
+        -thrust_axis
+    };
+    let rotation = Quat::from_rotation_arc(Vec3::NEG_Y, exhaust);
+
     Transform {
-        translation: effect.station_m - Vec3::Y * (length_m * 0.5),
+        translation: effect.station_m + exhaust * (length_m * 0.5),
+        rotation,
         scale: Vec3::new(
             radius_m * thrust_scale * expansion,
             length_m,
             radius_m * thrust_scale * expansion,
         ),
-        ..default()
     }
 }
 
@@ -528,6 +703,7 @@ fn layer_is_within_quality_budget(
 
 #[cfg(test)]
 mod tests {
+    use super::super::presentation_parameters::RocketPresentationParameters;
     use super::*;
     use crate::domain::entities::rocket::{ParallelBoosters, Rocket};
     use crate::domain::services::simulation_time::SimulationTime;
@@ -608,12 +784,12 @@ mod tests {
             },
             layer: EngineEffectLayer::Core,
             station_m: Vec3::new(2.0, -10.0, 3.0),
+            thrust_axis_body: Vec3::Y,
             rated_thrust_kn: 1_000.0,
             running: true,
         };
         let parameters = map_presentation_parameters(RocketPresentationInputs {
-            throttle_unit: 1.0,
-            thrust_fraction_unit: 1.0,
+            mass_flow_fraction_unit: 1.0,
             ignition_elapsed_s: 1.0,
             ignition_ramp_duration_s: 1.0,
             ambient_pressure_pa: 101_325.0,
@@ -630,6 +806,149 @@ mod tests {
         assert_eq!(transform.translation.x, 2.0);
         assert_eq!(transform.translation.z, 3.0);
         assert!(transform.translation.y < effect.station_m.y);
+    }
+
+    fn plume_effect(axis_body: Vec3, layer: EngineEffectLayer) -> RocketEngineEffect {
+        RocketEngineEffect {
+            owner: Entity::PLACEHOLDER,
+            key: EngineEffectStationKey::Core {
+                stage_index: 0,
+                engine_index: 0,
+            },
+            layer,
+            station_m: Vec3::new(0.0, -20.0, 0.0),
+            thrust_axis_body: axis_body,
+            rated_thrust_kn: 1_000.0,
+            running: true,
+        }
+    }
+
+    fn plume_parameters(ambient_pressure_pa: f64) -> RocketPresentationParameters {
+        map_presentation_parameters(RocketPresentationInputs {
+            mass_flow_fraction_unit: 1.0,
+            ignition_elapsed_s: 1.0,
+            ignition_ramp_duration_s: 1.0,
+            ambient_pressure_pa,
+            density_kg_m3: 0.0,
+            terrain_distance_m: 1_000.0,
+            mach_number: 0.0,
+            dynamic_pressure_pa: 0.0,
+            total_heat_flux_w_m2: 0.0,
+            observer_distance_m: 0.0,
+        })
+    }
+
+    /// The gimbal is part of the authoritative thrust direction. A gimballed
+    /// engine must tilt its plume, otherwise the effect contradicts the force
+    /// the simulation is applying.
+    #[test]
+    fn plume_follows_the_gimbaled_thrust_axis() {
+        let angle = 0.12_f32;
+        let axis = Vec3::new(angle.sin(), angle.cos(), 0.0).normalize();
+        let effect = plume_effect(axis, EngineEffectLayer::Inner);
+        let parameters = plume_parameters(101_325.0);
+
+        let transform = plume_local_transform(effect, 1.0, parameters, EngineEffectLayer::Inner);
+
+        let exhaust = transform.rotation * Vec3::NEG_Y;
+        assert!(
+            exhaust.dot(-axis) > 0.9999,
+            "plume must leave along the gimbaled thrust axis: {exhaust:?} vs {axis:?}"
+        );
+        let expected_center = effect.station_m + (-axis) * (transform.scale.y * 0.5);
+        assert!(
+            (transform.translation - expected_center).length() < 1e-4,
+            "plume must stay anchored at the engine station"
+        );
+    }
+
+    /// An under-expanded plume lengthens as ambient pressure falls, not only
+    /// widens. The core stays pinned to the nozzle so the effect still reads as
+    /// an engine rather than a long beam.
+    #[test]
+    fn outer_plume_lengthens_as_ambient_pressure_falls() {
+        let sea_level = plume_parameters(101_325.0);
+        let vacuum = plume_parameters(0.0);
+        let effect = plume_effect(Vec3::Y, EngineEffectLayer::Outer);
+
+        let sea = plume_local_transform(effect, 1.0, sea_level, EngineEffectLayer::Outer);
+        let vac = plume_local_transform(effect, 1.0, vacuum, EngineEffectLayer::Outer);
+
+        assert!(sea.scale.y > 0.0);
+        assert!(
+            vac.scale.y > sea.scale.y * 2.0,
+            "vacuum plume must lengthen: {} vs {}",
+            vac.scale.y,
+            sea.scale.y
+        );
+        assert!(vac.scale.x > sea.scale.x, "vacuum plume must also widen");
+
+        let sea_core = plume_local_transform(effect, 1.0, sea_level, EngineEffectLayer::Core);
+        let vac_core = plume_local_transform(effect, 1.0, vacuum, EngineEffectLayer::Core);
+        assert_eq!(
+            sea_core.scale.y, vac_core.scale.y,
+            "the core plume stays anchored near the nozzle"
+        );
+    }
+
+    /// Plume intensity follows the propellant the fixed pipeline actually
+    /// burned, not a binary running flag: a propellant-limited final tick fades
+    /// out continuously. The entry-flow force multiplier is excluded because
+    /// combustion still feeds the plume.
+    #[test]
+    fn plume_intensity_follows_applied_mass_flow() {
+        let mut propulsion =
+            RocketPropulsion::for_fresh_flight(Rocket::falcon9_test_fixture(), 0.0, 0.0);
+        for engine in &mut propulsion.vehicle.stages[0].engines {
+            engine.state = EngineState::Running;
+        }
+        let ambient_pressure_pa = 101_325.0;
+        let rated_kg_s = rated_mass_flow_at_ambient_kg_s(&propulsion, ambient_pressure_pa);
+        assert!(
+            rated_kg_s > 0.0,
+            "running engines must have a rated mass flow"
+        );
+
+        let partial = AppliedPropulsionState {
+            thrust_n: 0.0,
+            mass_flow_kg_s: rated_kg_s * 0.4,
+            active_engine_count: 9,
+        };
+        let fraction =
+            applied_mass_flow_fraction(&propulsion, ambient_pressure_pa, Some(&partial), true);
+        assert!((fraction - 0.4).abs() < 1e-9);
+
+        // A reduced entry-flow force multiplier must not dim a burning plume.
+        let retro_reduced = AppliedPropulsionState {
+            thrust_n: 1.0,
+            mass_flow_kg_s: rated_kg_s,
+            active_engine_count: 9,
+        };
+        assert_eq!(
+            applied_mass_flow_fraction(
+                &propulsion,
+                ambient_pressure_pa,
+                Some(&retro_reduced),
+                true
+            ),
+            1.0
+        );
+
+        assert_eq!(
+            applied_mass_flow_fraction(&propulsion, ambient_pressure_pa, Some(&partial), false),
+            0.0,
+            "a stopped engine set must extinguish the plume even with a stale sample"
+        );
+
+        let over_rated = AppliedPropulsionState {
+            thrust_n: 0.0,
+            mass_flow_kg_s: rated_kg_s * 2.0,
+            active_engine_count: 9,
+        };
+        assert_eq!(
+            applied_mass_flow_fraction(&propulsion, ambient_pressure_pa, Some(&over_rated), true),
+            1.0
+        );
     }
 
     #[test]

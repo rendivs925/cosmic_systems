@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-06. Last code checkpoint: `a9d51a2`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-five of forty-five roadmap tasks, each with implementation + tests + a
+Twenty-six of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -93,7 +93,8 @@ named frame or a named measurement:
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | TD-06 synthetic coastline guard | land-only sea-datum guard enabled; worst-case detail cannot cross the datum across the whole window, measured ocean keeps signed relief, all three committed baselines unchanged; Papua A/B mean 1.53/255; `2026-11-05-td06-papua-*` |
 | RK-01 attitude and staging | separation preserves attitude/angular velocity; jettisoned debris now advances its own render snapshot; the serial-stage mesh is centred on the physical stage; the debug tripod uses the flight frame; three body-axis frames, staging at `T+27.5 s`, capture at `T+29.9 s`; `2026-11-06-rk01-*` |
-| VL-02 OpenSpec strict | 42/42 |
+| RK-02 plume state | intensity is the burned mass-flow fraction, length follows the pressure expansion, direction follows the gimbaled thrust axis; same flow fraction at sea level 6.6 m / 96.8 kPa and 40.4 km 20.7 m / 274 Pa; 33 effects, 0.022 ms update; `2026-11-07-rk02-*` |
+| VL-02 OpenSpec strict | 43/43 |
 
 Every implemented task is now verified. The two remaining blocked items are
 environmental; the rest are planned work.
@@ -107,22 +108,17 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**RK-02 — plume driven by propulsion state.** The plume is still a static layered
-cone. RK-02 maps expansion, shock structure and extinction to thrust, mass flow,
-throttle, ambient pressure and altitude, and measures the effect cost with the
-existing telemetry.
+**TD-12 — the Papua water bodies.** Determine whether the angular water bodies
+that persist after the land-only detail guard are carved by erosion or measured,
+by comparing against ETOPO before changing the erosion model.
 
-RK-01 is closed. The physics already preserved attitude through separation, so the
-audit's value was in the seams around it: jettisoned debris carried no mission
-state and therefore never advanced its render snapshot (it froze at the
-separation pose), the rebuilt serial-stage mesh was centred on the stage plus its
-retained envelope while physics had already switched to a stage-centred frame,
-and the debug tripod converted metres with the solar-map factor, drawing every
-overlay at the planet centre. All three are fixed and pinned by tests.
-
-TD-12 still tracks the angular water bodies that persist on the Papua plain
-against the measured DEM. The remaining terrain and material audits (TD-07,
-TD-08, TD-09, TM-01/02/03, TG-01/02) and RD-01 follow.
+RK-02 is closed. The plume was already partly state-driven, but intensity used a
+binary running flag, length ignored the pressure expansion, and direction ignored
+the gimbal. It now reads the mass flow the fixed pipeline actually burned,
+lengthens with the same expansion that widens it, and points along the
+authoritative gimbaled thrust axis — including for a recovering first stage, which
+previously had no applied-propulsion sample. The remaining terrain and material
+audits (TD-07, TD-08, TD-09, TD-12, TM-01/02/03, TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -130,9 +126,9 @@ TD-08, TD-09, TM-01/02/03, TG-01/02) and RD-01 follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1159 passed, 2 ignored
-cargo test --no-default-features --lib   # 1117 passed, 2 ignored
-openspec validate --all --strict         # 42 passed
+cargo test --features dem --lib          # 1165 passed, 2 ignored
+cargo test --no-default-features --lib   # 1123 passed, 2 ignored
+openspec validate --all --strict         # 43 passed
 ```
 
 And for anything visual (or, with `COSMIC_SYSTEMS_DIAGNOSTIC_MODE=<mode>`, for one
@@ -154,9 +150,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,159 domain and adapter
-tests pass (1,117 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-five of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,165 domain and adapter
+tests pass (1,123 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-six of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -264,3 +260,13 @@ needed to show any of this, converted metres with the solar-map factor and drew
 a twenty-metre axis a hundred-thousandth of a unit long at the planet centre.
 All three are fixed, pinned by tests, and demonstrated with body-axis frames at
 prelaunch, ascent and the first staging tick.
+
+The rocket plume had the same shape as the attitude audit: the state was there,
+the picture only used part of it. Intensity treated every engine as fully on or
+fully off, length responded to the burn but not to the altitude that widens the
+exhaust, and every plume pointed straight down the body even when the engine was
+gimbaled. It now reads the propellant mass flow the fixed pipeline actually
+burned, lengthens with the pressure-derived expansion, and follows the
+authoritative gimbaled thrust axis. The same change gave recovering first stages
+their own applied-propulsion sample, so a landing burn is no longer drawn from a
+commanded-throttle guess.

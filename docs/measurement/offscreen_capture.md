@@ -42,6 +42,8 @@ COSMIC_SYSTEMS_CAPTURE_TIME=42 \
 | `COSMIC_SYSTEMS_CAPTURE_UTC` | pin the simulation start instant, `YYYY-MM-DDTHH:MM:SS` in UTC (`Z`, `T` or a space accepted). Unset keeps the shared 2000-01-01 03:00 UTC default. A bare `HH:MM:SS` is **not** accepted; it is dropped and the log shows the default epoch. |
 | `COSMIC_SYSTEMS_CAPTURE_BODY_AXES` | `1`/`on`/`true` draws the vehicle body frame: `+X` red, `+Y` green, `+Z` blue. Presentation only. |
 | `COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS` | issue a real launch order and run this many production `FixedUpdate` steps before the first frame (bounded to 200 s). Inert when unset. |
+| `COSMIC_SYSTEMS_CAPTURE_EFFECTS` | log each vehicle's plume driving state every 30 frames: stage, throttle, burned mass flow against the full-throttle value, altitude, pressure, mass-flow fraction, expansion, shock, heating, and outer plume length. Inert when unset. |
+| `COSMIC_SYSTEMS_CAPTURE_TRACK` | `side` places the capture camera three body heights to the side of the active vehicle and looks back at it. A chase camera sits along the thrust axis, so a plume is seen end-on; the side view makes its length measurable. Inert when unset. |
 
 The run exits with status 0 after writing the PNG. A malformed size or frame
 count falls back to the defaults rather than failing the run. A malformed
@@ -84,6 +86,30 @@ COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS=1762 \
 The reference Falcon 9 configuration separates at `T+27.5 s`; the frame logs the
 capture at `T+29.9 s`, with the upper stage at 1,545.8 m/s and the spent stage at
 1,543.3 m/s. Neither control runs without its environment variable.
+
+## Plume evidence
+
+A chase camera sits behind the vehicle, i.e. along the thrust axis, so a
+20 m exhaust plume projects to a dot. `COSMIC_SYSTEMS_CAPTURE_TRACK=side` stands
+the camera off along the body's lateral axis instead, and
+`COSMIC_SYSTEMS_CAPTURE_EFFECTS=1` logs the state that produced the frame:
+
+```bash
+env -u DISPLAY \
+COSMIC_SYSTEMS_OFFSCREEN_CAPTURE=/tmp/plume.png \
+COSMIC_SYSTEMS_OFFSCREEN_CAPTURE_FRAMES=60 \
+COSMIC_SYSTEMS_CAPTURE_UTC=2000-01-01T18:46:37Z \
+COSMIC_SYSTEMS_CAPTURE_TRACK=side \
+COSMIC_SYSTEMS_CAPTURE_EFFECTS=1 \
+COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS=2560 \
+  ./target/debug/cosmic_systems rocket --site starbase
+```
+
+The log line reports, for the upper stage, `mass flow 273.7/273.7 kg/s`,
+`altitude 40351 m`, `pressure 274 Pa`, `fraction 1.000`, `expansion 2.99`,
+`outer length 20.7 m`. At sea level the same full-throttle fraction gives
+`expansion 1.09` and a `6.6 m` outer plume. The orange band at mid-body in an
+altitude frame is the aerodynamic-heating shell, not the plume.
 
 
 ## Imagery colour-match A/B

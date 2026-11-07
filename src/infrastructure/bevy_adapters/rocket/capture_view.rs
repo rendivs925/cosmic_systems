@@ -33,7 +33,8 @@ use crate::domain::services::reference_frames::{
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    RocketAutopilot, RocketMissionState, RocketPhysicsState, RocketRenderState, SpentStage,
+    PrimaryVehicle, RocketAutopilot, RocketFlightConditions, RocketGeometry, RocketMissionState,
+    RocketPhysicsState, RocketRenderState, SpentStage,
 };
 use crate::infrastructure::bevy_adapters::rocket::planet::RocketBoundPlanet;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
@@ -57,6 +58,12 @@ pub const CAPTURE_FOV_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_FOV_DEG";
 /// This is an explicit launch order plus `n` real `FixedUpdate` steps, not a
 /// teleported pose, so the frame shows the same physics a piloted run reaches.
 pub const CAPTURE_WARMUP_STEPS_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS";
+
+/// Environment variable that puts the capture camera beside the active vehicle
+/// instead of behind it (`side`, `1`, `on`, `true`). A chase camera looks down
+/// the thrust axis, so an exhaust plume foreshortens to a dot; plume evidence
+/// needs a profile view. Measurement only and inert when unset.
+pub const CAPTURE_TRACK_ENV: &str = "COSMIC_SYSTEMS_CAPTURE_TRACK";
 
 /// Upper bound on the warm start (200 s at 64 Hz). A capture is a measurement,
 /// not a batch runner; a runaway value should fail visibly rather than hang.
@@ -176,14 +183,20 @@ fn run_capture_warm_start(world: &mut World, steps: u32) {
         world.run_schedule(FixedUpdate);
     }
 
-    // Capture diagnostics: report the achieved attitude of every body so a
-    // staging frame can be checked against the authoritative state.
-    let mut bodies = world.query::<(&RocketPhysicsState, Option<&SpentStage>)>();
-    for (state, spent) in bodies.iter(world) {
+    // Capture diagnostics: report the achieved altitude and attitude of every
+    // body so a flight frame can be checked against the authoritative state.
+    let mut bodies = world.query::<(
+        &RocketPhysicsState,
+        Option<&SpentStage>,
+        Option<&RocketFlightConditions>,
+    )>();
+    for (state, spent, conditions) in bodies.iter(world) {
         let longitudinal = state.dynamics.orientation * DVec3::Y;
         bevy::log::info!(
-            "Capture warm start body ({}): +Y inertial [{:.3}, {:.3}, {:.3}], |v| {:.1} m/s",
+            "Capture warm start body ({}): altitude {:.0} m, +Y inertial \
+             [{:.3}, {:.3}, {:.3}], |v| {:.1} m/s",
             if spent.is_some() { "debris" } else { "primary" },
+            conditions.map_or(f64::NAN, |conditions| conditions.altitude_m),
             longitudinal.x,
             longitudinal.y,
             longitudinal.z,
@@ -338,6 +351,71 @@ pub fn apply_capture_pose(
             perspective.fov = fov_deg.to_radians();
         }
     }
+}
+
+/// Side-on tracking camera for plume evidence.
+///
+/// The chase camera sits behind the vehicle, i.e. along the thrust axis, so a
+/// plume is seen end-on and its length is not measurable. This view stands off
+/// along the body `+Z` axis and looks at the vehicle, giving a true profile of
+/// the same authoritative attitude. It is opt-in through
+/// [`CAPTURE_TRACK_ENV`] and writes only the camera.
+pub fn apply_capture_track_camera(
+    mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
+    rocket_query: Query<(&Transform, &RocketGeometry), (PrimaryVehicle, Without<Camera3d>)>,
+) {
+    if !capture_track_enabled() {
+        return;
+    }
+    let Ok((rocket, geometry)) = rocket_query.single() else {
+        return;
+    };
+    let Some((camera, distance_m)) = track_camera_transform(rocket, geometry.height_m) else {
+        return;
+    };
+    let Some((mut transform, mut projection)) = camera_query.iter_mut().next() else {
+        return;
+    };
+    *transform = camera;
+    if let Projection::Perspective(perspective) = projection.as_mut() {
+        perspective.near = (distance_m * 0.01).max(0.1);
+        perspective.far = distance_m * 20.0;
+        if let Some(fov_deg) = capture_fov_deg() {
+            perspective.fov = fov_deg.to_radians();
+        }
+    }
+}
+
+/// Side profile camera for a vehicle at `rocket` with body height `height_m`.
+/// Returns the camera transform and its distance from the vehicle, or `None`
+/// for a degenerate attitude. Pure so the framing rule is testable.
+fn track_camera_transform(rocket: &Transform, height_m: f32) -> Option<(Transform, f32)> {
+    let side = (rocket.rotation * Vec3::Z).normalize_or_zero();
+    let up = (rocket.rotation * Vec3::Y).normalize_or_zero();
+    if side.length_squared() < 0.5 || up.length_squared() < 0.5 {
+        return None;
+    }
+    // Three body heights back keeps a full stack and its plume in frame.
+    let distance_m = (height_m * 3.0).max(40.0);
+    let position = rocket.translation + side * distance_m;
+    Some((
+        Transform::from_translation(position).looking_at(rocket.translation, up),
+        distance_m,
+    ))
+}
+
+fn capture_track_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| parse_capture_track(std::env::var(CAPTURE_TRACK_ENV).ok().as_deref()))
+}
+
+fn parse_capture_track(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "side" | "1" | "on" | "true" | "yes"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -513,5 +591,47 @@ mod tests {
             parse_capture_warmup_steps(Some("999999")),
             MAX_CAPTURE_WARMUP_STEPS
         );
+    }
+
+    #[test]
+    fn capture_track_parsing_is_opt_in() {
+        assert!(!parse_capture_track(None));
+        for value in ["side", "1", "on", "TRUE", " yes "] {
+            assert!(
+                parse_capture_track(Some(value)),
+                "{value:?} must enable tracking"
+            );
+        }
+        for value in ["0", "off", "", "chase"] {
+            assert!(
+                !parse_capture_track(Some(value)),
+                "{value:?} must not enable tracking"
+            );
+        }
+    }
+
+    /// The plume is invisible from the chase camera because it is seen along
+    /// its own axis. The capture view must stand off along the body lateral
+    /// axis and look back at the vehicle, with distance scaled to the body.
+    #[test]
+    fn side_capture_camera_profiles_the_vehicle() {
+        let rotation = DQuat::from_axis_angle(DVec3::new(0.2, 1.0, 0.3).normalize(), 0.7);
+        let rocket =
+            Transform::from_translation(Vec3::new(1.0, 2.0, 3.0)).with_rotation(rotation.as_quat());
+
+        let (camera, distance_m) = track_camera_transform(&rocket, 13.2).expect("valid attitude");
+
+        let offset = camera.translation - rocket.translation;
+        let side = (rotation * DVec3::Z).as_vec3();
+        assert!(
+            offset.normalize().dot(side) > 0.9999,
+            "camera must stand off along the body +Z lateral axis"
+        );
+        assert_eq!(distance_m, 40.0, "the minimum stand-off applies");
+        assert!((offset.length() - distance_m).abs() < 1e-4);
+
+        // The camera looks at the vehicle, not away from it.
+        let forward = camera.rotation * Vec3::NEG_Z;
+        assert!(forward.dot(-offset.normalize()) > 0.9999);
     }
 }

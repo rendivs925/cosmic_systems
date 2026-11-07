@@ -37,7 +37,7 @@ values and its linear-to-byte encoding are in
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
 | 7 | vegetation | PARTIAL | `terrain-600m` | trees read as isolated specks only |
-| 8 | rocket ascent | CURRENT | `2026-11-06-rk01-ascent-axes`, `2026-11-06-rk01-staging-axes` | warm-started production flight; ascent at `T+17.8 s`, separation at `T+27.5 s`, staging frame at `T+29.9 s` |
+| 8 | rocket ascent | CURRENT | `2026-11-06-rk01-ascent-axes`, `2026-11-06-rk01-staging-axes`, `2026-11-07-rk02-*` | warm-started production flight; ascent at `T+17.8 s`, separation at `T+27.5 s`, staging frame at `T+29.9 s`; the RK-02 pair shows the plume at sea level and at 40 km |
 | 9 | high altitude | CURRENT | `300km-papua`, `production-1200km` | 300 km and 1,200 km nadir |
 | 10 | orbit | MISSING | — | 1,200 km is the highest captured |
 
@@ -230,6 +230,28 @@ method for both.
 own** single-scattered radiance, not the sky dome. This sky-only fill does not
 change it; it stays tracked with the cloud-edge work (CL-05/06). The +2° sky hue
 and the upper limb tail are the quantities AT-04 changes.
+
+### Engine plume from propulsion state (`RK-02`, commit `PLACEHOLDER`)
+
+Both frames use Starbase, `2000-01-01T18:46:37Z`, 1280x720, and the
+capture-only side tracking camera (`COSMIC_SYSTEMS_CAPTURE_TRACK=side`). A chase
+camera looks along the thrust axis, so a plume foreshortens to a dot; the side
+view measures the same authoritative attitude in profile.
+
+| file | capture | altitude | pressure | flow fraction | expansion | outer plume | sha256 (first 16) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `2026-11-07-rk02-sealevel-side.jpg` | T+4.4 s | 386 m | 96,775 Pa | 1.000 | 1.09 | 6.6 m | `b32d088e0d594be0` |
+| `2026-11-07-rk02-altitude-side.jpg` | T+43.8 s | 40,351 m | 274 Pa | 1.000 | 2.99 | 20.7 m | `e20a70db235faae8` |
+
+The mass-flow fraction is 1.000 in both frames, so the 3.1x outer-plume length
+ratio is the pressure response, not a throttle difference. The altitude frame is
+the first capture with the upper stage still at full burn after staging; the
+spent first stage appears separately in the RK-01 staging frame.
+
+**Recorded limits:** the layer proportions are presentation constants, not a
+gas-dynamic solution. The orange band at mid-body in the altitude frame is the
+existing aerodynamic-heating shell, not the plume. Per-layer materials stay
+shared, so brightness is not scaled per vehicle.
 
 ### Rocket body frame and staging (`RK-01`, commit `a9d51a2`)
 
