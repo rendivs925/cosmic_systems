@@ -1298,7 +1298,7 @@ timings. This phase exists because an unverifiable change is not a change.
   documented expansion factor, and direction is the authoritative thrust axis.
 - **Risks recorded:** the layer proportions are presentation constants; per-layer
   materials stay shared, so brightness is not per-vehicle.
-- **Completion evidence:** `PLACEHOLDER`; tests plus the two frames.
+- **Completion evidence:** `6209a73`; tests plus the two frames.
 
 ---
 

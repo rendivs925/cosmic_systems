@@ -231,7 +231,7 @@ own** single-scattered radiance, not the sky dome. This sky-only fill does not
 change it; it stays tracked with the cloud-edge work (CL-05/06). The +2° sky hue
 and the upper limb tail are the quantities AT-04 changes.
 
-### Engine plume from propulsion state (`RK-02`, commit `PLACEHOLDER`)
+### Engine plume from propulsion state (`RK-02`, commit `6209a73`)
 
 Both frames use Starbase, `2000-01-01T18:46:37Z`, 1280x720, and the
 capture-only side tracking camera (`COSMIC_SYSTEMS_CAPTURE_TRACK=side`). A chase
