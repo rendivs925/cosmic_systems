@@ -489,6 +489,64 @@ mod tests {
 
     #[cfg(feature = "dem")]
     #[test]
+    fn papua_site_elevation_comes_from_the_regional_payload() {
+        use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
+        let source = EarthTerrainSource::new();
+        let tiles = source
+            .elevation_tile_source()
+            .expect("default Earth source must expose composed payloads");
+        let terrain_latitude_deg =
+            crate::domain::services::regional_dem::geodetic_to_terrain_latitude_deg(-8.0);
+        let direction = terrain_lat_lon_to_body_fixed(terrain_latitude_deg, 139.5);
+        assert!(
+            tiles
+                .ensure_covering_tile_loaded(terrain_latitude_deg, 139.5)
+                .expect("the Papua payload must decode"),
+            "the site must have a covering regional tile"
+        );
+
+        let measured_m = tiles
+            .sample_resident(direction)
+            .expect("the finest covering payload is resident");
+        // Verified probe from the package bake
+        // (docs/datasets/earth_regional_papua_v1.md).
+        assert!(
+            (measured_m - 71.978).abs() < 0.01,
+            "Papua payload height {measured_m} must match the baked probe"
+        );
+        assert_eq!(
+            tiles.height_m(terrain_latitude_deg, 139.5),
+            measured_m,
+            "the tile source must sample the regional payload at the site"
+        );
+        let covering = tiles
+            .covering_tile_for_direction(direction)
+            .expect("the payload manifest covers the site");
+        assert_eq!(
+            covering.patch.level, 12,
+            "the site must resolve at the finest declared payload level"
+        );
+        assert_eq!((covering.width, covering.height), (64, 64));
+
+        // The global 30 arc-second base remains the fallback: without a payload
+        // root the same point is several metres higher and the source advertises
+        // no tile handle.
+        let global = EarthTerrainSource::with_dem_path(DEFAULT_EARTH_DEM_PATH)
+            .expect("resident Earth DEM must load");
+        assert!(global.elevation_tile_source().is_none());
+        let fallback_m = global.height_m(terrain_latitude_deg, 139.5);
+        assert!(
+            (fallback_m - 77.59).abs() < 0.5,
+            "global fallback {fallback_m} must match the measured base"
+        );
+        assert!(
+            fallback_m - measured_m > 3.0,
+            "the regional package must refine the site: {measured_m} vs {fallback_m}"
+        );
+    }
+
+    #[cfg(feature = "dem")]
+    #[test]
     fn default_earth_source_composes_all_regional_payloads_when_present() {
         let ksc_root =
             std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_ksc");

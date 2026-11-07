@@ -1138,3 +1138,35 @@ recorded rather than hidden.
 
 Cost: one comparison and one constant per patch vertex in the existing cap
 build. All three flight baselines are unchanged.
+
+## 2026-11-07 — Regional DEM at the Papua site (TD-07)
+
+The regional NASADEM package, its bake, its provenance and its runtime
+composition already existed. TD-07 was missing the proof at the Papua site and
+the visual evidence, not the mechanism.
+
+**Selection.** The site is a geodetic point (`-8.0, 139.5`), while the terrain
+source samples planetocentric terrain latitude. The conversion gives `−7.9471°`;
+sampling the geodetic latitude directly lands about 5 km away and reads the
+global fallback. At the converted point the covering payload is level 12 with a
+64×64 grid, the finest declared level, and the measured height is **71.978 m** —
+exactly the package bake's verified `--probe`. `TileElevationSource::height_m`
+returns that same measured value.
+
+**Fallback.** The same point through `EarthTerrainSource::with_dem_path` has no
+tile handle and measures **77.592 m** on the global 30 arc-second base, a
+**5.61 m** difference. The regional package is therefore demonstrably the
+source at the site, and the global base is the fallback.
+
+**Visual evidence.** The 3 km pose shows a continuous measured plain with no
+angular water polygons; the 300 km pose resolves the coast, offshore islands and
+inland water. Both are the P0-01 pose at the default instant, 42 s, 220 frames.
+
+One limit is recorded rather than hidden: the 3 km frame has a 1–2 px
+intermittent bright line along one patch boundary. It appears because the
+capture camera is 5 km from the vehicle that drives streaming, so the two sides
+of that boundary can be at different LODs. It is a capture-path artefact, not an
+elevation-data artefact, and it belongs to a streaming/LOD audit rather than
+TD-07.
+
+No production code changed; the new test and the two frames are the evidence.

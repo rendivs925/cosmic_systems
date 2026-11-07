@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `98dc788` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 27 | 60.0 % |
+| VERIFIED | 28 | 62.2 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 16 | 35.6 % |
+| PLANNED | 15 | 33.3 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 9 / 12 | 75 % | active | TD-12 closed; TD-07, TD-08 and TD-09 remain |
+| P1 Data and terrain correctness | 10 / 12 | 83 % | active | TD-07 and TD-12 closed; TD-08 and TD-09 remain |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -121,14 +121,12 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — TD-07, coastal DEM resolution for the Papua site.** Prove the
-site's elevation comes from the regional NASADEM package at its declared
-resolution with the global base as fallback, and capture the 3 km / 300 km
-frames the entry asks for.
+**Next task — TD-08, vertical datum audit.** Prove the geoid/ellipsoid
+correction is applied exactly once across the DEM, imagery, water and collision,
+so a point is never shifted by the ~71 m EGM2008 undulation twice or not at all.
 
-TD-12 is closed. The Papua water was measured NASADEM data (4.3 cm below the
-datum, with erosion four metres above it), not a synthetic basin. The visible
-over-extent came from the ocean cap using its 0.5 m depth-test offset as a flood
-threshold; classification now follows the sea datum and the offset is 0.05 m.
-The remaining terrain and material audits (TD-07, TD-08, TD-09, TM-01/02/03,
-TG-01/02) and RD-01 follow.
+TD-07 is closed: the Papua site resolves at the finest declared payload level
+(12, 64×64), measures 71.978 m against the bake's verified probe, and differs by
+5.61 m from the global fallback at the same point. TD-12 is also closed (the
+water was measured, not eroded). The remaining audits (TD-08, TD-09,
+TM-01/02/03, TG-01/02) and RD-01 follow.

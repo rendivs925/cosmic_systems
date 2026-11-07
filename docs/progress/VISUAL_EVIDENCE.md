@@ -32,7 +32,7 @@ values and its linear-to-byte encoding are in
 | --- | --- | --- | --- | --- |
 | 1 | prelaunch | CURRENT | `pad-110m-footprint`, `2026-11-06-rk01-prelaunch-axes` | pad and tower; the RK-01 frame adds the body tripod and the retained upper envelope |
 | 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed` | one graded pad per predefined site, all flush and dry |
-| 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*`, `2026-11-07-td12-papua-after` | 600 m nadir; the detail guard A/B is the same pose with the guard off and on, and the TD-12 frame repeats it after the datum-classification fix |
+| 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*`, `2026-11-07-td12-papua-after`, `2026-11-07-td07-papua-3km` | 600 m nadir with the guard A/B, the TD-12 repeat, and the 3 km regional-DEM view |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
@@ -59,6 +59,8 @@ missing ones explainable.
 | `2026-10-31-pad-250m-footprint.jpg` | `b7dbb2d` | default chase | 0 s | 240 | `3db6d6622b477d23` | 250 m graded footprint: pale disc around pad | disc visible (failing) |
 | `2026-10-31-pad-110m-footprint.jpg` | `d89e7d6` | default chase | 0 s | 240 | `1fa53406f293f25c` | 110 m footprint: pad flush, tone continuous | no disc, no floating edge (passing) |
 | `2026-11-01-terrain-600m.jpg` | `d89e7d6` | `-8.0,139.5,600` | 42 s | 220 | `3c7b470c5d3bceec` | coastal plain, water bodies, tree specks | relief and canopy visible (failing) |
+| `2026-11-07-td07-papua-3km.jpg` | `PLACEHOLDER` | `-8.0,139.5,3000` | 42 s | 220 | `ff12f642cee147e9` | regional NASADEM base at 3 km: continuous plain, no angular water polygons | measured relief, no synthetic polygons (passing) |
+| `2026-11-07-td07-papua-300km.jpg` | `PLACEHOLDER` | `-8.0,139.5,300000` | 42 s | 220 | `fcf403cac5198ff7` | regional base at 300 km: coast, offshore islands, inland water | coast and water bodies resolved (passing) |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -307,6 +309,35 @@ shifting only inside them). The guard provably removes every detail-only
 crossing on land above the datum, so this water was below the datum in the base
 surface. TD-12 identified the base as the measured NASADEM payload and the
 over-extent as a rendering flood threshold; see the next section.
+
+### Regional DEM at the Papua site (`TD-07`, commit `PLACEHOLDER`)
+
+Both frames are the P0-01 pose, default start instant, presentation time 42 s,
+220 frames and 1280x720. The regional NASADEM package is composed over the
+global 30 arc-second base.
+
+| file | pose | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- |
+| `2026-11-07-td07-papua-3km.jpg` | `-8.0,139.5,3000` | `ff12f642cee147e9` | continuous measured plain; the angular water polygons of the global base are gone |
+| `2026-11-07-td07-papua-300km.jpg` | `-8.0,139.5,300000` | `fcf403cac5198ff7` | coast, offshore islands and inland water resolved from the measured base |
+
+Measured at the geodetic site (`-8.0, 139.5` → terrain latitude `−7.9471°`):
+
+| quantity | value |
+| --- | --- |
+| covering payload | level 12, 64×64 grid (finest declared) |
+| measured payload height | **71.978 m** (matches the bake probe) |
+| global fallback, same point | **77.592 m** |
+| refinement | **5.61 m** |
+
+Provenance and checksums: `docs/datasets/earth_regional_papua_v1.md`. NASADEM's
+vertical accuracy is metres; absolute survey control is still required for
+survey-grade claims.
+
+**Recorded limit:** the 3 km frame shows a 1–2 px intermittent bright line along
+one patch boundary. It is a capture-path artefact of viewing 5 km from the
+vehicle (the streaming focus), not the elevation data; it is recorded for a
+future streaming/LOD audit.
 
 ### Near-datum water on the Papua plain (`TD-12`, commit `98dc788`)
 

@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-07. Last code checkpoint: `98dc788`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-seven of forty-five roadmap tasks, each with implementation + tests + a
+Twenty-eight of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -95,6 +95,7 @@ named frame or a named measurement:
 | RK-01 attitude and staging | separation preserves attitude/angular velocity; jettisoned debris now advances its own render snapshot; the serial-stage mesh is centred on the physical stage; the debug tripod uses the flight frame; three body-axis frames, staging at `T+27.5 s`, capture at `T+29.9 s`; `2026-11-06-rk01-*` |
 | RK-02 plume state | intensity is the burned mass-flow fraction, length follows the pressure expansion, direction follows the gimbaled thrust axis; same flow fraction at sea level 6.6 m / 96.8 kPa and 40.4 km 20.7 m / 274 Pa; 33 effects, 0.022 ms update; `2026-11-07-rk02-*` |
 | TD-12 near-datum water | the Papua strip is measured NASADEM (4.3 cm below the datum; the eroded base is +4 m above it); the ocean cap had used its 0.5 m depth-test offset as a flood threshold and submerged measured land at 0.28–0.46 m; classification now follows the datum, offset 0.05 m, pale water share 8.19 % → 3.27 %; `2026-11-07-td12-papua-after.jpg` |
+| TD-07 regional DEM at Papua | site resolves at payload level 12 (64×64), measures 71.978 m against the bake probe, global fallback 77.592 m (5.61 m refinement); 3 km and 300 km frames; `2026-11-07-td07-*` |
 | VL-02 OpenSpec strict | 42/42 |
 
 Every implemented task is now verified. The two remaining blocked items are
@@ -109,19 +110,15 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TD-07 — coastal DEM resolution for the Papua site.** Prove the site's
-elevation comes from the regional NASADEM package at its declared resolution
-with the global base as fallback, and capture the 3 km / 300 km frames the entry
-asks for.
+**TD-08 — vertical datum audit.** Prove the geoid/ellipsoid correction is
+applied exactly once across the DEM, imagery, water and collision, so a point is
+never shifted by the ~71 m EGM2008 undulation twice or not at all.
 
-TD-12 is closed. The Papua water is measured NASADEM: the finest payload puts
-the observed strip 4.3 cm below the EGM2008 datum and the source's own
-classification calls it ocean, while the eroded base over the global DEM is four
-metres above the datum. The visible over-extent was a rendering bug: the ocean
-cap used its 0.5 m depth-test offset as the flood threshold, submerging measured
-land at 0.28–0.46 m. Classification now follows the datum and the offset is
-0.05 m. The remaining terrain and material audits (TD-07, TD-08, TD-09,
-TM-01/02/03, TG-01/02) and RD-01 follow.
+TD-07 is closed. The Papua site resolves at the finest declared payload level
+(12, 64×64), measures 71.978 m against the package bake's verified probe, and
+differs by 5.61 m from the global fallback at the same point. TD-12 is also
+closed: the water was measured NASADEM, not eroded. The remaining audits
+(TD-08, TD-09, TM-01/02/03, TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -129,7 +126,7 @@ TM-01/02/03, TG-01/02) and RD-01 follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1167 passed, 2 ignored
+cargo test --features dem --lib          # 1168 passed, 2 ignored
 cargo test --no-default-features --lib   # 1124 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
@@ -153,9 +150,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,167 domain and adapter
+The simulator runs and its physics is regression-locked; 1,168 domain and adapter
 tests pass (1,124 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-seven of its forty-five tasks.
+realism programme has verified twenty-eight of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface

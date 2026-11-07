@@ -609,7 +609,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `5c7585e`; tests plus the Papua A/B pair.
 
 ### TD-07 — Coastal DEM resolution for the Papua site
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Replace the 900 m global base with the regional package where one
   exists, so the 3 km view stops showing angular water polygons.
@@ -620,13 +620,41 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Acceptance:** the site's elevation comes from the regional package at its
   declared resolution; the global base remains the fallback; provenance and
   checksums recorded.
-- **Tests:** payload selection; fallback when the package is absent.
-- **Visual evidence:** 3 km and 300 km frames at the P0-01 pose.
-- **Performance:** resident tile budget unchanged.
-- **Scientific validation:** source, version, licence, datum, epoch and
-  uncertainty recorded in the dataset document.
-- **Risks:** mixing vertical datums between the global and regional packages.
-- **Completion evidence:** pending.
+- **Specification:** no delta; the existing `terrain-source` requirement
+  "Tile-backed terrain source preserves a resident fallback" already states that
+  a query inside resident coverage returns the tile's measured elevation and a
+  query outside it returns the coarse value.
+- **Implementation:** the regional package already existed and was composed by
+  `EarthTerrainSource::new()`; TD-07 supplies the missing proof at the Papua
+  site and the visual evidence. No production code changed.
+- **Tests:** `papua_site_elevation_comes_from_the_regional_payload` converts the
+  geodetic site to terrain latitude (−7.9471°), loads the covering payload and
+  asserts:
+  - the resident tile is level 12 with a 64×64 grid (the finest declared level);
+  - the measured height is **71.978 m**, matching the package bake's verified
+    `--probe`;
+  - `TileElevationSource::height_m` returns that same measured value;
+  - the same point without a payload root has no tile handle and measures
+    **77.592 m** on the global 30 arc-second base — a **5.61 m** refinement, so
+    the regional package is demonstrably in use.
+  Provenance, checksums, licence and the NASADEM vertical-accuracy caveat are
+  recorded in `docs/datasets/earth_regional_papua_v1.md`.
+- **Visual evidence:** `2026-11-07-td07-papua-3km.jpg` and
+  `2026-11-07-td07-papua-300km.jpg`, both at the P0-01 pose
+  (`-8.0,139.5,3000` and `-8.0,139.5,300000`), default start instant,
+  presentation time 42 s, 220 frames, 1280x720. The 3 km view is a continuous
+  measured plain with no angular water polygons; the 300 km view resolves the
+  coast, offshore islands and inland water bodies.
+- **Performance:** resident tile budget unchanged; the test decodes one tile.
+- **Scientific validation:** the source is NASA MEaSUREs NASADEM 1 arc-second
+  bare earth, EGM96 orthometric converted with the runtime EGM2008 geoid; the
+  bake reports RMSE 0.163 m and max absolute error 2.457 m against the source.
+  Absolute survey control is still required for survey-grade claims.
+- **Recorded limit:** the 3 km capture shows a 1–2 px intermittent bright line
+  along one patch boundary. It is a capture-path artefact of looking 5 km from
+  the vehicle (the streaming focus), not of the elevation data; it is recorded
+  for a future streaming/LOD audit rather than hidden.
+- **Completion evidence:** `PLACEHOLDER`; the test plus the two frames.
 
 ### TD-08 — Vertical datum audit
 - **Status:** PLANNED
