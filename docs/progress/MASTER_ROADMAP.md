@@ -1001,7 +1001,7 @@ timings. This phase exists because an unverifiable change is not a change.
   reconciliation gate, not a global coastline survey.
 - **Risks recorded:** one clean control does not certify rias, barrier islands or
   tidal flats, where sub-texel agreement is not expected.
-- **Completion evidence:** `PLACEHOLDER`; the transect test plus the 3 km frame.
+- **Completion evidence:** `15f9b63`; the transect test plus the 3 km frame.
 
 ---
 
