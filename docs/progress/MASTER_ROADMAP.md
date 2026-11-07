@@ -790,7 +790,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Scientific validation:** presentation only.
 - **Risks recorded:** the offsets are chosen for the current meshes; the AABB
   test fails if a mesh is resized without updating its centre.
-- **Completion evidence:** `PLACEHOLDER`; the test plus the ground frame.
+- **Completion evidence:** `1ea0895`; the test plus the ground frame.
 
 ### LF-03 — Flame trench and deflector visible and grounded
 - **Status:** PLANNED

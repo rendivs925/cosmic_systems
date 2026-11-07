@@ -69,6 +69,7 @@ missing ones explainable.
 | `2026-11-07-tm03-bight-coast-3km.jpg` | `15f9b63` | `-32.0,132.14,3000` | 42 s | 220 | `e748618a653c0d2c` | Great Australian Bight coast: water cap and albedo coast meet on one line | coastline agrees within one overview texel |
 | `2026-11-07-vg01-papua-600m.jpg` | `c76c7be` | `-8.0,139.5,600` | 42 s | 220 | `22914e5c7ff597db` | ground view after the sea-datum tree exclusion | specks on land, none on water |
 | `2026-11-07-vg01-papua-3km.jpg` | `c76c7be` | `-8.0,139.5,3000` | 42 s | 220 | `a14c8d8f52cafc4a` | 3 km view of the same distribution | trees only on land |
+| `2026-11-07-lf02-starbase-pad-ground.jpg` | `1ea0895` | default chase | 0 s | 240 | `90e0855fe61cc288` | Starbase pad: tanks, blockhouse, floodlights and tower in profile | ground hardware on the pad plane |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -385,6 +386,24 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Grounded facility hardware (`LF-02`, commit `1ea0895`)
+
+Reading the spawned mesh bounds found the hold-down clamps floating 0.10 m and the
+deluge rails buried 0.25 m. Both are grounded; the spawned-scene AABB test guards
+every ground-based facility within 0.05 m.
+
+| file | sha256 (first 16) | demonstrates |
+| --- | --- | --- |
+| `2026-11-07-lf02-starbase-pad-ground.jpg` | `90e0855fe61cc288` | the Starbase pad with tanks, blockhouse, floodlight poles and tower standing on the deck |
+
+The frame is the default chase view at the TD-02 Starbase instant
+(`2000-01-01T18:46:37Z`, 0 s, 240 frames). The clamps and rails are sub-pixel at
+this distance; the test reads their live mesh AABBs, which is the authoritative
+check.
+
+**Recorded limit:** the flame trench and deflector are still covered by the deck
+(LF-03).
 
 ### Vegetation distribution (`VG-01`, commit `c76c7be`)
 
