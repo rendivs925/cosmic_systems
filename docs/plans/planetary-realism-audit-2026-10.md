@@ -1347,3 +1347,23 @@ Evidence is the 600 m ground and 3 km views at the Papua pose. Both still read
 sparse: that is canopy geometry and shading, not the gate, and it is attributed
 to VG-02/VG-03. There is no density-overlay diagnostic, so the domain tests and
 the placed instances are the evidence for distribution.
+
+## 2026-11-07 — Grounded facility hardware (LF-02)
+
+The pad children are placed under an entity whose origin is the authoritative
+terrain anchor, so each structure's local minimum Y should be zero. The audit
+read the live mesh AABBs from a spawned scene rather than the placement
+constants: the hold-down clamps were floating 0.10 m (a 0.8 m body centred at
+0.5 m) and the deluge rails were buried 0.25 m (a 1.4 m body centred at 0.45 m).
+The tanks, blockhouse, floodlight poles and tower legs already met the plane.
+
+Both centres are corrected to half their height. The regression spawns the pad
+exactly as production does, queries `(Name, Transform, Mesh3d)`, computes
+`translation.y + aabb.min.y` from the live mesh, and requires every ground-based
+facility to meet the plane within 0.05 m. Mounted tower levels, braces, arms,
+beacons and floodlight heads are excluded by name, as are the deliberately
+embedded apron/deck slabs and the flame deflector (LF-03).
+
+Evidence is the default chase view of the Starbase pad at the TD-02 instant.
+The clamps and rails are sub-pixel there; the AABB test is the authoritative
+check.

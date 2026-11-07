@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `c76c7be` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 34 | 75.6 % |
+| VERIFIED | 35 | 77.8 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 9 | 20.0 % |
+| PLANNED | 8 | 17.8 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -24,7 +24,7 @@ evidenced", not "the simulator does not work".
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
-| P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
+| P2 Launch facility | 2 / 4 | 50 % | active | LF-02 closed; trench and structural detail remain |
 | P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
 | P4 Vegetation | 1 / 3 | 33 % | active | VG-01 closed; canopy geometry and wind remain |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
@@ -115,18 +115,18 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 1 — `spaceflight-game-mvp` (5/37 tasks) |
-| archived changes | 41 |
-| strict validation | 41/41 pass |
+| archived changes | 43 |
+| strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — VG-02, near-field canopy geometry.** Replace the flat tree cards
-with volumetric canopies at close range, with impostors beyond the near band and
-a measured instance cap.
+**Next task — LF-03, flame trench and deflector.** The deck currently covers the
+trench, so the deflector reads as a buried box. LF-03 opens the trench in the
+deck and makes the deflector visible and grounded, with nothing floating below
+the plane.
 
-VG-01 is closed: vegetation exclusion now uses height above the local sea datum
-(the old raw ellipsoidal test accepted a tree 5.2 m under the sea at Papua), the
-generator identity is versioned, and the stable-lattice far-field change is
-archived. The remaining vegetation audits (VG-02/03) and the cloud, facility,
-performance and validation tasks follow.
+LF-02 is closed: the hold-down clamps floated 0.10 m and the deluge rails were
+buried 0.25 m; both are grounded, and a spawned-scene AABB test now guards every
+ground-based facility. LF-03 and LF-04, the vegetation geometry, clouds,
+resource invalidation and the visual suite follow.

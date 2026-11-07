@@ -763,7 +763,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** commit `d89e7d6`.
 
 ### LF-02 — Facility hardware grounded on the pad plane
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Verify tanks, blockhouse, floodlights and hold-downs sit on the
   pad plane with no float or interpenetration.
@@ -771,13 +771,26 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Subsystems:** launch presentation.
 - **Expected files:** `src/application/rocket_spawning.rs`.
 - **Acceptance:** every structure's base is within 0.05 m of the surface under it.
-- **Tests:** a spawned-scene test asserting each structure's minimum Y against the
-  pad plane.
-- **Visual evidence:** ground frame with the structures in profile.
+- **Specification:** `launch-site-presentation` gained "Ground-based facility
+  hardware sits on the pad plane" (change `2026-11-07-ground-facility-hardware`,
+  requirement recorded by `2026-11-07-record-ground-facility-requirement`).
+- **Defect found and fixed:** reading the spawned mesh bounds showed the
+  hold-down clamps floating **0.10 m** (0.8 m body centred at 0.5 m) and the
+  deluge rails buried **0.25 m** (1.4 m body centred at 0.45 m). Their centres
+  are now 0.4 m and 0.7 m. The tanks, blockhouse, floodlight poles and tower legs
+  already met the plane.
+- **Tests:** `spawned_ground_facilities_sit_on_the_pad_plane` spawns the pad
+  exactly as production does, reads each ground-based facility's live mesh AABB
+  and asserts its lowest vertex is within 0.05 m of the plane. Mounted items and
+  the embedded apron/deck are excluded by name.
+- **Visual evidence:** `2026-11-07-lf02-starbase-pad-ground.jpg`, the Starbase
+  pad at `2000-01-01T18:46:37Z`, 0 s, 240 frames, showing the tanks, blockhouse,
+  floodlights and tower in profile.
 - **Performance:** none.
 - **Scientific validation:** presentation only.
-- **Risks:** items placed by eye rather than derived from the pad plane.
-- **Completion evidence:** pending.
+- **Risks recorded:** the offsets are chosen for the current meshes; the AABB
+  test fails if a mesh is resized without updating its centre.
+- **Completion evidence:** `PLACEHOLDER`; the test plus the ground frame.
 
 ### LF-03 — Flame trench and deflector visible and grounded
 - **Status:** PLANNED

@@ -427,7 +427,8 @@ fn spawn_procedural_launch_pad(
                 LaunchSiteStructure,
                 Mesh3d(meshes.add(Cuboid::new(0.35, 1.4, 26.0))),
                 MeshMaterial3d(water.clone()),
-                Transform::from_xyz(x, 0.45, 0.0),
+                // 1.4 m tall: centre at 0.7 m puts the base on the pad plane.
+                Transform::from_xyz(x, 0.7, 0.0),
                 Name::new("LaunchPadDelugeRail"),
             ));
         }
@@ -437,7 +438,8 @@ fn spawn_procedural_launch_pad(
                 LaunchSiteStructure,
                 Mesh3d(meshes.add(Cuboid::new(1.2, 0.8, 1.2))),
                 MeshMaterial3d(hazard.clone()),
-                Transform::from_xyz(x, 0.5, z),
+                // 0.8 m tall: centre at 0.4 m grounds the clamp on the pad.
+                Transform::from_xyz(x, 0.4, z),
                 Name::new("LaunchPadHoldDownClamp"),
             ));
         }
@@ -917,6 +919,7 @@ mod tests {
     use crate::domain::entities::rocket::{
         EngineState, RocketEngine, RocketStage, ThrustReference,
     };
+    use bevy::camera::primitives::MeshAabb;
     use bevy::light::{NotShadowCaster, NotShadowReceiver};
 
     #[test]
@@ -1053,6 +1056,81 @@ mod tests {
             checked >= 8,
             "expected the spawned tower to contain perimeter and diagonal braces, found {checked}"
         );
+    }
+
+    /// LF-02: every ground-based facility sits on the pad plane. The test reads
+    /// the spawned mesh AABBs, so a hardcoded centre that leaves a clamp
+    /// floating or buries a rail fails even if the layout constants change.
+    #[test]
+    fn spawned_ground_facilities_sit_on_the_pad_plane() {
+        let height_m = 70.0;
+        let diameter_m = 3.7;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>| {
+                spawn_procedural_launch_pad(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    LaunchPadPresentation {
+                        planet_name: CelestialBodyId::earth(),
+                        position_body_fixed_m: DVec3::new(6_371_000.0, 0.0, 0.0),
+                        normal_body_fixed: DVec3::X,
+                        heading_body_fixed: DVec3::Z,
+                    },
+                    height_m,
+                    diameter_m,
+                );
+            },
+        );
+        app.update();
+
+        // Ground-based facilities: their lowest mesh vertex must meet the pad
+        // plane. The apron/deck slabs, flame deflector (LF-03), tower members,
+        // beacons and floodlight heads are deliberately mounted or recessed.
+        const GROUND_NAMES: [&str; 6] = [
+            "LaunchPadTowerLeg",
+            "LaunchPadWaterTank",
+            "LaunchPadBlockhouse",
+            "LaunchPadFloodlightPole",
+            "LaunchPadHoldDownClamp",
+            "LaunchPadDelugeRail",
+        ];
+        let world = app.world_mut();
+        let mut query = world.query::<(&Name, &Transform, &Mesh3d)>();
+        let meshes = world.resource::<Assets<Mesh>>();
+        let mut checked = [0usize; GROUND_NAMES.len()];
+        for (name, transform, mesh3d) in query.iter(world) {
+            let Some(index) = GROUND_NAMES
+                .iter()
+                .position(|candidate| *candidate == name.as_str())
+            else {
+                continue;
+            };
+            let mesh = meshes
+                .get(&mesh3d.0)
+                .expect("spawned facility mesh must exist");
+            let aabb = mesh
+                .compute_aabb()
+                .expect("facility geometry must have bounds");
+            let base_y_m =
+                transform.translation.y + (aabb.center.y - aabb.half_extents.y) * transform.scale.y;
+            assert!(
+                base_y_m.abs() <= 0.05,
+                "{} base is {base_y_m:+.3} m from the pad plane",
+                name.as_str()
+            );
+            checked[index] += 1;
+        }
+        for (name, count) in GROUND_NAMES.iter().zip(checked) {
+            assert!(count > 0, "the pad must spawn {name}");
+        }
     }
 
     #[test]
