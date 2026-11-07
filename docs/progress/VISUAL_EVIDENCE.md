@@ -61,7 +61,7 @@ missing ones explainable.
 | `2026-11-01-terrain-600m.jpg` | `d89e7d6` | `-8.0,139.5,600` | 42 s | 220 | `3c7b470c5d3bceec` | coastal plain, water bodies, tree specks | relief and canopy visible (failing) |
 | `2026-11-07-td07-papua-3km.jpg` | `85d4d88` | `-8.0,139.5,3000` | 42 s | 220 | `ff12f642cee147e9` | regional NASADEM base at 3 km: continuous plain, no angular water polygons | measured relief, no synthetic polygons (passing) |
 | `2026-11-07-td07-papua-300km.jpg` | `85d4d88` | `-8.0,139.5,300000` | 42 s | 220 | `fcf403cac5198ff7` | regional base at 300 km: coast, offshore islands, inland water | coast and water bodies resolved (passing) |
-| `2026-11-07-tm01-vandenberg-pad.jpg` | `PLACEHOLDER` | default chase | 0 s | 240 | `cbfa209bb2858319` | Vandenberg pad after classification was decoupled from the site grade | pad material continuous with the hillside (passing) |
+| `2026-11-07-tm01-vandenberg-pad.jpg` | `18c78ea` | default chase | 0 s | 240 | `cbfa209bb2858319` | Vandenberg pad after classification was decoupled from the site grade | pad material continuous with the hillside (passing) |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -379,7 +379,7 @@ limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
 
-### Material classification under grading (`TM-01`, commit `PLACEHOLDER`)
+### Material classification under grading (`TM-01`, commit `18c78ea`)
 
 Vandenberg is the most rugged predefined site. The frame is the TD-02 ground view
 (`2000-01-01T20:20:17Z`, 0 s, 240 frames), repeated after the appearance path was

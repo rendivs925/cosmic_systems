@@ -858,7 +858,7 @@ timings. This phase exists because an unverifiable change is not a change.
   the trait: `appearance_height_m` must never drive collision or physics.
 - **Risks recorded:** two height notions now exist; the name and trait doc keep
   them apart, and only the layered source overrides the appearance path.
-- **Completion evidence:** `PLACEHOLDER`; two tests plus the ground frame.
+- **Completion evidence:** `18c78ea`; two tests plus the ground frame.
 
 ### TM-02 — Geometric detail band at distance
 - **Status:** PLANNED
