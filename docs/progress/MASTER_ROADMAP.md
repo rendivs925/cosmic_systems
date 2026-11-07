@@ -700,7 +700,7 @@ timings. This phase exists because an unverifiable change is not a change.
   difference is below NASADEM's vertical accuracy.
 - **Risks recorded:** a future payload producer must not add the geoid again;
   the requirement and the synthetic test now catch that.
-- **Completion evidence:** `PLACEHOLDER`; the two tests.
+- **Completion evidence:** `b4743da`; the two tests.
 
 ### TD-09 — Cube-face and antimeridian continuity tests
 - **Status:** PLANNED
