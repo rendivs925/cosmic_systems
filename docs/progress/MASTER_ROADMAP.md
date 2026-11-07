@@ -654,7 +654,7 @@ timings. This phase exists because an unverifiable change is not a change.
   along one patch boundary. It is a capture-path artefact of looking 5 km from
   the vehicle (the streaming focus), not of the elevation data; it is recorded
   for a future streaming/LOD audit rather than hidden.
-- **Completion evidence:** `PLACEHOLDER`; the test plus the two frames.
+- **Completion evidence:** `85d4d88`; the test plus the two frames.
 
 ### TD-08 — Vertical datum audit
 - **Status:** PLANNED

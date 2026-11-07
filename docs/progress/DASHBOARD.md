@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `PLACEHOLDER` (2026-11-07).
+Last code checkpoint: `85d4d88` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is

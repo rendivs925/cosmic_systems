@@ -59,8 +59,8 @@ missing ones explainable.
 | `2026-10-31-pad-250m-footprint.jpg` | `b7dbb2d` | default chase | 0 s | 240 | `3db6d6622b477d23` | 250 m graded footprint: pale disc around pad | disc visible (failing) |
 | `2026-10-31-pad-110m-footprint.jpg` | `d89e7d6` | default chase | 0 s | 240 | `1fa53406f293f25c` | 110 m footprint: pad flush, tone continuous | no disc, no floating edge (passing) |
 | `2026-11-01-terrain-600m.jpg` | `d89e7d6` | `-8.0,139.5,600` | 42 s | 220 | `3c7b470c5d3bceec` | coastal plain, water bodies, tree specks | relief and canopy visible (failing) |
-| `2026-11-07-td07-papua-3km.jpg` | `PLACEHOLDER` | `-8.0,139.5,3000` | 42 s | 220 | `ff12f642cee147e9` | regional NASADEM base at 3 km: continuous plain, no angular water polygons | measured relief, no synthetic polygons (passing) |
-| `2026-11-07-td07-papua-300km.jpg` | `PLACEHOLDER` | `-8.0,139.5,300000` | 42 s | 220 | `fcf403cac5198ff7` | regional base at 300 km: coast, offshore islands, inland water | coast and water bodies resolved (passing) |
+| `2026-11-07-td07-papua-3km.jpg` | `85d4d88` | `-8.0,139.5,3000` | 42 s | 220 | `ff12f642cee147e9` | regional NASADEM base at 3 km: continuous plain, no angular water polygons | measured relief, no synthetic polygons (passing) |
+| `2026-11-07-td07-papua-300km.jpg` | `85d4d88` | `-8.0,139.5,300000` | 42 s | 220 | `fcf403cac5198ff7` | regional base at 300 km: coast, offshore islands, inland water | coast and water bodies resolved (passing) |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -310,7 +310,7 @@ crossing on land above the datum, so this water was below the datum in the base
 surface. TD-12 identified the base as the measured NASADEM payload and the
 over-extent as a rendering flood threshold; see the next section.
 
-### Regional DEM at the Papua site (`TD-07`, commit `PLACEHOLDER`)
+### Regional DEM at the Papua site (`TD-07`, commit `85d4d88`)
 
 Both frames are the P0-01 pose, default start instant, presentation time 42 s,
 220 frames and 1280x720. The regional NASADEM package is composed over the
