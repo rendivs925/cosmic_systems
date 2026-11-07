@@ -969,7 +969,7 @@ timings. This phase exists because an unverifiable change is not a change.
   altitude difference (1.84–1.85 at 300–400 km) is the longer air column.
 
 ### TM-03 — Land/sea mask and imagery reconciliation
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Ensure the water mask, coastline and imagery agree at the same
   place.
@@ -978,12 +978,30 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Expected files:** `imagery_package.rs`, `terrain_source/catalog.rs`.
 - **Acceptance:** a control transect crossing the coast shows water exactly where
   the DEM is below the datum within one texel of the imagery coastline.
-- **Tests:** transect test on a fixed site.
-- **Visual evidence:** 3 km coastal frame.
-- **Performance:** none.
-- **Scientific validation:** each dataset's datum and resolution documented.
-- **Risks:** matching a 2 km overview to a 900 m DEM is approximate by nature.
-- **Completion evidence:** pending.
+- **Specification:** `terrain-rendering` gained "The geometric waterline agrees
+  with the albedo coast" (change `2026-11-07-reconcile-the-coastal-waterline`).
+- **Audit result:** no code defect. The three authorities use one sea datum; the
+  water cap classifies at it (TD-12), and the albedo coast agrees within its own
+  texel on a clean control.
+- **Tests:** `coastal_transect_dem_and_imagery_agree` walks latitude −32.0 from
+  longitude 132.0 to 132.2 at 0.001° across the Great Australian Bight. The
+  imagery waterline is the midpoint between the median luminance of the first
+  and last twenty samples (open water is almost black, inland ground bright), not
+  a tuned colour threshold. Measured crossings: DEM **≈132.138°**, imagery
+  **≈132.136°**, a **0.002° (≈0.2 km)** offset; one 8192-wide overview texel is
+  **0.04395° (≈4.3 km)**. The coast is a single clean cliff crossing; Namibia was
+  rejected because the 30 arc-second DEM smears its rias, and KSC because its
+  barrier island and lagoon make a single crossing meaningless.
+- **Visual evidence:** `2026-11-07-tm03-bight-coast-3km.jpg`, the same coast at
+  3 km (`-32.0,132.14,3000`), default instant, presentation time 42 s, 220
+  frames. The water cap and the albedo coast meet along the same line.
+- **Performance:** none; data-backed test only.
+- **Scientific validation:** both products are measured; the overview sets the
+  tolerance because it is coarser than the elevation source. The test is a
+  reconciliation gate, not a global coastline survey.
+- **Risks recorded:** one clean control does not certify rias, barrier islands or
+  tidal flats, where sub-texel agreement is not expected.
+- **Completion evidence:** `PLACEHOLDER`; the transect test plus the 3 km frame.
 
 ---
 

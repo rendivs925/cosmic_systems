@@ -1296,3 +1296,29 @@ and patch count are unchanged.
 Recorded limit: the rendered far field can differ from collision by up to ±30 m
 at LOD 5–9. Physics never samples there, the coastline is protected, and the
 relief is labelled synthetic presentation.
+
+## 2026-11-07 — Coastal waterline reconciliation (TM-03)
+
+The coast is defined twice: the elevation source puts the water cap at the sea
+datum, and the measured albedo paints land and water at its own resolution. A
+viewer sees both, so a several-kilometre disagreement reads as water painted on
+land. The audit found no code defect; the missing piece was a control transect
+with a stated tolerance.
+
+The control is the Great Australian Bight at 32°S. The coast is a straight cliff
+line: open water is almost black and inland ground is bright, so the albedo
+waterline is the midpoint between the median luminance of the first and last
+twenty samples rather than a tuned colour threshold. Namibia was rejected because
+the 30 arc-second DEM smears its rias and shelf; KSC because its barrier island
+and lagoon make a single crossing meaningless.
+
+Along latitude −32.0 from 132.0 to 132.2 at 0.001°, the DEM crossing is about
+132.138° and the albedo crossing about 132.136°: a 0.002° (≈0.2 km) offset. One
+8192-wide overview texel is 0.04395° (≈4.3 km), so the test tolerance is one
+texel and the measured agreement is an order of magnitude better.
+
+The 3 km frame at `-32.0,132.14,3000` shows the water cap and the albedo coast
+meeting on the same line. The test is a reconciliation gate, not a global survey:
+rias, barrier islands and tidal flats are outside what a 4.4 km albedo and a
+0.9 km DEM can reconcile sub-texel, and that limit is recorded rather than
+hidden.

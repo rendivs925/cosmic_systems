@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `c1ecb0e` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 32 | 71.1 % |
+| VERIFIED | 33 | 73.3 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 11 | 24.4 % |
+| PLANNED | 10 | 22.2 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -25,7 +25,7 @@ evidenced", not "the simulator does not work".
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
-| P3 Terrain materials | 3 / 4 | 75 % | active | TM-01, TM-02 and TM-04 closed; TM-03 remains |
+| P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
@@ -115,17 +115,17 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 38 |
+| archived changes | 39 |
 | strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — TM-03.** Read the entry for its exact scope; it is the last
-terrain-material audit before the vegetation group.
+**Next task — TG-01, the first procedural-vegetation audit.** Read the roadmap
+entry for its scope before starting; phase P3 (terrain materials) is now
+complete.
 
-TM-02 is closed: a deterministic ~4 km, ±30 m relief band is added to the
-rendered mesh only, through a band-pass LOD fade and a land-only sea guard, so
-5–50 km ground keeps relief while collision, the site anchor, physics and the
-coastline are unchanged. The remaining material and vegetation audits (TM-03,
-TG-01/02) and RD-01 follow.
+TM-03 is closed: the geometric waterline and the albedo coast agree to 0.002°
+(about 0.2 km) on the Great Australian Bight control transect, well inside the
+4.3 km overview texel, using a recorded luminance-midpoint method. The remaining
+vegetation audits (TG-01/02) and RD-01 follow.

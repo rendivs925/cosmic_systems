@@ -66,6 +66,7 @@ missing ones explainable.
 | `2026-11-07-tm02-papua-40km.jpg` | `c1ecb0e` | `-8.0,139.5,40000` | 42 s | 220 | `8a0c9c7b823e06e3` | 40 km lowland with the coarse relief band | mottled relief, no flat sheet |
 | `2026-11-07-tm02-highlands-40km-height.jpg` | `c1ecb0e` | `-5.0,141.5,40000` | 42 s | 220 | `5af1ba3ac3a7feb5` | unlit height diagnostic over the highlands | continuous contours, no LOD steps |
 | `2026-11-07-tm02-papua-300km.jpg` | `c1ecb0e` | `-8.0,139.5,300000` | 42 s | 220 | `6abc624df27e5233` | 300 km context with coast and lakes | relief and coast resolved |
+| `2026-11-07-tm03-bight-coast-3km.jpg` | `PLACEHOLDER` | `-32.0,132.14,3000` | 42 s | 220 | `e748618a653c0d2c` | Great Australian Bight coast: water cap and albedo coast meet on one line | coastline agrees within one overview texel |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -382,6 +383,33 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Coastal waterline reconciliation (`TM-03`, commit `PLACEHOLDER`)
+
+The water cap is the DEM-below-datum surface; the albedo is a separate measured
+product at its own resolution. The control transect is the Great Australian
+Bight at 32°S, a clean single cliff crossing.
+
+| file | pose | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- |
+| `2026-11-07-tm03-bight-coast-3km.jpg` | `-32.0,132.14,3000` | `e748618a653c0d2c` | the water cap and the albedo coast meet along the same line at 3 km |
+
+Measured along latitude −32.0 from longitude 132.0 to 132.2 at 0.001°:
+
+| quantity | value |
+| --- | --- |
+| DEM sea-datum crossing | **≈132.138°** |
+| albedo luminance-midpoint crossing | **≈132.136°** |
+| offset | **0.002° (≈0.2 km)** |
+| one 8192-wide overview texel | **0.04395° (≈4.3 km)** |
+
+The albedo waterline is the midpoint between the median luminance of the first
+and last twenty samples; open water is almost black and inland ground is bright,
+so no per-frame colour threshold is involved.
+
+**Recorded limit:** one clean control does not certify rias, barrier islands or
+tidal flats, where sub-texel agreement is not expected. The test is a
+reconciliation gate, not a global coastline survey.
 
 ### Distant terrain relief band (`TM-02`, commit `c1ecb0e`)
 

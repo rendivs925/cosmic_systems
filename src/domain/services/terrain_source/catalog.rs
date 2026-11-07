@@ -708,6 +708,78 @@ mod tests {
     use super::*;
     use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
 
+    /// Load the global albedo overview as the authoritative equirectangular
+    /// sampler, so the transect uses the same pixel-centre wrap/clamp rules as
+    /// the renderer.
+    fn global_overview_rgb() -> crate::domain::services::imagery_tiles::EquirectangularRgb {
+        let image = image::open("assets/large_files/terrain/earth_imagery_v1/global_overview.png")
+            .expect("the global albedo overview must load")
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        crate::domain::services::imagery_tiles::EquirectangularRgb::new(
+            width,
+            height,
+            image.pixels().map(|pixel| pixel.0).collect(),
+        )
+        .expect("overview raster")
+    }
+
+    /// TM-03: the geometric waterline (DEM below the datum) and the imagery
+    /// coastline must agree within one overview texel. The Great Australian
+    /// Bight is a clean, straight cliff coast: open water is almost black and
+    /// inland ground is bright, so the imagery waterline is the midpoint of the
+    /// luminance ramp rather than a tuned colour threshold.
+    #[test]
+    fn coastal_transect_dem_and_imagery_agree() {
+        let source = EarthTerrainSource::new();
+        let overview = global_overview_rgb();
+
+        let latitude_deg = -32.0;
+        let start_lon = 132.0;
+        let step_deg = 0.001;
+        let samples = 200;
+        let mut rows = Vec::new();
+        for index in 0..samples {
+            let longitude_deg = start_lon + f64::from(index) * step_deg;
+            let sea_level_m = source.sea_level_height_m(latitude_deg, longitude_deg);
+            let height_m = source.height_m(latitude_deg, longitude_deg) - sea_level_m;
+            let pixel = overview.sample_lat_lon(latitude_deg, longitude_deg);
+            let luminance = (f64::from(pixel[0]) + f64::from(pixel[1]) + f64::from(pixel[2])) / 3.0;
+            rows.push((longitude_deg, height_m, luminance));
+        }
+
+        let median = |values: &mut Vec<f64>| {
+            values.sort_by(f64::total_cmp);
+            values[values.len() / 2]
+        };
+        let mut water_luminance: Vec<f64> = rows.iter().take(20).map(|row| row.2).collect();
+        let mut land_luminance: Vec<f64> = rows.iter().rev().take(20).map(|row| row.2).collect();
+        let water = median(&mut water_luminance);
+        let land = median(&mut land_luminance);
+        assert!(
+            land > water + 20.0,
+            "the transect must cross a strong water/land contrast: {water} vs {land}"
+        );
+        let midpoint = 0.5 * (water + land);
+
+        let dem_coast_deg = rows
+            .iter()
+            .find(|row| row.1 > 0.0)
+            .map(|row| row.0)
+            .expect("the transect crosses onto land");
+        let imagery_coast_deg = rows
+            .iter()
+            .find(|row| row.2 >= midpoint)
+            .map(|row| row.0)
+            .expect("the imagery crosses onto land");
+        let overview_texel_deg = 360.0 / 8192.0;
+        assert!(
+            (dem_coast_deg - imagery_coast_deg).abs() <= overview_texel_deg,
+            "DEM coast {dem_coast_deg:.4} vs imagery coast {imagery_coast_deg:.4} \
+             (one overview texel is {overview_texel_deg:.4})"
+        );
+    }
+
     /// TM-02: the coarse relief band is part of the rendered mesh at the LODs
     /// where a few kilometres resolve, and absent from the physical surface and
     /// from the planet-scale / fine-LOD meshes.
