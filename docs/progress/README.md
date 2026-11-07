@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-07. Last code checkpoint: `18c78ea`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Thirty-one of forty-five roadmap tasks, each with implementation + tests + a
+Thirty-two of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -99,6 +99,7 @@ named frame or a named measurement:
 | TD-08 vertical datum | one ellipsoidal height, one EGM2008 datum, one subtraction; synthetic 5 m geoid test across source/mesh/class/water/collision; Papua control point 0.56 m orthometric plain, 3.00 m pad; `geoid_is_applied_once_across_source_mesh_and_collision`, `papua_control_point_reports_one_datum_across_consumers` |
 | TD-09 seam continuity | twelve cube-face pairs agree exactly (0 m); antimeridian step 4.8 mm at a 0.1 m separation; polar spread 1e-12 m; imagery wrap and pole tests already present |
 | TM-01 material under grading | classification samples the natural surface via `appearance_height_m`; geometry stays graded; gentle and 45° synthetic tests, the latter keeping rock instead of a flat disc; `2026-11-07-tm01-vandenberg-pad.jpg` |
+| TM-02 distant relief | mesh-only ~4 km / ±30 m band, band-pass fade LOD 5–11, land-only sea guard; collision and coast unchanged; 40 km height diagnostic shows continuous contours; 241 tiles / 91.6 MiB, 1.40 ms main-thread streaming; `2026-11-07-tm02-*` |
 | VL-02 OpenSpec strict | 42/42 |
 
 Every implemented task is now verified. The two remaining blocked items are
@@ -113,14 +114,14 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TM-02 — geometric detail band at distance.** The bounded detail octave fades
-with LOD; TM-02 audits that band so distant terrain does not flatten abruptly or
-keep sub-pixel detail that aliases.
+**TM-03 — the last terrain-material audit.** Read the roadmap entry for its
+scope before starting.
 
-TM-01 is closed: surface classification now samples the natural surface, so a
-graded pad keeps the hillside's material while geometry, collision and elevation
-bands follow the surface actually shown. The remaining material and vegetation
-audits (TM-02/03, TG-01/02) and RD-01 follow.
+TM-02 is closed: a deterministic ~4 km, ±30 m relief band is added to the
+rendered mesh only, through a band-pass LOD fade and a land-only sea guard, so
+5–50 km ground keeps relief while collision, the launch-site anchor, physics and
+the coastline are unchanged. The remaining material and vegetation audits (TM-03,
+TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -128,8 +129,8 @@ audits (TM-02/03, TG-01/02) and RD-01 follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1174 passed, 2 ignored
-cargo test --no-default-features --lib   # 1126 passed, 2 ignored
+cargo test --features dem --lib          # 1177 passed, 2 ignored
+cargo test --no-default-features --lib   # 1128 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -152,9 +153,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,174 domain and adapter
-tests pass (1,126 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified thirty-one of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,177 domain and adapter
+tests pass (1,128 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified thirty-two of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface

@@ -861,7 +861,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `18c78ea`; two tests plus the ground frame.
 
 ### TM-02 — Geometric detail band at distance
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Give terrain geometry beyond LOD 11 so distant ground is not flat.
 - **Dependencies:** P0-03 (satisfied).
@@ -869,12 +869,38 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Expected files:** `terrain_source/procedural.rs`, `layered.rs`,
   `terrain/render.rs`, `assets/shaders/terrain_surface.wgsl`.
 - **Acceptance:** relief remains visible at 5–50 km without shimmer; no LOD pop.
-- **Tests:** LOD continuity; detail weight monotonic in level.
-- **Visual evidence:** 3 km, 40 km and 300 km frames.
-- **Performance:** must stay inside the patch budget; measured before/after.
-- **Scientific validation:** presentation scale relief, labelled as such.
-- **Risks:** shimmer and aliasing; cost per patch.
-- **Completion evidence:** pending.
+- **Specification:** `terrain-lod` gained "Distant mesh keeps a coarse relief
+  band" (change `2026-11-07-extend-terrain-relief-band`).
+- **Implementation:** the fine detail octave is ~250 m and cannot be represented
+  below LOD 11 without aliasing, so distant ground flattened. A second,
+  deterministic ~4 km / ±30 m relief source (`ProceduralFarDetailSource`) is
+  applied through a band-pass fade — absent at planet scale, full at LOD 8,
+  absent again where the fine octave is full — and only by `mesh_height_m`.
+  It is land-only above the sea-datum guard, reuses the launch-site attenuation,
+  and never enters `height_m`, so collision, radar altitude, the site anchor and
+  physics are unchanged.
+- **Tests:** `far_detail_is_band_limited_and_mesh_only` (planet/fine LODs zero,
+  full at the band centre, monotonic edges, physical height untouched),
+  `far_detail_respects_the_sea_level_guard` (zero at the datum, full on high
+  land), and `earth_far_detail_changes_only_the_coarse_mesh` (Earth's fine LOD
+  equals collision, LOD 9 differs by >1 m).
+- **Visual evidence:** `2026-11-07-tm02-papua-3km.jpg`,
+  `2026-11-07-tm02-papua-40km.jpg`,
+  `2026-11-07-tm02-highlands-40km-height.jpg` (unlit height diagnostic showing
+  continuous contours across the 40 km view), and
+  `2026-11-07-tm02-papua-300km.jpg`. All at the P0-01 pose family, default
+  instant, presentation time 42 s, 220 frames.
+- **Performance:** 40 km capture: 244 requested / 297 target / 181 visible / 241
+  resident tiles, 91.6 MiB of the 160 MiB budget, main-thread streaming 1.40 ms,
+  cold batch 243 ms. The band adds one sampler per vertex only on LOD 5–11
+  patches; residency and patch count are unchanged.
+- **Scientific validation:** presentation-scale relief, explicitly synthetic. It
+  is not measured terrain and does not claim to be; it exists to keep distant
+  geometry legible between the measured base and the fine octave.
+- **Risks recorded:** the rendered far field may differ from collision by up to
+  ±30 m at LOD 5–9; physics never samples there, and the land-only weight keeps
+  the coastline identical. The band is a deliberate presentation approximation.
+- **Completion evidence:** `PLACEHOLDER`; three tests plus the four frames.
 
 ### TM-04 — Local and layered albedo tone match to the measured overview
 - **Status:** VERIFIED

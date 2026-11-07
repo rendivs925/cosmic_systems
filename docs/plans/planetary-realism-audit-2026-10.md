@@ -1260,3 +1260,39 @@ Vandenberg is the most rugged predefined site; its TD-02 ground frame is repeate
 after the change and shows the apron continuous with the surrounding scrub. The
 site is gentle, so the steep synthetic test is the regression that matters. Cost
 is one extra appearance grid per surface map, generated off the fixed step.
+
+## 2026-11-07 — Distant terrain relief band (TM-02)
+
+The fine procedural octave is ~250 m wide. At LOD 10 a patch is about 10 km with
+~300 m vertex spacing, so those ridges alias; the existing fade therefore removed
+them entirely, and a lowland beyond ~5 km rendered as a flat sheet. The measured
+ETOPO base still carries continental relief, but not the coastal-plain case the
+launch sites sit on.
+
+The fix adds a second, coarse relief source: deterministic ~4 km features at
+±30 m, using the same value noise and the same launch-site attenuation as the
+fine octave. It is applied only by `mesh_height_m`, through a band-pass fade:
+`rise(5→8)` removes it at planet scale, `fall(9→11)` removes it once the fine
+octave is full. A plain one-sided fade would alias at LOD 0–4, where 4 km is
+sub-pixel.
+
+Two guards matter. The band is mesh-only, so `height_m`, collision, radar
+altitude, the launch-site anchor and every flight baseline are untouched. And it
+is multiplied by a land-only sea-guard weight (zero at the datum, full above
+60 m), so a coarse patch cannot raise a shallow seabed above the datum or lower a
+coast; the water cap therefore sees the same coastline at every LOD.
+
+Tests cover the band weight (zero at 0 and 5, full at 8, zero at 11+), the sea
+guard (zero at the datum, full on high land), and the Earth composition (fine LOD
+equals collision, LOD 9 differs by more than 1 m). Evidence is the 3/40/300 km
+set plus an unlit height diagnostic over the highlands whose contours are
+continuous across the whole view.
+
+Cost at 40 km: 244 requested / 297 target / 181 visible / 241 resident tiles,
+91.6 MiB of the 160 MiB budget, 1.40 ms main-thread streaming and a 243 ms cold
+batch. The band adds one sampler per vertex only on LOD 5–11 patches; residency
+and patch count are unchanged.
+
+Recorded limit: the rendered far field can differ from collision by up to ±30 m
+at LOD 5–9. Physics never samples there, the coastline is protected, and the
+relief is labelled synthetic presentation.

@@ -2,8 +2,8 @@
 
 #[cfg(feature = "dem")]
 use super::{
-    DetailLodFade, LayeredTerrainSource, PadFlatZone, ProceduralDetailSource, SurfaceClass,
-    TerrainDetailLayer, TerrainElevationLayer,
+    DetailLodFade, FarDetailLayer, LayeredTerrainSource, PadFlatZone, ProceduralDetailSource,
+    ProceduralFarDetailSource, SurfaceClass, TerrainDetailLayer, TerrainElevationLayer,
 };
 use super::{ElevationBounds, TerrainSource};
 #[cfg(not(feature = "dem"))]
@@ -79,6 +79,9 @@ const EARTH_PROCEDURAL_DETAIL_SEED: u64 = 0x00E4_27A6_1E5E_ED01;
 /// Deterministic master seed for Earth's thermal/hydraulic erosion field.
 #[cfg(feature = "dem")]
 const EARTH_EROSION_SEED: u64 = 0x00E4_2705_E0D1_5EED;
+/// Deterministic seed for the coarse, mesh-only far relief band (TM-02).
+#[cfg(feature = "dem")]
+const EARTH_FAR_DETAIL_SEED: u64 = 0x00E4_27A6_1E5E_FADE;
 /// Radius around a launch site where the composed surface is graded level.
 ///
 /// This is the prepared-platform footprint, not a visual fade: it has to contain
@@ -274,6 +277,21 @@ fn earth_layered_terrain_over(
             // with an ocean can be flooded by a negative octave.
             .with_sea_level_guard(EARTH_DETAIL_SEA_GUARD_M, EARTH_DETAIL_SEA_GUARD_FULL_M),
         ),
+    )
+    // A coarse relief band for distant ground, present only on the mesh at
+    // LODs where ~4 km features resolve. Collision keeps the measured surface
+    // (TM-02); the sea guard keeps it from inventing coastline.
+    .with_far_detail(
+        FarDetailLayer::new(
+            Arc::new(ProceduralFarDetailSource::with_flat_zones(
+                EARTH_FAR_DETAIL_SEED,
+                earth_pad_flat_zones(),
+            )),
+            ProceduralFarDetailSource::elevation_bounds_m(),
+            DetailLodFade::new(5, 8),
+            DetailLodFade::new(9, 11),
+        )
+        .with_sea_level_guard(EARTH_DETAIL_SEA_GUARD_M, EARTH_DETAIL_SEA_GUARD_FULL_M),
     )
     // Grade the launch-site platforms in the composed surface itself, so the
     // mesh, collision and radar all see level ground under the facility instead
@@ -689,6 +707,26 @@ impl TerrainSource for EarthTerrainSource {
 mod tests {
     use super::*;
     use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
+
+    /// TM-02: the coarse relief band is part of the rendered mesh at the LODs
+    /// where a few kilometres resolve, and absent from the physical surface and
+    /// from the planet-scale / fine-LOD meshes.
+    #[test]
+    fn earth_far_detail_changes_only_the_coarse_mesh() {
+        let source = EarthTerrainSource::new();
+        let (latitude_deg, longitude_deg) = (-5.0, 141.5);
+        let physical_m = source.height_m(latitude_deg, longitude_deg);
+        assert_eq!(
+            source.mesh_height_m(latitude_deg, longitude_deg, 14),
+            physical_m,
+            "fine LOD must match collision"
+        );
+        let coarse_m = source.mesh_height_m(latitude_deg, longitude_deg, 9);
+        assert!(
+            (coarse_m - physical_m).abs() > 1.0,
+            "distant geometry must keep relief: {coarse_m} vs {physical_m} m"
+        );
+    }
 
     /// TD-12: the angular water bodies on the Papua plain. The finest measured
     /// payload puts the observed strip a few centimetres below the EGM2008 sea

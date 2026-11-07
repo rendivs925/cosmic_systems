@@ -30,7 +30,7 @@ over with a new duplicate spec.
 | LF-01 footprint | `launch-site-presentation` | — | |
 | LF-02…04 facility | `launch-site-presentation` | — | |
 | TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | change `2026-11-07-stabilize-material-classification-under-grading`: appearance-only natural height, graded geometry unchanged |
-| TM-02 distance detail | `terrain-lod`, `terrain-rendering` | — | |
+| TM-02 distance detail | `terrain-lod`, `terrain-rendering` | — | change `2026-11-07-extend-terrain-relief-band`: mesh-only coarse band, band-pass LOD fade, land-only guard |
 | TM-03 land/sea reconciliation | `earth-imagery-streaming`, `terrain-source` | — | |
 | TM-04 near-ground albedo tone | `planetary-terrain-material`, `terrain-material-splat`, `scientific-lighting` | — | tone continuity between the measured overview and the layered material |
 | VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | `stabilize-far-field-tree-placement` | change tasks complete, not archived |

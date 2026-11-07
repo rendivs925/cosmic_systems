@@ -62,6 +62,10 @@ missing ones explainable.
 | `2026-11-07-td07-papua-3km.jpg` | `85d4d88` | `-8.0,139.5,3000` | 42 s | 220 | `ff12f642cee147e9` | regional NASADEM base at 3 km: continuous plain, no angular water polygons | measured relief, no synthetic polygons (passing) |
 | `2026-11-07-td07-papua-300km.jpg` | `85d4d88` | `-8.0,139.5,300000` | 42 s | 220 | `fcf403cac5198ff7` | regional base at 300 km: coast, offshore islands, inland water | coast and water bodies resolved (passing) |
 | `2026-11-07-tm01-vandenberg-pad.jpg` | `18c78ea` | default chase | 0 s | 240 | `cbfa209bb2858319` | Vandenberg pad after classification was decoupled from the site grade | pad material continuous with the hillside (passing) |
+| `2026-11-07-tm02-papua-3km.jpg` | `PLACEHOLDER` | `-8.0,139.5,3000` | 42 s | 220 | `4be2a7c90eafab44` | fine-LOD control: the far band is inactive | same as TD-07's 3 km view |
+| `2026-11-07-tm02-papua-40km.jpg` | `PLACEHOLDER` | `-8.0,139.5,40000` | 42 s | 220 | `8a0c9c7b823e06e3` | 40 km lowland with the coarse relief band | mottled relief, no flat sheet |
+| `2026-11-07-tm02-highlands-40km-height.jpg` | `PLACEHOLDER` | `-5.0,141.5,40000` | 42 s | 220 | `5af1ba3ac3a7feb5` | unlit height diagnostic over the highlands | continuous contours, no LOD steps |
+| `2026-11-07-tm02-papua-300km.jpg` | `PLACEHOLDER` | `-8.0,139.5,300000` | 42 s | 220 | `6abc624df27e5233` | 300 km context with coast and lakes | relief and coast resolved |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -378,6 +382,33 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Distant terrain relief band (`TM-02`, commit `PLACEHOLDER`)
+
+The fine detail octave is ~250 m and cannot be represented below LOD 11 without
+aliasing, so distant ground lost its relief. The band is a deterministic ~4 km,
+±30 m field added to the rendered mesh only, through a band-pass fade
+(`rise 5→8`, `fall 9→11`) and a land-only sea guard.
+
+| file | pose | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- |
+| `2026-11-07-tm02-papua-3km.jpg` | `-8.0,139.5,3000` | `4be2a7c90eafab44` | fine LOD: band inactive, matches TD-07's 3 km frame |
+| `2026-11-07-tm02-papua-40km.jpg` | `-8.0,139.5,40000` | `8a0c9c7b823e06e3` | 40 km lowland: mottled relief rather than a flat sheet |
+| `2026-11-07-tm02-highlands-40km-height.jpg` | `-5.0,141.5,40000` | `5af1ba3ac3a7feb5` | unlit height diagnostic: continuous contour field across the view |
+| `2026-11-07-tm02-papua-300km.jpg` | `-8.0,139.5,300000` | `6abc624df27e5233` | 300 km context: coast, lakes and relief |
+
+Measured composition: at a highland point the fine LOD 14 mesh equals collision
+exactly, while the LOD 9 mesh differs by more than 1 m (the band plus the fine
+octave fade). The band weight is zero at LOD 0 and 5, full at 8, and zero again
+at 11+.
+
+Performance (40 km capture): 244 requested / 297 target / 181 visible / 241
+resident tiles, 91.6 MiB of the 160 MiB budget, main-thread streaming 1.40 ms,
+cold batch 243 ms.
+
+**Recorded limits:** the rendered far field can differ from collision by up to
+±30 m at LOD 5–9. Physics never samples there and the land-only weight keeps the
+coastline identical; the relief is synthetic presentation, not measured terrain.
 
 ### Material classification under grading (`TM-01`, commit `18c78ea`)
 

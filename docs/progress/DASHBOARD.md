@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `18c78ea` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 31 | 68.9 % |
+| VERIFIED | 32 | 71.1 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 12 | 26.7 % |
+| PLANNED | 11 | 24.4 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -25,7 +25,7 @@ evidenced", not "the simulator does not work".
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
-| P3 Terrain materials | 2 / 4 | 50 % | active | TM-01 and TM-04 closed; TM-02 and TM-03 remain |
+| P3 Terrain materials | 3 / 4 | 75 % | active | TM-01, TM-02 and TM-04 closed; TM-03 remains |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
@@ -45,7 +45,7 @@ Ordered by visible impact, not by ease.
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
 | 5 | Vegetation is sparse and reads as specks | VG-01/02 | PLANNED | `terrain-600m` |
 | 6 | Regional imagery inset still steps at its patch edge | TD-04 | **VERIFIED** | the edge is now a 16.6 km cross-fade at the region bound: the frame's worst step within ±40 px of the bound fell from 4.23 to 0.72/255 (its own texture level), and the before/after change is confined to x=381..737, the declared band. Resolution now uses patch overlap, so a straddling patch binds the tile |
-| 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | PLANNED | `300km-papua` |
+| 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | **VERIFIED — fixed** | mesh-only ~4 km / ±30 m band on LOD 5–11, land-only guard; collision, anchor and coastline unchanged; 40 km height diagnostic shows continuous contours; `2026-11-07-tm02-*` |
 | 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | **VERIFIED — fixed** | bounded luminance-preserving diffuse fill; +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km, teal band 0.670 → 0.339, limb e-folding 8.24/8.45 → 8.30/8.33 km; `2026-11-05-at04-*` |
 | 9 | Three graded pads sat under water: Starbase, KSC LC-39A and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | TD-11 | **VERIFIED — fixed** | resident payloads replace the erosion refinement and a 3 m platform floor raises each pad; `2026-11-05-td02-*-fixed.jpg` shows all seven flush; clearances +3.00 … +113.55 m |
 | 10 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | TD-10 | **VERIFIED — fixed** | erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean, Baikonur to 3.0–3.2/255, the same as repeat-run noise; `2026-11-05-td10-*` |
@@ -115,17 +115,17 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 37 |
+| archived changes | 38 |
 | strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — TM-02, geometric detail band at distance.** The bounded detail
-octave fades with LOD; TM-02 is the audit of that band, so distant terrain does
-not flatten abruptly or keep sub-pixel detail that aliases.
+**Next task — TM-03.** Read the entry for its exact scope; it is the last
+terrain-material audit before the vegetation group.
 
-TM-01 is closed: surface classification now samples the natural surface, so a
-graded pad keeps the hillside's material while geometry, collision and elevation
-bands follow the surface actually shown. The remaining material and vegetation
-audits (TM-02/03, TG-01/02) and RD-01 follow.
+TM-02 is closed: a deterministic ~4 km, ±30 m relief band is added to the
+rendered mesh only, through a band-pass LOD fade and a land-only sea guard, so
+5–50 km ground keeps relief while collision, the site anchor, physics and the
+coastline are unchanged. The remaining material and vegetation audits (TM-03,
+TG-01/02) and RD-01 follow.

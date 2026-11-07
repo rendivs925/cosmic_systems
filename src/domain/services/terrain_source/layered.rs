@@ -63,6 +63,55 @@ impl DetailLodFade {
     }
 }
 
+/// A coarse, mesh-only relief band for LODs where a few kilometres of feature
+/// is representable (TM-02).
+///
+/// `rise` grows detail from coarse to fine; `fall` removes it again before the
+/// fine detail octave takes over. The product is a band that is absent at
+/// planet-scale LODs, full where 4 km features resolve, and absent where the
+/// 250 m detail already carries the surface. It is applied only by
+/// [`LayeredTerrainSource::mesh_height_m`]: collision and physics keep the
+/// measured surface.
+#[derive(Debug)]
+pub struct FarDetailLayer {
+    pub source: Arc<dyn TerrainSource>,
+    bounds: ElevationBounds,
+    pub rise: DetailLodFade,
+    pub fall: DetailLodFade,
+    sea_level_guard: Option<(f64, f64)>,
+}
+
+impl FarDetailLayer {
+    pub fn new(
+        source: Arc<dyn TerrainSource>,
+        bounds: ElevationBounds,
+        rise: DetailLodFade,
+        fall: DetailLodFade,
+    ) -> Self {
+        Self {
+            source,
+            bounds,
+            rise,
+            fall,
+            sea_level_guard: None,
+        }
+    }
+
+    pub fn with_sea_level_guard(mut self, guard_m: f64, full_m: f64) -> Self {
+        self.sea_level_guard = Some((guard_m, full_m));
+        self
+    }
+
+    pub fn bounds(&self) -> ElevationBounds {
+        self.bounds
+    }
+
+    /// Representative weight: 0 at planet-scale LODs, 1 in the band.
+    pub fn weight_for_level(&self, level: u32) -> f64 {
+        self.rise.weight_for_level(level) * (1.0 - self.fall.weight_for_level(level))
+    }
+}
+
 /// A bounded procedural contribution plus the LOD metadata used by mesh
 /// generation. The fade is not applied by [`LayeredTerrainSource::height_m`].
 #[derive(Debug)]
@@ -134,6 +183,8 @@ pub struct LayeredTerrainSource {
     pub base: TerrainElevationLayer,
     pub macro_elevation: Option<TerrainElevationLayer>,
     pub procedural_detail: Option<TerrainDetailLayer>,
+    /// Mesh-only coarse relief band; never sampled by `height_m` (TM-02).
+    pub far_detail: Option<FarDetailLayer>,
     site_grades: Vec<SiteGrade>,
 }
 
@@ -147,8 +198,16 @@ impl LayeredTerrainSource {
             base,
             macro_elevation,
             procedural_detail,
+            far_detail: None,
             site_grades: Vec::new(),
         }
+    }
+
+    /// Add the coarse mesh-only relief band. It is not part of `height_m`, so
+    /// collision, radar altitude and physics never see it.
+    pub fn with_far_detail(mut self, layer: FarDetailLayer) -> Self {
+        self.far_detail = Some(layer);
+        self
     }
 
     /// Grade the given launch sites level in the composed surface.
@@ -260,6 +319,25 @@ impl LayeredTerrainSource {
         detail_m + (-detail_m).max(0.0) * negative_removal
     }
 
+    /// Zero at and below the sea datum, one above the guard band. Used for
+    /// mesh-only relief so a coarse patch cannot raise or lower the coastline.
+    fn land_only_weight(
+        &self,
+        guard: Option<(f64, f64)>,
+        latitude_deg: f64,
+        longitude_deg: f64,
+        base_height_m: f64,
+    ) -> f64 {
+        let Some((guard_m, full_m)) = guard else {
+            return 1.0;
+        };
+        let sea_level_m = self
+            .base
+            .source
+            .sea_level_height_m(latitude_deg, longitude_deg);
+        ss(sea_level_m + guard_m, sea_level_m + full_m, base_height_m)
+    }
+
     fn ungraded_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         let mut height_m = self.base.source.height_m(latitude_deg, longitude_deg);
         if let Some(layer) = &self.macro_elevation {
@@ -289,6 +367,7 @@ impl LayeredTerrainSource {
             self.procedural_detail
                 .as_ref()
                 .map(TerrainDetailLayer::bounds),
+            self.far_detail.as_ref().map(FarDetailLayer::bounds),
         ]
         .into_iter()
         .flatten()
@@ -362,6 +441,23 @@ impl TerrainSource for LayeredTerrainSource {
                 height_m,
             );
             height_m += self.detail_contribution_m(detail_m, negative_removal);
+        }
+        if let Some(far) = &self.far_detail {
+            let weight = far.weight_for_level(patch_level);
+            if weight > 0.0 {
+                // Mesh-only relief must not move the coastline: it is applied
+                // only on land well above the datum, fading in above the same
+                // guard band the fine detail uses. Water and collision keep the
+                // measured surface exactly.
+                let land_weight = self.land_only_weight(
+                    far.sea_level_guard,
+                    latitude_deg,
+                    longitude_deg,
+                    height_m,
+                );
+                let far_m = far.source.height_m(latitude_deg, longitude_deg) * weight * land_weight;
+                height_m += far_m;
+            }
         }
         self.grade(latitude_deg, longitude_deg, height_m)
     }
@@ -489,6 +585,97 @@ mod tests {
             None,
         )
         .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, 6_371_000.0, 90.0, 320.0)])
+    }
+
+    #[derive(Debug)]
+    struct ConstantTerrain(f64);
+    impl TerrainSource for ConstantTerrain {
+        fn height_m(&self, _: f64, _: f64) -> f64 {
+            self.0
+        }
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(self.0, self.0)
+        }
+    }
+
+    /// TM-02: the coarse relief band is present only on the mesh, only where
+    /// the patch can represent a few kilometres, and never at planet scale.
+    #[test]
+    fn far_detail_is_band_limited_and_mesh_only() {
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(10.0)),
+                ElevationBounds::new(10.0, 10.0),
+            ),
+            None,
+            None,
+        )
+        .with_far_detail(FarDetailLayer::new(
+            Arc::new(ConstantTerrain(5.0)),
+            ElevationBounds::new(5.0, 5.0),
+            DetailLodFade::new(5, 8),
+            DetailLodFade::new(9, 11),
+        ));
+
+        // Physical/Collision surface: never includes the far band.
+        assert_eq!(source.height_m(0.0, 0.0), 10.0);
+        // Planet-scale and fine LODs: no far band.
+        assert_eq!(source.mesh_height_m(0.0, 0.0, 0), 10.0);
+        assert_eq!(source.mesh_height_m(0.0, 0.0, 5), 10.0);
+        assert_eq!(source.mesh_height_m(0.0, 0.0, 11), 10.0);
+        assert_eq!(source.mesh_height_m(0.0, 0.0, 14), 10.0);
+        // Band centre: full contribution.
+        assert_eq!(source.mesh_height_m(0.0, 0.0, 8), 15.0);
+        // Falling edge: strictly between full and none.
+        let falling = source.mesh_height_m(0.0, 0.0, 10);
+        assert!(falling > 10.0 && falling < 15.0, "falling edge: {falling}");
+        // The band is monotonic into and out of the centre.
+        assert!(source.mesh_height_m(0.0, 0.0, 6) < source.mesh_height_m(0.0, 0.0, 7));
+        assert!(source.mesh_height_m(0.0, 0.0, 10) < source.mesh_height_m(0.0, 0.0, 9));
+    }
+
+    /// The far band may raise coastal ground but must not lower it below the
+    /// datum and invent a shoreline (the TD-06 rule applies to it too).
+    #[test]
+    fn far_detail_respects_the_sea_level_guard() {
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(0.0)),
+                ElevationBounds::new(0.0, 0.0),
+            ),
+            None,
+            None,
+        )
+        .with_far_detail(
+            FarDetailLayer::new(
+                Arc::new(ConstantTerrain(-10.0)),
+                ElevationBounds::new(-10.0, -10.0),
+                DetailLodFade::new(5, 8),
+                DetailLodFade::new(9, 11),
+            )
+            .with_sea_level_guard(4.0, 60.0),
+        );
+        assert_eq!(source.mesh_height_m(0.0, 0.0, 8), 0.0);
+
+        // Inland ground well above the datum keeps the full band.
+        let high_land = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantTerrain(100.0)),
+                ElevationBounds::new(100.0, 100.0),
+            ),
+            None,
+            None,
+        )
+        .with_far_detail(
+            FarDetailLayer::new(
+                Arc::new(ConstantTerrain(5.0)),
+                ElevationBounds::new(5.0, 5.0),
+                DetailLodFade::new(5, 8),
+                DetailLodFade::new(9, 11),
+            )
+            .with_sea_level_guard(4.0, 60.0),
+        );
+        assert_eq!(high_land.mesh_height_m(0.0, 0.0, 8), 105.0);
     }
 
     /// TM-01: a graded pad is flat *geometry*, not a new landform. Surface

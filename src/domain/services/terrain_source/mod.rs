@@ -42,10 +42,13 @@ pub use catalog::{
     DEFAULT_EROSION_CACHE_MAX_BYTES, DEFAULT_MARS_DEM_PATH, DEFAULT_MOON_DEM_PATH,
     EARTH_SITE_PLATFORM_CLEARANCE_M,
 };
-pub use layered::{DetailLodFade, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer};
+pub use layered::{
+    DetailLodFade, FarDetailLayer, LayeredTerrainSource, TerrainDetailLayer, TerrainElevationLayer,
+};
 pub use noise::ValueNoise;
 pub use procedural::{
-    PadFlatZone, ProceduralDetailSource, ProceduralTerrainConfig, ProceduralTerrainSource,
+    PadFlatZone, ProceduralDetailSource, ProceduralFarDetailSource, ProceduralTerrainConfig,
+    ProceduralTerrainSource,
 };
 
 /// Helper: `smoothstep(edge0, edge1, x)`.

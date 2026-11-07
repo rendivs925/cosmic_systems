@@ -427,6 +427,82 @@ impl ProceduralDetailSource {
     }
 }
 
+/// Bounded landscape-scale relief for the far mesh band (TM-02).
+///
+/// The fine detail octave is ~250 m and cannot be represented below LOD 11
+/// without aliasing, so distant ground was flat. This source carries a ~4 km
+/// wobble with the same deterministic noise and launch-site attenuation; it is
+/// added only to the rendered mesh, on a band of LODs where a few kilometres is
+/// representable.
+#[derive(Debug)]
+pub struct ProceduralFarDetailSource {
+    seed: u64,
+    noise: ValueNoise,
+    flat_zones: Vec<PadFlatZone>,
+}
+
+impl ProceduralFarDetailSource {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            seed,
+            noise: ValueNoise,
+            flat_zones: Vec::new(),
+        }
+    }
+
+    pub fn with_flat_zones(seed: u64, flat_zones: Vec<PadFlatZone>) -> Self {
+        Self {
+            seed,
+            noise: ValueNoise,
+            flat_zones,
+        }
+    }
+
+    pub const fn elevation_bounds_m() -> ElevationBounds {
+        ElevationBounds {
+            min_m: -30.0,
+            max_m: 30.0,
+        }
+    }
+
+    fn detail_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        // ~4 km features at Earth's radius.
+        let ridges = self.noise.ridged_noise(
+            self.seed,
+            direction.x * 1_600.0,
+            direction.y * 1_600.0,
+            direction.z * 1_600.0,
+            3,
+        ) - 0.5;
+        let attenuation = self
+            .flat_zones
+            .iter()
+            .fold(1.0_f64, |acc, zone| acc.min(zone.attenuation(direction)));
+        (ridges * 60.0 * attenuation).clamp(
+            Self::elevation_bounds_m().min_m,
+            Self::elevation_bounds_m().max_m,
+        )
+    }
+}
+
+impl TerrainSource for ProceduralFarDetailSource {
+    fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.detail_m(latitude_deg, longitude_deg)
+    }
+
+    fn elevation_bounds_m(&self) -> ElevationBounds {
+        Self::elevation_bounds_m()
+    }
+
+    fn patch_geometric_error(&self, _patch: &TerrainPatch) -> PatchGeometricError {
+        let bounds = Self::elevation_bounds_m();
+        PatchGeometricError::from_elevation_bounds(bounds.min_m, bounds.max_m)
+    }
+}
+
 impl TerrainSource for ProceduralDetailSource {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
         self.detail_m(latitude_deg, longitude_deg)
