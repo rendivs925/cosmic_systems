@@ -1050,7 +1050,7 @@ timings. This phase exists because an unverifiable change is not a change.
   geometry and shading (VG-02/VG-03), not the density gate; no density-overlay
   diagnostic exists, so the domain tests and the placed-instance frames are the
   evidence.
-- **Completion evidence:** `PLACEHOLDER`; three tests plus the two frames.
+- **Completion evidence:** `c76c7be`; three tests plus the two frames.
 
 ### VG-02 — Near-field canopy geometry
 - **Status:** PLANNED
