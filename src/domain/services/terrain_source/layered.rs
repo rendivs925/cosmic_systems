@@ -1,6 +1,6 @@
 //! Composition of authoritative terrain elevation layers.
 
-use super::{ss, ElevationBounds, PadFlatZone, TerrainSource};
+use super::{ss, ElevationBounds, PadFlatZone, PadTrenchZone, TerrainSource};
 use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
 use bevy::math::DVec3;
 use std::sync::Arc;
@@ -186,6 +186,9 @@ pub struct LayeredTerrainSource {
     /// Mesh-only coarse relief band; never sampled by `height_m` (TM-02).
     pub far_detail: Option<FarDetailLayer>,
     site_grades: Vec<SiteGrade>,
+    /// Excavations cut into graded sites after the grade is applied, so the
+    /// trench is always the same depth below the levelled platform.
+    site_trenches: Vec<PadTrenchZone>,
 }
 
 impl LayeredTerrainSource {
@@ -200,6 +203,7 @@ impl LayeredTerrainSource {
             procedural_detail,
             far_detail: None,
             site_grades: Vec::new(),
+            site_trenches: Vec::new(),
         }
     }
 
@@ -251,6 +255,17 @@ impl LayeredTerrainSource {
         self
     }
 
+    /// Cut the given excavations into the graded sites.
+    ///
+    /// Applied after the grade, so each trench is exactly its declared depth
+    /// below the levelled platform at every LOD, for the mesh, for collision and
+    /// for radar altitude alike. A zone whose rectangle excludes the launch
+    /// point leaves that point's resting height untouched.
+    pub fn with_site_trenches(mut self, zones: Vec<PadTrenchZone>) -> Self {
+        self.site_trenches = zones;
+        self
+    }
+
     /// Pull a composed height toward the nearest site's graded height. Outside
     /// every site's blend radius the weight is one and the height is untouched.
     fn grade(&self, latitude_deg: f64, longitude_deg: f64, height_m: f64) -> f64 {
@@ -273,7 +288,11 @@ impl LayeredTerrainSource {
                 graded_height_m = site.height_m;
             }
         }
-        height_m * weight + graded_height_m * (1.0 - weight)
+        let mut height_m = height_m * weight + graded_height_m * (1.0 - weight);
+        for trench in &self.site_trenches {
+            height_m -= trench.cut_m(direction);
+        }
+        height_m
     }
 
     /// How much of the negative half of the synthetic detail contribution is
@@ -359,7 +378,7 @@ impl LayeredTerrainSource {
 
     /// Conservative deterministic bounds for every active elevation layer.
     pub fn elevation_bounds_m(&self) -> ElevationBounds {
-        [
+        let bounds = [
             Some(self.base.bounds()),
             self.macro_elevation
                 .as_ref()
@@ -371,7 +390,18 @@ impl LayeredTerrainSource {
         ]
         .into_iter()
         .flatten()
-        .fold(ElevationBounds::new(0.0, 0.0), ElevationBounds::combine)
+        .fold(ElevationBounds::new(0.0, 0.0), ElevationBounds::combine);
+        // An excavation lowers the surface below every layer's own envelope, so
+        // the conservative minimum must include the deepest cut.
+        let deepest_m = self
+            .site_trenches
+            .iter()
+            .map(PadTrenchZone::depth_m)
+            .fold(0.0, f64::max);
+        if deepest_m > 0.0 {
+            return ElevationBounds::new(bounds.min_m - deepest_m, bounds.max_m);
+        }
+        bounds
     }
 
     fn primary_surface(&self) -> &dyn TerrainSource {
@@ -994,6 +1024,58 @@ mod tests {
         .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, 6_371_000.0, 90.0, 320.0)])
         .with_coastal_platform_clearance(3.0);
         assert!((already_high.height_m(0.0, 0.0) - 100.0).abs() < 1e-9);
+    }
+
+    /// LF-03: the excavation is cut into the levelled platform and stops short
+    /// of the launch point, so the vehicle's resting height is unchanged.
+    #[test]
+    fn site_trench_cuts_the_pad_but_not_the_launch_point() {
+        const RADIUS_M: f64 = 6_371_000.0;
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(ConstantGround(100.0)),
+                ElevationBounds::new(-1_000.0, 10_000.0),
+            ),
+            None,
+            None,
+        )
+        .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, RADIUS_M, 110.0, 280.0)])
+        .with_site_trenches(vec![PadTrenchZone::new(
+            0.0,
+            0.0,
+            RADIUS_M,
+            (-7.0, 7.0),
+            (4.5, 28.0),
+            5.0,
+            2.5,
+        )]);
+
+        let north = |north_m: f64| {
+            let direction = DVec3::new(RADIUS_M, north_m, 0.0).normalize();
+            (
+                direction.y.asin().to_degrees(),
+                direction.z.atan2(direction.x).to_degrees(),
+            )
+        };
+        let (lat, lon) = north(0.0);
+        assert!(
+            (source.height_m(lat, lon) - 100.0).abs() < 1e-6,
+            "the launch point must keep the graded platform height"
+        );
+        let (lat, lon) = north(10.0);
+        assert!(
+            (source.height_m(lat, lon) - 95.0).abs() < 1e-6,
+            "inside the trench the platform must be cut by its full depth"
+        );
+        let (lat, lon) = north(-10.0);
+        assert!(
+            (source.height_m(lat, lon) - 100.0).abs() < 1e-6,
+            "the pad south of the mouth must not be cut"
+        );
+        assert!(
+            source.elevation_bounds_m().min_m <= 95.0,
+            "the declared bounds must include the excavation"
+        );
     }
 
     #[test]

@@ -2,8 +2,10 @@
 
 #[cfg(feature = "dem")]
 use super::{
-    DetailLodFade, FarDetailLayer, LayeredTerrainSource, PadFlatZone, ProceduralDetailSource,
-    ProceduralFarDetailSource, SurfaceClass, TerrainDetailLayer, TerrainElevationLayer,
+    DetailLodFade, FarDetailLayer, LayeredTerrainSource, PadFlatZone, PadTrenchZone,
+    ProceduralDetailSource, ProceduralFarDetailSource, SurfaceClass, TerrainDetailLayer,
+    TerrainElevationLayer, LAUNCH_TRENCH_BLEND_M, LAUNCH_TRENCH_DEPTH_M, LAUNCH_TRENCH_FAR_Z_M,
+    LAUNCH_TRENCH_HALF_WIDTH_M, LAUNCH_TRENCH_NEAR_Z_M,
 };
 use super::{ElevationBounds, TerrainSource};
 #[cfg(not(feature = "dem"))]
@@ -28,7 +30,7 @@ use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(feature = "dem")]
 use crate::domain::value_objects::launch_site_coordinates::{
-    predefined_sites, PredefinedLaunchSite,
+    predefined_sites, LaunchSiteCoordinates, PredefinedLaunchSite,
 };
 #[cfg(feature = "dem")]
 use std::env;
@@ -297,6 +299,7 @@ fn earth_layered_terrain_over(
     // mesh, collision and radar all see level ground under the facility instead
     // of a flat apron drawn over a slope.
     .with_graded_sites(earth_pad_flat_zones())
+    .with_site_trenches(earth_pad_trenches())
     .with_coastal_platform_clearance(EARTH_SITE_PLATFORM_CLEARANCE_M)
 }
 
@@ -313,6 +316,26 @@ fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
     // from: a facility floats wherever the ground under it has not been graded,
     // and the grade pins each site to its own composed height, so adding a site
     // cannot move that site's launch elevation.
+    earth_pad_sites()
+        .into_iter()
+        .map(|site| {
+            let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
+            PadFlatZone::new(
+                latitude_deg,
+                longitude_deg,
+                radius_m,
+                EARTH_PAD_FLAT_RADIUS_M,
+                EARTH_PAD_BLEND_RADIUS_M,
+            )
+        })
+        .collect()
+}
+
+/// The single list of Earth sites that carry a presented launch facility. The
+/// grade and the excavation must cover exactly the same sites, or a facility
+/// stands on ungraded ground at one of them.
+#[cfg(feature = "dem")]
+fn earth_pad_sites() -> [LaunchSiteCoordinates; 9] {
     [
         predefined_sites::kennedy_space_center(),
         predefined_sites::kennedy_lc39a(),
@@ -324,18 +347,37 @@ fn earth_pad_flat_zones() -> Vec<PadFlatZone> {
         predefined_sites::mahia_new_zealand(),
         predefined_sites::papua_indonesia_coastal_lowland(),
     ]
-    .into_iter()
-    .map(|site| {
-        let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
-        PadFlatZone::new(
-            latitude_deg,
-            longitude_deg,
-            radius_m,
-            EARTH_PAD_FLAT_RADIUS_M,
-            EARTH_PAD_BLEND_RADIUS_M,
-        )
-    })
-    .collect()
+}
+
+/// Flame-trench excavations at the same graded Earth launch sites.
+///
+/// The rectangle is expressed in the pad's local frame (`+X` east, `+Z` north),
+/// which is the frame the presentation facility is built in, so the visible
+/// opening and the excavated terrain cannot drift apart. The near edge clears
+/// the vehicle base and its hold-down clamps: the pad carries no collision
+/// surface of its own, so the launch point must stay on grade and the resting
+/// height — and every flight baseline — is unchanged.
+#[cfg(feature = "dem")]
+fn earth_pad_trenches() -> Vec<PadTrenchZone> {
+    let Some(earth) = PlanetFactory::create_by_id(&CelestialBodyId::earth()) else {
+        return Vec::new();
+    };
+    let radius_m = earth.radius_km as f64 * 1_000.0;
+    earth_pad_sites()
+        .into_iter()
+        .map(|site| {
+            let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
+            PadTrenchZone::new(
+                latitude_deg,
+                longitude_deg,
+                radius_m,
+                (-LAUNCH_TRENCH_HALF_WIDTH_M, LAUNCH_TRENCH_HALF_WIDTH_M),
+                (LAUNCH_TRENCH_NEAR_Z_M, LAUNCH_TRENCH_FAR_Z_M),
+                LAUNCH_TRENCH_DEPTH_M,
+                LAUNCH_TRENCH_BLEND_M,
+            )
+        })
+        .collect()
 }
 
 /// Earth's one authoritative terrain composition. Native builds require the

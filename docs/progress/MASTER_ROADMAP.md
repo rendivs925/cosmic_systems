@@ -793,20 +793,40 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `1ea0895`; the test plus the ground frame.
 
 ### LF-03 — Flame trench and deflector visible and grounded
-- **Status:** PLANNED
+- **Status:** IN_PROGRESS
 - **Priority:** P2
 - **Objective:** Make the trench and deflector read as cut into the pad rather than
   buried under it.
 - **Dependencies:** LF-02.
-- **Subsystems:** launch presentation.
-- **Expected files:** `src/application/rocket_spawning.rs`.
+- **Subsystems:** launch presentation, terrain grading.
+- **Expected files:** `src/application/rocket_spawning.rs`,
+  `src/domain/services/terrain_source/{procedural,layered,catalog}.rs`.
 - **Acceptance:** the trench opening is visible from the chase camera; nothing
   floats below the pad plane.
-- **Tests:** geometry placement test.
-- **Visual evidence:** ground frame from two headings.
+- **Defect found (audit):** the roadmap entry said the deck covered the trench.
+  That was true but incomplete — the terrain is graded level across the whole
+  110 m pad, so the old trench's top face sat 0.05 m *below grade* and every
+  trench and deflector vertex was behind the terrain surface. Opening the deck
+  alone would have exposed flat ground. The deck was not the only occluder.
+- **Implementation so far:** one rectangular excavation per graded Earth pad in
+  the terrain authority (`PadTrenchZone`, applied after the site grade, with the
+  declared bounds extended), apron/deck split into frames around the mouth, a
+  concrete floor plus four walls, and an inclined steel deflector resting on the
+  floor below the pad plane. The mouth starts 9 m from the launch point so the
+  ±5 m surface-normal stencil stays on grade; at 4.5 m the normal under the
+  vehicle tilted and two landing tests failed.
+- **Tests:** `pad_trench_cut_is_full_inside_and_blends_to_grade`,
+  `site_trench_cuts_the_pad_but_not_the_launch_point`,
+  `spawned_flame_trench_is_open_and_grounded`.
+- **Open issue:** the excavation is present in `height_m` and `mesh_height_m`
+  (measured −5 m at LOD 5 and 12) but the nadir capture still shows ground at
+  the trench footprint, so the lining and deflector are hidden. The render path
+  or the local patch LOD is unresolved — the slice is **not** verified.
+- **Visual evidence:** pending.
 - **Performance:** none.
 - **Scientific validation:** presentation only; not claimed as a surveyed model.
-- **Risks:** overlapping the deck and z-fighting.
+- **Risks:** overlapping the deck and z-fighting; the trench is a bounded pit,
+  not a duct to the pad edge.
 - **Completion evidence:** pending.
 
 ### LF-04 — Facility scale and structural detail

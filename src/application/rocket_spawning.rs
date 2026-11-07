@@ -17,7 +17,10 @@ use crate::domain::services::rocket_propulsion::{
     ActiveVehicleMassProperties, DEFAULT_ULLAGE_SETTLE_TIME_S,
 };
 use crate::domain::services::terrain_collision::sample_surface;
-use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::services::terrain_source::{
+    TerrainSource, LAUNCH_TRENCH_DEPTH_M, LAUNCH_TRENCH_FAR_Z_M, LAUNCH_TRENCH_HALF_WIDTH_M,
+    LAUNCH_TRENCH_NEAR_Z_M,
+};
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::launch_site_coordinates::{
     LaunchSiteCoordinates, PredefinedLaunchSite,
@@ -316,6 +319,27 @@ pub(crate) fn spawn_rockets(
     );
 }
 
+/// Spawn one axis-aligned concrete pad slab. The shared constructor keeps the
+/// apron, deck and trench lining on one half-thickness convention, so the
+/// geometry-placement tests can compare raw mesh bounds without per-part
+/// special cases.
+fn spawn_pad_slab(
+    parent: &mut ChildSpawnerCommands,
+    meshes: &mut Assets<Mesh>,
+    material: &Handle<StandardMaterial>,
+    name: &'static str,
+    size: Vec3,
+    centre: Vec3,
+) {
+    parent.spawn((
+        LaunchSiteStructure,
+        Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
+        MeshMaterial3d(material.clone()),
+        Transform::from_translation(centre),
+        Name::new(name),
+    ));
+}
+
 /// Spawn a procedural service tower and supporting facilities at the exact
 /// terrain launch point. Every child is presentation-only: it has no collision
 /// authority, contributes no terrain height, and applies no forces. All
@@ -386,40 +410,161 @@ fn spawn_procedural_launch_pad(
         // A wide concrete apron grounds the facility visually; the deck sits on
         // top. Both are low slabs whose top face sits a few centimetres above
         // the sampled surface height, so streamed terrain that interpolates to
-        // the same height cannot z-fight with or hide the pad, while the slab
-        // still reads as a prepared pad rather than a raised platform.
-        parent.spawn((
-            LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(64.0, 0.5, 64.0))),
-            MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(0.0, -0.20, 0.0),
-            Name::new("LaunchPadApron"),
-        ));
+        // the same height cannot z-fight with or hide the pad. Both stop at the
+        // flame-trench mouth instead of bridging over it: the excavation is cut
+        // into the terrain authority (LF-03), so a continuous slab would cover
+        // the opening and hide the trench again.
+        let trench_half_width_m = LAUNCH_TRENCH_HALF_WIDTH_M as f32;
+        let trench_near_z_m = LAUNCH_TRENCH_NEAR_Z_M as f32;
+        let trench_far_z_m = LAUNCH_TRENCH_FAR_Z_M as f32;
+        let trench_depth_m = LAUNCH_TRENCH_DEPTH_M as f32;
+        let apron_half_span_m = 32.0;
+        let deck_half_span_m = 18.0;
+        for (name, centre_x_m, centre_z_m, size_x_m, size_z_m) in [
+            (
+                "LaunchPadApron",
+                -(trench_half_width_m + apron_half_span_m) * 0.5,
+                0.0,
+                apron_half_span_m - trench_half_width_m,
+                2.0 * apron_half_span_m,
+            ),
+            (
+                "LaunchPadApron",
+                (trench_half_width_m + apron_half_span_m) * 0.5,
+                0.0,
+                apron_half_span_m - trench_half_width_m,
+                2.0 * apron_half_span_m,
+            ),
+            (
+                "LaunchPadApron",
+                0.0,
+                (-apron_half_span_m + trench_near_z_m) * 0.5,
+                2.0 * trench_half_width_m,
+                apron_half_span_m + trench_near_z_m,
+            ),
+            (
+                "LaunchPadApron",
+                0.0,
+                (apron_half_span_m + trench_far_z_m) * 0.5,
+                2.0 * trench_half_width_m,
+                apron_half_span_m - trench_far_z_m,
+            ),
+        ] {
+            spawn_pad_slab(
+                parent,
+                meshes,
+                &concrete,
+                name,
+                Vec3::new(size_x_m, 0.5, size_z_m),
+                Vec3::new(centre_x_m, -0.20, centre_z_m),
+            );
+        }
         // The deck is centered on the authoritative terrain anchor with its top
         // 0.06 m proud of the sampled surface; the vehicle rests on the surface,
         // so its base sits inside the slab, which reads as a launch mount rather
         // than a floating pad.
+        for (centre_x_m, size_x_m) in [
+            (
+                -(trench_half_width_m + deck_half_span_m) * 0.5,
+                deck_half_span_m - trench_half_width_m,
+            ),
+            (
+                (trench_half_width_m + deck_half_span_m) * 0.5,
+                deck_half_span_m - trench_half_width_m,
+            ),
+        ] {
+            spawn_pad_slab(
+                parent,
+                meshes,
+                &concrete,
+                "LaunchPadDeck",
+                Vec3::new(size_x_m, 0.5, 2.0 * deck_half_span_m),
+                Vec3::new(centre_x_m, -0.19, 0.0),
+            );
+        }
+        spawn_pad_slab(
+            parent,
+            meshes,
+            &concrete,
+            "LaunchPadDeck",
+            Vec3::new(
+                2.0 * trench_half_width_m,
+                0.5,
+                deck_half_span_m + trench_near_z_m,
+            ),
+            Vec3::new(0.0, -0.19, (-deck_half_span_m + trench_near_z_m) * 0.5),
+        );
+        // Trench lining. The excavation itself is terrain authority; these slabs
+        // face it in concrete and give the opening a readable edge. Every part
+        // sits on the excavated floor or spans from it to the pad plane.
+        let trench_length_m = trench_far_z_m - trench_near_z_m;
+        let trench_centre_z_m = (trench_near_z_m + trench_far_z_m) * 0.5;
+        spawn_pad_slab(
+            parent,
+            meshes,
+            &concrete,
+            "LaunchPadFlameTrenchFloor",
+            Vec3::new(2.0 * trench_half_width_m, 0.4, trench_length_m),
+            Vec3::new(0.0, -trench_depth_m + 0.2, trench_centre_z_m),
+        );
+        let wall_thickness_m = 0.4;
+        for side in [-1.0_f32, 1.0] {
+            spawn_pad_slab(
+                parent,
+                meshes,
+                &concrete,
+                "LaunchPadFlameTrenchWall",
+                Vec3::new(wall_thickness_m, trench_depth_m, trench_length_m),
+                Vec3::new(
+                    side * (trench_half_width_m - wall_thickness_m * 0.5),
+                    -trench_depth_m * 0.5,
+                    trench_centre_z_m,
+                ),
+            );
+        }
+        for (name, centre_z_m) in [
+            (
+                "LaunchPadFlameTrenchWall",
+                trench_near_z_m + wall_thickness_m * 0.5,
+            ),
+            (
+                "LaunchPadFlameTrenchWall",
+                trench_far_z_m - wall_thickness_m * 0.5,
+            ),
+        ] {
+            spawn_pad_slab(
+                parent,
+                meshes,
+                &concrete,
+                name,
+                Vec3::new(2.0 * trench_half_width_m, trench_depth_m, wall_thickness_m),
+                Vec3::new(0.0, -trench_depth_m * 0.5, centre_z_m),
+            );
+        }
+        // The deflector is a single inclined steel plate standing on the trench
+        // floor. Its highest edge stays well below the pad plane, so it cannot
+        // intersect the vehicle or its engines.
+        let deflector_length_m = 5.0_f32;
+        let deflector_angle_rad = 35.0_f32.to_radians();
         parent.spawn((
             LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(36.0, 0.5, 36.0))),
-            MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(0.0, -0.19, 0.0),
-            Name::new("LaunchPadDeck"),
-        ));
-        // Local procedural facility details only. The terrain and pad anchor
-        // remain the sole source of surface placement.
-        parent.spawn((
-            LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(9.0, 5.0, 16.0))),
-            MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(0.0, -2.55, 0.0),
-            Name::new("LaunchPadFlameTrench"),
-        ));
-        parent.spawn((
-            LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(10.0, 2.5, 1.0))),
+            Mesh3d(meshes.add(Cuboid::new(
+                2.0 * trench_half_width_m,
+                0.5,
+                deflector_length_m,
+            ))),
             MeshMaterial3d(steel.clone()),
-            Transform::from_xyz(0.0, -1.15, -7.0),
+            Transform::from_xyz(
+                0.0,
+                // Inclined half-height plus half-thickness, so the low edge rests
+                // on the trench floor and the high edge stays under the pad.
+                -trench_depth_m
+                    + 0.4
+                    + deflector_length_m * 0.5 * deflector_angle_rad.sin()
+                    + 0.25 * deflector_angle_rad.cos(),
+                trench_near_z_m + 3.5,
+            )
+            .with_rotation(Quat::from_rotation_x(deflector_angle_rad)),
             Name::new("LaunchPadFlameDeflector"),
         ));
         for x in [-11.0_f32, 11.0] {
@@ -1131,6 +1276,141 @@ mod tests {
         for (name, count) in GROUND_NAMES.iter().zip(checked) {
             assert!(count > 0, "the pad must spawn {name}");
         }
+    }
+
+    /// LF-03: the flame trench is open through the deck and its lining is
+    /// grounded. The test reads the spawned mesh bounds, so a slab that bridges
+    /// the mouth, a lining part left hanging, or a deflector poking through the
+    /// pad fails even if the layout constants change.
+    #[test]
+    fn spawned_flame_trench_is_open_and_grounded() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>| {
+                spawn_procedural_launch_pad(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    LaunchPadPresentation {
+                        planet_name: CelestialBodyId::earth(),
+                        position_body_fixed_m: DVec3::new(6_371_000.0, 0.0, 0.0),
+                        normal_body_fixed: DVec3::X,
+                        heading_body_fixed: DVec3::Z,
+                    },
+                    70.0,
+                    3.7,
+                );
+            },
+        );
+        app.update();
+
+        let half_width = LAUNCH_TRENCH_HALF_WIDTH_M as f32;
+        let near_z = LAUNCH_TRENCH_NEAR_Z_M as f32;
+        let far_z = LAUNCH_TRENCH_FAR_Z_M as f32;
+        let depth = LAUNCH_TRENCH_DEPTH_M as f32;
+        // The lining floor is a 0.4 m slab whose top face is the surface every
+        // other trench part rests on.
+        let floor_top_y = -depth + 0.4;
+        let pad_plane_y = 0.06;
+
+        let world = app.world_mut();
+        let mut query = world.query::<(&Name, &Transform, &Mesh3d)>();
+        let meshes = world.resource::<Assets<Mesh>>();
+        let mut slabs = 0;
+        let mut walls = 0;
+        let mut floors = 0;
+        let mut deflectors = 0;
+        let mut clamp_max_z = f32::MIN;
+        for (name, transform, mesh3d) in query.iter(world) {
+            let mesh = meshes
+                .get(&mesh3d.0)
+                .expect("spawned facility mesh must exist");
+            let aabb = mesh
+                .compute_aabb()
+                .expect("facility geometry must have bounds");
+            // Rotate the local half extents into the anchor frame; the deflector
+            // is inclined, so its bounds cannot be read unrotated.
+            let rotation = Mat3::from_quat(transform.rotation);
+            let local_half = Vec3::from(aabb.half_extents);
+            let local_centre = Vec3::from(aabb.center);
+            let half = Vec3::new(
+                rotation.x_axis.abs().dot(local_half),
+                rotation.y_axis.abs().dot(local_half),
+                rotation.z_axis.abs().dot(local_half),
+            );
+            let centre = transform.translation + (rotation * local_centre);
+            let min = centre - half;
+            let max = centre + half;
+            match name.as_str() {
+                "LaunchPadApron" | "LaunchPadDeck" => {
+                    slabs += 1;
+                    let covers_x = max.x > -half_width && min.x < half_width;
+                    let covers_z = max.z > near_z && min.z < far_z;
+                    assert!(
+                        !(covers_x && covers_z),
+                        "{} spans {min:?}..{max:?} and bridges the trench mouth",
+                        name.as_str()
+                    );
+                }
+                "LaunchPadFlameTrenchFloor" => {
+                    floors += 1;
+                    assert!(
+                        (min.y - (floor_top_y - 0.4)).abs() <= 0.01
+                            && (max.y - floor_top_y).abs() <= 0.01,
+                        "trench floor spans {min:?}..{max:?}, expected its top at \
+                         {floor_top_y} m"
+                    );
+                }
+                "LaunchPadFlameTrenchWall" => {
+                    walls += 1;
+                    assert!(
+                        (min.y + depth).abs() <= 0.01 && max.y <= pad_plane_y + 1e-3,
+                        "trench wall spans {min:?}..{max:?}, expected it to rise from \
+                         the floor to the pad plane"
+                    );
+                }
+                "LaunchPadFlameDeflector" => {
+                    deflectors += 1;
+                    assert!(
+                        max.y < pad_plane_y,
+                        "deflector top {} must stay below the pad plane {pad_plane_y}",
+                        max.y
+                    );
+                    assert!(
+                        (min.y - floor_top_y).abs() <= 0.05,
+                        "deflector base {} must rest on the trench floor {floor_top_y}",
+                        min.y
+                    );
+                    assert!(
+                        min.x >= -half_width - 1e-3
+                            && max.x <= half_width + 1e-3
+                            && min.z > near_z
+                            && max.z < far_z,
+                        "deflector {min:?}..{max:?} leaves the trench volume"
+                    );
+                }
+                "LaunchPadHoldDownClamp" => clamp_max_z = clamp_max_z.max(max.z),
+                _ => {}
+            }
+        }
+        assert_eq!(floors, 1, "the trench needs exactly one lining floor");
+        assert_eq!(deflectors, 1, "the trench needs exactly one deflector");
+        assert_eq!(walls, 4, "the trench needs four lining walls");
+        assert!(
+            slabs >= 7,
+            "expected the split apron and deck, found {slabs}"
+        );
+        assert!(
+            clamp_max_z < near_z,
+            "the trench mouth starts at {near_z} m but the hold-down clamps reach \
+             {clamp_max_z} m; the launch point must keep a grade-level footing"
+        );
     }
 
     #[test]

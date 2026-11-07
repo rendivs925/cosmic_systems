@@ -49,13 +49,19 @@ futures-channel = "0.3"
 [profile.dev]
 # `cargo run` must stay usable: the simulator is CPU-heavy even before the
 # renderer, and an unoptimized build makes it unplayable. Optimize this crate
-# lightly so debug info and fast rebuilds remain useful.
+# lightly so fast rebuilds remain useful.
 opt-level = 1
+# Line tables only. Full DWARF made a single debug binary 1.78 GB, of which
+# 1.60 GB was debug info: every link wrote ~1.7 GB and `target/` reached 96 GB.
+# Line tables keep file:line backtraces for this crate at a fraction of it.
+debug = 1
 
 [profile.dev.package."*"]
 # Dependencies (Bevy, physics math, image decoding) have no debugger value
-# here; optimize them fully so `cargo run` performance approaches release.
+# here; optimize them fully so `cargo run` performance approaches release, and
+# emit no DWARF at all — they are what made the artifacts enormous.
 opt-level = 3
+debug = 0
 
 [features]
 default = ["native"]

@@ -349,6 +349,120 @@ impl PadFlatZone {
     }
 }
 
+/// Half-width of the standard Earth pad flame trench on the pad's local +X
+/// (east) axis, metres.
+pub const LAUNCH_TRENCH_HALF_WIDTH_M: f64 = 7.0;
+/// Near edge of the trench on the pad's local +Z (north) axis, metres.
+///
+/// It must clear the launch point by more than `surface_normal`'s 5 m
+/// finite-difference footprint plus the blend, or the terrain normal under the
+/// vehicle is measured across the excavation edge and the pad reads as a slope.
+/// 9 m leaves 1.5 m of margin and also clears the hold-down clamps, so the
+/// resting height, the launch attitude and every flight baseline are unchanged.
+pub const LAUNCH_TRENCH_NEAR_Z_M: f64 = 9.0;
+/// Far edge of the trench on the pad's local +Z axis, metres.
+pub const LAUNCH_TRENCH_FAR_Z_M: f64 = 28.0;
+/// Excavation depth below the levelled pad platform, metres.
+pub const LAUNCH_TRENCH_DEPTH_M: f64 = 5.0;
+/// Horizontal distance over which the excavation returns to the surrounding
+/// grade, metres.
+pub const LAUNCH_TRENCH_BLEND_M: f64 = 2.5;
+
+/// A rectangular excavation cut into a graded launch site, expressed in the
+/// site's local tangent plane (`+x` east, `+z` north).
+///
+/// A launch pad is a construction, and its flame trench is part of that
+/// construction rather than a terrain sample. The cut is applied *after* the
+/// site grade, so it is always exactly `depth_m` below the levelled platform
+/// and the rendered mesh, collision and radar altitude all see the same
+/// excavation (AGENTS.md sections 9 and 20).
+///
+/// The near edge deliberately stays outside the vehicle's launch point: the
+/// pad has no collision surface of its own, so the ground under the vehicle
+/// must remain at grade or the resting height would move.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PadTrenchZone {
+    direction: DVec3,
+    east: DVec3,
+    north: DVec3,
+    reference_radius_m: f64,
+    min_x_m: f64,
+    max_x_m: f64,
+    min_z_m: f64,
+    max_z_m: f64,
+    depth_m: f64,
+    blend_m: f64,
+}
+
+impl PadTrenchZone {
+    /// Build a zone from terrain-radial coordinates. Offsets are chord lengths
+    /// on a sphere of `reference_radius_m`; for a pad-scale rectangle the
+    /// chord/arc difference is far below the excavation's own tolerance.
+    pub fn new(
+        latitude_deg: f64,
+        longitude_deg: f64,
+        reference_radius_m: f64,
+        x_range_m: (f64, f64),
+        z_range_m: (f64, f64),
+        depth_m: f64,
+        blend_m: f64,
+    ) -> Self {
+        let lat = latitude_deg.to_radians();
+        let lon = longitude_deg.to_radians();
+        let direction = DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin());
+        // The terrain frame's polar axis is +Y, so the local north tangent is
+        // the polar axis with its radial component removed; east completes the
+        // right-handed (east, up, north) pad triad.
+        let polar = DVec3::new(0.0, 1.0, 0.0);
+        let north = (polar - direction * polar.dot(direction)).normalize_or_zero();
+        let north = if north.length_squared() > 0.5 {
+            north
+        } else {
+            DVec3::X
+        };
+        let east = direction.cross(north).normalize_or_zero();
+        Self {
+            direction,
+            east,
+            north,
+            reference_radius_m: reference_radius_m.max(1.0),
+            min_x_m: x_range_m.0.min(x_range_m.1),
+            max_x_m: x_range_m.0.max(x_range_m.1),
+            min_z_m: z_range_m.0.min(z_range_m.1),
+            max_z_m: z_range_m.0.max(z_range_m.1),
+            depth_m: depth_m.max(0.0),
+            blend_m: blend_m.max(0.0),
+        }
+    }
+
+    /// Excavation depth removed at `direction`, metres. Fully `depth_m` inside
+    /// the rectangle, zero beyond the blend, smooth in between.
+    pub(crate) fn cut_m(&self, direction: DVec3) -> f64 {
+        if self.depth_m <= 0.0 {
+            return 0.0;
+        }
+        let relative = (direction - self.direction) * self.reference_radius_m;
+        let x = relative.dot(self.east);
+        let z = relative.dot(self.north);
+        let outside_x = (self.min_x_m - x).max(x - self.max_x_m).max(0.0);
+        let outside_z = (self.min_z_m - z).max(z - self.max_z_m).max(0.0);
+        let outside = outside_x.hypot(outside_z);
+        if outside <= 0.0 {
+            return self.depth_m;
+        }
+        if self.blend_m <= 0.0 || outside >= self.blend_m {
+            return 0.0;
+        }
+        let t = outside / self.blend_m;
+        self.depth_m * (1.0 - t * t * (3.0 - 2.0 * t))
+    }
+
+    /// Depth of the excavation, metres.
+    pub fn depth_m(&self) -> f64 {
+        self.depth_m
+    }
+}
+
 /// Deterministic bounded procedural detail contribution at Earth's surface:
 /// ~250 m ridges plus ~100 m drainage-like troughs, sampled as seeded 3D value
 /// noise on the unit sphere so it stays continuous across longitude and
@@ -596,6 +710,34 @@ mod tests {
             );
             previous = current;
         }
+    }
+
+    /// LF-03: the excavation is full depth inside its rectangle, zero beyond the
+    /// blend, and never cuts the launch point.
+    #[test]
+    fn pad_trench_cut_is_full_inside_and_blends_to_grade() {
+        const RADIUS_M: f64 = 6_371_000.0;
+        let zone = PadTrenchZone::new(0.0, 0.0, RADIUS_M, (-7.0, 7.0), (4.5, 28.0), 5.0, 2.5);
+        // (east, north) offsets in metres from the site centre, as a terrain
+        // direction in the same convention `height_m` samples.
+        let at = |east_m: f64, north_m: f64| DVec3::new(RADIUS_M, north_m, east_m).normalize();
+        assert!(
+            zone.cut_m(at(0.0, 0.0)).abs() < 1e-9,
+            "the launch point must never be excavated"
+        );
+        assert!((zone.cut_m(at(0.0, 10.0)) - 5.0).abs() < 1e-9);
+        assert!((zone.cut_m(at(6.0, 20.0)) - 5.0).abs() < 1e-9);
+        let mouth = zone.cut_m(at(0.0, 3.5));
+        assert!(
+            mouth > 0.0 && mouth < 5.0,
+            "the mouth must blend instead of stepping, got {mouth}"
+        );
+        assert_eq!(
+            zone.cut_m(at(10.0, 20.0)),
+            0.0,
+            "beyond the blend the surrounding grade is untouched"
+        );
+        assert!((zone.depth_m() - 5.0).abs() < 1e-9);
     }
 
     #[test]

@@ -47,8 +47,9 @@ pub use layered::{
 };
 pub use noise::ValueNoise;
 pub use procedural::{
-    PadFlatZone, ProceduralDetailSource, ProceduralFarDetailSource, ProceduralTerrainConfig,
-    ProceduralTerrainSource,
+    PadFlatZone, PadTrenchZone, ProceduralDetailSource, ProceduralFarDetailSource,
+    ProceduralTerrainConfig, ProceduralTerrainSource, LAUNCH_TRENCH_BLEND_M, LAUNCH_TRENCH_DEPTH_M,
+    LAUNCH_TRENCH_FAR_Z_M, LAUNCH_TRENCH_HALF_WIDTH_M, LAUNCH_TRENCH_NEAR_Z_M,
 };
 
 /// Helper: `smoothstep(edge0, edge1, x)`.
