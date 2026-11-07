@@ -121,9 +121,10 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — TD-07, terrain LOD transitions.** The patch-identity diagnostic
-shows hard gaps between some neighbouring patches; TD-07 is the audit of the
-crack-free transition claims and the stitch weights at those boundaries.
+**Next task — TD-07, coastal DEM resolution for the Papua site.** Prove the
+site's elevation comes from the regional NASADEM package at its declared
+resolution with the global base as fallback, and capture the 3 km / 300 km
+frames the entry asks for.
 
 TD-12 is closed. The Papua water was measured NASADEM data (4.3 cm below the
 datum, with erosion four metres above it), not a synthetic basin. The visible

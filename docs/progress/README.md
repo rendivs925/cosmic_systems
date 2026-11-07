@@ -109,9 +109,10 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TD-07 — terrain LOD transitions.** The patch-identity diagnostic shows hard
-gaps between some neighbouring patches; TD-07 audits the crack-free transition
-claims and the stitch weights at those boundaries.
+**TD-07 — coastal DEM resolution for the Papua site.** Prove the site's
+elevation comes from the regional NASADEM package at its declared resolution
+with the global base as fallback, and capture the 3 km / 300 km frames the entry
+asks for.
 
 TD-12 is closed. The Papua water is measured NASADEM: the finest payload puts
 the observed strip 4.3 cm below the EGM2008 datum and the source's own
