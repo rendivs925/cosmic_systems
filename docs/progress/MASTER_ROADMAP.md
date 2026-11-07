@@ -736,7 +736,7 @@ timings. This phase exists because an unverifiable change is not a change.
   sample. The test proves the conversion and f32 storage preserve it.
 - **Risks recorded:** a future DEM bake or a per-face filter must keep writing
   shared edge samples consistently; the test fails at the first mismatch.
-- **Completion evidence:** `PLACEHOLDER`; the two tests plus the existing
+- **Completion evidence:** `bbba8ef`; the two tests plus the existing
   imagery tests.
 
 ---
