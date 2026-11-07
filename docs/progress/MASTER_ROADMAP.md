@@ -1181,7 +1181,7 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P7 — Rocket attitude and VFX
 
 ### RK-01 — Attitude, staging and model-axis audit
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Prove the rendered vehicle follows the authoritative attitude and
   that a detached stage keeps its own body frame.
@@ -1191,13 +1191,56 @@ timings. This phase exists because an unverifiable change is not a change.
   `rocket/separation.rs`, `rocket/presentation.rs`.
 - **Acceptance:** body → render transform is a pure frame conversion; no late
   overwrite; detached stages inherit position and attitude, not the parent.
-- **Tests:** attitude mapping and separation transform tests.
-- **Visual evidence:** prelaunch, ascent and staging frames with a body-axis
-  overlay.
-- **Performance:** none.
-- **Scientific validation:** the physical attitude is the source of truth.
-- **Risks:** a visual correction hiding a physical error.
-- **Completion evidence:** pending.
+- **Specification:** `rocket-dynamics` gained "Separation preserves the attitude
+  state"; `rocket-flight-presentation` gained "Every simulated body renders from
+  its own state" and "The mesh frame matches the physical body frame" (change
+  `2026-11-06-audit-rocket-attitude-staging`).
+- **Implementation:** the physics was already correct. Separation copies the
+  pre-separation orientation and body angular velocity into both bodies, and
+  `render_transform` is a direct body→world quaternion with the origin rebased
+  before the `f32` conversion. Three presentation defects were found and fixed:
+  1. `capture_render_state` required a mission state, so jettisoned hardware
+     (spent stages and fairing halves carry none) never advanced its render
+     snapshot and stayed frozen at the separation pose. The mission read is now
+     optional; only a surface-constrained mission vehicle still pins its latest
+     snapshot.
+  2. The rebuilt mesh for a surviving serial stage was centred on the stage plus
+     its retained upper envelope, while physics switches to a stage-centred frame
+     (`lower_extent_y_m = -stage.height / 2`). The mesh builder now takes an
+     explicit body-origin shift and the serial stage passes `+envelope / 2`, so
+     the stage cylinder lands on the physical origin with the envelope above it.
+  3. The debug frame/vector helpers converted planet-centered metres with the
+     solar-map factor instead of the flight factor, shrinking a 20 m axis by
+     about five orders of magnitude and drawing every overlay at the planet
+     centre. They now use the flight frame (one unit per metre).
+- **Tests:** `debris_without_a_mission_state_tracks_its_own_dynamics`,
+  `landed_vehicle_still_pins_the_latest_snapshot`,
+  `debris_render_transform_follows_its_own_attitude`,
+  `serial_stage_mesh_is_centred_on_the_stage_not_the_envelope`,
+  `debug_offsets_use_the_flight_frame`, plus attitude and angular-velocity
+  assertions in the existing serial and parallel separation tests.
+- **Visual evidence:** `2026-11-06-rk01-prelaunch-axes.jpg` (T+6.5 s, no warm
+  start), `2026-11-06-rk01-ascent-axes.jpg` (T+17.8 s, 709.9 m/s at the end of the
+  warm start), `2026-11-06-rk01-staging-axes.jpg` (separation at T+27.5 s,
+  capture at T+29.9 s, upper 1,545.8 m/s, spent 1,543.3 m/s). All at Starbase,
+  `2000-01-01T18:46:37Z`, 1280x720. The staging frame shows the spent stage
+  flying on its own attitude and velocity while the upper stage carries the body
+  tripod.
+- **Capture controls:** `COSMIC_SYSTEMS_CAPTURE_BODY_AXES` spawns the mesh
+  tripod; `COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS` issues a real launch order and
+  runs the production fixed schedule. Both are measurement-only and inert when
+  unset; see `docs/measurement/offscreen_capture.md`.
+- **Baselines:** `ascent`, `ascent-gravity-turn` and `leo-insertion-safe` are
+  unchanged. The fixes are presentation-only and the staging assertions are on
+  existing initial conditions.
+- **Performance:** none. The tripod is three child meshes, spawned only when the
+  capture control is enabled.
+- **Scientific validation:** the physical attitude is the source of truth. The
+  frames are checked against the logged inertial `+Y` of each body, not against a
+  desired look.
+- **Risks recorded:** fairing halves remain cosmetic solids (not true half
+  shells); the 60 m capture rods are presentation scale, not a physical part.
+- **Completion evidence:** `a9d51a2`; tests plus the three frames.
 
 ### RK-02 — Plume driven by propulsion state
 - **Status:** PLANNED

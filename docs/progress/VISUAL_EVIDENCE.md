@@ -30,20 +30,20 @@ values and its linear-to-byte encoding are in
 
 | # | scene | state | frame | note |
 | --- | --- | --- | --- | --- |
-| 1 | prelaunch | PARTIAL | `pad-110m-footprint` | pad and tower, no HUD, chase angle only |
+| 1 | prelaunch | CURRENT | `pad-110m-footprint`, `2026-11-06-rk01-prelaunch-axes` | pad and tower; the RK-01 frame adds the body tripod and the retained upper envelope |
 | 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed` | one graded pad per predefined site, all flush and dry |
 | 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*` | 600 m nadir; the detail guard A/B is the same pose with the guard off and on |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
 | 7 | vegetation | PARTIAL | `terrain-600m` | trees read as isolated specks only |
-| 8 | rocket ascent | MISSING | — | no offscreen path for firing the vehicle yet |
+| 8 | rocket ascent | CURRENT | `2026-11-06-rk01-ascent-axes`, `2026-11-06-rk01-staging-axes` | warm-started production flight; ascent at `T+17.8 s`, separation at `T+27.5 s`, staging frame at `T+29.9 s` |
 | 9 | high altitude | CURRENT | `300km-papua`, `production-1200km` | 300 km and 1,200 km nadir |
 | 10 | orbit | MISSING | — | 1,200 km is the highest captured |
 
-Three of ten required scenes have no usable frame. That is the point of the
-matrix: it is the most honest measure of how much of the visual programme is
-actually evidenced. The diagnostic views added below do not fill these scenes —
+One of ten required scenes (coastline) has no usable frame. That is the point
+of the matrix: it is the most honest measure of how much of the visual programme
+is actually evidenced. The diagnostic views added below do not fill these scenes —
 they are false colours, not production frames — but they do make two of the
 missing ones explainable.
 
@@ -230,6 +230,33 @@ method for both.
 own** single-scattered radiance, not the sky dome. This sky-only fill does not
 change it; it stays tracked with the cloud-edge work (CL-05/06). The +2° sky hue
 and the upper limb tail are the quantities AT-04 changes.
+
+### Rocket body frame and staging (`RK-01`, commit `a9d51a2`)
+
+All three frames use the same site and start instant (`starbase`,
+`2000-01-01T18:46:37Z`), 1280x720, and the capture-only body tripod: `+X` red,
+`+Y` green, `+Z` blue. The rods are children of the vehicle, so they inherit the
+authoritative body→world quaternion; nothing in this path writes a pose.
+
+| file | sim time | warm start | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- | --- |
+| `2026-11-06-rk01-prelaunch-axes.jpg` | T+6.5 s | none | `8c0c1524ecfacf0f` | `+Y` on the pad normal, `+Z` along the pad heading, vehicle on the graded pad |
+| `2026-11-06-rk01-ascent-axes.jpg` | T+17.8 s | 768 steps (12 s) | `6b9dd81a5177a0dd` | the tripod follows the gravity-turn attitude at 709.9 m/s at the end of the warm start |
+| `2026-11-06-rk01-staging-axes.jpg` | T+29.9 s | 1,762 steps (27.5 s) | `788dfa2dce556715` | spent stage (left) flying on its own attitude and velocity, upper stage carrying the tripod |
+
+Separation occurs at `T+27.5 s`: the log records the upper stage at 1,545.8 m/s
+and the spent stage at 1,543.3 m/s, with inertial `+Y` `[0.509, 0.690, −0.515]`
+and `[0.506, 0.692, −0.515]` — a 0.2° difference at the staging tick, as the
+attitude-preservation requirement demands. Two seconds later the spent stage has
+rotated independently, which is the point of the frame: it is no longer the
+parent.
+
+The warm start runs the production `FixedUpdate` schedule from a real launch
+order. It is the first capture path that can show a firing vehicle without a
+window, and it is inert when `COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS` is unset.
+
+**Recorded limit:** the fairing halves remain cosmetic solids rather than true
+half shells, and the 60 m tripod is presentation scale.
 
 ### Synthetic detail guard on the coastal plain (`TD-06`, commit `5c7585e`)
 

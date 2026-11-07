@@ -39,12 +39,52 @@ COSMIC_SYSTEMS_CAPTURE_TIME=42 \
 | `COSMIC_SYSTEMS_CAPTURE_TIME` | existing deterministic simulation clock, unchanged |
 | `COSMIC_SYSTEMS_CAPTURE_PITCH_DEG` | tilt away from nadir: `0` is straight down (default), `90` is the local horizon. Valid range −90…90. |
 | `COSMIC_SYSTEMS_CAPTURE_FOV_DEG` | vertical field of view, 0.1…120. Unset keeps the flight camera's lens. |
-| `COSMIC_SYSTEMS_CAPTURE_UTC` | pin the simulation start instant, `YYYY-MM-DDTHH:MM:SS` in UTC (`Z`, `T` or a space accepted). Unset keeps the shared 2000-01-01 03:00 UTC default. |
+| `COSMIC_SYSTEMS_CAPTURE_UTC` | pin the simulation start instant, `YYYY-MM-DDTHH:MM:SS` in UTC (`Z`, `T` or a space accepted). Unset keeps the shared 2000-01-01 03:00 UTC default. A bare `HH:MM:SS` is **not** accepted; it is dropped and the log shows the default epoch. |
+| `COSMIC_SYSTEMS_CAPTURE_BODY_AXES` | `1`/`on`/`true` draws the vehicle body frame: `+X` red, `+Y` green, `+Z` blue. Presentation only. |
+| `COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS` | issue a real launch order and run this many production `FixedUpdate` steps before the first frame (bounded to 200 s). Inert when unset. |
 
 The run exits with status 0 after writing the PNG. A malformed size or frame
 count falls back to the defaults rather than failing the run. A malformed
 capture instant is dropped, so the log shows the default epoch instead of a
 near-miss time.
+
+Every capture logs `Offscreen capture at T+<seconds>` with the authoritative
+simulation clock, so a frame produced after a warm start is never mistaken for
+the startup instant.
+
+## Body-axis evidence and the warm start
+
+The interactive debug overlay (F1/F6) draws with gizmos. Gizmos are collected
+into the render world, but this project's image readback does not carry that
+pass, so a gizmo-only overlay never appears in an offscreen PNG. The two capture
+controls therefore work differently:
+
+- `COSMIC_SYSTEMS_CAPTURE_BODY_AXES` enables the existing frame config **and**
+  spawns three unlit rods as children of the vehicle: `+X` red, `+Y` green,
+  `+Z` blue. Being children, the rods inherit the authoritative attitude through
+  the same transform path as the mesh; there is no second orientation source.
+  The rods are 60 m long so the longitudinal axis clears the hull.
+- `COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS` sets the pre-launch mission to `Launch`
+  and runs the production fixed schedule N times, exactly as a piloted run
+  would. It writes no pose; guidance, propulsion, staging, gravity and contact
+  decide the result. The log reports the simulated time reached and the
+  inertial `+Y` of every body, which is what makes a staging frame checkable.
+
+Example — a staging frame at Starbase:
+
+```bash
+COSMIC_SYSTEMS_OFFSCREEN_CAPTURE=/tmp/staging.png \
+COSMIC_SYSTEMS_OFFSCREEN_CAPTURE_FRAMES=40 \
+COSMIC_SYSTEMS_CAPTURE_UTC=2000-01-01T18:46:37Z \
+COSMIC_SYSTEMS_CAPTURE_BODY_AXES=1 \
+COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS=1762 \
+  ./target/debug/cosmic_systems rocket --site starbase
+```
+
+The reference Falcon 9 configuration separates at `T+27.5 s`; the frame logs the
+capture at `T+29.9 s`, with the upper stage at 1,545.8 m/s and the spent stage at
+1,543.3 m/s. Neither control runs without its environment variable.
+
 
 ## Imagery colour-match A/B
 

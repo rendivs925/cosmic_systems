@@ -41,7 +41,7 @@ over with a new duplicate spec.
 | AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |
 | AT-03 high-altitude darkness | `atmosphere`, `scientific-lighting` | — | |
 | AT-04 multiple-scattering horizon | `scientific-lighting` | — | added and archived `2026-11-05-add-sky-multiple-scattering`: bounded, luminance-preserving diffuse fill with an explicit energy bound and unchanged limb e-folding |
-| RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | |
+| RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | change `2026-11-06-audit-rocket-attitude-staging`: debris render snapshots, stage-centred mesh frame, attitude preservation |
 | RK-02 plume | `rocket-engine-effects`, `flight-presentation-effects` | — | |
 | RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | |
 | RD-02 streaming measurement | `terrain-lod`, `terrain-rendering` | — | culling, LOD reconcile and the upload burst are timed separately; GPU upload completion is still unexposed and not claimed |

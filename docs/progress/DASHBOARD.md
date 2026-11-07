@@ -1,7 +1,7 @@
 # Progress dashboard
 
-Snapshot date: 2026-11-05.
-Last code checkpoint: `5c7585e` (2026-11-05).
+Snapshot date: 2026-11-06.
+Last code checkpoint: `a9d51a2` (2026-11-06).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 24 | 53.3 % |
+| VERIFIED | 25 | 55.6 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 19 | 42.2 % |
+| PLANNED | 18 | 40.0 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -29,7 +29,7 @@ evidenced", not "the simulator does not work".
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
-| P7 Rocket and VFX | 0 / 2 | 0 % | planned | attitude audit not started |
+| P7 Rocket and VFX | 1 / 2 | 50 % | active | RK-01 closed; plume still driven by a static cone |
 | P8 Rendering optimisation | 2 / 3 | 67 % | active | RD-01 needs the presentation baseline |
 | P9 Final validation | 1 / 3 | 33 % | active | three-mode smoke blocked by presentation |
 
@@ -52,18 +52,19 @@ Ordered by visible impact, not by ease.
 | 11 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
 | 12 | The regional Sentinel-2 mosaic rendered as a pale inset against the Blue Marble overview | TD-03 | **VERIFIED — fixed** | measured per-channel linear gain applied before mips; region/overview linear-luma ratio 3.87× → 1.16×, median before/after ratio matches the inverse gain to 0.2 %; `2026-11-05-td03-albedo-40km-*` |
 | 13 | Angular water bodies persist on the Papua plain after the detail guard | TD-12 | PLANNED | base is below the datum (erosion or measurement); by construction the detail guard cannot lower land above the datum; `2026-11-05-td06-papua-*` |
+| 14 | A separated stage stayed frozen in the sky, and the rebuilt upper-stage mesh sat half an envelope low | RK-01 | **VERIFIED — fixed** | debris render snapshots now advance without a mission state; the serial mesh is built in the stage frame; the debug tripod also used the solar factor and drew at the planet centre; `2026-11-06-rk01-*` |
 
 ## Validation status
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 5c7585e |
-| `cargo check --all-targets --features dem` | PASS | 5c7585e |
-| `cargo check --no-default-features` | PASS | 5c7585e |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 5c7585e |
-| `cargo test --features dem --lib` | 1151 passed, 0 failed, 2 ignored | 5c7585e |
-| `cargo test --no-default-features --lib` | 1109 passed, 0 failed, 2 ignored | 5c7585e |
-| `openspec validate --all --strict` | 42 passed, 0 failed | 5c7585e |
+| `cargo fmt --check` | PASS | a9d51a2 |
+| `cargo check --all-targets --features dem` | PASS | a9d51a2 |
+| `cargo check --no-default-features` | PASS | a9d51a2 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | a9d51a2 |
+| `cargo test --features dem --lib` | 1159 passed, 0 failed, 2 ignored | a9d51a2 |
+| `cargo test --no-default-features --lib` | 1117 passed, 0 failed, 2 ignored | a9d51a2 |
+| `openspec validate --all --strict` | 42 passed, 0 failed | a9d51a2 |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
@@ -112,22 +113,20 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 31 |
+| archived changes | 32 |
 | strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — RK-01, rocket attitude, staging and model-axis audit.** Verify that
-the rendered vehicle's body axes, thrust axis, gimbal direction and separation
-impulses agree with the authoritative dynamics, and that staging does not change
-the attitude state. RK-02 (plume from propulsion state) follows.
+**Next task — RK-02, plume driven by propulsion state.** The plume is still a
+static layered cone; RK-02 maps its expansion, shock and extinction to thrust,
+mass flow, throttle, ambient pressure and altitude, and measures the effect cost
+with the existing telemetry.
 
-TD-06 is closed: the land-only sea-datum guard is enabled, the three committed
-baselines are unchanged, and the earlier LEO shift is explained (the old guard
-was suppressing negative detail across the ocean floor). The large angular water
-bodies that remain on the Papua plain are **not** detail-fabricated — by
-construction the guard cannot lower land above the datum — so they are opened as
-TD-12 and must be compared against the measured DEM before any erosion change.
-The remaining terrain and material audits (TD-07, TD-08, TD-09, TM-01/02/03,
-TG-01/02, RD-01) follow.
+RK-01 is closed: the physics already preserved attitude through separation, but
+jettisoned debris never advanced its render snapshot, the rebuilt serial-stage
+mesh was centred on the stage plus its envelope, and the debug tripod used the
+solar-map conversion (so it drew at the planet centre). All three are fixed and
+pinned. The remaining terrain and material audits (TD-07, TD-08, TD-09, TD-12,
+TM-01/02/03, TG-01/02) and RD-01 follow.

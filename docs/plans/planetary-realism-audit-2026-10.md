@@ -994,3 +994,53 @@ land above the datum, so this water is below the datum in the base surface
 (erosion or measurement). It is opened as TD-12 and must be compared against the
 measured DEM before any erosion change, because real river incision near a coast
 can also cut below sea level.
+
+## 2026-11-06 — Rocket attitude and staging audit (RK-01)
+
+The audit started from the assumption that the render path might be rotating the
+vehicle. It is not: `render_transform` is a direct body→world quaternion, the body
+frame is documented (`+Y` longitudinal, position at the attached assembly's
+geometric centre), and separation copies the pre-separation orientation and body
+angular velocity into both bodies. The domain test now asserts both, and the
+parallel-booster path asserts the same for each jettisoned booster.
+
+The defects were at the seams around that correct core.
+
+**1. Debris never advanced its render snapshot.** `capture_render_state` required
+`&RocketMissionState`. Spent stages and fairing halves deliberately carry no
+mission state, so the system skipped them: their `RocketRenderState` stayed at the
+spawn value and the rendered stage hung in the sky at the separation pose while
+the authoritative state flew on. The mission read is now optional. The
+surface-constrained pin still requires an actual mission state, so landed and
+crashed vehicles keep the behaviour that avoids per-tick sawtooth.
+
+**2. The serial-stage mesh was not in the stage frame.** Physics re-origins to
+`lower_extent_y_m = -stage.height / 2` at separation. The rebuild passed
+`height = stage + retained envelope` to a builder that always centres the whole
+envelope, so the stage cylinder sat half an envelope too low (7.8 m for Falcon 9)
+and jumped at the staging tick. The builder now takes an explicit body-origin
+shift; the full stack passes `0`, the serial stage passes `+envelope / 2`. The
+regression pins the cylinder rings at `±height/2` and the nose apex at
+`height/2 + envelope`.
+
+**3. The debug overlay did not draw at the vehicle.** The frame and vector
+helpers converted planet-centred metres with `solar_meters_to_units`. In the
+flight frame the factor is 1, so a 20 m axis became ~1e-5 units and every gizmo
+was drawn near the planet centre. They now use `flight_meters_to_units`. This was
+found only because the axis overlay still did not appear after the first two
+fixes.
+
+The overlay also exposed a capture-path limit: gizmos are not present in the
+offscreen image readback. The capture control therefore spawns three unlit mesh
+rods as children of the vehicle (`+X` red, `+Y` green, `+Z` blue), which inherit
+the same authoritative transform as the hull. `COSMIC_SYSTEMS_CAPTURE_WARMUP_STEPS`
+supplies the other missing capability: a capture cannot press Space, so it issues
+a real launch order and runs the production fixed schedule for N steps. The
+frames are the real flight, not a posed scene.
+
+Measured: Starbase, `2000-01-01T18:46:37Z`. Ascent frame at `T+17.8 s`
+(709.9 m/s at the end of the warm start). Separation at `T+27.5 s`; at that tick
+the two bodies' inertial `+Y` are `[0.509, 0.690, −0.515]` and
+`[0.506, 0.692, −0.515]` (0.2°). The staging frame at `T+29.9 s` shows the spent
+stage flying on its own attitude, with the upper at 1,545.8 m/s and the spent at
+1,543.3 m/s. All three committed flight baselines are unchanged.

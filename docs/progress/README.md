@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-05. Last code checkpoint: `5c7585e`.
+Snapshot: 2026-11-06. Last code checkpoint: `a9d51a2`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-four of forty-five roadmap tasks, each with implementation + tests + a
+Twenty-five of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -92,6 +92,7 @@ named frame or a named measurement:
 | AT-04 multiple-scattering horizon | +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km; 70 km teal band 0.670 → 0.339; limb e-folding 8.30/8.33 km (before 8.24/8.45); `2026-11-05-at04-*` |
 | TD-11 coastal platform floor | Starbase +0.10 → +3.00 m, Papua +0.54 → +3.00 m, KSC reference +0.94 → +3.00 m; Kourou moved to ELA-3 (+9.19 m) |
 | TD-06 synthetic coastline guard | land-only sea-datum guard enabled; worst-case detail cannot cross the datum across the whole window, measured ocean keeps signed relief, all three committed baselines unchanged; Papua A/B mean 1.53/255; `2026-11-05-td06-papua-*` |
+| RK-01 attitude and staging | separation preserves attitude/angular velocity; jettisoned debris now advances its own render snapshot; the serial-stage mesh is centred on the physical stage; the debug tripod uses the flight frame; three body-axis frames, staging at `T+27.5 s`, capture at `T+29.9 s`; `2026-11-06-rk01-*` |
 | VL-02 OpenSpec strict | 42/42 |
 
 Every implemented task is now verified. The two remaining blocked items are
@@ -106,17 +107,22 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**RK-01 — attitude, staging and model-axis audit.** Verify that the rendered
-vehicle's body axes, thrust axis, gimbal direction and separation impulses agree
-with the authoritative dynamics, and that staging does not change the attitude
-state. RK-02 (plume from propulsion state) follows.
+**RK-02 — plume driven by propulsion state.** The plume is still a static layered
+cone. RK-02 maps expansion, shock structure and extinction to thrust, mass flow,
+throttle, ambient pressure and altitude, and measures the effect cost with the
+existing telemetry.
 
-TD-06 is closed. The land-only sea-datum guard is enabled and the three committed
-baselines are unchanged; the earlier LEO shift is explained (the old guard had
-suppressed negative detail across the ocean floor). The angular water bodies that
-remain on the Papua plain are **not** detail-fabricated — by construction the
-guard cannot lower land above the datum — so TD-12 now tracks them against the
-measured DEM before any erosion change.
+RK-01 is closed. The physics already preserved attitude through separation, so the
+audit's value was in the seams around it: jettisoned debris carried no mission
+state and therefore never advanced its render snapshot (it froze at the
+separation pose), the rebuilt serial-stage mesh was centred on the stage plus its
+retained envelope while physics had already switched to a stage-centred frame,
+and the debug tripod converted metres with the solar-map factor, drawing every
+overlay at the planet centre. All three are fixed and pinned by tests.
+
+TD-12 still tracks the angular water bodies that persist on the Papua plain
+against the measured DEM. The remaining terrain and material audits (TD-07,
+TD-08, TD-09, TM-01/02/03, TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -124,8 +130,8 @@ measured DEM before any erosion change.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1151 passed, 2 ignored
-cargo test --no-default-features --lib   # 1109 passed, 2 ignored
+cargo test --features dem --lib          # 1159 passed, 2 ignored
+cargo test --no-default-features --lib   # 1117 passed, 2 ignored
 openspec validate --all --strict         # 42 passed
 ```
 
@@ -148,9 +154,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,151 domain and adapter
-tests pass (1,109 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-four of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,159 domain and adapter
+tests pass (1,117 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified twenty-five of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -247,3 +253,14 @@ exposed.
 
 Of the ten required visual scenes, five have usable evidence, two are partial,
 and three are missing. That is the truest single measure of where this stands.
+
+The rocket audit had the same shape one level down: the physics was right and the
+picture was wrong. A separated stage kept its own authoritative state but the
+render snapshot system required a mission state, so debris stopped updating at
+the separation tick and hung in the sky. The rebuilt upper-stage mesh was centred
+on the stage plus the fairing envelope while physics had already re-origined to
+the stage itself, so it sat half an envelope low. And the debug tripod, the tool
+needed to show any of this, converted metres with the solar-map factor and drew
+a twenty-metre axis a hundred-thousandth of a unit long at the planet centre.
+All three are fixed, pinned by tests, and demonstrated with body-axis frames at
+prelaunch, ascent and the first staging tick.
