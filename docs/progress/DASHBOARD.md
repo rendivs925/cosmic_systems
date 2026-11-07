@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `15f9b63` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 33 | 73.3 % |
+| VERIFIED | 34 | 75.6 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 10 | 22.2 % |
+| PLANNED | 9 | 20.0 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -26,7 +26,7 @@ evidenced", not "the simulator does not work".
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
-| P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
+| P4 Vegetation | 1 / 3 | 33 % | active | VG-01 closed; canopy geometry and wind remain |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
 | P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
@@ -43,7 +43,7 @@ Ordered by visible impact, not by ease.
 | 2 | Synthetic detail fabricated lakes on the coastal plain | TD-06 | **VERIFIED — fixed** | land-only sea-datum guard; worst-case detail cannot cross the datum, ocean floor keeps signed relief, all three baselines unchanged; Papua A/B mean 1.53/255, `2026-11-05-td06-papua-*` |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | **VERIFIED — explained** | the altitude term is right: at `-4.0,138.0` the same ground measures the same albedo at 400 km and 3 km (0.0169 linear p50), occlusion is exactly 1.000, and the production/albedo ratio matches 300 km (1.77 vs 2.07). Tropical-forest albedo really is ~4 %; the deck is white because it is white. The *near-ground* render was 2.2× brighter because the local surface map carried absolute albedo 4× the overview's. **Fixed by TM-04**: it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % |
 | 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
-| 5 | Vegetation is sparse and reads as specks | VG-01/02 | PLANNED | `terrain-600m` |
+| 5 | Vegetation is sparse and reads as specks | VG-02/03 | PLANNED | VG-01 closed the datum defect and far-field density; the remaining sparseness is canopy geometry and shading; `2026-11-07-vg01-*` |
 | 6 | Regional imagery inset still steps at its patch edge | TD-04 | **VERIFIED** | the edge is now a 16.6 km cross-fade at the region bound: the frame's worst step within ±40 px of the bound fell from 4.23 to 0.72/255 (its own texture level), and the before/after change is confined to x=381..737, the declared band. Resolution now uses patch overlap, so a straddling patch binds the tile |
 | 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | **VERIFIED — fixed** | mesh-only ~4 km / ±30 m band on LOD 5–11, land-only guard; collision, anchor and coastline unchanged; 40 km height diagnostic shows continuous contours; `2026-11-07-tm02-*` |
 | 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | **VERIFIED — fixed** | bounded luminance-preserving diffuse fill; +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km, teal band 0.670 → 0.339, limb e-folding 8.24/8.45 → 8.30/8.33 km; `2026-11-05-at04-*` |
@@ -114,18 +114,19 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | item | value |
 | --- | --- |
 | specs | 40 |
-| active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 39 |
-| strict validation | 42/42 pass |
+| active changes | 1 — `spaceflight-game-mvp` (5/37 tasks) |
+| archived changes | 41 |
+| strict validation | 41/41 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — TG-01, the first procedural-vegetation audit.** Read the roadmap
-entry for its scope before starting; phase P3 (terrain materials) is now
-complete.
+**Next task — VG-02, near-field canopy geometry.** Replace the flat tree cards
+with volumetric canopies at close range, with impostors beyond the near band and
+a measured instance cap.
 
-TM-03 is closed: the geometric waterline and the albedo coast agree to 0.002°
-(about 0.2 km) on the Great Australian Bight control transect, well inside the
-4.3 km overview texel, using a recorded luminance-midpoint method. The remaining
-vegetation audits (TG-01/02) and RD-01 follow.
+VG-01 is closed: vegetation exclusion now uses height above the local sea datum
+(the old raw ellipsoidal test accepted a tree 5.2 m under the sea at Papua), the
+generator identity is versioned, and the stable-lattice far-field change is
+archived. The remaining vegetation audits (VG-02/03) and the cloud, facility,
+performance and validation tasks follow.

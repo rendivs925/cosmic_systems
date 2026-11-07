@@ -33,7 +33,7 @@ over with a new duplicate spec.
 | TM-02 distance detail | `terrain-lod`, `terrain-rendering` | — | change `2026-11-07-extend-terrain-relief-band`: mesh-only coarse band, band-pass LOD fade, land-only guard |
 | TM-03 land/sea reconciliation | `earth-imagery-streaming`, `terrain-source`, `terrain-rendering` | — | change `2026-11-07-reconcile-the-coastal-waterline`: Bight control transect, one-texel reconciliation |
 | TM-04 near-ground albedo tone | `planetary-terrain-material`, `terrain-material-splat`, `scientific-lighting` | — | tone continuity between the measured overview and the layered material |
-| VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | `stabilize-far-field-tree-placement` | change tasks complete, not archived |
+| VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | — | archived `2026-11-07-stabilize-far-field-tree-placement` and `2026-11-07-audit-vegetation-distribution` (sea-datum exclusion, versioned identity) |
 | VG-02 canopy | `vegetation-species` | — | |
 | VG-03 wind and shading | `vegetation-species` | — | |
 | CL-01…06 clouds | — | — | **gap**: requirements live in `docs/technical_specification_photorealistic_procedural_3d_cloud_engine.md`, not in OpenSpec |

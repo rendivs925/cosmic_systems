@@ -1008,7 +1008,7 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P4 — Procedural vegetation
 
 ### VG-01 — Vegetation distribution audit
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Establish where vegetation should exist and whether the current
   density signal produces it.
@@ -1018,14 +1018,39 @@ timings. This phase exists because an unverifiable change is not a change.
   `terrain/surface/scatter.rs`.
 - **Acceptance:** density is derived from land/sea, slope, elevation, biome and
   moisture, with a deterministic seed and generator version.
-- **Tests:** determinism across runs and LODs; coastal exclusion.
-- **Visual evidence:** ground and 3 km frames with density overlay.
-- **Performance:** instance budget respected.
-- **Scientific validation:** measured land cover where available, procedural
-  fallback labelled as such.
-- **Risks:** sparse coverage reading as bare ground.
-- **Completion evidence:** pending; active OpenSpec change
-  `stabilize-far-field-tree-placement` is nearly complete.
+- **Specification:** `vegetation-placement` gained "Vegetation exclusion uses
+  height above the sea datum" and "Placement identity is versioned" (change
+  `2026-11-07-audit-vegetation-distribution`). The stable-lattice change
+  `2026-11-07-stabilize-far-field-tree-placement` was archived with it.
+- **Defect found and fixed:** the tree gate compared raw `height_m` with 0.5 m.
+  On Earth that is the ellipsoidal coordinate, and the EGM2008 undulation is
+  about 71 m at Papua, so a shelf 30 m under the sea passed the land/sea test. A
+  real coastal patch accepted a tree **5.2 m below the sea**. The gate, the
+  species call and the vegetation treeline now use height above the local sea
+  datum (`height_m - sea_level_height_m`). Procedural bodies return a zero datum
+  and are unchanged.
+- **Identity:** `VEGETATION_GENERATOR_VERSION = 1`, with the clump seed, lattice
+  salt and lattice level pinned by a test.
+- **Tests:** `coastal_tree_sites_exclude_the_sea` (real Papua patch: at least one
+  accepted tree, every one at least 0.5 m above the datum), 
+  `vegetation_density_falls_to_zero_above_the_treeline`,
+  `vegetation_generator_identity_is_versioned`, plus the existing lattice
+  nesting and determinism tests.
+- **Visual evidence:** `2026-11-07-vg01-papua-600m.jpg` and
+  `2026-11-07-vg01-papua-3km.jpg`, the ground and 3 km views at the P0-01 pose
+  family, default instant, presentation time 42 s, 220 frames.
+- **Performance:** no change; the stable-lattice budget caps are unchanged
+  (`FULL_TREE_BUDGET_CAP` 100, `COARSE_TREE_BUDGET_CAP` 24) and their tests
+  pass.
+- **Scientific validation:** measured land cover (ESA WorldCover regional)
+  decides the vegetation form where resident; the climate/procedural density is
+  the labelled fallback. Trees are excluded on water, permanent snow and
+  built-up ground, and above the treeline.
+- **Risks recorded:** the 600 m frame still reads sparse. That is canopy
+  geometry and shading (VG-02/VG-03), not the density gate; no density-overlay
+  diagnostic exists, so the domain tests and the placed-instance frames are the
+  evidence.
+- **Completion evidence:** `PLACEHOLDER`; three tests plus the two frames.
 
 ### VG-02 — Near-field canopy geometry
 - **Status:** PLANNED

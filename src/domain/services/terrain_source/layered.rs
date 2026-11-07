@@ -515,7 +515,13 @@ impl TerrainSource for LayeredTerrainSource {
             }
             None => primary,
         };
-        let height_m = self.height_m(latitude_deg, longitude_deg);
+        // The treeline is an altitude above the local sea datum, not the raw
+        // ellipsoidal coordinate (VG-01).
+        let height_m = self.height_m(latitude_deg, longitude_deg)
+            - self
+                .base
+                .source
+                .sea_level_height_m(latitude_deg, longitude_deg);
         let treeline = 1.0 - ss(3_600.0, 4_800.0, height_m);
         (combined * treeline).clamp(0.0, 1.0)
     }
@@ -676,6 +682,40 @@ mod tests {
             .with_sea_level_guard(4.0, 60.0),
         );
         assert_eq!(high_land.mesh_height_m(0.0, 0.0, 8), 105.0);
+    }
+
+    #[derive(Debug)]
+    struct DenseSurface(f64);
+    impl TerrainSource for DenseSurface {
+        fn height_m(&self, _: f64, _: f64) -> f64 {
+            self.0
+        }
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(self.0, self.0)
+        }
+        fn vegetation_density(&self, _: f64, _: f64) -> f64 {
+            1.0
+        }
+    }
+
+    /// VG-01: the treeline is an altitude above the sea datum, and density falls
+    /// to zero above it rather than staying at the climate value.
+    #[test]
+    fn vegetation_density_falls_to_zero_above_the_treeline() {
+        let source = |height_m: f64| {
+            LayeredTerrainSource::new(
+                TerrainElevationLayer::new(
+                    Arc::new(DenseSurface(height_m)),
+                    ElevationBounds::new(height_m, height_m),
+                ),
+                None,
+                None,
+            )
+        };
+        assert_eq!(source(100.0).vegetation_density(0.0, 0.0), 1.0);
+        let mid = source(4_200.0).vegetation_density(0.0, 0.0);
+        assert!(mid > 0.0 && mid < 1.0, "the treeline must fade: {mid}");
+        assert_eq!(source(5_000.0).vegetation_density(0.0, 0.0), 0.0);
     }
 
     /// TM-01: a graded pad is flat *geometry*, not a new landform. Surface

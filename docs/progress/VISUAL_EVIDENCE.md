@@ -67,6 +67,8 @@ missing ones explainable.
 | `2026-11-07-tm02-highlands-40km-height.jpg` | `c1ecb0e` | `-5.0,141.5,40000` | 42 s | 220 | `5af1ba3ac3a7feb5` | unlit height diagnostic over the highlands | continuous contours, no LOD steps |
 | `2026-11-07-tm02-papua-300km.jpg` | `c1ecb0e` | `-8.0,139.5,300000` | 42 s | 220 | `6abc624df27e5233` | 300 km context with coast and lakes | relief and coast resolved |
 | `2026-11-07-tm03-bight-coast-3km.jpg` | `15f9b63` | `-32.0,132.14,3000` | 42 s | 220 | `e748618a653c0d2c` | Great Australian Bight coast: water cap and albedo coast meet on one line | coastline agrees within one overview texel |
+| `2026-11-07-vg01-papua-600m.jpg` | `PLACEHOLDER` | `-8.0,139.5,600` | 42 s | 220 | `22914e5c7ff597db` | ground view after the sea-datum tree exclusion | specks on land, none on water |
+| `2026-11-07-vg01-papua-3km.jpg` | `PLACEHOLDER` | `-8.0,139.5,3000` | 42 s | 220 | `a14c8d8f52cafc4a` | 3 km view of the same distribution | trees only on land |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -383,6 +385,22 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Vegetation distribution (`VG-01`, commit `PLACEHOLDER`)
+
+The audit found that the land/sea gate compared the raw ellipsoidal height with
+0.5 m. At Papua the EGM2008 undulation is about 71 m, so a shelf 30 m under the
+sea passed; the test caught a tree **5.2 m below the sea**. The gate, species
+call and treeline now subtract the local datum.
+
+| file | pose | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- |
+| `2026-11-07-vg01-papua-600m.jpg` | `-8.0,139.5,600` | `22914e5c7ff597db` | ground view: tree instances on land, none on the water strip |
+| `2026-11-07-vg01-papua-3km.jpg` | `-8.0,139.5,3000` | `a14c8d8f52cafc4a` | 3 km view: distribution follows the land |
+
+**Recorded limit:** the ground view still reads sparse. That is canopy geometry
+and shading (VG-02/VG-03), not the density gate. There is no density-overlay
+diagnostic; the domain tests and these placed-instance frames are the evidence.
 
 ### Coastal waterline reconciliation (`TM-03`, commit `15f9b63`)
 

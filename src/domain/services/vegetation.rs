@@ -25,6 +25,14 @@ pub const TREE_SITE_LEVEL: u32 = 14;
 /// full candidate count stays at or below the configured tree budget so the
 /// per-patch streaming reservation does not grow.
 pub const TREE_CANDIDATE_SIDE: usize = 10;
+
+/// Committed identity of the placement generator.
+///
+/// Bump this whenever the lattice, ecological gate, species law, density
+/// composition, or seed derivation changes. It is the version a replay or a
+/// terrain cache records alongside the seed, so two worlds that merely look
+/// similar can still be distinguished.
+pub const VEGETATION_GENERATOR_VERSION: u32 = 1;
 /// Candidate sites per patch edge on a coarse, tree-only patch. It is a
 /// power-of-two fraction of [`TREE_CANDIDATE_SIDE`] so the coarse sites remain a
 /// strict subset of the finer sites (no popping), while keeping the far-field
@@ -825,6 +833,17 @@ mod tests {
         }
         // The generator is pure: it never consults the face direction itself.
         let _ = face_uv_to_direction(patch.face, 0.5, 0.5);
+    }
+
+    /// VG-01: the placement identity is a committed seed + generator version.
+    /// Bumping either must be a deliberate change, because replays and terrain
+    /// caches use them to distinguish worlds.
+    #[test]
+    fn vegetation_generator_identity_is_versioned() {
+        assert_eq!(VEGETATION_GENERATOR_VERSION, 1);
+        assert_eq!(VegetationConfig::DEFAULT.clump_seed, 0x00A1_C0FF_EE01_2345);
+        assert_eq!(TREE_CANDIDATE_SALT, 0x7A11_5EED);
+        assert_eq!(TREE_SITE_LEVEL, 14);
     }
 
     #[test]

@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-07. Last code checkpoint: `15f9b63`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Thirty-three of forty-five roadmap tasks, each with implementation + tests + a
+Thirty-four of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -101,7 +101,8 @@ named frame or a named measurement:
 | TM-01 material under grading | classification samples the natural surface via `appearance_height_m`; geometry stays graded; gentle and 45° synthetic tests, the latter keeping rock instead of a flat disc; `2026-11-07-tm01-vandenberg-pad.jpg` |
 | TM-02 distant relief | mesh-only ~4 km / ±30 m band, band-pass fade LOD 5–11, land-only sea guard; collision and coast unchanged; 40 km height diagnostic shows continuous contours; 241 tiles / 91.6 MiB, 1.40 ms main-thread streaming; `2026-11-07-tm02-*` |
 | TM-03 coastal reconciliation | Bight control transect: DEM coast ≈132.138°, albedo ≈132.136° (0.002° ≈ 0.2 km) inside the 4.3 km overview texel; luminance-midpoint method; 3 km frame `2026-11-07-tm03-bight-coast-3km.jpg` |
-| VL-02 OpenSpec strict | 42/42 |
+| VG-01 vegetation distribution | gate/species/treeline use height above the local sea datum (the raw ellipsoidal test accepted a tree 5.2 m under the sea at Papua); generator version 1 + pinned seed/salt; real coastal-patch test, treeline test, identity test; `2026-11-07-vg01-*` |
+| VL-02 OpenSpec strict | 41/41 |
 
 Every implemented task is now verified. The two remaining blocked items are
 environmental; the rest are planned work.
@@ -115,13 +116,15 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TG-01 — the first procedural-vegetation audit.** Read the roadmap entry for its
-scope before starting. Phase P3 (terrain materials) is complete.
+**VG-02 — near-field canopy geometry.** Replace the flat tree cards with
+volumetric canopies at close range, with impostors beyond the near band and a
+measured instance cap.
 
-TM-03 is closed: the geometric waterline and the albedo coast agree to 0.002°
-(about 0.2 km) on the Great Australian Bight control transect, well inside the
-4.3 km overview texel, using a recorded luminance-midpoint method. The remaining
-vegetation audits (TG-01/02) and RD-01 follow.
+VG-01 is closed: vegetation exclusion now uses height above the local sea datum
+(the old raw ellipsoidal test accepted a tree 5.2 m under the sea at Papua), the
+generator identity is versioned, and the stable-lattice far-field change is
+archived. The remaining vegetation audits (VG-02/03) and the cloud, facility,
+performance and validation tasks follow.
 
 ## How do we know it works?
 
@@ -129,8 +132,8 @@ vegetation audits (TG-01/02) and RD-01 follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1178 passed, 2 ignored
-cargo test --no-default-features --lib   # 1128 passed, 2 ignored
+cargo test --features dem --lib          # 1181 passed, 2 ignored
+cargo test --no-default-features --lib   # 1130 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -153,9 +156,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,178 domain and adapter
-tests pass (1,128 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified thirty-three of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,181 domain and adapter
+tests pass (1,130 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified thirty-four of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface

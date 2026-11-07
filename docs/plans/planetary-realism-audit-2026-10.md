@@ -1322,3 +1322,28 @@ meeting on the same line. The test is a reconciliation gate, not a global survey
 rias, barrier islands and tidal flats are outside what a 4.4 km albedo and a
 0.9 km DEM can reconcile sub-texel, and that limit is recorded rather than
 hidden.
+
+## 2026-11-07 — Vegetation distribution audit (VG-01)
+
+The stable-lattice work had already removed the LOD re-roll and the far-field
+sparsity. The audit found one datum defect: `tree_site_gate` compared the raw
+`height_m` with 0.5 m. On Earth that field is ellipsoidal and the EGM2008
+undulation is about 71 m at Papua, so a shelf 30 m under the sea passed the
+land/sea test. A real coastal patch accepted a tree 5.2 m below the sea.
+
+The gate, the species-selection height and the layered vegetation treeline now
+use `height_m - sea_level_height_m`. Procedural bodies return a zero datum and
+are unchanged. `VEGETATION_GENERATOR_VERSION = 1` records the placement law next
+to the fixed clump seed and lattice salt, both pinned by a test.
+
+Tests: `coastal_tree_sites_exclude_the_sea` on the real Papua patch requires at
+least one accepted tree and every one at least 0.5 m above the datum;
+`vegetation_density_falls_to_zero_above_the_treeline` checks the orthometric
+band; `vegetation_generator_identity_is_versioned` pins the version, seed, salt
+and lattice level. The lattice nesting and determinism tests came from the
+archived `stabilize-far-field-tree-placement` change.
+
+Evidence is the 600 m ground and 3 km views at the Papua pose. Both still read
+sparse: that is canopy geometry and shading, not the gate, and it is attributed
+to VG-02/VG-03. There is no density-overlay diagnostic, so the domain tests and
+the placed instances are the evidence for distribution.

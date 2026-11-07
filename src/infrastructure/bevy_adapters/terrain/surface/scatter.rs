@@ -674,7 +674,10 @@ pub(super) fn tree_site_gate(
 ) -> bool {
     let dir = face_uv_to_direction(patch.face, u, v);
     let (lat, lon) = direction_to_lat_lon(dir);
-    if source.height_m(lat, lon) < 0.5 {
+    // Height above the source's own sea datum: Earth stores ellipsoidal
+    // heights, so comparing the raw value with zero would let a shallow shelf
+    // host trees (VG-01).
+    if source.height_m(lat, lon) - source.sea_level_height_m(lat, lon) < 0.5 {
         return false;
     }
     if slope_deg_at(source, lat, lon) > 34.0 {
@@ -1017,7 +1020,7 @@ pub(super) fn build_grounded_vegetation_mesh(
     for (k, (u, v)) in tree_sites.into_iter().enumerate() {
         let dir = face_uv_to_direction(patch.face, u, v);
         let (lat, lon) = direction_to_lat_lon(dir);
-        let gate_height_m = source.height_m(lat, lon);
+        let gate_height_m = source.height_m(lat, lon) - source.sea_level_height_m(lat, lon);
         let local_slope = slope_deg_at(source, lat, lon);
         let moisture = source.moisture(lat, lon);
         // Clumping already gates placement. It describes spatial clearings,
@@ -1407,6 +1410,42 @@ pub fn build_river_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VG-01: the ecological gate must use height above the source's sea datum,
+    /// not the raw ellipsoidal coordinate. On Earth the EGM2008 undulation is
+    /// tens of metres, so a shallow shelf at 40 m ellipsoidal is 30 m under the
+    /// sea and must never host a tree.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn coastal_tree_sites_exclude_the_sea() {
+        use crate::domain::services::cube_sphere::TerrainPatch;
+        use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
+        use crate::domain::services::terrain_source::EarthTerrainSource;
+
+        let source = EarthTerrainSource::new();
+        let patch = TerrainPatch::for_direction(terrain_lat_lon_to_body_fixed(-8.5, 139.5), 12);
+        let density_at = |latitude_deg: f64, longitude_deg: f64| {
+            source.vegetation_density(latitude_deg, longitude_deg)
+        };
+        let sites =
+            tree_site_candidates(&patch, TREE_CANDIDATE_SIDE, TREE_CANDIDATE_SALT, |u, v| {
+                tree_site_gate(&source, &patch, &density_at, u, v)
+            });
+        assert!(
+            !sites.is_empty(),
+            "a forested coastal patch must host trees"
+        );
+        for (u, v) in sites {
+            let direction = face_uv_to_direction(patch.face, u, v);
+            let (latitude_deg, longitude_deg) = direction_to_lat_lon(direction);
+            let above_sea_m = source.height_m(latitude_deg, longitude_deg)
+                - source.sea_level_height_m(latitude_deg, longitude_deg);
+            assert!(
+                above_sea_m >= 0.5,
+                "tree accepted {above_sea_m:+.1} m above the sea at {latitude_deg:.4}, {longitude_deg:.4}"
+            );
+        }
+    }
 
     /// A branch is one continuous ring extrusion: exactly one ring per curve
     /// point (no duplicated joint ring) and a connecting quad strip per segment.
