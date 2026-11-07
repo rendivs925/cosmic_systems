@@ -351,7 +351,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Risks recorded:** a bed less than 5 cm below the datum now renders as land.
   That is inside the measured coast's vertical uncertainty and is the price of
   not flooding measured land.
-- **Completion evidence:** `PLACEHOLDER`; tests plus the repeated frame.
+- **Completion evidence:** `98dc788`; tests plus the repeated frame.
 
 ### TD-03 — Regional imagery colour match to the global overview
 - **Status:** VERIFIED

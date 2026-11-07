@@ -308,7 +308,7 @@ crossing on land above the datum, so this water was below the datum in the base
 surface. TD-12 identified the base as the measured NASADEM payload and the
 over-extent as a rendering flood threshold; see the next section.
 
-### Near-datum water on the Papua plain (`TD-12`, commit `PLACEHOLDER`)
+### Near-datum water on the Papua plain (`TD-12`, commit `98dc788`)
 
 Same pose (`-8.0,139.5,600`), default start instant, presentation time 42 s and
 220 frames as `2026-11-05-td06-papua-after.jpg`; only the ocean-cap
@@ -317,7 +317,7 @@ classification changed.
 | file | commit | sha256 (first 16) | demonstrates |
 | --- | --- | --- | --- |
 | `2026-11-05-td06-papua-after.jpg` | `5c7585e` | `cd1fd925c2601f72` | before: the 0.5 m depth-test offset also acted as a flood threshold |
-| `2026-11-07-td12-papua-after.jpg` | `PLACEHOLDER` | `d59dd3c099cd9d24` | after: classification at the datum, surface offset 0.05 m |
+| `2026-11-07-td12-papua-after.jpg` | `98dc788` | `d59dd3c099cd9d24` | after: classification at the datum, surface offset 0.05 m |
 
 Measured composition at the observed strip (finest resident payload):
 

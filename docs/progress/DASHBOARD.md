@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `PLACEHOLDER` (2026-11-07).
+Last code checkpoint: `98dc788` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,13 +59,13 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | PLACEHOLDER |
-| `cargo check --all-targets --features dem` | PASS | PLACEHOLDER |
-| `cargo check --no-default-features` | PASS | PLACEHOLDER |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | PLACEHOLDER |
-| `cargo test --features dem --lib` | 1167 passed, 0 failed, 2 ignored | PLACEHOLDER |
-| `cargo test --no-default-features --lib` | 1124 passed, 0 failed, 2 ignored | PLACEHOLDER |
-| `openspec validate --all --strict` | 43 passed, 0 failed | PLACEHOLDER |
+| `cargo fmt --check` | PASS | 98dc788 |
+| `cargo check --all-targets --features dem` | PASS | 98dc788 |
+| `cargo check --no-default-features` | PASS | 98dc788 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 98dc788 |
+| `cargo test --features dem --lib` | 1167 passed, 0 failed, 2 ignored | 98dc788 |
+| `cargo test --no-default-features --lib` | 1124 passed, 0 failed, 2 ignored | 98dc788 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 98dc788 |
 | `cargo build --release --features dem` | PASS | eba5d6e |
 | three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
