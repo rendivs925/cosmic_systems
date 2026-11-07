@@ -900,7 +900,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Risks recorded:** the rendered far field may differ from collision by up to
   ±30 m at LOD 5–9; physics never samples there, and the land-only weight keeps
   the coastline identical. The band is a deliberate presentation approximation.
-- **Completion evidence:** `PLACEHOLDER`; three tests plus the four frames.
+- **Completion evidence:** `c1ecb0e`; three tests plus the four frames.
 
 ### TM-04 — Local and layered albedo tone match to the measured overview
 - **Status:** VERIFIED
