@@ -702,6 +702,70 @@ mod tests {
         }
     }
 
+    /// TD-08: one geoid, one ellipsoidal height, one orthometric subtraction.
+    /// The Papua control point is a real coastal lowland: the EGM2008 undulation
+    /// is about 71.4 m there, the measured payload is 0.56 m above sea, and the
+    /// site platform floor raises the composed pad to 3.0 m. Every consumer must
+    /// agree on those numbers; a second correction would move them by 71 m.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn papua_control_point_reports_one_datum_across_consumers() {
+        use crate::domain::services::reference_frames::terrain_lat_lon_to_body_fixed;
+        use crate::domain::services::terrain_collision::radar_altitude_m;
+        const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+        let source = EarthTerrainSource::new();
+        let tiles = source
+            .elevation_tile_source()
+            .expect("default Earth source must expose composed payloads");
+        let terrain_latitude_deg =
+            crate::domain::services::regional_dem::geodetic_to_terrain_latitude_deg(-8.0);
+        assert!(tiles
+            .ensure_covering_tile_loaded(terrain_latitude_deg, 139.5)
+            .expect("the Papua payload must decode"));
+
+        let sea_m = source.sea_level_height_m(terrain_latitude_deg, 139.5);
+        let payload_m = tiles.height_m(terrain_latitude_deg, 139.5);
+        let composed_m = source.height_m(terrain_latitude_deg, 139.5);
+
+        // The EGM2008 undulation at the site, from the published 0.5 degree grid.
+        assert!(
+            (70.0..73.0).contains(&sea_m),
+            "unexpected EGM2008 undulation at the control point: {sea_m} m"
+        );
+        // Measured NASADEM is already ellipsoidal after the ingest adds the
+        // geoid once: 0.56 m orthometric, not -71 m or +143 m.
+        let payload_orthometric_m = payload_m - sea_m;
+        assert!(
+            (0.2..1.0).contains(&payload_orthometric_m),
+            "measured payload must be a low coastal plain: {payload_orthometric_m} m"
+        );
+        // The graded pad floor is 3 m above the same datum.
+        let composed_orthometric_m = composed_m - sea_m;
+        assert!(
+            (2.9..3.1).contains(&composed_orthometric_m),
+            "the platform floor must be 3 m over the same datum: {composed_orthometric_m} m"
+        );
+        assert_eq!(
+            source.surface_class(terrain_latitude_deg, 139.5),
+            SurfaceClass::Land
+        );
+        assert_eq!(
+            source.mesh_height_m(terrain_latitude_deg, 139.5, 12),
+            composed_m,
+            "the rendered mesh must share the collision height at the pad"
+        );
+
+        // Collision consumes the same ellipsoidal height: a point on the composed
+        // surface has zero radar altitude.
+        let direction = terrain_lat_lon_to_body_fixed(terrain_latitude_deg, 139.5);
+        let at_surface = direction * (EARTH_RADIUS_M + composed_m);
+        assert!(
+            radar_altitude_m(&source, at_surface, EARTH_RADIUS_M).abs() < 1e-6,
+            "collision must use the one ellipsoidal height"
+        );
+    }
+
     #[test]
     fn procedural_detail_is_deterministic_seam_safe_and_varied_nearby() {
         let detail = ProceduralDetailSource::new(99);

@@ -657,7 +657,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `85d4d88`; the test plus the two frames.
 
 ### TD-08 — Vertical datum audit
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Prove the geoid/ellipsoid correction is applied exactly once
   across DEM, imagery, water and collision.
@@ -667,12 +667,40 @@ timings. This phase exists because an unverifiable change is not a change.
   `dem_terrain_source.rs`, `terrain_source/mod.rs`.
 - **Acceptance:** a known coastal control point reports the same height (within
   the documented tolerance) from every consumer.
-- **Tests:** control-point test with published geoid undulation.
-- **Visual evidence:** not applicable.
+- **Specification:** `terrain-source` gained "The sea datum is applied exactly
+  once" (change `2026-11-07-audit-the-vertical-datum`).
+- **Audit result:** one correction, one subtraction, no production code change.
+  The global ETOPO 2022 package is stored ellipsoidal; the regional NASADEM
+  ingest adds the EGM2008 undulation once in
+  `RegionalDem::height_ellipsoid_m`; `DemTerrainSource::height_m` returns the
+  ellipsoidal height, `sea_level_height_m` returns the undulation, and
+  `surface_class` compares them. Collision and radar altitude are purely
+  geometric (`r − (R + height)`), `surface_maps`/`terrain_overview` subtract the
+  datum once, and the water cap classifies at the datum (TD-12). Imagery is a
+  2D albedo channel and carries no height, so it is out of scope by
+  construction.
+- **Tests:** `geoid_is_applied_once_across_source_mesh_and_collision` uses a
+  synthetic uniform 5 m geoid with 6 m (land, 1 m orthometric) and 3 m (ocean,
+  2 m below datum) DEMs and asserts source height, mesh height, classification,
+  lake depth, the orthometric difference and zero radar altitude at the surface.
+  `papua_control_point_reports_one_datum_across_consumers` records the real
+  control point:
+  * EGM2008 undulation at the site ≈ **71.42 m**;
+  * measured NASADEM payload **71.978 m** ellipsoidal = **0.56 m** orthometric;
+  * graded pad **74.42 m** = **3.00 m** above the same datum;
+  * classification `Land`, mesh height equals collision height, and a point on
+    the composed surface has zero radar altitude.
+  A second correction would move these by 71 m; the tolerances are 0.8 m and
+  0.2 m.
+- **Visual evidence:** not applicable (the audit is numeric).
 - **Performance:** none.
-- **Scientific validation:** EGM2008 undulation documented with source and version.
-- **Risks:** a second correction hidden in a package producer.
-- **Completion evidence:** pending.
+- **Scientific validation:** EGM2008 is the published 0.5° grid documented with
+  its SHA-256 in `docs/datasets/open_science_data_v1.md`; NASADEM's EGM96
+  orthometric heights are converted with it once, and the EGM96→EGM2008
+  difference is below NASADEM's vertical accuracy.
+- **Risks recorded:** a future payload producer must not add the geoid again;
+  the requirement and the synthetic test now catch that.
+- **Completion evidence:** `PLACEHOLDER`; the two tests.
 
 ### TD-09 — Cube-face and antimeridian continuity tests
 - **Status:** PLANNED

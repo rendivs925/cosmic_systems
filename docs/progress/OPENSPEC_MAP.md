@@ -22,7 +22,7 @@ over with a new duplicate spec.
 | TD-05 albedo blocks | `earth-imagery-streaming`, `terrain-rendering`, `planetary-terrain-material` | — | cause not yet attributed, so no single requirement owns it |
 | TD-06 fabricated coastline | `terrain-source` | — | added and archived `2026-11-05-guard-coastal-synthetic-detail`: land-only sea-datum guard, continuous underwater fade, worst-case non-crossing |
 | TD-07 regional DEM | `elevation-tile-payload`, `terrain-source` | — | no delta; the existing resident-fallback requirement already states in-coverage precedence, and `papua_site_elevation_comes_from_the_regional_payload` now pins the Papua site |
-| TD-08 vertical datum | `terrain-source` | — | |
+| TD-08 vertical datum | `terrain-source` | — | change `2026-11-07-audit-the-vertical-datum`: exactly-once sea-datum correction, synthetic and Papua control-point tests |
 | TD-09 seam continuity | `terrain-source`, `terrain-lod` | — | |
 | TD-10 pad anchor vs payload and cache | `elevation-tile-payload`, `terrain-source`, `determinism-regression` | — | payload outranks erosion for the sample; erosion bakes from the immutable global DEM so load order and the disk cache cannot select a different field |
 | TD-11 coastal datum clearance | `terrain-source`, `planetary-water` | — | platform floor at sea + 3 m; the ascent fixture pins its launch altitude, so baselines are unaffected |

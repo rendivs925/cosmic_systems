@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-07. Last code checkpoint: `85d4d88`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Twenty-eight of forty-five roadmap tasks, each with implementation + tests + a
+Twenty-nine of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -96,6 +96,7 @@ named frame or a named measurement:
 | RK-02 plume state | intensity is the burned mass-flow fraction, length follows the pressure expansion, direction follows the gimbaled thrust axis; same flow fraction at sea level 6.6 m / 96.8 kPa and 40.4 km 20.7 m / 274 Pa; 33 effects, 0.022 ms update; `2026-11-07-rk02-*` |
 | TD-12 near-datum water | the Papua strip is measured NASADEM (4.3 cm below the datum; the eroded base is +4 m above it); the ocean cap had used its 0.5 m depth-test offset as a flood threshold and submerged measured land at 0.28–0.46 m; classification now follows the datum, offset 0.05 m, pale water share 8.19 % → 3.27 %; `2026-11-07-td12-papua-after.jpg` |
 | TD-07 regional DEM at Papua | site resolves at payload level 12 (64×64), measures 71.978 m against the bake probe, global fallback 77.592 m (5.61 m refinement); 3 km and 300 km frames; `2026-11-07-td07-*` |
+| TD-08 vertical datum | one ellipsoidal height, one EGM2008 datum, one subtraction; synthetic 5 m geoid test across source/mesh/class/water/collision; Papua control point 0.56 m orthometric plain, 3.00 m pad; `geoid_is_applied_once_across_source_mesh_and_collision`, `papua_control_point_reports_one_datum_across_consumers` |
 | VL-02 OpenSpec strict | 42/42 |
 
 Every implemented task is now verified. The two remaining blocked items are
@@ -110,15 +111,15 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TD-08 — vertical datum audit.** Prove the geoid/ellipsoid correction is
-applied exactly once across the DEM, imagery, water and collision, so a point is
-never shifted by the ~71 m EGM2008 undulation twice or not at all.
+**TD-09 — cube-face and antimeridian continuity.** Sample the same great-circle
+point from both sides of every cube-face seam, the antimeridian and the polar
+clamp, and prove the terrain and imagery agree within tolerance.
 
-TD-07 is closed. The Papua site resolves at the finest declared payload level
-(12, 64×64), measures 71.978 m against the package bake's verified probe, and
-differs by 5.61 m from the global fallback at the same point. TD-12 is also
-closed: the water was measured NASADEM, not eroded. The remaining audits
-(TD-08, TD-09, TM-01/02/03, TG-01/02) and RD-01 follow.
+TD-08 is closed: one ellipsoidal frame, one EGM2008 datum, one subtraction. The
+Papua control point is a 0.56 m orthometric plain under a 3.00 m graded pad, and
+a synthetic 5 m geoid test catches a second correction across the source, mesh,
+classification and collision. The remaining audits (TD-09, TM-01/02/03,
+TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -126,7 +127,7 @@ closed: the water was measured NASADEM, not eroded. The remaining audits
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1168 passed, 2 ignored
+cargo test --features dem --lib          # 1170 passed, 2 ignored
 cargo test --no-default-features --lib   # 1124 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
@@ -150,9 +151,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,168 domain and adapter
+The simulator runs and its physics is regression-locked; 1,170 domain and adapter
 tests pass (1,124 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified twenty-eight of its forty-five tasks.
+realism programme has verified twenty-nine of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface

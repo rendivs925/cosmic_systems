@@ -1170,3 +1170,39 @@ elevation-data artefact, and it belongs to a streaming/LOD audit rather than
 TD-07.
 
 No production code changed; the new test and the two frames are the evidence.
+
+## 2026-11-07 — Vertical datum audit (TD-08)
+
+Three height frames exist and must not be mixed: ellipsoidal `h` (the runtime
+terrain frame), the EGM2008 geoid undulation `N` (mean sea level above the
+ellipsoid), and orthometric `H = h − N`. The audit found one correction and one
+subtraction; no production code changed.
+
+**Producers.** The global ETOPO 2022 package is stored ellipsoidal. Regional
+NASADEM is EGM96 orthometric and the ingest adds the EGM2008 undulation once in
+`RegionalDem::height_ellipsoid_m`, converting geodetic latitude at the same
+point.
+
+**Consumers.** `DemTerrainSource::height_m` returns `h`; `sea_level_height_m`
+returns `N`; `surface_class` compares them. `surface_maps` and
+`terrain_overview` subtract `N` once. Collision and radar altitude are purely
+geometric (`r − (R + h)`), so they are datum-independent and cannot
+double-correct. The water cap classifies at the datum, pinned by TD-12. Imagery
+is a 2D albedo channel with no height.
+
+**Proof 1 — synthetic.** A uniform 5 m geoid over a 6 m ellipsoidal DEM gives
+1 m orthometric land; a 3 m DEM gives 2 m below sea. The test asserts source
+height, mesh height, classification, lake depth, the orthometric difference and
+zero radar altitude at the surface. A second subtraction flips the
+classification; a second addition moves the difference by 5 m.
+
+**Proof 2 — real control point (Papua).** The EGM2008 undulation at the site is
+about 71.42 m. The measured NASADEM payload is 71.978 m ellipsoidal, i.e.
+0.56 m orthometric; the graded pad is 74.42 m, i.e. 3.00 m above the same datum.
+The source calls it land, the mesh equals the collision height at the pad, and a
+point on the composed surface has zero radar altitude. A double correction would
+move these by 71 m; the test tolerances are 0.8 m and 0.2 m.
+
+**Recorded rule.** `terrain-source` now states that the sea datum is applied
+exactly once, and that a producer receiving orthometric data converts at ingest
+while runtime consumers do not repeat the correction.

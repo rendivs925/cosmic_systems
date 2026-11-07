@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `85d4d88` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 28 | 62.2 % |
+| VERIFIED | 29 | 64.4 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 15 | 33.3 % |
+| PLANNED | 14 | 31.1 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -23,7 +23,7 @@ evidenced", not "the simulator does not work".
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
-| P1 Data and terrain correctness | 10 / 12 | 83 % | active | TD-07 and TD-12 closed; TD-08 and TD-09 remain |
+| P1 Data and terrain correctness | 11 / 12 | 92 % | active | TD-08 closed; TD-09 remains |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
 | P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
@@ -115,18 +115,18 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 34 |
+| archived changes | 35 |
 | strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — TD-08, vertical datum audit.** Prove the geoid/ellipsoid
-correction is applied exactly once across the DEM, imagery, water and collision,
-so a point is never shifted by the ~71 m EGM2008 undulation twice or not at all.
+**Next task — TD-09, cube-face and antimeridian continuity.** Sample the same
+great-circle point from both sides of every cube-face seam, the antimeridian and
+the polar clamp, and prove the terrain and imagery agree within tolerance.
 
-TD-07 is closed: the Papua site resolves at the finest declared payload level
-(12, 64×64), measures 71.978 m against the bake's verified probe, and differs by
-5.61 m from the global fallback at the same point. TD-12 is also closed (the
-water was measured, not eroded). The remaining audits (TD-08, TD-09,
-TM-01/02/03, TG-01/02) and RD-01 follow.
+TD-08 is closed: one ellipsoidal frame, one EGM2008 datum, one subtraction. The
+Papua control point is a 0.56 m orthometric plain under a 3.00 m graded pad, and
+the synthetic 5 m geoid test catches a second correction across the source,
+mesh, classification and collision. The remaining audits (TD-09, TM-01/02/03,
+TG-01/02) and RD-01 follow.

@@ -1146,6 +1146,83 @@ mod tests {
         assert_eq!(below_sea_level.surface_class(0.0, 0.0), SurfaceClass::Ocean);
     }
 
+    /// TD-08: the geoid is a single sea-level offset. Every consumer must
+    /// report the same ellipsoidal height and derive orthometric height by one
+    /// subtraction. A double correction here would be 5 m, not a rounding
+    /// difference.
+    #[test]
+    fn geoid_is_applied_once_across_source_mesh_and_collision() {
+        let dem_spec = GlobalRasterSpec {
+            columns: 4,
+            rows: 2,
+            longitude_origin_deg: -135.0,
+            longitude_step_deg: 90.0,
+            longitude_period_columns: 4,
+            latitude_origin_deg: 45.0,
+            latitude_step_deg: 90.0,
+            height_scale_m: 1.0,
+        };
+        let geoid_spec = GlobalRasterSpec {
+            height_scale_m: 0.01,
+            ..dem_spec
+        };
+        let raster = |value: i16| -> Vec<u8> {
+            std::iter::repeat_n(value, 8)
+                .flat_map(i16::to_le_bytes)
+                .collect()
+        };
+
+        let land_dem = CubeSphereDem::from_global_raster_raw(&raster(6), dem_spec, 2).unwrap();
+        let geoid = GeoidModel::from_raw(raster(500), geoid_spec).unwrap();
+        let land = DemTerrainSource::from_dem_with_geoid(land_dem, Arc::new(geoid));
+
+        // Ellipsoidal 6 m, geoid 5 m: 1 m orthometric above sea.
+        assert_eq!(land.height_m(0.0, 0.0), 6.0);
+        assert_eq!(land.sea_level_height_m(0.0, 0.0), 5.0);
+        assert_eq!(land.mesh_height_m(0.0, 0.0, 8), 6.0);
+        assert_eq!(land.surface_class(0.0, 0.0), SurfaceClass::Land);
+        assert_eq!(land.lake_depth_m(0.0, 0.0), 0.0);
+        assert_eq!(
+            land.height_m(0.0, 0.0) - land.sea_level_height_m(0.0, 0.0),
+            1.0
+        );
+
+        const RADIUS_M: f64 = 6_371_000.0;
+        let direction = crate::domain::math::DVec3::new(0.0, 0.0, -1.0);
+        let at_surface = direction * (RADIUS_M + land.height_m(0.0, 0.0));
+        assert!(
+            crate::domain::services::terrain_collision::radar_altitude_m(
+                &land, at_surface, RADIUS_M
+            )
+            .abs()
+                < 1e-9,
+            "collision must consume the same ellipsoidal height"
+        );
+
+        // Ellipsoidal 3 m, geoid 5 m: 2 m below sea. A second subtraction in
+        // classification would still say ocean, but a second *addition* to the
+        // ellipsoidal height would say land; pin the sign.
+        let sea_dem = CubeSphereDem::from_global_raster_raw(&raster(3), dem_spec, 2).unwrap();
+        let sea_geoid = GeoidModel::from_raw(raster(500), geoid_spec).unwrap();
+        let sea = DemTerrainSource::from_dem_with_geoid(sea_dem, Arc::new(sea_geoid));
+        assert_eq!(sea.height_m(0.0, 0.0), 3.0);
+        assert_eq!(sea.surface_class(0.0, 0.0), SurfaceClass::Ocean);
+        assert_eq!(
+            sea.height_m(0.0, 0.0) - sea.sea_level_height_m(0.0, 0.0),
+            -2.0
+        );
+        let below_surface = direction * (RADIUS_M + sea.height_m(0.0, 0.0));
+        assert!(
+            crate::domain::services::terrain_collision::radar_altitude_m(
+                &sea,
+                below_surface,
+                RADIUS_M
+            )
+            .abs()
+                < 1e-9
+        );
+    }
+
     #[test]
     fn global_raster_conversion_reuses_the_shared_sampler() {
         let raw = [
