@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-07.
-Last code checkpoint: `bbba8ef` (2026-11-07).
+Last code checkpoint: `PLACEHOLDER` (2026-11-07).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 30 | 66.7 % |
+| VERIFIED | 31 | 68.9 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 13 | 28.9 % |
+| PLANNED | 12 | 26.7 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -25,7 +25,7 @@ evidenced", not "the simulator does not work".
 | P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 1 / 4 | 25 % | active | facility hardware and trench not audited |
-| P3 Terrain materials | 1 / 4 | 25 % | active | TM-04 closed; TM-01, TM-02 and TM-03 remain |
+| P3 Terrain materials | 2 / 4 | 50 % | active | TM-01 and TM-04 closed; TM-02 and TM-03 remain |
 | P4 Vegetation | 0 / 3 | 0 % | planned | audit not started |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
@@ -115,19 +115,17 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 2 — `spaceflight-game-mvp` (5/37 tasks), `stabilize-far-field-tree-placement` (tasks complete, not archived) |
-| archived changes | 36 |
+| archived changes | 37 |
 | strict validation | 42/42 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — TM-01, material classification under grading.** Levelling a pad
-also flattens the slope-derived material weights, so the graded footprint can
-read as a different surface from the land around it. TM-01 makes the blend
-continuous with the surrounding noise band.
+**Next task — TM-02, geometric detail band at distance.** The bounded detail
+octave fades with LOD; TM-02 is the audit of that band, so distant terrain does
+not flatten abruptly or keep sub-pixel detail that aliases.
 
-TD-09 is closed: all twelve adjacent cube-face pairs share their edge samples
-exactly, the antimeridian agrees to millimetres at a 0.1 m separation, and the
-poles collapse to one sample. With TD-07/TD-08/TD-12, phase P1 is complete. The
-remaining material and vegetation audits (TM-01/02/03, TG-01/02) and RD-01
-follow.
+TM-01 is closed: surface classification now samples the natural surface, so a
+graded pad keeps the hillside's material while geometry, collision and elevation
+bands follow the surface actually shown. The remaining material and vegetation
+audits (TM-02/03, TG-01/02) and RD-01 follow.

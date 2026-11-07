@@ -102,6 +102,18 @@ impl Default for TerrainSurfaceSample {
 pub trait TerrainSource: Send + Sync + Debug {
     fn height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64;
 
+    /// Height used to classify *appearance* (surface material, vegetation
+    /// suitability) rather than geometry.
+    ///
+    /// A prepared launch platform is graded flat, but that is a construction,
+    /// not a change of the surrounding landform. Classification therefore reads
+    /// the natural surface so the pad does not become a flat-material disc
+    /// (TM-01). Geometry, collision, radar altitude and orbit prediction must use
+    /// [`Self::height_m`], never this.
+    fn appearance_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.height_m(latitude_deg, longitude_deg)
+    }
+
     /// Conservative elevation interval for this source in meters above the
     /// body's mean radius. Streaming uses it for culling and LOD; collision and
     /// mesh sampling remain authoritative through [`Self::height_m`].

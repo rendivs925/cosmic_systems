@@ -312,6 +312,10 @@ impl TerrainSource for LayeredTerrainSource {
         )
     }
 
+    fn appearance_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
+        self.ungraded_height_m(latitude_deg, longitude_deg)
+    }
+
     fn elevation_bounds_m(&self) -> ElevationBounds {
         LayeredTerrainSource::elevation_bounds_m(self)
     }
@@ -485,6 +489,97 @@ mod tests {
             None,
         )
         .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, 6_371_000.0, 90.0, 320.0)])
+    }
+
+    /// TM-01: a graded pad is flat *geometry*, not a new landform. Surface
+    /// classification must keep reading the natural slope, or levelling turns
+    /// the footprint into a differently-classified disc.
+    #[test]
+    fn grading_does_not_reclassify_the_surface_material() {
+        use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance};
+
+        let source = graded_source();
+        let latitude_deg = 0.0008; // ~89 m north: inside the 90 m flat radius
+        assert!(
+            source.height_m(latitude_deg, 0.0).abs() < 1e-6,
+            "the pad must stay level for geometry and collision"
+        );
+        let natural_m = SlopedBase.height_m(latitude_deg, 0.0);
+        assert!(
+            (source.appearance_height_m(latitude_deg, 0.0) - natural_m).abs() < 1e-9,
+            "classification must see the natural surface"
+        );
+
+        let pad_slope_deg = slope_deg_at(&source, latitude_deg, 0.0);
+        let natural_slope_deg = slope_deg_at(&SlopedBase, latitude_deg, 0.0);
+        assert!(
+            (pad_slope_deg - natural_slope_deg).abs() < 1e-6,
+            "the grade must not change the classified slope: {pad_slope_deg} vs {natural_slope_deg}"
+        );
+
+        // The slope term of the appearance law is unchanged. Elevation bands
+        // (wet shore, snow) still follow the graded surface actually shown, so
+        // the comparison holds elevation fixed.
+        let pad_material = surface_appearance(natural_m, 0.5, 0.5, pad_slope_deg);
+        let natural_material = surface_appearance(natural_m, 0.5, 0.5, natural_slope_deg);
+        assert!(
+            (pad_material.roughness - natural_material.roughness).abs() < 1e-6,
+            "the graded footprint must not read as a different material"
+        );
+        assert_eq!(pad_material.albedo, natural_material.albedo);
+    }
+
+    /// A 45 degree synthetic hillside: the rock blend is materially different
+    /// from flat ground, so levelling it would otherwise recolour the pad.
+    #[derive(Debug)]
+    struct SteepBase;
+    impl TerrainSource for SteepBase {
+        fn height_m(&self, latitude_deg: f64, _: f64) -> f64 {
+            latitude_deg * 111_320.0
+        }
+        fn elevation_bounds_m(&self) -> ElevationBounds {
+            ElevationBounds::new(-10_000_000.0, 10_000_000.0)
+        }
+    }
+
+    #[test]
+    fn a_steep_graded_pad_keeps_the_hillside_material() {
+        use crate::domain::services::terrain_source::{slope_deg_at, surface_appearance};
+
+        let source = LayeredTerrainSource::new(
+            TerrainElevationLayer::new(
+                Arc::new(SteepBase),
+                ElevationBounds::new(-10_000_000.0, 10_000_000.0),
+            ),
+            None,
+            None,
+        )
+        .with_graded_sites(vec![PadFlatZone::new(0.0, 0.0, 6_371_000.0, 90.0, 320.0)]);
+
+        let latitude_deg = 0.0008;
+        let graded_slope_deg = 0.0; // what the flattened geometry would classify as
+        let classified_slope_deg = slope_deg_at(&source, latitude_deg, 0.0);
+        assert!(
+            (classified_slope_deg - 45.0).abs() < 1.0,
+            "classification must keep the hillside slope, got {classified_slope_deg}"
+        );
+
+        let elevation_m = source.height_m(latitude_deg, 0.0);
+        let pad = surface_appearance(elevation_m, 0.5, 0.3, classified_slope_deg);
+        let flattened = surface_appearance(elevation_m, 0.5, 0.3, graded_slope_deg);
+        assert_ne!(
+            pad.albedo, flattened.albedo,
+            "the control must show that a flat classification would recolour the pad"
+        );
+
+        let natural = surface_appearance(
+            elevation_m,
+            0.5,
+            0.3,
+            slope_deg_at(&SteepBase, latitude_deg, 0.0),
+        );
+        assert_eq!(pad.albedo, natural.albedo);
+        assert!((pad.roughness - natural.roughness).abs() < 1e-6);
     }
 
     /// The pad footprint must be level in the composed surface, which is what

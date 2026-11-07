@@ -29,7 +29,7 @@ over with a new duplicate spec.
 | TD-12 near-datum base water | `terrain-source`, `terrain-erosion`, `terrain-rendering` | — | change `2026-11-07-classify-water-at-the-sea-datum`: water is measured NASADEM (4.3 cm below the datum), erosion is +4 m above it; the cap now classifies at the datum and keeps the 0.05 m offset for depth stability only |
 | LF-01 footprint | `launch-site-presentation` | — | |
 | LF-02…04 facility | `launch-site-presentation` | — | |
-| TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | |
+| TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | change `2026-11-07-stabilize-material-classification-under-grading`: appearance-only natural height, graded geometry unchanged |
 | TM-02 distance detail | `terrain-lod`, `terrain-rendering` | — | |
 | TM-03 land/sea reconciliation | `earth-imagery-streaming`, `terrain-source` | — | |
 | TM-04 near-ground albedo tone | `planetary-terrain-material`, `terrain-material-splat`, `scientific-lighting` | — | tone continuity between the measured overview and the layered material |

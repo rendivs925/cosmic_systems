@@ -1234,3 +1234,29 @@ pin the equirectangular path; no new code was needed.
 No visual evidence is claimed: a UV/tile-identity frame shows the patch layout,
 not sampled height equality, and the height diagnostic has no sub-metre
 resolution across a face seam. The acceptance is numeric.
+
+## 2026-11-07 — Material classification under grading (TM-01)
+
+The site grade is correct for geometry: the composed height is pulled to the
+anchor inside the flat radius and restored over the blend, so mesh, collision,
+radar altitude and physics all agree on a level pad. The appearance law also read
+the slope, and the slope came from the graded height, so a steep footprint
+classified as flat ground. LF-01 had reduced the footprint to 110 m to make the
+resulting disc less visible; TM-01 fixes the cause.
+
+`TerrainSource` gained `appearance_height_m`, documented as classification-only
+and defaulting to `height_m`. `LayeredTerrainSource` overrides it with its
+ungraded composition. `slope_deg_at` and the per-vertex surface map derive the
+slope from that height; elevation bands (shoreline, snow) still follow the graded
+surface actually shown, and collision/physics never see the new method.
+
+Two tests pin it. The gentle synthetic grade checks that geometry is level while
+the classified slope and the slope term of the albedo/roughness are unchanged.
+The steep test uses a 45° hillside: the graded pad keeps the rock albedo, and a
+control evaluates the flattened slope to show the material difference the old
+path produced.
+
+Vandenberg is the most rugged predefined site; its TD-02 ground frame is repeated
+after the change and shows the apron continuous with the surrounding scrub. The
+site is gentle, so the steep synthetic test is the regression that matters. Cost
+is one extra appearance grid per surface map, generated off the fixed step.

@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-07. Last code checkpoint: `bbba8ef`.
+Snapshot: 2026-11-07. Last code checkpoint: `PLACEHOLDER`.
 
 ---
 
@@ -64,7 +64,7 @@ it.
 
 ## What has been verified?
 
-Thirty of forty-five roadmap tasks, each with implementation + tests + a
+Thirty-one of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -98,6 +98,7 @@ named frame or a named measurement:
 | TD-07 regional DEM at Papua | site resolves at payload level 12 (64×64), measures 71.978 m against the bake probe, global fallback 77.592 m (5.61 m refinement); 3 km and 300 km frames; `2026-11-07-td07-*` |
 | TD-08 vertical datum | one ellipsoidal height, one EGM2008 datum, one subtraction; synthetic 5 m geoid test across source/mesh/class/water/collision; Papua control point 0.56 m orthometric plain, 3.00 m pad; `geoid_is_applied_once_across_source_mesh_and_collision`, `papua_control_point_reports_one_datum_across_consumers` |
 | TD-09 seam continuity | twelve cube-face pairs agree exactly (0 m); antimeridian step 4.8 mm at a 0.1 m separation; polar spread 1e-12 m; imagery wrap and pole tests already present |
+| TM-01 material under grading | classification samples the natural surface via `appearance_height_m`; geometry stays graded; gentle and 45° synthetic tests, the latter keeping rock instead of a flat disc; `2026-11-07-tm01-vandenberg-pad.jpg` |
 | VL-02 OpenSpec strict | 42/42 |
 
 Every implemented task is now verified. The two remaining blocked items are
@@ -112,16 +113,14 @@ environmental; the rest are planned work.
 
 ## What should be built next?
 
-**TM-01 — material classification under grading.** Levelling a pad also flattens
-the slope-derived material weights, so the graded footprint can read as a
-different surface from the land around it. TM-01 makes the blend continuous with
-the surrounding noise band.
+**TM-02 — geometric detail band at distance.** The bounded detail octave fades
+with LOD; TM-02 audits that band so distant terrain does not flatten abruptly or
+keep sub-pixel detail that aliases.
 
-TD-09 is closed: all twelve adjacent cube-face pairs share their edge samples
-exactly, the antimeridian agrees to millimetres at a 0.1 m separation, and the
-poles collapse to one sample. With TD-07, TD-08 and TD-12, phase P1 is complete.
-The remaining material and vegetation audits (TM-01/02/03, TG-01/02) and RD-01
-follow.
+TM-01 is closed: surface classification now samples the natural surface, so a
+graded pad keeps the hillside's material while geometry, collision and elevation
+bands follow the surface actually shown. The remaining material and vegetation
+audits (TM-02/03, TG-01/02) and RD-01 follow.
 
 ## How do we know it works?
 
@@ -129,8 +128,8 @@ follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1172 passed, 2 ignored
-cargo test --no-default-features --lib   # 1124 passed, 2 ignored
+cargo test --features dem --lib          # 1174 passed, 2 ignored
+cargo test --no-default-features --lib   # 1126 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -153,9 +152,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,172 domain and adapter
-tests pass (1,124 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified thirty of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,174 domain and adapter
+tests pass (1,126 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified thirty-one of its forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface

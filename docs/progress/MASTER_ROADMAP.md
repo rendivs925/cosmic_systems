@@ -819,7 +819,7 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P3 — Terrain materials
 
 ### TM-01 — Material classification stable under grading
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Stop levelling ground from reclassifying its surface material over
   the whole graded footprint.
@@ -829,12 +829,36 @@ timings. This phase exists because an unverifiable change is not a change.
   `catalog.rs`, `assets/shaders/terrain_surface.wgsl`.
 - **Acceptance:** the material blend across the graded area is continuous with the
   surrounding landscape within the normal noise band.
-- **Tests:** slope-classification invariant with a synthetic grade.
-- **Visual evidence:** ground frame with a larger synthetic footprint.
-- **Performance:** none.
-- **Scientific validation:** classification must follow the surface being shown.
-- **Risks:** freezing classification could hide real slope changes.
-- **Completion evidence:** pending; LF-01 shrank the footprint to mitigate.
+- **Specification:** `planetary-terrain-material` gained "Surface classification
+  ignores artificial site grading" (change
+  `2026-11-07-stabilize-material-classification-under-grading`).
+- **Implementation:** the site grade is correct for geometry, collision, radar
+  altitude and the mesh, but the appearance law also read the graded slope, so a
+  steep footprint lost its rock classification. `TerrainSource` gained
+  `appearance_height_m` (default `height_m`) for classification only;
+  `LayeredTerrainSource` returns its ungraded composition, `slope_deg_at` and the
+  per-vertex surface map sample it, and elevation bands (shoreline, snow) keep
+  following the graded surface actually shown. Collision and physics keep using
+  `height_m`.
+- **Tests:** `grading_does_not_reclassify_the_surface_material` (gentle grade:
+  geometry level, classified slope unchanged, slope term of albedo/roughness
+  identical) and `a_steep_graded_pad_keeps_the_hillside_material` (45° synthetic
+  hillside: the pad keeps the rock albedo, and the flat classification control
+  demonstrably differs).
+- **Visual evidence:** `2026-11-07-tm01-vandenberg-pad.jpg`, the most rugged
+  predefined site at its TD-02 instant (`2000-01-01T20:20:17Z`, 0 s, 240 frames).
+  The pad and the surrounding grass are continuous; this site is gentle, so the
+  steep synthetic test is the regression that matters.
+- **Performance:** one extra appearance grid per surface map, generated off the
+  fixed step on worker tasks; it is the same composition without the final grade
+  blend.
+- **Scientific validation:** classification must follow the surface being shown
+  for elevation bands, but an artificial construction grade is not a landform, so
+  slope classification reads the natural surface. The boundary is documented on
+  the trait: `appearance_height_m` must never drive collision or physics.
+- **Risks recorded:** two height notions now exist; the name and trait doc keep
+  them apart, and only the layered source overrides the appearance path.
+- **Completion evidence:** `PLACEHOLDER`; two tests plus the ground frame.
 
 ### TM-02 — Geometric detail band at distance
 - **Status:** PLANNED

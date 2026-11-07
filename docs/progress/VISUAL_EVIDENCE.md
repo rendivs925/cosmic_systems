@@ -31,7 +31,7 @@ values and its linear-to-byte encoding are in
 | # | scene | state | frame | note |
 | --- | --- | --- | --- | --- |
 | 1 | prelaunch | CURRENT | `pad-110m-footprint`, `2026-11-06-rk01-prelaunch-axes` | pad and tower; the RK-01 frame adds the body tripod and the retained upper envelope |
-| 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed` | one graded pad per predefined site, all flush and dry |
+| 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed`, `2026-11-07-tm01-vandenberg-pad` | one graded pad per predefined site, all flush and dry; the TM-01 frame repeats Vandenberg after classification was decoupled from the grade |
 | 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*`, `2026-11-07-td12-papua-after`, `2026-11-07-td07-papua-3km` | 600 m nadir with the guard A/B, the TD-12 repeat, and the 3 km regional-DEM view |
 | 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
@@ -61,6 +61,7 @@ missing ones explainable.
 | `2026-11-01-terrain-600m.jpg` | `d89e7d6` | `-8.0,139.5,600` | 42 s | 220 | `3c7b470c5d3bceec` | coastal plain, water bodies, tree specks | relief and canopy visible (failing) |
 | `2026-11-07-td07-papua-3km.jpg` | `85d4d88` | `-8.0,139.5,3000` | 42 s | 220 | `ff12f642cee147e9` | regional NASADEM base at 3 km: continuous plain, no angular water polygons | measured relief, no synthetic polygons (passing) |
 | `2026-11-07-td07-papua-300km.jpg` | `85d4d88` | `-8.0,139.5,300000` | 42 s | 220 | `fcf403cac5198ff7` | regional base at 300 km: coast, offshore islands, inland water | coast and water bodies resolved (passing) |
+| `2026-11-07-tm01-vandenberg-pad.jpg` | `PLACEHOLDER` | default chase | 0 s | 240 | `cbfa209bb2858319` | Vandenberg pad after classification was decoupled from the site grade | pad material continuous with the hillside (passing) |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -377,6 +378,25 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Material classification under grading (`TM-01`, commit `PLACEHOLDER`)
+
+Vandenberg is the most rugged predefined site. The frame is the TD-02 ground view
+(`2000-01-01T20:20:17Z`, 0 s, 240 frames), repeated after the appearance path was
+decoupled from the site grade.
+
+| file | sha256 (first 16) | demonstrates |
+| --- | --- | --- |
+| `2026-11-07-tm01-vandenberg-pad.jpg` | `cbfa209bb2858319` | the pad apron and the surrounding grass/scrub are continuous; no material disc |
+
+The site is gentle enough that the pre-fix disc was already subtle, so this frame
+is a continuity check rather than a strong before/after. The regression is the
+steep synthetic test: a 45° hillside graded flat keeps its rock albedo, and a
+control shows that classifying the flattened slope would recolour the pad.
+
+**Recorded rule:** geometry, collision, radar altitude and elevation bands follow
+the graded surface; slope classification reads the natural surface through
+`appearance_height_m`, which must never drive physics.
 
 ### Launch-site grading per predefined site (`TD-02`, commit `c582708`)
 

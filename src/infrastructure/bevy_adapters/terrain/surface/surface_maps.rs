@@ -90,9 +90,11 @@ pub fn build_patch_surfaces(
     // Source samples remain worker-local. Their high-resolution normals provide
     // only residual detail relative to the already-generated terrain mesh.
     let mut h = vec![0.0f64; res * res];
+    let mut appearance_h = vec![0.0f64; res * res];
     let mut lat = vec![0.0f64; res * res];
     let mut lon = vec![0.0f64; res * res];
     let mut positions = vec![DVec3::ZERO; res * res];
+    let mut appearance_positions = vec![DVec3::ZERO; res * res];
     for j in 0..res {
         for i in 0..res {
             let u = u0 + (u1 - u0) * i as f64 / (res - 1) as f64;
@@ -104,6 +106,10 @@ pub fn build_patch_surfaces(
             lon[idx] = lo;
             h[idx] = source.height_m(la, lo);
             positions[idx] = dir * (radius_m + h[idx]);
+            // Appearance classification reads the natural surface: a graded
+            // pad is flat geometry, not a new landform (TM-01).
+            appearance_h[idx] = source.appearance_height_m(la, lo);
+            appearance_positions[idx] = dir * (radius_m + appearance_h[idx]);
         }
     }
 
@@ -118,13 +124,16 @@ pub fn build_patch_surfaces(
             let elevation_m = h[idx] - source.sea_level_height_m(la, lo);
             let moisture = source.moisture(la, lo);
             let zone = source.zone_lat(la);
-            let (source_tangent_u, source_tangent_v) = grid_tangents(&positions, res, i, j);
-            let source_normal =
-                outward_normal(source_tangent_u.cross(source_tangent_v), positions[idx]);
+            let (appearance_tangent_u, appearance_tangent_v) =
+                grid_tangents(&appearance_positions, res, i, j);
+            let source_normal = outward_normal(
+                appearance_tangent_u.cross(appearance_tangent_v),
+                appearance_positions[idx],
+            );
             let (mesh_tangent_u, mesh_tangent_v, mesh_normal) =
                 mesh_surface_frame(geometry, i, j, res);
             let source_slope_deg = source_normal
-                .dot(positions[idx].normalize())
+                .dot(appearance_positions[idx].normalize())
                 .clamp(-1.0, 1.0)
                 .acos()
                 .to_degrees();
