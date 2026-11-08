@@ -12,9 +12,9 @@
 //! in [`metrics`].
 
 use crate::domain::services::cube_sphere::{
-    build_patch_geometry_with_stitches, direction_to_lat_lon, patch_world_size_m,
+    build_patch_geometry_with_cutouts, direction_to_lat_lon, patch_world_size_m,
     select_quadtree_leaves, visible_leaves_for_cover, CameraProjection, PatchEdge, PatchGeometry,
-    QuadtreePatchState, QuadtreeSelectionConfig, TerrainPatch,
+    QuadtreePatchState, QuadtreeSelectionConfig, TerrainMeshCutout, TerrainPatch,
 };
 use crate::domain::services::elevation_pyramid::{
     ElevationPyramidError, ElevationTile, TileElevationSource,
@@ -39,6 +39,7 @@ use crate::infrastructure::bevy_adapters::performance_components::PerformanceMet
 use crate::infrastructure::bevy_adapters::rocket::components::{
     PrimaryVehicle, RocketMissionState, RocketPhysicsState, RocketPlanetBinding,
 };
+use crate::infrastructure::bevy_adapters::terrain::cutouts::TerrainMeshCutouts;
 use crate::infrastructure::bevy_adapters::terrain::imagery::{
     ImageryMetrics, TerrainImageryResource,
 };
@@ -447,6 +448,8 @@ struct TerrainPatchBakeRequest {
     surface_fields: Option<Arc<SurfaceFieldsSet>>,
     /// Present when volumetric geology applies to this patch.
     volumetric: Option<VolumetricBakeRequest>,
+    /// Body-fixed caps whose terrain mesh a site structure draws instead.
+    cutouts: Vec<TerrainMeshCutout>,
 }
 
 /// The bounded parameters for one Module 3 rock shell bake.
@@ -472,6 +475,7 @@ impl TerrainPatchBakeRequest {
                 self.resolution,
                 self.skirt_depth_m,
                 &self.stitched_edges,
+                &self.cutouts,
             );
             let surface = prepare_patch_surface(
                 self.source.as_ref(),
@@ -648,6 +652,7 @@ pub(crate) fn stream_terrain_patches(
     performance_config: Res<PerformanceMetricsConfig>,
     mut terrain_performance: ResMut<TerrainPerformanceTelemetry>,
     imagery: Res<TerrainImageryResource>,
+    cutouts: Res<TerrainMeshCutouts>,
 ) {
     let instrumentation_enabled = performance_config.instrumentation_enabled();
     terrain_performance.begin_frame(instrumentation_enabled);
@@ -1000,6 +1005,7 @@ pub(crate) fn stream_terrain_patches(
     let land_cover = streaming.land_cover.clone();
     let soil = streaming.soil.clone();
     let surface_fields = streaming.surface_fields.clone();
+    let cutouts = cutouts.cutouts().to_vec();
     for patch in batch {
         let stitch_edges = stitch_edges_for(patch, &selection.target_leaves);
         streaming.begin_bake(
@@ -1014,6 +1020,7 @@ pub(crate) fn stream_terrain_patches(
                 soil: soil.clone(),
                 surface_fields: surface_fields.clone(),
                 volumetric: volumetric_bake_for(patch, radius_m, &volumetric_settings),
+                cutouts: cutouts.clone(),
             },
             task_pool,
         );
@@ -1223,16 +1230,18 @@ fn build_streamed_patch_geometry(
     resolution: u32,
     skirt_depth_m: f64,
     stitched_edges: &[PatchEdge],
+    cutouts: &[TerrainMeshCutout],
 ) -> PatchGeometry {
     // Roots and refinements always use the same source field. Cold-start work
     // remains asynchronous and throttled by the caller.
-    build_patch_geometry_with_stitches(
+    build_patch_geometry_with_cutouts(
         patch,
         source,
         radius_m,
         resolution,
         skirt_depth_m,
         stitched_edges,
+        cutouts,
     )
 }
 
@@ -1649,6 +1658,7 @@ fn stale_cached_stitch_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::services::cube_sphere::build_patch_geometry_with_stitches;
     use crate::domain::services::cube_sphere::{face_uv_to_direction, CubeFace};
     #[cfg(feature = "dem")]
     use crate::domain::services::terrain_source::EarthTerrainSource;
@@ -1741,9 +1751,10 @@ mod tests {
         let root = TerrainPatch::for_direction(DVec3::Z, 0);
         let child = TerrainPatch::for_direction(DVec3::Z, 1);
 
-        let root_geometry = build_streamed_patch_geometry(&root, &source, 6_371_000.0, 3, 5.0, &[]);
+        let root_geometry =
+            build_streamed_patch_geometry(&root, &source, 6_371_000.0, 3, 5.0, &[], &[]);
         let child_geometry =
-            build_streamed_patch_geometry(&child, &source, 6_371_000.0, 3, 5.0, &[]);
+            build_streamed_patch_geometry(&child, &source, 6_371_000.0, 3, 5.0, &[], &[]);
 
         assert!(root_geometry.positions.iter().take(9).all(|position| {
             (DVec3::from_array(*position).length() - 6_371_125.0).abs() < 1e-6

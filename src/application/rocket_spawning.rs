@@ -18,7 +18,8 @@ use crate::domain::services::rocket_propulsion::{
 };
 use crate::domain::services::terrain_collision::sample_surface;
 use crate::domain::services::terrain_source::{
-    TerrainSource, LAUNCH_TRENCH_DEPTH_M, LAUNCH_TRENCH_FAR_Z_M, LAUNCH_TRENCH_HALF_WIDTH_M,
+    TerrainSource, LAUNCH_HARDSTAND_CUTOUT_RADIUS_M, LAUNCH_HARDSTAND_HALF_EXTENT_M,
+    LAUNCH_TRENCH_DEPTH_M, LAUNCH_TRENCH_FAR_Z_M, LAUNCH_TRENCH_HALF_WIDTH_M,
     LAUNCH_TRENCH_NEAR_Z_M,
 };
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
@@ -30,6 +31,7 @@ use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
 use crate::infrastructure::bevy_adapters::rocket::components::*;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::FlightRecorder;
+use crate::infrastructure::bevy_adapters::terrain::cutouts::TerrainMeshCutouts;
 use crate::infrastructure::bevy_adapters::terrain::render::RenderOrigin;
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::math::DVec3;
@@ -353,6 +355,23 @@ fn spawn_procedural_launch_pad(
     rocket_height_m: f32,
     rocket_diameter_m: f32,
 ) {
+    // The hardstand covers the ground here, and its flame trench is below grade,
+    // so the terrain mesh must stop at the structure: a continuous terrain
+    // surface spans the opening and hides the trench. Registering the cutout
+    // here keeps it tied to the facility that fills it, and a site with no
+    // facility never loses its ground.
+    let mut cutouts = TerrainMeshCutouts::default();
+    if let Some(planet) = PlanetFactory::create_by_id(&anchor.planet_name) {
+        let radius_m = planet.radius_km as f64 * 1_000.0;
+        if radius_m > 0.0 {
+            cutouts.cover_once(
+                anchor.normal_body_fixed,
+                LAUNCH_HARDSTAND_CUTOUT_RADIUS_M / radius_m,
+            );
+        }
+    }
+    commands.insert_resource(cutouts);
+
     let steel = materials.add(StandardMaterial {
         base_color: Color::srgb(0.28, 0.31, 0.34),
         metallic: 0.35,
@@ -418,7 +437,12 @@ fn spawn_procedural_launch_pad(
         let trench_near_z_m = LAUNCH_TRENCH_NEAR_Z_M as f32;
         let trench_far_z_m = LAUNCH_TRENCH_FAR_Z_M as f32;
         let trench_depth_m = LAUNCH_TRENCH_DEPTH_M as f32;
-        let apron_half_span_m = 32.0;
+        // Slabs that meet a perpendicular frame overlap it by this much. Two
+        // coplanar slabs sharing an edge leave a sub-pixel crack under the top-left
+        // fill rule, and at the trench corner that crack looked straight through
+        // the ground.
+        let slab_overlap_m = 2.0_f32;
+        let apron_half_span_m = LAUNCH_HARDSTAND_HALF_EXTENT_M as f32;
         let deck_half_span_m = 18.0;
         for (name, centre_x_m, centre_z_m, size_x_m, size_z_m) in [
             (
@@ -439,14 +463,14 @@ fn spawn_procedural_launch_pad(
                 "LaunchPadApron",
                 0.0,
                 (-apron_half_span_m + trench_near_z_m) * 0.5,
-                2.0 * trench_half_width_m,
+                2.0 * trench_half_width_m + slab_overlap_m,
                 apron_half_span_m + trench_near_z_m,
             ),
             (
                 "LaunchPadApron",
                 0.0,
                 (apron_half_span_m + trench_far_z_m) * 0.5,
-                2.0 * trench_half_width_m,
+                2.0 * trench_half_width_m + slab_overlap_m,
                 apron_half_span_m - trench_far_z_m,
             ),
         ] {
@@ -488,7 +512,7 @@ fn spawn_procedural_launch_pad(
             &concrete,
             "LaunchPadDeck",
             Vec3::new(
-                2.0 * trench_half_width_m,
+                2.0 * trench_half_width_m + slab_overlap_m,
                 0.5,
                 deck_half_span_m + trench_near_z_m,
             ),
@@ -507,38 +531,45 @@ fn spawn_procedural_launch_pad(
             Vec3::new(2.0 * trench_half_width_m, 0.4, trench_length_m),
             Vec3::new(0.0, -trench_depth_m + 0.2, trench_centre_z_m),
         );
-        let wall_thickness_m = 0.4;
+        // The lining rim must clear the terrain grade. Its top face used to sit
+        // at exactly `y = 0`, the same height as the graded ground and the sea
+        // cap, so it z-fought and let slivers of grass and sky through the
+        // trench edge. It now meets the apron's top plane instead.
+        let pad_top_m = 0.05;
+        // Every rim part straddles the opening edge instead of abutting it, so no
+        // two faces are coplanar and the corners cannot crack open. The part that
+        // sits beyond the edge is hidden inside the apron and the deck.
+        let rim_thickness_m = 0.4;
         for side in [-1.0_f32, 1.0] {
             spawn_pad_slab(
                 parent,
                 meshes,
                 &concrete,
                 "LaunchPadFlameTrenchWall",
-                Vec3::new(wall_thickness_m, trench_depth_m, trench_length_m),
                 Vec3::new(
-                    side * (trench_half_width_m - wall_thickness_m * 0.5),
-                    -trench_depth_m * 0.5,
+                    rim_thickness_m,
+                    trench_depth_m + pad_top_m,
+                    trench_length_m + 2.0 * rim_thickness_m,
+                ),
+                Vec3::new(
+                    side * trench_half_width_m,
+                    -trench_depth_m * 0.5 + pad_top_m * 0.5,
                     trench_centre_z_m,
                 ),
             );
         }
-        for (name, centre_z_m) in [
-            (
-                "LaunchPadFlameTrenchWall",
-                trench_near_z_m + wall_thickness_m * 0.5,
-            ),
-            (
-                "LaunchPadFlameTrenchWall",
-                trench_far_z_m - wall_thickness_m * 0.5,
-            ),
-        ] {
+        for centre_z_m in [trench_near_z_m, trench_far_z_m] {
             spawn_pad_slab(
                 parent,
                 meshes,
                 &concrete,
-                name,
-                Vec3::new(2.0 * trench_half_width_m, trench_depth_m, wall_thickness_m),
-                Vec3::new(0.0, -trench_depth_m * 0.5, centre_z_m),
+                "LaunchPadFlameTrenchWall",
+                Vec3::new(
+                    2.0 * trench_half_width_m + 2.0 * rim_thickness_m,
+                    trench_depth_m + pad_top_m,
+                    rim_thickness_m,
+                ),
+                Vec3::new(0.0, -trench_depth_m * 0.5 + pad_top_m * 0.5, centre_z_m),
             );
         }
         // The deflector is a single inclined steel plate standing on the trench
@@ -1327,6 +1358,8 @@ mod tests {
         let mut floors = 0;
         let mut deflectors = 0;
         let mut clamp_max_z = f32::MIN;
+        let mut apron_min = Vec3::splat(f32::MAX);
+        let mut apron_max = Vec3::splat(f32::MIN);
         for (name, transform, mesh3d) in query.iter(world) {
             let mesh = meshes
                 .get(&mesh3d.0)
@@ -1348,7 +1381,19 @@ mod tests {
             let min = centre - half;
             let max = centre + half;
             match name.as_str() {
-                "LaunchPadApron" | "LaunchPadDeck" => {
+                "LaunchPadApron" => {
+                    slabs += 1;
+                    apron_min = apron_min.min(min);
+                    apron_max = apron_max.max(max);
+                    let covers_x = max.x > -half_width && min.x < half_width;
+                    let covers_z = max.z > near_z && min.z < far_z;
+                    assert!(
+                        !(covers_x && covers_z),
+                        "{} spans {min:?}..{max:?} and bridges the trench mouth",
+                        name.as_str()
+                    );
+                }
+                "LaunchPadDeck" => {
                     slabs += 1;
                     let covers_x = max.x > -half_width && min.x < half_width;
                     let covers_z = max.z > near_z && min.z < far_z;
@@ -1373,6 +1418,15 @@ mod tests {
                         (min.y + depth).abs() <= 0.01 && max.y <= pad_plane_y + 1e-3,
                         "trench wall spans {min:?}..{max:?}, expected it to rise from \
                          the floor to the pad plane"
+                    );
+                    // A rim at exactly grade is coplanar with the ground and the
+                    // sea cap, so it z-fights and lets slivers of grass and sky
+                    // through the trench edge.
+                    assert!(
+                        max.y > 0.0,
+                        "trench wall top {} must clear the terrain grade to avoid \
+                         z-fighting at the rim",
+                        max.y
                     );
                 }
                 "LaunchPadFlameDeflector" => {
@@ -1410,6 +1464,18 @@ mod tests {
             clamp_max_z < near_z,
             "the trench mouth starts at {near_z} m but the hold-down clamps reach \
              {clamp_max_z} m; the launch point must keep a grade-level footing"
+        );
+        // The terrain mesh is cut away under the hardstand so the below-grade
+        // trench can be seen. The hardstand must therefore span the whole cutout,
+        // or the cut shows as a see-through hole in the ground.
+        let cutout_radius = LAUNCH_HARDSTAND_CUTOUT_RADIUS_M as f32;
+        assert!(
+            apron_min.x <= -cutout_radius
+                && apron_min.z <= -cutout_radius
+                && apron_max.x >= cutout_radius
+                && apron_max.z >= cutout_radius,
+            "the hardstand spans {apron_min:?}..{apron_max:?} but the terrain cutout \
+             reaches {cutout_radius} m"
         );
     }
 

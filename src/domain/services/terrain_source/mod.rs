@@ -48,7 +48,8 @@ pub use layered::{
 pub use noise::ValueNoise;
 pub use procedural::{
     PadFlatZone, PadTrenchZone, ProceduralDetailSource, ProceduralFarDetailSource,
-    ProceduralTerrainConfig, ProceduralTerrainSource, LAUNCH_TRENCH_BLEND_M, LAUNCH_TRENCH_DEPTH_M,
+    ProceduralTerrainConfig, ProceduralTerrainSource, LAUNCH_HARDSTAND_CUTOUT_RADIUS_M,
+    LAUNCH_HARDSTAND_HALF_EXTENT_M, LAUNCH_TRENCH_BLEND_M, LAUNCH_TRENCH_DEPTH_M,
     LAUNCH_TRENCH_FAR_Z_M, LAUNCH_TRENCH_HALF_WIDTH_M, LAUNCH_TRENCH_NEAR_Z_M,
 };
 

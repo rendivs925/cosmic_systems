@@ -890,6 +890,7 @@ impl Plugin for TerrainRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderOrigin>()
             .init_resource::<TerrainRenderConfig>()
+            .init_resource::<super::cutouts::TerrainMeshCutouts>()
             .init_resource::<VolumetricGeologySettings>()
             .init_resource::<TerrainRenderAssets>()
             .init_resource::<PendingTerrainPatchUploads>()

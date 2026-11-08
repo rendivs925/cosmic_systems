@@ -368,6 +368,27 @@ pub const LAUNCH_TRENCH_DEPTH_M: f64 = 5.0;
 /// grade, metres.
 pub const LAUNCH_TRENCH_BLEND_M: f64 = 2.5;
 
+/// Half-extent of the concrete hardstand under the launch facility, metres.
+///
+/// The hardstand is a structure, not terrain: it carries the flame-trench
+/// opening, and the terrain mesh is cut away beneath it so the below-grade
+/// trench can be seen at all. It must span
+/// [`LAUNCH_HARDSTAND_CUTOUT_RADIUS_M`] with margin, or the cut shows as a
+/// see-through hole in the ground.
+pub const LAUNCH_HARDSTAND_HALF_EXTENT_M: f64 = 55.0;
+
+/// Radius of the terrain-mesh cutout under the hardstand, metres.
+///
+/// A mesh cell is removed only when all four of its corners lie inside this cap,
+/// so the hole is always a subset of it and the hardstand always closes it. The
+/// same rule makes the *guaranteed* hole smaller than the cap: a cell whose
+/// centre is within `radius - diagonal / 2` has every corner inside, so the hole
+/// always covers that disc. The finest streamed Earth patch is 610.8 m across at
+/// 33 samples, i.e. 19.09 m cells with a 27 m diagonal, which leaves 36.5 m of
+/// guaranteed opening — enough to expose the trench, whose far edge is 28 m from
+/// the pad centre.
+pub const LAUNCH_HARDSTAND_CUTOUT_RADIUS_M: f64 = 50.0;
+
 /// A rectangular excavation cut into a graded launch site, expressed in the
 /// site's local tangent plane (`+x` east, `+z` north).
 ///

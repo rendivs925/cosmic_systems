@@ -23,6 +23,53 @@ pub struct PatchGeometry {
     pub indices: Vec<u32>,
 }
 
+/// A spherical cap of the terrain *mesh* that another surface covers.
+///
+/// The authoritative height field still describes this area: collision, radar
+/// altitude and physics sample it exactly as before. Only the rendered mesh
+/// skips it, because a structure is drawn there instead. A below-grade feature
+/// inside such a structure — a flame trench, for instance — can only be seen if
+/// no terrain triangle spans the opening, and at pad scale the streamed mesh is
+/// far too coarse to resolve the opening on its own.
+///
+/// The hole is quantized to whole cells that lie *entirely* inside the cap, so
+/// it is always a subset of the cap and a covering surface that spans the cap
+/// always closes it. Coarse patches whose cells are larger than the cap are left
+/// untouched, so a distant view can never punch a see-through hole in the
+/// planet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerrainMeshCutout {
+    direction: DVec3,
+    cos_radius: f64,
+}
+
+impl TerrainMeshCutout {
+    /// Build a cutout from a body-fixed direction and an angular radius in
+    /// radians. Non-finite or non-positive radii are rejected rather than
+    /// silently clamped, because a zero-radius cutout would remove one cell for
+    /// no visible reason.
+    pub fn new(direction: DVec3, angular_radius_rad: f64) -> Option<Self> {
+        let direction = direction.try_normalize()?;
+        if !angular_radius_rad.is_finite() || angular_radius_rad <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            direction,
+            cos_radius: angular_radius_rad.clamp(0.0, std::f64::consts::PI).cos(),
+        })
+    }
+
+    /// Whether `direction` lies inside the cap.
+    pub fn contains(&self, direction: DVec3) -> bool {
+        direction.normalize_or_zero().dot(self.direction) >= self.cos_radius
+    }
+
+    /// Angular radius in radians.
+    pub fn angular_radius_rad(&self) -> f64 {
+        self.cos_radius.acos()
+    }
+}
+
 /// Build the mesh geometry for a patch from the shared terrain source.
 /// `resolution` is the number of vertices per side. Boundary vertices get a
 /// skirt ring extruded down the normal by `skirt_depth_m`.
@@ -55,6 +102,29 @@ pub fn build_patch_geometry_with_stitches(
     skirt_depth_m: f64,
     stitched_edges: &[PatchEdge],
 ) -> PatchGeometry {
+    build_patch_geometry_with_cutouts(
+        patch,
+        source,
+        planet_radius_m,
+        resolution,
+        skirt_depth_m,
+        stitched_edges,
+        &[],
+    )
+}
+
+/// Build a patch whose mesh omits every cell that lies entirely inside one of
+/// `cutouts`. The authoritative height field is unchanged; see
+/// [`TerrainMeshCutout`].
+pub fn build_patch_geometry_with_cutouts(
+    patch: &TerrainPatch,
+    source: &dyn TerrainSource,
+    planet_radius_m: f64,
+    resolution: u32,
+    skirt_depth_m: f64,
+    stitched_edges: &[PatchEdge],
+    cutouts: &[TerrainMeshCutout],
+) -> PatchGeometry {
     let parent_level = patch.level.saturating_sub(1);
     build_patch_geometry_with_height_sampler(
         patch,
@@ -62,6 +132,7 @@ pub fn build_patch_geometry_with_stitches(
         resolution,
         skirt_depth_m,
         stitched_edges,
+        cutouts,
         |latitude_deg, longitude_deg| {
             source.mesh_height_m(latitude_deg, longitude_deg, patch.level)
         },
@@ -78,6 +149,7 @@ fn build_patch_geometry_with_height_sampler(
     resolution: u32,
     skirt_depth_m: f64,
     stitched_edges: &[PatchEdge],
+    cutouts: &[TerrainMeshCutout],
     height_at: impl Fn(f64, f64) -> f64,
     coarse_height_at: impl Fn(f64, f64) -> f64,
 ) -> PatchGeometry {
@@ -207,8 +279,24 @@ fn build_patch_geometry_with_height_sampler(
     let reversed = matches!(patch.face, CubeFace::PosX | CubeFace::NegY | CubeFace::PosZ);
 
     let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6 + res * 4 * 6);
+    // A cell is omitted only when all four of its corners are inside one cap, so
+    // the hole is always a subset of the cap and a covering surface that spans
+    // the cap always closes it.
+    let cell_is_cut = |i: usize, j: usize| {
+        !cutouts.is_empty()
+            && cutouts.iter().any(|cutout| {
+                let at = |ci: usize, cj: usize| DVec3::from_array(grid[cj * res + ci]);
+                cutout.contains(at(i, j))
+                    && cutout.contains(at(i + 1, j))
+                    && cutout.contains(at(i, j + 1))
+                    && cutout.contains(at(i + 1, j + 1))
+            })
+    };
     for j in 0..res - 1 {
         for i in 0..res - 1 {
+            if cell_is_cut(i, j) {
+                continue;
+            }
             let tl = stitched_grid_index(i, j, res, stitched_edges);
             let tr = stitched_grid_index(i + 1, j, res, stitched_edges);
             let bl = stitched_grid_index(i, j + 1, res, stitched_edges);

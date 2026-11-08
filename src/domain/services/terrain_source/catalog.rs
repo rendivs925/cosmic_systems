@@ -822,6 +822,58 @@ mod tests {
         );
     }
 
+    /// LF-03: at the finest streamed LOD the launch site's terrain mesh is cut
+    /// away under the hardstand, so the below-grade flame trench is not hidden
+    /// by a surface the mesh cannot resolve. The height field is untouched.
+    #[test]
+    fn launch_site_mesh_is_cut_under_the_hardstand() {
+        use crate::domain::services::cube_sphere::{
+            build_patch_geometry, build_patch_geometry_with_cutouts, TerrainMeshCutout,
+            TerrainPatch,
+        };
+        use crate::domain::services::terrain_source::LAUNCH_HARDSTAND_CUTOUT_RADIUS_M;
+
+        let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).unwrap();
+        let radius_m = earth.radius_km as f64 * 1_000.0;
+        let site = predefined_sites::starbase_boca_chica();
+        let (latitude_deg, longitude_deg) = geodetic_to_terrain_lat_lon(&site, &earth);
+        let direction = terrain_lat_lon_to_body_fixed(latitude_deg, longitude_deg);
+        let source = EarthTerrainSource::new();
+        let patch = TerrainPatch::for_direction(direction, 14);
+
+        let cutout = TerrainMeshCutout::new(direction, LAUNCH_HARDSTAND_CUTOUT_RADIUS_M / radius_m)
+            .expect("a positive radius is a valid cutout");
+        let uncut = build_patch_geometry(&patch, &source, radius_m, 33, 5.0);
+        let cut =
+            build_patch_geometry_with_cutouts(&patch, &source, radius_m, 33, 5.0, &[], &[cutout]);
+
+        assert!(
+            cut.indices.len() < uncut.indices.len(),
+            "the launch-site patch must lose geometry under the hardstand: the trench is \
+             below grade and a continuous mesh hides it"
+        );
+        // The cut removes only cells wholly inside the cap, so the opening is a
+        // subset of the cap — but it is also *smaller* by up to half a cell
+        // diagonal. That guaranteed disc must still expose the whole trench, or
+        // the far end of the trench is hidden by uncut ground.
+        let cell_diagonal_m = 610.8 / 32.0 * std::f64::consts::SQRT_2;
+        let guaranteed_open_m = LAUNCH_HARDSTAND_CUTOUT_RADIUS_M - cell_diagonal_m * 0.5;
+        assert!(
+            guaranteed_open_m > crate::domain::services::terrain_source::LAUNCH_TRENCH_FAR_Z_M,
+            "the guaranteed mesh opening is {guaranteed_open_m:.1} m but the trench reaches \
+             {} m",
+            crate::domain::services::terrain_source::LAUNCH_TRENCH_FAR_Z_M
+        );
+
+        // The height field is what physics and collision sample, and it must keep
+        // the excavation: only the rendered mesh is cut.
+        assert_eq!(
+            source.height_m(latitude_deg, longitude_deg),
+            EarthTerrainSource::new().height_m(latitude_deg, longitude_deg),
+            "cutting the mesh must not change the authoritative surface"
+        );
+    }
+
     /// TM-02: the coarse relief band is part of the rendered mesh at the LODs
     /// where a few kilometres resolve, and absent from the physical surface and
     /// from the planet-scale / fine-LOD meshes.

@@ -25,7 +25,8 @@ pub use lod::{
 };
 mod mesh;
 pub use mesh::{
-    build_patch_geometry, build_patch_geometry_with_stitches, direction_to_lat_lon, PatchGeometry,
+    build_patch_geometry, build_patch_geometry_with_cutouts, build_patch_geometry_with_stitches,
+    direction_to_lat_lon, PatchGeometry, TerrainMeshCutout,
 };
 
 #[cfg(test)]
@@ -40,6 +41,81 @@ mod tests {
 
     fn source() -> ProceduralTerrainSource {
         ProceduralTerrainSource::new(99, 2_000.0, 800.0, 0)
+    }
+
+    /// LF-03: a cutout removes only whole cells that lie inside the cap, so the
+    /// hole is always a subset of the cap and a covering structure closes it.
+    #[test]
+    fn mesh_cutout_omits_only_cells_inside_the_cap() {
+        const RADIUS_M: f64 = 6_371_000.0;
+        let source = source();
+        let patch = TerrainPatch::for_direction(DVec3::Z, 14);
+        let full = build_patch_geometry(&patch, &source, RADIUS_M, 33, 5.0);
+        // 100 m is well inside the 305 m half-extent of a level-14 patch, so the
+        // patch edge and its skirt stay outside the hole.
+        let cutout = TerrainMeshCutout::new(patch.center_direction(), 100.0 / RADIUS_M)
+            .expect("a positive radius is a valid cutout");
+        let cut =
+            build_patch_geometry_with_cutouts(&patch, &source, RADIUS_M, 33, 5.0, &[], &[cutout]);
+
+        assert!(
+            cut.indices.len() < full.indices.len(),
+            "the cutout must remove geometry, found {} vs {} indices",
+            cut.indices.len(),
+            full.indices.len()
+        );
+        assert_eq!(
+            cut.positions, full.positions,
+            "a cutout removes triangles, never vertices"
+        );
+        // The safety property is that *removed* geometry stays inside the cap:
+        // a hole that reached past the cap could escape the structure covering
+        // it and become a see-through hole in the planet. Kept triangles inside
+        // the cap are harmless, because the covering structure sits above them.
+        let mut kept: std::collections::BTreeSet<[u32; 3]> = std::collections::BTreeSet::new();
+        for triangle in cut.indices.as_chunks::<3>().0 {
+            kept.insert(*triangle);
+        }
+        let mut removed: Vec<[u32; 3]> = Vec::new();
+        for triangle in full.indices.as_chunks::<3>().0 {
+            if !kept.contains(triangle) {
+                removed.push(*triangle);
+            }
+        }
+        assert!(
+            !removed.is_empty(),
+            "the cutout must remove at least one triangle"
+        );
+        for triangle in removed {
+            let wholly_inside = triangle
+                .iter()
+                .all(|index| cutout.contains(DVec3::from_array(cut.positions[*index as usize])));
+            assert!(
+                wholly_inside,
+                "removed triangle {triangle:?} reaches outside the cutout, so the hole \
+                 could exceed the covering structure"
+            );
+        }
+    }
+
+    /// LF-03: a patch whose cells are larger than the cap keeps every triangle.
+    /// A distant view must never punch a see-through hole in the planet.
+    #[test]
+    fn mesh_cutout_leaves_coarse_patches_whole() {
+        const RADIUS_M: f64 = 6_371_000.0;
+        let source = source();
+        // A level-3 cell spans about 39 km, far wider than the 100 m cap, so no
+        // cell can lie entirely inside it.
+        let patch = TerrainPatch::for_direction(DVec3::Z, 3);
+        let cutout = TerrainMeshCutout::new(patch.center_direction(), 100.0 / RADIUS_M)
+            .expect("a positive radius is a valid cutout");
+        let full = build_patch_geometry(&patch, &source, RADIUS_M, 33, 5.0);
+        let cut =
+            build_patch_geometry_with_cutouts(&patch, &source, RADIUS_M, 33, 5.0, &[], &[cutout]);
+        assert_eq!(
+            cut.indices, full.indices,
+            "cells far larger than the cap must not be cut"
+        );
     }
 
     #[derive(Debug, Default)]

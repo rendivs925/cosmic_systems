@@ -1,3 +1,4 @@
+pub mod cutouts;
 pub mod diagnostics;
 pub(crate) mod imagery;
 pub(crate) mod mips;
