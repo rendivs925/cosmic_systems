@@ -12,10 +12,10 @@ evidenced", not "the simulator does not work".
 | state | count | share of roadmap |
 | --- | ---: | ---: |
 | VERIFIED | 38 | 84.4 % |
-| IMPLEMENTED (not verified) | 4 | 8.9 % |
+| IMPLEMENTED (not verified) | 5 | 11.1 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 1 | 2.2 % |
+| PLANNED | 0 | 0 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -31,7 +31,7 @@ evidenced", not "the simulator does not work".
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
 | P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
 | P8 Rendering optimisation | 2 / 3 | 67 % | active | RD-01 implemented; 600-frame counter evidence pending |
-| P9 Final validation | 1 / 3 | 33 % | active | three-mode smoke blocked by presentation |
+| P9 Final validation | 1 / 3 | 33 % | active | VL-03 implemented; VL-01 blocked by presentation |
 
 ## Critical unresolved defects
 
@@ -121,7 +121,10 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — VL-03, in-repo visual acceptance suite.** RD-01 is implemented:
+**Next task — the submission pass.** All planned implementation slices are done; capture the deferred evidence, run the full gate, and close the five open changes. VL-03 is implemented:
+`visual_matrix.json` plus `scripts/visual_acceptance.py` machine-check the ten
+required scenes, with `--write` for a reviewed baseline and `--capture` to
+re-render from the recorded recipe. RD-01 is implemented:
 every per-frame terrain system is classified, and the vegetation uniform no
 longer rewrites inputs that are already current. CL-06 is implemented:
 the coverage band is a smoothstep with a resolved lower-quarter edge, and the
@@ -140,4 +143,4 @@ resolve a 14 m excavation at its finest LOD, so a new mesh cutout stops the
 rendered ground at the hardstand while collision keeps the same surface.
 
 Evidence and the full gate are deferred to one submission pass after the
-remaining implementation slice (VL-03), as requested.
+submission pass, as requested.

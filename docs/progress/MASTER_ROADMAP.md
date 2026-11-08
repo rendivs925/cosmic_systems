@@ -1787,19 +1787,37 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** 2026-11-01 run, 42 passed / 0 failed.
 
 ### VL-03 — In-repo visual acceptance suite
-- **Status:** PLANNED
+- **Status:** IMPLEMENTED
 - **Priority:** P1
 - **Objective:** One reproducible frame per required scene, committed with its
   measurement, so a regression is visible in the diff.
-- **Dependencies:** P0-02.
+- **Dependencies:** P0-02 (satisfied; the offscreen path is the capture path).
 - **Subsystems:** measurement.
-- **Expected files:** `docs/progress/evidence/`, `VISUAL_EVIDENCE.md`.
-- **Acceptance:** the ten required scenes each have a current frame at a stated
-  commit and pose, with a pass criterion.
-- **Tests:** a script that re-captures and compares.
-- **Visual evidence:** the matrix in `VISUAL_EVIDENCE.md`.
+- **Expected files:** `scripts/visual_acceptance.py`,
+  `docs/progress/visual_matrix.json`, `docs/progress/evidence/`,
+  `VISUAL_EVIDENCE.md`.
+- **Implementation:** a committed manifest with one entry per required scene
+  (frame, evidence commit, capture recipe where known) and a harness that
+  recomputes five coarse statistics per frame — mean luminance, bright and dark
+  pixel shares, edge energy, quantised colour count — and exits non-zero when a
+  scene is missing, its commit is not an ancestor of `HEAD`, or a statistic
+  leaves a relative tolerance with an absolute floor. `--write` refreshes the
+  baseline; `--capture` re-renders from the recorded recipe and compares. The
+  offscreen path's exit 134 is tolerated only when the PNG exists.
+- **Acceptance status:** nine scenes have a current frame. `orbit` is explicitly
+  missing, so the default check is red by design until the submission pass
+  captures it. `rocket-ascent`, `prelaunch`, `launch-site` and
+  `terrain-close-up` still need a complete capture recipe recorded when they are
+  re-captured.
+- **Tests:** the harness itself; `scripts/visual_acceptance.py` is the runnable
+  comparison and returns 1 on a regression.
+- **Visual evidence:** the matrix in `VISUAL_EVIDENCE.md`, now backed by
+  `visual_matrix.json`.
 - **Performance:** not applicable.
-- **Scientific validation:** not applicable.
-- **Risks:** committing stale frames as if current — every row must carry its
-  commit.
-- **Completion evidence:** 7 rows present, 3 scenes missing.
+- **Scientific validation:** not applicable. The statistics are failure
+  detectors, not measurements of realism.
+- **Risks:** a brittle threshold; mitigated by coarse metrics, relative
+  tolerances and the `--write` refresh path. A large intentional visual change
+  shows up as one reviewable manifest diff.
+- **Completion evidence:** implementation committed; OpenSpec change
+  `2026-11-08-visual-acceptance-suite` open until the submission pass.

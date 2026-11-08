@@ -47,6 +47,24 @@ is actually evidenced. The diagnostic views added below do not fill these scenes
 they are false colours, not production frames — but they do make two of the
 missing ones explainable.
 
+## Automated acceptance
+
+The required scene matrix is machine-checked. `docs/progress/visual_matrix.json`
+holds one entry per scene with its frame, evidence commit and capture recipe;
+`scripts/visual_acceptance.py` recomputes five coarse statistics from the
+committed bytes and exits non-zero when a scene is missing, its commit is not in
+history, or a statistic leaves its tolerance.
+
+```bash
+scripts/visual_acceptance.py             # check the committed frames
+scripts/visual_acceptance.py --capture   # re-render from each recipe, then check
+scripts/visual_acceptance.py --write     # refresh the baseline after a reviewed change
+```
+
+A missing recipe means `--capture` cannot rebuild that scene yet; `--check` still
+uses the committed frame. The `orbit` scene is explicitly missing, so the default
+check is red until it is captured.
+
 ## Registry
 
 | file | commit | pose | time | frames | sha256 (first 16) | demonstrates | pass criterion |

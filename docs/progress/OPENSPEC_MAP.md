@@ -48,7 +48,7 @@ over with a new duplicate spec.
 | RD-03 shadow lifecycle | `terrain-lighting-occlusion` | — | |
 | VL-01 smoke | `scientific-validation` | — | |
 | VL-02 spec validation | — | — | process check |
-| VL-03 visual suite | `scientific-validation` | — | |
+| VL-03 visual suite | `scientific-validation` | active `2026-11-08-visual-acceptance-suite` | manifest + script; orbit still missing |
 
 ## Requirement gaps, ranked
 
